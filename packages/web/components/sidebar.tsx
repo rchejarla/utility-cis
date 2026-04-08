@@ -37,7 +37,7 @@ const navSections: NavSection[] = [
     title: "System",
     items: [
       { href: "/audit-log", label: "Audit Log", icon: "📋" },
-      { href: "/theme-editor", label: "Theme Editor", icon: "🎨" },
+      { href: "/theme", label: "Theme Editor", icon: "🎨" },
       { href: "/settings", label: "Settings", icon: "⚙️" },
     ],
   },
