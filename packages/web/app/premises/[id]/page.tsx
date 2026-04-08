@@ -1,0 +1,260 @@
+"use client";
+
+import { useState, useEffect, use } from "react";
+import { useRouter } from "next/navigation";
+import { PageHeader } from "@/components/ui/page-header";
+import { Tabs } from "@/components/ui/tabs";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { CommodityBadge } from "@/components/ui/commodity-badge";
+import { DataTable } from "@/components/ui/data-table";
+import { apiClient } from "@/lib/api-client";
+
+interface Premise {
+  id: string;
+  addressLine1: string;
+  addressLine2?: string;
+  city: string;
+  state: string;
+  zip: string;
+  premiseType: string;
+  status: string;
+  geoLat?: number;
+  geoLng?: number;
+  serviceTerritoryId?: string;
+  municipalityCode?: string;
+  commodities?: Array<{ commodity: { id: string; name: string } }>;
+  meters?: Array<{
+    id: string;
+    meterNumber: string;
+    meterType: string;
+    status: string;
+    commodity?: { name: string };
+  }>;
+  serviceAgreements?: Array<{
+    id: string;
+    agreementNumber: string;
+    status: string;
+    startDate: string;
+    account?: { accountNumber: string };
+  }>;
+}
+
+interface AuditEntry {
+  id: string;
+  action: string;
+  actorId?: string;
+  createdAt: string;
+  changes?: unknown;
+}
+
+const fieldStyle = {
+  display: "grid" as const,
+  gridTemplateColumns: "160px 1fr",
+  gap: "8px",
+  padding: "10px 0",
+  borderBottom: "1px solid var(--border-subtle)",
+  alignItems: "start" as const,
+};
+
+const labelStyle = {
+  fontSize: "12px",
+  color: "var(--text-muted)",
+  fontWeight: "500" as const,
+};
+
+const valueStyle = {
+  fontSize: "13px",
+  color: "var(--text-primary)",
+};
+
+export default function PremiseDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  const router = useRouter();
+  const [premise, setPremise] = useState<Premise | null>(null);
+  const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState("overview");
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const data = await apiClient.get<Premise>(`/api/v1/premises/${id}`);
+        setPremise(data);
+      } catch (err) {
+        console.error("Failed to load premise", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, [id]);
+
+  useEffect(() => {
+    if (activeTab === "audit") {
+      apiClient
+        .get<{ data: AuditEntry[] }>("/api/v1/audit-log", {
+          entityType: "Premise",
+          entityId: id,
+        })
+        .then((res) => setAudit(res.data ?? []))
+        .catch(console.error);
+    }
+  }, [activeTab, id]);
+
+  if (loading) {
+    return (
+      <div style={{ color: "var(--text-muted)", fontSize: "14px", padding: "40px 0" }}>
+        Loading...
+      </div>
+    );
+  }
+
+  if (!premise) {
+    return (
+      <div style={{ color: "var(--text-muted)", fontSize: "14px", padding: "40px 0" }}>
+        Premise not found.
+      </div>
+    );
+  }
+
+  const address = [premise.addressLine1, premise.addressLine2, premise.city, premise.state, premise.zip]
+    .filter(Boolean)
+    .join(", ");
+
+  return (
+    <div>
+      <PageHeader
+        title={premise.addressLine1}
+        subtitle={`${premise.city}, ${premise.state} ${premise.zip}`}
+      />
+
+      <Tabs
+        tabs={[
+          { key: "overview", label: "Overview" },
+          { key: "meters", label: `Meters (${premise.meters?.length ?? 0})` },
+          { key: "agreements", label: `Agreements (${premise.serviceAgreements?.length ?? 0})` },
+          { key: "audit", label: "Audit" },
+        ]}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+      >
+        {activeTab === "overview" && (
+          <div
+            style={{
+              background: "var(--bg-card)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              padding: "20px 24px",
+            }}
+          >
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Status</span>
+              <StatusBadge status={premise.status} />
+            </div>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Address</span>
+              <span style={valueStyle}>{address}</span>
+            </div>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Premise Type</span>
+              <span style={valueStyle}>{premise.premiseType}</span>
+            </div>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Commodities</span>
+              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                {premise.commodities && premise.commodities.length > 0
+                  ? premise.commodities.map((c, i) => (
+                      <CommodityBadge key={i} commodity={c.commodity?.name ?? ""} />
+                    ))
+                  : <span style={valueStyle}>—</span>}
+              </div>
+            </div>
+            {premise.geoLat != null && (
+              <div style={fieldStyle}>
+                <span style={labelStyle}>Coordinates</span>
+                <span style={{ ...valueStyle, fontFamily: "monospace", fontSize: "12px" }}>
+                  {premise.geoLat}, {premise.geoLng}
+                </span>
+              </div>
+            )}
+            {premise.serviceTerritoryId && (
+              <div style={fieldStyle}>
+                <span style={labelStyle}>Service Territory</span>
+                <span style={valueStyle}>{premise.serviceTerritoryId}</span>
+              </div>
+            )}
+            {premise.municipalityCode && (
+              <div style={fieldStyle}>
+                <span style={labelStyle}>Municipality Code</span>
+                <span style={valueStyle}>{premise.municipalityCode}</span>
+              </div>
+            )}
+            <div style={{ ...fieldStyle, borderBottom: "none" }}>
+              <span style={labelStyle}>Premise ID</span>
+              <span style={{ ...valueStyle, fontFamily: "monospace", fontSize: "11px", color: "var(--text-muted)" }}>
+                {premise.id}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "meters" && (
+          <DataTable
+            columns={[
+              { key: "meterNumber", header: "Meter Number" },
+              {
+                key: "commodity",
+                header: "Commodity",
+                render: (row: any) => <CommodityBadge commodity={row.commodity?.name ?? ""} />,
+              },
+              { key: "meterType", header: "Type" },
+              {
+                key: "status",
+                header: "Status",
+                render: (row: any) => <StatusBadge status={row.status} />,
+              },
+            ]}
+            data={(premise.meters ?? []) as any}
+            onRowClick={(row: any) => router.push(`/meters/${row.id}`)}
+          />
+        )}
+
+        {activeTab === "agreements" && (
+          <DataTable
+            columns={[
+              { key: "agreementNumber", header: "Agreement Number" },
+              {
+                key: "account",
+                header: "Account",
+                render: (row: any) => row.account?.accountNumber ?? "—",
+              },
+              { key: "startDate", header: "Start Date", render: (row: any) => row.startDate?.slice(0, 10) ?? "—" },
+              {
+                key: "status",
+                header: "Status",
+                render: (row: any) => <StatusBadge status={row.status} />,
+              },
+            ]}
+            data={(premise.serviceAgreements ?? []) as any}
+            onRowClick={(row: any) => router.push(`/service-agreements/${row.id}`)}
+          />
+        )}
+
+        {activeTab === "audit" && (
+          <DataTable
+            columns={[
+              {
+                key: "createdAt",
+                header: "Timestamp",
+                render: (row: any) => new Date(row.createdAt).toLocaleString(),
+              },
+              { key: "action", header: "Action" },
+              { key: "actorId", header: "Actor", render: (row: any) => row.actorId ?? "System" },
+            ]}
+            data={audit as any}
+          />
+        )}
+      </Tabs>
+    </div>
+  );
+}

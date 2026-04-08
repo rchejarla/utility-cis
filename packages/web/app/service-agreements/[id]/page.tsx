@@ -1,0 +1,331 @@
+"use client";
+
+import { useState, useEffect, use } from "react";
+import { useRouter } from "next/navigation";
+import { PageHeader } from "@/components/ui/page-header";
+import { Tabs } from "@/components/ui/tabs";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { CommodityBadge } from "@/components/ui/commodity-badge";
+import { DataTable } from "@/components/ui/data-table";
+import { apiClient } from "@/lib/api-client";
+
+interface ServiceAgreement {
+  id: string;
+  agreementNumber: string;
+  status: string;
+  startDate: string;
+  endDate?: string;
+  account?: { id: string; accountNumber: string };
+  premise?: { id: string; addressLine1: string; city: string; state: string };
+  commodity?: { name: string };
+  rateSchedule?: { name: string; code: string };
+  billingCycle?: { name: string; cycleCode: string };
+  meters?: Array<{
+    meter: {
+      id: string;
+      meterNumber: string;
+      meterType: string;
+      status: string;
+      commodity?: { name: string };
+    };
+    isPrimary: boolean;
+  }>;
+}
+
+interface AuditEntry {
+  id: string;
+  action: string;
+  actorId?: string;
+  createdAt: string;
+}
+
+const fieldStyle = {
+  display: "grid" as const,
+  gridTemplateColumns: "180px 1fr",
+  gap: "8px",
+  padding: "10px 0",
+  borderBottom: "1px solid var(--border-subtle)",
+  alignItems: "start" as const,
+};
+const labelStyle = { fontSize: "12px", color: "var(--text-muted)", fontWeight: "500" as const };
+const valueStyle = { fontSize: "13px", color: "var(--text-primary)" };
+
+const STATUS_TRANSITIONS: Record<string, string[]> = {
+  PENDING: ["ACTIVE"],
+  ACTIVE: ["INACTIVE", "CLOSED"],
+  INACTIVE: ["ACTIVE", "CLOSED"],
+};
+
+export default function ServiceAgreementDetailPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = use(params);
+  const router = useRouter();
+  const [sa, setSa] = useState<ServiceAgreement | null>(null);
+  const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState("overview");
+  const [transitioning, setTransitioning] = useState(false);
+
+  const loadSA = async () => {
+    try {
+      const data = await apiClient.get<ServiceAgreement>(`/api/v1/service-agreements/${id}`);
+      setSa(data);
+    } catch (err) {
+      console.error("Failed to load SA", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadSA();
+  }, [id]);
+
+  useEffect(() => {
+    if (activeTab === "audit") {
+      apiClient
+        .get<{ data: AuditEntry[] }>("/api/v1/audit-log", {
+          entityType: "ServiceAgreement",
+          entityId: id,
+        })
+        .then((res) => setAudit(res.data ?? []))
+        .catch(console.error);
+    }
+  }, [activeTab, id]);
+
+  const handleTransition = async (newStatus: string) => {
+    if (!sa) return;
+    setTransitioning(true);
+    try {
+      await apiClient.patch(`/api/v1/service-agreements/${id}`, { status: newStatus });
+      await loadSA();
+    } catch (err) {
+      console.error("Transition failed", err);
+    } finally {
+      setTransitioning(false);
+    }
+  };
+
+  if (loading) {
+    return <div style={{ color: "var(--text-muted)", padding: "40px 0" }}>Loading...</div>;
+  }
+  if (!sa) {
+    return <div style={{ color: "var(--text-muted)", padding: "40px 0" }}>Agreement not found.</div>;
+  }
+
+  const availableTransitions = STATUS_TRANSITIONS[sa.status] ?? [];
+
+  return (
+    <div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          marginBottom: "24px",
+          gap: "16px",
+        }}
+      >
+        <div>
+          <h1
+            style={{
+              fontSize: "22px",
+              fontWeight: "600",
+              color: "var(--text-primary)",
+              margin: "0 0 4px",
+            }}
+          >
+            {sa.agreementNumber}
+          </h1>
+          <p style={{ fontSize: "14px", color: "var(--text-secondary)", margin: 0 }}>
+            {sa.account?.accountNumber} — {sa.premise?.addressLine1}
+          </p>
+        </div>
+        {availableTransitions.length > 0 && (
+          <div style={{ display: "flex", gap: "8px" }}>
+            {availableTransitions.map((nextStatus) => (
+              <button
+                key={nextStatus}
+                onClick={() => handleTransition(nextStatus)}
+                disabled={transitioning}
+                style={{
+                  padding: "7px 16px",
+                  borderRadius: "var(--radius)",
+                  border: "1px solid var(--accent-primary)",
+                  background: nextStatus === "ACTIVE" ? "var(--accent-primary)" : "transparent",
+                  color: nextStatus === "ACTIVE" ? "#fff" : "var(--accent-primary)",
+                  fontSize: "12px",
+                  fontWeight: "500",
+                  cursor: transitioning ? "not-allowed" : "pointer",
+                  fontFamily: "inherit",
+                  opacity: transitioning ? 0.6 : 1,
+                }}
+              >
+                {nextStatus === "ACTIVE" ? "Activate" : nextStatus === "CLOSED" ? "Close" : nextStatus}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <Tabs
+        tabs={[
+          { key: "overview", label: "Overview" },
+          { key: "meters", label: `Meters (${sa.meters?.length ?? 0})` },
+          { key: "audit", label: "Audit" },
+        ]}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+      >
+        {activeTab === "overview" && (
+          <div
+            style={{
+              background: "var(--bg-card)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              padding: "20px 24px",
+            }}
+          >
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Status</span>
+              <StatusBadge status={sa.status} />
+            </div>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Agreement Number</span>
+              <span style={{ ...valueStyle, fontFamily: "monospace" }}>{sa.agreementNumber}</span>
+            </div>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Account</span>
+              <button
+                onClick={() => sa.account && router.push(`/accounts/${sa.account.id}`)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "var(--accent-primary)",
+                  fontSize: "13px",
+                  cursor: "pointer",
+                  padding: 0,
+                  textDecoration: "underline",
+                  fontFamily: "inherit",
+                }}
+              >
+                {sa.account?.accountNumber ?? "—"}
+              </button>
+            </div>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Premise</span>
+              <button
+                onClick={() => sa.premise && router.push(`/premises/${sa.premise.id}`)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "var(--accent-primary)",
+                  fontSize: "13px",
+                  cursor: "pointer",
+                  padding: 0,
+                  textDecoration: "underline",
+                  fontFamily: "inherit",
+                }}
+              >
+                {sa.premise
+                  ? `${sa.premise.addressLine1}, ${sa.premise.city}, ${sa.premise.state}`
+                  : "—"}
+              </button>
+            </div>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Commodity</span>
+              <CommodityBadge commodity={sa.commodity?.name ?? ""} />
+            </div>
+            {sa.rateSchedule && (
+              <div style={fieldStyle}>
+                <span style={labelStyle}>Rate Schedule</span>
+                <span style={valueStyle}>
+                  {sa.rateSchedule.name} ({sa.rateSchedule.code})
+                </span>
+              </div>
+            )}
+            {sa.billingCycle && (
+              <div style={fieldStyle}>
+                <span style={labelStyle}>Billing Cycle</span>
+                <span style={valueStyle}>
+                  {sa.billingCycle.name} ({sa.billingCycle.cycleCode})
+                </span>
+              </div>
+            )}
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Start Date</span>
+              <span style={valueStyle}>{sa.startDate?.slice(0, 10) ?? "—"}</span>
+            </div>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>End Date</span>
+              <span style={valueStyle}>{sa.endDate?.slice(0, 10) ?? "Open-ended"}</span>
+            </div>
+            <div style={{ ...fieldStyle, borderBottom: "none" }}>
+              <span style={labelStyle}>Agreement ID</span>
+              <span style={{ ...valueStyle, fontFamily: "monospace", fontSize: "11px", color: "var(--text-muted)" }}>
+                {sa.id}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "meters" && (
+          <DataTable
+            columns={[
+              {
+                key: "meterNumber",
+                header: "Meter Number",
+                render: (row: any) => (
+                  <span style={{ fontFamily: "monospace", fontSize: "12px", fontWeight: 600 }}>
+                    {row.meter?.meterNumber}
+                  </span>
+                ),
+              },
+              {
+                key: "commodity",
+                header: "Commodity",
+                render: (row: any) => <CommodityBadge commodity={row.meter?.commodity?.name ?? ""} />,
+              },
+              { key: "meterType", header: "Type", render: (row: any) => row.meter?.meterType },
+              {
+                key: "isPrimary",
+                header: "Primary",
+                render: (row: any) =>
+                  row.isPrimary ? (
+                    <span style={{ color: "#22c55e", fontSize: "12px" }}>✓ Primary</span>
+                  ) : (
+                    <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>—</span>
+                  ),
+              },
+              {
+                key: "status",
+                header: "Status",
+                render: (row: any) => <StatusBadge status={row.meter?.status ?? ""} />,
+              },
+            ]}
+            data={(sa.meters ?? []) as any}
+            onRowClick={(row: any) => router.push(`/meters/${row.meter?.id}`)}
+          />
+        )}
+
+        {activeTab === "audit" && (
+          <DataTable
+            columns={[
+              {
+                key: "createdAt",
+                header: "Timestamp",
+                render: (row: any) => new Date(row.createdAt).toLocaleString(),
+              },
+              { key: "action", header: "Action" },
+              { key: "actorId", header: "Actor", render: (row: any) => row.actorId ?? "System" },
+            ]}
+            data={audit as any}
+          />
+        )}
+      </Tabs>
+    </div>
+  );
+}
