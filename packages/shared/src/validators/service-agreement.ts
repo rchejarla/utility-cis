@@ -42,6 +42,17 @@ export const updateServiceAgreementSchema = z.object({
   readSequence: z.number().int().optional(),
 });
 
+export const serviceAgreementQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(100).default(20),
+  sort: z.string().default("createdAt"),
+  order: z.enum(["asc", "desc"]).default("desc"),
+  accountId: z.string().uuid().optional(),
+  premiseId: z.string().uuid().optional(),
+  status: agreementStatusEnum.optional(),
+});
+
 export type MeterAssignment = z.infer<typeof meterAssignmentSchema>;
 export type CreateServiceAgreementInput = z.infer<typeof createServiceAgreementSchema>;
 export type UpdateServiceAgreementInput = z.infer<typeof updateServiceAgreementSchema>;
+export type ServiceAgreementQuery = z.infer<typeof serviceAgreementQuerySchema>;
