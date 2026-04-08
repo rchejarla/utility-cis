@@ -1,0 +1,419 @@
+// Prisma schema for Utility CIS — all 13 entities
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum PremiseType {
+  RESIDENTIAL
+  COMMERCIAL
+  INDUSTRIAL
+  MUNICIPAL
+
+  @@map("premise_type")
+}
+
+enum PremiseStatus {
+  ACTIVE
+  INACTIVE
+  CONDEMNED
+
+  @@map("premise_status")
+}
+
+enum MeterType {
+  AMR
+  AMI
+  MANUAL
+  SMART
+
+  @@map("meter_type")
+}
+
+enum MeterStatus {
+  ACTIVE
+  REMOVED
+  DEFECTIVE
+  PENDING_INSTALL
+
+  @@map("meter_status")
+}
+
+enum AccountType {
+  RESIDENTIAL
+  COMMERCIAL
+  INDUSTRIAL
+  MUNICIPAL
+
+  @@map("account_type")
+}
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+  FINAL
+  CLOSED
+  SUSPENDED
+
+  @@map("account_status")
+}
+
+enum CreditRating {
+  EXCELLENT
+  GOOD
+  FAIR
+  POOR
+  UNRATED
+
+  @@map("credit_rating")
+}
+
+enum ServiceAgreementStatus {
+  PENDING
+  ACTIVE
+  FINAL
+  CLOSED
+
+  @@map("service_agreement_status")
+}
+
+enum RateType {
+  FLAT
+  TIERED
+  TIME_OF_USE
+  DEMAND
+  BUDGET
+  SEASONAL
+
+  @@map("rate_type")
+}
+
+enum BillingFrequency {
+  MONTHLY
+  BIMONTHLY
+  QUARTERLY
+
+  @@map("billing_frequency")
+}
+
+enum ReadType {
+  ACTUAL
+  ESTIMATED
+  CORRECTED
+  FINAL
+  AMI
+
+  @@map("read_type")
+}
+
+enum ReadSource {
+  MANUAL
+  AMR
+  AMI
+  CUSTOMER_SELF
+  SYSTEM
+
+  @@map("read_source")
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+
+  @@map("audit_action")
+}
+
+enum ThemeMode {
+  DARK
+  LIGHT
+  SYSTEM
+
+  @@map("theme_mode")
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+model Commodity {
+  id             String   @id @default(uuid()) @db.Uuid
+  utilityId      String   @map("utility_id") @db.Uuid
+  code           String   @map("code") @db.VarChar(50)
+  name           String   @map("name") @db.VarChar(100)
+  defaultUomId   String?  @map("default_uom_id") @db.Uuid
+  isActive       Boolean  @default(true) @map("is_active")
+  displayOrder   Int      @default(0) @map("display_order")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  defaultUom        UnitOfMeasure?  @relation("DefaultUom", fields: [defaultUomId], references: [id])
+  unitsOfMeasure    UnitOfMeasure[] @relation("CommodityUoms")
+  meters            Meter[]
+  serviceAgreements ServiceAgreement[]
+  rateSchedules     RateSchedule[]
+
+  @@unique([utilityId, code])
+  @@map("commodity")
+}
+
+model UnitOfMeasure {
+  id               String   @id @default(uuid()) @db.Uuid
+  utilityId        String   @map("utility_id") @db.Uuid
+  code             String   @map("code") @db.VarChar(20)
+  name             String   @map("name") @db.VarChar(100)
+  commodityId      String   @map("commodity_id") @db.Uuid
+  conversionFactor Decimal  @map("conversion_factor") @db.Decimal(15, 8)
+  isBaseUnit       Boolean  @map("is_base_unit")
+  isActive         Boolean  @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  commodity        Commodity   @relation("CommodityUoms", fields: [commodityId], references: [id])
+  commodityDefault Commodity[] @relation("DefaultUom")
+  meters           Meter[]
+
+  @@unique([utilityId, commodityId, code])
+  @@map("unit_of_measure")
+}
+
+model Premise {
+  id                 String        @id @default(uuid()) @db.Uuid
+  utilityId          String        @map("utility_id") @db.Uuid
+  addressLine1       String        @map("address_line1") @db.VarChar(255)
+  addressLine2       String?       @map("address_line2") @db.VarChar(255)
+  city               String        @map("city") @db.VarChar(100)
+  state              String        @map("state") @db.Char(2)
+  zip                String        @map("zip") @db.VarChar(10)
+  geoLat             Decimal?      @map("geo_lat") @db.Decimal(9, 6)
+  geoLng             Decimal?      @map("geo_lng") @db.Decimal(9, 6)
+  premiseType        PremiseType   @map("premise_type")
+  commodityIds       String[]      @map("commodity_ids") @db.Uuid
+  serviceTerritoryId String?       @map("service_territory_id") @db.Uuid
+  municipalityCode   String?       @map("municipality_code") @db.VarChar(50)
+  status             PremiseStatus @default(ACTIVE) @map("status")
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Relations
+  meters            Meter[]
+  serviceAgreements ServiceAgreement[]
+
+  @@map("premise")
+}
+
+model Meter {
+  id          String      @id @default(uuid()) @db.Uuid
+  utilityId   String      @map("utility_id") @db.Uuid
+  premiseId   String      @map("premise_id") @db.Uuid
+  meterNumber String      @map("meter_number") @db.VarChar(100)
+  commodityId String      @map("commodity_id") @db.Uuid
+  meterType   MeterType   @map("meter_type")
+  uomId       String      @map("uom_id") @db.Uuid
+  dialCount   Int?        @map("dial_count")
+  multiplier  Decimal     @default(1.0) @map("multiplier") @db.Decimal(10, 4)
+  installDate DateTime    @map("install_date") @db.Date
+  removalDate DateTime?   @map("removal_date") @db.Date
+  status      MeterStatus @map("status")
+  notes       String?     @map("notes") @db.Text
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Relations
+  premise                Premise               @relation(fields: [premiseId], references: [id])
+  commodity              Commodity             @relation(fields: [commodityId], references: [id])
+  uom                    UnitOfMeasure         @relation(fields: [uomId], references: [id])
+  meterReads             MeterRead[]
+  serviceAgreementMeters ServiceAgreementMeter[]
+
+  @@unique([utilityId, meterNumber])
+  @@map("meter")
+}
+
+model Account {
+  id                  String        @id @default(uuid()) @db.Uuid
+  utilityId           String        @map("utility_id") @db.Uuid
+  accountNumber       String        @map("account_number") @db.VarChar(50)
+  customerId          String?       @map("customer_id") @db.Uuid
+  accountType         AccountType   @map("account_type")
+  status              AccountStatus @map("status")
+  creditRating        CreditRating  @default(UNRATED) @map("credit_rating")
+  depositAmount       Decimal       @default(0) @map("deposit_amount") @db.Decimal(10, 2)
+  depositWaived       Boolean       @default(false) @map("deposit_waived")
+  depositWaivedReason String?       @map("deposit_waived_reason") @db.VarChar(255)
+  languagePref        String        @default("en-US") @map("language_pref") @db.Char(5)
+  paperlessBilling    Boolean       @default(false) @map("paperless_billing")
+  budgetBilling       Boolean       @default(false) @map("budget_billing")
+  saaslogicAccountId  String?       @map("saaslogic_account_id") @db.Uuid
+  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  closedAt            DateTime?     @map("closed_at") @db.Timestamptz
+
+  // Relations
+  serviceAgreements ServiceAgreement[]
+
+  @@unique([utilityId, accountNumber])
+  @@map("account")
+}
+
+model ServiceAgreement {
+  id              String                 @id @default(uuid()) @db.Uuid
+  utilityId       String                 @map("utility_id") @db.Uuid
+  agreementNumber String                 @map("agreement_number") @db.VarChar(50)
+  accountId       String                 @map("account_id") @db.Uuid
+  premiseId       String                 @map("premise_id") @db.Uuid
+  commodityId     String                 @map("commodity_id") @db.Uuid
+  rateScheduleId  String                 @map("rate_schedule_id") @db.Uuid
+  billingCycleId  String                 @map("billing_cycle_id") @db.Uuid
+  startDate       DateTime               @map("start_date") @db.Date
+  endDate         DateTime?              @map("end_date") @db.Date
+  status          ServiceAgreementStatus @default(PENDING) @map("status")
+  readSequence    Int?                   @map("read_sequence")
+  createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Relations
+  account      Account       @relation(fields: [accountId], references: [id])
+  premise      Premise       @relation(fields: [premiseId], references: [id])
+  commodity    Commodity     @relation(fields: [commodityId], references: [id])
+  rateSchedule RateSchedule  @relation(fields: [rateScheduleId], references: [id])
+  billingCycle BillingCycle  @relation(fields: [billingCycleId], references: [id])
+  meters       ServiceAgreementMeter[]
+  meterReads   MeterRead[]
+
+  @@unique([utilityId, agreementNumber])
+  @@map("service_agreement")
+}
+
+model ServiceAgreementMeter {
+  id                 String           @id @default(uuid()) @db.Uuid
+  utilityId          String           @map("utility_id") @db.Uuid
+  serviceAgreementId String           @map("service_agreement_id") @db.Uuid
+  meterId            String           @map("meter_id") @db.Uuid
+  isPrimary          Boolean          @default(true) @map("is_primary")
+  addedDate          DateTime         @map("added_date") @db.Date
+  removedDate        DateTime?        @map("removed_date") @db.Date
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  serviceAgreement ServiceAgreement @relation(fields: [serviceAgreementId], references: [id])
+  meter            Meter            @relation(fields: [meterId], references: [id])
+
+  @@map("service_agreement_meter")
+}
+
+model RateSchedule {
+  id             String    @id @default(uuid()) @db.Uuid
+  utilityId      String    @map("utility_id") @db.Uuid
+  name           String    @map("name") @db.VarChar(255)
+  code           String    @map("code") @db.VarChar(50)
+  commodityId    String    @map("commodity_id") @db.Uuid
+  rateType       RateType  @map("rate_type")
+  effectiveDate  DateTime  @map("effective_date") @db.Date
+  expirationDate DateTime? @map("expiration_date") @db.Date
+  description    String?   @map("description") @db.Text
+  regulatoryRef  String?   @map("regulatory_ref") @db.VarChar(100)
+  rateConfig     Json      @map("rate_config")
+  version        Int       @default(1) @map("version")
+  supersedesId   String?   @map("supersedes_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  commodity         Commodity        @relation(fields: [commodityId], references: [id])
+  supersedes        RateSchedule?    @relation("RateScheduleVersions", fields: [supersedesId], references: [id])
+  supersededBy      RateSchedule[]   @relation("RateScheduleVersions")
+  serviceAgreements ServiceAgreement[]
+
+  @@unique([utilityId, code, version])
+  @@map("rate_schedule")
+}
+
+model BillingCycle {
+  id             String           @id @default(uuid()) @db.Uuid
+  utilityId      String           @map("utility_id") @db.Uuid
+  name           String           @map("name") @db.VarChar(255)
+  cycleCode      String           @map("cycle_code") @db.VarChar(20)
+  readDayOfMonth Int              @map("read_day_of_month")
+  billDayOfMonth Int              @map("bill_day_of_month")
+  frequency      BillingFrequency @default(MONTHLY) @map("frequency")
+  active         Boolean          @default(true) @map("active")
+
+  // Relations
+  serviceAgreements ServiceAgreement[]
+
+  @@unique([utilityId, cycleCode])
+  @@map("billing_cycle")
+}
+
+model MeterRead {
+  id                 String     @id @default(uuid()) @db.Uuid
+  utilityId          String     @map("utility_id") @db.Uuid
+  meterId            String     @map("meter_id") @db.Uuid
+  serviceAgreementId String     @map("service_agreement_id") @db.Uuid
+  readDate           DateTime   @map("read_date") @db.Date
+  readDatetime       DateTime   @map("read_datetime") @db.Timestamptz
+  reading            Decimal    @map("reading") @db.Decimal(12, 4)
+  priorReading       Decimal    @map("prior_reading") @db.Decimal(12, 4)
+  consumption        Decimal    @map("consumption") @db.Decimal(12, 4)
+  readType           ReadType   @map("read_type")
+  readSource         ReadSource @map("read_source")
+  exceptionCode      String?    @map("exception_code") @db.VarChar(50)
+  readerId           String?    @map("reader_id") @db.Uuid
+  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  meter            Meter            @relation(fields: [meterId], references: [id])
+  serviceAgreement ServiceAgreement @relation(fields: [serviceAgreementId], references: [id])
+
+  @@map("meter_read")
+}
+
+model AuditLog {
+  id          String      @id @default(uuid()) @db.Uuid
+  utilityId   String      @map("utility_id") @db.Uuid
+  entityType  String      @map("entity_type") @db.VarChar(100)
+  entityId    String      @map("entity_id") @db.Uuid
+  action      AuditAction @map("action")
+  actorId     String      @map("actor_id") @db.Uuid
+  beforeState Json?       @map("before_state")
+  afterState  Json?       @map("after_state")
+  metadata    Json?       @map("metadata")
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([utilityId, entityType, entityId])
+  @@index([utilityId, createdAt])
+  @@map("audit_log")
+}
+
+model TenantTheme {
+  id           String   @id @default(uuid()) @db.Uuid
+  utilityId    String   @unique @map("utility_id") @db.Uuid
+  preset       String?  @map("preset") @db.VarChar(50)
+  colors       Json     @map("colors")
+  typography   Json     @map("typography")
+  borderRadius Int      @default(10) @map("border_radius")
+  logoUrl      String?  @map("logo_url") @db.VarChar(500)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("tenant_theme")
+}
+
+model UserPreference {
+  id          String    @id @default(uuid()) @db.Uuid
+  utilityId   String    @map("utility_id") @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  themeMode   ThemeMode @default(SYSTEM) @map("theme_mode")
+  preferences Json      @default("{}") @map("preferences")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([utilityId, userId])
+  @@map("user_preference")
+}
