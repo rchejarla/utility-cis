@@ -2,6 +2,9 @@ import { PrismaClient } from "@utility-cis/shared/src/generated/prisma";
 
 export const prisma = new PrismaClient();
 
+// Warm up connection pool on import
+prisma.$connect().catch((err) => console.error("[prisma] Failed to connect:", err));
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function setTenantContext(utilityId: string): Promise<void> {

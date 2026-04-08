@@ -39,3 +39,17 @@ body {
   color: var(--text-primary);
   font-family: 'DM Sans', sans-serif;
 }
+
+/* Prevent Mapbox popups from being clipped */
+.mapboxgl-popup {
+  z-index: 50;
+}
+.mapboxgl-popup-content {
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+}
+.mapboxgl-popup-tip {
+  display: none;
+}

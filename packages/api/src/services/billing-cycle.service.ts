@@ -10,6 +10,12 @@ export async function listBillingCycles(utilityId: string) {
   });
 }
 
+export async function getBillingCycle(id: string, utilityId: string) {
+  return prisma.billingCycle.findUniqueOrThrow({
+    where: { id, utilityId },
+  });
+}
+
 export async function createBillingCycle(
   utilityId: string,
   actorId: string,

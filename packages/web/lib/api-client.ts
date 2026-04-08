@@ -2,12 +2,15 @@ import { getSession } from "next-auth/react";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
+// Cache the token so we don't call getSession() on every request
+let cachedToken: string | null = null;
+let cacheExpiry = 0;
+
 function createDevToken(): string {
-  // Dev-mode fallback token when no session exists
   const header = btoa(JSON.stringify({ alg: "none" }));
   const payload = btoa(JSON.stringify({
     sub: "dev-user-001",
-    utility_id: "mwa-001-uuid",
+    utility_id: "00000000-0000-4000-8000-000000000001",
     email: "dev@example.com",
     role: "admin",
   }));
@@ -15,21 +18,32 @@ function createDevToken(): string {
 }
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
-  const session = await getSession();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
+
+  // Use cached token if still valid (cache for 5 minutes)
+  if (cachedToken && Date.now() < cacheExpiry) {
+    headers["Authorization"] = `Bearer ${cachedToken}`;
+    return headers;
+  }
+
+  // Try to get session token
+  const session = await getSession();
   if (session) {
     const token = (session as any).accessToken;
     if (token && typeof token === "string") {
-      // Signed JWT string from NextAuth — pass directly to the API
+      cachedToken = token;
+      cacheExpiry = Date.now() + 5 * 60 * 1000; // 5 min cache
       headers["Authorization"] = `Bearer ${token}`;
+      return headers;
     }
   }
-  if (!headers["Authorization"]) {
-    // Dev fallback — create a proper JWT-like token
-    headers["Authorization"] = `Bearer ${createDevToken()}`;
-  }
+
+  // Dev fallback
+  cachedToken = createDevToken();
+  cacheExpiry = Date.now() + 5 * 60 * 1000;
+  headers["Authorization"] = `Bearer ${cachedToken}`;
   return headers;
 }
 
@@ -38,7 +52,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
     let errorDetails: string;
     try {
       const errorBody = await response.json();
-      errorDetails = errorBody.message || errorBody.error || JSON.stringify(errorBody);
+      errorDetails = errorBody.error?.message || errorBody.message || JSON.stringify(errorBody);
     } catch {
       errorDetails = await response.text();
     }

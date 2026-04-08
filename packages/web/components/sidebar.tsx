@@ -4,11 +4,27 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { useSession } from "next-auth/react";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
+import {
+  faLocationDot,
+  faGauge,
+  faUser,
+  faFileContract,
+  faMoneyBill,
+  faCalendarDays,
+  faDroplet,
+  faClipboardList,
+  faPalette,
+  faGear,
+  faChevronLeft,
+  faChevronRight,
+} from "@fortawesome/pro-solid-svg-icons";
 
 interface NavItem {
   href: string;
   label: string;
-  icon: string;
+  icon: IconDefinition;
 }
 
 interface NavSection {
@@ -20,25 +36,26 @@ const navSections: NavSection[] = [
   {
     title: "Operations",
     items: [
-      { href: "/premises", label: "Premises", icon: "🏠" },
-      { href: "/meters", label: "Meters", icon: "📊" },
-      { href: "/accounts", label: "Accounts", icon: "👤" },
-      { href: "/agreements", label: "Agreements", icon: "📄" },
+      { href: "/premises", label: "Premises", icon: faLocationDot },
+      { href: "/meters", label: "Meters", icon: faGauge },
+      { href: "/accounts", label: "Accounts", icon: faUser },
+      { href: "/service-agreements", label: "Agreements", icon: faFileContract },
     ],
   },
   {
     title: "Configuration",
     items: [
-      { href: "/rate-schedules", label: "Rate Schedules", icon: "💰" },
-      { href: "/billing-cycles", label: "Billing Cycles", icon: "🗓" },
+      { href: "/commodities", label: "Commodities & UOM", icon: faDroplet },
+      { href: "/rate-schedules", label: "Rate Schedules", icon: faMoneyBill },
+      { href: "/billing-cycles", label: "Billing Cycles", icon: faCalendarDays },
     ],
   },
   {
     title: "System",
     items: [
-      { href: "/audit-log", label: "Audit Log", icon: "📋" },
-      { href: "/theme", label: "Theme Editor", icon: "🎨" },
-      { href: "/settings", label: "Settings", icon: "⚙️" },
+      { href: "/audit-log", label: "Audit Log", icon: faClipboardList },
+      { href: "/theme", label: "Theme Editor", icon: faPalette },
+      { href: "/settings", label: "Settings", icon: faGear },
     ],
   },
 ];
@@ -48,13 +65,13 @@ export function Sidebar() {
   const { data: session } = useSession();
   const [collapsed, setCollapsed] = useState(false);
 
-  const sidebarWidth = collapsed ? "64px" : "240px";
+  const width = collapsed ? 64 : 240;
 
   return (
     <aside
       style={{
-        width: sidebarWidth,
-        minWidth: sidebarWidth,
+        width,
+        minWidth: width,
         background: "var(--bg-surface)",
         borderRight: "1px solid var(--border)",
         display: "flex",
@@ -62,24 +79,26 @@ export function Sidebar() {
         transition: "width 0.2s ease, min-width 0.2s ease",
         overflow: "hidden",
         height: "100vh",
+        position: "relative",
       }}
     >
       {/* Brand */}
       <div
         style={{
-          padding: collapsed ? "16px 12px" : "16px 20px",
+          padding: collapsed ? "16px 0" : "16px 20px",
           borderBottom: "1px solid var(--border)",
           display: "flex",
           alignItems: "center",
           gap: "10px",
-          minHeight: "64px",
+          minHeight: 56,
+          justifyContent: collapsed ? "center" : "flex-start",
         }}
       >
         <div
           style={{
-            width: "32px",
-            height: "32px",
-            borderRadius: "8px",
+            width: 32,
+            height: 32,
+            borderRadius: 8,
             background: "var(--accent-primary)",
             display: "flex",
             alignItems: "center",
@@ -87,119 +106,80 @@ export function Sidebar() {
             flexShrink: 0,
             color: "white",
             fontWeight: "bold",
-            fontSize: "14px",
+            fontSize: 14,
           }}
         >
           U
         </div>
         {!collapsed && (
-          <div>
-            <div
-              style={{
-                color: "var(--text-primary)",
-                fontWeight: "600",
-                fontSize: "14px",
-                lineHeight: "1.2",
-              }}
-            >
+          <div style={{ overflow: "hidden" }}>
+            <div style={{ color: "var(--text-primary)", fontWeight: 600, fontSize: 14, lineHeight: 1.2, whiteSpace: "nowrap" }}>
               Utility CIS
             </div>
-            <div
-              style={{
-                color: "var(--text-muted)",
-                fontSize: "11px",
-              }}
-            >
+            <div style={{ color: "var(--text-muted)", fontSize: 11, whiteSpace: "nowrap" }}>
               Admin Portal
             </div>
           </div>
         )}
       </div>
 
-      {/* Toggle button */}
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        style={{
-          position: "absolute",
-          top: "72px",
-          right: collapsed ? "8px" : "-1px",
-          transform: collapsed ? "none" : "translateX(50%)",
-          width: "24px",
-          height: "24px",
-          borderRadius: "50%",
-          background: "var(--bg-elevated)",
-          border: "1px solid var(--border)",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: "10px",
-          color: "var(--text-secondary)",
-          zIndex: 10,
-          transition: "all 0.2s ease",
-        }}
-        aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-      >
-        {collapsed ? "›" : "‹"}
-      </button>
-
       {/* Nav */}
-      <nav
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          overflowX: "hidden",
-          padding: "12px 0",
-        }}
-      >
+      <nav style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "12px 0" }}>
         {navSections.map((section) => (
-          <div key={section.title} style={{ marginBottom: "8px" }}>
+          <div key={section.title} style={{ marginBottom: 4 }}>
             {!collapsed && (
               <div
                 style={{
-                  padding: "6px 20px 4px",
+                  padding: "8px 20px 4px",
                   color: "var(--text-muted)",
-                  fontSize: "10px",
-                  fontWeight: "600",
+                  fontSize: 10,
+                  fontWeight: 600,
                   textTransform: "uppercase",
                   letterSpacing: "0.08em",
+                  whiteSpace: "nowrap",
                 }}
               >
                 {section.title}
               </div>
             )}
+            {collapsed && section !== navSections[0] && (
+              <div style={{ height: 1, background: "var(--border)", margin: "6px 12px" }} />
+            )}
             {section.items.map((item) => {
-              const isActive =
-                pathname === item.href ||
-                (item.href !== "/" && pathname.startsWith(item.href));
+              const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
               return (
                 <Link
                   key={item.href}
                   href={item.href}
+                  title={collapsed ? item.label : undefined}
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: "10px",
-                    padding: collapsed ? "10px 16px" : "8px 20px",
-                    margin: "1px 8px",
+                    gap: 10,
+                    padding: collapsed ? "10px 0" : "8px 16px",
+                    margin: collapsed ? "2px 8px" : "1px 8px",
                     borderRadius: "var(--radius)",
                     background: isActive ? "var(--bg-hover)" : "transparent",
-                    color: isActive
-                      ? "var(--text-primary)"
-                      : "var(--text-secondary)",
+                    color: isActive ? "var(--accent-primary)" : "var(--text-secondary)",
                     textDecoration: "none",
-                    fontSize: "13px",
-                    fontWeight: isActive ? "500" : "400",
+                    fontSize: 13,
+                    fontWeight: isActive ? 500 : 400,
                     transition: "all 0.15s ease",
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     justifyContent: collapsed ? "center" : "flex-start",
+                    position: "relative",
                   }}
-                  title={collapsed ? item.label : undefined}
                 >
-                  <span style={{ fontSize: "15px", flexShrink: 0 }}>
-                    {item.icon}
-                  </span>
+                  <FontAwesomeIcon
+                    icon={item.icon}
+                    style={{
+                      width: 16,
+                      height: 16,
+                      flexShrink: 0,
+                      opacity: isActive ? 1 : 0.7,
+                    }}
+                  />
                   {!collapsed && <span>{item.label}</span>}
                 </Link>
               );
@@ -208,62 +188,76 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {/* User info at bottom */}
-      <div
-        style={{
-          padding: collapsed ? "12px 8px" : "12px 16px",
-          borderTop: "1px solid var(--border)",
-          display: "flex",
-          alignItems: "center",
-          gap: "10px",
-          overflow: "hidden",
-        }}
-      >
+      {/* User + Collapse toggle */}
+      <div style={{ borderTop: "1px solid var(--border)" }}>
+        {/* User */}
         <div
           style={{
-            width: "32px",
-            height: "32px",
-            borderRadius: "50%",
-            background: "var(--bg-elevated)",
-            border: "1px solid var(--border)",
+            padding: collapsed ? "10px 0" : "10px 16px",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            overflow: "hidden",
+            justifyContent: collapsed ? "center" : "flex-start",
+          }}
+        >
+          <div
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: "50%",
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+              color: "var(--text-secondary)",
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            {session?.user?.name?.[0] ?? "A"}
+          </div>
+          {!collapsed && (
+            <div style={{ overflow: "hidden", flex: 1 }}>
+              <div style={{ color: "var(--text-primary)", fontSize: 13, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {session?.user?.name ?? "Admin User"}
+              </div>
+              <div style={{ color: "var(--text-muted)", fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {session?.user?.email ?? "admin@utility.com"}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Collapse toggle */}
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          style={{
+            width: "100%",
+            padding: "10px 0",
+            background: "none",
+            border: "none",
+            borderTop: "1px solid var(--border)",
+            cursor: "pointer",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            flexShrink: 0,
-            color: "var(--text-secondary)",
-            fontSize: "13px",
-            fontWeight: "600",
+            gap: 8,
+            color: "var(--text-muted)",
+            fontSize: 12,
+            fontFamily: "inherit",
+            transition: "color 0.15s ease",
           }}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
-          {session?.user?.name?.[0] ?? "A"}
-        </div>
-        {!collapsed && (
-          <div style={{ overflow: "hidden" }}>
-            <div
-              style={{
-                color: "var(--text-primary)",
-                fontSize: "13px",
-                fontWeight: "500",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
-              {session?.user?.name ?? "Admin User"}
-            </div>
-            <div
-              style={{
-                color: "var(--text-muted)",
-                fontSize: "11px",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
-              {session?.user?.email ?? "admin@utility.com"}
-            </div>
-          </div>
-        )}
+          <FontAwesomeIcon
+            icon={collapsed ? faChevronRight : faChevronLeft}
+            style={{ width: 10, height: 10 }}
+          />
+          {!collapsed && <span>Collapse</span>}
+        </button>
       </div>
     </aside>
   );

@@ -11,7 +11,7 @@ export async function listPremises(utilityId: string, query: PremiseQuery) {
   if (query.premiseType) where.premiseType = query.premiseType;
   if (query.serviceTerritoryId) where.serviceTerritoryId = query.serviceTerritoryId;
 
-  const [data, total] = await Promise.all([
+  const [data, total, activeCount, inactiveCount, condemnedCount] = await Promise.all([
     prisma.premise.findMany({
       where,
       ...paginationArgs(query),
@@ -25,9 +25,16 @@ export async function listPremises(utilityId: string, query: PremiseQuery) {
       },
     }),
     prisma.premise.count({ where }),
+    prisma.premise.count({ where: { utilityId, status: "ACTIVE" } }),
+    prisma.premise.count({ where: { utilityId, status: "INACTIVE" } }),
+    prisma.premise.count({ where: { utilityId, status: "CONDEMNED" } }),
   ]);
 
-  return paginatedResponse(data, total, query);
+  const result = paginatedResponse(data, total, query);
+  return {
+    ...result,
+    stats: { active: activeCount, inactive: inactiveCount, condemned: condemnedCount },
+  };
 }
 
 export async function getPremise(id: string, utilityId: string) {

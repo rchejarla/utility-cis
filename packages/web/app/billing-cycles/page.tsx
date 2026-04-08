@@ -31,12 +31,11 @@ export default function BillingCyclesPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await apiClient.get<BCResponse>("/api/v1/billing-cycles", {
-        page: String(page),
-        limit: "20",
-      });
-      setData(res.data);
-      setMeta(res.meta);
+      const res = await apiClient.get<BillingCycle[] | BCResponse>("/api/v1/billing-cycles");
+      // API returns plain array (not paginated)
+      const items = Array.isArray(res) ? res : res.data;
+      setData(items);
+      setMeta({ total: items.length, page: 1, limit: items.length, pages: 1 });
     } catch (err) {
       console.error("Failed to fetch billing cycles", err);
     } finally {

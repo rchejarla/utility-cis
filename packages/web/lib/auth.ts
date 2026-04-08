@@ -17,7 +17,7 @@ export const authOptions: NextAuthOptions = {
             id: "user-001",
             email: credentials.email,
             name: "Admin User",
-            utilityId: "mwa-001-uuid",
+            utilityId: "00000000-0000-4000-8000-000000000001",
             role: "admin",
           };
         }

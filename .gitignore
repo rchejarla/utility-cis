@@ -6,3 +6,6 @@ dist
 *.log
 .turbo
 .superpowers
+*.xlsx
+tsconfig.tsbuildinfo
+.npmrc

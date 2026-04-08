@@ -10,13 +10,23 @@ type CommodityStyle = {
   border: string;
 };
 
+// Normalize name → code for display
+function toCode(commodity: string): string {
+  const c = commodity?.toUpperCase().trim() ?? "";
+  if (c === "ELECTRICITY" || c === "ELECTRIC") return "ELECTRIC";
+  if (c === "POTABLE WATER" || c === "WATER") return "WATER";
+  if (c === "NATURAL GAS" || c === "GAS") return "GAS";
+  if (c === "SEWER") return "SEWER";
+  return c;
+}
+
 function getCommodityStyle(commodity: string): CommodityStyle {
-  const c = commodity?.toUpperCase() ?? "";
+  const c = toCode(commodity);
 
   if (c === "WATER") {
     return { bg: "rgba(59,130,246,0.12)", text: "#60a5fa", border: "rgba(59,130,246,0.25)" };
   }
-  if (c === "ELECTRIC" || c === "ELECTRICITY") {
+  if (c === "ELECTRIC") {
     return { bg: "rgba(245,158,11,0.12)", text: "#fbbf24", border: "rgba(245,158,11,0.25)" };
   }
   if (c === "GAS") {
@@ -49,7 +59,7 @@ export function CommodityBadge({ commodity }: CommodityBadgeProps) {
         whiteSpace: "nowrap",
       }}
     >
-      {commodity?.toUpperCase() ?? "—"}
+      {toCode(commodity) || "—"}
     </span>
   );
 }

@@ -65,6 +65,7 @@ export function MapView({ onPremiseClick }: MapViewProps) {
   const [geoData, setGeoData] = useState<GeoFeatureCollection | null>(null);
   const [activeTypes, setActiveTypes] = useState<string[]>(ALL_TYPES);
   const [popupInfo, setPopupInfo] = useState<PopupInfo | null>(null);
+  const [commodityMap, setCommodityMap] = useState<Record<string, string>>({});
   const [viewport, setViewport] = useState<ViewportState>({
     longitude: -98.5795,
     latitude: 39.8283,
@@ -88,17 +89,23 @@ export function MapView({ onPremiseClick }: MapViewProps) {
       ? "mapbox://styles/mapbox/light-v11"
       : "mapbox://styles/mapbox/dark-v11";
 
-  // Fetch GeoJSON data
+  // Fetch GeoJSON data + commodity lookup
   useEffect(() => {
-    async function fetchGeo() {
+    async function fetchData() {
       try {
-        const data = await apiClient.get<GeoFeatureCollection>("/api/v1/premises/geo");
-        setGeoData(data);
+        const [geo, commodities] = await Promise.all([
+          apiClient.get<GeoFeatureCollection>("/api/v1/premises/geo"),
+          apiClient.get<Array<{ id: string; code: string }>>("/api/v1/commodities"),
+        ]);
+        setGeoData(geo);
+        const cMap: Record<string, string> = {};
+        for (const c of commodities) { cMap[c.id] = c.code; }
+        setCommodityMap(cMap);
       } catch (err) {
-        console.error("Failed to fetch premises GeoJSON", err);
+        console.error("Failed to fetch map data", err);
       }
     }
-    fetchGeo();
+    fetchData();
   }, []);
 
   // Build Supercluster instance when data or active filters change
@@ -313,13 +320,15 @@ export function MapView({ onPremiseClick }: MapViewProps) {
             closeOnClick={false}
             anchor="bottom"
             offset={16}
+            maxWidth="300px"
+            style={{ zIndex: 50 }}
           >
             <MapPopup
               premiseId={popupInfo.properties.id}
               address={popupInfo.properties.address}
               premiseType={popupInfo.properties.premiseType}
               status={popupInfo.properties.status}
-              commodityIds={popupInfo.properties.commodityIds}
+              commodityIds={popupInfo.properties.commodityIds.map((id: string) => commodityMap[id] || id)}
               onClose={() => setPopupInfo(null)}
               onViewDetails={() => {
                 onPremiseClick?.(popupInfo.properties.id);

@@ -25,7 +25,9 @@ export interface DataTableProps<T> {
   loading?: boolean;
 }
 
-function SkeletonRow({ cols }: { cols: number }) {
+const SKELETON_WIDTHS = [75, 60, 85, 70, 65, 80, 68, 72, 63, 78];
+
+function SkeletonRow({ cols, rowIndex = 0 }: { cols: number; rowIndex?: number }) {
   return (
     <tr>
       {Array.from({ length: cols }).map((_, i) => (
@@ -35,7 +37,7 @@ function SkeletonRow({ cols }: { cols: number }) {
               height: "14px",
               borderRadius: "4px",
               background: "var(--bg-elevated)",
-              width: `${60 + Math.random() * 30}%`,
+              width: `${SKELETON_WIDTHS[(rowIndex * cols + i) % SKELETON_WIDTHS.length]}%`,
               animation: "pulse 1.5s ease-in-out infinite",
             }}
           />
@@ -63,10 +65,13 @@ export function DataTable<T extends Record<string, unknown>>({
         border: "1px solid var(--border)",
         borderRadius: "var(--radius)",
         overflow: "hidden",
+        minHeight: "480px",
+        display: "flex",
+        flexDirection: "column",
       }}
     >
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <div style={{ overflowX: "auto", flex: 1 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
           <thead>
             <tr style={{ background: "var(--bg-elevated)" }}>
               {columns.map((col) => (
@@ -92,7 +97,7 @@ export function DataTable<T extends Record<string, unknown>>({
           <tbody>
             {loading ? (
               Array.from({ length: 8 }).map((_, i) => (
-                <SkeletonRow key={i} cols={columns.length} />
+                <SkeletonRow key={i} cols={columns.length} rowIndex={i} />
               ))
             ) : data.length === 0 ? (
               <tr>

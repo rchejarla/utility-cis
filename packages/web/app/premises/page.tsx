@@ -61,9 +61,12 @@ export default function PremisesPage() {
       if (premiseType) params.premiseType = premiseType;
       if (status) params.status = status;
 
-      const res = await apiClient.get<PremisesResponse>("/api/v1/premises", params);
+      const res = await apiClient.get<PremisesResponse & { stats?: { active: number; inactive: number; condemned: number } }>("/api/v1/premises", params);
       setData(res.data);
       setMeta(res.meta);
+      if (res.stats) {
+        setStats({ total: res.meta.total, active: res.stats.active, inactive: res.stats.inactive, condemned: res.stats.condemned });
+      }
     } catch (err) {
       console.error("Failed to fetch premises", err);
     } finally {
@@ -71,33 +74,9 @@ export default function PremisesPage() {
     }
   }, [page, premiseType, status]);
 
-  const fetchStats = useCallback(async () => {
-    try {
-      const res = await apiClient.get<PremisesResponse>("/api/v1/premises", { limit: "1" });
-      const total = res.meta.total;
-      const [activeRes, inactiveRes, condemnedRes] = await Promise.all([
-        apiClient.get<PremisesResponse>("/api/v1/premises", { status: "ACTIVE", limit: "1" }),
-        apiClient.get<PremisesResponse>("/api/v1/premises", { status: "INACTIVE", limit: "1" }),
-        apiClient.get<PremisesResponse>("/api/v1/premises", { status: "CONDEMNED", limit: "1" }),
-      ]);
-      setStats({
-        total,
-        active: activeRes.meta.total,
-        inactive: inactiveRes.meta.total,
-        condemned: condemnedRes.meta.total,
-      });
-    } catch (err) {
-      console.error("Failed to fetch stats", err);
-    }
-  }, []);
-
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  useEffect(() => {
-    fetchStats();
-  }, [fetchStats]);
 
   const columns = [
     {

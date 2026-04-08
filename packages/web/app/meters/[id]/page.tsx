@@ -20,11 +20,15 @@ interface Meter {
   premise?: { id: string; addressLine1: string; city: string; state: string };
   commodity?: { name: string };
   uom?: { name: string; code: string };
-  serviceAgreements?: Array<{
+  serviceAgreementMeters?: Array<{
     id: string;
-    agreementNumber: string;
-    status: string;
-    startDate: string;
+    isPrimary: boolean;
+    serviceAgreement: {
+      id: string;
+      agreementNumber: string;
+      status: string;
+      startDate: string;
+    };
   }>;
 }
 
@@ -71,7 +75,7 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
       <Tabs
         tabs={[
           { key: "overview", label: "Overview" },
-          { key: "agreements", label: `Agreements (${meter.serviceAgreements?.length ?? 0})` },
+          { key: "agreements", label: `Agreements (${meter.serviceAgreementMeters?.length ?? 0})` },
         ]}
         activeTab={activeTab}
         onTabChange={setActiveTab}
@@ -155,12 +159,13 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
         {activeTab === "agreements" && (
           <DataTable
             columns={[
-              { key: "agreementNumber", header: "Agreement Number" },
-              { key: "startDate", header: "Start Date", render: (row: any) => row.startDate?.slice(0, 10) ?? "—" },
-              { key: "status", header: "Status", render: (row: any) => <StatusBadge status={row.status} /> },
+              { key: "agreementNumber", header: "Agreement Number", render: (row: any) => row.serviceAgreement.agreementNumber },
+              { key: "isPrimary", header: "Primary", render: (row: any) => row.isPrimary ? "Yes" : "No" },
+              { key: "startDate", header: "Start Date", render: (row: any) => row.serviceAgreement.startDate?.slice(0, 10) ?? "—" },
+              { key: "status", header: "Status", render: (row: any) => <StatusBadge status={row.serviceAgreement.status} /> },
             ]}
-            data={(meter.serviceAgreements ?? []) as any}
-            onRowClick={(row: any) => router.push(`/service-agreements/${row.id}`)}
+            data={(meter.serviceAgreementMeters ?? []) as any}
+            onRowClick={(row: any) => router.push(`/service-agreements/${row.serviceAgreement.id}`)}
           />
         )}
       </Tabs>

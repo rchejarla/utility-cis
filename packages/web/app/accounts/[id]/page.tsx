@@ -125,7 +125,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
               <span style={labelStyle}>Deposit Amount</span>
               <span style={valueStyle}>
                 {account.depositAmount != null
-                  ? `$${account.depositAmount.toFixed(2)}`
+                  ? `$${Number(account.depositAmount).toFixed(2)}`
                   : "—"}
               </span>
             </div>
