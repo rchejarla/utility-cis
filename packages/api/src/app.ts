@@ -7,6 +7,9 @@ import { startAuditWriter } from "./events/audit-writer.js";
 import { commodityRoutes } from "./routes/commodities.js";
 import { uomRoutes } from "./routes/uom.js";
 import { premiseRoutes } from "./routes/premises.js";
+import { meterRoutes } from "./routes/meters.js";
+import { accountRoutes } from "./routes/accounts.js";
+import { billingCycleRoutes } from "./routes/billing-cycles.js";
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -27,6 +30,9 @@ export async function buildApp() {
   await app.register(commodityRoutes);
   await app.register(uomRoutes);
   await app.register(premiseRoutes);
+  await app.register(meterRoutes);
+  await app.register(accountRoutes);
+  await app.register(billingCycleRoutes);
 
   startAuditWriter();
 
