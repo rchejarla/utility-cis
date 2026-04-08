@@ -4,6 +4,8 @@ import { authMiddleware } from "./middleware/auth.js";
 import { tenantMiddleware } from "./middleware/tenant.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { startAuditWriter } from "./events/audit-writer.js";
+import { commodityRoutes } from "./routes/commodities.js";
+import { uomRoutes } from "./routes/uom.js";
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -20,6 +22,9 @@ export async function buildApp() {
   app.get("/health", { config: { skipAuth: true } }, async (_request, reply) => {
     return reply.send({ status: "ok" });
   });
+
+  await app.register(commodityRoutes);
+  await app.register(uomRoutes);
 
   startAuditWriter();
 
