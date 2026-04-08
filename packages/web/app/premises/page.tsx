@@ -9,6 +9,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { apiClient } from "@/lib/api-client";
+import { MapView } from "@/components/premises/map-view";
 
 interface Premise {
   id: string;
@@ -220,19 +221,8 @@ export default function PremisesPage() {
       />
 
       {view === "map" ? (
-        <div
-          style={{
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius)",
-            padding: "80px 24px",
-            textAlign: "center",
-            color: "var(--text-muted)",
-            fontSize: "14px",
-          }}
-        >
-          <div style={{ fontSize: "32px", marginBottom: "12px" }}>🗺</div>
-          Map view coming soon
+        <div style={{ display: "flex", flex: 1, minHeight: "560px" }}>
+          <MapView onPremiseClick={(id) => router.push(`/premises/${id}`)} />
         </div>
       ) : (
         <DataTable
