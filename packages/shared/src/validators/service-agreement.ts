@@ -5,8 +5,8 @@ export const agreementStatusEnum = z.enum(["PENDING", "ACTIVE", "FINAL", "CLOSED
 export type AgreementStatus = z.infer<typeof agreementStatusEnum>;
 
 export const VALID_STATUS_TRANSITIONS: Record<AgreementStatus, AgreementStatus[]> = {
-  PENDING: ["ACTIVE", "CLOSED"],
-  ACTIVE: ["FINAL", "CLOSED"],
+  PENDING: ["ACTIVE"],
+  ACTIVE: ["FINAL"],
   FINAL: ["CLOSED"],
   CLOSED: [],
 };

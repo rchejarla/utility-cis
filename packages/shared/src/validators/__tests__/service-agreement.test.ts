@@ -67,8 +67,8 @@ describe("isValidStatusTransition", () => {
     expect(isValidStatusTransition("ACTIVE", "FINAL")).toBe(true);
   });
 
-  it("allows ACTIVE → CLOSED", () => {
-    expect(isValidStatusTransition("ACTIVE", "CLOSED")).toBe(true);
+  it("rejects ACTIVE → CLOSED (skips FINAL state)", () => {
+    expect(isValidStatusTransition("ACTIVE", "CLOSED")).toBe(false);
   });
 
   it("allows FINAL → CLOSED", () => {

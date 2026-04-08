@@ -29,9 +29,9 @@ export async function listRateSchedules(utilityId: string, query: RateScheduleQu
   return paginatedResponse(data, total, query);
 }
 
-export async function getRateSchedule(id: string) {
+export async function getRateSchedule(id: string, utilityId: string) {
   return prisma.rateSchedule.findUniqueOrThrow({
-    where: { id },
+    where: { id, utilityId },
     include: {
       commodity: true,
       supersedes: true,

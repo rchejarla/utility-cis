@@ -16,8 +16,9 @@ export async function rateScheduleRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/v1/rate-schedules/:id", async (request, reply) => {
+    const { utilityId } = request.user;
     const { id } = request.params as { id: string };
-    const schedule = await getRateSchedule(id);
+    const schedule = await getRateSchedule(id, utilityId);
     return reply.send(schedule);
   });
 

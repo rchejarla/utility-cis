@@ -30,9 +30,9 @@ export async function listPremises(utilityId: string, query: PremiseQuery) {
   return paginatedResponse(data, total, query);
 }
 
-export async function getPremise(id: string) {
+export async function getPremise(id: string, utilityId: string) {
   return prisma.premise.findUniqueOrThrow({
-    where: { id },
+    where: { id, utilityId },
     include: {
       meters: {
         where: { status: "ACTIVE" },

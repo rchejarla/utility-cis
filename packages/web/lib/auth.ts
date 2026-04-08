@@ -1,5 +1,6 @@
 import type { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
+import { encode } from "next-auth/jwt";
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -35,7 +36,11 @@ export const authOptions: NextAuthOptions = {
     async session({ session, token }) {
       (session as any).utilityId = token.utilityId;
       (session as any).role = token.role;
-      (session as any).accessToken = token; // JWT for API calls
+      // Encode the JWT token as a signed string so the API can verify it
+      (session as any).accessToken = await encode({
+        token,
+        secret: process.env.NEXTAUTH_SECRET || "",
+      });
       return session;
     },
   },

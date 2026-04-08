@@ -1,6 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState } from "react";
+import { apiClient } from "./api-client";
 
 type ThemeMode = "dark" | "light" | "system";
 
@@ -63,16 +64,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Fetch theme data from API
+  // Fetch theme data from API (uses apiClient so auth headers are included)
   useEffect(() => {
     async function fetchTheme() {
       try {
-        const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
-        const response = await fetch(`${API_URL}/api/v1/theme`);
-        if (response.ok) {
-          const data = await response.json();
-          setThemeData(data);
-        }
+        const data = await apiClient.get<ThemeData>("/api/v1/theme");
+        setThemeData(data);
       } catch {
         // Silently fail — use CSS variable defaults
       }

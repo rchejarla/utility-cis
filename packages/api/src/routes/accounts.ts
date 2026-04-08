@@ -16,8 +16,9 @@ export async function accountRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/v1/accounts/:id", async (request, reply) => {
+    const { utilityId } = request.user;
     const { id } = request.params as { id: string };
-    const account = await getAccount(id);
+    const account = await getAccount(id, utilityId);
     return reply.send(account);
   });
 

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-export const rateTypeEnum = z.enum(["FLAT", "TIERED", "TIME_OF_USE", "DEMAND", "BUDGET", "SEASONAL"]);
+// SEASONAL is excluded from Phase 1 scope
+export const rateTypeEnum = z.enum(["FLAT", "TIERED", "TIME_OF_USE", "DEMAND", "BUDGET"]);
 
 export const flatRateConfigSchema = z.object({
   type: z.literal("FLAT"),
@@ -56,17 +57,33 @@ export const rateConfigSchema = z.union([
   budgetRateConfigSchema,
 ]);
 
-export const createRateScheduleSchema = z.object({
-  name: z.string().min(1).max(255),
-  code: z.string().min(1).max(50),
-  commodityId: z.string().uuid(),
-  rateType: rateTypeEnum,
-  effectiveDate: z.string().date(),
-  expirationDate: z.string().date().optional(),
-  description: z.string().optional(),
-  regulatoryRef: z.string().max(100).optional(),
-  rateConfig: rateConfigSchema,
-});
+const RATE_TYPE_TO_CONFIG_TYPE: Record<string, string> = {
+  FLAT: "FLAT",
+  TIERED: "TIERED",
+  TIME_OF_USE: "TIME_OF_USE",
+  DEMAND: "DEMAND",
+  BUDGET: "BUDGET",
+};
+
+export const createRateScheduleSchema = z
+  .object({
+    name: z.string().min(1).max(255),
+    code: z.string().min(1).max(50),
+    commodityId: z.string().uuid(),
+    rateType: rateTypeEnum,
+    effectiveDate: z.string().date(),
+    expirationDate: z.string().date().optional(),
+    description: z.string().optional(),
+    regulatoryRef: z.string().max(100).optional(),
+    rateConfig: rateConfigSchema,
+  })
+  .refine(
+    (data) => data.rateConfig.type === RATE_TYPE_TO_CONFIG_TYPE[data.rateType],
+    {
+      message: "rateConfig.type must match rateType",
+      path: ["rateConfig"],
+    }
+  );
 
 export const rateScheduleQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),

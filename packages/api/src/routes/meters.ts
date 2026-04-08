@@ -16,8 +16,9 @@ export async function meterRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/v1/meters/:id", async (request, reply) => {
+    const { utilityId } = request.user;
     const { id } = request.params as { id: string };
-    const meter = await getMeter(id);
+    const meter = await getMeter(id, utilityId);
     return reply.send(meter);
   });
 

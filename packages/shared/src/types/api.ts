@@ -18,13 +18,4 @@ export interface ApiError {
   };
 }
 
-export interface DomainEvent {
-  type: string;
-  entityType: string;
-  entityId: string;
-  utilityId: string;
-  actorId: string;
-  beforeState: Record<string, unknown> | null;
-  afterState: Record<string, unknown> | null;
-  timestamp: string;
-}
+// DomainEvent is defined in events/index.ts and re-exported from the package root

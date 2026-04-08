@@ -23,8 +23,9 @@ export async function premiseRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/v1/premises/:id", async (request, reply) => {
+    const { utilityId } = request.user;
     const { id } = request.params as { id: string };
-    const premise = await getPremise(id);
+    const premise = await getPremise(id, utilityId);
     return reply.send(premise);
   });
 

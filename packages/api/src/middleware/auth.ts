@@ -1,4 +1,5 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
+import { jwtVerify } from "jose";
 
 export interface AuthUser {
   id: string;
@@ -12,6 +13,8 @@ declare module "fastify" {
     user: AuthUser;
   }
 }
+
+const NEXTAUTH_SECRET = process.env.NEXTAUTH_SECRET;
 
 export async function authMiddleware(
   request: FastifyRequest,
@@ -33,30 +36,59 @@ export async function authMiddleware(
   const token = authHeader.slice(7);
 
   try {
-    // Decode JWT payload (base64) for dev — no signature verification
-    const parts = token.split(".");
-    if (parts.length !== 3) {
-      throw new Error("Invalid token format");
+    if (NEXTAUTH_SECRET) {
+      // Production: verify JWT signature using NEXTAUTH_SECRET
+      const secret = new TextEncoder().encode(NEXTAUTH_SECRET);
+      const { payload } = await jwtVerify(token, secret);
+
+      const userId = (payload.sub || (payload as Record<string, unknown>).id) as string | undefined;
+      const utilityId = (
+        (payload as Record<string, unknown>).utility_id ||
+        (payload as Record<string, unknown>).utilityId
+      ) as string | undefined;
+
+      if (!userId || !utilityId) {
+        throw new Error("Missing required token fields");
+      }
+
+      request.user = {
+        id: userId,
+        utilityId,
+        email: (payload.email as string) ?? "",
+        role: ((payload as Record<string, unknown>).role as string) ?? "user",
+      };
+    } else {
+      // Dev mode fallback: decode without verification (only when NEXTAUTH_SECRET not set)
+      let payload: Record<string, unknown>;
+
+      // Try JSON parse first (NextAuth sends token object via JSON.stringify)
+      try {
+        payload = JSON.parse(token);
+      } catch {
+        // Fall back to JWT base64 decode
+        const parts = token.split(".");
+        if (parts.length !== 3) {
+          throw new Error("Invalid token format");
+        }
+        const payloadJson = Buffer.from(parts[1], "base64url").toString("utf-8");
+        payload = JSON.parse(payloadJson);
+      }
+
+      // Accept both utility_id (JWT convention) and utilityId (NextAuth convention)
+      const userId = (payload.sub || payload.id) as string | undefined;
+      const utilityId = (payload.utility_id || payload.utilityId) as string | undefined;
+
+      if (!userId || !utilityId) {
+        throw new Error("Missing required token fields");
+      }
+
+      request.user = {
+        id: userId,
+        utilityId,
+        email: (payload.email as string) ?? "",
+        role: (payload.role as string) ?? "user",
+      };
     }
-
-    const payloadJson = Buffer.from(parts[1], "base64url").toString("utf-8");
-    const payload = JSON.parse(payloadJson) as {
-      sub?: string;
-      utility_id?: string;
-      email?: string;
-      role?: string;
-    };
-
-    if (!payload.sub || !payload.utility_id) {
-      throw new Error("Missing required token fields");
-    }
-
-    request.user = {
-      id: payload.sub,
-      utilityId: payload.utility_id,
-      email: payload.email ?? "",
-      role: payload.role ?? "user",
-    };
   } catch {
     reply.status(401).send({
       error: { code: "UNAUTHORIZED", message: "Invalid token" },

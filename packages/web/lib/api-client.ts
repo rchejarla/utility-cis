@@ -2,17 +2,33 @@ import { getSession } from "next-auth/react";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
+function createDevToken(): string {
+  // Dev-mode fallback token when no session exists
+  const header = btoa(JSON.stringify({ alg: "none" }));
+  const payload = btoa(JSON.stringify({
+    sub: "dev-user-001",
+    utility_id: "mwa-001-uuid",
+    email: "dev@example.com",
+    role: "admin",
+  }));
+  return `${header}.${payload}.dev`;
+}
+
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const session = await getSession();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
   if (session) {
-    // Use the accessToken (JWT) from the session
     const token = (session as any).accessToken;
-    if (token) {
-      headers["Authorization"] = `Bearer ${JSON.stringify(token)}`;
+    if (token && typeof token === "string") {
+      // Signed JWT string from NextAuth — pass directly to the API
+      headers["Authorization"] = `Bearer ${token}`;
     }
+  }
+  if (!headers["Authorization"]) {
+    // Dev fallback — create a proper JWT-like token
+    headers["Authorization"] = `Bearer ${createDevToken()}`;
   }
   return headers;
 }

@@ -20,8 +20,9 @@ export async function serviceAgreementRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/v1/service-agreements/:id", async (request, reply) => {
+    const { utilityId } = request.user;
     const { id } = request.params as { id: string };
-    const agreement = await getServiceAgreement(id);
+    const agreement = await getServiceAgreement(id, utilityId);
     return reply.send(agreement);
   });
 

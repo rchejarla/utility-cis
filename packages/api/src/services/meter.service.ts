@@ -27,9 +27,9 @@ export async function listMeters(utilityId: string, query: MeterQuery) {
   return paginatedResponse(data, total, query);
 }
 
-export async function getMeter(id: string) {
+export async function getMeter(id: string, utilityId: string) {
   return prisma.meter.findUniqueOrThrow({
-    where: { id },
+    where: { id, utilityId },
     include: {
       premise: true,
       commodity: true,

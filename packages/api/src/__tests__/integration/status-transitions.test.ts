@@ -1,24 +1,24 @@
 import { describe, it, expect } from "vitest";
 import { isValidStatusTransition } from "@utility-cis/shared";
 
-// VALID_STATUS_TRANSITIONS from the validator:
-// PENDING: ["ACTIVE", "CLOSED"]
-// ACTIVE:  ["FINAL", "CLOSED"]
+// VALID_STATUS_TRANSITIONS from the validator (no skipping per spec):
+// PENDING: ["ACTIVE"]
+// ACTIVE:  ["FINAL"]
 // FINAL:   ["CLOSED"]
 // CLOSED:  []
 
 describe("ServiceAgreement status transitions", () => {
   const validTransitions: [string, string][] = [
     ["PENDING", "ACTIVE"],
-    ["PENDING", "CLOSED"],
     ["ACTIVE", "FINAL"],
-    ["ACTIVE", "CLOSED"],
     ["FINAL", "CLOSED"],
   ];
 
   const invalidTransitions: [string, string][] = [
     ["PENDING", "FINAL"],
+    ["PENDING", "CLOSED"],
     ["ACTIVE", "PENDING"],
+    ["ACTIVE", "CLOSED"],
     ["FINAL", "PENDING"],
     ["FINAL", "ACTIVE"],
     ["CLOSED", "PENDING"],

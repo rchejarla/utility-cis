@@ -31,9 +31,9 @@ export async function listAccounts(utilityId: string, query: AccountQuery) {
   return paginatedResponse(data, total, query);
 }
 
-export async function getAccount(id: string) {
+export async function getAccount(id: string, utilityId: string) {
   return prisma.account.findUniqueOrThrow({
-    where: { id },
+    where: { id, utilityId },
     include: {
       serviceAgreements: {
         include: {
@@ -76,27 +76,29 @@ export async function updateAccount(
   id: string,
   data: UpdateAccountInput
 ) {
-  if (data.status === "CLOSED") {
-    const activeCount = await prisma.serviceAgreement.count({
-      where: {
-        accountId: id,
-        status: { in: ["PENDING", "ACTIVE"] },
-      },
-    });
-
-    if (activeCount > 0) {
-      throw Object.assign(
-        new Error("Account has active or pending service agreements"),
-        { statusCode: 400, code: "ACTIVE_AGREEMENTS_EXIST" }
-      );
-    }
-  }
-
   const before = await prisma.account.findUniqueOrThrow({ where: { id, utilityId } });
 
-  const account = await prisma.account.update({
-    where: { id, utilityId },
-    data,
+  const account = await prisma.$transaction(async (tx) => {
+    if (data.status === "CLOSED") {
+      const activeCount = await tx.serviceAgreement.count({
+        where: {
+          accountId: id,
+          status: { in: ["PENDING", "ACTIVE"] },
+        },
+      });
+
+      if (activeCount > 0) {
+        throw Object.assign(
+          new Error("Account has active or pending service agreements"),
+          { statusCode: 400, code: "ACTIVE_AGREEMENTS_EXIST" }
+        );
+      }
+    }
+
+    return tx.account.update({
+      where: { id, utilityId },
+      data,
+    });
   });
 
   domainEvents.emitDomainEvent({
