@@ -6,6 +6,7 @@ import { errorHandler } from "./middleware/error-handler.js";
 import { startAuditWriter } from "./events/audit-writer.js";
 import { commodityRoutes } from "./routes/commodities.js";
 import { uomRoutes } from "./routes/uom.js";
+import { premiseRoutes } from "./routes/premises.js";
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -25,6 +26,7 @@ export async function buildApp() {
 
   await app.register(commodityRoutes);
   await app.register(uomRoutes);
+  await app.register(premiseRoutes);
 
   startAuditWriter();
 
