@@ -16,7 +16,7 @@ CIS owns the utility domain — premises, meters, accounts, rate logic, and serv
 
 ### Phase 1 Deliverables
 
-1. Database schema for 7 core entities + audit log (PostgreSQL 16+ with TimescaleDB)
+1. Database schema for 13 entities (8 core + 2 reference + junction + 2 system) (PostgreSQL 16+ with TimescaleDB)
 2. PostgreSQL Row-Level Security for multi-tenancy
 3. REST CRUD endpoints for all core entities (Fastify)
 4. Auth middleware with tenant context (NextAuth.js + JWT)
@@ -111,7 +111,38 @@ Prisma's `$executeRaw` is used to set the RLS context per-request. A Fastify `on
 
 ## 5. Data Model
 
-### 5.1 Premise (Service Location)
+### 5.1 Commodity
+
+Utility service types. Configurable per tenant — no hardcoded ENUM. Utilities can add custom commodity types without schema changes.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | Primary key |
+| utility_id | UUID | Tenant scope |
+| code | VARCHAR | e.g. "WATER", "ELECTRIC", "RECLAIMED_WATER" |
+| name | VARCHAR | e.g. "Potable Water", "Electricity" |
+| default_uom_id | UUID | FK → UnitOfMeasure (default unit for this commodity) |
+| is_active | BOOLEAN | Default true |
+| display_order | INTEGER | For UI ordering |
+| created_at | TIMESTAMPTZ | |
+
+### 5.2 UnitOfMeasure
+
+Measurement units per commodity. Includes conversion factors to a base unit for cross-UOM rate application.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | Primary key |
+| utility_id | UUID | Tenant scope |
+| code | VARCHAR | e.g. "GAL", "CCF", "KWH", "THERM" |
+| name | VARCHAR | e.g. "Gallons", "Hundred Cubic Feet" |
+| commodity_id | UUID | FK → Commodity |
+| conversion_factor | DECIMAL(15,8) | To base unit (e.g. 1 CCF = 748.052 GAL) |
+| is_base_unit | BOOLEAN | Is this the base unit for its commodity? |
+| is_active | BOOLEAN | Default true |
+| created_at | TIMESTAMPTZ | |
+
+### 5.3 Premise (Service Location)
 
 The physical address where utility service is delivered. Permanent — exists independently of customers.
 
@@ -127,14 +158,14 @@ The physical address where utility service is delivered. Permanent — exists in
 | geo_lat | DECIMAL(9,6) | For map view |
 | geo_lng | DECIMAL(9,6) | For map view |
 | premise_type | ENUM | RESIDENTIAL, COMMERCIAL, INDUSTRIAL, MUNICIPAL |
-| utility_types | ARRAY\<ENUM\> | [WATER, ELECTRIC, GAS, SEWER, STEAM] |
+| commodity_ids | ARRAY\<UUID\> | FK → Commodity (which commodities are served here) |
 | service_territory_id | UUID | |
 | municipality_code | VARCHAR | |
 | status | ENUM | ACTIVE, INACTIVE, CONDEMNED |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
-### 5.2 Meter
+### 5.4 Meter
 
 Physical device measuring consumption. Retained across customer changes.
 
@@ -144,9 +175,9 @@ Physical device measuring consumption. Retained across customer changes.
 | utility_id | UUID | Tenant scope |
 | premise_id | UUID | FK → Premise |
 | meter_number | VARCHAR | Manufacturer serial, unique within utility |
-| commodity | ENUM | WATER, ELECTRIC, GAS, SEWER, STEAM |
+| commodity_id | UUID | FK → Commodity |
 | meter_type | ENUM | AMR, AMI, MANUAL, SMART |
-| unit_of_measure | ENUM | GAL, CCF, KWH, MCF, THERM, HCF |
+| uom_id | UUID | FK → UnitOfMeasure |
 | dial_count | INTEGER | |
 | multiplier | DECIMAL(10,4) | Default 1.0 |
 | install_date | DATE | |
@@ -156,7 +187,7 @@ Physical device measuring consumption. Retained across customer changes.
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
-### 5.3 Account
+### 5.5 Account
 
 Billing relationship between a customer and the utility.
 
@@ -179,9 +210,9 @@ Billing relationship between a customer and the utility.
 | created_at | TIMESTAMPTZ | |
 | closed_at | TIMESTAMPTZ | Nullable |
 
-### 5.4 ServiceAgreement
+### 5.6 ServiceAgreement
 
-The core billing unit. Links account + premise + meter + commodity + rate schedule.
+The core billing unit. Links account + premise + commodity + rate schedule. Meters are linked via a junction table (ServiceAgreementMeter) to support both single-meter residential and multi-meter commercial/industrial scenarios.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -190,8 +221,7 @@ The core billing unit. Links account + premise + meter + commodity + rate schedu
 | agreement_number | VARCHAR | Human-readable |
 | account_id | UUID | FK → Account |
 | premise_id | UUID | FK → Premise |
-| meter_id | UUID | FK → Meter |
-| commodity | ENUM | WATER, ELECTRIC, GAS, SEWER, STEAM |
+| commodity_id | UUID | FK → Commodity |
 | rate_schedule_id | UUID | FK → RateSchedule (current) |
 | billing_cycle_id | UUID | FK → BillingCycle |
 | start_date | DATE | |
@@ -202,11 +232,30 @@ The core billing unit. Links account + premise + meter + commodity + rate schedu
 | updated_at | TIMESTAMPTZ | |
 
 **Constraints:**
-- No two active agreements for the same meter + commodity at the same time
 - Status transitions: PENDING → ACTIVE → FINAL → CLOSED (no skipping)
 - Supports retroactive end_date adjustments for rebilling
 
-### 5.5 RateSchedule
+### 5.6.1 ServiceAgreementMeter (Junction)
+
+Links one or more meters to a service agreement. Most residential agreements have one meter. Commercial/industrial may have multiple meters whose consumption is aggregated before rate application.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | Primary key |
+| utility_id | UUID | Tenant scope |
+| service_agreement_id | UUID | FK → ServiceAgreement |
+| meter_id | UUID | FK → Meter |
+| is_primary | BOOLEAN | Default true — primary meter for display/routing |
+| added_date | DATE | When meter was linked to this agreement |
+| removed_date | DATE | Nullable — null means currently linked |
+| created_at | TIMESTAMPTZ | |
+
+**Constraints:**
+- A meter can only be linked to one active agreement per commodity at a time
+- At least one meter must be marked `is_primary` per agreement
+- Meters can be added/removed over the life of an agreement without losing history
+
+### 5.7 RateSchedule
 
 Pricing rules for a commodity. Effective-dated and versioned.
 
@@ -216,7 +265,7 @@ Pricing rules for a commodity. Effective-dated and versioned.
 | utility_id | UUID | Tenant scope |
 | name | VARCHAR | e.g. "Residential Water - Schedule RS-1" |
 | code | VARCHAR | e.g. "RS-1", "TOU-EV" |
-| commodity | ENUM | WATER, ELECTRIC, GAS, SEWER, STEAM |
+| commodity_id | UUID | FK → Commodity |
 | rate_type | ENUM | FLAT, TIERED, TIME_OF_USE, DEMAND, BUDGET, SEASONAL |
 | effective_date | DATE | |
 | expiration_date | DATE | Nullable |
@@ -278,7 +327,7 @@ Pricing rules for a commodity. Effective-dated and versioned.
 }
 ```
 
-### 5.6 BillingCycle
+### 5.8 BillingCycle
 
 Defines when meters in a cycle are read and bills generate.
 
@@ -293,7 +342,7 @@ Defines when meters in a cycle are read and bills generate.
 | frequency | ENUM | MONTHLY, BIMONTHLY, QUARTERLY |
 | active | BOOLEAN | Default true |
 
-### 5.7 MeterRead
+### 5.9 MeterRead
 
 Every reading taken from a meter. Created as a TimescaleDB hypertable from day one, partitioned by `read_datetime`. CRUD endpoints and consumption logic are Phase 2 — only the schema is created in Phase 1.
 
@@ -319,7 +368,7 @@ Every reading taken from a meter. Created as a TimescaleDB hypertable from day o
 SELECT create_hypertable('meter_read', 'read_datetime');
 ```
 
-### 5.8 AuditLog
+### 5.10 AuditLog
 
 Captures all entity state changes via internal event emitter.
 
@@ -336,7 +385,7 @@ Captures all entity state changes via internal event emitter.
 | metadata | JSONB | Nullable — extra context |
 | created_at | TIMESTAMPTZ | |
 
-### 5.9 TenantTheme
+### 5.11 TenantTheme
 
 Per-tenant UI theme configuration.
 
@@ -352,7 +401,7 @@ Per-tenant UI theme configuration.
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
-### 5.10 UserPreference
+### 5.12 UserPreference
 
 Per-user settings (theme mode, view preferences). One row per user per tenant.
 
@@ -375,6 +424,16 @@ Per-user settings (theme mode, view preferences). One row per user per tenant.
 All endpoints under `/api/v1`. All require JWT with `utility_id` claim.
 
 ### 6.2 Endpoints
+
+#### Commodities & Units of Measure
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/commodities` | List commodities for tenant |
+| POST | `/api/v1/commodities` | Create commodity |
+| PATCH | `/api/v1/commodities/:id` | Update commodity (name, active status) |
+| GET | `/api/v1/uom` | List units of measure (filterable by commodity) |
+| POST | `/api/v1/uom` | Create unit of measure |
+| PATCH | `/api/v1/uom/:id` | Update UOM (conversion factor, active status) |
 
 #### Premises
 | Method | Path | Description |
@@ -405,7 +464,7 @@ All endpoints under `/api/v1`. All require JWT with `utility_id` claim.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/service-agreements` | List (filterable by account, premise, status) |
-| POST | `/api/v1/service-agreements` | Create (validates no overlap for meter+commodity) |
+| POST | `/api/v1/service-agreements` | Create (with meter assignments, validates uniqueness) |
 | GET | `/api/v1/service-agreements/:id` | Detail |
 | PATCH | `/api/v1/service-agreements/:id` | Update (rate change, status transition) |
 
@@ -457,9 +516,9 @@ Response: { data: [...], meta: { total, page, limit, pages } }
 
 ### 6.4 Business Rules
 
-- **ServiceAgreement overlap prevention:** No two active agreements for same meter + commodity
+- **Meter assignment uniqueness:** A meter can only be linked to one active agreement per commodity at a time (enforced on ServiceAgreementMeter)
 - **RateSchedule versioning:** Creating a new version auto-expires the predecessor
-- **Meter-Premise commodity match:** Meter commodity must be in premise's `utility_types`
+- **Meter-Premise commodity match:** Meter's `commodity_id` must exist in premise's `commodity_ids`
 - **Status transitions:** ServiceAgreement follows PENDING → ACTIVE → FINAL → CLOSED
 - **Account closure guard:** Cannot close account with active service agreements
 - **Soft delete only:** No hard deletes — status changes to INACTIVE/CLOSED/REMOVED
@@ -498,7 +557,7 @@ app/
 │   └── [id]/page.tsx       — Detail (agreements + billing + deposit)
 ├── service-agreements/
 │   ├── page.tsx            — List view
-│   ├── new/page.tsx        — Link account + premise + meter + rate + cycle
+│   ├── new/page.tsx        — Link account + premise + meters (1+) + rate + cycle
 │   └── [id]/page.tsx       — Detail + status transitions
 ├── rate-schedules/
 │   ├── page.tsx            — List (current + historical)
