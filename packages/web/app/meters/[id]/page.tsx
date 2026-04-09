@@ -75,6 +75,7 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
   const [uoms, setUoms] = useState<Array<{ id: string; code: string; name: string; commodityId: string }>>([]);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
 
   const loadMeter = async () => {
     try {
@@ -184,7 +185,28 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
           { key: "attachments", label: "Attachments" },
         ]}
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={(t) => { setActiveTab(t); setShowUpload(false); }}
+        action={
+          activeTab === "attachments" && !showUpload ? (
+            <button
+              onClick={() => setShowUpload(true)}
+              style={{
+                padding: "5px 12px",
+                fontSize: "12px",
+                fontWeight: 500,
+                background: "var(--accent-primary)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "var(--radius, 10px)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                marginBottom: "2px",
+              }}
+            >
+              + Upload
+            </button>
+          ) : undefined
+        }
       >
         {activeTab === "overview" && (
           <div
@@ -407,7 +429,7 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
         )}
 
         {activeTab === "attachments" && (
-          <AttachmentsTab entityType="Meter" entityId={id} />
+          <AttachmentsTab entityType="Meter" entityId={id} showForm={showUpload} onShowFormChange={setShowUpload} />
         )}
       </Tabs>
     </div>

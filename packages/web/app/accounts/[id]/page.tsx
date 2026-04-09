@@ -116,6 +116,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
   const [closing, setClosing] = useState(false);
   const [showAddContact, setShowAddContact] = useState(false);
   const [showAddAddress, setShowAddAddress] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
 
   const loadAccount = async () => {
     try {
@@ -236,6 +237,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
           setActiveTab(tab);
           if (tab !== "contacts") setShowAddContact(false);
           if (tab !== "billing-addresses") setShowAddAddress(false);
+          setShowUpload(false);
         }}
         action={
           activeTab === "contacts" ? (
@@ -271,6 +273,24 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
               }}
             >
               {showAddAddress ? "Cancel" : "+ Add Address"}
+            </button>
+          ) : activeTab === "attachments" && !showUpload ? (
+            <button
+              onClick={() => setShowUpload(true)}
+              style={{
+                padding: "5px 12px",
+                fontSize: "12px",
+                fontWeight: 500,
+                background: "var(--accent-primary)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "var(--radius, 10px)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                marginBottom: "2px",
+              }}
+            >
+              + Upload
             </button>
           ) : undefined
         }
@@ -553,7 +573,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
         )}
 
         {activeTab === "attachments" && (
-          <AttachmentsTab entityType="Account" entityId={id} />
+          <AttachmentsTab entityType="Account" entityId={id} showForm={showUpload} onShowFormChange={setShowUpload} />
         )}
 
         {activeTab === "audit" && (

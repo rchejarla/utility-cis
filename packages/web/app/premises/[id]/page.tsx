@@ -124,6 +124,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
   const [saving, setSaving] = useState(false);
   const [showAddMeter, setShowAddMeter] = useState(false);
   const [showAddAgreement, setShowAddAgreement] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
   const [editCommodityIds, setEditCommodityIds] = useState<string[]>([]);
   const [allCommodities, setAllCommodities] = useState<Array<{ id: string; code: string; name: string }>>([]);
   const [showDeactivateConfirm, setShowDeactivateConfirm] = useState(false);
@@ -279,7 +280,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
           { key: "audit", label: "Audit" },
         ]}
         activeTab={activeTab}
-        onTabChange={(t) => { setActiveTab(t); setShowAddMeter(false); setShowAddAgreement(false); }}
+        onTabChange={(t) => { setActiveTab(t); setShowAddMeter(false); setShowAddAgreement(false); setShowUpload(false); }}
         action={
           activeTab === "meters" && !showAddMeter ? (
             <button
@@ -316,6 +317,24 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
               }}
             >
               + Add Agreement
+            </button>
+          ) : activeTab === "attachments" && !showUpload ? (
+            <button
+              onClick={() => setShowUpload(true)}
+              style={{
+                padding: "5px 12px",
+                fontSize: "12px",
+                fontWeight: 500,
+                background: "var(--accent-primary)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "var(--radius, 10px)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                marginBottom: "2px",
+              }}
+            >
+              + Upload
             </button>
           ) : undefined
         }
@@ -632,7 +651,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
         )}
 
         {activeTab === "attachments" && (
-          <AttachmentsTab entityType="Premise" entityId={id} />
+          <AttachmentsTab entityType="Premise" entityId={id} showForm={showUpload} onShowFormChange={setShowUpload} />
         )}
 
         {activeTab === "audit" && (

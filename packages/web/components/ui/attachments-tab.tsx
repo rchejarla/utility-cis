@@ -17,6 +17,8 @@ interface Attachment {
 interface AttachmentsTabProps {
   entityType: string; // "Customer", "Account", "Premise", "Meter", "ServiceAgreement"
   entityId: string;
+  showForm?: boolean;
+  onShowFormChange?: (show: boolean) => void;
 }
 
 function formatFileSize(bytes: number): string {
@@ -35,11 +37,13 @@ const btnBase: React.CSSProperties = {
   border: "none",
 };
 
-export function AttachmentsTab({ entityType, entityId }: AttachmentsTabProps) {
+export function AttachmentsTab({ entityType, entityId, showForm: showFormProp, onShowFormChange }: AttachmentsTabProps) {
   const { toast } = useToast();
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showUpload, setShowUpload] = useState(false);
+  const [showUploadLocal, setShowUploadLocal] = useState(false);
+  const showUpload = showFormProp ?? showUploadLocal;
+  const setShowUpload = (v: boolean) => { setShowUploadLocal(v); onShowFormChange?.(v); };
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [description, setDescription] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -119,21 +123,6 @@ export function AttachmentsTab({ entityType, entityId }: AttachmentsTabProps) {
 
   return (
     <div>
-      {/* Toolbar */}
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px" }}>
-        <button
-          onClick={() => setShowUpload((v) => !v)}
-          style={{
-            ...btnBase,
-            background: showUpload ? "transparent" : "var(--accent-primary)",
-            color: showUpload ? "var(--text-secondary)" : "#fff",
-            border: showUpload ? "1px solid var(--border)" : "none",
-          }}
-        >
-          {showUpload ? "Cancel" : "+ Upload"}
-        </button>
-      </div>
-
       {/* Upload form */}
       {showUpload && (
         <div

@@ -113,6 +113,7 @@ export default function ServiceAgreementDetailPage({
   const [rateSchedules, setRateSchedules] = useState<RateSchedule[]>([]);
   const [billingCycles, setBillingCycles] = useState<BillingCycle[]>([]);
   const [showAddMeter, setShowAddMeter] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
 
   const loadSA = async () => {
     try {
@@ -278,7 +279,7 @@ export default function ServiceAgreementDetailPage({
           { key: "audit", label: "Audit" },
         ]}
         activeTab={activeTab}
-        onTabChange={(t) => { setActiveTab(t); setShowAddMeter(false); }}
+        onTabChange={(t) => { setActiveTab(t); setShowAddMeter(false); setShowUpload(false); }}
         action={
           activeTab === "meters" && !showAddMeter ? (
             <button
@@ -297,6 +298,24 @@ export default function ServiceAgreementDetailPage({
               }}
             >
               + Add Meter
+            </button>
+          ) : activeTab === "attachments" && !showUpload ? (
+            <button
+              onClick={() => setShowUpload(true)}
+              style={{
+                padding: "5px 12px",
+                fontSize: "12px",
+                fontWeight: 500,
+                background: "var(--accent-primary)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "var(--radius, 10px)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                marginBottom: "2px",
+              }}
+            >
+              + Upload
             </button>
           ) : undefined
         }
@@ -482,7 +501,7 @@ export default function ServiceAgreementDetailPage({
         )}
 
         {activeTab === "attachments" && (
-          <AttachmentsTab entityType="ServiceAgreement" entityId={id} />
+          <AttachmentsTab entityType="ServiceAgreement" entityId={id} showForm={showUpload} onShowFormChange={setShowUpload} />
         )}
 
         {activeTab === "audit" && (
