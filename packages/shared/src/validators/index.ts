@@ -10,3 +10,5 @@ export * from "./theme";
 export * from "./customer";
 export * from "./contact";
 export * from "./billing-address";
+export * from "./user";
+export * from "./role";

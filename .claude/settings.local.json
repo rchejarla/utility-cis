@@ -1,21 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node:*)",
-      "Bash(wc -l \"C:/development/claude-test/docs/specs/\"*.md)",
-      "Bash(wc -l /c/development/claude-test/docs/specs/*.md)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
-      "Bash(git push:*)",
-      "Bash(npx next:*)",
-      "Bash(git:*)",
-      "Bash(npx vitest:*)",
-      "Bash(npx tsc:*)",
-      "Bash(grep -n \"activeTab\\\\|Tabs\\\\|tabs=\\\\|\\\\{ key:\" /c/development/claude-test/packages/web/app/premises/[id]/page.tsx)",
-      "Bash(grep -n \"activeTab\\\\|Tabs\\\\|tabs=\\\\|\\\\{ key:\" /c/development/claude-test/packages/web/app/accounts/[id]/page.tsx)",
-      "Bash(grep -n \"activeTab\\\\|Tabs\\\\|tabs=\\\\|\\\\{ key:\" /c/development/claude-test/packages/web/app/meters/[id]/page.tsx)",
-      "Bash(npx prisma:*)",
-      "Bash(pnpm add:*)"
+      "Bash(*)",
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)",
+      "Glob(*)",
+      "Grep(*)",
+      "Agent(*)"
     ]
   },
   "hooks": {
