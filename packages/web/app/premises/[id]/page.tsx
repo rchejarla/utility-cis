@@ -9,6 +9,7 @@ import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { DataTable } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
+import { MetersTab } from "@/components/premises/meters-tab";
 
 interface Premise {
   id: string;
@@ -23,6 +24,7 @@ interface Premise {
   geoLng?: number;
   serviceTerritoryId?: string;
   municipalityCode?: string;
+  commodityIds?: string[];
   ownerId?: string;
   owner?: {
     id: string;
@@ -461,23 +463,10 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
         )}
 
         {activeTab === "meters" && (
-          <DataTable
-            columns={[
-              { key: "meterNumber", header: "Meter Number" },
-              {
-                key: "commodity",
-                header: "Commodity",
-                render: (row: any) => <CommodityBadge commodity={row.commodity?.name ?? ""} />,
-              },
-              { key: "meterType", header: "Type" },
-              {
-                key: "status",
-                header: "Status",
-                render: (row: any) => <StatusBadge status={row.status} />,
-              },
-            ]}
-            data={(premise.meters ?? []) as any}
-            onRowClick={(row: any) => router.push(`/meters/${row.id}`)}
+          <MetersTab
+            premise={premise}
+            onMeterAdded={() => loadPremise()}
+            onRowClick={(id: string) => router.push(`/meters/${id}`)}
           />
         )}
 
