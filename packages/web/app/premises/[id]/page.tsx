@@ -123,6 +123,8 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
   const [saving, setSaving] = useState(false);
   const [showAddMeter, setShowAddMeter] = useState(false);
   const [showAddAgreement, setShowAddAgreement] = useState(false);
+  const [editCommodityIds, setEditCommodityIds] = useState<string[]>([]);
+  const [allCommodities, setAllCommodities] = useState<Array<{ id: string; code: string; name: string }>>([]);
   const [showDeactivateConfirm, setShowDeactivateConfirm] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
 
@@ -167,13 +169,19 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
       ownerId: premise.ownerId ?? "",
       status: premise.status ?? "",
     });
-    // Fetch customers for dropdown
+    // Fetch customers and commodities for dropdowns
     try {
-      const res = await apiClient.get<{ data: Customer[] }>("/api/v1/customers", { limit: "500" });
-      setCustomers(res.data ?? []);
+      const [custRes, commRes] = await Promise.all([
+        apiClient.get<{ data: Customer[] }>("/api/v1/customers", { limit: "500" }),
+        apiClient.get<Array<{ id: string; code: string; name: string }> | { data: Array<{ id: string; code: string; name: string }> }>("/api/v1/commodities"),
+      ]);
+      setCustomers(custRes.data ?? []);
+      const cList = Array.isArray(commRes) ? commRes : commRes.data ?? [];
+      setAllCommodities(cList);
     } catch (err) {
-      console.error("Failed to load customers", err);
+      console.error("Failed to load dropdown data", err);
     }
+    setEditCommodityIds(premise.commodityIds ?? []);
     setEditing(true);
   };
 
@@ -211,6 +219,12 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
       if (editForm.municipalityCode !== (premise.municipalityCode ?? "")) changes.municipalityCode = editForm.municipalityCode;
       if (editForm.ownerId !== (premise.ownerId ?? "")) changes.ownerId = editForm.ownerId || null;
       if (editForm.status !== (premise.status ?? "")) changes.status = editForm.status;
+      // Check if commodityIds changed
+      const origIds = (premise.commodityIds ?? []).slice().sort().join(",");
+      const editIds = editCommodityIds.slice().sort().join(",");
+      if (origIds !== editIds && editCommodityIds.length > 0) {
+        changes.commodityIds = editCommodityIds;
+      }
 
       await apiClient.patch(`/api/v1/premises/${id}`, changes);
       await loadPremise();
@@ -502,13 +516,52 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
 
             <div style={fieldStyle}>
               <span style={labelStyle}>Commodities</span>
-              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                {premise.commodities && premise.commodities.length > 0
-                  ? premise.commodities.map((c, i) => (
-                      <CommodityBadge key={i} commodity={c.commodity?.name ?? ""} />
-                    ))
-                  : <span style={valueStyle}>—</span>}
-              </div>
+              {editing ? (
+                <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                  {allCommodities.map((c) => {
+                    const selected = editCommodityIds.includes(c.id);
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => {
+                          setEditCommodityIds((prev) =>
+                            selected ? prev.filter((id) => id !== c.id) : [...prev, c.id]
+                          );
+                        }}
+                        style={{
+                          padding: "4px 12px",
+                          borderRadius: "16px",
+                          border: selected ? "1px solid var(--accent-primary)" : "1px solid var(--border)",
+                          background: selected ? "rgba(59,130,246,0.15)" : "transparent",
+                          color: selected ? "var(--accent-primary)" : "var(--text-secondary)",
+                          fontSize: "12px",
+                          fontWeight: selected ? 600 : 400,
+                          cursor: "pointer",
+                          fontFamily: "inherit",
+                          transition: "all 0.15s ease",
+                        }}
+                      >
+                        {c.name} ({c.code})
+                      </button>
+                    );
+                  })}
+                  {editCommodityIds.length === 0 && (
+                    <span style={{ fontSize: "11px", color: "#f87171" }}>At least one commodity required (BR-PR-003)</span>
+                  )}
+                </div>
+              ) : (
+                <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                  {premise.commodityIds && premise.commodityIds.length > 0
+                    ? premise.commodityIds.map((cId, i) => {
+                        // Find commodity name from meters or just show ID
+                        const meterWithCommodity = premise.meters?.find((m: any) => m.commodityId === cId || m.commodity?.id === cId);
+                        const name = meterWithCommodity?.commodity?.name ?? cId;
+                        return <CommodityBadge key={i} commodity={name} />;
+                      })
+                    : <span style={valueStyle}>—</span>}
+                </div>
+              )}
             </div>
 
             {premise.geoLat != null && (
