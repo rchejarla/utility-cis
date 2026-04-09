@@ -37,6 +37,8 @@ interface MetersTabProps {
   premise: Premise;
   onMeterAdded: () => void;
   onRowClick: (id: string) => void;
+  showForm?: boolean;
+  onShowFormChange?: (show: boolean) => void;
 }
 
 const METER_TYPES = ["MANUAL", "AMR", "AMI", "SMART"];
@@ -63,9 +65,11 @@ const btnStyle = {
   fontFamily: "inherit",
 };
 
-export function MetersTab({ premise, onMeterAdded, onRowClick }: MetersTabProps) {
+export function MetersTab({ premise, onMeterAdded, onRowClick, showForm: showFormProp, onShowFormChange }: MetersTabProps) {
   const { toast } = useToast();
-  const [showForm, setShowForm] = useState(false);
+  const [showFormLocal, setShowFormLocal] = useState(false);
+  const showForm = showFormProp ?? showFormLocal;
+  const setShowForm = (v: boolean) => { setShowFormLocal(v); onShowFormChange?.(v); };
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [commodities, setCommodities] = useState<Commodity[]>([]);
@@ -143,18 +147,6 @@ export function MetersTab({ premise, onMeterAdded, onRowClick }: MetersTabProps)
 
   return (
     <div>
-      {/* Header with Add button */}
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px" }}>
-        {!showForm && (
-          <button
-            onClick={() => setShowForm(true)}
-            style={{ ...btnStyle, background: "var(--accent-primary)", color: "#fff" }}
-          >
-            + Add Meter
-          </button>
-        )}
-      </div>
-
       {/* Inline Add Meter Form */}
       {showForm && (
         <div

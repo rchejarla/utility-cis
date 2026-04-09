@@ -119,6 +119,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
   const [editForm, setEditForm] = useState<Record<string, string>>({});
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [saving, setSaving] = useState(false);
+  const [showAddMeter, setShowAddMeter] = useState(false);
 
   const loadPremise = async () => {
     try {
@@ -237,7 +238,28 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
           { key: "audit", label: "Audit" },
         ]}
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={(t) => { setActiveTab(t); setShowAddMeter(false); }}
+        action={
+          activeTab === "meters" && !showAddMeter ? (
+            <button
+              onClick={() => setShowAddMeter(true)}
+              style={{
+                padding: "5px 12px",
+                fontSize: "12px",
+                fontWeight: 500,
+                background: "var(--accent-primary)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "var(--radius, 10px)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                marginBottom: "2px",
+              }}
+            >
+              + Add Meter
+            </button>
+          ) : undefined
+        }
       >
         {activeTab === "overview" && (
           <div
@@ -466,8 +488,10 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
         {activeTab === "meters" && (
           <MetersTab
             premise={premise}
-            onMeterAdded={() => loadPremise()}
+            onMeterAdded={() => { loadPremise(); setShowAddMeter(false); }}
             onRowClick={(id: string) => router.push(`/meters/${id}`)}
+            showForm={showAddMeter}
+            onShowFormChange={setShowAddMeter}
           />
         )}
 

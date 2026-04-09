@@ -11,16 +11,18 @@ interface TabsProps {
   tabs: Tab[];
   activeTab: string;
   onTabChange: (key: string) => void;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }
 
-export function Tabs({ tabs, activeTab, onTabChange, children }: TabsProps) {
+export function Tabs({ tabs, activeTab, onTabChange, action, children }: TabsProps) {
   return (
     <div>
       {/* Tab bar */}
       <div
         style={{
           display: "flex",
+          alignItems: "center",
           gap: "2px",
           borderBottom: "1px solid var(--border)",
           marginBottom: "20px",
@@ -63,6 +65,7 @@ export function Tabs({ tabs, activeTab, onTabChange, children }: TabsProps) {
             </button>
           );
         })}
+        {action && <div style={{ marginLeft: "auto" }}>{action}</div>}
       </div>
 
       {/* Tab content */}
