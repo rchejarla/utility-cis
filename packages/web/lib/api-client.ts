@@ -109,6 +109,8 @@ export const apiClient = {
 
   async delete<T>(path: string): Promise<T> {
     const headers = await getAuthHeaders();
+    // Remove Content-Type for DELETE — no body to send
+    delete headers["Content-Type"];
     const response = await fetch(`${API_URL}${path}`, {
       method: "DELETE",
       headers,
