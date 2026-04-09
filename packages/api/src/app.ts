@@ -14,6 +14,9 @@ import { serviceAgreementRoutes } from "./routes/service-agreements.js";
 import { rateScheduleRoutes } from "./routes/rate-schedules.js";
 import { themeRoutes } from "./routes/theme.js";
 import { auditLogRoutes } from "./routes/audit-log.js";
+import { customerRoutes } from "./routes/customers.js";
+import { contactRoutes } from "./routes/contacts.js";
+import { billingAddressRoutes } from "./routes/billing-addresses.js";
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -41,6 +44,9 @@ export async function buildApp() {
   await app.register(rateScheduleRoutes);
   await app.register(themeRoutes);
   await app.register(auditLogRoutes);
+  await app.register(customerRoutes);
+  await app.register(contactRoutes);
+  await app.register(billingAddressRoutes);
 
   startAuditWriter();
 

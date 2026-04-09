@@ -111,6 +111,47 @@ async function main() {
   }
   console.log("  " + saData.length + " service agreements");
 
+  const customerData = [
+    { customerType: "INDIVIDUAL", firstName: "Jane", lastName: "Smith", email: "jane.smith@example.com", phone: "555-100-0001", status: "ACTIVE" },
+    { customerType: "INDIVIDUAL", firstName: "Robert", lastName: "Johnson", email: "robert.j@example.com", phone: "555-100-0002", status: "ACTIVE" },
+    { customerType: "ORGANIZATION", organizationName: "Acme Industries LLC", email: "billing@acme.example.com", phone: "555-200-0001", taxId: "12-3456789", status: "ACTIVE" },
+  ];
+
+  const cArr = [];
+  for (const cu of customerData) {
+    cArr.push(await p.customer.create({ data: { utilityId: UID, ...cu } }));
+  }
+
+  // Link customers to accounts
+  await p.account.update({ where: { id: aArr[0].id }, data: { customerId: cArr[0].id } });
+  await p.account.update({ where: { id: aArr[2].id }, data: { customerId: cArr[1].id } });
+  await p.account.update({ where: { id: aArr[1].id }, data: { customerId: cArr[2].id } });
+  await p.account.update({ where: { id: aArr[3].id }, data: { customerId: cArr[2].id } });
+  console.log("  " + cArr.length + " customers");
+
+  const contactData = [
+    { accountId: aArr[0].id, customerId: cArr[0].id, role: "PRIMARY", firstName: "Jane", lastName: "Smith", email: "jane.smith@example.com", phone: "555-100-0001", isPrimary: true },
+    { accountId: aArr[0].id, role: "AUTHORIZED", firstName: "Tom", lastName: "Smith", email: "tom.smith@example.com", phone: "555-100-0099", isPrimary: false },
+    { accountId: aArr[1].id, customerId: cArr[2].id, role: "BILLING", firstName: "Alice", lastName: "Walker", email: "alice@acme.example.com", phone: "555-200-0002", isPrimary: true },
+    { accountId: aArr[2].id, customerId: cArr[1].id, role: "PRIMARY", firstName: "Robert", lastName: "Johnson", email: "robert.j@example.com", phone: "555-100-0002", isPrimary: true },
+  ];
+
+  for (const ct of contactData) {
+    await p.contact.create({ data: { utilityId: UID, ...ct } });
+  }
+  console.log("  " + contactData.length + " contacts");
+
+  const billingAddressData = [
+    { accountId: aArr[0].id, addressLine1: "742 Evergreen Terrace", city: "Springfield", state: "IL", zip: "62704", country: "US", isPrimary: true },
+    { accountId: aArr[1].id, addressLine1: "PO Box 1234", city: "Washington", state: "DC", zip: "20500", country: "US", isPrimary: true },
+    { accountId: aArr[2].id, addressLine1: "221B Baker Street", city: "New York", state: "NY", zip: "10001", country: "US", isPrimary: true },
+  ];
+
+  for (const ba of billingAddressData) {
+    await p.billingAddress.create({ data: { utilityId: UID, ...ba } });
+  }
+  console.log("  " + billingAddressData.length + " billing addresses");
+
   await p.tenantTheme.create({
     data: {
       utilityId: UID, preset: "midnight",
@@ -120,7 +161,7 @@ async function main() {
   });
   console.log("  theme");
 
-  console.log("\nDone! 10 premises, 8 accounts, 15 meters, 10 agreements");
+  console.log("\nDone! 10 premises, 8 accounts, 15 meters, 10 agreements, 3 customers, 4 contacts, 3 billing addresses");
 }
 
 main().catch(e => { console.error("SEED ERROR:", e); process.exit(1); }).finally(() => p.$disconnect());
