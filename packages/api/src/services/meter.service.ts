@@ -60,8 +60,14 @@ export async function createMeter(
     );
   }
 
+  const { installDate, removalDate, ...rest } = data;
   const meter = await prisma.meter.create({
-    data: { ...data, utilityId },
+    data: {
+      ...rest,
+      utilityId,
+      installDate: new Date(installDate),
+      ...(removalDate ? { removalDate: new Date(removalDate) } : {}),
+    },
     include: {
       premise: true,
       commodity: true,
