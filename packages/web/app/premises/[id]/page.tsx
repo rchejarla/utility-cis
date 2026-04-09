@@ -120,6 +120,8 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [saving, setSaving] = useState(false);
   const [showAddMeter, setShowAddMeter] = useState(false);
+  const [showDeactivateConfirm, setShowDeactivateConfirm] = useState(false);
+  const [deactivating, setDeactivating] = useState(false);
 
   const loadPremise = async () => {
     try {
@@ -175,6 +177,21 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
   const handleCancel = () => {
     setEditing(false);
     setEditForm({});
+  };
+
+  const handleDeactivate = async () => {
+    if (!premise) return;
+    setDeactivating(true);
+    try {
+      await apiClient.patch(`/api/v1/premises/${id}`, { status: "INACTIVE" });
+      await loadPremise();
+      setShowDeactivateConfirm(false);
+      toast("Premise deactivated successfully", "success");
+    } catch (err: any) {
+      toast(err.message || "Failed to deactivate premise", "error");
+    } finally {
+      setDeactivating(false);
+    }
   };
 
   const handleSave = async () => {
@@ -271,31 +288,44 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
             }}
           >
             {/* Edit / Save / Cancel buttons */}
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px", gap: "8px" }}>
-              {editing ? (
-                <>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px", gap: "8px" }}>
+              <div>
+                {!editing && premise.status === "ACTIVE" && (
                   <button
-                    onClick={handleCancel}
+                    onClick={() => setShowDeactivateConfirm(true)}
+                    title="BR-PR-004: Premises cannot be deleted, only deactivated."
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid rgba(239,68,68,0.4)", borderRadius: "var(--radius)", color: "#f87171", cursor: "pointer", fontFamily: "inherit" }}
+                  >
+                    Deactivate Premise
+                  </button>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: "8px" }}>
+                {editing ? (
+                  <>
+                    <button
+                      onClick={handleCancel}
+                      style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSave}
+                      disabled={saving}
+                      style={{ padding: "6px 14px", fontSize: "12px", background: "var(--accent-primary)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
+                    >
+                      {saving ? "Saving..." : "Save"}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={handleEdit}
                     style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
                   >
-                    Cancel
+                    Edit
                   </button>
-                  <button
-                    onClick={handleSave}
-                    disabled={saving}
-                    style={{ padding: "6px 14px", fontSize: "12px", background: "var(--accent-primary)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
-                  >
-                    {saving ? "Saving..." : "Save"}
-                  </button>
-                </>
-              ) : (
-                <button
-                  onClick={handleEdit}
-                  style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
-                >
-                  Edit
-                </button>
-              )}
+                )}
+              </div>
             </div>
 
             <div style={fieldStyle}>
@@ -481,6 +511,23 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
               <span style={{ ...valueStyle, fontFamily: "monospace", fontSize: "11px", color: "var(--text-muted)" }}>
                 {premise.id}
               </span>
+            </div>
+          </div>
+        )}
+
+        {showDeactivateConfirm && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+            <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "24px", maxWidth: "420px", width: "100%" }}>
+              <div style={{ fontSize: "16px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "8px" }}>Confirm Deactivation</div>
+              <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "20px", lineHeight: 1.5 }}>
+                Are you sure you want to deactivate this premise? Active meters and agreements will not be affected.
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+                <button onClick={() => setShowDeactivateConfirm(false)} style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+                <button onClick={handleDeactivate} disabled={deactivating} style={{ padding: "6px 14px", fontSize: "12px", background: "#ef4444", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: deactivating ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: deactivating ? 0.7 : 1 }}>
+                  {deactivating ? "Processing..." : "Confirm"}
+                </button>
+              </div>
             </div>
           </div>
         )}

@@ -70,6 +70,8 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   const loadMeter = async () => {
     try {
@@ -102,6 +104,22 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
   const handleCancel = () => {
     setEditing(false);
     setEditForm({});
+  };
+
+  const handleRemove = async () => {
+    if (!meter) return;
+    setRemoving(true);
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      await apiClient.patch(`/api/v1/meters/${id}`, { status: "REMOVED", removalDate: today });
+      await loadMeter();
+      setShowRemoveConfirm(false);
+      toast("Meter removed successfully", "success");
+    } catch (err: any) {
+      toast(err.message || "Failed to remove meter", "error");
+    } finally {
+      setRemoving(false);
+    }
   };
 
   const handleSave = async () => {
@@ -161,31 +179,44 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
             }}
           >
             {/* Edit / Save / Cancel buttons */}
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px", gap: "8px" }}>
-              {editing ? (
-                <>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px", gap: "8px" }}>
+              <div>
+                {!editing && meter.status === "ACTIVE" && (
                   <button
-                    onClick={handleCancel}
+                    onClick={() => setShowRemoveConfirm(true)}
+                    title="BR-MT-005: Meters cannot be deleted, only removed. History is retained."
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid rgba(239,68,68,0.4)", borderRadius: "var(--radius)", color: "#f87171", cursor: "pointer", fontFamily: "inherit" }}
+                  >
+                    Remove Meter
+                  </button>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: "8px" }}>
+                {editing ? (
+                  <>
+                    <button
+                      onClick={handleCancel}
+                      style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSave}
+                      disabled={saving}
+                      style={{ padding: "6px 14px", fontSize: "12px", background: "var(--accent-primary)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
+                    >
+                      {saving ? "Saving..." : "Save"}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={handleEdit}
                     style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
                   >
-                    Cancel
+                    Edit
                   </button>
-                  <button
-                    onClick={handleSave}
-                    disabled={saving}
-                    style={{ padding: "6px 14px", fontSize: "12px", background: "var(--accent-primary)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
-                  >
-                    {saving ? "Saving..." : "Save"}
-                  </button>
-                </>
-              ) : (
-                <button
-                  onClick={handleEdit}
-                  style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
-                >
-                  Edit
-                </button>
-              )}
+                )}
+              </div>
             </div>
 
             <div style={fieldStyle}>
@@ -307,6 +338,23 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
               <span style={{ ...valueStyle, fontFamily: "monospace", fontSize: "11px", color: "var(--text-muted)" }}>
                 {meter.id}
               </span>
+            </div>
+          </div>
+        )}
+
+        {showRemoveConfirm && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+            <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "24px", maxWidth: "420px", width: "100%" }}>
+              <div style={{ fontSize: "16px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "8px" }}>Confirm Meter Removal</div>
+              <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "20px", lineHeight: 1.5 }}>
+                Are you sure you want to remove this meter? This marks it as removed.
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+                <button onClick={() => setShowRemoveConfirm(false)} style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+                <button onClick={handleRemove} disabled={removing} style={{ padding: "6px 14px", fontSize: "12px", background: "#ef4444", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: removing ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: removing ? 0.7 : 1 }}>
+                  {removing ? "Processing..." : "Confirm"}
+                </button>
+              </div>
             </div>
           </div>
         )}
