@@ -75,10 +75,11 @@ export function AttachmentsTab({ entityType, entityId, showForm: showFormProp, o
     setUploading(true);
     try {
       const formData = new FormData();
-      formData.append("file", selectedFile);
+      // Text fields MUST come before the file — @fastify/multipart only reads fields before the file part
       formData.append("entityType", entityType);
       formData.append("entityId", entityId);
       if (description) formData.append("description", description);
+      formData.append("file", selectedFile);
 
       await apiClient.upload<Attachment>("/api/v1/attachments", formData);
       toast("File uploaded successfully", "success");
