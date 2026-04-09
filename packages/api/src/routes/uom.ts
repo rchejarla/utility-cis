@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { createUomSchema, updateUomSchema } from "@utility-cis/shared";
-import { listUom, createUom, updateUom } from "../services/uom.service.js";
+import { listUom, createUom, updateUom, deleteUom } from "../services/uom.service.js";
 
 export async function uomRoutes(app: FastifyInstance) {
   app.get("/api/v1/uom", async (request, reply) => {
@@ -23,5 +23,12 @@ export async function uomRoutes(app: FastifyInstance) {
     const data = updateUomSchema.parse(request.body);
     const uom = await updateUom(utilityId, actorId, id, data);
     return reply.send(uom);
+  });
+
+  app.delete("/api/v1/uom/:id", async (request, reply) => {
+    const { utilityId } = request.user;
+    const { id } = request.params as { id: string };
+    await deleteUom(utilityId, id);
+    return reply.status(204).send();
   });
 }

@@ -62,3 +62,15 @@ export async function updateUom(
 
   return uom;
 }
+
+export async function deleteUom(utilityId: string, id: string) {
+  // BR-UO-005: Cannot delete if referenced by active meters
+  const meterCount = await prisma.meter.count({ where: { uomId: id, utilityId } });
+  if (meterCount > 0) {
+    throw Object.assign(
+      new Error(`Cannot delete UOM — ${meterCount} meter(s) are using it (BR-UO-005)`),
+      { statusCode: 400, code: "UOM_IN_USE" }
+    );
+  }
+  return prisma.unitOfMeasure.delete({ where: { id, utilityId } });
+}

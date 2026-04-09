@@ -43,6 +43,14 @@ export default function CommoditiesPage() {
   const [showNewUom, setShowNewUom] = useState<string | null>(null);
   const [newUomForm, setNewUomForm] = useState({ code: "", name: "", conversionFactor: "1", isBaseUnit: false });
 
+  // Edit UOM state
+  const [editingUom, setEditingUom] = useState<string | null>(null);
+  const [editUomForm, setEditUomForm] = useState({ name: "", conversionFactor: "1", isBaseUnit: false });
+
+  // Delete UOM state
+  const [deleteUomId, setDeleteUomId] = useState<string | null>(null);
+  const [deletingUom, setDeletingUom] = useState(false);
+
   const fetchData = useCallback(async () => {
     try {
       const [c, u] = await Promise.all([
@@ -103,6 +111,36 @@ export default function CommoditiesPage() {
       fetchData();
     } catch (err: any) {
       toast(err.message, "error");
+    }
+  };
+
+  const handleUpdateUom = async (id: string) => {
+    try {
+      await apiClient.patch(`/api/v1/uom/${id}`, {
+        name: editUomForm.name,
+        conversionFactor: Number(editUomForm.conversionFactor) || 1,
+        isBaseUnit: editUomForm.isBaseUnit,
+      });
+      setEditingUom(null);
+      toast("Unit of measure updated", "success");
+      fetchData();
+    } catch (err: any) {
+      toast(err.message, "error");
+    }
+  };
+
+  const handleDeleteUom = async () => {
+    if (!deleteUomId) return;
+    setDeletingUom(true);
+    try {
+      await apiClient.delete(`/api/v1/uom/${deleteUomId}`);
+      setDeleteUomId(null);
+      toast("Unit of measure deleted", "success");
+      fetchData();
+    } catch (err: any) {
+      toast(err.message, "error");
+    } finally {
+      setDeletingUom(false);
     }
   };
 
@@ -210,26 +248,57 @@ export default function CommoditiesPage() {
                       <th style={{ padding: "8px 18px", textAlign: "left", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)" }}>Name</th>
                       <th style={{ padding: "8px 18px", textAlign: "left", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)" }}>Conversion Factor</th>
                       <th style={{ padding: "8px 18px", textAlign: "left", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)" }}>Base Unit</th>
+                      <th style={{ padding: "8px 18px", textAlign: "right", fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)" }}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {cUoms.map((u) => (
                       <tr key={u.id} style={{ borderTop: "1px solid var(--border-subtle)" }}>
                         <td style={{ padding: "8px 18px", fontFamily: "monospace", color: "var(--text-primary)" }}>{u.code}</td>
-                        <td style={{ padding: "8px 18px", color: "var(--text-secondary)" }}>{u.name}</td>
-                        <td style={{ padding: "8px 18px", fontFamily: "monospace", color: "var(--text-secondary)" }}>{u.conversionFactor}</td>
                         <td style={{ padding: "8px 18px" }}>
-                          {u.isBaseUnit ? (
+                          {editingUom === u.id ? (
+                            <input style={{ ...inputStyle, width: 140, padding: "4px 8px", fontSize: 12 }} value={editUomForm.name} onChange={(e) => setEditUomForm({ ...editUomForm, name: e.target.value })} />
+                          ) : (
+                            <span style={{ color: "var(--text-secondary)" }}>{u.name}</span>
+                          )}
+                        </td>
+                        <td style={{ padding: "8px 18px" }}>
+                          {editingUom === u.id ? (
+                            <input style={{ ...inputStyle, width: 80, padding: "4px 8px", fontSize: 12 }} type="number" step="any" value={editUomForm.conversionFactor} onChange={(e) => setEditUomForm({ ...editUomForm, conversionFactor: e.target.value })} />
+                          ) : (
+                            <span style={{ fontFamily: "monospace", color: "var(--text-secondary)" }}>{u.conversionFactor}</span>
+                          )}
+                        </td>
+                        <td style={{ padding: "8px 18px" }}>
+                          {editingUom === u.id ? (
+                            <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--text-secondary)", cursor: "pointer" }}>
+                              <input type="checkbox" checked={editUomForm.isBaseUnit} onChange={(e) => setEditUomForm({ ...editUomForm, isBaseUnit: e.target.checked })} />
+                              Base
+                            </label>
+                          ) : u.isBaseUnit ? (
                             <span style={{ fontSize: 10, fontWeight: 500, color: "#4ade80", background: "rgba(74,222,128,0.1)", padding: "2px 8px", borderRadius: 10 }}>Base</span>
                           ) : (
                             <span style={{ fontSize: 10, color: "var(--text-muted)" }}>—</span>
+                          )}
+                        </td>
+                        <td style={{ padding: "8px 18px", textAlign: "right" }}>
+                          {editingUom === u.id ? (
+                            <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                              <button onClick={() => handleUpdateUom(u.id)} style={{ ...btnStyle, background: "var(--accent-primary)", color: "#fff", padding: "3px 10px" }}>Save</button>
+                              <button onClick={() => setEditingUom(null)} style={{ ...btnStyle, background: "transparent", color: "var(--text-muted)", padding: "3px 10px", border: "1px solid var(--border)" }}>Cancel</button>
+                            </div>
+                          ) : (
+                            <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                              <button onClick={() => { setEditingUom(u.id); setEditUomForm({ name: u.name, conversionFactor: String(u.conversionFactor), isBaseUnit: u.isBaseUnit }); }} style={{ ...btnStyle, background: "transparent", color: "var(--text-secondary)", padding: "3px 10px", border: "1px solid var(--border)" }}>Edit</button>
+                              <button onClick={() => setDeleteUomId(u.id)} style={{ ...btnStyle, background: "transparent", color: "#f87171", padding: "3px 10px", border: "1px solid rgba(239,68,68,0.3)" }}>Delete</button>
+                            </div>
                           )}
                         </td>
                       </tr>
                     ))}
                     {cUoms.length === 0 && (
                       <tr>
-                        <td colSpan={4} style={{ padding: "16px 18px", color: "var(--text-muted)", textAlign: "center" }}>No units of measure defined</td>
+                        <td colSpan={5} style={{ padding: "16px 18px", color: "var(--text-muted)", textAlign: "center" }}>No units of measure defined</td>
                       </tr>
                     )}
                   </tbody>
@@ -274,6 +343,24 @@ export default function CommoditiesPage() {
           );
         })}
       </div>
+
+      {/* Delete UOM confirmation */}
+      {deleteUomId && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "24px", maxWidth: "420px", width: "100%" }}>
+            <div style={{ fontSize: "16px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "8px" }}>Delete Unit of Measure</div>
+            <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "20px", lineHeight: 1.5 }}>
+              Are you sure? This will permanently delete this unit of measure. If any meters are using it, the delete will be blocked (BR-UO-005).
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+              <button onClick={() => setDeleteUomId(null)} style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+              <button onClick={handleDeleteUom} disabled={deletingUom} style={{ padding: "6px 14px", fontSize: "12px", background: "#ef4444", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: deletingUom ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: deletingUom ? 0.7 : 1 }}>
+                {deletingUom ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
