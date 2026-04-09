@@ -253,20 +253,40 @@ export function AttachmentsTab({ entityType, entityId, showForm: showFormProp, o
                 >
                   {/* File Name — clickable to download */}
                   <td style={{ padding: "10px 14px", fontSize: "13px" }}>
-                    <a
-                      href={`${API_URL}/api/v1/attachments/${att.id}/download`}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        try {
+                          const headers = await apiClient.getAuthHeadersOnly();
+                          const res = await fetch(`${API_URL}/api/v1/attachments/${att.id}/download`, { headers });
+                          if (!res.ok) throw new Error("Download failed");
+                          const blob = await res.blob();
+                          const url = window.URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = url;
+                          a.download = att.fileName;
+                          a.click();
+                          window.URL.revokeObjectURL(url);
+                        } catch (err) {
+                          toast("Failed to download file", "error");
+                        }
+                      }}
                       style={{
+                        background: "none",
+                        border: "none",
                         color: "var(--accent-primary)",
                         textDecoration: "none",
                         fontWeight: 500,
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                        fontSize: "13px",
+                        padding: 0,
                       }}
-                      onMouseEnter={(e) => ((e.currentTarget as HTMLAnchorElement).style.textDecoration = "underline")}
-                      onMouseLeave={(e) => ((e.currentTarget as HTMLAnchorElement).style.textDecoration = "none")}
+                      onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.textDecoration = "underline")}
+                      onMouseLeave={(e) => ((e.currentTarget as HTMLButtonElement).style.textDecoration = "none")}
                     >
                       {att.fileName}
-                    </a>
+                    </button>
                   </td>
                   {/* Type */}
                   <td style={{ padding: "10px 14px", fontSize: "12px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>

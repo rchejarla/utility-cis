@@ -66,6 +66,29 @@ async function handleResponse<T>(response: Response): Promise<T> {
 }
 
 export const apiClient = {
+  async getAuthHeadersOnly(): Promise<Record<string, string>> {
+    const headers: Record<string, string> = {};
+    if (cachedToken && Date.now() < cacheExpiry) {
+      headers["Authorization"] = `Bearer ${cachedToken}`;
+    } else {
+      const session = await getSession();
+      if (session) {
+        const token = (session as any).accessToken;
+        if (token && typeof token === "string") {
+          cachedToken = token;
+          cacheExpiry = Date.now() + 5 * 60 * 1000;
+          headers["Authorization"] = `Bearer ${token}`;
+        }
+      }
+      if (!headers["Authorization"]) {
+        cachedToken = createDevToken();
+        cacheExpiry = Date.now() + 5 * 60 * 1000;
+        headers["Authorization"] = `Bearer ${cachedToken}`;
+      }
+    }
+    return headers;
+  },
+
   async get<T>(path: string, params?: Record<string, string>): Promise<T> {
     const headers = await getAuthHeaders();
     const url = new URL(`${API_URL}${path}`);
