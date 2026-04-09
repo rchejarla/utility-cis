@@ -356,6 +356,7 @@ export default function ServiceAgreementDetailPage({
                   padding: 0,
                   textDecoration: "underline",
                   fontFamily: "inherit",
+                  textAlign: "left",
                 }}
               >
                 {sa.account?.accountNumber ?? "—"}
@@ -374,6 +375,7 @@ export default function ServiceAgreementDetailPage({
                   padding: 0,
                   textDecoration: "underline",
                   fontFamily: "inherit",
+                  textAlign: "left",
                 }}
               >
                 {sa.premise
