@@ -294,6 +294,47 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
             </div>
 
             <div style={fieldStyle}>
+              <span style={labelStyle}>Property Owner</span>
+              {editing ? (
+                <select
+                  style={inputStyle}
+                  value={editForm.ownerId}
+                  onChange={(e) => setEditForm((f) => ({ ...f, ownerId: e.target.value }))}
+                >
+                  <option value="">No owner assigned</option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.customerType === "ORGANIZATION"
+                        ? c.organizationName
+                        : `${c.firstName} ${c.lastName}`}
+                    </option>
+                  ))}
+                </select>
+              ) : premise.owner ? (
+                <button
+                  onClick={() => router.push(`/customers/${premise.owner!.id}`)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "var(--accent-primary)",
+                    fontSize: "13px",
+                    cursor: "pointer",
+                    padding: 0,
+                    textDecoration: "underline",
+                    fontFamily: "inherit",
+                    textAlign: "left",
+                  }}
+                >
+                  {premise.owner.customerType === "ORGANIZATION"
+                    ? premise.owner.organizationName
+                    : `${premise.owner.firstName} ${premise.owner.lastName}`}
+                </button>
+              ) : (
+                <span style={{ ...valueStyle, color: "var(--text-muted)" }}>No owner assigned</span>
+              )}
+            </div>
+
+            <div style={fieldStyle}>
               <span style={labelStyle}>Address Line 1</span>
               {editing ? (
                 <input
@@ -369,46 +410,6 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
                 </select>
               ) : (
                 <span style={valueStyle}>{premise.premiseType}</span>
-              )}
-            </div>
-
-            <div style={fieldStyle}>
-              <span style={labelStyle}>Property Owner</span>
-              {editing ? (
-                <select
-                  style={inputStyle}
-                  value={editForm.ownerId}
-                  onChange={(e) => setEditForm((f) => ({ ...f, ownerId: e.target.value }))}
-                >
-                  <option value="">No owner assigned</option>
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.customerType === "ORGANIZATION"
-                        ? c.organizationName
-                        : `${c.firstName} ${c.lastName}`}
-                    </option>
-                  ))}
-                </select>
-              ) : premise.owner ? (
-                <button
-                  onClick={() => router.push(`/customers/${premise.owner!.id}`)}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "var(--accent-primary)",
-                    fontSize: "13px",
-                    cursor: "pointer",
-                    padding: 0,
-                    textDecoration: "underline",
-                    fontFamily: "inherit",
-                  }}
-                >
-                  {premise.owner.customerType === "ORGANIZATION"
-                    ? premise.owner.organizationName
-                    : `${premise.owner.firstName} ${premise.owner.lastName}`}
-                </button>
-              ) : (
-                <span style={{ ...valueStyle, color: "var(--text-muted)" }}>No owner assigned</span>
               )}
             </div>
 
