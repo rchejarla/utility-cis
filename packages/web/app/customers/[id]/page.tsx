@@ -14,6 +14,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { DataTable } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
+import { useToast } from "@/components/ui/toast";
 
 interface Contact {
   id: string;
@@ -63,6 +64,8 @@ interface Customer {
   updatedAt?: string;
 }
 
+const CUSTOMER_STATUSES = ["ACTIVE", "INACTIVE", "SUSPENDED", "CLOSED"];
+
 const fieldStyle = {
   display: "grid" as const,
   gridTemplateColumns: "180px 1fr",
@@ -73,6 +76,18 @@ const fieldStyle = {
 };
 const labelStyle = { fontSize: "12px", color: "var(--text-muted)", fontWeight: "500" as const };
 const valueStyle = { fontSize: "13px", color: "var(--text-primary)" };
+
+const inputStyle = {
+  padding: "6px 10px",
+  fontSize: "13px",
+  background: "var(--bg-deep)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius)",
+  color: "var(--text-primary)",
+  fontFamily: "inherit",
+  outline: "none",
+  width: "100%",
+};
 
 function TypeBadge({ type }: { type: string }) {
   const isOrg = type === "ORGANIZATION";
@@ -161,17 +176,83 @@ function QuickStat({ label, value }: { label: string; value: number }) {
 export default function CustomerDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const { toast } = useToast();
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  const loadCustomer = async () => {
+    try {
+      const data = await apiClient.get<Customer>(`/api/v1/customers/${id}`);
+      setCustomer(data);
+      return data;
+    } catch (err) {
+      console.error("Failed to load customer", err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    apiClient
-      .get<Customer>(`/api/v1/customers/${id}`)
-      .then((data) => setCustomer(data))
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    loadCustomer();
   }, [id]);
+
+  const handleEdit = () => {
+    if (!customer) return;
+    setEditForm({
+      firstName: customer.firstName ?? "",
+      lastName: customer.lastName ?? "",
+      organizationName: customer.organizationName ?? "",
+      email: customer.email ?? "",
+      phone: customer.phone ?? "",
+      altPhone: customer.altPhone ?? "",
+      dateOfBirth: customer.dateOfBirth ? customer.dateOfBirth.slice(0, 10) : "",
+      driversLicense: customer.driversLicense ?? "",
+      taxId: customer.taxId ?? "",
+      status: customer.status ?? "",
+    });
+    setEditing(true);
+  };
+
+  const handleCancel = () => {
+    setEditing(false);
+    setEditForm({});
+  };
+
+  const handleSave = async () => {
+    if (!customer) return;
+    setSaving(true);
+    try {
+      const changes: Record<string, unknown> = {};
+      if (customer.customerType === "INDIVIDUAL") {
+        if (editForm.firstName !== (customer.firstName ?? "")) changes.firstName = editForm.firstName;
+        if (editForm.lastName !== (customer.lastName ?? "")) changes.lastName = editForm.lastName;
+        if (editForm.dateOfBirth !== (customer.dateOfBirth ? customer.dateOfBirth.slice(0, 10) : ""))
+          changes.dateOfBirth = editForm.dateOfBirth || null;
+        if (editForm.driversLicense !== (customer.driversLicense ?? "")) changes.driversLicense = editForm.driversLicense;
+      }
+      if (customer.customerType === "ORGANIZATION") {
+        if (editForm.organizationName !== (customer.organizationName ?? "")) changes.organizationName = editForm.organizationName;
+        if (editForm.taxId !== (customer.taxId ?? "")) changes.taxId = editForm.taxId;
+      }
+      if (editForm.email !== (customer.email ?? "")) changes.email = editForm.email;
+      if (editForm.phone !== (customer.phone ?? "")) changes.phone = editForm.phone;
+      if (editForm.altPhone !== (customer.altPhone ?? "")) changes.altPhone = editForm.altPhone;
+      if (editForm.status !== (customer.status ?? "")) changes.status = editForm.status;
+
+      await apiClient.patch(`/api/v1/customers/${id}`, changes);
+      await loadCustomer();
+      setEditing(false);
+      toast("Customer updated successfully", "success");
+    } catch (err: any) {
+      toast(err.message || "Failed to save customer", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   if (loading) {
     return <div style={{ color: "var(--text-muted)", padding: "40px 0" }}>Loading...</div>;
@@ -281,6 +362,34 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
               padding: "20px 24px",
             }}
           >
+            {/* Edit / Save / Cancel buttons */}
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px", gap: "8px" }}>
+              {editing ? (
+                <>
+                  <button
+                    onClick={handleCancel}
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "var(--accent-primary)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
+                  >
+                    {saving ? "Saving..." : "Save"}
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={handleEdit}
+                  style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
+                >
+                  Edit
+                </button>
+              )}
+            </div>
+
             <div
               style={{
                 fontSize: "11px",
@@ -298,26 +407,55 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
               <>
                 <div style={fieldStyle}>
                   <span style={labelStyle}>First Name</span>
-                  <span style={valueStyle}>{customer.firstName ?? "—"}</span>
+                  {editing ? (
+                    <input
+                      style={inputStyle}
+                      value={editForm.firstName}
+                      onChange={(e) => setEditForm((f) => ({ ...f, firstName: e.target.value }))}
+                    />
+                  ) : (
+                    <span style={valueStyle}>{customer.firstName ?? "—"}</span>
+                  )}
                 </div>
                 <div style={fieldStyle}>
                   <span style={labelStyle}>Last Name</span>
-                  <span style={valueStyle}>{customer.lastName ?? "—"}</span>
+                  {editing ? (
+                    <input
+                      style={inputStyle}
+                      value={editForm.lastName}
+                      onChange={(e) => setEditForm((f) => ({ ...f, lastName: e.target.value }))}
+                    />
+                  ) : (
+                    <span style={valueStyle}>{customer.lastName ?? "—"}</span>
+                  )}
                 </div>
-                {customer.dateOfBirth && (
-                  <div style={fieldStyle}>
-                    <span style={labelStyle}>Date of Birth</span>
-                    <span style={valueStyle}>{customer.dateOfBirth.slice(0, 10)}</span>
-                  </div>
-                )}
-                {customer.driversLicense && (
-                  <div style={fieldStyle}>
-                    <span style={labelStyle}>Driver&apos;s License</span>
+                <div style={fieldStyle}>
+                  <span style={labelStyle}>Date of Birth</span>
+                  {editing ? (
+                    <input
+                      style={inputStyle}
+                      type="date"
+                      value={editForm.dateOfBirth}
+                      onChange={(e) => setEditForm((f) => ({ ...f, dateOfBirth: e.target.value }))}
+                    />
+                  ) : (
+                    <span style={valueStyle}>{customer.dateOfBirth ? customer.dateOfBirth.slice(0, 10) : "—"}</span>
+                  )}
+                </div>
+                <div style={fieldStyle}>
+                  <span style={labelStyle}>Driver&apos;s License</span>
+                  {editing ? (
+                    <input
+                      style={{ ...inputStyle, fontFamily: "monospace" }}
+                      value={editForm.driversLicense}
+                      onChange={(e) => setEditForm((f) => ({ ...f, driversLicense: e.target.value }))}
+                    />
+                  ) : (
                     <span style={{ ...valueStyle, fontFamily: "monospace" }}>
-                      {customer.driversLicense}
+                      {customer.driversLicense ?? "—"}
                     </span>
-                  </div>
-                )}
+                  )}
+                </div>
               </>
             )}
 
@@ -325,14 +463,28 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
               <>
                 <div style={fieldStyle}>
                   <span style={labelStyle}>Organization Name</span>
-                  <span style={valueStyle}>{customer.organizationName ?? "—"}</span>
+                  {editing ? (
+                    <input
+                      style={inputStyle}
+                      value={editForm.organizationName}
+                      onChange={(e) => setEditForm((f) => ({ ...f, organizationName: e.target.value }))}
+                    />
+                  ) : (
+                    <span style={valueStyle}>{customer.organizationName ?? "—"}</span>
+                  )}
                 </div>
-                {customer.taxId && (
-                  <div style={fieldStyle}>
-                    <span style={labelStyle}>Tax ID / EIN</span>
-                    <span style={{ ...valueStyle, fontFamily: "monospace" }}>{customer.taxId}</span>
-                  </div>
-                )}
+                <div style={fieldStyle}>
+                  <span style={labelStyle}>Tax ID / EIN</span>
+                  {editing ? (
+                    <input
+                      style={{ ...inputStyle, fontFamily: "monospace" }}
+                      value={editForm.taxId}
+                      onChange={(e) => setEditForm((f) => ({ ...f, taxId: e.target.value }))}
+                    />
+                  ) : (
+                    <span style={{ ...valueStyle, fontFamily: "monospace" }}>{customer.taxId ?? "—"}</span>
+                  )}
+                </div>
               </>
             )}
 
@@ -353,15 +505,40 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
 
             <div style={fieldStyle}>
               <span style={labelStyle}>Email</span>
-              <span style={valueStyle}>{customer.email ?? "—"}</span>
+              {editing ? (
+                <input
+                  style={inputStyle}
+                  type="email"
+                  value={editForm.email}
+                  onChange={(e) => setEditForm((f) => ({ ...f, email: e.target.value }))}
+                />
+              ) : (
+                <span style={valueStyle}>{customer.email ?? "—"}</span>
+              )}
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Phone</span>
-              <span style={{ ...valueStyle, fontFamily: "monospace" }}>{customer.phone ?? "—"}</span>
+              {editing ? (
+                <input
+                  style={{ ...inputStyle, fontFamily: "monospace" }}
+                  value={editForm.phone}
+                  onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))}
+                />
+              ) : (
+                <span style={{ ...valueStyle, fontFamily: "monospace" }}>{customer.phone ?? "—"}</span>
+              )}
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Alt Phone</span>
-              <span style={{ ...valueStyle, fontFamily: "monospace" }}>{customer.altPhone ?? "—"}</span>
+              {editing ? (
+                <input
+                  style={{ ...inputStyle, fontFamily: "monospace" }}
+                  value={editForm.altPhone}
+                  onChange={(e) => setEditForm((f) => ({ ...f, altPhone: e.target.value }))}
+                />
+              ) : (
+                <span style={{ ...valueStyle, fontFamily: "monospace" }}>{customer.altPhone ?? "—"}</span>
+              )}
             </div>
 
             {/* System section */}
@@ -381,7 +558,19 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
 
             <div style={fieldStyle}>
               <span style={labelStyle}>Status</span>
-              <StatusBadge status={customer.status} />
+              {editing ? (
+                <select
+                  style={inputStyle}
+                  value={editForm.status}
+                  onChange={(e) => setEditForm((f) => ({ ...f, status: e.target.value }))}
+                >
+                  {CUSTOMER_STATUSES.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              ) : (
+                <StatusBadge status={customer.status} />
+              )}
             </div>
             {customer.createdAt && (
               <div style={fieldStyle}>

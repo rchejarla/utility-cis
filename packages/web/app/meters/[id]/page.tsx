@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { DataTable } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
+import { useToast } from "@/components/ui/toast";
 
 interface Meter {
   id: string;
@@ -16,6 +17,7 @@ interface Meter {
   status: string;
   multiplier?: number;
   installDate?: string;
+  removalDate?: string;
   notes?: string;
   premise?: { id: string; addressLine1: string; city: string; state: string };
   commodity?: { name: string };
@@ -32,6 +34,9 @@ interface Meter {
   }>;
 }
 
+const METER_TYPES = ["AMI", "AMR", "MANUAL", "SMART", "OTHER"];
+const METER_STATUSES = ["ACTIVE", "INACTIVE", "REMOVED", "FAULTY"];
+
 const fieldStyle = {
   display: "grid" as const,
   gridTemplateColumns: "160px 1fr",
@@ -43,20 +48,86 @@ const fieldStyle = {
 const labelStyle = { fontSize: "12px", color: "var(--text-muted)", fontWeight: "500" as const };
 const valueStyle = { fontSize: "13px", color: "var(--text-primary)" };
 
+const inputStyle = {
+  padding: "6px 10px",
+  fontSize: "13px",
+  background: "var(--bg-deep)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius)",
+  color: "var(--text-primary)",
+  fontFamily: "inherit",
+  outline: "none",
+  width: "100%",
+};
+
 export default function MeterDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const { toast } = useToast();
   const [meter, setMeter] = useState<Meter | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  const loadMeter = async () => {
+    try {
+      const data = await apiClient.get<Meter>(`/api/v1/meters/${id}`);
+      setMeter(data);
+      return data;
+    } catch (err) {
+      console.error("Failed to load meter", err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    apiClient
-      .get<Meter>(`/api/v1/meters/${id}`)
-      .then((data) => setMeter(data))
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    loadMeter();
   }, [id]);
+
+  const handleEdit = () => {
+    if (!meter) return;
+    setEditForm({
+      meterType: meter.meterType ?? "",
+      status: meter.status ?? "",
+      multiplier: meter.multiplier != null ? String(meter.multiplier) : "1",
+      notes: meter.notes ?? "",
+      removalDate: meter.removalDate ? meter.removalDate.slice(0, 10) : "",
+    });
+    setEditing(true);
+  };
+
+  const handleCancel = () => {
+    setEditing(false);
+    setEditForm({});
+  };
+
+  const handleSave = async () => {
+    if (!meter) return;
+    setSaving(true);
+    try {
+      const changes: Record<string, unknown> = {};
+      if (editForm.meterType !== meter.meterType) changes.meterType = editForm.meterType;
+      if (editForm.status !== meter.status) changes.status = editForm.status;
+      const multVal = editForm.multiplier !== "" ? parseFloat(editForm.multiplier) : 1;
+      if (multVal !== (meter.multiplier ?? 1)) changes.multiplier = multVal;
+      if (editForm.notes !== (meter.notes ?? "")) changes.notes = editForm.notes || null;
+      const removalVal = editForm.removalDate || null;
+      const currentRemoval = meter.removalDate ? meter.removalDate.slice(0, 10) : null;
+      if (removalVal !== currentRemoval) changes.removalDate = removalVal;
+
+      await apiClient.patch(`/api/v1/meters/${id}`, changes);
+      await loadMeter();
+      setEditing(false);
+      toast("Meter updated successfully", "success");
+    } catch (err: any) {
+      toast(err.message || "Failed to save meter", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   if (loading) {
     return <div style={{ color: "var(--text-muted)", fontSize: "14px", padding: "40px 0" }}>Loading...</div>;
@@ -89,9 +160,49 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
               padding: "20px 24px",
             }}
           >
+            {/* Edit / Save / Cancel buttons */}
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px", gap: "8px" }}>
+              {editing ? (
+                <>
+                  <button
+                    onClick={handleCancel}
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "var(--accent-primary)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
+                  >
+                    {saving ? "Saving..." : "Save"}
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={handleEdit}
+                  style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
+                >
+                  Edit
+                </button>
+              )}
+            </div>
+
             <div style={fieldStyle}>
               <span style={labelStyle}>Status</span>
-              <StatusBadge status={meter.status} />
+              {editing ? (
+                <select
+                  style={inputStyle}
+                  value={editForm.status}
+                  onChange={(e) => setEditForm((f) => ({ ...f, status: e.target.value }))}
+                >
+                  {METER_STATUSES.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              ) : (
+                <StatusBadge status={meter.status} />
+              )}
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Meter Number</span>
@@ -99,7 +210,19 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Meter Type</span>
-              <span style={valueStyle}>{meter.meterType}</span>
+              {editing ? (
+                <select
+                  style={inputStyle}
+                  value={editForm.meterType}
+                  onChange={(e) => setEditForm((f) => ({ ...f, meterType: e.target.value }))}
+                >
+                  {METER_TYPES.map((t) => (
+                    <option key={t} value={t}>{t.charAt(0) + t.slice(1).toLowerCase()}</option>
+                  ))}
+                </select>
+              ) : (
+                <span style={valueStyle}>{meter.meterType}</span>
+              )}
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Commodity</span>
@@ -113,7 +236,18 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Multiplier</span>
-              <span style={valueStyle}>{meter.multiplier ?? 1}</span>
+              {editing ? (
+                <input
+                  style={inputStyle}
+                  type="number"
+                  step="any"
+                  min="0"
+                  value={editForm.multiplier}
+                  onChange={(e) => setEditForm((f) => ({ ...f, multiplier: e.target.value }))}
+                />
+              ) : (
+                <span style={valueStyle}>{meter.multiplier ?? 1}</span>
+              )}
             </div>
             {meter.installDate && (
               <div style={fieldStyle}>
@@ -121,6 +255,19 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
                 <span style={valueStyle}>{meter.installDate.slice(0, 10)}</span>
               </div>
             )}
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Removal Date</span>
+              {editing ? (
+                <input
+                  style={inputStyle}
+                  type="date"
+                  value={editForm.removalDate}
+                  onChange={(e) => setEditForm((f) => ({ ...f, removalDate: e.target.value }))}
+                />
+              ) : (
+                <span style={valueStyle}>{meter.removalDate ? meter.removalDate.slice(0, 10) : "—"}</span>
+              )}
+            </div>
             {meter.premise && (
               <div style={fieldStyle}>
                 <span style={labelStyle}>Premise</span>
@@ -141,12 +288,19 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
                 </button>
               </div>
             )}
-            {meter.notes && (
-              <div style={fieldStyle}>
-                <span style={labelStyle}>Notes</span>
-                <span style={valueStyle}>{meter.notes}</span>
-              </div>
-            )}
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Notes</span>
+              {editing ? (
+                <textarea
+                  style={{ ...inputStyle, minHeight: "70px", resize: "vertical" as const }}
+                  value={editForm.notes}
+                  onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))}
+                  placeholder="Optional notes"
+                />
+              ) : (
+                <span style={valueStyle}>{meter.notes || "—"}</span>
+              )}
+            </div>
             <div style={{ ...fieldStyle, borderBottom: "none" }}>
               <span style={labelStyle}>Meter ID</span>
               <span style={{ ...valueStyle, fontFamily: "monospace", fontSize: "11px", color: "var(--text-muted)" }}>

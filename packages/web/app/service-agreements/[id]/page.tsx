@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { DataTable } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
+import { useToast } from "@/components/ui/toast";
 
 interface ServiceAgreement {
   id: string;
@@ -15,11 +16,14 @@ interface ServiceAgreement {
   status: string;
   startDate: string;
   endDate?: string;
+  readSequence?: number;
   account?: { id: string; accountNumber: string };
   premise?: { id: string; addressLine1: string; city: string; state: string };
   commodity?: { name: string };
-  rateSchedule?: { name: string; code: string };
-  billingCycle?: { name: string; cycleCode: string };
+  rateSchedule?: { id: string; name: string; code: string };
+  billingCycle?: { id: string; name: string; cycleCode: string };
+  rateScheduleId?: string;
+  billingCycleId?: string;
   meters?: Array<{
     meter: {
       id: string;
@@ -39,6 +43,18 @@ interface AuditEntry {
   createdAt: string;
 }
 
+interface RateSchedule {
+  id: string;
+  name: string;
+  code: string;
+}
+
+interface BillingCycle {
+  id: string;
+  name: string;
+  cycleCode: string;
+}
+
 const fieldStyle = {
   display: "grid" as const,
   gridTemplateColumns: "180px 1fr",
@@ -49,6 +65,18 @@ const fieldStyle = {
 };
 const labelStyle = { fontSize: "12px", color: "var(--text-muted)", fontWeight: "500" as const };
 const valueStyle = { fontSize: "13px", color: "var(--text-primary)" };
+
+const inputStyle = {
+  padding: "6px 10px",
+  fontSize: "13px",
+  background: "var(--bg-deep)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius)",
+  color: "var(--text-primary)",
+  fontFamily: "inherit",
+  outline: "none",
+  width: "100%",
+};
 
 const STATUS_TRANSITIONS: Record<string, string[]> = {
   PENDING: ["ACTIVE"],
@@ -63,16 +91,23 @@ export default function ServiceAgreementDetailPage({
 }) {
   const { id } = use(params);
   const router = useRouter();
+  const { toast } = useToast();
   const [sa, setSa] = useState<ServiceAgreement | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
   const [transitioning, setTransitioning] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [rateSchedules, setRateSchedules] = useState<RateSchedule[]>([]);
+  const [billingCycles, setBillingCycles] = useState<BillingCycle[]>([]);
 
   const loadSA = async () => {
     try {
       const data = await apiClient.get<ServiceAgreement>(`/api/v1/service-agreements/${id}`);
       setSa(data);
+      return data;
     } catch (err) {
       console.error("Failed to load SA", err);
     } finally {
@@ -106,6 +141,59 @@ export default function ServiceAgreementDetailPage({
       console.error("Transition failed", err);
     } finally {
       setTransitioning(false);
+    }
+  };
+
+  const handleEdit = async () => {
+    if (!sa) return;
+    setEditForm({
+      rateScheduleId: sa.rateScheduleId ?? sa.rateSchedule?.id ?? "",
+      billingCycleId: sa.billingCycleId ?? sa.billingCycle?.id ?? "",
+      endDate: sa.endDate ? sa.endDate.slice(0, 10) : "",
+      readSequence: sa.readSequence != null ? String(sa.readSequence) : "",
+    });
+    // Fetch dropdowns
+    try {
+      const [rsRes, bcRes] = await Promise.all([
+        apiClient.get<{ data: RateSchedule[] }>("/api/v1/rate-schedules", { limit: "200" }),
+        apiClient.get<{ data: BillingCycle[] }>("/api/v1/billing-cycles"),
+      ]);
+      setRateSchedules(rsRes.data ?? []);
+      setBillingCycles(bcRes.data ?? []);
+    } catch (err) {
+      console.error("Failed to load dropdowns", err);
+    }
+    setEditing(true);
+  };
+
+  const handleCancel = () => {
+    setEditing(false);
+    setEditForm({});
+  };
+
+  const handleSave = async () => {
+    if (!sa) return;
+    setSaving(true);
+    try {
+      const changes: Record<string, unknown> = {};
+      const currentRsId = sa.rateScheduleId ?? sa.rateSchedule?.id ?? "";
+      const currentBcId = sa.billingCycleId ?? sa.billingCycle?.id ?? "";
+      if (editForm.rateScheduleId !== currentRsId) changes.rateScheduleId = editForm.rateScheduleId || null;
+      if (editForm.billingCycleId !== currentBcId) changes.billingCycleId = editForm.billingCycleId || null;
+      const endVal = editForm.endDate || null;
+      const currentEnd = sa.endDate ? sa.endDate.slice(0, 10) : null;
+      if (endVal !== currentEnd) changes.endDate = endVal;
+      const readSeqVal = editForm.readSequence !== "" ? parseInt(editForm.readSequence, 10) : null;
+      if (readSeqVal !== (sa.readSequence ?? null)) changes.readSequence = readSeqVal;
+
+      await apiClient.patch(`/api/v1/service-agreements/${id}`, changes);
+      await loadSA();
+      setEditing(false);
+      toast("Service agreement updated successfully", "success");
+    } catch (err: any) {
+      toast(err.message || "Failed to save service agreement", "error");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -189,6 +277,34 @@ export default function ServiceAgreementDetailPage({
               padding: "20px 24px",
             }}
           >
+            {/* Edit / Save / Cancel buttons */}
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px", gap: "8px" }}>
+              {editing ? (
+                <>
+                  <button
+                    onClick={handleCancel}
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "var(--accent-primary)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
+                  >
+                    {saving ? "Saving..." : "Save"}
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={handleEdit}
+                  style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
+                >
+                  Edit
+                </button>
+              )}
+            </div>
+
             <div style={fieldStyle}>
               <span style={labelStyle}>Status</span>
               <StatusBadge status={sa.status} />
@@ -239,29 +355,75 @@ export default function ServiceAgreementDetailPage({
               <span style={labelStyle}>Commodity</span>
               <CommodityBadge commodity={sa.commodity?.name ?? ""} />
             </div>
-            {sa.rateSchedule && (
-              <div style={fieldStyle}>
-                <span style={labelStyle}>Rate Schedule</span>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Rate Schedule</span>
+              {editing ? (
+                <select
+                  style={inputStyle}
+                  value={editForm.rateScheduleId}
+                  onChange={(e) => setEditForm((f) => ({ ...f, rateScheduleId: e.target.value }))}
+                >
+                  <option value="">None</option>
+                  {rateSchedules.map((rs) => (
+                    <option key={rs.id} value={rs.id}>{rs.name} ({rs.code})</option>
+                  ))}
+                </select>
+              ) : (
                 <span style={valueStyle}>
-                  {sa.rateSchedule.name} ({sa.rateSchedule.code})
+                  {sa.rateSchedule ? `${sa.rateSchedule.name} (${sa.rateSchedule.code})` : "—"}
                 </span>
-              </div>
-            )}
-            {sa.billingCycle && (
-              <div style={fieldStyle}>
-                <span style={labelStyle}>Billing Cycle</span>
+              )}
+            </div>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Billing Cycle</span>
+              {editing ? (
+                <select
+                  style={inputStyle}
+                  value={editForm.billingCycleId}
+                  onChange={(e) => setEditForm((f) => ({ ...f, billingCycleId: e.target.value }))}
+                >
+                  <option value="">None</option>
+                  {billingCycles.map((bc) => (
+                    <option key={bc.id} value={bc.id}>{bc.name} ({bc.cycleCode})</option>
+                  ))}
+                </select>
+              ) : (
                 <span style={valueStyle}>
-                  {sa.billingCycle.name} ({sa.billingCycle.cycleCode})
+                  {sa.billingCycle ? `${sa.billingCycle.name} (${sa.billingCycle.cycleCode})` : "—"}
                 </span>
-              </div>
-            )}
+              )}
+            </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Start Date</span>
               <span style={valueStyle}>{sa.startDate?.slice(0, 10) ?? "—"}</span>
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>End Date</span>
-              <span style={valueStyle}>{sa.endDate?.slice(0, 10) ?? "Open-ended"}</span>
+              {editing ? (
+                <input
+                  style={inputStyle}
+                  type="date"
+                  value={editForm.endDate}
+                  onChange={(e) => setEditForm((f) => ({ ...f, endDate: e.target.value }))}
+                />
+              ) : (
+                <span style={valueStyle}>{sa.endDate?.slice(0, 10) ?? "Open-ended"}</span>
+              )}
+            </div>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Read Sequence</span>
+              {editing ? (
+                <input
+                  style={inputStyle}
+                  type="number"
+                  min="0"
+                  value={editForm.readSequence}
+                  onChange={(e) => setEditForm((f) => ({ ...f, readSequence: e.target.value }))}
+                  placeholder="Optional"
+                />
+              ) : (
+                <span style={valueStyle}>{sa.readSequence != null ? sa.readSequence : "—"}</span>
+              )}
             </div>
             <div style={{ ...fieldStyle, borderBottom: "none" }}>
               <span style={labelStyle}>Agreement ID</span>

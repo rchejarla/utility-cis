@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { DataTable } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
+import { useToast } from "@/components/ui/toast";
 
 interface Premise {
   id: string;
@@ -22,6 +23,14 @@ interface Premise {
   geoLng?: number;
   serviceTerritoryId?: string;
   municipalityCode?: string;
+  ownerId?: string;
+  owner?: {
+    id: string;
+    customerType: string;
+    firstName?: string;
+    lastName?: string;
+    organizationName?: string;
+  };
   commodities?: Array<{ commodity: { id: string; name: string } }>;
   meters?: Array<{
     id: string;
@@ -39,6 +48,14 @@ interface Premise {
   }>;
 }
 
+interface Customer {
+  id: string;
+  customerType: string;
+  firstName?: string;
+  lastName?: string;
+  organizationName?: string;
+}
+
 interface AuditEntry {
   id: string;
   action: string;
@@ -46,6 +63,15 @@ interface AuditEntry {
   createdAt: string;
   changes?: unknown;
 }
+
+const US_STATES = [
+  "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME",
+  "MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA",
+  "RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY",
+];
+
+const PREMISE_TYPES = ["RESIDENTIAL", "COMMERCIAL", "INDUSTRIAL", "AGRICULTURAL", "OTHER"];
+const PREMISE_STATUSES = ["ACTIVE", "INACTIVE", "PENDING", "DEMOLISHED"];
 
 const fieldStyle = {
   display: "grid" as const,
@@ -67,26 +93,45 @@ const valueStyle = {
   color: "var(--text-primary)",
 };
 
+const inputStyle = {
+  padding: "6px 10px",
+  fontSize: "13px",
+  background: "var(--bg-deep)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius)",
+  color: "var(--text-primary)",
+  fontFamily: "inherit",
+  outline: "none",
+  width: "100%",
+};
+
 export default function PremiseDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const { toast } = useToast();
   const [premise, setPremise] = useState<Premise | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  const loadPremise = async () => {
+    try {
+      const data = await apiClient.get<Premise>(`/api/v1/premises/${id}`);
+      setPremise(data);
+      return data;
+    } catch (err) {
+      console.error("Failed to load premise", err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const load = async () => {
-      try {
-        const data = await apiClient.get<Premise>(`/api/v1/premises/${id}`);
-        setPremise(data);
-      } catch (err) {
-        console.error("Failed to load premise", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
+    loadPremise();
   }, [id]);
 
   useEffect(() => {
@@ -100,6 +145,60 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
         .catch(console.error);
     }
   }, [activeTab, id]);
+
+  const handleEdit = async () => {
+    if (!premise) return;
+    setEditForm({
+      addressLine1: premise.addressLine1 ?? "",
+      addressLine2: premise.addressLine2 ?? "",
+      city: premise.city ?? "",
+      state: premise.state ?? "",
+      zip: premise.zip ?? "",
+      premiseType: premise.premiseType ?? "",
+      municipalityCode: premise.municipalityCode ?? "",
+      ownerId: premise.ownerId ?? "",
+      status: premise.status ?? "",
+    });
+    // Fetch customers for dropdown
+    try {
+      const res = await apiClient.get<{ data: Customer[] }>("/api/v1/customers", { limit: "500" });
+      setCustomers(res.data ?? []);
+    } catch (err) {
+      console.error("Failed to load customers", err);
+    }
+    setEditing(true);
+  };
+
+  const handleCancel = () => {
+    setEditing(false);
+    setEditForm({});
+  };
+
+  const handleSave = async () => {
+    if (!premise) return;
+    setSaving(true);
+    try {
+      const changes: Record<string, unknown> = {};
+      if (editForm.addressLine1 !== (premise.addressLine1 ?? "")) changes.addressLine1 = editForm.addressLine1;
+      if (editForm.addressLine2 !== (premise.addressLine2 ?? "")) changes.addressLine2 = editForm.addressLine2;
+      if (editForm.city !== (premise.city ?? "")) changes.city = editForm.city;
+      if (editForm.state !== (premise.state ?? "")) changes.state = editForm.state;
+      if (editForm.zip !== (premise.zip ?? "")) changes.zip = editForm.zip;
+      if (editForm.premiseType !== (premise.premiseType ?? "")) changes.premiseType = editForm.premiseType;
+      if (editForm.municipalityCode !== (premise.municipalityCode ?? "")) changes.municipalityCode = editForm.municipalityCode;
+      if (editForm.ownerId !== (premise.ownerId ?? "")) changes.ownerId = editForm.ownerId || null;
+      if (editForm.status !== (premise.status ?? "")) changes.status = editForm.status;
+
+      await apiClient.patch(`/api/v1/premises/${id}`, changes);
+      await loadPremise();
+      setEditing(false);
+      toast("Premise updated successfully", "success");
+    } catch (err: any) {
+      toast(err.message || "Failed to save premise", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -147,18 +246,184 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
               padding: "20px 24px",
             }}
           >
+            {/* Edit / Save / Cancel buttons */}
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px", gap: "8px" }}>
+              {editing ? (
+                <>
+                  <button
+                    onClick={handleCancel}
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "var(--accent-primary)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
+                  >
+                    {saving ? "Saving..." : "Save"}
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={handleEdit}
+                  style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
+                >
+                  Edit
+                </button>
+              )}
+            </div>
+
             <div style={fieldStyle}>
               <span style={labelStyle}>Status</span>
-              <StatusBadge status={premise.status} />
+              {editing ? (
+                <select
+                  style={inputStyle}
+                  value={editForm.status}
+                  onChange={(e) => setEditForm((f) => ({ ...f, status: e.target.value }))}
+                >
+                  {PREMISE_STATUSES.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              ) : (
+                <StatusBadge status={premise.status} />
+              )}
             </div>
+
             <div style={fieldStyle}>
-              <span style={labelStyle}>Address</span>
-              <span style={valueStyle}>{address}</span>
+              <span style={labelStyle}>Address Line 1</span>
+              {editing ? (
+                <input
+                  style={inputStyle}
+                  value={editForm.addressLine1}
+                  onChange={(e) => setEditForm((f) => ({ ...f, addressLine1: e.target.value }))}
+                />
+              ) : (
+                <span style={valueStyle}>{address}</span>
+              )}
             </div>
+
+            {editing && (
+              <div style={fieldStyle}>
+                <span style={labelStyle}>Address Line 2</span>
+                <input
+                  style={inputStyle}
+                  value={editForm.addressLine2}
+                  onChange={(e) => setEditForm((f) => ({ ...f, addressLine2: e.target.value }))}
+                  placeholder="Apt / Suite (optional)"
+                />
+              </div>
+            )}
+
+            {editing && (
+              <div style={fieldStyle}>
+                <span style={labelStyle}>City</span>
+                <input
+                  style={inputStyle}
+                  value={editForm.city}
+                  onChange={(e) => setEditForm((f) => ({ ...f, city: e.target.value }))}
+                />
+              </div>
+            )}
+
+            {editing && (
+              <div style={fieldStyle}>
+                <span style={labelStyle}>State</span>
+                <select
+                  style={inputStyle}
+                  value={editForm.state}
+                  onChange={(e) => setEditForm((f) => ({ ...f, state: e.target.value }))}
+                >
+                  {US_STATES.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {editing && (
+              <div style={fieldStyle}>
+                <span style={labelStyle}>ZIP Code</span>
+                <input
+                  style={inputStyle}
+                  value={editForm.zip}
+                  onChange={(e) => setEditForm((f) => ({ ...f, zip: e.target.value }))}
+                />
+              </div>
+            )}
+
             <div style={fieldStyle}>
               <span style={labelStyle}>Premise Type</span>
-              <span style={valueStyle}>{premise.premiseType}</span>
+              {editing ? (
+                <select
+                  style={inputStyle}
+                  value={editForm.premiseType}
+                  onChange={(e) => setEditForm((f) => ({ ...f, premiseType: e.target.value }))}
+                >
+                  {PREMISE_TYPES.map((t) => (
+                    <option key={t} value={t}>{t.charAt(0) + t.slice(1).toLowerCase()}</option>
+                  ))}
+                </select>
+              ) : (
+                <span style={valueStyle}>{premise.premiseType}</span>
+              )}
             </div>
+
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Property Owner</span>
+              {editing ? (
+                <select
+                  style={inputStyle}
+                  value={editForm.ownerId}
+                  onChange={(e) => setEditForm((f) => ({ ...f, ownerId: e.target.value }))}
+                >
+                  <option value="">No owner assigned</option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.customerType === "ORGANIZATION"
+                        ? c.organizationName
+                        : `${c.firstName} ${c.lastName}`}
+                    </option>
+                  ))}
+                </select>
+              ) : premise.owner ? (
+                <button
+                  onClick={() => router.push(`/customers/${premise.owner!.id}`)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "var(--accent-primary)",
+                    fontSize: "13px",
+                    cursor: "pointer",
+                    padding: 0,
+                    textDecoration: "underline",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  {premise.owner.customerType === "ORGANIZATION"
+                    ? premise.owner.organizationName
+                    : `${premise.owner.firstName} ${premise.owner.lastName}`}
+                </button>
+              ) : (
+                <span style={{ ...valueStyle, color: "var(--text-muted)" }}>No owner assigned</span>
+              )}
+            </div>
+
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Municipality Code</span>
+              {editing ? (
+                <input
+                  style={inputStyle}
+                  value={editForm.municipalityCode}
+                  onChange={(e) => setEditForm((f) => ({ ...f, municipalityCode: e.target.value }))}
+                  placeholder="Optional"
+                />
+              ) : (
+                <span style={valueStyle}>{premise.municipalityCode || "—"}</span>
+              )}
+            </div>
+
             <div style={fieldStyle}>
               <span style={labelStyle}>Commodities</span>
               <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
@@ -169,6 +434,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
                   : <span style={valueStyle}>—</span>}
               </div>
             </div>
+
             {premise.geoLat != null && (
               <div style={fieldStyle}>
                 <span style={labelStyle}>Coordinates</span>
@@ -177,18 +443,14 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
                 </span>
               </div>
             )}
+
             {premise.serviceTerritoryId && (
               <div style={fieldStyle}>
                 <span style={labelStyle}>Service Territory</span>
                 <span style={valueStyle}>{premise.serviceTerritoryId}</span>
               </div>
             )}
-            {premise.municipalityCode && (
-              <div style={fieldStyle}>
-                <span style={labelStyle}>Municipality Code</span>
-                <span style={valueStyle}>{premise.municipalityCode}</span>
-              </div>
-            )}
+
             <div style={{ ...fieldStyle, borderBottom: "none" }}>
               <span style={labelStyle}>Premise ID</span>
               <span style={{ ...valueStyle, fontFamily: "monospace", fontSize: "11px", color: "var(--text-muted)" }}>

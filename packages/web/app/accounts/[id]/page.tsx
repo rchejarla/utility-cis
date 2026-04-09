@@ -7,6 +7,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { DataTable } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
+import { useToast } from "@/components/ui/toast";
 
 interface Account {
   id: string;
@@ -15,7 +16,13 @@ interface Account {
   status: string;
   creditRating?: string;
   depositAmount?: number;
+  depositWaived?: boolean;
+  depositWaivedReason?: string;
   languagePref?: string;
+  paperlessBilling?: boolean;
+  budgetBilling?: boolean;
+  customerId?: string;
+  saaslogicAccountId?: string;
   serviceAgreements?: Array<{
     id: string;
     agreementNumber: string;
@@ -34,6 +41,17 @@ interface AuditEntry {
   createdAt: string;
 }
 
+const ACCOUNT_TYPES = ["RESIDENTIAL", "COMMERCIAL", "INDUSTRIAL", "GOVERNMENT", "OTHER"];
+const ACCOUNT_STATUSES = ["ACTIVE", "INACTIVE", "SUSPENDED", "CLOSED"];
+const CREDIT_RATINGS = ["AAA", "AA", "A", "BBB", "BB", "B", "CCC", "CC", "C", "D"];
+const LANGUAGE_PREFS = [
+  { value: "en", label: "English" },
+  { value: "es", label: "Spanish" },
+  { value: "fr", label: "French" },
+  { value: "zh", label: "Chinese" },
+  { value: "vi", label: "Vietnamese" },
+];
+
 const fieldStyle = {
   display: "grid" as const,
   gridTemplateColumns: "160px 1fr",
@@ -45,20 +63,44 @@ const fieldStyle = {
 const labelStyle = { fontSize: "12px", color: "var(--text-muted)", fontWeight: "500" as const };
 const valueStyle = { fontSize: "13px", color: "var(--text-primary)" };
 
+const inputStyle = {
+  padding: "6px 10px",
+  fontSize: "13px",
+  background: "var(--bg-deep)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius)",
+  color: "var(--text-primary)",
+  fontFamily: "inherit",
+  outline: "none",
+  width: "100%",
+};
+
 export default function AccountDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const { toast } = useToast();
   const [account, setAccount] = useState<Account | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState<Record<string, string | boolean>>({});
+  const [saving, setSaving] = useState(false);
+
+  const loadAccount = async () => {
+    try {
+      const data = await apiClient.get<Account>(`/api/v1/accounts/${id}`);
+      setAccount(data);
+      return data;
+    } catch (err) {
+      console.error("Failed to load account", err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    apiClient
-      .get<Account>(`/api/v1/accounts/${id}`)
-      .then((data) => setAccount(data))
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    loadAccount();
   }, [id]);
 
   useEffect(() => {
@@ -72,6 +114,54 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
         .catch(console.error);
     }
   }, [activeTab, id]);
+
+  const handleEdit = () => {
+    if (!account) return;
+    setEditForm({
+      accountType: account.accountType ?? "",
+      status: account.status ?? "",
+      creditRating: account.creditRating ?? "",
+      depositAmount: account.depositAmount != null ? String(account.depositAmount) : "",
+      depositWaived: account.depositWaived ?? false,
+      depositWaivedReason: account.depositWaivedReason ?? "",
+      languagePref: account.languagePref ?? "en",
+      paperlessBilling: account.paperlessBilling ?? false,
+      budgetBilling: account.budgetBilling ?? false,
+    });
+    setEditing(true);
+  };
+
+  const handleCancel = () => {
+    setEditing(false);
+    setEditForm({});
+  };
+
+  const handleSave = async () => {
+    if (!account) return;
+    setSaving(true);
+    try {
+      const changes: Record<string, unknown> = {};
+      if (editForm.accountType !== account.accountType) changes.accountType = editForm.accountType;
+      if (editForm.status !== account.status) changes.status = editForm.status;
+      if (editForm.creditRating !== (account.creditRating ?? "")) changes.creditRating = editForm.creditRating || null;
+      const depositVal = editForm.depositAmount !== "" ? parseFloat(editForm.depositAmount as string) : null;
+      if (depositVal !== (account.depositAmount ?? null)) changes.depositAmount = depositVal;
+      if (editForm.depositWaived !== (account.depositWaived ?? false)) changes.depositWaived = editForm.depositWaived;
+      if (editForm.depositWaivedReason !== (account.depositWaivedReason ?? "")) changes.depositWaivedReason = editForm.depositWaivedReason;
+      if (editForm.languagePref !== (account.languagePref ?? "")) changes.languagePref = editForm.languagePref;
+      if (editForm.paperlessBilling !== (account.paperlessBilling ?? false)) changes.paperlessBilling = editForm.paperlessBilling;
+      if (editForm.budgetBilling !== (account.budgetBilling ?? false)) changes.budgetBilling = editForm.budgetBilling;
+
+      await apiClient.patch(`/api/v1/accounts/${id}`, changes);
+      await loadAccount();
+      setEditing(false);
+      toast("Account updated successfully", "success");
+    } catch (err: any) {
+      toast(err.message || "Failed to save account", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   if (loading) {
     return <div style={{ color: "var(--text-muted)", padding: "40px 0" }}>Loading...</div>;
@@ -105,9 +195,49 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
               padding: "20px 24px",
             }}
           >
+            {/* Edit / Save / Cancel buttons */}
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px", gap: "8px" }}>
+              {editing ? (
+                <>
+                  <button
+                    onClick={handleCancel}
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "var(--accent-primary)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
+                  >
+                    {saving ? "Saving..." : "Save"}
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={handleEdit}
+                  style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
+                >
+                  Edit
+                </button>
+              )}
+            </div>
+
             <div style={fieldStyle}>
               <span style={labelStyle}>Status</span>
-              <StatusBadge status={account.status} />
+              {editing ? (
+                <select
+                  style={inputStyle}
+                  value={editForm.status as string}
+                  onChange={(e) => setEditForm((f) => ({ ...f, status: e.target.value }))}
+                >
+                  {ACCOUNT_STATUSES.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              ) : (
+                <StatusBadge status={account.status} />
+              )}
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Account Number</span>
@@ -115,23 +245,132 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Account Type</span>
-              <span style={valueStyle}>{account.accountType}</span>
+              {editing ? (
+                <select
+                  style={inputStyle}
+                  value={editForm.accountType as string}
+                  onChange={(e) => setEditForm((f) => ({ ...f, accountType: e.target.value }))}
+                >
+                  {ACCOUNT_TYPES.map((t) => (
+                    <option key={t} value={t}>{t.charAt(0) + t.slice(1).toLowerCase()}</option>
+                  ))}
+                </select>
+              ) : (
+                <span style={valueStyle}>{account.accountType}</span>
+              )}
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Credit Rating</span>
-              <span style={valueStyle}>{account.creditRating ?? "—"}</span>
+              {editing ? (
+                <select
+                  style={inputStyle}
+                  value={editForm.creditRating as string}
+                  onChange={(e) => setEditForm((f) => ({ ...f, creditRating: e.target.value }))}
+                >
+                  <option value="">None</option>
+                  {CREDIT_RATINGS.map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+              ) : (
+                <span style={valueStyle}>{account.creditRating ?? "—"}</span>
+              )}
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Deposit Amount</span>
-              <span style={valueStyle}>
-                {account.depositAmount != null
-                  ? `$${Number(account.depositAmount).toFixed(2)}`
-                  : "—"}
-              </span>
+              {editing ? (
+                <input
+                  style={inputStyle}
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={editForm.depositAmount as string}
+                  onChange={(e) => setEditForm((f) => ({ ...f, depositAmount: e.target.value }))}
+                  placeholder="0.00"
+                />
+              ) : (
+                <span style={valueStyle}>
+                  {account.depositAmount != null
+                    ? `$${Number(account.depositAmount).toFixed(2)}`
+                    : "—"}
+                </span>
+              )}
             </div>
             <div style={fieldStyle}>
+              <span style={labelStyle}>Deposit Waived</span>
+              {editing ? (
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={editForm.depositWaived as boolean}
+                    onChange={(e) => setEditForm((f) => ({ ...f, depositWaived: e.target.checked }))}
+                  />
+                  Waived
+                </label>
+              ) : (
+                <span style={valueStyle}>{account.depositWaived ? "Yes" : "No"}</span>
+              )}
+            </div>
+            {(editing || account.depositWaivedReason) && (
+              <div style={fieldStyle}>
+                <span style={labelStyle}>Waiver Reason</span>
+                {editing ? (
+                  <input
+                    style={inputStyle}
+                    value={editForm.depositWaivedReason as string}
+                    onChange={(e) => setEditForm((f) => ({ ...f, depositWaivedReason: e.target.value }))}
+                    placeholder="Optional reason"
+                  />
+                ) : (
+                  <span style={valueStyle}>{account.depositWaivedReason ?? "—"}</span>
+                )}
+              </div>
+            )}
+            <div style={fieldStyle}>
               <span style={labelStyle}>Language Pref</span>
-              <span style={valueStyle}>{account.languagePref ?? "—"}</span>
+              {editing ? (
+                <select
+                  style={inputStyle}
+                  value={editForm.languagePref as string}
+                  onChange={(e) => setEditForm((f) => ({ ...f, languagePref: e.target.value }))}
+                >
+                  {LANGUAGE_PREFS.map((l) => (
+                    <option key={l.value} value={l.value}>{l.label}</option>
+                  ))}
+                </select>
+              ) : (
+                <span style={valueStyle}>{account.languagePref ?? "—"}</span>
+              )}
+            </div>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Paperless Billing</span>
+              {editing ? (
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={editForm.paperlessBilling as boolean}
+                    onChange={(e) => setEditForm((f) => ({ ...f, paperlessBilling: e.target.checked }))}
+                  />
+                  Enabled
+                </label>
+              ) : (
+                <span style={valueStyle}>{account.paperlessBilling ? "Yes" : "No"}</span>
+              )}
+            </div>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Budget Billing</span>
+              {editing ? (
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--text-primary)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={editForm.budgetBilling as boolean}
+                    onChange={(e) => setEditForm((f) => ({ ...f, budgetBilling: e.target.checked }))}
+                  />
+                  Enabled
+                </label>
+              ) : (
+                <span style={valueStyle}>{account.budgetBilling ? "Yes" : "No"}</span>
+              )}
             </div>
             {account.createdAt && (
               <div style={fieldStyle}>
