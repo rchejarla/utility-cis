@@ -84,8 +84,19 @@ export default function CommoditiesPage() {
   };
 
   const handleCreateUom = async (commodityId: string) => {
+    if (!newUomForm.code || !newUomForm.name) {
+      toast("Code and Name are required", "error");
+      return;
+    }
     try {
-      await apiClient.post("/api/v1/uom", { ...newUomForm, commodityId, conversionFactor: Number(newUomForm.conversionFactor) });
+      await apiClient.post("/api/v1/uom", {
+        code: newUomForm.code,
+        name: newUomForm.name,
+        commodityId,
+        conversionFactor: Number(newUomForm.conversionFactor) || 1,
+        isBaseUnit: newUomForm.isBaseUnit,
+        isActive: true,
+      });
       setShowNewUom(null);
       setNewUomForm({ code: "", name: "", conversionFactor: "1", isBaseUnit: false });
       toast("Unit of measure created", "success");
