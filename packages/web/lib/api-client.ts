@@ -12,6 +12,7 @@ function createDevToken(): string {
     sub: "00000000-0000-4000-8000-000000000099",
     utility_id: "00000000-0000-4000-8000-000000000001",
     email: "dev@example.com",
+    name: "Admin User",
     role: "admin",
   }));
   return `${header}.${payload}.dev`;
