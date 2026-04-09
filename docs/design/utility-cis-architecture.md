@@ -1,7 +1,7 @@
 # Utility CIS — System Architecture & Design
 
 **Last updated:** 2026-04-08
-**Status:** Phase 1 complete, Phase 2 planned
+**Status:** Phase 1 complete, Phase 2 in progress
 
 ---
 
@@ -477,10 +477,21 @@ Per-user settings.
 
 All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `/health`).
 
-### 5.2 Endpoints (29 current)
+### 5.2 Endpoints (39 current)
 
 | Method | Path | Module |
 |--------|------|--------|
+| GET | `/api/v1/customers` | Customer |
+| POST | `/api/v1/customers` | Customer |
+| GET | `/api/v1/customers/:id` | Customer |
+| PATCH | `/api/v1/customers/:id` | Customer |
+| GET | `/api/v1/contacts` | Contact |
+| POST | `/api/v1/contacts` | Contact |
+| PATCH | `/api/v1/contacts/:id` | Contact |
+| DELETE | `/api/v1/contacts/:id` | Contact |
+| GET | `/api/v1/billing-addresses` | BillingAddress |
+| POST | `/api/v1/billing-addresses` | BillingAddress |
+| PATCH | `/api/v1/billing-addresses/:id` | BillingAddress |
 | GET | `/api/v1/commodities` | Commodity |
 | POST | `/api/v1/commodities` | Commodity |
 | PATCH | `/api/v1/commodities/:id` | Commodity |
@@ -548,6 +559,8 @@ All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `
 
 | Page | Path | Features |
 |------|------|----------|
+| Customers | `/customers` | Search with debounce, stat cards, type/status filters |
+| Customer Detail | `/customers/:id` | Command center: hero header, 4 tabs (Overview, Accounts, Premises, Contacts) |
 | Premises | `/premises` | Table + map toggle, stats bar, type/status filters |
 | Premises Map | `/premises` (map view) | Mapbox GL JS, Supercluster, popups, type filters |
 | Premise Detail | `/premises/:id` | Tabs: Overview, Meters, Agreements |

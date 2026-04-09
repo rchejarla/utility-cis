@@ -6,7 +6,9 @@
       "Bash(wc -l /c/development/claude-test/docs/specs/*.md)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(npx next:*)",
+      "Bash(git:*)"
     ]
   },
   "hooks": {
