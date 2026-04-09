@@ -86,10 +86,11 @@ const inputStyle = {
   width: "100%",
 };
 
+// BR-SA-006: PENDING → ACTIVE → FINAL → CLOSED (no skipping)
 const STATUS_TRANSITIONS: Record<string, string[]> = {
   PENDING: ["ACTIVE"],
-  ACTIVE: ["INACTIVE", "CLOSED"],
-  INACTIVE: ["ACTIVE", "CLOSED"],
+  ACTIVE: ["FINAL"],
+  FINAL: ["CLOSED"],
 };
 
 export default function ServiceAgreementDetailPage({
