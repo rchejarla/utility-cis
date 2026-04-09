@@ -6,6 +6,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
+import { DatePicker } from "@/components/ui/date-picker";
 
 interface Commodity {
   id: string;
@@ -239,11 +240,10 @@ export function MetersTab({ premise, onMeterAdded, onRowClick }: MetersTabProps)
               <div style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px", fontWeight: 500 }}>
                 Install Date *
               </div>
-              <input
-                style={inputStyle}
-                type="date"
+              <DatePicker
                 value={form.installDate}
-                onChange={(e) => setForm({ ...form, installDate: e.target.value })}
+                onChange={(v) => setForm({ ...form, installDate: v })}
+                placeholder="Select install date..."
               />
             </div>
           </div>
