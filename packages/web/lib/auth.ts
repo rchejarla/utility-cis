@@ -14,7 +14,7 @@ export const authOptions: NextAuthOptions = {
         // Dev mode: accept any credentials, return mock user
         if (credentials?.email) {
           return {
-            id: "user-001",
+            id: "00000000-0000-4000-8000-000000000099",
             email: credentials.email,
             name: "Admin User",
             utilityId: "00000000-0000-4000-8000-000000000001",

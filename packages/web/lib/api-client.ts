@@ -9,7 +9,7 @@ let cacheExpiry = 0;
 function createDevToken(): string {
   const header = btoa(JSON.stringify({ alg: "none" }));
   const payload = btoa(JSON.stringify({
-    sub: "dev-user-001",
+    sub: "00000000-0000-4000-8000-000000000099",
     utility_id: "00000000-0000-4000-8000-000000000001",
     email: "dev@example.com",
     role: "admin",
