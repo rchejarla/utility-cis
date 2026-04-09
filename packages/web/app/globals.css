@@ -64,6 +64,32 @@ body {
   background: var(--text-muted);
 }
 
+/* Responsive layout helpers */
+
+/* Tablet: horizontal scroll for tables */
+@media (max-width: 1199px) {
+  table {
+    display: block;
+    overflow-x: auto;
+  }
+}
+
+/* Mobile: single-column forms, stacked stats, stacked page headers */
+@media (max-width: 767px) {
+  .responsive-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .stats-row {
+    flex-direction: column;
+  }
+
+  .page-header {
+    flex-direction: column;
+    gap: 8px;
+  }
+}
+
 /* Prevent Mapbox popups from being clipped */
 .mapboxgl-popup {
   z-index: 50;

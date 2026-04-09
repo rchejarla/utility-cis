@@ -5,10 +5,9 @@ import "@/lib/fontawesome";
 import { AuthSessionProvider } from "@/components/session-provider";
 import { QueryProvider } from "@/lib/query-provider";
 import { ThemeProvider } from "@/lib/theme-provider";
-import { Sidebar } from "@/components/sidebar";
-import { Topbar } from "@/components/topbar";
 import { NavProgress } from "@/components/nav-progress";
 import { ToastProvider } from "@/components/ui/toast";
+import { AppShell } from "@/components/app-shell";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -33,28 +32,7 @@ export default function RootLayout({
             <ThemeProvider>
               <ToastProvider>
               <NavProgress />
-              <div style={{ display: "flex", height: "100vh" }}>
-                <Sidebar />
-                <div
-                  style={{
-                    flex: 1,
-                    display: "flex",
-                    flexDirection: "column",
-                    overflow: "hidden",
-                  }}
-                >
-                  <Topbar />
-                  <main
-                    style={{
-                      flex: 1,
-                      overflow: "auto",
-                      padding: "24px",
-                    }}
-                  >
-                    {children}
-                  </main>
-                </div>
-              </div>
+              <AppShell>{children}</AppShell>
             </ToastProvider>
             </ThemeProvider>
           </QueryProvider>

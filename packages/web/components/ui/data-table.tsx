@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { useBreakpoint } from "@/lib/use-media-query";
 
 export interface Column<T> {
   key: string;
@@ -55,6 +56,7 @@ export function DataTable<T extends Record<string, unknown>>({
   onRowClick,
   loading = false,
 }: DataTableProps<T>) {
+  const { isMobile } = useBreakpoint();
   const startItem = meta ? (meta.page - 1) * meta.limit + 1 : 1;
   const endItem = meta ? Math.min(meta.page * meta.limit, meta.total) : data.length;
 
@@ -70,89 +72,187 @@ export function DataTable<T extends Record<string, unknown>>({
         flexDirection: "column",
       }}
     >
-      <div style={{ overflowX: "auto", flex: 1 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
-          <thead>
-            <tr style={{ background: "var(--bg-elevated)" }}>
-              {columns.map((col) => (
-                <th
-                  key={col.key}
+      {isMobile ? (
+        /* Mobile card view */
+        <div style={{ flex: 1, padding: "8px" }}>
+          {loading ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div
+                  key={i}
                   style={{
-                    padding: "10px 16px",
-                    textAlign: "left",
-                    fontSize: "11px",
-                    fontWeight: "600",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.06em",
-                    color: "var(--text-muted)",
-                    borderBottom: "1px solid var(--border)",
-                    whiteSpace: "nowrap",
+                    background: "var(--bg-elevated)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius)",
+                    padding: "12px 16px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "8px",
                   }}
                 >
-                  {col.header}
-                </th>
+                  {Array.from({ length: 3 }).map((_, j) => (
+                    <div
+                      key={j}
+                      style={{
+                        height: "14px",
+                        borderRadius: "4px",
+                        background: "var(--bg-hover)",
+                        width: `${SKELETON_WIDTHS[(i * 3 + j) % SKELETON_WIDTHS.length]}%`,
+                        animation: "pulse 1.5s ease-in-out infinite",
+                      }}
+                    />
+                  ))}
+                </div>
               ))}
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              Array.from({ length: 8 }).map((_, i) => (
-                <SkeletonRow key={i} cols={columns.length} rowIndex={i} />
-              ))
-            ) : data.length === 0 ? (
-              <tr>
-                <td
-                  colSpan={columns.length}
+            </div>
+          ) : data.length === 0 ? (
+            <div
+              style={{
+                padding: "48px 16px",
+                textAlign: "center",
+                color: "var(--text-muted)",
+                fontSize: "14px",
+              }}
+            >
+              No records found
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              {data.map((row, i) => (
+                <div
+                  key={i}
+                  onClick={() => onRowClick?.(row)}
                   style={{
-                    padding: "48px 16px",
-                    textAlign: "center",
-                    color: "var(--text-muted)",
-                    fontSize: "14px",
-                  }}
-                >
-                  No records found
-                </td>
-              </tr>
-            ) : (
-              data.map((row, rowIndex) => (
-                <tr
-                  key={rowIndex}
-                  onClick={onRowClick ? () => onRowClick(row) : undefined}
-                  style={{
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius)",
+                    padding: "12px 16px",
                     cursor: onRowClick ? "pointer" : "default",
-                    transition: "background 0.1s ease",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (onRowClick) {
-                      (e.currentTarget as HTMLTableRowElement).style.background = "var(--bg-hover)";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLTableRowElement).style.background = "transparent";
                   }}
                 >
-                  {columns.map((col) => (
-                    <td
+                  {columns.slice(0, 4).map((col) => (
+                    <div
                       key={col.key}
                       style={{
-                        padding: "12px 16px",
-                        fontSize: "13px",
-                        color: "var(--text-primary)",
-                        borderBottom: "1px solid var(--border-subtle)",
-                        whiteSpace: "nowrap",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "flex-start",
+                        padding: "4px 0",
+                        gap: "8px",
                       }}
                     >
-                      {col.render
-                        ? col.render(row)
-                        : (row[col.key] as React.ReactNode) ?? "—"}
-                    </td>
+                      <span
+                        style={{
+                          fontSize: "11px",
+                          color: "var(--text-muted)",
+                          fontWeight: 500,
+                          flexShrink: 0,
+                        }}
+                      >
+                        {col.header}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: "13px",
+                          color: "var(--text-primary)",
+                          textAlign: "right",
+                        }}
+                      >
+                        {col.render ? col.render(row) : (row[col.key] as React.ReactNode) ?? "—"}
+                      </span>
+                    </div>
                   ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        /* Desktop/tablet table view */
+        <div style={{ overflowX: "auto", flex: 1 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+            <thead>
+              <tr style={{ background: "var(--bg-elevated)" }}>
+                {columns.map((col) => (
+                  <th
+                    key={col.key}
+                    style={{
+                      padding: "10px 16px",
+                      textAlign: "left",
+                      fontSize: "11px",
+                      fontWeight: "600",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.06em",
+                      color: "var(--text-muted)",
+                      borderBottom: "1px solid var(--border)",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {col.header}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                Array.from({ length: 8 }).map((_, i) => (
+                  <SkeletonRow key={i} cols={columns.length} rowIndex={i} />
+                ))
+              ) : data.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={columns.length}
+                    style={{
+                      padding: "48px 16px",
+                      textAlign: "center",
+                      color: "var(--text-muted)",
+                      fontSize: "14px",
+                    }}
+                  >
+                    No records found
+                  </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+              ) : (
+                data.map((row, rowIndex) => (
+                  <tr
+                    key={rowIndex}
+                    onClick={onRowClick ? () => onRowClick(row) : undefined}
+                    style={{
+                      cursor: onRowClick ? "pointer" : "default",
+                      transition: "background 0.1s ease",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (onRowClick) {
+                        (e.currentTarget as HTMLTableRowElement).style.background = "var(--bg-hover)";
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLTableRowElement).style.background = "transparent";
+                    }}
+                  >
+                    {columns.map((col) => (
+                      <td
+                        key={col.key}
+                        style={{
+                          padding: "12px 16px",
+                          fontSize: "13px",
+                          color: "var(--text-primary)",
+                          borderBottom: "1px solid var(--border-subtle)",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {col.render
+                          ? col.render(row)
+                          : (row[col.key] as React.ReactNode) ?? "—"}
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Pagination footer */}
       {meta && meta.pages > 0 && (

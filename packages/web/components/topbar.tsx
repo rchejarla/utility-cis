@@ -74,7 +74,11 @@ function SearchIcon() {
   );
 }
 
-export function Topbar() {
+interface TopbarProps {
+  compact?: boolean;
+}
+
+export function Topbar({ compact = false }: TopbarProps) {
   const pathname = usePathname();
   const { mode, toggle } = useTheme();
   const [searchValue, setSearchValue] = useState("");
@@ -83,6 +87,75 @@ export function Topbar() {
   const effectiveMode = mode === "system"
     ? (typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
     : mode;
+
+  if (compact) {
+    return (
+      <header
+        style={{
+          height: "56px",
+          background: "var(--bg-surface)",
+          borderBottom: "1px solid var(--border)",
+          display: "flex",
+          alignItems: "center",
+          padding: "0 16px",
+          gap: "12px",
+          flexShrink: 0,
+        }}
+      >
+        {/* App title on mobile */}
+        <div style={{ flex: 1, display: "flex", alignItems: "center", gap: "10px" }}>
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 7,
+              background: "var(--accent-primary)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "white",
+              fontWeight: "bold",
+              fontSize: 13,
+              flexShrink: 0,
+            }}
+          >
+            U
+          </div>
+          <span
+            style={{
+              color: "var(--text-primary)",
+              fontWeight: 600,
+              fontSize: 15,
+            }}
+          >
+            Utility CIS
+          </span>
+        </div>
+
+        {/* Theme toggle */}
+        <button
+          onClick={toggle}
+          title={`Switch to ${effectiveMode === "dark" ? "light" : "dark"} mode`}
+          style={{
+            width: "36px",
+            height: "36px",
+            borderRadius: "var(--radius)",
+            background: "var(--bg-card)",
+            border: "1px solid var(--border)",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "var(--text-secondary)",
+            transition: "all 0.15s ease",
+            flexShrink: 0,
+          }}
+        >
+          {effectiveMode === "dark" ? <SunIcon /> : <MoonIcon />}
+        </button>
+      </header>
+    );
+  }
 
   return (
     <header

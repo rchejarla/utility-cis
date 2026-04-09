@@ -62,10 +62,14 @@ const navSections: NavSection[] = [
   },
 ];
 
-export function Sidebar() {
+interface SidebarProps {
+  defaultCollapsed?: boolean;
+}
+
+export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
   const pathname = usePathname();
   const { data: session } = useSession();
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
   const width = collapsed ? 64 : 240;
 
