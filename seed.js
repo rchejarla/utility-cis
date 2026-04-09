@@ -148,6 +148,21 @@ async function main() {
   await p.account.update({ where: { id: aArr[3].id }, data: { customerId: cArr[2].id } });
   console.log("  " + cArr.length + " customers");
 
+  // Link customers as premise owners
+  // Jane Smith owns premises 0, 5 (residential)
+  await p.premise.update({ where: { id: pArr[0].id }, data: { ownerId: cArr[0].id } });
+  await p.premise.update({ where: { id: pArr[5].id }, data: { ownerId: cArr[0].id } });
+  // Robert Johnson owns premises 2, 9 (residential)
+  await p.premise.update({ where: { id: pArr[2].id }, data: { ownerId: cArr[1].id } });
+  await p.premise.update({ where: { id: pArr[9].id }, data: { ownerId: cArr[1].id } });
+  // Acme Industries owns premises 1, 3, 4, 6, 7 (commercial/industrial)
+  await p.premise.update({ where: { id: pArr[1].id }, data: { ownerId: cArr[2].id } });
+  await p.premise.update({ where: { id: pArr[3].id }, data: { ownerId: cArr[2].id } });
+  await p.premise.update({ where: { id: pArr[4].id }, data: { ownerId: cArr[2].id } });
+  await p.premise.update({ where: { id: pArr[6].id }, data: { ownerId: cArr[2].id } });
+  await p.premise.update({ where: { id: pArr[7].id }, data: { ownerId: cArr[2].id } });
+  console.log("  9 premises linked to owners");
+
   const contactData = [
     { accountId: aArr[0].id, customerId: cArr[0].id, role: "PRIMARY", firstName: "Jane", lastName: "Smith", email: "jane.smith@example.com", phone: "555-100-0001", isPrimary: true },
     { accountId: aArr[0].id, role: "AUTHORIZED", firstName: "Tom", lastName: "Smith", email: "tom.smith@example.com", phone: "555-100-0099", isPrimary: false },
