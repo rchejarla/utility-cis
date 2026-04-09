@@ -142,6 +142,11 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
 
   useEffect(() => {
     loadPremise();
+    // Fetch commodities for display (resolving IDs to names)
+    apiClient
+      .get<Array<{ id: string; code: string; name: string }> | { data: Array<{ id: string; code: string; name: string }> }>("/api/v1/commodities")
+      .then((res) => setAllCommodities(Array.isArray(res) ? res : res.data ?? []))
+      .catch(console.error);
   }, [id]);
 
   useEffect(() => {
@@ -554,10 +559,8 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
                 <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
                   {premise.commodityIds && premise.commodityIds.length > 0
                     ? premise.commodityIds.map((cId, i) => {
-                        // Find commodity name from meters or just show ID
-                        const meterWithCommodity = premise.meters?.find((m: any) => m.commodityId === cId || m.commodity?.id === cId);
-                        const name = meterWithCommodity?.commodity?.name ?? cId;
-                        return <CommodityBadge key={i} commodity={name} />;
+                        const comm = allCommodities.find((c) => c.id === cId);
+                        return <CommodityBadge key={i} commodity={comm?.code ?? comm?.name ?? ""} />;
                       })
                     : <span style={valueStyle}>—</span>}
                 </div>
