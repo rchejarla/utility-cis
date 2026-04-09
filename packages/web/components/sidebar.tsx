@@ -10,6 +10,7 @@ import {
   faLocationDot,
   faGauge,
   faUser,
+  faUsers,
   faFileContract,
   faMoneyBill,
   faCalendarDays,
@@ -36,6 +37,7 @@ const navSections: NavSection[] = [
   {
     title: "Operations",
     items: [
+      { href: "/customers", label: "Customers", icon: faUsers },
       { href: "/premises", label: "Premises", icon: faLocationDot },
       { href: "/meters", label: "Meters", icon: faGauge },
       { href: "/accounts", label: "Accounts", icon: faUser },
