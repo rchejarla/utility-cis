@@ -7,6 +7,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { DataTable } from "@/components/ui/data-table";
+import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { MeterManagementTab } from "@/components/service-agreements/meters-tab";
@@ -454,11 +455,9 @@ export default function ServiceAgreementDetailPage({
             <div style={fieldStyle}>
               <span style={labelStyle}>End Date</span>
               {editing ? (
-                <input
-                  style={inputStyle}
-                  type="date"
+                <DatePicker
                   value={editForm.endDate}
-                  onChange={(e) => setEditForm((f) => ({ ...f, endDate: e.target.value }))}
+                  onChange={(v) => setEditForm((f) => ({ ...f, endDate: v }))}
                 />
               ) : (
                 <span style={valueStyle}>{sa.endDate?.slice(0, 10) ?? "Open-ended"}</span>

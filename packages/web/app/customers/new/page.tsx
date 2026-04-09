@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { FormField } from "@/components/ui/form-field";
 import { useToast } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
+import { DatePicker } from "@/components/ui/date-picker";
 
 const inputStyle = {
   padding: "8px 12px",
@@ -173,12 +174,11 @@ export default function NewCustomerPage() {
                 </FormField>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                <FormField label="Date of Birth" hint="YYYY-MM-DD">
-                  <input
-                    style={inputStyle}
-                    type="date"
+                <FormField label="Date of Birth">
+                  <DatePicker
                     value={form.dateOfBirth}
-                    onChange={(e) => set("dateOfBirth", e.target.value)}
+                    onChange={(v) => set("dateOfBirth", v)}
+                    placeholder="Select date..."
                   />
                 </FormField>
                 <FormField label="Driver's License">

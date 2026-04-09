@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { FilterBar } from "@/components/ui/filter-bar";
 import { DataTable } from "@/components/ui/data-table";
+import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
 
 interface AuditEntry {
@@ -151,20 +152,16 @@ export default function AuditLogPage() {
         <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: "500" }}>
           Date range:
         </span>
-        <input
-          type="date"
-          style={inputStyle}
+        <DatePicker
           value={dateFrom}
-          onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
-          placeholder="From"
+          onChange={(v) => { setDateFrom(v); setPage(1); }}
+          placeholder="Start date"
         />
         <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>to</span>
-        <input
-          type="date"
-          style={inputStyle}
+        <DatePicker
           value={dateTo}
-          onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
-          placeholder="To"
+          onChange={(v) => { setDateTo(v); setPage(1); }}
+          placeholder="End date"
         />
         {(dateFrom || dateTo) && (
           <button

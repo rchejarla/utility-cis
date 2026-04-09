@@ -7,6 +7,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { DataTable } from "@/components/ui/data-table";
+import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
 
 interface RateSchedule {
@@ -174,21 +175,9 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
               >
                 New Effective Date
               </label>
-              <input
-                type="date"
+              <DatePicker
                 value={reviseDate}
-                onChange={(e) => setReviseDate(e.target.value)}
-                style={{
-                  padding: "8px 12px",
-                  borderRadius: "var(--radius)",
-                  border: "1px solid var(--border)",
-                  background: "var(--bg-elevated)",
-                  color: "var(--text-primary)",
-                  fontSize: "13px",
-                  fontFamily: "inherit",
-                  width: "100%",
-                  boxSizing: "border-box" as const,
-                }}
+                onChange={(v) => setReviseDate(v)}
               />
             </div>
             <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>

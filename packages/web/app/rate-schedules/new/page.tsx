@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/page-header";
 import { FormField } from "@/components/ui/form-field";
 import { HelpTooltip } from "@/components/ui/tooltip";
+import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
 
 interface Commodity {
@@ -210,20 +211,16 @@ export default function NewRateSchedulePage() {
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
             <FormField label="Effective Date" required hint="BR-RS-003: Billing uses the rate in effect during the billing period">
-              <input
-                style={inputStyle}
-                type="date"
+              <DatePicker
                 value={form.effectiveDate}
-                onChange={(e) => set("effectiveDate", e.target.value)}
-                required
+                onChange={(v) => set("effectiveDate", v)}
               />
             </FormField>
             <FormField label="Expiration Date" hint="Leave blank for indefinite">
-              <input
-                style={inputStyle}
-                type="date"
+              <DatePicker
                 value={form.expirationDate}
-                onChange={(e) => set("expirationDate", e.target.value)}
+                onChange={(v) => set("expirationDate", v)}
+                placeholder="Leave blank for indefinite"
               />
             </FormField>
           </div>

@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/page-header";
 import { FormField } from "@/components/ui/form-field";
+import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
 
 interface Commodity {
@@ -212,11 +213,9 @@ export default function NewMeterPage() {
           </div>
 
           <FormField label="Install Date">
-            <input
-              style={inputStyle}
-              type="date"
+            <DatePicker
               value={form.installDate}
-              onChange={(e) => set("installDate", e.target.value)}
+              onChange={(v) => set("installDate", v)}
             />
           </FormField>
 

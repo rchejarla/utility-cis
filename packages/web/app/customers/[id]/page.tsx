@@ -13,6 +13,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { DataTable } from "@/components/ui/data-table";
+import { DatePicker } from "@/components/ui/date-picker";
 import { AccountsTab } from "@/components/customers/accounts-tab";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
 import { apiClient } from "@/lib/api-client";
@@ -510,11 +511,9 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
                 <div style={fieldStyle}>
                   <span style={labelStyle}>Date of Birth</span>
                   {editing ? (
-                    <input
-                      style={inputStyle}
-                      type="date"
+                    <DatePicker
                       value={editForm.dateOfBirth}
-                      onChange={(e) => setEditForm((f) => ({ ...f, dateOfBirth: e.target.value }))}
+                      onChange={(v) => setEditForm((f) => ({ ...f, dateOfBirth: v }))}
                     />
                   ) : (
                     <span style={valueStyle}>{customer.dateOfBirth ? customer.dateOfBirth.slice(0, 10) : "—"}</span>

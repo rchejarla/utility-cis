@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/page-header";
 import { FormField } from "@/components/ui/form-field";
 import { HelpTooltip } from "@/components/ui/tooltip";
+import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
 
 interface Account {
@@ -276,20 +277,16 @@ export default function NewServiceAgreementPage() {
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
             <FormField label="Start Date" required>
-              <input
-                style={inputStyle}
-                type="date"
+              <DatePicker
                 value={form.startDate}
-                onChange={(e) => set("startDate", e.target.value)}
-                required
+                onChange={(v) => set("startDate", v)}
               />
             </FormField>
             <FormField label="End Date" hint="Optional — leave blank for open-ended">
-              <input
-                style={inputStyle}
-                type="date"
+              <DatePicker
                 value={form.endDate}
-                onChange={(e) => set("endDate", e.target.value)}
+                onChange={(v) => set("endDate", v)}
+                placeholder="Leave blank for open-ended"
               />
             </FormField>
           </div>
