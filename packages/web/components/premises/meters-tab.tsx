@@ -65,6 +65,7 @@ const btnStyle = {
 export function MetersTab({ premise, onMeterAdded, onRowClick }: MetersTabProps) {
   const { toast } = useToast();
   const [showForm, setShowForm] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [commodities, setCommodities] = useState<Commodity[]>([]);
   const [uoms, setUoms] = useState<Uom[]>([]);
@@ -233,20 +234,6 @@ export function MetersTab({ premise, onMeterAdded, onRowClick }: MetersTabProps)
               </select>
             </div>
 
-            {/* Multiplier */}
-            <div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px", fontWeight: 500 }}>
-                Multiplier
-              </div>
-              <input
-                style={inputStyle}
-                type="number"
-                step="0.0001"
-                value={form.multiplier}
-                onChange={(e) => setForm({ ...form, multiplier: e.target.value })}
-              />
-            </div>
-
             {/* Install Date */}
             <div>
               <div style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px", fontWeight: 500 }}>
@@ -272,6 +259,68 @@ export function MetersTab({ premise, onMeterAdded, onRowClick }: MetersTabProps)
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
               placeholder="Optional notes..."
             />
+          </div>
+
+          {/* Advanced */}
+          <div style={{ marginTop: "12px" }}>
+            <button
+              type="button"
+              onClick={() => setShowAdvanced((v) => !v)}
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                fontSize: "12px",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                padding: 0,
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+              }}
+            >
+              <span style={{ fontSize: "10px" }}>{showAdvanced ? "▼" : "▶"}</span>
+              Advanced
+            </button>
+
+            {showAdvanced && (
+              <div style={{ marginTop: "10px", display: "flex", alignItems: "flex-end", gap: "12px" }}>
+                <div style={{ width: "200px" }}>
+                  <div style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px", fontWeight: 500, display: "flex", alignItems: "center", gap: "6px" }}>
+                    Multiplier
+                    <span
+                      title="Conversion factor applied to raw meter readings. For example, a CT electric meter with a 200:5 ratio uses multiplier 40. Most residential meters use 1.0 (no conversion)."
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        width: "14px",
+                        height: "14px",
+                        borderRadius: "50%",
+                        background: "var(--bg-elevated)",
+                        border: "1px solid var(--border)",
+                        fontSize: "9px",
+                        fontWeight: 700,
+                        color: "var(--text-muted)",
+                        cursor: "help",
+                      }}
+                    >
+                      ?
+                    </span>
+                  </div>
+                  <input
+                    style={inputStyle}
+                    type="number"
+                    step="0.0001"
+                    value={form.multiplier}
+                    onChange={(e) => setForm({ ...form, multiplier: e.target.value })}
+                  />
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--text-muted)", paddingBottom: "8px" }}>
+                  Default is 1.0 — only change for CT meters, pressure correction, or unit conversion.
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Actions */}
