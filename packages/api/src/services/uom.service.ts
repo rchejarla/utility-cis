@@ -16,6 +16,14 @@ export async function createUom(
   actorId: string,
   data: CreateUomInput
 ) {
+  // BR-UO-003: Only one base unit per commodity — unmark existing if setting new one
+  if (data.isBaseUnit) {
+    await prisma.unitOfMeasure.updateMany({
+      where: { utilityId, commodityId: data.commodityId, isBaseUnit: true },
+      data: { isBaseUnit: false },
+    });
+  }
+
   const uom = await prisma.unitOfMeasure.create({
     data: { ...data, utilityId },
     include: { commodity: true },
@@ -42,6 +50,14 @@ export async function updateUom(
   data: UpdateUomInput
 ) {
   const before = await prisma.unitOfMeasure.findUniqueOrThrow({ where: { id, utilityId } });
+
+  // BR-UO-003: Only one base unit per commodity — unmark existing if setting new one
+  if (data.isBaseUnit) {
+    await prisma.unitOfMeasure.updateMany({
+      where: { utilityId, commodityId: before.commodityId, isBaseUnit: true, id: { not: id } },
+      data: { isBaseUnit: false },
+    });
+  }
 
   const uom = await prisma.unitOfMeasure.update({
     where: { id, utilityId },
