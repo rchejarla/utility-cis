@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import { authMiddleware } from "./middleware/auth.js";
 import { tenantMiddleware } from "./middleware/tenant.js";
+import { authorizationMiddleware } from "./middleware/authorization.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { startAuditWriter } from "./events/audit-writer.js";
 import { commodityRoutes } from "./routes/commodities.js";
@@ -19,6 +20,7 @@ import { customerRoutes } from "./routes/customers.js";
 import { contactRoutes } from "./routes/contacts.js";
 import { billingAddressRoutes } from "./routes/billing-addresses.js";
 import { attachmentRoutes } from "./routes/attachments.js";
+import { authRoutes } from "./routes/auth.js";
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -33,6 +35,7 @@ export async function buildApp() {
 
   app.addHook("onRequest", authMiddleware);
   app.addHook("onRequest", tenantMiddleware);
+  app.addHook("onRequest", authorizationMiddleware);
 
   app.get("/health", { config: { skipAuth: true } }, async (_request, reply) => {
     return reply.send({ status: "ok" });
@@ -52,6 +55,7 @@ export async function buildApp() {
   await app.register(contactRoutes);
   await app.register(billingAddressRoutes);
   await app.register(attachmentRoutes);
+  await app.register(authRoutes);
 
   startAuditWriter();
 
