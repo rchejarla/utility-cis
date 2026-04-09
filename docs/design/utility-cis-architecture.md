@@ -477,7 +477,7 @@ Per-user settings.
 
 All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `/health`).
 
-### 5.2 Endpoints (39 current)
+### 5.2 Endpoints (43 current)
 
 | Method | Path | Module |
 |--------|------|--------|
@@ -515,6 +515,8 @@ All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `
 | POST | `/api/v1/service-agreements` | Agreement |
 | GET | `/api/v1/service-agreements/:id` | Agreement |
 | PATCH | `/api/v1/service-agreements/:id` | Agreement |
+| POST | `/api/v1/service-agreements/:id/meters` | Agreement (add meter) |
+| PATCH | `/api/v1/service-agreements/:id/meters/:samId` | Agreement (remove meter) |
 | GET | `/api/v1/rate-schedules` | Rate |
 | POST | `/api/v1/rate-schedules` | Rate |
 | GET | `/api/v1/rate-schedules/:id` | Rate |
@@ -559,28 +561,37 @@ All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `
 
 | Page | Path | Features |
 |------|------|----------|
-| Customers | `/customers` | Search with debounce, stat cards, type/status filters |
-| Customer Detail | `/customers/:id` | Command center: hero header, 4 tabs (Overview, Accounts, Premises, Contacts) |
-| Premises | `/premises` | Table + map toggle, stats bar, type/status filters |
-| Premises Map | `/premises` (map view) | Mapbox GL JS, Supercluster, popups, type filters |
-| Premise Detail | `/premises/:id` | Tabs: Overview, Meters, Agreements |
+| Customers | `/customers` | Search with debounce, stat cards, type/status filters, Create Customer |
+| Customer Detail | `/customers/:id` | Command center: hero header, 4 tabs (Overview, Accounts, Premises, Contacts); inline editing; Deactivate button; Add Account inline form on Accounts tab |
+| Premises | `/premises` | Table + map toggle, stats bar, type/status filters, owner filter (SearchableSelect), owner column |
+| Premises Map | `/premises` (map view) | Mapbox GL JS, Supercluster, popups with commodity badges (not UUIDs), type filters; stats reflect active filters |
+| Premise Detail | `/premises/:id` | Tabs: Overview, Meters, Agreements; inline editing; Deactivate button; Add Meter inline form (Meters tab); Add Agreement inline form (Agreements tab) |
 | Meters | `/meters` | Table with commodity/status filters |
-| Meter Detail | `/meters/:id` | Tabs: Overview, Agreements |
+| Meter Detail | `/meters/:id` | Tabs: Overview, Agreements; inline editing; Remove Meter button; DatePicker for install date |
 | Accounts | `/accounts` | Table with search, type/status filters |
-| Account Detail | `/accounts/:id` | Tabs: Overview, Agreements |
+| Account Detail | `/accounts/:id` | Tabs: Overview, Agreements, Contacts, Billing Addresses; inline editing; Close Account button (BR-AC-004 guard); Add/edit/delete contacts inline; Add/edit billing addresses inline |
 | Agreements | `/service-agreements` | Table with status filters |
-| Agreement Detail | `/service-agreements/:id` | Tabs: Overview, Meters, Audit |
+| Agreement Detail | `/service-agreements/:id` | Tabs: Overview, Meters, Audit; inline editing on overview; Activate/Close status transition buttons; Add/remove meter assignments on Meters tab |
 | Rate Schedules | `/rate-schedules` | Table with commodity/type/active filters |
-| Rate Schedule Detail | `/rate-schedules/:id` | Tabs: Overview, Version History, Revise action |
-| Rate Schedule Create | `/rate-schedules/new` | Dynamic form: tier builder for TIERED, JSON for TOU/DEMAND |
+| Rate Schedule Detail | `/rate-schedules/:id` | Tabs: Overview, Version History, Revise action; contextual tooltips referencing BR-RS rules |
+| Rate Schedule Create | `/rate-schedules/new` | Dynamic form: tier builder for TIERED, JSON for TOU/DEMAND; HelpTooltip on all fields |
 | Billing Cycles | `/billing-cycles` | Table |
-| Billing Cycle Detail | `/billing-cycles/:id` | Overview |
+| Billing Cycle Detail | `/billing-cycles/:id` | Overview; inline editing; Deactivate button |
 | Commodities & UOM | `/commodities` | Inline edit, UOM table per commodity |
 | Audit Log | `/audit-log` | Searchable by entity type, action, actor, date range |
 | Theme Editor | `/theme` | Presets, color pickers, typography, live preview |
 | Settings | `/settings` | Placeholder |
 
-### 6.3 Theme System
+### 6.3 Shared UI Components (Phase 2)
+
+| Component | Purpose |
+|-----------|---------|
+| `SearchableSelect` | Dropdown with live search for customer/owner selection; used on Premise create/edit and Customer detail |
+| `DatePicker` | Calendar picker for date fields (install date, start date, etc.) |
+| `HelpTooltip` | Inline icon button that displays business rule references in a popover |
+| Navigation progress bar | Thin loading bar at top of page on all route transitions |
+
+### 6.4 Theme System
 
 - 4 built-in presets (Midnight/Daybreak, Dusk/Dawn, Forest/Meadow)
 - Dark/light toggle via CSS custom properties on `data-theme` attribute
@@ -606,8 +617,10 @@ All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `
 ### Phase 1 (Complete)
 Core foundation: 17 entities, 29 API endpoints, admin UI with map view and theme editor, 68 tests.
 
-### Phase 2 (Next)
-Enhanced CIS + meter management: GIS integration, move-in/move-out, MeterRead CRUD, meter events, container/cart management for solid waste, full-text search, transfer of service.
+### Phase 2 (In Progress)
+Enhanced CIS + UI: Customer CRUD API (4 endpoints), Contact CRUD API (4 endpoints), BillingAddress CRUD API (3 endpoints), Agreement meter assignment endpoints (2 endpoints) — total 43 endpoints live. Customer list/detail UI with command center, inline editing on all detail pages (Premise, Customer, Account, Meter, Agreement, BillingCycle), Deactivate/Close/Remove buttons with confirmation dialogs, Add Meter/Agreement inline forms on Premise detail, Add Contact/BillingAddress tabs on Account detail, Add Account inline form on Customer detail, Add/remove meter assignments on Agreement detail, SearchableSelect + DatePicker + HelpTooltip components, navigation progress bar, contextual business rule tooltips on all create forms, owner filter on Premise list, commodity badges on map popups.
+
+Still planned for Phase 2: GIS integration, move-in/move-out, MeterRead CRUD, meter events, container/cart management for solid waste, full-text search, transfer of service.
 
 ### Phase 3
 Billing engine + notifications + delinquency: Rate engine calculations (including WQA), billing cycle execution, SaaSLogic integration, bill document generation, late fees, payment plans, delinquency management, notification engine.

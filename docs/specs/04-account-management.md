@@ -25,7 +25,7 @@ Billing relationship between a customer and the utility.
 | id | UUID | PK |
 | utility_id | UUID | Tenant scope |
 | account_number | VARCHAR(50) | Unique per utility; human-readable identifier |
-| customer_id | UUID | Nullable FK → Customer |
+| customer_id | UUID | FK → Customer (required in normal operations; nullable for bulk migration) |
 | account_type | ENUM | `RESIDENTIAL`, `COMMERCIAL`, `INDUSTRIAL`, `MUNICIPAL` |
 | status | ENUM | `ACTIVE`, `INACTIVE`, `FINAL`, `CLOSED`, `SUSPENDED` |
 | credit_rating | ENUM | `EXCELLENT`, `GOOD`, `FAIR`, `POOR`, `UNRATED` |
@@ -42,7 +42,7 @@ Billing relationship between a customer and the utility.
 **Unique constraint:** `[utility_id, account_number]`
 
 **Relationships:**
-- `customer` → Customer (nullable; account may exist without a customer record)
+- `customer` → Customer (FK; account may be nullable during bulk migration but expected in normal operations)
 - `serviceAgreements` → ServiceAgreement[] (all agreements on this account)
 - `contacts` → Contact[] (authorized contacts for this account)
 - `billingAddresses` → BillingAddress[] (alternate bill-to addresses)
@@ -154,22 +154,26 @@ Accounts are never deleted. `CLOSED` with `closed_at` timestamp is the terminal 
 
 ### Customer Linkage
 
-`customer_id` is nullable to support accounts that are not yet linked to a customer record (e.g., bulk migration scenarios). In normal operations, every account should have a linked customer.
+`customer_id` is a FK → Customer entity (not an external CRM reference). It is nullable only to support bulk migration scenarios where accounts are imported before customer records are fully established. In normal operations every account must have a linked Customer. Accounts can be created from the Customer detail Accounts tab, which pre-populates the `customerId` automatically.
 
 ## UI Pages
 
 | Page | Path | Features |
 |------|------|----------|
 | Accounts List | `/accounts` | Table with account number, customer name, type, status, credit rating; search by account number; filter by type/status/credit rating |
-| Account Detail | `/accounts/:id` | Tabs: Overview (all account fields), Agreements (list of service agreements), Contacts (authorized contacts), Billing Addresses |
-| Account Create | `/accounts/new` | Form with account number, customer selector, type, deposit, billing preferences |
+| Account Detail | `/accounts/:id` | Tabs: Overview (inline editable fields), Agreements (list of service agreements), Contacts (add/edit/delete inline), Billing Addresses (add/edit inline); Close Account button with confirmation dialog (enforces BR-AC-004 — blocked if active agreements exist) |
+| Account Create | `/accounts/new` | Form with account number, customer selector (SearchableSelect), type, deposit, billing preferences; HelpTooltip on deposit and credit rating fields |
 
-**Overview tab fields displayed:** account number, customer name (linked), account type, status, credit rating, deposit amount/waived, language preference, paperless and budget billing flags, SaaSLogic ID, created/closed dates.
+**Overview tab fields displayed:** account number, customer name (linked), account type, status, credit rating, deposit amount/waived, language preference, paperless and budget billing flags, SaaSLogic ID, created/closed dates. All editable fields support inline editing.
+
+**Contacts tab:** List of contacts with role badges (PRIMARY, BILLING, AUTHORIZED, EMERGENCY). Add Contact inline form. Edit contact inline. Delete contact with confirmation. Uses Contact endpoints (`GET/POST/PATCH/DELETE /api/v1/contacts`).
+
+**Billing Addresses tab:** List of billing addresses with primary badge. Add Billing Address inline form. Edit inline. Remove. Uses BillingAddress endpoints (`GET/POST/PATCH /api/v1/billing-addresses`).
 
 ## Phase Roadmap
 
-- **Phase 1:** Full Account CRUD (4 endpoints), deposit tracking, credit rating, paperless/budget billing flags, closure guard, SaaSLogic ID field, Contact and BillingAddress relationships defined.
-- **Phase 2:** Contact CRUD endpoints nested under Account. BillingAddress CRUD endpoints. Full-text search across account number, customer name. Deposit refund workflow on close. Landlord/tenant relationship on ServiceAgreement. Transfer of service (close account A, open account B, preserve meter read continuity). Delinquency status indicator visible in UI during account lookup.
+- **Phase 1 (Complete):** Full Account CRUD (4 endpoints), deposit tracking, credit rating, paperless/budget billing flags, closure guard, SaaSLogic ID field, Contact and BillingAddress relationships defined.
+- **Phase 2 (Built):** `customerId` is now a FK → Customer entity (not an external CRM string). Account detail inline editing on all overview fields. Close Account button with confirmation dialog enforcing BR-AC-004 (blocked if active agreements exist). New Contacts tab with add/edit/delete inline forms using Contact API endpoints. New Billing Addresses tab with add/edit inline forms using BillingAddress API endpoints. Accounts can be added from Customer detail Accounts tab (customerId pre-populated). SearchableSelect for customer lookup on account create. Still planned for Phase 2: full-text search across account/customer name, deposit refund workflow, landlord/tenant SA relationship, transfer of service, delinquency status indicator.
 - **Phase 3+:** Budget billing calculation and true-up logic. Credit rating auto-update from SaaSLogic payment events. Deposit auto-application to unpaid charges. Delinquency rules engine. User-defined required fields (configurable custom fields). Bill holds. Communication preferences per account.
 
 ## Bozeman RFP Coverage

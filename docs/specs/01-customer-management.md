@@ -1,7 +1,7 @@
 # Customer Management
 
 **Module:** 01 — Customer Management
-**Status:** Built (Phase 1), with Phase 2 enhancements planned
+**Status:** Built (Phase 1 + Phase 2)
 **Entities:** Customer, Contact, BillingAddress
 
 ## Overview
@@ -86,7 +86,7 @@ Alternate bill-to address for an account. Supports international addresses. When
 
 ## API Endpoints
 
-Customer endpoints are not yet in the API routes directory — Customer was added to the schema in Phase 1 along with Contact and BillingAddress, but the REST routes for Customer CRUD are planned for Phase 2. Contact and BillingAddress endpoints will be nested under Accounts.
+All endpoints are live. Customer CRUD is at top-level routes; Contact and BillingAddress use flat routes filtered by `accountId`.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -94,14 +94,13 @@ Customer endpoints are not yet in the API routes directory — Customer was adde
 | POST | `/api/v1/customers` | Create a new customer |
 | GET | `/api/v1/customers/:id` | Get customer by ID (includes accounts) |
 | PATCH | `/api/v1/customers/:id` | Update customer fields |
-| GET | `/api/v1/accounts/:id/contacts` | List contacts on an account |
-| POST | `/api/v1/accounts/:id/contacts` | Add a contact to an account |
-| PATCH | `/api/v1/accounts/:accountId/contacts/:id` | Update a contact |
-| DELETE | `/api/v1/accounts/:accountId/contacts/:id` | Remove a contact |
-| GET | `/api/v1/accounts/:id/billing-addresses` | List billing addresses for an account |
-| POST | `/api/v1/accounts/:id/billing-addresses` | Add a billing address |
-| PATCH | `/api/v1/accounts/:accountId/billing-addresses/:id` | Update a billing address |
-| DELETE | `/api/v1/accounts/:accountId/billing-addresses/:id` | Remove a billing address |
+| GET | `/api/v1/contacts` | List contacts (filter by `accountId`) |
+| POST | `/api/v1/contacts` | Add a contact to an account |
+| PATCH | `/api/v1/contacts/:id` | Update a contact |
+| DELETE | `/api/v1/contacts/:id` | Remove a contact |
+| GET | `/api/v1/billing-addresses` | List billing addresses (filter by `accountId`) |
+| POST | `/api/v1/billing-addresses` | Add a billing address to an account |
+| PATCH | `/api/v1/billing-addresses/:id` | Update a billing address |
 
 **Query parameters for `GET /customers`:** `page`, `limit`, `sort`, `order`, `customerType`, `status`, `search`
 
@@ -109,64 +108,45 @@ Customer endpoints are not yet in the API routes directory — Customer was adde
 
 ## Business Rules
 
-### Customer Type Validation
+### Customer Rules (BR-CU-001 – BR-CU-007)
 
-Enforced via Zod schema (`createCustomerSchema`):
-- `INDIVIDUAL` requires both `first_name` and `last_name`
-- `ORGANIZATION` requires `organization_name`
-- Validation error message: `"Individual requires firstName+lastName; Organization requires organizationName"`
+- **BR-CU-001 — Customer type validation:** `INDIVIDUAL` requires `first_name` + `last_name`; `ORGANIZATION` requires `organization_name`. Enforced via Zod (`createCustomerSchema`). Error: `"Individual requires firstName+lastName; Organization requires organizationName"`
+- **BR-CU-002 — Default status:** Status on creation is `ACTIVE`.
+- **BR-CU-003 — Deactivation:** Deactivation sets `status = INACTIVE`; no hard deletes. A customer with active accounts cannot be deactivated (enforced at service layer).
+- **BR-CU-004 — Immutable type:** `customer_type` cannot be changed after creation (`updateCustomerSchema` omits `customerType`). To reclassify, a new record must be created.
+- **BR-CU-005 — Landlord/tenant:** `owner_id` on the Premise entity links a customer as property owner. SA-level landlord/tenant separation (`owner_account_id` vs `occupant_account_id`) is a Phase 2 feature.
+- **BR-CU-006 — Duplicate detection:** Not implemented. Phase 3 will add a matching rules engine (name + DOB, email, phone, drivers_license).
+- **BR-CU-007 — PII handling:** SSN and payment card data are never stored in CIS. `drivers_license`, `tax_id`, and `date_of_birth` are stored for ID verification only. All reads/writes are tenant-scoped via RLS.
 
-### Status
+### Contact Rules (BR-CT-001 – BR-CT-004)
 
-- Default status on creation: `ACTIVE`
-- Deactivation sets `status = INACTIVE`; no hard deletes
-- A customer with active accounts should not be deactivated (enforcement planned in Phase 2)
+- **BR-CT-001:** `account_id` is required; contacts belong to an account.
+- **BR-CT-002:** `customer_id` is optional; a contact may or may not be a system customer record.
+- **BR-CT-003:** Multiple contacts per account are allowed (no limit).
+- **BR-CT-004:** `is_primary` should have at most one `true` per account (UI enforcement; no DB unique constraint).
 
-### Immutable Fields on Update
+### BillingAddress Rules (BR-BA-001 – BR-BA-005)
 
-`customer_type` cannot be changed after creation (`updateCustomerSchema` omits `customerType`). To change a customer from INDIVIDUAL to ORGANIZATION, a new record must be created.
-
-### Contact Constraints
-
-- `account_id` is required; contacts belong to an account
-- `customer_id` is optional; a contact may or may not be a system customer
-- Multiple contacts per account are allowed (no limit)
-- `is_primary` should have at most one `true` per account (UI enforcement; no DB unique constraint in Phase 1)
-
-### BillingAddress Constraints
-
-- `account_id` is required
-- `country` defaults to `"US"`; international addresses supported with ISO 3166-1 alpha-2 country codes
-- `is_primary` should have at most one `true` per account per phase
-
-### Landlord/Tenant Relationships
-
-Phase 1 supports `owner_id` on the Premise entity (a Customer who owns the property). The formal landlord/tenant distinction on service agreements — where the owner pays some charges and the tenant pays others — is a Phase 2 feature requiring `owner_account_id` vs `occupant_account_id` on ServiceAgreement.
-
-### Duplicate Detection
-
-Not implemented in Phase 1. Phase 3 will add a matching rules engine that checks for duplicates on name + date_of_birth, email, phone, and drivers_license before creating a new Customer record.
-
-### PII Handling
-
-- SSN and payment card data are never stored in CIS (handled by SaaSLogic)
-- `drivers_license`, `tax_id`, and `date_of_birth` are stored for ID verification purposes only
-- All reads and writes are tenant-scoped via RLS; no cross-tenant data access is possible
+- **BR-BA-001:** `account_id` is required.
+- **BR-BA-002:** `country` defaults to `"US"`. International addresses supported with ISO 3166-1 alpha-2 country codes.
+- **BR-BA-003:** `is_primary` should have at most one `true` per account (UI enforcement).
+- **BR-BA-004:** When a primary BillingAddress exists, bills are sent there instead of the premise address.
+- **BR-BA-005:** BillingAddresses are not hard-deleted; remove via DELETE endpoint (soft removal tracked via audit log).
 
 ## UI Pages
 
 | Page | Path | Features |
 |------|------|----------|
-| Customers List | `/customers` | Table with search (name, email, phone), filter by type/status, pagination |
-| Customer Detail | `/customers/:id` | Tabs: Overview (fields), Accounts (linked accounts), Contacts |
-| Customer Create | `/customers/new` | Form with customer type selector; conditional fields for INDIVIDUAL vs ORGANIZATION |
-| Account Contacts | `/accounts/:id` (Contacts tab) | List contacts with roles; add/edit/remove |
-| Account Billing Addresses | `/accounts/:id` (Billing tab) | List billing addresses; add/edit/remove |
+| Customers List | `/customers` | Search bar (name, email, phone) with debounce; stat cards (total, by type, by status); filter by type/status; pagination; Create Customer button |
+| Customer Detail | `/customers/:id` | Command center layout: hero header with name, type badge, status; 4 tabs: Overview (inline editable fields), Accounts (linked accounts + Add Account inline form), Premises (premises where customer is owner), Contacts; Deactivate button with confirmation dialog |
+| Customer Create | `/customers/new` | Form with customer type selector; conditional fields for INDIVIDUAL vs ORGANIZATION; HelpTooltip on type field referencing BR-CU-001 |
+| Account Contacts | `/accounts/:id` (Contacts tab) | List contacts with role badges; inline Add Contact form; inline edit per contact; Delete contact with confirmation |
+| Account Billing Addresses | `/accounts/:id` (Billing tab) | List billing addresses with primary badge; inline Add Billing Address form; inline edit; remove |
 
 ## Phase Roadmap
 
-- **Phase 1:** Customer, Contact, and BillingAddress entities fully defined in schema and Zod validators. Customer → Account → Contact/BillingAddress relationships established.
-- **Phase 2:** Customer CRUD API endpoints deployed. Contact and BillingAddress CRUD endpoints deployed under Account routes. Full-text customer search (name, phone, email). Landlord/tenant relationship on ServiceAgreement. Transfer of service workflow (close/open without data loss).
+- **Phase 1 (Complete):** Customer, Contact, and BillingAddress entities fully defined in schema and Zod validators. Customer → Account → Contact/BillingAddress relationships established.
+- **Phase 2 (Built):** Customer CRUD API (GET/POST/PATCH `/api/v1/customers`, GET `/api/v1/customers/:id`). Contact CRUD API (GET/POST/PATCH/DELETE `/api/v1/contacts`). BillingAddress CRUD API (GET/POST/PATCH `/api/v1/billing-addresses`). Customer list page with search and stat cards. Customer detail command center with 4 tabs (Overview, Accounts, Premises, Contacts). Inline editing on all overview fields. Deactivate button with confirmation dialog. Add Account inline form on Accounts tab. Add/edit/delete contacts on Account detail Contacts tab. Add/edit billing addresses on Account detail Billing Addresses tab. SearchableSelect for owner/customer lookups. HelpTooltip on create form fields. Still planned for Phase 2: full-text customer search, landlord/tenant SA relationship, transfer of service workflow.
 - **Phase 3+:** Duplicate detection matching rules engine. User-defined required fields on customer file (configurable custom fields). Delinquency status indicator on customer lookup. Communication preferences (opt-in/opt-out per channel). Communication history log per customer.
 
 ## Bozeman RFP Coverage

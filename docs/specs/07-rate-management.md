@@ -192,8 +192,9 @@ Defines a read-and-bill schedule. All service agreements are assigned to exactly
 - TOU: period editor with time range pickers
 - DEMAND: numeric inputs for demand charge and ratchet
 - BUDGET: smoothing configuration
-- Effective date picker (blocked to future for revisions)
+- Effective date DatePicker (blocked to future for revisions)
 - Regulatory reference field
+- HelpTooltip on all key fields referencing the applicable BR-RS rule (e.g., BR-RS-001 on effective date ordering, BR-RS-002 on expiration, BR-RS-004 on rate config validation)
 
 ### Billing Cycles (`/billing-cycles`)
 
@@ -203,13 +204,15 @@ Defines a read-and-bill schedule. All service agreements are assigned to exactly
 
 ### Billing Cycle Detail (`/billing-cycles/:id`)
 
-- Overview fields
+- Overview fields with inline editing on all editable fields
+- Deactivate button with confirmation dialog (sets `active = false`)
 - Count of active service agreements assigned
 - Calendar preview: next 12 read/bill dates based on frequency and day settings
 
 ## Phase Roadmap
 
 - **Phase 1 (Complete):** RateSchedule entity, BillingCycle entity, all 8 endpoints, rate_config JSONB for all 5 rate types, effective dating, version chain (supersedes), tier builder UI, version history UI, active schedule filter.
+- **Phase 2 (Built):** BillingCycle detail inline editing. BillingCycle Deactivate button with confirmation. HelpTooltip components on Rate Schedule create/revise form fields referencing BR-RS rules. DatePicker for effective date on rate schedule forms.
 
 - **Phase 3:** Rate engine — the calculation component that applies a RateSchedule to a MeterRead and produces a charge breakdown. Rate eligibility by account type (Bozeman Req 67). Prorated tier thresholds for partial billing periods (Req 138). Validation that charges match adopted rates (Req 140).
 

@@ -65,6 +65,7 @@ All endpoints require JWT authentication with `utility_id` claim.
 | order | `asc` \| `desc` | Default `desc` |
 | status | PremiseStatus | Filter by status |
 | premiseType | PremiseType | Filter by type |
+| ownerId | UUID | Filter by property owner (Customer) |
 | serviceTerritoryId | UUID | Filter by territory |
 
 **`GET /api/v1/premises/geo` response:** GeoJSON FeatureCollection where each Feature contains the premise's coordinates as a Point geometry and key fields (id, address, premiseType, status) as properties. Used by the Mapbox map view with Supercluster for client-side clustering.
@@ -82,6 +83,7 @@ All endpoints require JWT authentication with `utility_id` claim.
 | geoLng | No | -180 to 180 |
 | premiseType | Yes | RESIDENTIAL, COMMERCIAL, INDUSTRIAL, MUNICIPAL |
 | commodityIds | Yes | Array of UUIDs, min 1 |
+| ownerId | No | UUID → Customer (property owner) |
 | serviceTerritoryId | No | UUID |
 | municipalityCode | No | max 50 chars |
 | status | No | Default ACTIVE |
@@ -132,17 +134,22 @@ Phase 1 stores only the current address. Phase 2 (Bozeman Req 4) will add an `Ad
 
 | Page | Path | Features |
 |------|------|----------|
-| Premises List | `/premises` | Table view with search; map toggle; stats bar (total, by type, by status); filter by type and status |
-| Premises Map | `/premises` (map view) | Mapbox GL JS full-screen map; Supercluster clustering; popups on click; filter by premise type; adapts to dark/light theme |
-| Premise Detail | `/premises/:id` | Tabs: Overview (all fields), Meters (meters installed here), Agreements (service agreements at this address) |
-| Premise Create | `/premises/new` | Form with address fields, type selector, commodity multi-select, optional geo coordinates |
+| Premises List | `/premises` | Table view with search; map toggle; stats bar reflecting active filters; filter by type, status, and owner (SearchableSelect); Owner column in table |
+| Premises Map | `/premises` (map view) | Mapbox GL JS full-screen map; Supercluster clustering; popups with commodity badges (not raw UUIDs); filter by premise type; adapts to dark/light theme; stats cards update when filters change |
+| Premise Detail | `/premises/:id` | Tabs: Overview (inline editable fields), Meters (meters installed here + Add Meter inline form), Agreements (agreements at this address + Add Agreement inline form); Deactivate button with confirmation dialog |
+| Premise Create | `/premises/new` | Form with address fields, type selector, commodity multi-select, optional geo coordinates, owner SearchableSelect (Customer lookup), HelpTooltip on key fields |
 
-**Stats bar (list view):** Shows total count, counts by type (Residential / Commercial / Industrial / Municipal), and counts by status (Active / Inactive / Condemned).
+**Stats bar (list view):** Shows total count, counts by type (Residential / Commercial / Industrial / Municipal), and counts by status (Active / Inactive / Condemned). Stats update to reflect the current search/filter state.
+
+**Add Meter inline form (Meters tab):** Pre-filters commodity options to commodities served at the premise. Multiplier field hidden behind "Advanced" toggle. Uses DatePicker for install date. Validates meter-premise commodity match before submit.
+
+**Add Agreement inline form (Agreements tab):** Creates a ServiceAgreement linked to this premise. Fields: agreement number, account (SearchableSelect), commodity (filtered to premise commodities), rate schedule, billing cycle, start date (DatePicker). Defaults status to PENDING.
 
 ## Phase Roadmap
 
-- **Phase 1:** Full Premise CRUD, geo coordinates storage, map view with Supercluster clustering, commodity_ids array, owner_id relationship, GeoJSON endpoint.
-- **Phase 2:** GIS integration as authoritative source (Bozeman Req 1-7). Parcel ID and GIS premise ID fields. Address history table. GIS sync schedules (real-time and batch). GIS-to-rate mapping rules. ServiceTerritory entity with eligibility rules. RBAC for GIS field overrides. Full-text address search. Container/cart management for solid waste (linked to premise).
+- **Phase 1 (Complete):** Full Premise CRUD, geo coordinates storage, map view with Supercluster clustering, commodity_ids array, owner_id relationship, GeoJSON endpoint.
+- **Phase 2 (Built):** Owner filter (SearchableSelect) on list page, owner column in table, `ownerId` filter parameter on API. Premise detail inline editing. Deactivate button with confirmation dialog. Add Meter inline form on Meters tab (commodity-filtered, DatePicker, multiplier behind Advanced toggle). Add Agreement inline form on Agreements tab. Map popups now show commodity badges instead of raw UUIDs. Stats bar reflects active filters. Still planned for Phase 2: GIS integration, address history, GIS sync, ServiceTerritory entity, full-text address search, container/cart management for solid waste.
+- **Phase 3+:** Special assessment district assignment at premise level. Parcel-based assessments (Phase 5).
 - **Phase 3+:** Special assessment district assignment at premise level. Parcel-based assessments (Phase 5).
 
 ## Bozeman RFP Coverage

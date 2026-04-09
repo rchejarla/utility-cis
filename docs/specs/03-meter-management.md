@@ -169,13 +169,14 @@ Phase 1 tracks meters as either installed at a premise or removed. Full inventor
 | Page | Path | Features |
 |------|------|----------|
 | Meters List | `/meters` | Table with meter number, premise address, commodity, type, status; filter by commodity and status |
-| Meter Detail | `/meters/:id` | Tabs: Overview (all fields + registers), Agreements (current and historical service agreement assignments) |
-| Meters at Premise | `/premises/:id` (Meters tab) | List of meters installed at a given premise; install/remove actions |
+| Meter Detail | `/meters/:id` | Tabs: Overview (inline editable fields + registers), Agreements (current and historical service agreement assignments); Remove Meter button with confirmation dialog; DatePicker for install date field |
+| Meters at Premise | `/premises/:id` (Meters tab) | List of meters installed at a given premise; Add Meter inline form (commodity pre-filtered to premise commodities, multiplier behind Advanced toggle, DatePicker for install date) |
 
 ## Phase Roadmap
 
-- **Phase 1:** Full Meter CRUD, MeterRegister entity, meter-premise and meter-commodity relationships, meter assignment uniqueness constraint, status lifecycle, UI with filters.
-- **Phase 2:** MeterRead CRUD (manual entry, correction, import). Meter events entity (leak, tamper, reverse flow). Meter inventory enhancements: manufacturer, model, size, serial number fields; warehouse location tracking; chain-of-custody history. MeterTest entity for certification and failure tracking. Multi-register read handling (split-read consumption for mid-cycle meter swaps). Exception thresholds configuration. Meter location description (for multi-unit buildings).
+- **Phase 1 (Complete):** Full Meter CRUD, MeterRegister entity, meter-premise and meter-commodity relationships, meter assignment uniqueness constraint, status lifecycle, UI with filters.
+- **Phase 2 (Built):** Meter detail inline editing. Remove Meter button with confirmation dialog. DatePicker component for install date on meter create and detail. Add Meter inline form on Premise detail Meters tab (commodity-filtered, multiplier behind Advanced toggle). Still planned for Phase 2: MeterRead CRUD, meter events entity, inventory enhancements, MeterTest entity, split-read handling, exception thresholds.
+- **Phase 3+:** Meter events triggering billing holds and notifications via ApptorFlow. Read freeze after billing. Rollover handling for dial wrap-around. Backflow/reverse flow consumption rules.
 - **Phase 3+:** Meter events triggering billing holds and notifications via ApptorFlow. Read freeze after billing. Rollover handling for dial wrap-around. Backflow/reverse flow consumption rules.
 
 ## Bozeman RFP Coverage

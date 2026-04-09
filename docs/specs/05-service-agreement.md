@@ -85,6 +85,8 @@ All endpoints require JWT authentication with `utility_id` claim.
 | POST | `/api/v1/service-agreements` | Create a new service agreement (with meter assignments) |
 | GET | `/api/v1/service-agreements/:id` | Get agreement by ID (includes meters, premise, account) |
 | PATCH | `/api/v1/service-agreements/:id` | Update agreement fields (status, rate, cycle, end date) |
+| POST | `/api/v1/service-agreements/:id/meters` | Add a meter to an existing agreement |
+| PATCH | `/api/v1/service-agreements/:id/meters/:samId` | Remove a meter from an agreement (sets `removed_date`) |
 
 **Query parameters for `GET /service-agreements`:**
 
@@ -202,18 +204,28 @@ The GET list endpoint supports filtering by `accountId` and `premiseId` to suppo
 | Page | Path | Features |
 |------|------|----------|
 | Agreements List | `/service-agreements` | Table with agreement number, account, premise, commodity, status, start date; filter by status |
-| Agreement Detail | `/service-agreements/:id` | Tabs: Overview (all fields, linked entities), Meters (assigned meters with add/remove dates), Audit (change history from AuditLog) |
+| Agreement Detail | `/service-agreements/:id` | Tabs: Overview (inline editable fields + status transition buttons), Meters (assigned meters with add/remove actions), Audit (change history from AuditLog) |
 | Agreements at Account | `/accounts/:id` (Agreements tab) | List of agreements for an account; status indicators |
-| Agreements at Premise | `/premises/:id` (Agreements tab) | List of agreements at a premise; current vs historical |
+| Agreements at Premise | `/premises/:id` (Agreements tab) | List of agreements at a premise; current vs historical; Add Agreement inline form |
 
-**Overview tab fields displayed:** agreement number, status badge, account (linked), premise (linked), commodity, rate schedule (linked), billing cycle, start date, end date (if set), read sequence.
+**Overview tab fields displayed:** agreement number, status badge, account (linked), premise (linked), commodity, rate schedule (linked), billing cycle, start date, end date (if set), read sequence. All editable fields support inline editing.
+
+**Status transition buttons:** Context-sensitive action buttons on the Overview tab:
+- Agreement in `PENDING`: "Activate" button (transitions to ACTIVE)
+- Agreement in `ACTIVE`: "Close" button (transitions to FINAL; confirmation dialog)
+- Agreement in `FINAL`: "Finalize" button (transitions to CLOSED; confirmation dialog)
+
+**Meters tab:** Displays all current and historical ServiceAgreementMeter records with `added_date` and `removed_date`. Add Meter button opens inline form to add a new meter assignment (validates commodity match and uniqueness). Remove button on active assignments sets `removed_date` via PATCH `/api/v1/service-agreements/:id/meters/:samId`.
 
 **Audit tab:** Pulls from AuditLog filtered by `entity_type = 'ServiceAgreement'` and `entity_id`. Shows each change with actor, timestamp, and before/after state diff.
 
+**Add Agreement inline form (Premise detail Agreements tab):** Creates a ServiceAgreement pre-filled with `premiseId`. Fields: agreement number, account (SearchableSelect), commodity (filtered to premise commodities), rate schedule, billing cycle, start date (DatePicker). Defaults status to PENDING.
+
 ## Phase Roadmap
 
-- **Phase 1:** Full ServiceAgreement CRUD (4 endpoints), ServiceAgreementMeter junction, status transition enforcement, meter assignment uniqueness constraint, meter-premise commodity match validation, read sequence, audit tab in UI.
-- **Phase 2:** Move-in/move-out workflow (transfer of service: close old agreement, open new one with meter read continuity). Landlord/tenant relationship on agreements (`owner_account_id` vs `occupant_account_id`). Split-read consumption when a meter is replaced mid-cycle. ServiceAgreement search by premise address or account number.
+- **Phase 1 (Complete):** Full ServiceAgreement CRUD (4 endpoints), ServiceAgreementMeter junction, status transition enforcement, meter assignment uniqueness constraint, meter-premise commodity match validation, read sequence, audit tab in UI.
+- **Phase 2 (Built):** Add/remove meter assignment endpoints (`POST /service-agreements/:id/meters`, `PATCH /service-agreements/:id/meters/:samId`). Agreement detail inline editing on overview. Status transition buttons (Activate, Close/Finalize) on Overview tab with confirmation dialogs. Add/remove meter assignments directly from Meters tab. Add Agreement inline form on Premise detail Agreements tab. Still planned for Phase 2: move-in/move-out workflow, landlord/tenant SA relationship, split-read consumption, SA search by address/account.
+- **Phase 3+:** Billing instruction generation per agreement (CIS → SaaSLogic). Final bill trigger on FINAL transition. Mid-cycle proration. Bill holds on agreements. Rate change mid-cycle handling. Retroactive billing after read corrections.
 - **Phase 3+:** Billing instruction generation per agreement (CIS → SaaSLogic). Final bill trigger on FINAL transition. Mid-cycle proration. Bill holds on agreements. Rate change mid-cycle handling. Retroactive billing after read corrections.
 
 ## Bozeman RFP Coverage
