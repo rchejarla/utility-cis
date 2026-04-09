@@ -246,8 +246,8 @@ export default function CommoditiesPage() {
                       <input style={{ ...inputStyle, width: 160 }} value={newUomForm.name} onChange={(e) => setNewUomForm({ ...newUomForm, name: e.target.value })} placeholder="Hundred Cubic Feet" />
                     </div>
                     <div>
-                      <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 3 }}>Factor</div>
-                      <input style={{ ...inputStyle, width: 80 }} value={newUomForm.conversionFactor} onChange={(e) => setNewUomForm({ ...newUomForm, conversionFactor: e.target.value })} />
+                      <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 3 }} title="How many of this unit equal one base unit (e.g., 1 CCF = 748 GAL)">Conversion Factor</div>
+                      <input style={{ ...inputStyle, width: 100 }} type="number" step="any" min="0" value={newUomForm.conversionFactor} onChange={(e) => setNewUomForm({ ...newUomForm, conversionFactor: e.target.value })} placeholder="1" />
                     </div>
                     <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--text-secondary)", cursor: "pointer" }}>
                       <input type="checkbox" checked={newUomForm.isBaseUnit} onChange={(e) => setNewUomForm({ ...newUomForm, isBaseUnit: e.target.checked })} />
