@@ -11,6 +11,14 @@ import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { apiClient } from "@/lib/api-client";
 import { MapView } from "@/components/premises/map-view";
 
+interface Customer {
+  id: string;
+  customerType: string;
+  firstName?: string;
+  lastName?: string;
+  organizationName?: string;
+}
+
 interface Premise {
   id: string;
   addressLine1: string;
@@ -20,6 +28,7 @@ interface Premise {
   zip: string;
   premiseType: string;
   status: string;
+  owner?: Customer;
   commodities?: Array<{ commodity: { name: string } }>;
   meters?: Array<unknown>;
 }
@@ -51,8 +60,26 @@ export default function PremisesPage() {
   const [view, setView] = useState<"table" | "map">("table");
   const [premiseType, setPremiseType] = useState<string | undefined>(undefined);
   const [status, setStatus] = useState<string | undefined>(undefined);
+  const [ownerId, setOwnerId] = useState<string | undefined>(undefined);
+  const [search, setSearch] = useState("");
+  const [searchDebounced, setSearchDebounced] = useState("");
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [page, setPage] = useState(1);
   const [stats, setStats] = useState({ total: 0, active: 0, inactive: 0, condemned: 0 });
+
+  // Debounce search
+  useEffect(() => {
+    const t = setTimeout(() => setSearchDebounced(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Fetch customers for filter dropdown
+  useEffect(() => {
+    apiClient
+      .get<Customer[] | { data: Customer[] }>("/api/v1/customers", { limit: "500" })
+      .then((res) => setCustomers(Array.isArray(res) ? res : res.data ?? []))
+      .catch(console.error);
+  }, []);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -60,6 +87,8 @@ export default function PremisesPage() {
       const params: Record<string, string> = { page: String(page), limit: "20" };
       if (premiseType) params.premiseType = premiseType;
       if (status) params.status = status;
+      if (ownerId) params.ownerId = ownerId;
+      if (searchDebounced) params.search = searchDebounced;
 
       const res = await apiClient.get<PremisesResponse & { stats?: { active: number; inactive: number; condemned: number } }>("/api/v1/premises", params);
       setData(res.data);
@@ -72,7 +101,7 @@ export default function PremisesPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, premiseType, status]);
+  }, [page, premiseType, status, ownerId, searchDebounced]);
 
   useEffect(() => {
     fetchData();
@@ -111,6 +140,19 @@ export default function PremisesPage() {
             <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>—</span>
           )}
         </div>
+      ),
+    },
+    {
+      key: "owner",
+      header: "Owner",
+      render: (row: Premise) => (
+        <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+          {row.owner
+            ? row.owner.customerType === "ORGANIZATION"
+              ? row.owner.organizationName
+              : `${row.owner.firstName} ${row.owner.lastName}`
+            : "—"}
+        </span>
       ),
     },
     {
@@ -174,6 +216,27 @@ export default function PremisesPage() {
         </div>
       </div>
 
+      {/* Search bar */}
+      <div style={{ marginBottom: "12px" }}>
+        <input
+          type="text"
+          placeholder="Search by address, city, or zip..."
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+          style={{
+            width: "100%",
+            padding: "10px 14px",
+            fontSize: "14px",
+            background: "var(--bg-card)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+            color: "var(--text-primary)",
+            fontFamily: "inherit",
+            outline: "none",
+          }}
+        />
+      </div>
+
       <FilterBar
         filters={[
           {
@@ -193,6 +256,21 @@ export default function PremisesPage() {
             value: status,
             onChange: (v) => {
               setStatus(v);
+              setPage(1);
+            },
+          },
+          {
+            key: "ownerId",
+            label: "Owner",
+            options: customers.map((c) => ({
+              label: c.customerType === "ORGANIZATION"
+                ? c.organizationName ?? ""
+                : `${c.firstName} ${c.lastName}`,
+              value: c.id,
+            })),
+            value: ownerId,
+            onChange: (v) => {
+              setOwnerId(v);
               setPage(1);
             },
           },

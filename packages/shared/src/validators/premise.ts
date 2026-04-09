@@ -29,6 +29,8 @@ export const premiseQuerySchema = z.object({
   status: premiseStatusEnum.optional(),
   premiseType: premiseTypeEnum.optional(),
   serviceTerritoryId: z.string().uuid().optional(),
+  ownerId: z.string().uuid().optional(),
+  search: z.string().optional(),
 });
 
 export type PremiseType = z.infer<typeof premiseTypeEnum>;

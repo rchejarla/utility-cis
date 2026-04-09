@@ -10,12 +10,21 @@ export async function listPremises(utilityId: string, query: PremiseQuery) {
   if (query.status) where.status = query.status;
   if (query.premiseType) where.premiseType = query.premiseType;
   if (query.serviceTerritoryId) where.serviceTerritoryId = query.serviceTerritoryId;
+  if (query.ownerId) where.ownerId = query.ownerId;
+  if (query.search) {
+    where.OR = [
+      { addressLine1: { contains: query.search, mode: "insensitive" } },
+      { city: { contains: query.search, mode: "insensitive" } },
+      { zip: { contains: query.search, mode: "insensitive" } },
+    ];
+  }
 
   const [data, total, activeCount, inactiveCount, condemnedCount] = await Promise.all([
     prisma.premise.findMany({
       where,
       ...paginationArgs(query),
       include: {
+        owner: true,
         _count: {
           select: {
             meters: true,
