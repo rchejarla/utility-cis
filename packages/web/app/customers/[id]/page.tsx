@@ -13,6 +13,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { DataTable } from "@/components/ui/data-table";
+import { AccountsTab } from "@/components/customers/accounts-tab";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 
@@ -32,6 +33,7 @@ interface Account {
   accountType: string;
   status: string;
   serviceAgreements?: Array<unknown>;
+  _count?: { serviceAgreements: number };
 }
 
 interface Premise {
@@ -185,6 +187,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   const [saving, setSaving] = useState(false);
   const [showDeactivateConfirm, setShowDeactivateConfirm] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
+  const [showAddAccount, setShowAddAccount] = useState(false);
 
   const loadCustomer = async () => {
     try {
@@ -367,7 +370,30 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
           { key: "contacts", label: `Contacts (${contacts.length})` },
         ]}
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={(key) => {
+          setActiveTab(key);
+          if (key !== "accounts") setShowAddAccount(false);
+        }}
+        action={
+          activeTab === "accounts" ? (
+            <button
+              onClick={() => setShowAddAccount((v) => !v)}
+              style={{
+                padding: "6px 14px",
+                fontSize: "12px",
+                fontWeight: 500,
+                background: showAddAccount ? "transparent" : "var(--accent-primary)",
+                color: showAddAccount ? "var(--text-secondary)" : "#fff",
+                border: showAddAccount ? "1px solid var(--border)" : "none",
+                borderRadius: "var(--radius)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              {showAddAccount ? "Cancel" : "+ Add Account"}
+            </button>
+          ) : undefined
+        }
       >
         {/* Overview tab */}
         {activeTab === "overview" && (
@@ -636,43 +662,12 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
 
         {/* Accounts tab */}
         {activeTab === "accounts" && (
-          <DataTable
-            columns={[
-              {
-                key: "accountNumber",
-                header: "Account Number",
-                render: (row: any) => (
-                  <span style={{ fontFamily: "monospace", fontSize: "12px", fontWeight: 600 }}>
-                    {row.accountNumber}
-                  </span>
-                ),
-              },
-              {
-                key: "accountType",
-                header: "Type",
-                render: (row: any) => (
-                  <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-                    {row.accountType}
-                  </span>
-                ),
-              },
-              {
-                key: "agreements",
-                header: "Agreements",
-                render: (row: any) => (
-                  <span style={{ fontFamily: "monospace", fontSize: "12px" }}>
-                    {row.serviceAgreements?.length ?? 0}
-                  </span>
-                ),
-              },
-              {
-                key: "status",
-                header: "Status",
-                render: (row: any) => <StatusBadge status={row.status} />,
-              },
-            ]}
-            data={accounts as any}
-            onRowClick={(row: any) => router.push(`/accounts/${row.id}`)}
+          <AccountsTab
+            customerId={customer.id}
+            data={accounts}
+            onAccountAdded={loadCustomer}
+            showForm={showAddAccount}
+            onShowFormChange={(v) => setShowAddAccount(v)}
           />
         )}
 
