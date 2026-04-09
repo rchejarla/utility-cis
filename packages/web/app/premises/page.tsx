@@ -10,6 +10,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { apiClient } from "@/lib/api-client";
 import { MapView } from "@/components/premises/map-view";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 
 interface Customer {
   id: string;
@@ -237,45 +238,46 @@ export default function PremisesPage() {
         />
       </div>
 
-      <FilterBar
-        filters={[
-          {
-            key: "premiseType",
-            label: "Type",
-            options: PREMISE_TYPE_OPTIONS,
-            value: premiseType,
-            onChange: (v) => {
-              setPremiseType(v);
-              setPage(1);
+      <div style={{ display: "flex", alignItems: "flex-start", gap: "12px", marginBottom: "16px", flexWrap: "wrap" }}>
+        <FilterBar
+          filters={[
+            {
+              key: "premiseType",
+              label: "Type",
+              options: PREMISE_TYPE_OPTIONS,
+              value: premiseType,
+              onChange: (v) => {
+                setPremiseType(v);
+                setPage(1);
+              },
             },
-          },
-          {
-            key: "status",
-            label: "Status",
-            options: STATUS_OPTIONS,
-            value: status,
-            onChange: (v) => {
-              setStatus(v);
-              setPage(1);
+            {
+              key: "status",
+              label: "Status",
+              options: STATUS_OPTIONS,
+              value: status,
+              onChange: (v) => {
+                setStatus(v);
+                setPage(1);
+              },
             },
-          },
-          {
-            key: "ownerId",
-            label: "Owner",
-            options: customers.map((c) => ({
+          ]}
+        />
+        <div style={{ width: "240px" }}>
+          <SearchableSelect
+            options={customers.map((c) => ({
               label: c.customerType === "ORGANIZATION"
                 ? c.organizationName ?? ""
                 : `${c.firstName} ${c.lastName}`,
               value: c.id,
-            })),
-            value: ownerId,
-            onChange: (v) => {
-              setOwnerId(v);
-              setPage(1);
-            },
-          },
-        ]}
-      />
+            }))}
+            value={ownerId}
+            onChange={(v) => { setOwnerId(v); setPage(1); }}
+            placeholder="Filter by owner..."
+            clearLabel="All owners"
+          />
+        </div>
+      </div>
 
       {view === "map" ? (
         <div style={{ display: "flex", flex: 1, minHeight: "560px" }}>
