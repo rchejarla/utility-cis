@@ -9,6 +9,7 @@ import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { DataTable } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
+import { DatePicker } from "@/components/ui/date-picker";
 
 interface Meter {
   id: string;
@@ -20,8 +21,8 @@ interface Meter {
   removalDate?: string;
   notes?: string;
   premise?: { id: string; addressLine1: string; city: string; state: string };
-  commodity?: { name: string };
-  uom?: { name: string; code: string };
+  commodity?: { id: string; name: string };
+  uom?: { id: string; name: string; code: string };
   serviceAgreementMeters?: Array<{
     id: string;
     isPrimary: boolean;
@@ -70,6 +71,7 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [uoms, setUoms] = useState<Array<{ id: string; code: string; name: string; commodityId: string }>>([]);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
   const [removing, setRemoving] = useState(false);
 
@@ -89,15 +91,24 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
     loadMeter();
   }, [id]);
 
-  const handleEdit = () => {
+  const handleEdit = async () => {
     if (!meter) return;
     setEditForm({
       meterType: meter.meterType ?? "",
       status: meter.status ?? "",
       multiplier: meter.multiplier != null ? String(meter.multiplier) : "1",
       notes: meter.notes ?? "",
+      installDate: meter.installDate ? meter.installDate.slice(0, 10) : "",
       removalDate: meter.removalDate ? meter.removalDate.slice(0, 10) : "",
+      uomId: meter.uom?.id ?? "",
     });
+    // Fetch UOMs filtered by this meter's commodity
+    try {
+      const res = await apiClient.get<Array<{ id: string; code: string; name: string; commodityId: string }> | { data: Array<{ id: string; code: string; name: string; commodityId: string }> }>("/api/v1/uom", meter.commodity?.id ? { commodityId: meter.commodity.id } : undefined);
+      setUoms(Array.isArray(res) ? res : res.data ?? []);
+    } catch (err) {
+      console.error("Failed to fetch UOMs", err);
+    }
     setEditing(true);
   };
 
@@ -132,6 +143,10 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
       const multVal = editForm.multiplier !== "" ? parseFloat(editForm.multiplier) : 1;
       if (multVal !== (meter.multiplier ?? 1)) changes.multiplier = multVal;
       if (editForm.notes !== (meter.notes ?? "")) changes.notes = editForm.notes || null;
+      if (editForm.uomId !== (meter.uom?.id ?? "") && editForm.uomId) changes.uomId = editForm.uomId;
+      const installVal = editForm.installDate || null;
+      const currentInstall = meter.installDate ? meter.installDate.slice(0, 10) : null;
+      if (installVal !== currentInstall) changes.installDate = installVal;
       const removalVal = editForm.removalDate || null;
       const currentRemoval = meter.removalDate ? meter.removalDate.slice(0, 10) : null;
       if (removalVal !== currentRemoval) changes.removalDate = removalVal;
@@ -282,9 +297,21 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Unit of Measure</span>
-              <span style={valueStyle}>
-                {meter.uom ? `${meter.uom.name} (${meter.uom.code})` : "—"}
-              </span>
+              {editing ? (
+                <select
+                  style={inputStyle}
+                  value={editForm.uomId}
+                  onChange={(e) => setEditForm((f) => ({ ...f, uomId: e.target.value }))}
+                >
+                  {uoms.map((u) => (
+                    <option key={u.id} value={u.id}>{u.name} ({u.code})</option>
+                  ))}
+                </select>
+              ) : (
+                <span style={valueStyle}>
+                  {meter.uom ? `${meter.uom.name} (${meter.uom.code})` : "—"}
+                </span>
+              )}
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Multiplier</span>
@@ -301,20 +328,25 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
                 <span style={valueStyle}>{meter.multiplier ?? 1}</span>
               )}
             </div>
-            {meter.installDate && (
-              <div style={fieldStyle}>
-                <span style={labelStyle}>Install Date</span>
-                <span style={valueStyle}>{meter.installDate.slice(0, 10)}</span>
-              </div>
-            )}
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Install Date</span>
+              {editing ? (
+                <DatePicker
+                  value={editForm.installDate}
+                  onChange={(v) => setEditForm((f) => ({ ...f, installDate: v }))}
+                  placeholder="Select install date..."
+                />
+              ) : (
+                <span style={valueStyle}>{meter.installDate ? meter.installDate.slice(0, 10) : "—"}</span>
+              )}
+            </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Removal Date</span>
               {editing ? (
-                <input
-                  style={inputStyle}
-                  type="date"
+                <DatePicker
                   value={editForm.removalDate}
-                  onChange={(e) => setEditForm((f) => ({ ...f, removalDate: e.target.value }))}
+                  onChange={(v) => setEditForm((f) => ({ ...f, removalDate: v }))}
+                  placeholder="Not removed"
                 />
               ) : (
                 <span style={valueStyle}>{meter.removalDate ? meter.removalDate.slice(0, 10) : "—"}</span>
