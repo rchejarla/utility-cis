@@ -16,7 +16,7 @@ CIS owns the utility domain — premises, meters, accounts, rate logic, and serv
 
 ### Phase 1 Deliverables
 
-1. Database schema for 13 entities (8 core + 2 reference + junction + 2 system) (PostgreSQL 16+ with TimescaleDB)
+1. Database schema for 17 entities (8 core + 4 customer/contact + 2 reference + junction + 2 system) (PostgreSQL 16+ with TimescaleDB)
 2. PostgreSQL Row-Level Security for multi-tenancy
 3. REST CRUD endpoints for all core entities (Fastify)
 4. Auth middleware with tenant context (NextAuth.js + JWT)
@@ -111,7 +111,69 @@ Prisma's `$executeRaw` is used to set the RLS context per-request. A Fastify `on
 
 ## 5. Data Model
 
-### 5.1 Commodity
+### 5.1 Customer
+
+The person or organization who receives utility service. Separate from Account (billing relationship) — one customer can have multiple accounts (e.g., landlord with multiple rental properties).
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | Primary key |
+| utility_id | UUID | Tenant scope |
+| customer_type | ENUM | INDIVIDUAL, ORGANIZATION |
+| first_name | VARCHAR(100) | Nullable — required for INDIVIDUAL |
+| last_name | VARCHAR(100) | Nullable — required for INDIVIDUAL |
+| organization_name | VARCHAR(255) | Nullable — required for ORGANIZATION |
+| email | VARCHAR(255) | Nullable |
+| phone | VARCHAR(20) | Nullable |
+| alt_phone | VARCHAR(20) | Nullable |
+| date_of_birth | DATE | Nullable |
+| drivers_license | VARCHAR(50) | Nullable — for ID verification |
+| tax_id | VARCHAR(50) | Nullable — for organizations |
+| status | ENUM | ACTIVE, INACTIVE |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | |
+
+**Indexes:** [utility_id, last_name, first_name], [utility_id, email], [utility_id, phone]
+
+### 5.2 Contact
+
+People associated with an account, with defined roles. An account can have multiple contacts (e.g., primary occupant, billing department, emergency contact, authorized third party).
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | Primary key |
+| utility_id | UUID | Tenant scope |
+| account_id | UUID | FK → Account |
+| customer_id | UUID | Nullable FK → Customer (if contact is an existing customer) |
+| role | ENUM | PRIMARY, BILLING, AUTHORIZED, EMERGENCY |
+| first_name | VARCHAR(100) | |
+| last_name | VARCHAR(100) | |
+| email | VARCHAR(255) | Nullable |
+| phone | VARCHAR(20) | Nullable |
+| is_primary | BOOLEAN | Default false |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | |
+
+### 5.3 BillingAddress
+
+Alternate bill-to address for an account. Supports international addresses (Req 18). The billing address may differ from the premise/service address (e.g., landlord billed at corporate office).
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | Primary key |
+| utility_id | UUID | Tenant scope |
+| account_id | UUID | FK → Account |
+| address_line1 | VARCHAR(255) | |
+| address_line2 | VARCHAR(255) | Nullable |
+| city | VARCHAR(100) | |
+| state | VARCHAR(50) | |
+| zip | VARCHAR(20) | |
+| country | VARCHAR(2) | Default "US" |
+| is_primary | BOOLEAN | Default true |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | |
+
+### 5.4 Commodity
 
 Utility service types. Configurable per tenant — no hardcoded ENUM. Utilities can add custom commodity types without schema changes.
 
@@ -126,7 +188,7 @@ Utility service types. Configurable per tenant — no hardcoded ENUM. Utilities 
 | display_order | INTEGER | For UI ordering |
 | created_at | TIMESTAMPTZ | |
 
-### 5.2 UnitOfMeasure
+### 5.5 UnitOfMeasure
 
 Measurement units per commodity. Includes conversion factors to a base unit for cross-UOM rate application.
 
@@ -142,7 +204,7 @@ Measurement units per commodity. Includes conversion factors to a base unit for 
 | is_active | BOOLEAN | Default true |
 | created_at | TIMESTAMPTZ | |
 
-### 5.3 Premise (Service Location)
+### 5.6 Premise (Service Location)
 
 The physical address where utility service is delivered. Permanent — exists independently of customers.
 
@@ -157,6 +219,7 @@ The physical address where utility service is delivered. Permanent — exists in
 | zip | VARCHAR | |
 | geo_lat | DECIMAL(9,6) | For map view |
 | geo_lng | DECIMAL(9,6) | For map view |
+| owner_id | UUID | Nullable FK → Customer (property owner — enables landlord/tenant) |
 | premise_type | ENUM | RESIDENTIAL, COMMERCIAL, INDUSTRIAL, MUNICIPAL |
 | commodity_ids | ARRAY\<UUID\> | FK → Commodity (which commodities are served here) |
 | service_territory_id | UUID | |
@@ -165,7 +228,7 @@ The physical address where utility service is delivered. Permanent — exists in
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
-### 5.4 Meter
+### 5.7 Meter
 
 Physical device measuring consumption. Retained across customer changes.
 
@@ -187,7 +250,28 @@ Physical device measuring consumption. Retained across customer changes.
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
-### 5.5 Account
+### 5.7.1 MeterRegister
+
+Some meters have multiple registers/channels that each measure something different (e.g., high-flow vs low-flow, on-peak vs off-peak, kWh vs kW demand). Each register produces its own read.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | Primary key |
+| utility_id | UUID | Tenant scope |
+| meter_id | UUID | FK → Meter |
+| register_number | INTEGER | Position (1, 2, 3...) |
+| description | VARCHAR(100) | Nullable — e.g. "High Flow", "On-Peak kWh" |
+| uom_id | UUID | FK → UnitOfMeasure (may differ per register) |
+| multiplier | DECIMAL(10,4) | Default 1.0 |
+| is_active | BOOLEAN | Default true |
+| created_at | TIMESTAMPTZ | |
+
+**Constraints:**
+- Unique on [meter_id, register_number]
+- Single-register meters have one register (register_number=1)
+- MeterRead.register_id references this entity for multi-register reads
+
+### 5.8 Account
 
 Billing relationship between a customer and the utility.
 
@@ -196,7 +280,7 @@ Billing relationship between a customer and the utility.
 | id | UUID | Primary key |
 | utility_id | UUID | Tenant scope |
 | account_number | VARCHAR | Human-readable (e.g. "0184732-00") |
-| customer_id | UUID | FK → external CRM / ApptorID |
+| customer_id | UUID | FK → Customer (account holder) |
 | account_type | ENUM | RESIDENTIAL, COMMERCIAL, INDUSTRIAL, MUNICIPAL |
 | status | ENUM | ACTIVE, INACTIVE, FINAL, CLOSED, SUSPENDED |
 | credit_rating | ENUM | EXCELLENT, GOOD, FAIR, POOR, UNRATED |
@@ -210,7 +294,7 @@ Billing relationship between a customer and the utility.
 | created_at | TIMESTAMPTZ | |
 | closed_at | TIMESTAMPTZ | Nullable |
 
-### 5.6 ServiceAgreement
+### 5.9 ServiceAgreement
 
 The core billing unit. Links account + premise + commodity + rate schedule. Meters are linked via a junction table (ServiceAgreementMeter) to support both single-meter residential and multi-meter commercial/industrial scenarios.
 
@@ -235,7 +319,7 @@ The core billing unit. Links account + premise + commodity + rate schedule. Mete
 - Status transitions: PENDING → ACTIVE → FINAL → CLOSED (no skipping)
 - Supports retroactive end_date adjustments for rebilling
 
-### 5.6.1 ServiceAgreementMeter (Junction)
+### 5.9.1 ServiceAgreementMeter (Junction)
 
 Links one or more meters to a service agreement. Most residential agreements have one meter. Commercial/industrial may have multiple meters whose consumption is aggregated before rate application.
 
@@ -255,7 +339,7 @@ Links one or more meters to a service agreement. Most residential agreements hav
 - At least one meter must be marked `is_primary` per agreement
 - Meters can be added/removed over the life of an agreement without losing history
 
-### 5.7 RateSchedule
+### 5.10 RateSchedule
 
 Pricing rules for a commodity. Effective-dated and versioned.
 
@@ -327,7 +411,7 @@ Pricing rules for a commodity. Effective-dated and versioned.
 }
 ```
 
-### 5.8 BillingCycle
+### 5.11 BillingCycle
 
 Defines when meters in a cycle are read and bills generate.
 
@@ -342,7 +426,7 @@ Defines when meters in a cycle are read and bills generate.
 | frequency | ENUM | MONTHLY, BIMONTHLY, QUARTERLY |
 | active | BOOLEAN | Default true |
 
-### 5.9 MeterRead
+### 5.12 MeterRead
 
 Every reading taken from a meter. Created as a TimescaleDB hypertable from day one, partitioned by `read_datetime`. CRUD endpoints and consumption logic are Phase 2 — only the schema is created in Phase 1.
 
@@ -351,6 +435,7 @@ Every reading taken from a meter. Created as a TimescaleDB hypertable from day o
 | id | UUID | Primary key |
 | utility_id | UUID | Tenant scope |
 | meter_id | UUID | FK → Meter |
+| register_id | UUID | Nullable FK → MeterRegister (for multi-register meters) |
 | service_agreement_id | UUID | FK → ServiceAgreement |
 | read_date | DATE | |
 | read_datetime | TIMESTAMPTZ | For AMI interval data |
@@ -368,7 +453,7 @@ Every reading taken from a meter. Created as a TimescaleDB hypertable from day o
 SELECT create_hypertable('meter_read', 'read_datetime');
 ```
 
-### 5.10 AuditLog
+### 5.13 AuditLog
 
 Captures all entity state changes via internal event emitter.
 
@@ -385,7 +470,7 @@ Captures all entity state changes via internal event emitter.
 | metadata | JSONB | Nullable — extra context |
 | created_at | TIMESTAMPTZ | |
 
-### 5.11 TenantTheme
+### 5.14 TenantTheme
 
 Per-tenant UI theme configuration.
 
@@ -401,7 +486,7 @@ Per-tenant UI theme configuration.
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
-### 5.12 UserPreference
+### 5.15 UserPreference
 
 Per-user settings (theme mode, view preferences). One row per user per tenant.
 
