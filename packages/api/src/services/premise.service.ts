@@ -19,6 +19,19 @@ export async function listPremises(utilityId: string, query: PremiseQuery) {
     ];
   }
 
+  // Base where without status filter — used for stats so they reflect other active filters
+  const baseWhere: Record<string, unknown> = { utilityId };
+  if (query.premiseType) baseWhere.premiseType = query.premiseType;
+  if (query.serviceTerritoryId) baseWhere.serviceTerritoryId = query.serviceTerritoryId;
+  if (query.ownerId) baseWhere.ownerId = query.ownerId;
+  if (query.search) {
+    baseWhere.OR = [
+      { addressLine1: { contains: query.search, mode: "insensitive" } },
+      { city: { contains: query.search, mode: "insensitive" } },
+      { zip: { contains: query.search, mode: "insensitive" } },
+    ];
+  }
+
   const [data, total, activeCount, inactiveCount, condemnedCount] = await Promise.all([
     prisma.premise.findMany({
       where,
@@ -34,9 +47,9 @@ export async function listPremises(utilityId: string, query: PremiseQuery) {
       },
     }),
     prisma.premise.count({ where }),
-    prisma.premise.count({ where: { utilityId, status: "ACTIVE" } }),
-    prisma.premise.count({ where: { utilityId, status: "INACTIVE" } }),
-    prisma.premise.count({ where: { utilityId, status: "CONDEMNED" } }),
+    prisma.premise.count({ where: { ...baseWhere, status: "ACTIVE" } }),
+    prisma.premise.count({ where: { ...baseWhere, status: "INACTIVE" } }),
+    prisma.premise.count({ where: { ...baseWhere, status: "CONDEMNED" } }),
   ]);
 
   const result = paginatedResponse(data, total, query);
