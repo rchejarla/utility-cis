@@ -15,6 +15,7 @@ export const createPremiseSchema = z.object({
   commodityIds: z.array(z.string().uuid()).min(1),
   serviceTerritoryId: z.string().uuid().optional(),
   municipalityCode: z.string().max(50).optional(),
+  ownerId: z.string().uuid().optional(),
   status: premiseStatusEnum.default("ACTIVE"),
 });
 

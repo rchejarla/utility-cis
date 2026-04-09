@@ -20,6 +20,14 @@ interface Commodity {
   code: string;
 }
 
+interface Customer {
+  id: string;
+  customerType: string;
+  firstName?: string;
+  lastName?: string;
+  organizationName?: string;
+}
+
 const inputStyle = {
   padding: "8px 12px",
   borderRadius: "var(--radius)",
@@ -36,6 +44,7 @@ const inputStyle = {
 export default function NewPremisePage() {
   const router = useRouter();
   const [commodities, setCommodities] = useState<Commodity[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,13 +60,17 @@ export default function NewPremisePage() {
     commodityIds: [] as string[],
     serviceTerritoryId: "",
     municipalityCode: "",
+    ownerId: "",
   });
 
   useEffect(() => {
-    apiClient
-      .get<{ data: Commodity[] }>("/api/v1/commodities")
-      .then((res) => setCommodities(res.data ?? []))
-      .catch(console.error);
+    Promise.all([
+      apiClient.get<Commodity[] | { data: Commodity[] }>("/api/v1/commodities"),
+      apiClient.get<{ data: Customer[] }>("/api/v1/customers", { limit: "500" }),
+    ]).then(([cRes, cuRes]) => {
+      setCommodities(Array.isArray(cRes) ? cRes : cRes.data ?? []);
+      setCustomers(cuRes.data ?? []);
+    }).catch(console.error);
   }, []);
 
   const set = (key: string, value: unknown) =>
@@ -90,6 +103,7 @@ export default function NewPremisePage() {
       if (form.geoLng) body.geoLng = parseFloat(form.geoLng);
       if (form.serviceTerritoryId) body.serviceTerritoryId = form.serviceTerritoryId;
       if (form.municipalityCode) body.municipalityCode = form.municipalityCode;
+      if (form.ownerId) body.ownerId = form.ownerId;
 
       await apiClient.post("/api/v1/premises", body);
       router.push("/premises");
@@ -285,6 +299,22 @@ export default function NewPremisePage() {
                 onChange={(e) => set("municipalityCode", e.target.value)}
                 placeholder="Optional"
               />
+            </FormField>
+            <FormField label="Property Owner">
+              <select
+                style={inputStyle}
+                value={form.ownerId}
+                onChange={(e) => set("ownerId", e.target.value)}
+              >
+                <option value="">No owner assigned</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.customerType === "ORGANIZATION"
+                      ? c.organizationName
+                      : `${c.firstName} ${c.lastName}`}
+                  </option>
+                ))}
+              </select>
             </FormField>
           </div>
 

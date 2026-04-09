@@ -41,6 +41,7 @@ export async function getPremise(id: string, utilityId: string) {
   return prisma.premise.findUniqueOrThrow({
     where: { id, utilityId },
     include: {
+      owner: true,
       meters: {
         where: { status: "ACTIVE" },
       },
