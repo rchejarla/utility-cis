@@ -105,7 +105,7 @@ Every significant CIS state change emits a domain event. ApptorFlow subscribes a
 
 ### 4.1 Entity Summary
 
-**17 entities** across 5 categories:
+**18 entities** across 5 categories:
 
 | Category | Entities |
 |----------|----------|
@@ -114,7 +114,7 @@ Every significant CIS state change emits a domain event. ApptorFlow subscribes a
 | **Core** | Premise, Meter, MeterRegister, Account |
 | **Agreement** | ServiceAgreement, ServiceAgreementMeter (junction) |
 | **Configuration** | RateSchedule, BillingCycle |
-| **Operations** | MeterRead (TimescaleDB hypertable) |
+| **Operations** | MeterRead (TimescaleDB hypertable), Attachment |
 | **System** | AuditLog, TenantTheme, UserPreference |
 
 ### 4.2 Entity Relationship Diagram
@@ -469,6 +469,28 @@ Per-user settings.
 
 **Unique:** [utility_id, user_id]
 
+### 4.20 Attachment
+
+Generic file attachment for any entity. Uses entityType + entityId pattern to associate documents, photos, or other files with any CIS entity (Premise, Customer, Account, Meter, ServiceAgreement).
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | Tenant scope |
+| entity_type | VARCHAR(100) | e.g. "Premise", "Meter", "Customer" |
+| entity_id | UUID | PK of the associated entity |
+| file_name | VARCHAR(255) | Original uploaded file name |
+| file_type | VARCHAR(100) | MIME type (e.g. "application/pdf", "image/jpeg") |
+| file_size | INTEGER | File size in bytes |
+| storage_path | VARCHAR(500) | Internal path in object storage |
+| uploaded_by | UUID | User UUID (from JWT) |
+| description | VARCHAR(500) | Optional description of the attachment |
+| created_at | TIMESTAMPTZ | |
+
+**RLS policy:** Enforced — utility_id must match tenant context.
+
+**Indexes:** [utility_id, entity_type, entity_id]
+
 ---
 
 ## 5. API Design
@@ -477,7 +499,7 @@ Per-user settings.
 
 All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `/health`).
 
-### 5.2 Endpoints (43 current)
+### 5.2 Endpoints (48 current)
 
 | Method | Path | Module |
 |--------|------|--------|
@@ -498,6 +520,7 @@ All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `
 | GET | `/api/v1/uom` | UOM |
 | POST | `/api/v1/uom` | UOM |
 | PATCH | `/api/v1/uom/:id` | UOM |
+| DELETE | `/api/v1/uom/:id` | UOM |
 | GET | `/api/v1/premises` | Premise |
 | POST | `/api/v1/premises` | Premise |
 | GET | `/api/v1/premises/:id` | Premise |
@@ -529,6 +552,10 @@ All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `
 | PUT | `/api/v1/theme` | Theme |
 | POST | `/api/v1/theme/reset` | Theme |
 | GET | `/api/v1/audit-log` | Audit |
+| GET | `/api/v1/attachments` | Attachment |
+| POST | `/api/v1/attachments` | Attachment |
+| GET | `/api/v1/attachments/:id/download` | Attachment |
+| DELETE | `/api/v1/attachments/:id` | Attachment |
 
 ### 5.3 Cross-Cutting Patterns
 
@@ -562,16 +589,16 @@ All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `
 | Page | Path | Features |
 |------|------|----------|
 | Customers | `/customers` | Search with debounce, stat cards, type/status filters, Create Customer |
-| Customer Detail | `/customers/:id` | Command center: hero header, 4 tabs (Overview, Accounts, Premises, Contacts); inline editing; Deactivate button; Add Account inline form on Accounts tab |
+| Customer Detail | `/customers/:id` | Command center: hero header, 5 tabs (Overview, Accounts, Premises, Contacts, Attachments); inline editing; Deactivate button; Add Account inline form on Accounts tab; Upload button in tab bar |
 | Premises | `/premises` | Table + map toggle, stats bar, type/status filters, owner filter (SearchableSelect), owner column |
 | Premises Map | `/premises` (map view) | Mapbox GL JS, Supercluster, popups with commodity badges (not UUIDs), type filters; stats reflect active filters |
-| Premise Detail | `/premises/:id` | Tabs: Overview, Meters, Agreements; inline editing; Deactivate button; Add Meter inline form (Meters tab); Add Agreement inline form (Agreements tab) |
+| Premise Detail | `/premises/:id` | Tabs: Overview, Meters, Agreements, Attachments; inline editing (including commodity toggle buttons); Deactivate button; Add Meter inline form (Meters tab); Add Agreement inline form (Agreements tab); Upload button in tab bar |
 | Meters | `/meters` | Table with commodity/status filters |
-| Meter Detail | `/meters/:id` | Tabs: Overview, Agreements; inline editing; Remove Meter button; DatePicker for install date |
+| Meter Detail | `/meters/:id` | Tabs: Overview, Agreements, Attachments; inline editing (install date, UOM, removal date via DatePicker); Remove Meter button; Upload button in tab bar |
 | Accounts | `/accounts` | Table with search, type/status filters |
-| Account Detail | `/accounts/:id` | Tabs: Overview, Agreements, Contacts, Billing Addresses; inline editing; Close Account button (BR-AC-004 guard); Add/edit/delete contacts inline; Add/edit billing addresses inline |
+| Account Detail | `/accounts/:id` | Tabs: Overview, Agreements, Contacts, Billing Addresses, Attachments; inline editing; Close Account button (BR-AC-004 guard); Add/edit/delete contacts inline; Add/edit billing addresses inline; Upload button in tab bar |
 | Agreements | `/service-agreements` | Table with status filters |
-| Agreement Detail | `/service-agreements/:id` | Tabs: Overview, Meters, Audit; inline editing on overview; Activate/Close status transition buttons; Add/remove meter assignments on Meters tab |
+| Agreement Detail | `/service-agreements/:id` | Tabs: Overview, Meters, Audit, Attachments; inline editing on overview; Activate/Close status transition buttons (PENDING→ACTIVE→FINAL→CLOSED, no INACTIVE); Add/remove meter assignments on Meters tab; Upload button in tab bar |
 | Rate Schedules | `/rate-schedules` | Table with commodity/type/active filters |
 | Rate Schedule Detail | `/rate-schedules/:id` | Tabs: Overview, Version History, Revise action; contextual tooltips referencing BR-RS rules |
 | Rate Schedule Create | `/rate-schedules/new` | Dynamic form: tier builder for TIERED, JSON for TOU/DEMAND; HelpTooltip on all fields |
@@ -604,7 +631,7 @@ All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `
 
 - **JWT verification:** Signatures verified with jose + NEXTAUTH_SECRET
 - **SQL injection:** UUID validation before any raw SQL interpolation
-- **RLS:** PostgreSQL Row-Level Security on all 17 entity tables
+- **RLS:** PostgreSQL Row-Level Security on all 18 entity tables
 - **Defense in depth:** All GET-by-ID queries include utility_id in WHERE clause
 - **Race conditions:** $transaction for account closure guard and meter uniqueness
 - **PII:** SSN/payment card data never stored in CIS (SaaSLogic handles payments)
@@ -618,7 +645,7 @@ All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `
 Core foundation: 17 entities, 29 API endpoints, admin UI with map view and theme editor, 68 tests.
 
 ### Phase 2 (In Progress)
-Enhanced CIS + UI: Customer CRUD API (4 endpoints), Contact CRUD API (4 endpoints), BillingAddress CRUD API (3 endpoints), Agreement meter assignment endpoints (2 endpoints) — total 43 endpoints live. Customer list/detail UI with command center, inline editing on all detail pages (Premise, Customer, Account, Meter, Agreement, BillingCycle), Deactivate/Close/Remove buttons with confirmation dialogs, Add Meter/Agreement inline forms on Premise detail, Add Contact/BillingAddress tabs on Account detail, Add Account inline form on Customer detail, Add/remove meter assignments on Agreement detail, SearchableSelect + DatePicker + HelpTooltip components, navigation progress bar, contextual business rule tooltips on all create forms, owner filter on Premise list, commodity badges on map popups.
+Enhanced CIS + UI: Customer CRUD API (4 endpoints), Contact CRUD API (4 endpoints), BillingAddress CRUD API (3 endpoints), Agreement meter assignment endpoints (2 endpoints), Attachment CRUD (4 endpoints), UOM delete endpoint (1 endpoint) — total 48 endpoints live. Customer list/detail UI with command center, inline editing on all detail pages (Premise, Customer, Account, Meter, Agreement, BillingCycle), Deactivate/Close/Remove buttons with confirmation dialogs, Add Meter/Agreement inline forms on Premise detail, Add Contact/BillingAddress tabs on Account detail, Add Account inline form on Customer detail, Add/remove meter assignments on Agreement detail, SearchableSelect + DatePicker + HelpTooltip components, navigation progress bar, contextual business rule tooltips on all create forms, owner filter on Premise list, commodity badges on map popups. Attachment tab added to all 5 detail pages (Premise, Customer, Account, Meter, ServiceAgreement) with Upload button in tab bar. Commodity editing on Premise inline edit (toggle buttons). Meter detail: install date, UOM, removal date now editable with DatePicker. UOM inline edit + delete with confirmation (BR-UO-005/BR-UO-006 guard). BR-UO-003 auto-enforcement (setting isBaseUnit=true unmarks existing base unit). Conversion factor label shows base unit dynamically. Agreement status transitions corrected: PENDING→ACTIVE→FINAL→CLOSED (no INACTIVE). Modern thin scrollbars. PageHeader supports onClick action. HelpTooltip uses styled popup (not native title).
 
 Still planned for Phase 2: GIS integration, move-in/move-out, MeterRead CRUD, meter events, container/cart management for solid waste, full-text search, transfer of service.
 

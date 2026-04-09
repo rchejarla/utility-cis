@@ -2,7 +2,7 @@
 
 **Module:** 17 — Reporting and Audit
 **Status:** Partially Built
-**Entities:** AuditLog (built)
+**Entities:** AuditLog (built), Attachment (built — Phase 2)
 
 ## Overview
 
@@ -34,6 +34,32 @@ Every entity state change in the CIS system is captured in AuditLog via the inte
 **Retention:** AuditLog records are never deleted. They are the system of record for all state changes.
 
 **RLS:** Row-Level Security enforced — utility_id is always set from the JWT context. Audit entries from one tenant are never visible to another.
+
+### Attachment (Built — Phase 2)
+
+Generic file attachment entity for document management. Any CIS entity can have associated file attachments using the `entityType` + `entityId` polymorphic pattern. Supports photos, PDFs, scanned forms, or any other document associated with a customer, account, premise, meter, or service agreement.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | Tenant scope (RLS enforced) |
+| entity_type | VARCHAR(100) | e.g. "Premise", "Customer", "Account", "Meter", "ServiceAgreement" |
+| entity_id | UUID | PK of the associated entity |
+| file_name | VARCHAR(255) | Original file name as uploaded |
+| file_type | VARCHAR(100) | MIME type (e.g. "application/pdf", "image/jpeg") |
+| file_size | INTEGER | File size in bytes |
+| storage_path | VARCHAR(500) | Internal path in object storage |
+| uploaded_by | UUID | User UUID from JWT |
+| description | VARCHAR(500) | Optional description |
+| created_at | TIMESTAMPTZ | |
+
+**Indexes:** `[utility_id, entity_type, entity_id]`
+
+**Upload limit:** 10MB per file (enforced at API layer on multipart upload).
+
+**RLS:** Enforced — `utility_id` from JWT context. Attachments from one tenant are never visible to another.
+
+**Supported on:** Premise, Customer, Account, Meter, ServiceAgreement detail pages — each has an Attachments tab with an Upload button in the tab bar.
 
 ## Internal Event System (Built — Phase 1)
 
@@ -90,6 +116,25 @@ The CIS uses a Node.js EventEmitter for intra-process domain events in Phase 1. 
 
 ## API Endpoints
 
+### Attachment (Built — Phase 2)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/attachments` | List attachments for an entity (`?entityType=X&entityId=Y` required) |
+| POST | `/api/v1/attachments` | Upload a file (multipart/form-data; 10MB limit) |
+| GET | `/api/v1/attachments/:id/download` | Download file by attachment ID |
+| DELETE | `/api/v1/attachments/:id` | Delete attachment record and associated file from storage |
+
+**Query parameters for `GET /attachments`:**
+- `entityType` — required; entity type string (e.g. "Premise")
+- `entityId` — required; UUID of the entity
+
+**Upload fields (`POST /attachments` — multipart):**
+- `file` — the file binary (required; max 10MB)
+- `entityType` — required
+- `entityId` — required UUID
+- `description` — optional
+
 ### Audit Log (Built)
 
 | Method | Path | Description |
@@ -145,6 +190,15 @@ The CIS uses a Node.js EventEmitter for intra-process domain events in Phase 1. 
 
 ## UI Pages
 
+### Attachments Tab (Built — Phase 2)
+
+Displayed on all 5 entity detail pages: Premise, Customer, Account, Meter, ServiceAgreement.
+
+- Lists all attachments for the current entity with file name, type, size, uploader, description, and upload date
+- Upload button is in the tab bar (not inside tab content) for quick access without selecting the tab first
+- Each attachment row has a Download link and a Delete button (with confirmation dialog)
+- Files open/download via the `GET /api/v1/attachments/:id/download` endpoint
+
 ### Audit Log (`/audit-log`) — Built
 
 - Searchable, filterable table of all audit entries
@@ -193,10 +247,10 @@ The CIS uses a Node.js EventEmitter for intra-process domain events in Phase 1. 
   - Audit Log admin UI page with full filter/search
   - 18 domain events across all Phase 1 modules
 
-- **Phase 2 (Planned):**
-  - Meter read domain events (import, exception, freeze)
-  - Exception queue UI (see Module 08)
-  - Meter inventory reconciliation report
+- **Phase 2 (Partially Built):**
+  - Attachment entity and API (4 endpoints: list, upload, download, delete)
+  - Attachments tab on all 5 entity detail pages (Premise, Customer, Account, Meter, ServiceAgreement)
+  - Still planned: Meter read domain events (import, exception, freeze), exception queue UI (see Module 08), meter inventory reconciliation report
 
 - **Phase 3 (Planned):**
   - Billing domain events (cycle execution, submission, holds)

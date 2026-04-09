@@ -107,6 +107,7 @@ All endpoints require JWT authentication with `utility_id` claim.
 | GET | `/api/v1/uom` | List UOMs, optionally filtered by commodityId |
 | POST | `/api/v1/uom` | Create a new UOM |
 | PATCH | `/api/v1/uom/:id` | Update UOM fields |
+| DELETE | `/api/v1/uom/:id` | Delete a UOM (BR-UO-005 and BR-UO-006 guards apply) |
 
 **Query parameter for `GET /uom`:**
 
@@ -142,9 +143,9 @@ Attempting to create a duplicate code returns a conflict error.
 
 ### Base Unit
 
-Exactly one UOM per commodity should be designated `is_base_unit = true`. The base unit has `conversion_factor = 1.0`. All other UOMs for that commodity express their conversion relative to this base.
+Exactly one UOM per commodity must be designated `is_base_unit = true`. The base unit has `conversion_factor = 1.0`. All other UOMs for that commodity express their conversion relative to this base.
 
-The system does not enforce the single-base-unit constraint at the database level in Phase 1; it is a data integrity guideline enforced by convention and UI guidance. Phase 2 may add a unique partial index or constraint.
+Setting `isBaseUnit = true` on a UOM (via POST or PATCH) automatically unmarks any existing base unit for that commodity. This is enforced at the API service layer (BR-UO-003). The UI conversion factor label dynamically shows the base unit code to provide context (e.g., "1 unit = ? GAL").
 
 ### Conversion Factor
 
@@ -158,12 +159,18 @@ Example: A reading in CCF with `conversion_factor = 748.052` (gallons per CCF) c
 
 ### Deactivation vs Deletion
 
-No DELETE endpoints exist for either entity. Setting `is_active = false`:
-- Hides the commodity or UOM from all selection dropdowns in the UI
+No DELETE endpoint exists for Commodity. Setting `is_active = false` on a Commodity:
+- Hides it from all selection dropdowns in the UI
 - Does not remove it from existing records (meters, agreements) that reference it
 - Existing meters with `commodity_id` pointing to an inactive commodity continue to function
 
 To fully retire a commodity, it must first have no active meters or agreements referencing it (enforcement planned as a Phase 2 guard).
+
+UOM records support hard delete via `DELETE /api/v1/uom/:id`, subject to two guards (BR-UO-005, BR-UO-006):
+1. Cannot delete a UOM referenced by any meter (`uom_id` FK on Meter or MeterRegister) — returns a conflict error.
+2. Cannot delete a UOM that is set as a commodity's `default_uom_id` — returns `UOM_IS_DEFAULT` error.
+
+The delete action is accessible from the Commodities & UOM admin page with a confirmation dialog that warns about the BR-UO-005 constraint.
 
 ### Default UOM
 
@@ -193,14 +200,14 @@ Suggested codes by commodity type (not enforced by the system):
 |------|------|----------|
 | Commodities & UOM | `/commodities` | Single page: commodity list at top with inline edit; UOM table per commodity below; add/deactivate actions; display order drag-and-drop (planned) |
 
-**Commodities section:** Displays code, name, default UOM, active status, display order. Inline edit allows toggling `is_active` and adjusting `display_order` without navigating away.
+**Commodities section:** Displays code, name, default UOM (resolved to name, not UUID), active status, display order. Inline edit allows toggling `is_active` and adjusting `display_order` without navigating away. Add Commodity button is in the PageHeader (not inline).
 
-**UOM section (per commodity):** Displays code, name, conversion factor, base unit indicator, active status. Allows adding new UOMs and toggling `is_active`.
+**UOM section (per commodity):** Displays code, name, conversion factor (label shows base unit code, e.g., "1 unit = ? GAL"), base unit indicator, active status. Allows adding new UOMs, inline editing existing UOMs, and deleting UOMs with a confirmation dialog (BR-UO-005 warning). Commodities view shows UOM names instead of raw UUIDs.
 
 ## Phase Roadmap
 
 - **Phase 1:** Full Commodity and UOM CRUD (GET list, POST create, PATCH update), code auto-uppercasing, unique constraints, default UOM relationship, display order, is_active flags, inline edit UI on `/commodities` page.
-- **Phase 2:** Guard against deactivating a commodity that has active meters or agreements referencing it. Unique partial index enforcing single base unit per commodity. Commodity categories or groupings for complex multi-utility setups. UOM delete with referential integrity check.
+- **Phase 2 (Built):** UOM DELETE endpoint with BR-UO-005 (meter reference guard) and BR-UO-006 (commodity default guard). BR-UO-003 auto-enforcement: setting isBaseUnit=true automatically unmarks any existing base unit for that commodity. UOM inline edit on Commodities page. Conversion factor label shows base unit code dynamically. Commodities view resolves UOM names instead of raw UUIDs. Add Commodity button moved to PageHeader. Still planned for Phase 2: Guard against deactivating a commodity with active meters/agreements. Commodity categories or groupings.
 - **Phase 3+:** Rate-to-commodity-to-UOM validation when running billing calculations. Cross-commodity conversion reporting (e.g., water consumption in both GAL and CCF on the same bill). Stormwater commodity with impervious surface area UOM (sq ft, acres).
 
 ## Bozeman RFP Coverage

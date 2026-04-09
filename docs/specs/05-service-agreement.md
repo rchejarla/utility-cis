@@ -139,7 +139,7 @@ Fields that cannot be changed after creation: `agreementNumber`, `accountId`, `p
 
 ### Status Transitions
 
-Strict linear progression — no skipping:
+Strict linear progression — no skipping, no INACTIVE state:
 
 ```
 PENDING → ACTIVE → FINAL → CLOSED
@@ -156,7 +156,7 @@ export const VALID_STATUS_TRANSITIONS: Record<AgreementStatus, AgreementStatus[]
 };
 ```
 
-Attempting an invalid transition (e.g., `PENDING → FINAL` or `ACTIVE → CLOSED`) returns a validation error. `CLOSED` is terminal; no further transitions are permitted.
+Attempting an invalid transition (e.g., `PENDING → FINAL`, `ACTIVE → CLOSED`, or any transition to/from `INACTIVE`) returns a validation error. `CLOSED` is terminal; no further transitions are permitted. The `INACTIVE` status does not exist on ServiceAgreement — agreements stop via `FINAL → CLOSED`.
 
 ### Meter Assignment Uniqueness
 
@@ -204,16 +204,18 @@ The GET list endpoint supports filtering by `accountId` and `premiseId` to suppo
 | Page | Path | Features |
 |------|------|----------|
 | Agreements List | `/service-agreements` | Table with agreement number, account, premise, commodity, status, start date; filter by status |
-| Agreement Detail | `/service-agreements/:id` | Tabs: Overview (inline editable fields + status transition buttons), Meters (assigned meters with add/remove actions), Audit (change history from AuditLog) |
+| Agreement Detail | `/service-agreements/:id` | Tabs: Overview (inline editable fields + status transition buttons), Meters (assigned meters with add/remove actions), Audit (change history from AuditLog), Attachments; Upload button in tab bar |
 | Agreements at Account | `/accounts/:id` (Agreements tab) | List of agreements for an account; status indicators |
 | Agreements at Premise | `/premises/:id` (Agreements tab) | List of agreements at a premise; current vs historical; Add Agreement inline form |
 
 **Overview tab fields displayed:** agreement number, status badge, account (linked), premise (linked), commodity, rate schedule (linked), billing cycle, start date, end date (if set), read sequence. All editable fields support inline editing.
 
-**Status transition buttons:** Context-sensitive action buttons on the Overview tab:
+**Status transition buttons:** Context-sensitive action buttons on the Overview tab (BR-SA-006 enforced):
 - Agreement in `PENDING`: "Activate" button (transitions to ACTIVE)
 - Agreement in `ACTIVE`: "Close" button (transitions to FINAL; confirmation dialog)
 - Agreement in `FINAL`: "Finalize" button (transitions to CLOSED; confirmation dialog)
+
+Note: There is no transition to or from INACTIVE. The INACTIVE status is not valid for ServiceAgreement.
 
 **Meters tab:** Displays all current and historical ServiceAgreementMeter records with `added_date` and `removed_date`. Add Meter button opens inline form to add a new meter assignment (validates commodity match and uniqueness). Remove button on active assignments sets `removed_date` via PATCH `/api/v1/service-agreements/:id/meters/:samId`.
 
@@ -224,7 +226,7 @@ The GET list endpoint supports filtering by `accountId` and `premiseId` to suppo
 ## Phase Roadmap
 
 - **Phase 1 (Complete):** Full ServiceAgreement CRUD (4 endpoints), ServiceAgreementMeter junction, status transition enforcement, meter assignment uniqueness constraint, meter-premise commodity match validation, read sequence, audit tab in UI.
-- **Phase 2 (Built):** Add/remove meter assignment endpoints (`POST /service-agreements/:id/meters`, `PATCH /service-agreements/:id/meters/:samId`). Agreement detail inline editing on overview. Status transition buttons (Activate, Close/Finalize) on Overview tab with confirmation dialogs. Add/remove meter assignments directly from Meters tab. Add Agreement inline form on Premise detail Agreements tab. Still planned for Phase 2: move-in/move-out workflow, landlord/tenant SA relationship, split-read consumption, SA search by address/account.
+- **Phase 2 (Built):** Add/remove meter assignment endpoints (`POST /service-agreements/:id/meters`, `PATCH /service-agreements/:id/meters/:samId`). Agreement detail inline editing on overview. Status transition buttons (Activate, Close/Finalize) on Overview tab with confirmation dialogs — transitions corrected to PENDING→ACTIVE→FINAL→CLOSED (removed invalid INACTIVE transitions). Add/remove meter assignments directly from Meters tab. Add Agreement inline form on Premise detail Agreements tab. Attachments tab added to Agreement detail with Upload button in tab bar. Still planned for Phase 2: move-in/move-out workflow, landlord/tenant SA relationship, split-read consumption, SA search by address/account.
 - **Phase 3+:** Billing instruction generation per agreement (CIS → SaaSLogic). Final bill trigger on FINAL transition. Mid-cycle proration. Bill holds on agreements. Rate change mid-cycle handling. Retroactive billing after read corrections.
 - **Phase 3+:** Billing instruction generation per agreement (CIS → SaaSLogic). Final bill trigger on FINAL transition. Mid-cycle proration. Bill holds on agreements. Rate change mid-cycle handling. Retroactive billing after read corrections.
 

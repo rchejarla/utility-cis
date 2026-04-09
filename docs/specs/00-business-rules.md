@@ -154,9 +154,10 @@
 |----|------|-------------|
 | BR-UO-001 | A UOM belongs to exactly one commodity. | FK constraint |
 | BR-UO-002 | UOM code is unique per commodity per tenant. | Unique constraint [utilityId, commodityId, code] |
-| BR-UO-003 | Each commodity should have exactly one base unit (isBaseUnit = true). | UI guidance (not enforced at DB) |
+| BR-UO-003 | Each commodity must have exactly one base unit (isBaseUnit = true). Setting isBaseUnit=true on a UOM automatically unmarks any existing base unit for that commodity. | API service layer (auto-unmarks existing base unit on POST/PATCH) |
 | BR-UO-004 | conversionFactor converts from this unit to the base unit (e.g., 1 CCF = 748.052 GAL). | By design |
-| BR-UO-005 | A UOM cannot be deactivated if referenced by active meters. | API validation |
+| BR-UO-005 | A UOM cannot be deleted if referenced by active meters. | API validation — enforced on DELETE /api/v1/uom/:id |
+| BR-UO-006 | A UOM cannot be deleted if it is the default UOM for a commodity (defaultUomId). | API validation — returns UOM_IS_DEFAULT error |
 
 ---
 

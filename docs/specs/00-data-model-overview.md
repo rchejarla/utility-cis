@@ -1,18 +1,18 @@
 # Data Model Overview
 
 **Module:** 00 — Data Model Overview
-**Status:** Built (Phase 1 complete)
-**Entities:** All 17
+**Status:** Built (Phase 1 complete, Phase 2 in progress)
+**Entities:** All 18
 
 ## Overview
 
-This document is the master entity reference for the Utility CIS data model. It describes all 17 entities, their database tables, categories, the phase in which they were built, and their key relationships. Use this as the index when navigating module-level specs.
+This document is the master entity reference for the Utility CIS data model. It describes all 18 entities, their database tables, categories, the phase in which they were built, and their key relationships. Use this as the index when navigating module-level specs.
 
 The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isolation is enforced at the database level via PostgreSQL Row-Level Security (RLS) policies, with the `utility_id` claim from the JWT applied per-request.
 
 ## Entity Summary
 
-**17 entities** across 5 categories:
+**18 entities** across 5 categories:
 
 | # | Entity | Table | Category | Phase Built | Key Relationships |
 |---|--------|-------|----------|-------------|-------------------|
@@ -33,6 +33,7 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 | 15 | AuditLog | `audit_log` | System | Phase 1 | Records all entity state changes; references actor by user UUID |
 | 16 | TenantTheme | `tenant_theme` | System | Phase 1 | One per utility (unique on utility_id) |
 | 17 | UserPreference | `user_preference` | System | Phase 1 | One per user per utility (unique on utility_id + user_id) |
+| 18 | Attachment | `attachment` | Operations | Phase 2 | Generic file attachment for any entity (entityType + entityId pattern); RLS enforced |
 
 ## ER Diagram
 
@@ -64,6 +65,7 @@ MeterRead ──→ Meter + MeterRegister (optional) + ServiceAgreement
 | [07 — Rate Management](./07-rate-management.md) | `07-rate-management.md` | RateSchedule, BillingCycle |
 | [08 — Meter Reads & Operations](./08-meter-reads.md) | `08-meter-reads.md` | MeterRead |
 | [09 — System & Audit](./09-system-audit.md) | `09-system-audit.md` | AuditLog, TenantTheme, UserPreference |
+| [17 — Reporting and Audit](./17-reporting-and-audit.md) | `17-reporting-and-audit.md` | Attachment |
 
 ## Multi-Tenancy Model
 

@@ -100,6 +100,8 @@ Premises are never deleted. When a property is demolished or taken out of servic
 
 When a Meter is installed at a premise, the meter's `commodity_id` must exist in the premise's `commodity_ids` array. This is the **meter-premise commodity match** rule enforced at the service layer.
 
+On the Premise detail page, commodity assignments are edited via toggle buttons (one per configured commodity) rather than raw UUID inputs. The display resolves commodity names from their IDs for readability.
+
 ### Address Validation
 
 - `state` must be exactly 2 characters (state code)
@@ -135,8 +137,8 @@ Phase 1 stores only the current address. Phase 2 (Bozeman Req 4) will add an `Ad
 | Page | Path | Features |
 |------|------|----------|
 | Premises List | `/premises` | Table view with search; map toggle; stats bar reflecting active filters; filter by type, status, and owner (SearchableSelect); Owner column in table |
-| Premises Map | `/premises` (map view) | Mapbox GL JS full-screen map; Supercluster clustering; popups with commodity badges (not raw UUIDs); filter by premise type; adapts to dark/light theme; stats cards update when filters change |
-| Premise Detail | `/premises/:id` | Tabs: Overview (inline editable fields), Meters (meters installed here + Add Meter inline form), Agreements (agreements at this address + Add Agreement inline form); Deactivate button with confirmation dialog |
+| Premises Map | `/premises` (map view) | Mapbox GL JS full-screen map; Supercluster clustering; popups with commodity badges showing commodity names (not raw UUIDs); filter by premise type; adapts to dark/light theme; stats cards update when filters change |
+| Premise Detail | `/premises/:id` | Tabs: Overview (inline editable fields), Meters (meters installed here + Add Meter inline form), Agreements (agreements at this address + Add Agreement inline form), Attachments; Deactivate button with confirmation dialog; Upload button in tab bar; commodity editing via toggle buttons (not free-form UUID input) |
 | Premise Create | `/premises/new` | Form with address fields, type selector, commodity multi-select, optional geo coordinates, owner SearchableSelect (Customer lookup), HelpTooltip on key fields |
 
 **Stats bar (list view):** Shows total count, counts by type (Residential / Commercial / Industrial / Municipal), and counts by status (Active / Inactive / Condemned). Stats update to reflect the current search/filter state.
@@ -148,7 +150,7 @@ Phase 1 stores only the current address. Phase 2 (Bozeman Req 4) will add an `Ad
 ## Phase Roadmap
 
 - **Phase 1 (Complete):** Full Premise CRUD, geo coordinates storage, map view with Supercluster clustering, commodity_ids array, owner_id relationship, GeoJSON endpoint.
-- **Phase 2 (Built):** Owner filter (SearchableSelect) on list page, owner column in table, `ownerId` filter parameter on API. Premise detail inline editing. Deactivate button with confirmation dialog. Add Meter inline form on Meters tab (commodity-filtered, DatePicker, multiplier behind Advanced toggle). Add Agreement inline form on Agreements tab. Map popups now show commodity badges instead of raw UUIDs. Stats bar reflects active filters. Still planned for Phase 2: GIS integration, address history, GIS sync, ServiceTerritory entity, full-text address search, container/cart management for solid waste.
+- **Phase 2 (Built):** Owner filter (SearchableSelect) on list page, owner column in table, `ownerId` filter parameter on API. Premise detail inline editing. Deactivate button with confirmation dialog. Add Meter inline form on Meters tab (commodity-filtered, DatePicker, multiplier behind Advanced toggle). Add Agreement inline form on Agreements tab. Map popups now show commodity names (not UUIDs). Stats bar reflects active filters. Commodity editing on Premise inline edit via toggle buttons. Attachments tab added to Premise detail with Upload button in tab bar. Still planned for Phase 2: GIS integration, address history, GIS sync, ServiceTerritory entity, full-text address search, container/cart management for solid waste.
 - **Phase 3+:** Special assessment district assignment at premise level. Parcel-based assessments (Phase 5).
 - **Phase 3+:** Special assessment district assignment at premise level. Parcel-based assessments (Phase 5).
 
