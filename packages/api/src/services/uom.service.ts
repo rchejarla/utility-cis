@@ -98,5 +98,10 @@ export async function deleteUom(utilityId: string, id: string) {
     );
   }
 
-  return prisma.unitOfMeasure.delete({ where: { id } });
+  // Use deleteMany with id filter — works with RLS since it doesn't require unique lookup
+  const result = await prisma.unitOfMeasure.deleteMany({ where: { id, utilityId } });
+  if (result.count === 0) {
+    throw Object.assign(new Error("UOM not found"), { statusCode: 404 });
+  }
+  return result;
 }
