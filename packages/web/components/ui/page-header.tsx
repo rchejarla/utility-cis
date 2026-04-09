@@ -5,7 +5,7 @@ import Link from "next/link";
 interface PageHeaderProps {
   title: string;
   subtitle?: string;
-  action?: { label: string; href: string };
+  action?: { label: string; href?: string; onClick?: () => void };
 }
 
 export function PageHeader({ title, subtitle, action }: PageHeaderProps) {
@@ -46,29 +46,55 @@ export function PageHeader({ title, subtitle, action }: PageHeaderProps) {
       </div>
 
       {action && (
-        <Link
-          href={action.href}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "6px",
-            padding: "8px 16px",
-            borderRadius: "var(--radius)",
-            background: "var(--accent-primary)",
-            color: "#fff",
-            fontSize: "13px",
-            fontWeight: "500",
-            textDecoration: "none",
-            whiteSpace: "nowrap",
-            flexShrink: 0,
-            transition: "opacity 0.15s ease",
-          }}
-          onMouseEnter={(e) => ((e.currentTarget as HTMLAnchorElement).style.opacity = "0.88")}
-          onMouseLeave={(e) => ((e.currentTarget as HTMLAnchorElement).style.opacity = "1")}
-        >
-          <span style={{ fontSize: "15px", lineHeight: 1 }}>+</span>
-          {action.label}
-        </Link>
+        action.href ? (
+          <Link
+            href={action.href}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "8px 16px",
+              borderRadius: "var(--radius)",
+              background: "var(--accent-primary)",
+              color: "#fff",
+              fontSize: "13px",
+              fontWeight: "500",
+              textDecoration: "none",
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+              transition: "opacity 0.15s ease",
+            }}
+            onMouseEnter={(e) => ((e.currentTarget as HTMLAnchorElement).style.opacity = "0.88")}
+            onMouseLeave={(e) => ((e.currentTarget as HTMLAnchorElement).style.opacity = "1")}
+          >
+            {action.label}
+          </Link>
+        ) : (
+          <button
+            onClick={action.onClick}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "8px 16px",
+              borderRadius: "var(--radius)",
+              background: "var(--accent-primary)",
+              color: "#fff",
+              fontSize: "13px",
+              fontWeight: "500",
+              border: "none",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+              fontFamily: "inherit",
+              transition: "opacity 0.15s ease",
+            }}
+            onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.opacity = "0.88")}
+            onMouseLeave={(e) => ((e.currentTarget as HTMLButtonElement).style.opacity = "1")}
+          >
+            {action.label}
+          </button>
+        )
       )}
     </div>
   );

@@ -171,16 +171,11 @@ export default function CommoditiesPage() {
 
   return (
     <div>
-      <PageHeader title="Commodities & Units of Measure" subtitle={`${commodities.length} commodities · ${uoms.length} units`} />
-
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
-        <button
-          onClick={() => setShowNewForm(true)}
-          style={{ ...btnStyle, background: "var(--accent-primary)", color: "#fff" }}
-        >
-          + Add Commodity
-        </button>
-      </div>
+      <PageHeader
+        title="Commodities & Units of Measure"
+        subtitle={`${commodities.length} commodities · ${uoms.length} units`}
+        action={{ label: "+ Add Commodity", href: "#", onClick: () => setShowNewForm(true) }}
+      />
 
       {/* New Commodity Form */}
       {showNewForm && (
