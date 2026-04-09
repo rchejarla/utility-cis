@@ -10,6 +10,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { MeterManagementTab } from "@/components/service-agreements/meters-tab";
+import { AttachmentsTab } from "@/components/ui/attachments-tab";
 
 interface ServiceAgreement {
   id: string;
@@ -273,6 +274,7 @@ export default function ServiceAgreementDetailPage({
         tabs={[
           { key: "overview", label: "Overview" },
           { key: "meters", label: `Meters (${sa.meters?.length ?? 0})` },
+          { key: "attachments", label: "Attachments" },
           { key: "audit", label: "Audit" },
         ]}
         activeTab={activeTab}
@@ -477,6 +479,10 @@ export default function ServiceAgreementDetailPage({
             showForm={showAddMeter}
             onShowFormChange={setShowAddMeter}
           />
+        )}
+
+        {activeTab === "attachments" && (
+          <AttachmentsTab entityType="ServiceAgreement" entityId={id} />
         )}
 
         {activeTab === "audit" && (

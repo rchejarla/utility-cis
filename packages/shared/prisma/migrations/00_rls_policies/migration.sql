@@ -75,6 +75,10 @@ CREATE POLICY tenant_isolation ON billing_address
 CREATE POLICY tenant_isolation ON meter_register
   USING (utility_id = current_setting('app.current_utility_id')::uuid);
 
+ALTER TABLE attachment ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON attachment
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
+
 -- ─── TimescaleDB Hypertable ───────────────────────────────────────────────────
 
 -- Convert meter_read to a TimescaleDB hypertable partitioned by read_datetime.

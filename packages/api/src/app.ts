@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import { authMiddleware } from "./middleware/auth.js";
 import { tenantMiddleware } from "./middleware/tenant.js";
 import { errorHandler } from "./middleware/error-handler.js";
@@ -17,6 +18,7 @@ import { auditLogRoutes } from "./routes/audit-log.js";
 import { customerRoutes } from "./routes/customers.js";
 import { contactRoutes } from "./routes/contacts.js";
 import { billingAddressRoutes } from "./routes/billing-addresses.js";
+import { attachmentRoutes } from "./routes/attachments.js";
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -24,6 +26,8 @@ export async function buildApp() {
   await app.register(cors, {
     origin: process.env.WEB_URL || "http://localhost:3000",
   });
+
+  await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB limit
 
   app.setErrorHandler(errorHandler);
 
@@ -47,6 +51,7 @@ export async function buildApp() {
   await app.register(customerRoutes);
   await app.register(contactRoutes);
   await app.register(billingAddressRoutes);
+  await app.register(attachmentRoutes);
 
   startAuditWriter();
 

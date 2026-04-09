@@ -14,6 +14,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { DataTable } from "@/components/ui/data-table";
 import { AccountsTab } from "@/components/customers/accounts-tab";
+import { AttachmentsTab } from "@/components/ui/attachments-tab";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 
@@ -368,6 +369,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
           { key: "accounts", label: `Accounts (${accounts.length})` },
           { key: "premises", label: `Owned Premises (${ownedPremises.length})` },
           { key: "contacts", label: `Contacts (${contacts.length})` },
+          { key: "attachments", label: "Attachments" },
         ]}
         activeTab={activeTab}
         onTabChange={(key) => {
@@ -790,6 +792,10 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
               data={contacts as any}
             />
           </div>
+        )}
+
+        {activeTab === "attachments" && (
+          <AttachmentsTab entityType="Customer" entityId={id} />
         )}
       </Tabs>
     </div>

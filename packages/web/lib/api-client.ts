@@ -115,4 +115,29 @@ export const apiClient = {
     });
     return handleResponse<T>(response);
   },
+
+  async upload<T>(path: string, formData: FormData): Promise<T> {
+    // Build auth header only — DO NOT set Content-Type; browser sets multipart boundary automatically
+    const headers: Record<string, string> = {};
+    if (cachedToken && Date.now() < cacheExpiry) {
+      headers["Authorization"] = `Bearer ${cachedToken}`;
+    } else {
+      const session = await getSession();
+      if (session) {
+        const token = (session as any).accessToken;
+        if (token && typeof token === "string") {
+          cachedToken = token;
+          cacheExpiry = Date.now() + 5 * 60 * 1000;
+          headers["Authorization"] = `Bearer ${token}`;
+        }
+      }
+      if (!headers["Authorization"]) {
+        cachedToken = createDevToken();
+        cacheExpiry = Date.now() + 5 * 60 * 1000;
+        headers["Authorization"] = `Bearer ${cachedToken}`;
+      }
+    }
+    const response = await fetch(`${API_URL}${path}`, { method: "POST", headers, body: formData });
+    return handleResponse<T>(response);
+  },
 };

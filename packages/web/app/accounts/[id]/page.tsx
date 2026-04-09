@@ -10,6 +10,7 @@ import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { ContactsTab } from "@/components/accounts/contacts-tab";
 import { BillingAddressesTab } from "@/components/accounts/billing-addresses-tab";
+import { AttachmentsTab } from "@/components/ui/attachments-tab";
 
 interface Contact {
   id: string;
@@ -227,6 +228,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
           { key: "agreements", label: `Agreements (${account.serviceAgreements?.length ?? 0})` },
           { key: "contacts", label: `Contacts (${account.contacts?.length ?? 0})` },
           { key: "billing-addresses", label: `Billing Addresses (${account.billingAddresses?.length ?? 0})` },
+          { key: "attachments", label: "Attachments" },
           { key: "audit", label: "Audit" },
         ]}
         activeTab={activeTab}
@@ -548,6 +550,10 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
             showForm={showAddAddress}
             onShowFormChange={setShowAddAddress}
           />
+        )}
+
+        {activeTab === "attachments" && (
+          <AttachmentsTab entityType="Account" entityId={id} />
         )}
 
         {activeTab === "audit" && (

@@ -10,6 +10,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { DatePicker } from "@/components/ui/date-picker";
+import { AttachmentsTab } from "@/components/ui/attachments-tab";
 
 interface Meter {
   id: string;
@@ -180,6 +181,7 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
         tabs={[
           { key: "overview", label: "Overview" },
           { key: "agreements", label: `Agreements (${meter.serviceAgreementMeters?.length ?? 0})` },
+          { key: "attachments", label: "Attachments" },
         ]}
         activeTab={activeTab}
         onTabChange={setActiveTab}
@@ -402,6 +404,10 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
             data={(meter.serviceAgreementMeters ?? []) as any}
             onRowClick={(row: any) => router.push(`/service-agreements/${row.serviceAgreement.id}`)}
           />
+        )}
+
+        {activeTab === "attachments" && (
+          <AttachmentsTab entityType="Meter" entityId={id} />
         )}
       </Tabs>
     </div>

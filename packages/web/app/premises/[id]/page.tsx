@@ -11,6 +11,7 @@ import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { MetersTab } from "@/components/premises/meters-tab";
 import { AgreementsTab } from "@/components/premises/agreements-tab";
+import { AttachmentsTab } from "@/components/ui/attachments-tab";
 
 interface Premise {
   id: string;
@@ -274,6 +275,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
           { key: "overview", label: "Overview" },
           { key: "meters", label: `Meters (${premise.meters?.length ?? 0})` },
           { key: "agreements", label: `Agreements (${premise.serviceAgreements?.length ?? 0})` },
+          { key: "attachments", label: "Attachments" },
           { key: "audit", label: "Audit" },
         ]}
         activeTab={activeTab}
@@ -627,6 +629,10 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
             showForm={showAddAgreement}
             onShowFormChange={setShowAddAgreement}
           />
+        )}
+
+        {activeTab === "attachments" && (
+          <AttachmentsTab entityType="Premise" entityId={id} />
         )}
 
         {activeTab === "audit" && (
