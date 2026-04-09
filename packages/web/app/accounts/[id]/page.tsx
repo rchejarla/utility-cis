@@ -8,6 +8,29 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { DataTable } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
+import { ContactsTab } from "@/components/accounts/contacts-tab";
+import { BillingAddressesTab } from "@/components/accounts/billing-addresses-tab";
+
+interface Contact {
+  id: string;
+  role: string;
+  firstName: string;
+  lastName: string;
+  email?: string | null;
+  phone?: string | null;
+  isPrimary: boolean;
+}
+
+interface BillingAddress {
+  id: string;
+  addressLine1: string;
+  addressLine2?: string | null;
+  city: string;
+  state: string;
+  zip: string;
+  country: string;
+  isPrimary: boolean;
+}
 
 interface Account {
   id: string;
@@ -30,6 +53,8 @@ interface Account {
     startDate: string;
     premise?: { addressLine1: string; city: string };
   }>;
+  contacts?: Contact[];
+  billingAddresses?: BillingAddress[];
   createdAt?: string;
   updatedAt?: string;
 }
@@ -88,6 +113,8 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
   const [saving, setSaving] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [showAddContact, setShowAddContact] = useState(false);
+  const [showAddAddress, setShowAddAddress] = useState(false);
 
   const loadAccount = async () => {
     try {
@@ -198,10 +225,53 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
         tabs={[
           { key: "overview", label: "Overview" },
           { key: "agreements", label: `Agreements (${account.serviceAgreements?.length ?? 0})` },
+          { key: "contacts", label: `Contacts (${account.contacts?.length ?? 0})` },
+          { key: "billing-addresses", label: `Billing Addresses (${account.billingAddresses?.length ?? 0})` },
           { key: "audit", label: "Audit" },
         ]}
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={(tab) => {
+          setActiveTab(tab);
+          if (tab !== "contacts") setShowAddContact(false);
+          if (tab !== "billing-addresses") setShowAddAddress(false);
+        }}
+        action={
+          activeTab === "contacts" ? (
+            <button
+              onClick={() => setShowAddContact((v) => !v)}
+              style={{
+                padding: "6px 14px",
+                fontSize: "12px",
+                fontWeight: 500,
+                background: showAddContact ? "transparent" : "var(--accent-primary)",
+                color: showAddContact ? "var(--text-secondary)" : "#fff",
+                border: showAddContact ? "1px solid var(--border)" : "none",
+                borderRadius: "var(--radius)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              {showAddContact ? "Cancel" : "+ Add Contact"}
+            </button>
+          ) : activeTab === "billing-addresses" ? (
+            <button
+              onClick={() => setShowAddAddress((v) => !v)}
+              style={{
+                padding: "6px 14px",
+                fontSize: "12px",
+                fontWeight: 500,
+                background: showAddAddress ? "transparent" : "var(--accent-primary)",
+                color: showAddAddress ? "var(--text-secondary)" : "#fff",
+                border: showAddAddress ? "1px solid var(--border)" : "none",
+                borderRadius: "var(--radius)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              {showAddAddress ? "Cancel" : "+ Add Address"}
+            </button>
+          ) : undefined
+        }
       >
         {activeTab === "overview" && (
           <div
@@ -457,6 +527,26 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
             ]}
             data={(account.serviceAgreements ?? []) as any}
             onRowClick={(row: any) => router.push(`/service-agreements/${row.id}`)}
+          />
+        )}
+
+        {activeTab === "contacts" && (
+          <ContactsTab
+            accountId={id}
+            contacts={account.contacts ?? []}
+            onContactsChanged={loadAccount}
+            showForm={showAddContact}
+            onShowFormChange={setShowAddContact}
+          />
+        )}
+
+        {activeTab === "billing-addresses" && (
+          <BillingAddressesTab
+            accountId={id}
+            billingAddresses={account.billingAddresses ?? []}
+            onAddressesChanged={loadAccount}
+            showForm={showAddAddress}
+            onShowFormChange={setShowAddAddress}
           />
         )}
 

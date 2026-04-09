@@ -106,4 +106,13 @@ export const apiClient = {
     });
     return handleResponse<T>(response);
   },
+
+  async delete<T>(path: string): Promise<T> {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}${path}`, {
+      method: "DELETE",
+      headers,
+    });
+    return handleResponse<T>(response);
+  },
 };

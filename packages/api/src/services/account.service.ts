@@ -43,6 +43,8 @@ export async function getAccount(id: string, utilityId: string) {
         },
         orderBy: { startDate: "desc" },
       },
+      contacts: { orderBy: { isPrimary: "desc" } },
+      billingAddresses: true,
     },
   });
 }
