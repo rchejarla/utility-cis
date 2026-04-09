@@ -40,6 +40,30 @@ body {
   font-family: 'DM Sans', sans-serif;
 }
 
+/* Modern thin scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
 /* Prevent Mapbox popups from being clipped */
 .mapboxgl-popup {
   z-index: 50;
