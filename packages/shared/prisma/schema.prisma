@@ -413,6 +413,7 @@ model AuditLog {
   entityId    String      @map("entity_id") @db.Uuid
   action      AuditAction @map("action")
   actorId     String      @map("actor_id") @db.Uuid
+  actorName   String?     @map("actor_name") @db.VarChar(255)
   beforeState Json?       @map("before_state")
   afterState  Json?       @map("after_state")
   metadata    Json?       @map("metadata")

@@ -4,6 +4,7 @@ export interface DomainEvent {
   entityId: string;
   utilityId: string;
   actorId: string;
+  actorName?: string;
   beforeState: Record<string, unknown> | null;
   afterState: Record<string, unknown> | null;
   timestamp: string;

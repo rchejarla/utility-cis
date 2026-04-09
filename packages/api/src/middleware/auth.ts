@@ -5,6 +5,7 @@ export interface AuthUser {
   id: string;
   utilityId: string;
   email: string;
+  name: string;
   role: string;
 }
 
@@ -55,6 +56,7 @@ export async function authMiddleware(
         id: userId,
         utilityId,
         email: (payload.email as string) ?? "",
+        name: ((payload as Record<string, unknown>).name as string) ?? (payload.email as string) ?? "Unknown",
         role: ((payload as Record<string, unknown>).role as string) ?? "user",
       };
     } else {
@@ -86,6 +88,7 @@ export async function authMiddleware(
         id: userId,
         utilityId,
         email: (payload.email as string) ?? "",
+        name: (payload.name as string) ?? (payload.email as string) ?? "Unknown",
         role: (payload.role as string) ?? "user",
       };
     }
