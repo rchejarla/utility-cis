@@ -84,3 +84,15 @@ CREATE POLICY tenant_isolation ON attachment
 -- Convert meter_read to a TimescaleDB hypertable partitioned by read_datetime.
 -- Requires the TimescaleDB extension to be installed and enabled.
 SELECT create_hypertable('meter_read', 'read_datetime', migrate_data => true);
+
+-- RBAC tables
+ALTER TABLE cis_user ENABLE ROW LEVEL SECURITY;
+ALTER TABLE role ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_module ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation ON cis_user
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
+CREATE POLICY tenant_isolation ON role
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
+CREATE POLICY tenant_isolation ON tenant_module
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
