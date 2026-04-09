@@ -60,6 +60,21 @@ CREATE POLICY tenant_isolation ON tenant_theme
 CREATE POLICY tenant_isolation ON user_preference
   USING (utility_id = current_setting('app.current_utility_id')::uuid);
 
+-- New tables (added for Customer, Contact, BillingAddress, MeterRegister)
+ALTER TABLE customer ENABLE ROW LEVEL SECURITY;
+ALTER TABLE contact ENABLE ROW LEVEL SECURITY;
+ALTER TABLE billing_address ENABLE ROW LEVEL SECURITY;
+ALTER TABLE meter_register ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation ON customer
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
+CREATE POLICY tenant_isolation ON contact
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
+CREATE POLICY tenant_isolation ON billing_address
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
+CREATE POLICY tenant_isolation ON meter_register
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
+
 -- ─── TimescaleDB Hypertable ───────────────────────────────────────────────────
 
 -- Convert meter_read to a TimescaleDB hypertable partitioned by read_datetime.

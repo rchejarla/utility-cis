@@ -26,6 +26,10 @@ export const EVENT_TYPES = {
   RATE_SCHEDULE_REVISED: "rate_schedule.revised",
   BILLING_CYCLE_CREATED: "billing_cycle.created",
   BILLING_CYCLE_UPDATED: "billing_cycle.updated",
+  CUSTOMER_CREATED: "customer.created",
+  CUSTOMER_UPDATED: "customer.updated",
+  CONTACT_CREATED: "contact.created",
+  CONTACT_UPDATED: "contact.updated",
 } as const;
 
 export type EventType = (typeof EVENT_TYPES)[keyof typeof EVENT_TYPES];

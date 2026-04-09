@@ -1,4 +1,4 @@
-// Prisma schema for Utility CIS — all 13 entities
+// Prisma schema for Utility CIS — all 17 entities
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
@@ -141,6 +141,29 @@ enum ThemeMode {
   @@map("theme_mode")
 }
 
+enum CustomerType {
+  INDIVIDUAL
+  ORGANIZATION
+
+  @@map("customer_type")
+}
+
+enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("customer_status")
+}
+
+enum ContactRole {
+  PRIMARY
+  BILLING
+  AUTHORIZED
+  EMERGENCY
+
+  @@map("contact_role")
+}
+
 // ─── Models ───────────────────────────────────────────────────────────────────
 
 model Commodity {
@@ -176,9 +199,10 @@ model UnitOfMeasure {
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   // Relations
-  commodity        Commodity   @relation("CommodityUoms", fields: [commodityId], references: [id])
-  commodityDefault Commodity[] @relation("DefaultUom")
+  commodity        Commodity       @relation("CommodityUoms", fields: [commodityId], references: [id])
+  commodityDefault Commodity[]     @relation("DefaultUom")
   meters           Meter[]
+  meterRegisters   MeterRegister[]
 
   @@unique([utilityId, commodityId, code])
   @@map("unit_of_measure")
@@ -199,12 +223,14 @@ model Premise {
   serviceTerritoryId String?       @map("service_territory_id") @db.Uuid
   municipalityCode   String?       @map("municipality_code") @db.VarChar(50)
   status             PremiseStatus @default(ACTIVE) @map("status")
+  ownerId            String?       @map("owner_id") @db.Uuid
   createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz
   updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz
 
   // Relations
   meters            Meter[]
   serviceAgreements ServiceAgreement[]
+  owner             Customer?          @relation("PremiseOwner", fields: [ownerId], references: [id])
 
   @@map("premise")
 }
@@ -232,6 +258,7 @@ model Meter {
   uom                    UnitOfMeasure         @relation(fields: [uomId], references: [id])
   meterReads             MeterRead[]
   serviceAgreementMeters ServiceAgreementMeter[]
+  registers              MeterRegister[]
 
   @@unique([utilityId, meterNumber])
   @@map("meter")
@@ -256,7 +283,10 @@ model Account {
   closedAt            DateTime?     @map("closed_at") @db.Timestamptz
 
   // Relations
+  customer          Customer?          @relation(fields: [customerId], references: [id])
   serviceAgreements ServiceAgreement[]
+  contacts          Contact[]
+  billingAddresses  BillingAddress[]
 
   @@unique([utilityId, accountNumber])
   @@map("account")
@@ -356,6 +386,7 @@ model MeterRead {
   utilityId          String     @map("utility_id") @db.Uuid
   meterId            String     @map("meter_id") @db.Uuid
   serviceAgreementId String     @map("service_agreement_id") @db.Uuid
+  registerId         String?    @map("register_id") @db.Uuid
   readDate           DateTime   @map("read_date") @db.Date
   readDatetime       DateTime   @map("read_datetime") @db.Timestamptz
   reading            Decimal    @map("reading") @db.Decimal(12, 4)
@@ -370,6 +401,7 @@ model MeterRead {
   // Relations
   meter            Meter            @relation(fields: [meterId], references: [id])
   serviceAgreement ServiceAgreement @relation(fields: [serviceAgreementId], references: [id])
+  register         MeterRegister?   @relation(fields: [registerId], references: [id])
 
   @@map("meter_read")
 }
@@ -416,4 +448,93 @@ model UserPreference {
 
   @@unique([utilityId, userId])
   @@map("user_preference")
+}
+
+model Customer {
+  id               String         @id @default(uuid()) @db.Uuid
+  utilityId        String         @map("utility_id") @db.Uuid
+  customerType     CustomerType   @map("customer_type")
+  firstName        String?        @map("first_name") @db.VarChar(100)
+  lastName         String?        @map("last_name") @db.VarChar(100)
+  organizationName String?        @map("organization_name") @db.VarChar(255)
+  email            String?        @db.VarChar(255)
+  phone            String?        @db.VarChar(20)
+  altPhone         String?        @map("alt_phone") @db.VarChar(20)
+  dateOfBirth      DateTime?      @map("date_of_birth") @db.Date
+  driversLicense   String?        @map("drivers_license") @db.VarChar(50)
+  taxId            String?        @map("tax_id") @db.VarChar(50)
+  status           CustomerStatus @default(ACTIVE)
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Relations
+  accounts      Account[]
+  contacts      Contact[]
+  ownedPremises Premise[]  @relation("PremiseOwner")
+
+  @@index([utilityId, lastName, firstName])
+  @@index([utilityId, email])
+  @@index([utilityId, phone])
+  @@map("customer")
+}
+
+model Contact {
+  id         String      @id @default(uuid()) @db.Uuid
+  utilityId  String      @map("utility_id") @db.Uuid
+  accountId  String      @map("account_id") @db.Uuid
+  customerId String?     @map("customer_id") @db.Uuid
+  role       ContactRole
+  firstName  String      @map("first_name") @db.VarChar(100)
+  lastName   String      @map("last_name") @db.VarChar(100)
+  email      String?     @db.VarChar(255)
+  phone      String?     @db.VarChar(20)
+  isPrimary  Boolean     @default(false) @map("is_primary")
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Relations
+  account  Account   @relation(fields: [accountId], references: [id])
+  customer Customer? @relation(fields: [customerId], references: [id])
+
+  @@map("contact")
+}
+
+model BillingAddress {
+  id           String   @id @default(uuid()) @db.Uuid
+  utilityId    String   @map("utility_id") @db.Uuid
+  accountId    String   @map("account_id") @db.Uuid
+  addressLine1 String   @map("address_line1") @db.VarChar(255)
+  addressLine2 String?  @map("address_line2") @db.VarChar(255)
+  city         String   @db.VarChar(100)
+  state        String   @db.VarChar(50)
+  zip          String   @db.VarChar(20)
+  country      String   @default("US") @db.VarChar(2)
+  isPrimary    Boolean  @default(true) @map("is_primary")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Relations
+  account Account @relation(fields: [accountId], references: [id])
+
+  @@map("billing_address")
+}
+
+model MeterRegister {
+  id             String   @id @default(uuid()) @db.Uuid
+  utilityId      String   @map("utility_id") @db.Uuid
+  meterId        String   @map("meter_id") @db.Uuid
+  registerNumber Int      @map("register_number")
+  description    String?  @db.VarChar(100)
+  uomId          String   @map("uom_id") @db.Uuid
+  multiplier     Decimal  @default(1.0) @db.Decimal(10, 4)
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  meter     Meter         @relation(fields: [meterId], references: [id])
+  uom       UnitOfMeasure @relation(fields: [uomId], references: [id])
+  meterReads MeterRead[]
+
+  @@unique([meterId, registerNumber])
+  @@map("meter_register")
 }
