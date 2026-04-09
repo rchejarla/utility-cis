@@ -18,10 +18,25 @@ export async function attachmentRoutes(app: FastifyInstance) {
       return;
     }
 
-    const { entityType, entityId, description } = data.fields as any;
-    const entityTypeVal = typeof entityType === "object" ? entityType.value : entityType;
-    const entityIdVal = typeof entityId === "object" ? entityId.value : entityId;
-    const descVal = typeof description === "object" ? description.value : description;
+    const fields = data.fields as Record<string, any>;
+
+    // @fastify/multipart returns fields as { value: string } objects
+    const getField = (name: string): string | undefined => {
+      const f = fields[name];
+      if (!f) return undefined;
+      if (typeof f === "string") return f;
+      if (f && typeof f === "object" && "value" in f) return f.value;
+      return String(f);
+    };
+
+    const entityTypeVal = getField("entityType");
+    const entityIdVal = getField("entityId");
+    const descVal = getField("description");
+
+    if (!entityTypeVal || !entityIdVal) {
+      reply.status(400).send({ error: { code: "MISSING_FIELDS", message: "entityType and entityId are required" } });
+      return;
+    }
 
     const buffer = await data.toBuffer();
 
