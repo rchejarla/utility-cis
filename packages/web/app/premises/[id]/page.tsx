@@ -10,6 +10,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { MetersTab } from "@/components/premises/meters-tab";
+import { AgreementsTab } from "@/components/premises/agreements-tab";
 
 interface Premise {
   id: string;
@@ -39,7 +40,8 @@ interface Premise {
     meterNumber: string;
     meterType: string;
     status: string;
-    commodity?: { name: string };
+    commodityId?: string;
+    commodity?: { id: string; name: string };
   }>;
   serviceAgreements?: Array<{
     id: string;
@@ -120,6 +122,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [saving, setSaving] = useState(false);
   const [showAddMeter, setShowAddMeter] = useState(false);
+  const [showAddAgreement, setShowAddAgreement] = useState(false);
   const [showDeactivateConfirm, setShowDeactivateConfirm] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
 
@@ -255,7 +258,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
           { key: "audit", label: "Audit" },
         ]}
         activeTab={activeTab}
-        onTabChange={(t) => { setActiveTab(t); setShowAddMeter(false); }}
+        onTabChange={(t) => { setActiveTab(t); setShowAddMeter(false); setShowAddAgreement(false); }}
         action={
           activeTab === "meters" && !showAddMeter ? (
             <button
@@ -274,6 +277,24 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
               }}
             >
               + Add Meter
+            </button>
+          ) : activeTab === "agreements" && !showAddAgreement ? (
+            <button
+              onClick={() => setShowAddAgreement(true)}
+              style={{
+                padding: "5px 12px",
+                fontSize: "12px",
+                fontWeight: 500,
+                background: "var(--accent-primary)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "var(--radius, 10px)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                marginBottom: "2px",
+              }}
+            >
+              + Add Agreement
             </button>
           ) : undefined
         }
@@ -543,23 +564,12 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
         )}
 
         {activeTab === "agreements" && (
-          <DataTable
-            columns={[
-              { key: "agreementNumber", header: "Agreement Number" },
-              {
-                key: "account",
-                header: "Account",
-                render: (row: any) => row.account?.accountNumber ?? "—",
-              },
-              { key: "startDate", header: "Start Date", render: (row: any) => row.startDate?.slice(0, 10) ?? "—" },
-              {
-                key: "status",
-                header: "Status",
-                render: (row: any) => <StatusBadge status={row.status} />,
-              },
-            ]}
-            data={(premise.serviceAgreements ?? []) as any}
-            onRowClick={(row: any) => router.push(`/service-agreements/${row.id}`)}
+          <AgreementsTab
+            premise={premise}
+            onAgreementAdded={() => { loadPremise(); setShowAddAgreement(false); }}
+            onRowClick={(id: string) => router.push(`/service-agreements/${id}`)}
+            showForm={showAddAgreement}
+            onShowFormChange={setShowAddAgreement}
           />
         )}
 

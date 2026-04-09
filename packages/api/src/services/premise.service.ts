@@ -66,6 +66,9 @@ export async function getPremise(id: string, utilityId: string) {
       owner: true,
       meters: {
         where: { status: "ACTIVE" },
+        include: {
+          commodity: { select: { id: true, name: true } },
+        },
       },
       serviceAgreements: {
         where: {
