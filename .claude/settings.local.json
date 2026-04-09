@@ -9,7 +9,8 @@
       "Bash(git push:*)",
       "Bash(npx next:*)",
       "Bash(git:*)",
-      "Bash(npx vitest:*)"
+      "Bash(npx vitest:*)",
+      "Bash(npx tsc:*)"
     ]
   },
   "hooks": {
