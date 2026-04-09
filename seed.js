@@ -3,6 +3,25 @@ const p = new PrismaClient();
 const UID = "00000000-0000-4000-8000-000000000001";
 
 async function main() {
+  console.log("Clearing existing data...");
+  await p.serviceAgreementMeter.deleteMany({});
+  await p.serviceAgreement.deleteMany({});
+  await p.meterRegister.deleteMany({});
+  await p.contact.deleteMany({});
+  await p.billingAddress.deleteMany({});
+  await p.meter.deleteMany({});
+  await p.account.deleteMany({});
+  await p.premise.deleteMany({});
+  await p.rateSchedule.deleteMany({});
+  await p.billingCycle.deleteMany({});
+  await p.unitOfMeasure.deleteMany({});
+  await p.commodity.deleteMany({});
+  await p.customer.deleteMany({});
+  await p.tenantTheme.deleteMany({});
+  await p.auditLog.deleteMany({});
+  await p.userPreference.deleteMany({});
+  console.log("  Cleared.");
+
   console.log("Seeding...");
 
   const water = await p.commodity.create({ data: { utilityId: UID, code: "WATER", name: "Potable Water", displayOrder: 1 } });

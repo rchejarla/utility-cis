@@ -3,7 +3,7 @@ import { z } from "zod";
 export const customerTypeEnum = z.enum(["INDIVIDUAL", "ORGANIZATION"]);
 export const customerStatusEnum = z.enum(["ACTIVE", "INACTIVE"]);
 
-export const createCustomerSchema = z.object({
+const customerBaseSchema = z.object({
   customerType: customerTypeEnum,
   firstName: z.string().max(100).optional(),
   lastName: z.string().max(100).optional(),
@@ -15,7 +15,9 @@ export const createCustomerSchema = z.object({
   driversLicense: z.string().max(50).optional(),
   taxId: z.string().max(50).optional(),
   status: customerStatusEnum.default("ACTIVE"),
-}).refine(
+});
+
+export const createCustomerSchema = customerBaseSchema.refine(
   (data) => {
     if (data.customerType === "INDIVIDUAL") return !!data.firstName && !!data.lastName;
     if (data.customerType === "ORGANIZATION") return !!data.organizationName;
@@ -24,7 +26,7 @@ export const createCustomerSchema = z.object({
   { message: "Individual requires firstName+lastName; Organization requires organizationName" }
 );
 
-export const updateCustomerSchema = createCustomerSchema.partial().omit({ customerType: true });
+export const updateCustomerSchema = customerBaseSchema.partial().omit({ customerType: true });
 
 export const customerQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
