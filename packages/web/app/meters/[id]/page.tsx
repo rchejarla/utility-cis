@@ -204,6 +204,27 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
                 <StatusBadge status={meter.status} />
               )}
             </div>
+            {meter.premise && (
+              <div style={fieldStyle}>
+                <span style={labelStyle}>Premise</span>
+                <button
+                  onClick={() => router.push(`/premises/${meter.premise!.id}`)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "var(--accent-primary)",
+                    fontSize: "13px",
+                    cursor: "pointer",
+                    padding: 0,
+                    textDecoration: "underline",
+                    fontFamily: "inherit",
+                    textAlign: "left",
+                  }}
+                >
+                  {meter.premise.addressLine1}, {meter.premise.city}, {meter.premise.state}
+                </button>
+              </div>
+            )}
             <div style={fieldStyle}>
               <span style={labelStyle}>Meter Number</span>
               <span style={{ ...valueStyle, fontFamily: "monospace" }}>{meter.meterNumber}</span>
@@ -268,26 +289,6 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
                 <span style={valueStyle}>{meter.removalDate ? meter.removalDate.slice(0, 10) : "—"}</span>
               )}
             </div>
-            {meter.premise && (
-              <div style={fieldStyle}>
-                <span style={labelStyle}>Premise</span>
-                <button
-                  onClick={() => router.push(`/premises/${meter.premise!.id}`)}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "var(--accent-primary)",
-                    fontSize: "13px",
-                    cursor: "pointer",
-                    padding: 0,
-                    textDecoration: "underline",
-                    fontFamily: "inherit",
-                  }}
-                >
-                  {meter.premise.addressLine1}, {meter.premise.city}
-                </button>
-              </div>
-            )}
             <div style={fieldStyle}>
               <span style={labelStyle}>Notes</span>
               {editing ? (
