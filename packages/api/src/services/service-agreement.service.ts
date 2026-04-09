@@ -129,6 +129,55 @@ export async function createServiceAgreement(
   return agreement;
 }
 
+export async function addMeterToAgreement(
+  utilityId: string,
+  agreementId: string,
+  meterId: string
+) {
+  const agreement = await prisma.serviceAgreement.findUniqueOrThrow({
+    where: { id: agreementId, utilityId },
+  });
+
+  const existing = await prisma.serviceAgreementMeter.findFirst({
+    where: {
+      meterId,
+      removedDate: null,
+      serviceAgreement: {
+        commodityId: agreement.commodityId,
+        status: { in: ["PENDING", "ACTIVE"] },
+      },
+    },
+  });
+  if (existing) {
+    throw Object.assign(
+      new Error("Meter is already assigned to an active agreement for this commodity (BR-SA-004)"),
+      { statusCode: 400, code: "METER_ALREADY_ASSIGNED" }
+    );
+  }
+
+  return prisma.serviceAgreementMeter.create({
+    data: {
+      utilityId,
+      serviceAgreementId: agreementId,
+      meterId,
+      isPrimary: false,
+      addedDate: new Date(),
+    },
+    include: {
+      meter: {
+        include: { commodity: true, uom: true },
+      },
+    },
+  });
+}
+
+export async function removeMeterFromAgreement(utilityId: string, samId: string) {
+  return prisma.serviceAgreementMeter.update({
+    where: { id: samId, utilityId },
+    data: { removedDate: new Date() },
+  });
+}
+
 export async function updateServiceAgreement(
   utilityId: string,
   actorId: string,

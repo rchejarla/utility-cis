@@ -9,6 +9,7 @@ import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { DataTable } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
+import { MeterManagementTab } from "@/components/service-agreements/meters-tab";
 
 interface ServiceAgreement {
   id: string;
@@ -24,15 +25,22 @@ interface ServiceAgreement {
   billingCycle?: { id: string; name: string; cycleCode: string };
   rateScheduleId?: string;
   billingCycleId?: string;
+  commodityId?: string;
+  premiseId?: string;
   meters?: Array<{
+    id: string;
+    meterId: string;
+    isPrimary: boolean;
+    addedDate: string;
+    removedDate?: string | null;
     meter: {
       id: string;
       meterNumber: string;
       meterType: string;
       status: string;
       commodity?: { name: string };
+      uom?: { code: string };
     };
-    isPrimary: boolean;
   }>;
 }
 
@@ -102,6 +110,7 @@ export default function ServiceAgreementDetailPage({
   const [saving, setSaving] = useState(false);
   const [rateSchedules, setRateSchedules] = useState<RateSchedule[]>([]);
   const [billingCycles, setBillingCycles] = useState<BillingCycle[]>([]);
+  const [showAddMeter, setShowAddMeter] = useState(false);
 
   const loadSA = async () => {
     try {
@@ -266,7 +275,28 @@ export default function ServiceAgreementDetailPage({
           { key: "audit", label: "Audit" },
         ]}
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={(t) => { setActiveTab(t); setShowAddMeter(false); }}
+        action={
+          activeTab === "meters" && !showAddMeter ? (
+            <button
+              onClick={() => setShowAddMeter(true)}
+              style={{
+                padding: "5px 12px",
+                fontSize: "12px",
+                fontWeight: 500,
+                background: "var(--accent-primary)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "var(--radius, 10px)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                marginBottom: "2px",
+              }}
+            >
+              + Add Meter
+            </button>
+          ) : undefined
+        }
       >
         {activeTab === "overview" && (
           <div
@@ -435,41 +465,14 @@ export default function ServiceAgreementDetailPage({
         )}
 
         {activeTab === "meters" && (
-          <DataTable
-            columns={[
-              {
-                key: "meterNumber",
-                header: "Meter Number",
-                render: (row: any) => (
-                  <span style={{ fontFamily: "monospace", fontSize: "12px", fontWeight: 600 }}>
-                    {row.meter?.meterNumber}
-                  </span>
-                ),
-              },
-              {
-                key: "commodity",
-                header: "Commodity",
-                render: (row: any) => <CommodityBadge commodity={row.meter?.commodity?.name ?? ""} />,
-              },
-              { key: "meterType", header: "Type", render: (row: any) => row.meter?.meterType },
-              {
-                key: "isPrimary",
-                header: "Primary",
-                render: (row: any) =>
-                  row.isPrimary ? (
-                    <span style={{ color: "#22c55e", fontSize: "12px" }}>✓ Primary</span>
-                  ) : (
-                    <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>—</span>
-                  ),
-              },
-              {
-                key: "status",
-                header: "Status",
-                render: (row: any) => <StatusBadge status={row.meter?.status ?? ""} />,
-              },
-            ]}
-            data={(sa.meters ?? []) as any}
-            onRowClick={(row: any) => router.push(`/meters/${row.meter?.id}`)}
+          <MeterManagementTab
+            agreementId={sa.id}
+            premiseId={sa.premise?.id ?? sa.premiseId ?? ""}
+            commodityId={sa.commodityId ?? ""}
+            meters={(sa.meters ?? []) as any}
+            onMetersChanged={loadSA}
+            showForm={showAddMeter}
+            onShowFormChange={setShowAddMeter}
           />
         )}
 
