@@ -83,7 +83,7 @@ export default function NewAccountPage() {
             gap: "20px",
           }}
         >
-          <FormField label="Account Number" required>
+          <FormField label="Account Number" required tooltip="Cannot be changed after creation" tooltipRuleId="BR-AC-005">
             <input
               style={inputStyle}
               value={form.accountNumber}
@@ -93,7 +93,7 @@ export default function NewAccountPage() {
             />
           </FormField>
 
-          <FormField label="Account Type" required>
+          <FormField label="Account Type" required hint="Determines default rate eligibility">
             <select
               style={inputStyle}
               value={form.accountType}
@@ -123,7 +123,7 @@ export default function NewAccountPage() {
               </select>
             </FormField>
 
-            <FormField label="Deposit Amount" hint="Optional security deposit">
+            <FormField label="Deposit Amount" hint="Optional security deposit" tooltip="May be required for certain account types (e.g., renters)" tooltipRuleId="BR-AC-008">
               <input
                 style={inputStyle}
                 type="number"

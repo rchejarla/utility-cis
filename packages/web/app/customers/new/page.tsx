@@ -144,6 +144,9 @@ export default function NewCustomerPage() {
                 Organization
               </button>
             </div>
+            <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "4px" }}>
+              BR-CU-003: Customer type cannot be changed after creation
+            </div>
           </div>
 
           {/* Individual fields */}
@@ -235,7 +238,7 @@ export default function NewCustomerPage() {
               Contact Information
             </div>
 
-            <FormField label="Email">
+            <FormField label="Email" hint="Used for notifications and portal access">
               <input
                 style={inputStyle}
                 type="email"

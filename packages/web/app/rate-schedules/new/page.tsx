@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/page-header";
 import { FormField } from "@/components/ui/form-field";
+import { HelpTooltip } from "@/components/ui/tooltip";
 import { apiClient } from "@/lib/api-client";
 
 interface Commodity {
@@ -165,7 +166,7 @@ export default function NewRateSchedulePage() {
                 required
               />
             </FormField>
-            <FormField label="Code" required>
+            <FormField label="Code" required tooltip="Code + version must be unique. Cannot be changed." tooltipRuleId="BR-RS-007">
               <input
                 style={inputStyle}
                 value={form.code}
@@ -208,7 +209,7 @@ export default function NewRateSchedulePage() {
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-            <FormField label="Effective Date" required>
+            <FormField label="Effective Date" required hint="BR-RS-003: Billing uses the rate in effect during the billing period">
               <input
                 style={inputStyle}
                 type="date"
@@ -244,7 +245,10 @@ export default function NewRateSchedulePage() {
             />
           </FormField>
 
-          <SectionLabel>Rate Configuration</SectionLabel>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "-8px", marginTop: "4px" }}>
+            <span style={{ fontSize: "12px", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)" }}>Rate Configuration</span>
+            <HelpTooltip text="Structure must match the selected rate type" ruleId="BR-RS-004" />
+          </div>
 
           {form.rateType === "FLAT" && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>

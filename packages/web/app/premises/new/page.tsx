@@ -172,7 +172,7 @@ export default function NewPremisePage() {
                 required
               />
             </FormField>
-            <FormField label="State" required>
+            <FormField label="State" required hint="2-letter state code">
               <select
                 style={inputStyle}
                 value={form.state}
@@ -224,7 +224,7 @@ export default function NewPremisePage() {
             </select>
           </FormField>
 
-          <FormField label="Commodities">
+          <FormField label="Commodities" tooltip="At least one commodity required" tooltipRuleId="BR-PR-003">
             <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
               {commodities.map((c) => {
                 const selected = form.commodityIds.includes(c.id);
@@ -300,7 +300,7 @@ export default function NewPremisePage() {
                 placeholder="Optional"
               />
             </FormField>
-            <FormField label="Property Owner">
+            <FormField label="Property Owner" tooltip="Property owner may differ from the service account holder (landlord/tenant)" tooltipRuleId="BR-PR-002">
               <select
                 style={inputStyle}
                 value={form.ownerId}

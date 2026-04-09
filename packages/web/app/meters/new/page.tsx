@@ -121,7 +121,7 @@ export default function NewMeterPage() {
             gap: "20px",
           }}
         >
-          <FormField label="Premise" required>
+          <FormField label="Premise" required hint="Meter is permanently tied to this premise (BR-MT-009)">
             <select
               style={inputStyle}
               value={form.premiseId}
@@ -137,7 +137,7 @@ export default function NewMeterPage() {
             </select>
           </FormField>
 
-          <FormField label="Meter Number" required>
+          <FormField label="Meter Number" required tooltip="Must be unique within the utility" tooltipRuleId="BR-MT-002">
             <input
               style={inputStyle}
               value={form.meterNumber}
@@ -148,7 +148,7 @@ export default function NewMeterPage() {
           </FormField>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-            <FormField label="Commodity" required>
+            <FormField label="Commodity" required hint="Must match one of the premise's commodities (BR-MT-003)">
               <select
                 style={inputStyle}
                 value={form.commodityId}

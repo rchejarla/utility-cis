@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { HelpTooltip } from "./tooltip";
 
 interface FormFieldProps {
   label: string;
@@ -8,9 +9,11 @@ interface FormFieldProps {
   children: React.ReactNode;
   required?: boolean;
   hint?: string;
+  tooltip?: string;
+  tooltipRuleId?: string;
 }
 
-export function FormField({ label, error, children, required, hint }: FormFieldProps) {
+export function FormField({ label, error, children, required, hint, tooltip, tooltipRuleId }: FormFieldProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
       <label
@@ -27,6 +30,7 @@ export function FormField({ label, error, children, required, hint }: FormFieldP
         {required && (
           <span style={{ color: "#ef4444", fontSize: "14px", lineHeight: 1 }}>*</span>
         )}
+        {tooltip && <HelpTooltip text={tooltip} ruleId={tooltipRuleId} />}
       </label>
 
       {children}

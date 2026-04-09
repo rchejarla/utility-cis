@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/page-header";
 import { FormField } from "@/components/ui/form-field";
+import { HelpTooltip } from "@/components/ui/tooltip";
 import { apiClient } from "@/lib/api-client";
 
 interface Account {
@@ -221,7 +222,7 @@ export default function NewServiceAgreementPage() {
 
           <SectionLabel>Service Details</SectionLabel>
 
-          <FormField label="Commodity" required>
+          <FormField label="Commodity" required hint="All meters must match this commodity (BR-SA-003)">
             <select
               style={inputStyle}
               value={form.commodityId}
@@ -293,7 +294,16 @@ export default function NewServiceAgreementPage() {
             </FormField>
           </div>
 
-          <SectionLabel>Meters</SectionLabel>
+          <div>
+            <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "-8px" }}>
+              Starts as PENDING. Status: PENDING → ACTIVE → FINAL → CLOSED (BR-SA-006)
+            </div>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "-8px", marginTop: "4px" }}>
+            <span style={{ fontSize: "12px", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)" }}>Meters</span>
+            <HelpTooltip text="A meter can only be in one active agreement per commodity at a time" ruleId="BR-SA-004" />
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
             {meterEntries.map((entry, i) => (
               <div

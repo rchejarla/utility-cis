@@ -85,7 +85,7 @@ export default function NewBillingCyclePage() {
             />
           </FormField>
 
-          <FormField label="Cycle Code" required hint="Short identifier code">
+          <FormField label="Cycle Code" required hint="BR-BC-005: Cannot be changed after creation">
             <input
               style={inputStyle}
               value={form.cycleCode}
@@ -110,7 +110,7 @@ export default function NewBillingCyclePage() {
           </FormField>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-            <FormField label="Read Day of Month" hint="1–31">
+            <FormField label="Read Day of Month" hint="1–28" tooltip="Must be 1-28 to avoid month-length issues" tooltipRuleId="BR-BC-001">
               <input
                 style={inputStyle}
                 type="number"
@@ -121,7 +121,7 @@ export default function NewBillingCyclePage() {
                 placeholder="15"
               />
             </FormField>
-            <FormField label="Bill Day of Month" hint="1–31">
+            <FormField label="Bill Day of Month" hint="1–28" tooltip="Must be 1-28 to avoid month-length issues" tooltipRuleId="BR-BC-001">
               <input
                 style={inputStyle}
                 type="number"
