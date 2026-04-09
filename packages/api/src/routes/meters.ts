@@ -23,17 +23,17 @@ export async function meterRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/v1/meters", async (request, reply) => {
-    const { utilityId, id: actorId } = request.user;
+    const { utilityId, id: actorId, name: actorName } = request.user;
     const data = createMeterSchema.parse(request.body);
-    const meter = await createMeter(utilityId, actorId, data);
+    const meter = await createMeter(utilityId, actorId, actorName, data);
     return reply.status(201).send(meter);
   });
 
   app.patch("/api/v1/meters/:id", async (request, reply) => {
-    const { utilityId, id: actorId } = request.user;
+    const { utilityId, id: actorId, name: actorName } = request.user;
     const { id } = request.params as { id: string };
     const data = updateMeterSchema.parse(request.body);
-    const meter = await updateMeter(utilityId, actorId, id, data);
+    const meter = await updateMeter(utilityId, actorId, actorName, id, data);
     return reply.send(meter);
   });
 }

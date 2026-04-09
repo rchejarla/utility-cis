@@ -14,6 +14,7 @@ export async function listCommodities(utilityId: string) {
 export async function createCommodity(
   utilityId: string,
   actorId: string,
+  actorName: string,
   data: CreateCommodityInput
 ) {
   const commodity = await prisma.commodity.create({
@@ -27,6 +28,7 @@ export async function createCommodity(
     entityId: commodity.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: null,
     afterState: commodity as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),
@@ -38,6 +40,7 @@ export async function createCommodity(
 export async function updateCommodity(
   utilityId: string,
   actorId: string,
+  actorName: string,
   id: string,
   data: UpdateCommodityInput
 ) {
@@ -55,6 +58,7 @@ export async function updateCommodity(
     entityId: commodity.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: before as unknown as Record<string, unknown>,
     afterState: commodity as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),

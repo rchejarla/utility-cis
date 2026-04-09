@@ -47,6 +47,7 @@ export async function getMeter(id: string, utilityId: string) {
 export async function createMeter(
   utilityId: string,
   actorId: string,
+  actorName: string,
   data: CreateMeterInput
 ) {
   const premise = await prisma.premise.findUniqueOrThrow({
@@ -81,6 +82,7 @@ export async function createMeter(
     entityId: meter.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: null,
     afterState: meter as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),
@@ -92,6 +94,7 @@ export async function createMeter(
 export async function updateMeter(
   utilityId: string,
   actorId: string,
+  actorName: string,
   id: string,
   data: UpdateMeterInput
 ) {
@@ -113,6 +116,7 @@ export async function updateMeter(
     entityId: meter.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: before as unknown as Record<string, unknown>,
     afterState: meter as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),

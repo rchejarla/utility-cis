@@ -23,17 +23,17 @@ export async function customerRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/v1/customers", async (request, reply) => {
-    const { utilityId, id: actorId } = request.user;
+    const { utilityId, id: actorId, name: actorName } = request.user;
     const data = createCustomerSchema.parse(request.body);
-    const customer = await createCustomer(utilityId, actorId, data);
+    const customer = await createCustomer(utilityId, actorId, actorName, data);
     return reply.status(201).send(customer);
   });
 
   app.patch("/api/v1/customers/:id", async (request, reply) => {
-    const { utilityId, id: actorId } = request.user;
+    const { utilityId, id: actorId, name: actorName } = request.user;
     const { id } = request.params as { id: string };
     const data = updateCustomerSchema.parse(request.body);
-    const customer = await updateCustomer(utilityId, actorId, id, data);
+    const customer = await updateCustomer(utilityId, actorId, actorName, id, data);
     return reply.send(customer);
   });
 }

@@ -19,6 +19,7 @@ export async function getBillingCycle(id: string, utilityId: string) {
 export async function createBillingCycle(
   utilityId: string,
   actorId: string,
+  actorName: string,
   data: CreateBillingCycleInput
 ) {
   const billingCycle = await prisma.billingCycle.create({
@@ -31,6 +32,7 @@ export async function createBillingCycle(
     entityId: billingCycle.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: null,
     afterState: billingCycle as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),
@@ -42,6 +44,7 @@ export async function createBillingCycle(
 export async function updateBillingCycle(
   utilityId: string,
   actorId: string,
+  actorName: string,
   id: string,
   data: UpdateBillingCycleInput
 ) {
@@ -58,6 +61,7 @@ export async function updateBillingCycle(
     entityId: billingCycle.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: before as unknown as Record<string, unknown>,
     afterState: billingCycle as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),

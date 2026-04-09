@@ -52,6 +52,7 @@ export async function getAccount(id: string, utilityId: string) {
 export async function createAccount(
   utilityId: string,
   actorId: string,
+  actorName: string,
   data: CreateAccountInput
 ) {
   const account = await prisma.account.create({
@@ -64,6 +65,7 @@ export async function createAccount(
     entityId: account.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: null,
     afterState: account as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),
@@ -75,6 +77,7 @@ export async function createAccount(
 export async function updateAccount(
   utilityId: string,
   actorId: string,
+  actorName: string,
   id: string,
   data: UpdateAccountInput
 ) {
@@ -109,6 +112,7 @@ export async function updateAccount(
     entityId: account.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: before as unknown as Record<string, unknown>,
     afterState: account as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),

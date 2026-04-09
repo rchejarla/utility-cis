@@ -21,6 +21,7 @@ async function handleDomainEvent(event: DomainEvent): Promise<void> {
         entityId: event.entityId,
         action: mapEventTypeToAction(event.type),
         actorId: event.actorId,
+        actorName: event.actorName ?? undefined,
         beforeState: event.beforeState ?? undefined,
         afterState: event.afterState ?? undefined,
       },

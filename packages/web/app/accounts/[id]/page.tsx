@@ -64,6 +64,7 @@ interface AuditEntry {
   id: string;
   action: string;
   actorId?: string;
+  actorName?: string;
   createdAt: string;
 }
 
@@ -585,7 +586,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
                 render: (row: any) => new Date(row.createdAt).toLocaleString(),
               },
               { key: "action", header: "Action" },
-              { key: "actorId", header: "Actor", render: (row: any) => row.actorId ?? "System" },
+              { key: "actorId", header: "Actor", render: (row: any) => row.actorName ?? row.actorId ?? "System" },
             ]}
             data={audit as any}
           />

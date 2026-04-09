@@ -11,17 +11,17 @@ export async function uomRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/v1/uom", async (request, reply) => {
-    const { utilityId, id: actorId } = request.user;
+    const { utilityId, id: actorId, name: actorName } = request.user;
     const data = createUomSchema.parse(request.body);
-    const uom = await createUom(utilityId, actorId, data);
+    const uom = await createUom(utilityId, actorId, actorName, data);
     return reply.status(201).send(uom);
   });
 
   app.patch("/api/v1/uom/:id", async (request, reply) => {
-    const { utilityId, id: actorId } = request.user;
+    const { utilityId, id: actorId, name: actorName } = request.user;
     const { id } = request.params as { id: string };
     const data = updateUomSchema.parse(request.body);
-    const uom = await updateUom(utilityId, actorId, id, data);
+    const uom = await updateUom(utilityId, actorId, actorName, id, data);
     return reply.send(uom);
   });
 

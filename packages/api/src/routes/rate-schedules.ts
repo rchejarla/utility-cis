@@ -23,17 +23,17 @@ export async function rateScheduleRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/v1/rate-schedules", async (request, reply) => {
-    const { utilityId, id: actorId } = request.user;
+    const { utilityId, id: actorId, name: actorName } = request.user;
     const data = createRateScheduleSchema.parse(request.body);
-    const schedule = await createRateSchedule(utilityId, actorId, data);
+    const schedule = await createRateSchedule(utilityId, actorId, actorName, data);
     return reply.status(201).send(schedule);
   });
 
   app.post("/api/v1/rate-schedules/:id/revise", async (request, reply) => {
-    const { utilityId, id: actorId } = request.user;
+    const { utilityId, id: actorId, name: actorName } = request.user;
     const { id } = request.params as { id: string };
     const data = createRateScheduleSchema.parse(request.body);
-    const schedule = await reviseRateSchedule(utilityId, actorId, id, data);
+    const schedule = await reviseRateSchedule(utilityId, actorId, actorName, id, data);
     return reply.status(201).send(schedule);
   });
 }

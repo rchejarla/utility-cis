@@ -128,6 +128,7 @@ export async function getPremisesGeo(utilityId: string) {
 export async function createPremise(
   utilityId: string,
   actorId: string,
+  actorName: string,
   data: CreatePremiseInput
 ) {
   const premise = await prisma.premise.create({
@@ -140,6 +141,7 @@ export async function createPremise(
     entityId: premise.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: null,
     afterState: premise as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),
@@ -151,6 +153,7 @@ export async function createPremise(
 export async function updatePremise(
   utilityId: string,
   actorId: string,
+  actorName: string,
   id: string,
   data: UpdatePremiseInput
 ) {
@@ -167,6 +170,7 @@ export async function updatePremise(
     entityId: premise.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: before as unknown as Record<string, unknown>,
     afterState: premise as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),

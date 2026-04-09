@@ -59,6 +59,7 @@ export async function getCustomer(id: string, utilityId: string) {
 export async function createCustomer(
   utilityId: string,
   actorId: string,
+  actorName: string,
   data: CreateCustomerInput
 ) {
   const customer = await prisma.customer.create({
@@ -71,6 +72,7 @@ export async function createCustomer(
     entityId: customer.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: null,
     afterState: customer as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),
@@ -82,6 +84,7 @@ export async function createCustomer(
 export async function updateCustomer(
   utilityId: string,
   actorId: string,
+  actorName: string,
   id: string,
   data: UpdateCustomerInput
 ) {
@@ -98,6 +101,7 @@ export async function updateCustomer(
     entityId: customer.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: before as unknown as Record<string, unknown>,
     afterState: customer as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),

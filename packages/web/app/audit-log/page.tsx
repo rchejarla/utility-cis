@@ -13,6 +13,7 @@ interface AuditEntry {
   entityId: string;
   action: string;
   actorId?: string;
+  actorName?: string;
   changes?: unknown;
   createdAt: string;
 }
@@ -135,7 +136,7 @@ export default function AuditLogPage() {
       key: "actorId",
       header: "Actor",
       render: (row: AuditEntry) => (
-        <span style={{ fontSize: "12px" }}>{row.actorId ?? "System"}</span>
+        <span style={{ fontSize: "12px" }}>{row.actorName ?? row.actorId ?? "System"}</span>
       ),
     },
   ];

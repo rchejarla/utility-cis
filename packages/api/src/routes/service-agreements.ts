@@ -29,17 +29,17 @@ export async function serviceAgreementRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/v1/service-agreements", async (request, reply) => {
-    const { utilityId, id: actorId } = request.user;
+    const { utilityId, id: actorId, name: actorName } = request.user;
     const data = createServiceAgreementSchema.parse(request.body);
-    const agreement = await createServiceAgreement(utilityId, actorId, data);
+    const agreement = await createServiceAgreement(utilityId, actorId, actorName, data);
     return reply.status(201).send(agreement);
   });
 
   app.patch("/api/v1/service-agreements/:id", async (request, reply) => {
-    const { utilityId, id: actorId } = request.user;
+    const { utilityId, id: actorId, name: actorName } = request.user;
     const { id } = request.params as { id: string };
     const data = updateServiceAgreementSchema.parse(request.body);
-    const agreement = await updateServiceAgreement(utilityId, actorId, id, data);
+    const agreement = await updateServiceAgreement(utilityId, actorId, actorName, id, data);
     return reply.send(agreement);
   });
 

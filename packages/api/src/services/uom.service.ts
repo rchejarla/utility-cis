@@ -14,6 +14,7 @@ export async function listUom(utilityId: string, commodityId?: string) {
 export async function createUom(
   utilityId: string,
   actorId: string,
+  actorName: string,
   data: CreateUomInput
 ) {
   // BR-UO-003: Only one base unit per commodity — unmark existing if setting new one
@@ -35,6 +36,7 @@ export async function createUom(
     entityId: uom.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: null,
     afterState: uom as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),
@@ -46,6 +48,7 @@ export async function createUom(
 export async function updateUom(
   utilityId: string,
   actorId: string,
+  actorName: string,
   id: string,
   data: UpdateUomInput
 ) {
@@ -71,6 +74,7 @@ export async function updateUom(
     entityId: uom.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: before as unknown as Record<string, unknown>,
     afterState: uom as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),

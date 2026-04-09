@@ -57,6 +57,7 @@ export async function getServiceAgreement(id: string, utilityId: string) {
 export async function createServiceAgreement(
   utilityId: string,
   actorId: string,
+  actorName: string,
   data: CreateServiceAgreementInput
 ) {
   // Rule 2: Ensure at least one primary meter (computed before transaction)
@@ -121,6 +122,7 @@ export async function createServiceAgreement(
     entityId: agreement.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: null,
     afterState: agreement as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),
@@ -181,6 +183,7 @@ export async function removeMeterFromAgreement(utilityId: string, samId: string)
 export async function updateServiceAgreement(
   utilityId: string,
   actorId: string,
+  actorName: string,
   id: string,
   data: UpdateServiceAgreementInput
 ) {
@@ -218,6 +221,7 @@ export async function updateServiceAgreement(
     entityId: agreement.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: before as unknown as Record<string, unknown>,
     afterState: agreement as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),

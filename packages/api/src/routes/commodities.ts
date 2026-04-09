@@ -14,17 +14,17 @@ export async function commodityRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/v1/commodities", async (request, reply) => {
-    const { utilityId, id: actorId } = request.user;
+    const { utilityId, id: actorId, name: actorName } = request.user;
     const data = createCommoditySchema.parse(request.body);
-    const commodity = await createCommodity(utilityId, actorId, data);
+    const commodity = await createCommodity(utilityId, actorId, actorName, data);
     return reply.status(201).send(commodity);
   });
 
   app.patch("/api/v1/commodities/:id", async (request, reply) => {
-    const { utilityId, id: actorId } = request.user;
+    const { utilityId, id: actorId, name: actorName } = request.user;
     const { id } = request.params as { id: string };
     const data = updateCommoditySchema.parse(request.body);
-    const commodity = await updateCommodity(utilityId, actorId, id, data);
+    const commodity = await updateCommodity(utilityId, actorId, actorName, id, data);
     return reply.send(commodity);
   });
 }

@@ -43,6 +43,7 @@ export async function getRateSchedule(id: string, utilityId: string) {
 export async function createRateSchedule(
   utilityId: string,
   actorId: string,
+  actorName: string,
   data: CreateRateScheduleInput
 ) {
   const schedule = await prisma.rateSchedule.create({
@@ -70,6 +71,7 @@ export async function createRateSchedule(
     entityId: schedule.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: null,
     afterState: schedule as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),
@@ -81,6 +83,7 @@ export async function createRateSchedule(
 export async function reviseRateSchedule(
   utilityId: string,
   actorId: string,
+  actorName: string,
   id: string,
   data: CreateRateScheduleInput
 ) {
@@ -118,6 +121,7 @@ export async function reviseRateSchedule(
     entityId: newSchedule.id,
     utilityId,
     actorId,
+    actorName,
     beforeState: predecessor as unknown as Record<string, unknown>,
     afterState: newSchedule as unknown as Record<string, unknown>,
     timestamp: new Date().toISOString(),
