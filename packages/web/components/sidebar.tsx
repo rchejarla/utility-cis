@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { useSession } from "next-auth/react";
+import { usePermission } from "@/lib/use-permission";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
 import {
@@ -26,6 +27,7 @@ interface NavItem {
   href: string;
   label: string;
   icon: IconDefinition;
+  module: string;
 }
 
 interface NavSection {
@@ -37,30 +39,66 @@ const navSections: NavSection[] = [
   {
     title: "Operations",
     items: [
-      { href: "/customers", label: "Customers", icon: faUsers },
-      { href: "/premises", label: "Premises", icon: faLocationDot },
-      { href: "/meters", label: "Meters", icon: faGauge },
-      { href: "/accounts", label: "Accounts", icon: faUser },
-      { href: "/service-agreements", label: "Agreements", icon: faFileContract },
+      { href: "/customers", label: "Customers", icon: faUsers, module: "customers" },
+      { href: "/premises", label: "Premises", icon: faLocationDot, module: "premises" },
+      { href: "/meters", label: "Meters", icon: faGauge, module: "meters" },
+      { href: "/accounts", label: "Accounts", icon: faUser, module: "accounts" },
+      { href: "/service-agreements", label: "Agreements", icon: faFileContract, module: "agreements" },
     ],
   },
   {
     title: "Configuration",
     items: [
-      { href: "/commodities", label: "Commodities & UOM", icon: faDroplet },
-      { href: "/rate-schedules", label: "Rate Schedules", icon: faMoneyBill },
-      { href: "/billing-cycles", label: "Billing Cycles", icon: faCalendarDays },
+      { href: "/commodities", label: "Commodities & UOM", icon: faDroplet, module: "commodities" },
+      { href: "/rate-schedules", label: "Rate Schedules", icon: faMoneyBill, module: "rate_schedules" },
+      { href: "/billing-cycles", label: "Billing Cycles", icon: faCalendarDays, module: "billing_cycles" },
     ],
   },
   {
     title: "System",
     items: [
-      { href: "/audit-log", label: "Audit Log", icon: faClipboardList },
-      { href: "/theme", label: "Theme Editor", icon: faPalette },
-      { href: "/settings", label: "Settings", icon: faGear },
+      { href: "/audit-log", label: "Audit Log", icon: faClipboardList, module: "audit_log" },
+      { href: "/theme", label: "Theme Editor", icon: faPalette, module: "theme" },
+      { href: "/settings", label: "Settings", icon: faGear, module: "settings" },
     ],
   },
 ];
+
+function NavItemWithPermission({ item, collapsed, isActive }: { item: NavItem; collapsed: boolean; isActive: boolean }) {
+  const { canView } = usePermission(item.module);
+  if (!canView) return null;
+
+  return (
+    <Link
+      href={item.href}
+      title={collapsed ? item.label : undefined}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: collapsed ? "10px 0" : "8px 16px",
+        margin: collapsed ? "2px 8px" : "1px 8px",
+        borderRadius: "var(--radius)",
+        background: isActive ? "var(--bg-hover)" : "transparent",
+        color: isActive ? "var(--accent-primary)" : "var(--text-secondary)",
+        textDecoration: "none",
+        fontSize: 13,
+        fontWeight: isActive ? 500 : 400,
+        transition: "all 0.15s ease",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        justifyContent: collapsed ? "center" : "flex-start",
+        position: "relative",
+      }}
+    >
+      <FontAwesomeIcon
+        icon={item.icon}
+        style={{ width: 16, height: 16, flexShrink: 0, opacity: isActive ? 1 : 0.7 }}
+      />
+      {!collapsed && <span>{item.label}</span>}
+    </Link>
+  );
+}
 
 interface SidebarProps {
   defaultCollapsed?: boolean;
@@ -154,40 +192,12 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
             {section.items.map((item) => {
               const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
               return (
-                <Link
+                <NavItemWithPermission
                   key={item.href}
-                  href={item.href}
-                  title={collapsed ? item.label : undefined}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    padding: collapsed ? "10px 0" : "8px 16px",
-                    margin: collapsed ? "2px 8px" : "1px 8px",
-                    borderRadius: "var(--radius)",
-                    background: isActive ? "var(--bg-hover)" : "transparent",
-                    color: isActive ? "var(--accent-primary)" : "var(--text-secondary)",
-                    textDecoration: "none",
-                    fontSize: 13,
-                    fontWeight: isActive ? 500 : 400,
-                    transition: "all 0.15s ease",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    justifyContent: collapsed ? "center" : "flex-start",
-                    position: "relative",
-                  }}
-                >
-                  <FontAwesomeIcon
-                    icon={item.icon}
-                    style={{
-                      width: 16,
-                      height: 16,
-                      flexShrink: 0,
-                      opacity: isActive ? 1 : 0.7,
-                    }}
-                  />
-                  {!collapsed && <span>{item.label}</span>}
-                </Link>
+                  item={item}
+                  collapsed={collapsed}
+                  isActive={isActive}
+                />
               );
             })}
           </div>

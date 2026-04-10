@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { usePermission } from "@/lib/use-permission";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faUsers,
@@ -21,21 +22,45 @@ import {
 } from "@fortawesome/pro-solid-svg-icons";
 
 const primaryNav = [
-  { href: "/customers", label: "Customers", icon: faUsers },
-  { href: "/premises", label: "Premises", icon: faLocationDot },
-  { href: "/meters", label: "Meters", icon: faGauge },
-  { href: "/service-agreements", label: "Agreements", icon: faFileContract },
+  { href: "/customers", label: "Customers", icon: faUsers, module: "customers" },
+  { href: "/premises", label: "Premises", icon: faLocationDot, module: "premises" },
+  { href: "/meters", label: "Meters", icon: faGauge, module: "meters" },
+  { href: "/service-agreements", label: "Agreements", icon: faFileContract, module: "agreements" },
 ];
 
 const moreNav = [
-  { href: "/accounts", label: "Accounts", icon: faUser },
-  { href: "/rate-schedules", label: "Rate Schedules", icon: faMoneyBill },
-  { href: "/billing-cycles", label: "Billing Cycles", icon: faCalendarDays },
-  { href: "/commodities", label: "Commodities", icon: faDroplet },
-  { href: "/audit-log", label: "Audit Log", icon: faClipboardList },
-  { href: "/theme", label: "Theme", icon: faPalette },
-  { href: "/settings", label: "Settings", icon: faGear },
+  { href: "/accounts", label: "Accounts", icon: faUser, module: "accounts" },
+  { href: "/rate-schedules", label: "Rate Schedules", icon: faMoneyBill, module: "rate_schedules" },
+  { href: "/billing-cycles", label: "Billing Cycles", icon: faCalendarDays, module: "billing_cycles" },
+  { href: "/commodities", label: "Commodities", icon: faDroplet, module: "commodities" },
+  { href: "/audit-log", label: "Audit Log", icon: faClipboardList, module: "audit_log" },
+  { href: "/theme", label: "Theme", icon: faPalette, module: "theme" },
+  { href: "/settings", label: "Settings", icon: faGear, module: "settings" },
 ];
+
+function BottomNavItem({ item, isActive }: { item: typeof primaryNav[number]; isActive: boolean }) {
+  const { canView } = usePermission(item.module);
+  if (!canView) return null;
+
+  return (
+    <Link href={item.href} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "2px", textDecoration: "none", color: isActive ? "var(--accent-primary)" : "var(--text-muted)", fontSize: "10px", fontWeight: isActive ? 600 : 400, transition: "color 0.15s" }}>
+      <FontAwesomeIcon icon={item.icon} style={{ width: 18, height: 18 }} />
+      <span>{item.label}</span>
+    </Link>
+  );
+}
+
+function MoreNavItem({ item, isActive, onClick }: { item: typeof moreNav[number]; isActive: boolean; onClick: () => void }) {
+  const { canView } = usePermission(item.module);
+  if (!canView) return null;
+
+  return (
+    <Link href={item.href} onClick={onClick} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 20px", textDecoration: "none", color: isActive ? "var(--accent-primary)" : "var(--text-secondary)", fontSize: 14, fontWeight: isActive ? 500 : 400 }}>
+      <FontAwesomeIcon icon={item.icon} style={{ width: 16, height: 16, opacity: 0.7 }} />
+      {item.label}
+    </Link>
+  );
+}
 
 export function BottomNav() {
   const pathname = usePathname();
@@ -63,31 +88,11 @@ export function BottomNav() {
           zIndex: 100,
         }}
       >
-        {primaryNav.map((item) => {
-          const active = isActive(item.href);
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              style={{
-                flex: 1,
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: "3px",
-                textDecoration: "none",
-                color: active ? "var(--accent-primary)" : "var(--text-muted)",
-                fontSize: "10px",
-                fontWeight: active ? 600 : 400,
-                transition: "color 0.15s ease",
-              }}
-            >
-              <FontAwesomeIcon icon={item.icon} style={{ width: 18, height: 18 }} />
-              <span>{item.label}</span>
-            </Link>
-          );
-        })}
+        {primaryNav.map((item) => (
+          <div key={item.href} style={{ flex: 1, display: "flex", justifyContent: "center" }}>
+            <BottomNavItem item={item} isActive={isActive(item.href)} />
+          </div>
+        ))}
 
         {/* More button */}
         <button
@@ -182,34 +187,14 @@ export function BottomNav() {
 
             {/* Sheet items */}
             <div style={{ padding: "8px 0" }}>
-              {moreNav.map((item) => {
-                const active = isActive(item.href);
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={() => setSheetOpen(false)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "14px",
-                      padding: "14px 20px",
-                      textDecoration: "none",
-                      color: active ? "var(--accent-primary)" : "var(--text-secondary)",
-                      background: active ? "var(--bg-hover)" : "transparent",
-                      fontSize: "14px",
-                      fontWeight: active ? 500 : 400,
-                      transition: "background 0.1s ease",
-                    }}
-                  >
-                    <FontAwesomeIcon
-                      icon={item.icon}
-                      style={{ width: 18, height: 18, opacity: active ? 1 : 0.7 }}
-                    />
-                    <span>{item.label}</span>
-                  </Link>
-                );
-              })}
+              {moreNav.map((item) => (
+                <MoreNavItem
+                  key={item.href}
+                  item={item}
+                  isActive={isActive(item.href)}
+                  onClick={() => setSheetOpen(false)}
+                />
+              ))}
             </div>
           </div>
         </>
