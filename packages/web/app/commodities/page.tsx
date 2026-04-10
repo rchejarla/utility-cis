@@ -30,7 +30,6 @@ interface Uom {
 export default function CommoditiesPage() {
   const { toast } = useToast();
   const { canView, canCreate, canEdit, canDelete } = usePermission("commodities");
-  if (!canView) return <AccessDenied />;
   const [commodities, setCommodities] = useState<Commodity[]>([]);
   const [uoms, setUoms] = useState<Uom[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,6 +70,8 @@ export default function CommoditiesPage() {
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  if (!canView) return <AccessDenied />;
 
   const handleCreateCommodity = async () => {
     try {

@@ -26,7 +26,6 @@ interface BCResponse {
 export default function BillingCyclesPage() {
   const router = useRouter();
   const { canView, canCreate } = usePermission("billing_cycles");
-  if (!canView) return <AccessDenied />;
   const [data, setData] = useState<BillingCycle[]>([]);
   const [meta, setMeta] = useState({ total: 0, page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
@@ -50,6 +49,8 @@ export default function BillingCyclesPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  if (!canView) return <AccessDenied />;
 
   const columns = [
     {

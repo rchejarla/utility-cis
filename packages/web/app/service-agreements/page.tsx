@@ -41,7 +41,6 @@ const STATUS_OPTIONS = [
 export default function ServiceAgreementsPage() {
   const router = useRouter();
   const { canView, canCreate } = usePermission("agreements");
-  if (!canView) return <AccessDenied />;
   const [data, setData] = useState<ServiceAgreement[]>([]);
   const [meta, setMeta] = useState({ total: 0, page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
@@ -76,6 +75,8 @@ export default function ServiceAgreementsPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  if (!canView) return <AccessDenied />;
 
   const accountOptions = accounts.map((a) => ({ label: a.accountNumber, value: a.id }));
 

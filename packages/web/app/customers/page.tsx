@@ -74,7 +74,6 @@ function TypeBadge({ type }: { type: string }) {
 export default function CustomersPage() {
   const router = useRouter();
   const { canView, canCreate } = usePermission("customers");
-  if (!canView) return <AccessDenied />;
   const [data, setData] = useState<Customer[]>([]);
   const [meta, setMeta] = useState({ total: 0, page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
@@ -131,6 +130,8 @@ export default function CustomersPage() {
   useEffect(() => {
     fetchStats();
   }, [fetchStats]);
+
+  if (!canView) return <AccessDenied />;
 
   const handleSearchChange = (value: string) => {
     setSearchInput(value);

@@ -57,7 +57,6 @@ const STATUS_OPTIONS = [
 export default function PremisesPage() {
   const router = useRouter();
   const { canView, canCreate } = usePermission("premises");
-  if (!canView) return <AccessDenied />;
 
   const [data, setData] = useState<Premise[]>([]);
   const [meta, setMeta] = useState({ total: 0, page: 1, limit: 20, pages: 0 });
@@ -111,6 +110,8 @@ export default function PremisesPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  if (!canView) return <AccessDenied />;
 
   const columns = [
     {

@@ -48,7 +48,6 @@ const ACTIVE_OPTIONS = [
 export default function RateSchedulesPage() {
   const router = useRouter();
   const { canView, canCreate } = usePermission("rate_schedules");
-  if (!canView) return <AccessDenied />;
   const [data, setData] = useState<RateSchedule[]>([]);
   const [meta, setMeta] = useState({ total: 0, page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
@@ -85,6 +84,8 @@ export default function RateSchedulesPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  if (!canView) return <AccessDenied />;
 
   const commodityOptions = commodities.map((c) => ({ label: c.name, value: c.id }));
 

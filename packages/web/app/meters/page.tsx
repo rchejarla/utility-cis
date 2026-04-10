@@ -39,7 +39,6 @@ const STATUS_OPTIONS = [
 export default function MetersPage() {
   const router = useRouter();
   const { canView, canCreate } = usePermission("meters");
-  if (!canView) return <AccessDenied />;
   const [data, setData] = useState<Meter[]>([]);
   const [meta, setMeta] = useState({ total: 0, page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
@@ -74,6 +73,8 @@ export default function MetersPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  if (!canView) return <AccessDenied />;
 
   const columns = [
     {
