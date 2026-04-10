@@ -35,4 +35,15 @@ export async function authRoutes(app: FastifyInstance) {
     const authData = await getAuthMe(userId, utilityId);
     reply.send(authData);
   });
+
+  // Dev-only: list all roles without permission check
+  app.get("/api/v1/auth/roles", async (request) => {
+    const { utilityId } = request.user;
+    const roles = await prisma.role.findMany({
+      where: { utilityId },
+      include: { _count: { select: { users: true } } },
+      orderBy: [{ isSystem: "desc" }, { name: "asc" }],
+    });
+    return roles;
+  });
 }

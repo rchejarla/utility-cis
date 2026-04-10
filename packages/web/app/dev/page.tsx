@@ -31,7 +31,7 @@ export default function DevLaunchPage() {
 
   useEffect(() => {
     apiClient
-      .get<Role[] | { data: Role[] }>("/api/v1/roles")
+      .get<Role[] | { data: Role[] }>("/api/v1/auth/roles")
       .then((res) => setRoles(Array.isArray(res) ? res : res.data ?? []))
       .catch(console.error)
       .finally(() => setLoading(false));
