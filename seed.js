@@ -262,6 +262,7 @@ async function main() {
 
   await p.cisUser.create({
     data: {
+      id: "00000000-0000-4000-8000-000000000099", // matches dev token sub
       utilityId: UID,
       email: "admin@utility.com",
       name: "Admin User",

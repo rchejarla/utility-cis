@@ -22,26 +22,20 @@ export async function getUserRole(
   }
 
   const cisUser = await prisma.cisUser.findUnique({
-    where: { utilityId_email: { utilityId, email: userId } },
-    include: { role: true },
-  }).catch(() => null);
-
-  // Also try by id directly
-  const cisUserById = cisUser ?? await prisma.cisUser.findUnique({
     where: { id: userId },
     include: { role: true },
   }).catch(() => null);
 
-  if (!cisUserById) {
+  if (!cisUser) {
     return null;
   }
 
   const result: UserRoleResult = {
-    userId: cisUserById.id,
-    roleId: cisUserById.roleId,
-    roleName: cisUserById.role.name,
-    permissions: cisUserById.role.permissions as PermissionMap,
-    isActive: cisUserById.isActive,
+    userId: cisUser.id,
+    roleId: cisUser.roleId,
+    roleName: cisUser.role.name,
+    permissions: cisUser.role.permissions as PermissionMap,
+    isActive: cisUser.isActive,
   };
 
   await redis.setex(cacheKey, 300, JSON.stringify(result));
