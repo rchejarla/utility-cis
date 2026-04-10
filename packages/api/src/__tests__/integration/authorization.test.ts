@@ -10,7 +10,9 @@ vi.mock("../../lib/redis.js", () => ({
   },
 }));
 
-// Mock prisma with RBAC-specific methods added on top of the global vitest.setup.ts mock
+// Mock prisma with RBAC-specific methods added on top of the global vitest.setup.ts mock.
+// NOTE: rbac.service.ts uses findFirst (not findUnique) to always scope queries by
+// utilityId, so the mock must expose findFirst.
 vi.mock("../../lib/prisma.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../lib/prisma.js")>();
   return {
@@ -18,6 +20,7 @@ vi.mock("../../lib/prisma.js", async (importOriginal) => {
     prisma: {
       ...(original as any).prisma,
       cisUser: {
+        findFirst: vi.fn().mockResolvedValue(null),
         findUnique: vi.fn().mockResolvedValue(null),
         findMany: vi.fn().mockResolvedValue([]),
         create: vi.fn().mockResolvedValue({}),
@@ -27,6 +30,7 @@ vi.mock("../../lib/prisma.js", async (importOriginal) => {
       cisRole: {
         findMany: vi.fn().mockResolvedValue([]),
         findUnique: vi.fn().mockResolvedValue(null),
+        findFirst: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue({}),
         update: vi.fn().mockResolvedValue({}),
         delete: vi.fn().mockResolvedValue({}),
@@ -34,11 +38,13 @@ vi.mock("../../lib/prisma.js", async (importOriginal) => {
       },
       tenantModule: {
         findMany: vi.fn().mockResolvedValue([]),
+        findFirst: vi.fn().mockResolvedValue(null),
         findUnique: vi.fn().mockResolvedValue(null),
         upsert: vi.fn().mockResolvedValue({}),
       },
     },
     setTenantContext: vi.fn().mockResolvedValue(undefined),
+    withTenant: vi.fn((_utilityId: string, fn: any) => fn({})),
   };
 });
 
@@ -53,7 +59,7 @@ describe("Authorization middleware", () => {
     vi.clearAllMocks();
     // Default: no tenant modules enabled, no CIS user found
     (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
-    (prisma.cisUser.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
   });
 
   // Test 1: Route without module declaration is allowed
@@ -79,7 +85,7 @@ describe("Authorization middleware", () => {
       name: "Admin",
       permissions: { commodities: ["VIEW", "CREATE", "EDIT", "DELETE"] },
     };
-    (prisma.cisUser.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
+    (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: "test-user-001",
       utilityId: "test-utility-001",
       email: "test@example.com",
@@ -110,7 +116,7 @@ describe("Authorization middleware", () => {
     ]);
 
     // No CIS user found — findUnique returns null
-    (prisma.cisUser.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
     // Hit a route that would have module enforcement (customers:VIEW)
     // Even with module enabled but no user record, middleware allows (BR-RB-007 compatibility)
@@ -153,7 +159,7 @@ describe("Authorization middleware", () => {
       { moduleKey: "meters" },
     ];
 
-    (prisma.cisUser.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(mockCisUser);
+    (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(mockCisUser);
     (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue(mockModules);
 
     const response = await app.inject({
@@ -202,7 +208,7 @@ describe("Authorization middleware", () => {
       role: mockRole,
     };
 
-    (prisma.cisUser.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(inactiveCisUser);
+    (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(inactiveCisUser);
     (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "customers" },
     ]);
@@ -240,7 +246,7 @@ describe("Authorization middleware", () => {
       role: mockRole,
     };
 
-    (prisma.cisUser.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(cisUserWithLimitedPerms);
+    (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(cisUserWithLimitedPerms);
     (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "customers" },
     ]);
@@ -285,7 +291,7 @@ describe("Authorization middleware", () => {
       role: mockRole,
     };
 
-    (prisma.cisUser.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(adminUser);
+    (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(adminUser);
     // Customers module NOT in enabled modules list
     (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "premises" }, // only premises enabled, not customers
@@ -307,7 +313,7 @@ describe("Authorization middleware", () => {
     const app = await createTestApp();
 
     // No CIS user and no modules
-    (prisma.cisUser.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
     (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
     const response = await app.inject({

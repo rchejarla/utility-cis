@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  /* Default dark theme variables */
+  /* ─── Dark theme (default) ──────────────────────────────── */
   --bg-deep: #06080d;
   --bg-surface: #0c1018;
   --bg-card: #111722;
@@ -14,24 +14,89 @@
   --text-primary: #e8edf5;
   --text-secondary: #8494ad;
   --text-muted: #4a5a73;
-  --accent-primary: #3b82f6;
-  --accent-secondary: #22d3ee;
+
+  /* Brand accents — indigo primary, cyan secondary, violet tertiary */
+  --accent-primary: #6366f1;      /* indigo-500 — lifted from flat blue */
+  --accent-primary-hover: #818cf8;
+  --accent-primary-subtle: rgba(99, 102, 241, 0.12);
+  --accent-secondary: #22d3ee;    /* cyan-400 */
+  --accent-secondary-subtle: rgba(34, 211, 238, 0.14);
+  --accent-tertiary: #c084fc;     /* violet-400 — for variety/highlights */
+  --accent-tertiary-subtle: rgba(192, 132, 252, 0.14);
+
+  /* Semantic accents — AA contrast against bg-card */
+  --success: #4ade80;
+  --success-subtle: rgba(74, 222, 128, 0.14);
+  --warning: #fbbf24;
+  --warning-subtle: rgba(251, 191, 36, 0.14);
+  --danger: #f87171;
+  --danger-subtle: rgba(248, 113, 113, 0.14);
+  --info: #60a5fa;
+  --info-subtle: rgba(96, 165, 250, 0.14);
+
+  /* Signature gradient — used sparingly for hero/highlight surfaces */
+  --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #22d3ee 100%);
+
   --radius: 10px;
 }
 
 [data-theme="light"] {
-  --bg-deep: #ffffff;
-  --bg-surface: #f8fafc;
+  /* ─── Light theme ──────────────────────────────────────────
+     Surfaces carry a very subtle cool tint (slate-50/100) instead
+     of pure white, so cards and elevated panels have visual depth
+     without feeling gray. */
+  --bg-deep: #fbfcfe;        /* near-white with a whisper of blue */
+  --bg-surface: #f4f6fb;     /* slate-50 with a hint of indigo */
   --bg-card: #ffffff;
-  --bg-elevated: #f1f5f9;
-  --bg-hover: #e2e8f0;
-  --border: #e2e8f0;
-  --border-subtle: #f1f5f9;
+  --bg-elevated: #eef1f8;    /* slightly cooler than default slate-100 */
+  --bg-hover: #e2e8f4;
+  --border: #dbe1ec;
+  --border-subtle: #edf0f7;
   --text-primary: #0f172a;
-  --text-secondary: #64748b;
-  --text-muted: #94a3b8;
-  --accent-primary: #0f766e;
-  --accent-secondary: #0891b2;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+
+  /* Brand accents — vivid but AA-compliant on white
+     #4f46e5 indigo-600 on #ffffff ≈ 7.1 : 1 */
+  --accent-primary: #4f46e5;       /* indigo-600 — the signature color */
+  --accent-primary-hover: #4338ca; /* indigo-700 */
+  --accent-primary-subtle: #eef2ff; /* indigo-50 */
+  --accent-secondary: #0891b2;     /* cyan-600 */
+  --accent-secondary-subtle: #ecfeff; /* cyan-50 */
+  --accent-tertiary: #9333ea;      /* violet-600 */
+  --accent-tertiary-subtle: #faf5ff; /* violet-50 */
+
+  /* Semantic accents — dark text tones on pale tinted backgrounds,
+     all ≥ 4.5 : 1 contrast against their subtle-bg counterparts */
+  --success: #15803d;            /* green-700 */
+  --success-subtle: #dcfce7;     /* green-100 */
+  --warning: #b45309;            /* amber-700 */
+  --warning-subtle: #fef3c7;     /* amber-100 */
+  --danger: #b91c1c;             /* red-700 */
+  --danger-subtle: #fee2e2;      /* red-100 */
+  --info: #1d4ed8;               /* blue-700 */
+  --info-subtle: #dbeafe;        /* blue-100 */
+
+  /* Signature gradient — indigo → violet → cyan, tuned lighter for white bg */
+  --accent-gradient: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #0891b2 100%);
+}
+
+/* Utility classes layered on top of the CSS variables.
+   Used sparingly — most components still use var(--...) directly. */
+.accent-gradient-text {
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.accent-gradient-bg {
+  background: var(--accent-gradient);
+}
+
+.accent-tint {
+  background: var(--accent-primary-subtle);
+  color: var(--accent-primary);
 }
 
 body {

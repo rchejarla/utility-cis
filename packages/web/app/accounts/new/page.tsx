@@ -8,14 +8,15 @@ import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
 
-const ACCOUNT_TYPES = ["RESIDENTIAL", "COMMERCIAL", "INDUSTRIAL", "GOVERNMENT", "OTHER"];
-const CREDIT_RATINGS = ["AAA", "AA", "A", "BBB", "BB", "B", "CCC", "CC", "C", "D"];
+// Must match shared validators (packages/shared/src/validators/account.ts)
+const ACCOUNT_TYPES = ["RESIDENTIAL", "COMMERCIAL", "INDUSTRIAL", "MUNICIPAL"] as const;
+const CREDIT_RATINGS = ["EXCELLENT", "GOOD", "FAIR", "POOR", "UNRATED"] as const;
 const LANGUAGE_PREFS = [
-  { value: "en", label: "English" },
-  { value: "es", label: "Spanish" },
-  { value: "fr", label: "French" },
-  { value: "zh", label: "Chinese" },
-  { value: "vi", label: "Vietnamese" },
+  { value: "en-US", label: "English" },
+  { value: "es-US", label: "Spanish" },
+  { value: "fr-CA", label: "French" },
+  { value: "zh-CN", label: "Chinese" },
+  { value: "vi-VN", label: "Vietnamese" },
 ];
 
 const inputStyle = {
@@ -39,10 +40,10 @@ export default function NewAccountPage() {
 
   const [form, setForm] = useState({
     accountNumber: "",
-    accountType: "RESIDENTIAL",
+    accountType: "RESIDENTIAL" as (typeof ACCOUNT_TYPES)[number],
     creditRating: "",
     depositAmount: "",
-    languagePref: "en",
+    languagePref: "en-US",
   });
 
   const set = (key: string, value: unknown) =>

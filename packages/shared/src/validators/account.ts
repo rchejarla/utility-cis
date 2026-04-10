@@ -4,6 +4,15 @@ export const accountTypeEnum = z.enum(["RESIDENTIAL", "COMMERCIAL", "INDUSTRIAL"
 export const accountStatusEnum = z.enum(["ACTIVE", "INACTIVE", "FINAL", "CLOSED", "SUSPENDED"]);
 export const creditRatingEnum = z.enum(["EXCELLENT", "GOOD", "FAIR", "POOR", "UNRATED"]);
 
+export const accountSortFields = [
+  "createdAt",
+  "updatedAt",
+  "accountNumber",
+  "status",
+  "accountType",
+  "creditRating",
+] as const;
+
 export const createAccountSchema = z.object({
   accountNumber: z.string().min(1).max(50),
   customerId: z.string().uuid().optional(),
@@ -17,8 +26,9 @@ export const createAccountSchema = z.object({
   paperlessBilling: z.boolean().default(false),
   budgetBilling: z.boolean().default(false),
   saaslogicAccountId: z.string().uuid().optional(),
-});
+}).strict();
 
+// Update schemas intentionally strip unknown keys (forgiving PATCH semantics).
 export const updateAccountSchema = createAccountSchema
   .omit({ accountNumber: true })
   .partial();
@@ -26,13 +36,13 @@ export const updateAccountSchema = createAccountSchema
 export const accountQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(500).default(20),
-  sort: z.string().default("createdAt"),
+  sort: z.enum(accountSortFields).default("createdAt"),
   order: z.enum(["asc", "desc"]).default("desc"),
   status: accountStatusEnum.optional(),
   accountType: accountTypeEnum.optional(),
   creditRating: creditRatingEnum.optional(),
   search: z.string().optional(),
-});
+}).strict();
 
 export type AccountType = z.infer<typeof accountTypeEnum>;
 export type AccountStatus = z.infer<typeof accountStatusEnum>;

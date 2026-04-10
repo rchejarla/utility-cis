@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { FilterBar } from "@/components/ui/filter-bar";
 import { DataTable } from "@/components/ui/data-table";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { TypeBadge } from "@/components/ui/type-badge";
 import { StatCard } from "@/components/ui/stat-card";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
@@ -39,37 +40,6 @@ const STATUS_OPTIONS = [
   { label: "Active", value: "ACTIVE" },
   { label: "Inactive", value: "INACTIVE" },
 ];
-
-function TypeBadge({ type }: { type: string }) {
-  const isOrg = type === "ORGANIZATION";
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "5px",
-        padding: "2px 8px",
-        borderRadius: "999px",
-        background: isOrg ? "rgba(245,158,11,0.12)" : "rgba(59,130,246,0.12)",
-        fontSize: "11px",
-        fontWeight: "500",
-        color: isOrg ? "#fbbf24" : "#60a5fa",
-        whiteSpace: "nowrap",
-      }}
-    >
-      <span
-        style={{
-          width: "5px",
-          height: "5px",
-          borderRadius: "50%",
-          background: isOrg ? "#f59e0b" : "#3b82f6",
-          flexShrink: 0,
-        }}
-      />
-      {isOrg ? "Organization" : "Individual"}
-    </span>
-  );
-}
 
 export default function CustomersPage() {
   const router = useRouter();

@@ -4,27 +4,35 @@ import type { PermissionMap } from "@utility-cis/shared";
 
 interface UserRoleResult {
   userId: string;
+  utilityId: string;
   roleId: string;
   roleName: string;
   permissions: PermissionMap;
   isActive: boolean;
 }
 
+function userRoleCacheKey(utilityId: string, userId: string): string {
+  return `user-role:${utilityId}:${userId}`;
+}
+
 export async function getUserRole(
   userId: string,
   utilityId: string
 ): Promise<UserRoleResult | null> {
-  const cacheKey = `user-role:${userId}`;
+  const cacheKey = userRoleCacheKey(utilityId, userId);
 
   const cached = await redis.get(cacheKey);
   if (cached) {
     return JSON.parse(cached) as UserRoleResult;
   }
 
-  const cisUser = await prisma.cisUser.findUnique({
-    where: { id: userId },
-    include: { role: true },
-  }).catch(() => null);
+  // Always scope by tenant. A user ID should never be trusted across tenants.
+  const cisUser = await prisma.cisUser
+    .findFirst({
+      where: { id: userId, utilityId },
+      include: { role: true },
+    })
+    .catch(() => null);
 
   if (!cisUser) {
     return null;
@@ -32,6 +40,7 @@ export async function getUserRole(
 
   const result: UserRoleResult = {
     userId: cisUser.id,
+    utilityId: cisUser.utilityId,
     roleId: cisUser.roleId,
     roleName: cisUser.role.name,
     permissions: cisUser.role.permissions as PermissionMap,
@@ -63,8 +72,11 @@ export async function getTenantModules(utilityId: string): Promise<string[]> {
   return moduleKeys;
 }
 
-export async function invalidateUserRoleCache(userId: string): Promise<void> {
-  await redis.del(`user-role:${userId}`);
+export async function invalidateUserRoleCache(
+  userId: string,
+  utilityId: string
+): Promise<void> {
+  await redis.del(userRoleCacheKey(utilityId, userId));
 }
 
 export async function invalidateTenantModulesCache(utilityId: string): Promise<void> {

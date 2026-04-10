@@ -31,11 +31,14 @@ export async function updateRole(utilityId: string, id: string, data: UpdateRole
     include: { _count: { select: { users: true } } },
   });
 
-  // Invalidate cache for all users with this role
-  const usersWithRole = await prisma.cisUser.findMany({ where: { roleId: id, utilityId }, select: { id: true } });
-  for (const u of usersWithRole) {
-    await invalidateUserRoleCache(u.id);
-  }
+  // Invalidate cache for all users with this role (batched, tenant-scoped)
+  const usersWithRole = await prisma.cisUser.findMany({
+    where: { roleId: id, utilityId },
+    select: { id: true },
+  });
+  await Promise.all(
+    usersWithRole.map((u) => invalidateUserRoleCache(u.id, utilityId))
+  );
 
   return role;
 }

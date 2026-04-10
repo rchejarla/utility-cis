@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { createUserSchema, updateUserSchema, userQuerySchema } from "@utility-cis/shared";
 import * as userService from "../services/user.service.js";
+import { idParamSchema } from "../lib/route-schemas.js";
 
 export async function userRoutes(app: FastifyInstance) {
   app.get("/api/v1/users", { config: { module: "settings", permission: "VIEW" } }, async (request) => {
@@ -9,7 +10,7 @@ export async function userRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/v1/users/:id", { config: { module: "settings", permission: "VIEW" } }, async (request) => {
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     return userService.getUser(id, request.user.utilityId);
   });
 
@@ -20,7 +21,7 @@ export async function userRoutes(app: FastifyInstance) {
   });
 
   app.patch("/api/v1/users/:id", { config: { module: "settings", permission: "EDIT" } }, async (request) => {
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     const data = updateUserSchema.parse(request.body);
     return userService.updateUser(request.user.utilityId, id, data);
   });

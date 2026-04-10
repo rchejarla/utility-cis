@@ -3,6 +3,17 @@ import { z } from "zod";
 export const premiseTypeEnum = z.enum(["RESIDENTIAL", "COMMERCIAL", "INDUSTRIAL", "MUNICIPAL"]);
 export const premiseStatusEnum = z.enum(["ACTIVE", "INACTIVE", "CONDEMNED"]);
 
+export const premiseSortFields = [
+  "createdAt",
+  "updatedAt",
+  "addressLine1",
+  "city",
+  "state",
+  "zip",
+  "premiseType",
+  "status",
+] as const;
+
 export const createPremiseSchema = z.object({
   addressLine1: z.string().min(1).max(255),
   addressLine2: z.string().max(255).optional(),
@@ -17,21 +28,22 @@ export const createPremiseSchema = z.object({
   municipalityCode: z.string().max(50).optional(),
   ownerId: z.string().uuid().optional(),
   status: premiseStatusEnum.default("ACTIVE"),
-});
+}).strict();
 
+// Update schemas intentionally strip unknown keys (forgiving PATCH semantics).
 export const updatePremiseSchema = createPremiseSchema.partial();
 
 export const premiseQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(500).default(20),
-  sort: z.string().default("createdAt"),
+  sort: z.enum(premiseSortFields).default("createdAt"),
   order: z.enum(["asc", "desc"]).default("desc"),
   status: premiseStatusEnum.optional(),
   premiseType: premiseTypeEnum.optional(),
   serviceTerritoryId: z.string().uuid().optional(),
   ownerId: z.string().uuid().optional(),
   search: z.string().optional(),
-});
+}).strict();
 
 export type PremiseType = z.infer<typeof premiseTypeEnum>;
 export type PremiseStatus = z.infer<typeof premiseStatusEnum>;

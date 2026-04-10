@@ -4,60 +4,67 @@ interface StatusBadgeProps {
   status: string;
 }
 
-type StatusStyle = {
-  dot: string;
-  bg: string;
-  text: string;
-  label: string;
-};
+type Tone = "success" | "warning" | "danger" | "neutral";
 
-function getStatusStyle(status: string): StatusStyle {
+/**
+ * Maps a status string to a semantic tone. Tones resolve to CSS vars
+ * (--success, --success-subtle, etc.) so the badge is theme-aware —
+ * light mode uses dark-on-pale; dark mode uses vivid-on-translucent.
+ */
+function getTone(status: string): { tone: Tone; label: string } {
   const s = status?.toLowerCase() ?? "";
+  const label = status ? status.charAt(0).toUpperCase() + status.slice(1).toLowerCase() : "";
 
-  if (s === "active") {
-    return { dot: "#22c55e", bg: "rgba(34,197,94,0.12)", text: "#4ade80", label: "Active" };
-  }
-  if (s === "inactive" || s === "pending") {
-    return { dot: "#f59e0b", bg: "rgba(245,158,11,0.12)", text: "#fbbf24", label: status };
-  }
-  if (s === "closed" || s === "final") {
-    return { dot: "#64748b", bg: "rgba(100,116,139,0.12)", text: "#94a3b8", label: status };
-  }
-  if (s === "condemned" || s === "suspended") {
-    return { dot: "#ef4444", bg: "rgba(239,68,68,0.12)", text: "#f87171", label: status };
-  }
-  // Default / unknown
-  return { dot: "#64748b", bg: "rgba(100,116,139,0.12)", text: "#94a3b8", label: status };
+  if (s === "active") return { tone: "success", label: label || "Active" };
+  if (s === "inactive" || s === "pending") return { tone: "warning", label };
+  if (s === "condemned" || s === "suspended") return { tone: "danger", label };
+  // closed / final / unknown → neutral slate
+  return { tone: "neutral", label };
 }
 
+const TONE_VARS: Record<Tone, { bg: string; fg: string; border: string }> = {
+  success: { bg: "var(--success-subtle)", fg: "var(--success)", border: "var(--success)" },
+  warning: { bg: "var(--warning-subtle)", fg: "var(--warning)", border: "var(--warning)" },
+  danger: { bg: "var(--danger-subtle)", fg: "var(--danger)", border: "var(--danger)" },
+  neutral: { bg: "var(--bg-elevated)", fg: "var(--text-secondary)", border: "var(--border)" },
+};
+
 export function StatusBadge({ status }: StatusBadgeProps) {
-  const style = getStatusStyle(status);
+  const { tone, label } = getTone(status);
+  const vars = TONE_VARS[tone];
 
   return (
     <span
+      role="status"
+      aria-label={`Status: ${label}`}
       style={{
         display: "inline-flex",
         alignItems: "center",
         gap: "5px",
         padding: "2px 8px",
         borderRadius: "999px",
-        background: style.bg,
+        background: vars.bg,
+        border: `1px solid ${vars.border}`,
         fontSize: "11px",
-        fontWeight: "500",
-        color: style.text,
+        fontWeight: 600,
+        color: vars.fg,
         whiteSpace: "nowrap",
+        width: "fit-content",
+        // Prevent CSS Grid from stretching the badge to fill its cell.
+        justifySelf: "start",
       }}
     >
       <span
+        aria-hidden="true"
         style={{
-          width: "5px",
-          height: "5px",
+          width: "6px",
+          height: "6px",
           borderRadius: "50%",
-          background: style.dot,
+          background: vars.fg,
           flexShrink: 0,
         }}
       />
-      {style.label}
+      {label}
     </span>
   );
 }

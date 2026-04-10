@@ -7,6 +7,7 @@ import {
   createPremise,
   updatePremise,
 } from "../services/premise.service.js";
+import { idParamSchema } from "../lib/route-schemas.js";
 
 export async function premiseRoutes(app: FastifyInstance) {
   app.get("/api/v1/premises", { config: { module: "premises", permission: "VIEW" } }, async (request, reply) => {
@@ -24,7 +25,7 @@ export async function premiseRoutes(app: FastifyInstance) {
 
   app.get("/api/v1/premises/:id", { config: { module: "premises", permission: "VIEW" } }, async (request, reply) => {
     const { utilityId } = request.user;
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     const premise = await getPremise(id, utilityId);
     return reply.send(premise);
   });
@@ -38,7 +39,7 @@ export async function premiseRoutes(app: FastifyInstance) {
 
   app.patch("/api/v1/premises/:id", { config: { module: "premises", permission: "EDIT" } }, async (request, reply) => {
     const { utilityId, id: actorId, name: actorName } = request.user;
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     const data = updatePremiseSchema.parse(request.body);
     const premise = await updatePremise(utilityId, actorId, actorName, id, data);
     return reply.send(premise);

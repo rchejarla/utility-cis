@@ -1,3 +1,27 @@
+/**
+ * Entity types that can have file attachments associated with them.
+ *
+ * SINGLE SOURCE OF TRUTH — both the API validator and every web
+ * <AttachmentsTab entityType="..."> call MUST use these constants.
+ * The casing must match the Prisma model name (PascalCase singular).
+ *
+ * Regression history: on 2026-04-09 the API route was temporarily
+ * hardcoded to a lowercase enum while the web sent PascalCase, silently
+ * 400-ing every attachments query. Keeping this in `shared/` makes it
+ * impossible for web and API to disagree because TypeScript checks both.
+ */
+export const ATTACHMENT_ENTITY_TYPES = [
+  "Customer",
+  "Account",
+  "Premise",
+  "Meter",
+  "ServiceAgreement",
+  "RateSchedule",
+  "BillingCycle",
+] as const;
+
+export type AttachmentEntityType = (typeof ATTACHMENT_ENTITY_TYPES)[number];
+
 export const MODULES = [
   "customers",
   "premises",

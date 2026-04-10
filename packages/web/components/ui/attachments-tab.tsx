@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import type { AttachmentEntityType } from "@utility-cis/shared";
 import { apiClient, API_URL } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 
@@ -15,7 +16,8 @@ interface Attachment {
 }
 
 interface AttachmentsTabProps {
-  entityType: string; // "Customer", "Account", "Premise", "Meter", "ServiceAgreement"
+  /** Must match packages/shared AttachmentEntityType — TypeScript enforces it. */
+  entityType: AttachmentEntityType;
   entityId: string;
   showForm?: boolean;
   onShowFormChange?: (show: boolean) => void;

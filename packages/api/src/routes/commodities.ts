@@ -5,6 +5,7 @@ import {
   createCommodity,
   updateCommodity,
 } from "../services/commodity.service.js";
+import { idParamSchema } from "../lib/route-schemas.js";
 
 export async function commodityRoutes(app: FastifyInstance) {
   app.get("/api/v1/commodities", { config: { module: "commodities", permission: "VIEW" } }, async (request, reply) => {
@@ -22,7 +23,7 @@ export async function commodityRoutes(app: FastifyInstance) {
 
   app.patch("/api/v1/commodities/:id", { config: { module: "commodities", permission: "EDIT" } }, async (request, reply) => {
     const { utilityId, id: actorId, name: actorName } = request.user;
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     const data = updateCommoditySchema.parse(request.body);
     const commodity = await updateCommodity(utilityId, actorId, actorName, id, data);
     return reply.send(commodity);

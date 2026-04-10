@@ -1,6 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createTestApp } from "../setup.js";
 import { createTestToken } from "../setup.js";
+import { prisma } from "../../lib/prisma.js";
 
 describe("Request validation", () => {
   const token = createTestToken();
@@ -9,6 +10,42 @@ describe("Request validation", () => {
   // Note: tests that pass validation will reach the DB and likely fail with a
   // connection error. These tests focus on requests that should be REJECTED
   // by Zod validation before hitting the DB.
+
+  // Happy-path authorization: every known module enabled + admin role with full
+  // permissions, so the authz middleware always lets requests through and the
+  // Zod schema parser is what decides pass/fail.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const ALL_MODULES = [
+      "customers",
+      "premises",
+      "meters",
+      "accounts",
+      "agreements",
+      "commodities",
+      "rate_schedules",
+      "billing_cycles",
+      "attachments",
+      "audit_log",
+      "settings",
+      "theme",
+    ];
+    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue(
+      ALL_MODULES.map((moduleKey) => ({ moduleKey }))
+    );
+    (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "test-user-001",
+      utilityId: "test-utility-001",
+      roleId: "role-admin",
+      isActive: true,
+      role: {
+        name: "Admin",
+        permissions: Object.fromEntries(
+          ALL_MODULES.map((m) => [m, ["VIEW", "CREATE", "EDIT", "DELETE"]])
+        ),
+      },
+    });
+  });
 
   describe("Premises", () => {
     it("rejects premise with missing required fields", async () => {

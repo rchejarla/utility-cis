@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useId } from "react";
 import { HelpTooltip } from "./tooltip";
 
 interface FormFieldProps {
@@ -13,10 +13,43 @@ interface FormFieldProps {
   tooltipRuleId?: string;
 }
 
-export function FormField({ label, error, children, required, hint, tooltip, tooltipRuleId }: FormFieldProps) {
+export function FormField({
+  label,
+  error,
+  children,
+  required,
+  hint,
+  tooltip,
+  tooltipRuleId,
+}: FormFieldProps) {
+  const reactId = useId();
+  const inputId = `ff-${reactId}`;
+  const hintId = hint ? `${inputId}-hint` : undefined;
+  const errorId = error ? `${inputId}-error` : undefined;
+  const describedBy = [hintId, errorId].filter(Boolean).join(" ") || undefined;
+
+  // Inject a11y props into the first child input/select/textarea. If the
+  // child already sets one of these, preserve the caller's value.
+  let wrappedChildren: React.ReactNode = children;
+  if (React.isValidElement(children)) {
+    const child = children as React.ReactElement<{
+      id?: string;
+      "aria-invalid"?: boolean | "true" | "false";
+      "aria-describedby"?: string;
+      "aria-required"?: boolean | "true" | "false";
+    }>;
+    wrappedChildren = React.cloneElement(child, {
+      id: child.props.id ?? inputId,
+      "aria-invalid": child.props["aria-invalid"] ?? (error ? "true" : undefined),
+      "aria-describedby": child.props["aria-describedby"] ?? describedBy,
+      "aria-required": child.props["aria-required"] ?? (required ? "true" : undefined),
+    });
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
       <label
+        htmlFor={inputId}
         style={{
           fontSize: "13px",
           fontWeight: "500",
@@ -28,28 +61,37 @@ export function FormField({ label, error, children, required, hint, tooltip, too
       >
         {label}
         {required && (
-          <span style={{ color: "#ef4444", fontSize: "14px", lineHeight: 1 }}>*</span>
+          <span aria-hidden="true" style={{ color: "#ef4444", fontSize: "14px", lineHeight: 1 }}>
+            *
+          </span>
         )}
+        {required && <span className="sr-only">(required)</span>}
         {tooltip && <HelpTooltip text={tooltip} ruleId={tooltipRuleId} />}
       </label>
 
-      {children}
+      {wrappedChildren}
 
       {hint && !error && (
-        <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>{hint}</span>
+        <span id={hintId} style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+          {hint}
+        </span>
       )}
 
       {error && (
         <span
+          id={errorId}
+          role="alert"
           style={{
             fontSize: "12px",
-            color: "#f87171",
+            color: "#dc2626",
             display: "flex",
             alignItems: "center",
             gap: "4px",
           }}
         >
-          <span style={{ fontSize: "13px" }}>⚠</span>
+          <span aria-hidden="true" style={{ fontSize: "13px" }}>
+            ⚠
+          </span>
           {error}
         </span>
       )}

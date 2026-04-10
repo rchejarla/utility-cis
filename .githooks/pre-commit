@@ -1,0 +1,23 @@
+#!/bin/sh
+#
+# Pre-commit hook: typecheck + run the test suite.
+# To enable after `git init`, run:
+#   git config core.hooksPath .githooks
+#
+# This hook exits non-zero on any failure, blocking the commit.
+
+set -e
+
+echo "[pre-commit] Typechecking shared..."
+pnpm --filter @utility-cis/shared exec tsc --noEmit
+
+echo "[pre-commit] Typechecking api..."
+pnpm --filter @utility-cis/api exec tsc --noEmit
+
+echo "[pre-commit] Running api tests..."
+pnpm --filter @utility-cis/api test
+
+echo "[pre-commit] Running shared tests..."
+pnpm --filter @utility-cis/shared test
+
+echo "[pre-commit] OK"

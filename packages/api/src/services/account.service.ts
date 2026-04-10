@@ -1,8 +1,8 @@
 import { prisma } from "../lib/prisma.js";
-import { domainEvents } from "../events/emitter.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
 import type { CreateAccountInput, UpdateAccountInput, AccountQuery } from "@utility-cis/shared";
-import { paginationArgs, paginatedResponse } from "../lib/pagination.js";
+import { paginatedTenantList } from "../lib/pagination.js";
+import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
 
 export async function listAccounts(utilityId: string, query: AccountQuery) {
   const where: Record<string, unknown> = { utilityId };
@@ -13,22 +13,9 @@ export async function listAccounts(utilityId: string, query: AccountQuery) {
     where.accountNumber = { contains: query.search, mode: "insensitive" };
   }
 
-  const [data, total] = await Promise.all([
-    prisma.account.findMany({
-      where,
-      ...paginationArgs(query),
-      include: {
-        _count: {
-          select: {
-            serviceAgreements: true,
-          },
-        },
-      },
-    }),
-    prisma.account.count({ where }),
-  ]);
-
-  return paginatedResponse(data, total, query);
+  return paginatedTenantList(prisma.account, where, query, {
+    include: { _count: { select: { serviceAgreements: true } } },
+  });
 }
 
 export async function getAccount(id: string, utilityId: string) {
@@ -55,23 +42,11 @@ export async function createAccount(
   actorName: string,
   data: CreateAccountInput
 ) {
-  const account = await prisma.account.create({
-    data: { ...data, utilityId },
-  });
-
-  domainEvents.emitDomainEvent({
-    type: EVENT_TYPES.ACCOUNT_CREATED,
-    entityType: "Account",
-    entityId: account.id,
-    utilityId,
-    actorId,
-    actorName,
-    beforeState: null,
-    afterState: account as unknown as Record<string, unknown>,
-    timestamp: new Date().toISOString(),
-  });
-
-  return account;
+  return auditCreate(
+    { utilityId, actorId, actorName, entityType: "Account" },
+    EVENT_TYPES.ACCOUNT_CREATED,
+    () => prisma.account.create({ data: { ...data, utilityId } })
+  );
 }
 
 export async function updateAccount(
@@ -82,41 +57,29 @@ export async function updateAccount(
   data: UpdateAccountInput
 ) {
   const before = await prisma.account.findUniqueOrThrow({ where: { id, utilityId } });
+  return auditUpdate(
+    { utilityId, actorId, actorName, entityType: "Account" },
+    EVENT_TYPES.ACCOUNT_UPDATED,
+    before,
+    () =>
+      prisma.$transaction(async (tx) => {
+        if (data.status === "CLOSED") {
+          const activeCount = await tx.serviceAgreement.count({
+            where: {
+              accountId: id,
+              status: { in: ["PENDING", "ACTIVE"] },
+            },
+          });
 
-  const account = await prisma.$transaction(async (tx) => {
-    if (data.status === "CLOSED") {
-      const activeCount = await tx.serviceAgreement.count({
-        where: {
-          accountId: id,
-          status: { in: ["PENDING", "ACTIVE"] },
-        },
-      });
+          if (activeCount > 0) {
+            throw Object.assign(
+              new Error("Account has active or pending service agreements"),
+              { statusCode: 400, code: "ACTIVE_AGREEMENTS_EXIST" }
+            );
+          }
+        }
 
-      if (activeCount > 0) {
-        throw Object.assign(
-          new Error("Account has active or pending service agreements"),
-          { statusCode: 400, code: "ACTIVE_AGREEMENTS_EXIST" }
-        );
-      }
-    }
-
-    return tx.account.update({
-      where: { id, utilityId },
-      data,
-    });
-  });
-
-  domainEvents.emitDomainEvent({
-    type: EVENT_TYPES.ACCOUNT_UPDATED,
-    entityType: "Account",
-    entityId: account.id,
-    utilityId,
-    actorId,
-    actorName,
-    beforeState: before as unknown as Record<string, unknown>,
-    afterState: account as unknown as Record<string, unknown>,
-    timestamp: new Date().toISOString(),
-  });
-
-  return account;
+        return tx.account.update({ where: { id, utilityId }, data });
+      })
+  );
 }

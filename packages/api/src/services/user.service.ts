@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma.js";
-import { paginationArgs, paginatedResponse } from "../lib/pagination.js";
+import { paginatedTenantList } from "../lib/pagination.js";
 import { invalidateUserRoleCache } from "./rbac.service.js";
 import type { CreateUserInput, UpdateUserInput, UserQuery } from "@utility-cis/shared";
 
@@ -16,16 +16,9 @@ export async function listUsers(utilityId: string, query: UserQuery) {
   if (query.roleId) where.roleId = query.roleId;
   if (query.isActive !== undefined) where.isActive = query.isActive;
 
-  const [data, total] = await Promise.all([
-    prisma.cisUser.findMany({
-      where,
-      ...paginationArgs(query),
-      include: { role: true },
-    }),
-    prisma.cisUser.count({ where }),
-  ]);
-
-  return paginatedResponse(data, total, query);
+  return paginatedTenantList(prisma.cisUser, where, query, {
+    include: { role: true },
+  });
 }
 
 export async function getUser(id: string, utilityId: string) {
@@ -50,7 +43,7 @@ export async function updateUser(utilityId: string, id: string, data: UpdateUser
     include: { role: true },
   });
 
-  await invalidateUserRoleCache(id);
+  await invalidateUserRoleCache(id, utilityId);
 
   return user;
 }

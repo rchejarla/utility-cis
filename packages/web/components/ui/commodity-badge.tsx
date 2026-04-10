@@ -4,12 +4,6 @@ interface CommodityBadgeProps {
   commodity: string;
 }
 
-type CommodityStyle = {
-  bg: string;
-  text: string;
-  border: string;
-};
-
 // Normalize name → code for display
 function toCode(commodity: string): string {
   const c = commodity?.toUpperCase().trim() ?? "";
@@ -20,27 +14,31 @@ function toCode(commodity: string): string {
   return c;
 }
 
-function getCommodityStyle(commodity: string): CommodityStyle {
-  const c = toCode(commodity);
+type Accent = "info" | "warning" | "tertiary" | "success" | "neutral";
 
-  if (c === "WATER") {
-    return { bg: "rgba(59,130,246,0.12)", text: "#60a5fa", border: "rgba(59,130,246,0.25)" };
-  }
-  if (c === "ELECTRIC") {
-    return { bg: "rgba(245,158,11,0.12)", text: "#fbbf24", border: "rgba(245,158,11,0.25)" };
-  }
-  if (c === "GAS") {
-    return { bg: "rgba(139,92,246,0.12)", text: "#a78bfa", border: "rgba(139,92,246,0.25)" };
-  }
-  if (c === "SEWER") {
-    return { bg: "rgba(34,197,94,0.12)", text: "#4ade80", border: "rgba(34,197,94,0.25)" };
-  }
-  // Default
-  return { bg: "rgba(100,116,139,0.12)", text: "#94a3b8", border: "rgba(100,116,139,0.25)" };
+function getAccent(commodity: string): Accent {
+  const c = toCode(commodity);
+  if (c === "WATER") return "info";
+  if (c === "ELECTRIC") return "warning";
+  if (c === "GAS") return "tertiary";
+  if (c === "SEWER") return "success";
+  return "neutral";
 }
 
+const ACCENT_VARS: Record<Accent, { bg: string; fg: string; border: string }> = {
+  info: { bg: "var(--info-subtle)", fg: "var(--info)", border: "var(--info)" },
+  warning: { bg: "var(--warning-subtle)", fg: "var(--warning)", border: "var(--warning)" },
+  tertiary: {
+    bg: "var(--accent-tertiary-subtle)",
+    fg: "var(--accent-tertiary)",
+    border: "var(--accent-tertiary)",
+  },
+  success: { bg: "var(--success-subtle)", fg: "var(--success)", border: "var(--success)" },
+  neutral: { bg: "var(--bg-elevated)", fg: "var(--text-secondary)", border: "var(--border)" },
+};
+
 export function CommodityBadge({ commodity }: CommodityBadgeProps) {
-  const style = getCommodityStyle(commodity);
+  const vars = ACCENT_VARS[getAccent(commodity)];
 
   return (
     <span
@@ -49,14 +47,16 @@ export function CommodityBadge({ commodity }: CommodityBadgeProps) {
         alignItems: "center",
         padding: "2px 8px",
         borderRadius: "6px",
-        background: style.bg,
-        border: `1px solid ${style.border}`,
+        background: vars.bg,
+        border: `1px solid ${vars.border}`,
         fontSize: "11px",
-        fontWeight: "600",
-        color: style.text,
+        fontWeight: 600,
+        color: vars.fg,
         fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
         letterSpacing: "0.04em",
         whiteSpace: "nowrap",
+        width: "fit-content",
+        justifySelf: "start",
       }}
     >
       {toCode(commodity) || "—"}

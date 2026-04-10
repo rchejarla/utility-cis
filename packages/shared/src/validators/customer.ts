@@ -17,7 +17,16 @@ const customerBaseSchema = z.object({
   status: customerStatusEnum.default("ACTIVE"),
 });
 
-export const createCustomerSchema = customerBaseSchema.refine(
+export const customerSortFields = [
+  "createdAt",
+  "updatedAt",
+  "lastName",
+  "organizationName",
+  "status",
+  "customerType",
+] as const;
+
+export const createCustomerSchema = customerBaseSchema.strict().refine(
   (data) => {
     if (data.customerType === "INDIVIDUAL") return !!data.firstName && !!data.lastName;
     if (data.customerType === "ORGANIZATION") return !!data.organizationName;
@@ -26,17 +35,23 @@ export const createCustomerSchema = customerBaseSchema.refine(
   { message: "Individual requires firstName+lastName; Organization requires organizationName" }
 );
 
-export const updateCustomerSchema = customerBaseSchema.partial().omit({ customerType: true });
+// Note: update schemas intentionally strip unknown keys instead of rejecting
+// them. This gives PATCH callers forgiving semantics — e.g. a client that
+// POSTs back the full object after editing one field won't 400 on fields
+// it doesn't own (like customerType or id). Create schemas stay strict.
+export const updateCustomerSchema = customerBaseSchema
+  .partial()
+  .omit({ customerType: true });
 
 export const customerQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(500).default(20),
-  sort: z.string().default("createdAt"),
+  sort: z.enum(customerSortFields).default("createdAt"),
   order: z.enum(["asc", "desc"]).default("desc"),
   customerType: customerTypeEnum.optional(),
   status: customerStatusEnum.optional(),
   search: z.string().optional(),
-});
+}).strict();
 
 export type CreateCustomerInput = z.infer<typeof createCustomerSchema>;
 export type UpdateCustomerInput = z.infer<typeof updateCustomerSchema>;

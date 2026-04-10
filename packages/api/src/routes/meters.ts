@@ -6,6 +6,7 @@ import {
   createMeter,
   updateMeter,
 } from "../services/meter.service.js";
+import { idParamSchema } from "../lib/route-schemas.js";
 
 export async function meterRoutes(app: FastifyInstance) {
   app.get("/api/v1/meters", { config: { module: "meters", permission: "VIEW" } }, async (request, reply) => {
@@ -17,7 +18,7 @@ export async function meterRoutes(app: FastifyInstance) {
 
   app.get("/api/v1/meters/:id", { config: { module: "meters", permission: "VIEW" } }, async (request, reply) => {
     const { utilityId } = request.user;
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     const meter = await getMeter(id, utilityId);
     return reply.send(meter);
   });
@@ -31,7 +32,7 @@ export async function meterRoutes(app: FastifyInstance) {
 
   app.patch("/api/v1/meters/:id", { config: { module: "meters", permission: "EDIT" } }, async (request, reply) => {
     const { utilityId, id: actorId, name: actorName } = request.user;
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     const data = updateMeterSchema.parse(request.body);
     const meter = await updateMeter(utilityId, actorId, actorName, id, data);
     return reply.send(meter);

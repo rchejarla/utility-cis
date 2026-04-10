@@ -6,6 +6,7 @@ import {
   createCustomer,
   updateCustomer,
 } from "../services/customer.service.js";
+import { idParamSchema } from "../lib/route-schemas.js";
 
 export async function customerRoutes(app: FastifyInstance) {
   app.get("/api/v1/customers", { config: { module: "customers", permission: "VIEW" } }, async (request, reply) => {
@@ -17,7 +18,7 @@ export async function customerRoutes(app: FastifyInstance) {
 
   app.get("/api/v1/customers/:id", { config: { module: "customers", permission: "VIEW" } }, async (request, reply) => {
     const { utilityId } = request.user;
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     const customer = await getCustomer(id, utilityId);
     return reply.send(customer);
   });
@@ -31,7 +32,7 @@ export async function customerRoutes(app: FastifyInstance) {
 
   app.patch("/api/v1/customers/:id", { config: { module: "customers", permission: "EDIT" } }, async (request, reply) => {
     const { utilityId, id: actorId, name: actorName } = request.user;
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     const data = updateCustomerSchema.parse(request.body);
     const customer = await updateCustomer(utilityId, actorId, actorName, id, data);
     return reply.send(customer);

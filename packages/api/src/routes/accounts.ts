@@ -6,6 +6,7 @@ import {
   createAccount,
   updateAccount,
 } from "../services/account.service.js";
+import { idParamSchema } from "../lib/route-schemas.js";
 
 export async function accountRoutes(app: FastifyInstance) {
   app.get("/api/v1/accounts", { config: { module: "accounts", permission: "VIEW" } }, async (request, reply) => {
@@ -17,7 +18,7 @@ export async function accountRoutes(app: FastifyInstance) {
 
   app.get("/api/v1/accounts/:id", { config: { module: "accounts", permission: "VIEW" } }, async (request, reply) => {
     const { utilityId } = request.user;
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     const account = await getAccount(id, utilityId);
     return reply.send(account);
   });
@@ -31,7 +32,7 @@ export async function accountRoutes(app: FastifyInstance) {
 
   app.patch("/api/v1/accounts/:id", { config: { module: "accounts", permission: "EDIT" } }, async (request, reply) => {
     const { utilityId, id: actorId, name: actorName } = request.user;
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     const data = updateAccountSchema.parse(request.body);
     const account = await updateAccount(utilityId, actorId, actorName, id, data);
     return reply.send(account);

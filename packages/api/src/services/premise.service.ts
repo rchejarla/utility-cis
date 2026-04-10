@@ -1,8 +1,8 @@
 import { prisma } from "../lib/prisma.js";
-import { domainEvents } from "../events/emitter.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
 import type { CreatePremiseInput, UpdatePremiseInput, PremiseQuery } from "@utility-cis/shared";
 import { paginationArgs, paginatedResponse } from "../lib/pagination.js";
+import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
 
 export async function listPremises(utilityId: string, query: PremiseQuery) {
   const where: Record<string, unknown> = { utilityId };
@@ -131,23 +131,11 @@ export async function createPremise(
   actorName: string,
   data: CreatePremiseInput
 ) {
-  const premise = await prisma.premise.create({
-    data: { ...data, utilityId },
-  });
-
-  domainEvents.emitDomainEvent({
-    type: EVENT_TYPES.PREMISE_CREATED,
-    entityType: "Premise",
-    entityId: premise.id,
-    utilityId,
-    actorId,
-    actorName,
-    beforeState: null,
-    afterState: premise as unknown as Record<string, unknown>,
-    timestamp: new Date().toISOString(),
-  });
-
-  return premise;
+  return auditCreate(
+    { utilityId, actorId, actorName, entityType: "Premise" },
+    EVENT_TYPES.PREMISE_CREATED,
+    () => prisma.premise.create({ data: { ...data, utilityId } })
+  );
 }
 
 export async function updatePremise(
@@ -158,23 +146,10 @@ export async function updatePremise(
   data: UpdatePremiseInput
 ) {
   const before = await prisma.premise.findUniqueOrThrow({ where: { id, utilityId } });
-
-  const premise = await prisma.premise.update({
-    where: { id, utilityId },
-    data,
-  });
-
-  domainEvents.emitDomainEvent({
-    type: EVENT_TYPES.PREMISE_UPDATED,
-    entityType: "Premise",
-    entityId: premise.id,
-    utilityId,
-    actorId,
-    actorName,
-    beforeState: before as unknown as Record<string, unknown>,
-    afterState: premise as unknown as Record<string, unknown>,
-    timestamp: new Date().toISOString(),
-  });
-
-  return premise;
+  return auditUpdate(
+    { utilityId, actorId, actorName, entityType: "Premise" },
+    EVENT_TYPES.PREMISE_UPDATED,
+    before,
+    () => prisma.premise.update({ where: { id, utilityId }, data })
+  );
 }

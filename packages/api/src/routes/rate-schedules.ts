@@ -6,6 +6,7 @@ import {
   createRateSchedule,
   reviseRateSchedule,
 } from "../services/rate-schedule.service.js";
+import { idParamSchema } from "../lib/route-schemas.js";
 
 export async function rateScheduleRoutes(app: FastifyInstance) {
   app.get("/api/v1/rate-schedules", { config: { module: "rate_schedules", permission: "VIEW" } }, async (request, reply) => {
@@ -17,7 +18,7 @@ export async function rateScheduleRoutes(app: FastifyInstance) {
 
   app.get("/api/v1/rate-schedules/:id", { config: { module: "rate_schedules", permission: "VIEW" } }, async (request, reply) => {
     const { utilityId } = request.user;
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     const schedule = await getRateSchedule(id, utilityId);
     return reply.send(schedule);
   });
@@ -31,7 +32,7 @@ export async function rateScheduleRoutes(app: FastifyInstance) {
 
   app.post("/api/v1/rate-schedules/:id/revise", { config: { module: "rate_schedules", permission: "EDIT" } }, async (request, reply) => {
     const { utilityId, id: actorId, name: actorName } = request.user;
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     const data = createRateScheduleSchema.parse(request.body);
     const schedule = await reviseRateSchedule(utilityId, actorId, actorName, id, data);
     return reply.status(201).send(schedule);

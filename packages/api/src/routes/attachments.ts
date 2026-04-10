@@ -1,11 +1,25 @@
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { ATTACHMENT_ENTITY_TYPES } from "@utility-cis/shared";
+import { idParamSchema } from "../lib/route-schemas.js";
 import * as attachmentService from "../services/attachment.service.js";
+
+const attachmentQuerySchema = z.object({
+  entityType: z.enum(ATTACHMENT_ENTITY_TYPES),
+  entityId: z.string().uuid(),
+}).strict();
+
+const attachmentUploadFieldsSchema = z.object({
+  entityType: z.enum(ATTACHMENT_ENTITY_TYPES),
+  entityId: z.string().uuid(),
+  description: z.string().max(500).optional(),
+});
 
 export async function attachmentRoutes(app: FastifyInstance) {
   // List attachments for an entity
   app.get("/api/v1/attachments", { config: { module: "attachments", permission: "VIEW" } }, async (request) => {
     const { utilityId } = request.user;
-    const { entityType, entityId } = request.query as { entityType: string; entityId: string };
+    const { entityType, entityId } = attachmentQuerySchema.parse(request.query);
     return attachmentService.listAttachments(utilityId, entityType, entityId);
   });
 
@@ -29,12 +43,22 @@ export async function attachmentRoutes(app: FastifyInstance) {
       return String(f);
     };
 
-    const entityTypeVal = getField("entityType");
-    const entityIdVal = getField("entityId");
-    const descVal = getField("description");
-
-    if (!entityTypeVal || !entityIdVal) {
-      reply.status(400).send({ error: { code: "MISSING_FIELDS", message: "entityType and entityId are required" } });
+    const parsedFields = attachmentUploadFieldsSchema.safeParse({
+      entityType: getField("entityType"),
+      entityId: getField("entityId"),
+      description: getField("description"),
+    });
+    if (!parsedFields.success) {
+      reply.status(400).send({
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Invalid upload fields",
+          details: parsedFields.error.errors.map((e) => ({
+            field: e.path.join("."),
+            message: e.message,
+          })),
+        },
+      });
       return;
     }
 
@@ -43,12 +67,12 @@ export async function attachmentRoutes(app: FastifyInstance) {
     const attachment = await attachmentService.uploadAttachment(
       utilityId,
       actorId,
-      entityTypeVal,
-      entityIdVal,
+      parsedFields.data.entityType,
+      parsedFields.data.entityId,
       data.filename,
       data.mimetype,
       buffer,
-      descVal || undefined
+      parsedFields.data.description
     );
 
     reply.status(201).send(attachment);
@@ -57,7 +81,7 @@ export async function attachmentRoutes(app: FastifyInstance) {
   // Download attachment
   app.get("/api/v1/attachments/:id/download", { config: { module: "attachments", permission: "VIEW" } }, async (request, reply) => {
     const { utilityId } = request.user;
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     const { attachment, buffer } = await attachmentService.getAttachmentFile(id, utilityId);
 
     reply
@@ -69,7 +93,7 @@ export async function attachmentRoutes(app: FastifyInstance) {
   // Delete attachment
   app.delete("/api/v1/attachments/:id", { config: { module: "attachments", permission: "DELETE" } }, async (request, reply) => {
     const { utilityId } = request.user;
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     await attachmentService.deleteAttachment(id, utilityId);
     reply.status(204).send();
   });

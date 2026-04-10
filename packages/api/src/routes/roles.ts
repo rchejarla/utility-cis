@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { createRoleSchema, updateRoleSchema } from "@utility-cis/shared";
 import * as roleService from "../services/role.service.js";
+import { idParamSchema } from "../lib/route-schemas.js";
 
 export async function roleRoutes(app: FastifyInstance) {
   app.get("/api/v1/roles", { config: { module: "settings", permission: "VIEW" } }, async (request) => {
@@ -8,7 +9,7 @@ export async function roleRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/v1/roles/:id", { config: { module: "settings", permission: "VIEW" } }, async (request) => {
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     return roleService.getRole(id, request.user.utilityId);
   });
 
@@ -19,13 +20,13 @@ export async function roleRoutes(app: FastifyInstance) {
   });
 
   app.patch("/api/v1/roles/:id", { config: { module: "settings", permission: "EDIT" } }, async (request) => {
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     const data = updateRoleSchema.parse(request.body);
     return roleService.updateRole(request.user.utilityId, id, data);
   });
 
   app.delete("/api/v1/roles/:id", { config: { module: "settings", permission: "DELETE" } }, async (request, reply) => {
-    const { id } = request.params as { id: string };
+    const { id } = idParamSchema.parse(request.params);
     await roleService.deleteRole(request.user.utilityId, id);
     reply.status(204).send();
   });

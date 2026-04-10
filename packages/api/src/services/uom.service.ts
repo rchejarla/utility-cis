@@ -1,7 +1,7 @@
 import { prisma } from "../lib/prisma.js";
-import { domainEvents } from "../events/emitter.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
 import type { CreateUomInput, UpdateUomInput } from "@utility-cis/shared";
+import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
 
 export async function listUom(utilityId: string, commodityId?: string) {
   return prisma.unitOfMeasure.findMany({
@@ -17,32 +17,23 @@ export async function createUom(
   actorName: string,
   data: CreateUomInput
 ) {
-  // BR-UO-003: Only one base unit per commodity — unmark existing if setting new one
-  if (data.isBaseUnit) {
-    await prisma.unitOfMeasure.updateMany({
-      where: { utilityId, commodityId: data.commodityId, isBaseUnit: true },
-      data: { isBaseUnit: false },
-    });
-  }
-
-  const uom = await prisma.unitOfMeasure.create({
-    data: { ...data, utilityId },
-    include: { commodity: true },
-  });
-
-  domainEvents.emitDomainEvent({
-    type: EVENT_TYPES.UOM_CREATED,
-    entityType: "UnitOfMeasure",
-    entityId: uom.id,
-    utilityId,
-    actorId,
-    actorName,
-    beforeState: null,
-    afterState: uom as unknown as Record<string, unknown>,
-    timestamp: new Date().toISOString(),
-  });
-
-  return uom;
+  return auditCreate(
+    { utilityId, actorId, actorName, entityType: "UnitOfMeasure" },
+    EVENT_TYPES.UOM_CREATED,
+    async () => {
+      // BR-UO-003: Only one base unit per commodity — unmark existing if setting new one
+      if (data.isBaseUnit) {
+        await prisma.unitOfMeasure.updateMany({
+          where: { utilityId, commodityId: data.commodityId, isBaseUnit: true },
+          data: { isBaseUnit: false },
+        });
+      }
+      return prisma.unitOfMeasure.create({
+        data: { ...data, utilityId },
+        include: { commodity: true },
+      });
+    }
+  );
 }
 
 export async function updateUom(
@@ -53,34 +44,25 @@ export async function updateUom(
   data: UpdateUomInput
 ) {
   const before = await prisma.unitOfMeasure.findUniqueOrThrow({ where: { id, utilityId } });
-
-  // BR-UO-003: Only one base unit per commodity — unmark existing if setting new one
-  if (data.isBaseUnit) {
-    await prisma.unitOfMeasure.updateMany({
-      where: { utilityId, commodityId: before.commodityId, isBaseUnit: true, id: { not: id } },
-      data: { isBaseUnit: false },
-    });
-  }
-
-  const uom = await prisma.unitOfMeasure.update({
-    where: { id, utilityId },
-    data,
-    include: { commodity: true },
-  });
-
-  domainEvents.emitDomainEvent({
-    type: EVENT_TYPES.UOM_UPDATED,
-    entityType: "UnitOfMeasure",
-    entityId: uom.id,
-    utilityId,
-    actorId,
-    actorName,
-    beforeState: before as unknown as Record<string, unknown>,
-    afterState: uom as unknown as Record<string, unknown>,
-    timestamp: new Date().toISOString(),
-  });
-
-  return uom;
+  return auditUpdate(
+    { utilityId, actorId, actorName, entityType: "UnitOfMeasure" },
+    EVENT_TYPES.UOM_UPDATED,
+    before,
+    async () => {
+      // BR-UO-003: Only one base unit per commodity — unmark existing if setting new one
+      if (data.isBaseUnit) {
+        await prisma.unitOfMeasure.updateMany({
+          where: { utilityId, commodityId: before.commodityId, isBaseUnit: true, id: { not: id } },
+          data: { isBaseUnit: false },
+        });
+      }
+      return prisma.unitOfMeasure.update({
+        where: { id, utilityId },
+        data,
+        include: { commodity: true },
+      });
+    }
+  );
 }
 
 export async function deleteUom(utilityId: string, id: string) {

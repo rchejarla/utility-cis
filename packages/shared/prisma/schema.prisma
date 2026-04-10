@@ -177,13 +177,14 @@ model Commodity {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   // Relations
-  defaultUom        UnitOfMeasure?  @relation("DefaultUom", fields: [defaultUomId], references: [id])
-  unitsOfMeasure    UnitOfMeasure[] @relation("CommodityUoms")
+  defaultUom        UnitOfMeasure?     @relation("DefaultUom", fields: [defaultUomId], references: [id], onDelete: SetNull)
+  unitsOfMeasure    UnitOfMeasure[]    @relation("CommodityUoms")
   meters            Meter[]
   serviceAgreements ServiceAgreement[]
   rateSchedules     RateSchedule[]
 
   @@unique([utilityId, code])
+  @@index([defaultUomId])
   @@map("commodity")
 }
 
@@ -199,12 +200,13 @@ model UnitOfMeasure {
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   // Relations
-  commodity        Commodity       @relation("CommodityUoms", fields: [commodityId], references: [id])
+  commodity        Commodity       @relation("CommodityUoms", fields: [commodityId], references: [id], onDelete: Restrict)
   commodityDefault Commodity[]     @relation("DefaultUom")
   meters           Meter[]
   meterRegisters   MeterRegister[]
 
   @@unique([utilityId, commodityId, code])
+  @@index([commodityId])
   @@map("unit_of_measure")
 }
 
@@ -230,8 +232,11 @@ model Premise {
   // Relations
   meters            Meter[]
   serviceAgreements ServiceAgreement[]
-  owner             Customer?          @relation("PremiseOwner", fields: [ownerId], references: [id])
+  owner             Customer?          @relation("PremiseOwner", fields: [ownerId], references: [id], onDelete: SetNull)
 
+  @@index([utilityId, status])
+  @@index([ownerId])
+  @@index([utilityId, city, zip])
   @@map("premise")
 }
 
@@ -253,14 +258,18 @@ model Meter {
   updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz
 
   // Relations
-  premise                Premise               @relation(fields: [premiseId], references: [id])
-  commodity              Commodity             @relation(fields: [commodityId], references: [id])
-  uom                    UnitOfMeasure         @relation(fields: [uomId], references: [id])
+  premise                Premise                 @relation(fields: [premiseId], references: [id], onDelete: Restrict)
+  commodity              Commodity               @relation(fields: [commodityId], references: [id], onDelete: Restrict)
+  uom                    UnitOfMeasure           @relation(fields: [uomId], references: [id], onDelete: Restrict)
   meterReads             MeterRead[]
   serviceAgreementMeters ServiceAgreementMeter[]
   registers              MeterRegister[]
 
   @@unique([utilityId, meterNumber])
+  @@index([premiseId])
+  @@index([commodityId])
+  @@index([uomId])
+  @@index([utilityId, status])
   @@map("meter")
 }
 
@@ -283,12 +292,14 @@ model Account {
   closedAt            DateTime?     @map("closed_at") @db.Timestamptz
 
   // Relations
-  customer          Customer?          @relation(fields: [customerId], references: [id])
+  customer          Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
   serviceAgreements ServiceAgreement[]
   contacts          Contact[]
   billingAddresses  BillingAddress[]
 
   @@unique([utilityId, accountNumber])
+  @@index([customerId])
+  @@index([utilityId, status])
   @@map("account")
 }
 
@@ -309,32 +320,40 @@ model ServiceAgreement {
   updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz
 
   // Relations
-  account      Account       @relation(fields: [accountId], references: [id])
-  premise      Premise       @relation(fields: [premiseId], references: [id])
-  commodity    Commodity     @relation(fields: [commodityId], references: [id])
-  rateSchedule RateSchedule  @relation(fields: [rateScheduleId], references: [id])
-  billingCycle BillingCycle  @relation(fields: [billingCycleId], references: [id])
+  account      Account                 @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  premise      Premise                 @relation(fields: [premiseId], references: [id], onDelete: Restrict)
+  commodity    Commodity               @relation(fields: [commodityId], references: [id], onDelete: Restrict)
+  rateSchedule RateSchedule            @relation(fields: [rateScheduleId], references: [id], onDelete: Restrict)
+  billingCycle BillingCycle            @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
   meters       ServiceAgreementMeter[]
   meterReads   MeterRead[]
 
   @@unique([utilityId, agreementNumber])
+  @@index([accountId])
+  @@index([premiseId])
+  @@index([commodityId])
+  @@index([rateScheduleId])
+  @@index([billingCycleId])
+  @@index([utilityId, status])
   @@map("service_agreement")
 }
 
 model ServiceAgreementMeter {
-  id                 String           @id @default(uuid()) @db.Uuid
-  utilityId          String           @map("utility_id") @db.Uuid
-  serviceAgreementId String           @map("service_agreement_id") @db.Uuid
-  meterId            String           @map("meter_id") @db.Uuid
-  isPrimary          Boolean          @default(true) @map("is_primary")
-  addedDate          DateTime         @map("added_date") @db.Date
-  removedDate        DateTime?        @map("removed_date") @db.Date
-  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  id                 String    @id @default(uuid()) @db.Uuid
+  utilityId          String    @map("utility_id") @db.Uuid
+  serviceAgreementId String    @map("service_agreement_id") @db.Uuid
+  meterId            String    @map("meter_id") @db.Uuid
+  isPrimary          Boolean   @default(true) @map("is_primary")
+  addedDate          DateTime  @map("added_date") @db.Date
+  removedDate        DateTime? @map("removed_date") @db.Date
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz
 
   // Relations
-  serviceAgreement ServiceAgreement @relation(fields: [serviceAgreementId], references: [id])
-  meter            Meter            @relation(fields: [meterId], references: [id])
+  serviceAgreement ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Cascade)
+  meter            Meter            @relation(fields: [meterId], references: [id], onDelete: Restrict)
 
+  @@index([serviceAgreementId])
+  @@index([meterId])
   @@map("service_agreement_meter")
 }
 
@@ -355,12 +374,15 @@ model RateSchedule {
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
 
   // Relations
-  commodity         Commodity        @relation(fields: [commodityId], references: [id])
-  supersedes        RateSchedule?    @relation("RateScheduleVersions", fields: [supersedesId], references: [id])
-  supersededBy      RateSchedule[]   @relation("RateScheduleVersions")
+  commodity         Commodity          @relation(fields: [commodityId], references: [id], onDelete: Restrict)
+  supersedes        RateSchedule?      @relation("RateScheduleVersions", fields: [supersedesId], references: [id], onDelete: SetNull)
+  supersededBy      RateSchedule[]     @relation("RateScheduleVersions")
   serviceAgreements ServiceAgreement[]
 
   @@unique([utilityId, code, version])
+  @@index([commodityId])
+  @@index([supersedesId])
+  @@index([utilityId, effectiveDate, expirationDate])
   @@map("rate_schedule")
 }
 
@@ -378,6 +400,7 @@ model BillingCycle {
   serviceAgreements ServiceAgreement[]
 
   @@unique([utilityId, cycleCode])
+  @@index([utilityId, active])
   @@map("billing_cycle")
 }
 
@@ -395,14 +418,24 @@ model MeterRead {
   readType           ReadType   @map("read_type")
   readSource         ReadSource @map("read_source")
   exceptionCode      String?    @map("exception_code") @db.VarChar(50)
+  exceptionNotes     String?    @map("exception_notes") @db.Text
   readerId           String?    @map("reader_id") @db.Uuid
+  isFrozen           Boolean    @default(false) @map("is_frozen")
+  billedAt           DateTime?  @map("billed_at") @db.Timestamptz
+  importBatchId      String?    @map("import_batch_id") @db.Uuid
+  correctsReadId     String?    @map("corrects_read_id") @db.Uuid
   createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime   @updatedAt @map("updated_at") @db.Timestamptz
 
   // Relations
-  meter            Meter            @relation(fields: [meterId], references: [id])
-  serviceAgreement ServiceAgreement @relation(fields: [serviceAgreementId], references: [id])
-  register         MeterRegister?   @relation(fields: [registerId], references: [id])
+  meter            Meter            @relation(fields: [meterId], references: [id], onDelete: Restrict)
+  serviceAgreement ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Restrict)
+  register         MeterRegister?   @relation(fields: [registerId], references: [id], onDelete: SetNull)
 
+  @@index([meterId, readDatetime])
+  @@index([serviceAgreementId, readDatetime])
+  @@index([registerId])
+  @@index([utilityId, importBatchId])
   @@map("meter_read")
 }
 
@@ -421,6 +454,7 @@ model AuditLog {
 
   @@index([utilityId, entityType, entityId])
   @@index([utilityId, createdAt])
+  @@index([utilityId, actorId, createdAt])
   @@map("audit_log")
 }
 
@@ -471,11 +505,12 @@ model Customer {
   // Relations
   accounts      Account[]
   contacts      Contact[]
-  ownedPremises Premise[]  @relation("PremiseOwner")
+  ownedPremises Premise[] @relation("PremiseOwner")
 
   @@index([utilityId, lastName, firstName])
   @@index([utilityId, email])
   @@index([utilityId, phone])
+  @@index([utilityId, status])
   @@map("customer")
 }
 
@@ -494,9 +529,11 @@ model Contact {
   updatedAt  DateTime    @updatedAt @map("updated_at") @db.Timestamptz
 
   // Relations
-  account  Account   @relation(fields: [accountId], references: [id])
-  customer Customer? @relation(fields: [customerId], references: [id])
+  account  Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
+  @@index([accountId])
+  @@index([customerId])
   @@map("contact")
 }
 
@@ -507,16 +544,17 @@ model BillingAddress {
   addressLine1 String   @map("address_line1") @db.VarChar(255)
   addressLine2 String?  @map("address_line2") @db.VarChar(255)
   city         String   @db.VarChar(100)
-  state        String   @db.VarChar(50)
+  state        String   @db.Char(2)
   zip          String   @db.VarChar(20)
-  country      String   @default("US") @db.VarChar(2)
+  country      String   @default("US") @db.Char(2)
   isPrimary    Boolean  @default(true) @map("is_primary")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   // Relations
-  account Account @relation(fields: [accountId], references: [id])
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
+  @@index([accountId])
   @@map("billing_address")
 }
 
@@ -532,11 +570,13 @@ model MeterRegister {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   // Relations
-  meter     Meter         @relation(fields: [meterId], references: [id])
-  uom       UnitOfMeasure @relation(fields: [uomId], references: [id])
+  meter      Meter         @relation(fields: [meterId], references: [id], onDelete: Cascade)
+  uom        UnitOfMeasure @relation(fields: [uomId], references: [id], onDelete: Restrict)
   meterReads MeterRead[]
 
   @@unique([meterId, registerNumber])
+  @@index([meterId])
+  @@index([uomId])
   @@map("meter_register")
 }
 
@@ -554,6 +594,7 @@ model Attachment {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   @@index([utilityId, entityType, entityId])
+  @@index([utilityId, uploadedBy])
   @@map("attachment")
 }
 
@@ -587,9 +628,12 @@ model CisUser {
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz
 
   // Relations
-  role Role @relation(fields: [roleId], references: [id])
+  role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
 
   @@unique([utilityId, email])
+  @@unique([utilityId, externalId])
+  @@index([roleId])
+  @@index([utilityId, isActive])
   @@map("cis_user")
 }
 

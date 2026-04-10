@@ -20,6 +20,15 @@ export const meterAssignmentSchema = z.object({
   isPrimary: z.boolean().default(false),
 });
 
+export const serviceAgreementSortFields = [
+  "createdAt",
+  "updatedAt",
+  "agreementNumber",
+  "startDate",
+  "endDate",
+  "status",
+] as const;
+
 export const createServiceAgreementSchema = z.object({
   agreementNumber: z.string().min(1).max(50),
   accountId: z.string().uuid(),
@@ -32,8 +41,9 @@ export const createServiceAgreementSchema = z.object({
   status: agreementStatusEnum.default("PENDING"),
   readSequence: z.number().int().optional(),
   meters: z.array(meterAssignmentSchema).min(1),
-});
+}).strict();
 
+// Update schemas intentionally strip unknown keys (forgiving PATCH semantics).
 export const updateServiceAgreementSchema = z.object({
   rateScheduleId: z.string().uuid().optional(),
   billingCycleId: z.string().uuid().optional(),
@@ -42,17 +52,29 @@ export const updateServiceAgreementSchema = z.object({
   readSequence: z.number().int().optional(),
 });
 
+export const addMeterToAgreementSchema = z.object({
+  meterId: z.string().uuid(),
+  isPrimary: z.boolean().default(false),
+}).strict();
+
+export const updateAgreementMeterSchema = z.object({
+  isPrimary: z.boolean().optional(),
+  endDate: z.string().date().optional(),
+}).strict();
+
 export const serviceAgreementQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(500).default(20),
-  sort: z.string().default("createdAt"),
+  sort: z.enum(serviceAgreementSortFields).default("createdAt"),
   order: z.enum(["asc", "desc"]).default("desc"),
   accountId: z.string().uuid().optional(),
   premiseId: z.string().uuid().optional(),
   status: agreementStatusEnum.optional(),
-});
+}).strict();
 
 export type MeterAssignment = z.infer<typeof meterAssignmentSchema>;
 export type CreateServiceAgreementInput = z.infer<typeof createServiceAgreementSchema>;
 export type UpdateServiceAgreementInput = z.infer<typeof updateServiceAgreementSchema>;
+export type AddMeterToAgreementInput = z.infer<typeof addMeterToAgreementSchema>;
+export type UpdateAgreementMeterInput = z.infer<typeof updateAgreementMeterSchema>;
 export type ServiceAgreementQuery = z.infer<typeof serviceAgreementQuerySchema>;

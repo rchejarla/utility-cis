@@ -50,6 +50,7 @@ function Toast({
 
   return (
     <div
+      role={type === "error" ? "alert" : "status"}
       style={{
         display: "flex",
         alignItems: "center",
@@ -147,29 +148,31 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     <ToastContext.Provider value={{ toast }}>
       {children}
 
-      {/* Toast container */}
-      {toasts.length > 0 && (
-        <div
-          style={{
-            position: "fixed",
-            bottom: "24px",
-            right: "24px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "8px",
-            zIndex: 9999,
-          }}
-        >
-          {toasts.map((t) => (
-            <Toast
-              key={t.id}
-              message={t.message}
-              type={t.type}
-              onDismiss={() => dismiss(t.id)}
-            />
-          ))}
-        </div>
-      )}
+      {/* Toast container — aria-live region so assistive tech announces new toasts */}
+      <div
+        aria-live="polite"
+        aria-atomic="false"
+        aria-relevant="additions"
+        style={{
+          position: "fixed",
+          bottom: "24px",
+          right: "24px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+          zIndex: 9999,
+          pointerEvents: toasts.length > 0 ? "auto" : "none",
+        }}
+      >
+        {toasts.map((t) => (
+          <Toast
+            key={t.id}
+            message={t.message}
+            type={t.type}
+            onDismiss={() => dismiss(t.id)}
+          />
+        ))}
+      </div>
 
       <style>{`
         @keyframes slideIn {

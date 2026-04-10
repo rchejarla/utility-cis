@@ -113,11 +113,22 @@ export default function LoginPage() {
             </label>
             <input
               id="email"
+              name="email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
+              autoComplete="email"
               placeholder="admin@utility.com"
+              aria-invalid={error ? "true" : undefined}
+              aria-describedby={error ? "login-error" : undefined}
+              onFocus={(e) => {
+                e.currentTarget.style.outline = "2px solid var(--accent-primary)";
+                e.currentTarget.style.outlineOffset = "2px";
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.outline = "none";
+              }}
               style={{
                 width: "100%",
                 padding: "10px 12px",
@@ -147,11 +158,22 @@ export default function LoginPage() {
             </label>
             <input
               id="password"
+              name="password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
+              autoComplete="current-password"
               placeholder="••••••••"
+              aria-invalid={error ? "true" : undefined}
+              aria-describedby={error ? "login-error" : undefined}
+              onFocus={(e) => {
+                e.currentTarget.style.outline = "2px solid var(--accent-primary)";
+                e.currentTarget.style.outlineOffset = "2px";
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.outline = "none";
+              }}
               style={{
                 width: "100%",
                 padding: "10px 12px",
@@ -168,6 +190,8 @@ export default function LoginPage() {
 
           {error && (
             <div
+              id="login-error"
+              role="alert"
               style={{
                 padding: "10px 12px",
                 background: "rgba(239, 68, 68, 0.1)",

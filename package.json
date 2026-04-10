@@ -6,6 +6,9 @@
     "dev": "turbo dev",
     "build": "turbo build",
     "test": "turbo test",
+    "test:ci": "pnpm --filter @utility-cis/shared build && pnpm --filter @utility-cis/shared test && pnpm --filter @utility-cis/api test",
+    "typecheck": "pnpm --filter @utility-cis/shared exec tsc --noEmit && pnpm --filter @utility-cis/api exec tsc --noEmit",
+    "verify": "pnpm typecheck && pnpm test:ci",
     "db:generate": "turbo db:generate",
     "db:push": "turbo db:push",
     "db:migrate": "turbo db:migrate"

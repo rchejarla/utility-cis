@@ -3,15 +3,11 @@
 import { useState, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import {
-  faEnvelope,
-  faPhone,
-  faBuilding,
-  faUser,
-} from "@fortawesome/pro-solid-svg-icons";
+import { faEnvelope, faPhone } from "@fortawesome/pro-solid-svg-icons";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { TypeBadge } from "@/components/ui/type-badge";
 import { DataTable } from "@/components/ui/data-table";
 import { DatePicker } from "@/components/ui/date-picker";
 import { AccountsTab } from "@/components/customers/accounts-tab";
@@ -20,6 +16,7 @@ import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 interface Contact {
   id: string;
@@ -94,32 +91,6 @@ const inputStyle = {
   outline: "none",
   width: "100%",
 };
-
-function TypeBadge({ type }: { type: string }) {
-  const isOrg = type === "ORGANIZATION";
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "5px",
-        padding: "2px 10px",
-        borderRadius: "999px",
-        background: isOrg ? "rgba(245,158,11,0.12)" : "rgba(59,130,246,0.12)",
-        fontSize: "12px",
-        fontWeight: "500",
-        color: isOrg ? "#fbbf24" : "#60a5fa",
-        whiteSpace: "nowrap",
-      }}
-    >
-      <FontAwesomeIcon
-        icon={isOrg ? faBuilding : faUser}
-        style={{ width: 11, height: 11 }}
-      />
-      {isOrg ? "Organization" : "Individual"}
-    </span>
-  );
-}
 
 function ContactInfoItem({
   icon,
@@ -330,7 +301,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
             {displayName}
           </h1>
           <div style={{ display: "flex", gap: "8px", alignItems: "center", flexShrink: 0, paddingTop: "4px" }}>
-            <TypeBadge type={customer.customerType} />
+            <TypeBadge type={customer.customerType} variant="detail" />
             <StatusBadge status={customer.status} />
           </div>
         </div>
@@ -670,20 +641,14 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
         )}
 
         {showDeactivateConfirm && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
-            <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "24px", maxWidth: "420px", width: "100%" }}>
-              <div style={{ fontSize: "16px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "8px" }}>Confirm Deactivation</div>
-              <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "20px", lineHeight: 1.5 }}>
-                Are you sure you want to deactivate this customer? This will set their status to INACTIVE.
-              </div>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
-                <button onClick={() => setShowDeactivateConfirm(false)} style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
-                <button onClick={handleDeactivate} disabled={deactivating} style={{ padding: "6px 14px", fontSize: "12px", background: "#ef4444", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: deactivating ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: deactivating ? 0.7 : 1 }}>
-                  {deactivating ? "Processing..." : "Confirm"}
-                </button>
-              </div>
-            </div>
-          </div>
+          <ConfirmDialog
+            title="Confirm Deactivation"
+            message="Are you sure you want to deactivate this customer? This will set their status to INACTIVE."
+            confirmLabel={deactivating ? "Processing..." : "Confirm"}
+            confirmDisabled={deactivating}
+            onConfirm={handleDeactivate}
+            onCancel={() => setShowDeactivateConfirm(false)}
+          />
         )}
 
         {/* Accounts tab */}

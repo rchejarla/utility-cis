@@ -1,7 +1,7 @@
 import { prisma } from "../lib/prisma.js";
-import { domainEvents } from "../events/emitter.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
 import type { CreateBillingCycleInput, UpdateBillingCycleInput } from "@utility-cis/shared";
+import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
 
 export async function listBillingCycles(utilityId: string) {
   return prisma.billingCycle.findMany({
@@ -22,23 +22,11 @@ export async function createBillingCycle(
   actorName: string,
   data: CreateBillingCycleInput
 ) {
-  const billingCycle = await prisma.billingCycle.create({
-    data: { ...data, utilityId },
-  });
-
-  domainEvents.emitDomainEvent({
-    type: EVENT_TYPES.BILLING_CYCLE_CREATED,
-    entityType: "BillingCycle",
-    entityId: billingCycle.id,
-    utilityId,
-    actorId,
-    actorName,
-    beforeState: null,
-    afterState: billingCycle as unknown as Record<string, unknown>,
-    timestamp: new Date().toISOString(),
-  });
-
-  return billingCycle;
+  return auditCreate(
+    { utilityId, actorId, actorName, entityType: "BillingCycle" },
+    EVENT_TYPES.BILLING_CYCLE_CREATED,
+    () => prisma.billingCycle.create({ data: { ...data, utilityId } })
+  );
 }
 
 export async function updateBillingCycle(
@@ -49,23 +37,10 @@ export async function updateBillingCycle(
   data: UpdateBillingCycleInput
 ) {
   const before = await prisma.billingCycle.findUniqueOrThrow({ where: { id, utilityId } });
-
-  const billingCycle = await prisma.billingCycle.update({
-    where: { id, utilityId },
-    data,
-  });
-
-  domainEvents.emitDomainEvent({
-    type: EVENT_TYPES.BILLING_CYCLE_UPDATED,
-    entityType: "BillingCycle",
-    entityId: billingCycle.id,
-    utilityId,
-    actorId,
-    actorName,
-    beforeState: before as unknown as Record<string, unknown>,
-    afterState: billingCycle as unknown as Record<string, unknown>,
-    timestamp: new Date().toISOString(),
-  });
-
-  return billingCycle;
+  return auditUpdate(
+    { utilityId, actorId, actorName, entityType: "BillingCycle" },
+    EVENT_TYPES.BILLING_CYCLE_UPDATED,
+    before,
+    () => prisma.billingCycle.update({ where: { id, utilityId }, data })
+  );
 }

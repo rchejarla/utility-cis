@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
 import multipart from "@fastify/multipart";
 import { authMiddleware } from "./middleware/auth.js";
 import { tenantMiddleware } from "./middleware/tenant.js";
@@ -27,8 +28,16 @@ import { roleRoutes } from "./routes/roles.js";
 export async function buildApp() {
   const app = Fastify({ logger: true });
 
+  // Security headers (CSP, X-Frame-Options, X-Content-Type-Options, etc.).
+  // We disable CSP here because this is a JSON API; the web app owns its own CSP.
+  await app.register(helmet, {
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  });
+
   await app.register(cors, {
     origin: process.env.WEB_URL || "http://localhost:3000",
+    credentials: true,
   });
 
   await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB limit

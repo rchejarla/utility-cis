@@ -1,8 +1,8 @@
 import { prisma } from "../lib/prisma.js";
-import { domainEvents } from "../events/emitter.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
 import type { CreateMeterInput, UpdateMeterInput, MeterQuery } from "@utility-cis/shared";
-import { paginationArgs, paginatedResponse } from "../lib/pagination.js";
+import { paginatedTenantList } from "../lib/pagination.js";
+import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
 
 export async function listMeters(utilityId: string, query: MeterQuery) {
   const where: Record<string, unknown> = { utilityId };
@@ -11,20 +11,9 @@ export async function listMeters(utilityId: string, query: MeterQuery) {
   if (query.commodityId) where.commodityId = query.commodityId;
   if (query.status) where.status = query.status;
 
-  const [data, total] = await Promise.all([
-    prisma.meter.findMany({
-      where,
-      ...paginationArgs(query),
-      include: {
-        premise: true,
-        commodity: true,
-        uom: true,
-      },
-    }),
-    prisma.meter.count({ where }),
-  ]);
-
-  return paginatedResponse(data, total, query);
+  return paginatedTenantList(prisma.meter, where, query, {
+    include: { premise: true, commodity: true, uom: true },
+  });
 }
 
 export async function getMeter(id: string, utilityId: string) {
@@ -61,34 +50,16 @@ export async function createMeter(
     );
   }
 
-  const { installDate, removalDate, ...rest } = data;
-  const meter = await prisma.meter.create({
-    data: {
-      ...rest,
-      utilityId,
-      installDate: new Date(installDate),
-      ...(removalDate ? { removalDate: new Date(removalDate) } : {}),
-    },
-    include: {
-      premise: true,
-      commodity: true,
-      uom: true,
-    },
-  });
-
-  domainEvents.emitDomainEvent({
-    type: EVENT_TYPES.METER_CREATED,
-    entityType: "Meter",
-    entityId: meter.id,
-    utilityId,
-    actorId,
-    actorName,
-    beforeState: null,
-    afterState: meter as unknown as Record<string, unknown>,
-    timestamp: new Date().toISOString(),
-  });
-
-  return meter;
+  const { installDate, ...rest } = data;
+  return auditCreate(
+    { utilityId, actorId, actorName, entityType: "Meter" },
+    EVENT_TYPES.METER_CREATED,
+    () =>
+      prisma.meter.create({
+        data: { ...rest, utilityId, installDate: new Date(installDate) },
+        include: { premise: true, commodity: true, uom: true },
+      })
+  );
 }
 
 export async function updateMeter(
@@ -99,28 +70,15 @@ export async function updateMeter(
   data: UpdateMeterInput
 ) {
   const before = await prisma.meter.findUniqueOrThrow({ where: { id, utilityId } });
-
-  const meter = await prisma.meter.update({
-    where: { id, utilityId },
-    data,
-    include: {
-      premise: true,
-      commodity: true,
-      uom: true,
-    },
-  });
-
-  domainEvents.emitDomainEvent({
-    type: EVENT_TYPES.METER_UPDATED,
-    entityType: "Meter",
-    entityId: meter.id,
-    utilityId,
-    actorId,
-    actorName,
-    beforeState: before as unknown as Record<string, unknown>,
-    afterState: meter as unknown as Record<string, unknown>,
-    timestamp: new Date().toISOString(),
-  });
-
-  return meter;
+  return auditUpdate(
+    { utilityId, actorId, actorName, entityType: "Meter" },
+    EVENT_TYPES.METER_UPDATED,
+    before,
+    () =>
+      prisma.meter.update({
+        where: { id, utilityId },
+        data,
+        include: { premise: true, commodity: true, uom: true },
+      })
+  );
 }

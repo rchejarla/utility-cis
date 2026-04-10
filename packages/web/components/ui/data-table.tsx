@@ -122,6 +122,19 @@ export function DataTable<T extends Record<string, unknown>>({
                 <div
                   key={i}
                   onClick={() => onRowClick?.(row)}
+                  onKeyDown={
+                    onRowClick
+                      ? (e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            onRowClick(row);
+                          }
+                        }
+                      : undefined
+                  }
+                  tabIndex={onRowClick ? 0 : undefined}
+                  role={onRowClick ? "button" : undefined}
+                  aria-label={onRowClick ? `Open row ${i + 1}` : undefined}
                   style={{
                     background: "var(--bg-card)",
                     border: "1px solid var(--border)",
@@ -176,6 +189,7 @@ export function DataTable<T extends Record<string, unknown>>({
                 {columns.map((col) => (
                   <th
                     key={col.key}
+                    scope="col"
                     style={{
                       padding: "10px 16px",
                       textAlign: "left",
@@ -217,9 +231,23 @@ export function DataTable<T extends Record<string, unknown>>({
                   <tr
                     key={rowIndex}
                     onClick={onRowClick ? () => onRowClick(row) : undefined}
+                    onKeyDown={
+                      onRowClick
+                        ? (e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              onRowClick(row);
+                            }
+                          }
+                        : undefined
+                    }
+                    tabIndex={onRowClick ? 0 : undefined}
+                    role={onRowClick ? "button" : undefined}
+                    aria-label={onRowClick ? `Open row ${rowIndex + 1}` : undefined}
                     style={{
                       cursor: onRowClick ? "pointer" : "default",
                       transition: "background 0.1s ease",
+                      outline: "none",
                     }}
                     onMouseEnter={(e) => {
                       if (onRowClick) {
@@ -228,6 +256,17 @@ export function DataTable<T extends Record<string, unknown>>({
                     }}
                     onMouseLeave={(e) => {
                       (e.currentTarget as HTMLTableRowElement).style.background = "transparent";
+                    }}
+                    onFocus={(e) => {
+                      if (onRowClick) {
+                        (e.currentTarget as HTMLTableRowElement).style.background = "var(--bg-hover)";
+                        (e.currentTarget as HTMLTableRowElement).style.outline = "2px solid var(--accent-primary)";
+                        (e.currentTarget as HTMLTableRowElement).style.outlineOffset = "-2px";
+                      }
+                    }}
+                    onBlur={(e) => {
+                      (e.currentTarget as HTMLTableRowElement).style.background = "transparent";
+                      (e.currentTarget as HTMLTableRowElement).style.outline = "none";
                     }}
                   >
                     {columns.map((col) => (
@@ -278,9 +317,10 @@ export function DataTable<T extends Record<string, unknown>>({
             </span>
           </span>
 
-          <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+          <nav aria-label="Pagination" style={{ display: "flex", gap: "4px", alignItems: "center" }}>
             <PageButton
               label="← Prev"
+              ariaLabel="Previous page"
               disabled={meta.page <= 1}
               onClick={() => onPageChange?.(meta.page - 1)}
             />
@@ -300,6 +340,7 @@ export function DataTable<T extends Record<string, unknown>>({
                 <PageButton
                   key={page}
                   label={String(page)}
+                  ariaLabel={`Page ${page}`}
                   active={page === meta.page}
                   onClick={() => onPageChange?.(page)}
                 />
@@ -308,10 +349,11 @@ export function DataTable<T extends Record<string, unknown>>({
 
             <PageButton
               label="Next →"
+              ariaLabel="Next page"
               disabled={meta.page >= meta.pages}
               onClick={() => onPageChange?.(meta.page + 1)}
             />
-          </div>
+          </nav>
         </div>
       )}
     </div>
@@ -320,11 +362,13 @@ export function DataTable<T extends Record<string, unknown>>({
 
 function PageButton({
   label,
+  ariaLabel,
   active,
   disabled,
   onClick,
 }: {
   label: string;
+  ariaLabel?: string;
   active?: boolean;
   disabled?: boolean;
   onClick?: () => void;
@@ -333,7 +377,11 @@ function PageButton({
     <button
       onClick={onClick}
       disabled={disabled}
+      aria-label={ariaLabel ?? label}
+      aria-current={active ? "page" : undefined}
       style={{
+        minWidth: "32px",
+        minHeight: "32px",
         padding: "4px 10px",
         borderRadius: "6px",
         border: active ? "1px solid var(--accent-primary)" : "1px solid var(--border)",

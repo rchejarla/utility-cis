@@ -85,15 +85,25 @@ export const createRateScheduleSchema = z
     }
   );
 
+export const rateScheduleSortFields = [
+  "createdAt",
+  "updatedAt",
+  "effectiveDate",
+  "expirationDate",
+  "name",
+  "code",
+  "version",
+] as const;
+
 export const rateScheduleQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(500).default(20),
-  sort: z.string().default("effectiveDate"),
+  sort: z.enum(rateScheduleSortFields).default("effectiveDate"),
   order: z.enum(["asc", "desc"]).default("desc"),
   commodityId: z.string().uuid().optional(),
   rateType: rateTypeEnum.optional(),
   active: z.coerce.boolean().optional(),
-});
+}).strict();
 
 export type RateType = z.infer<typeof rateTypeEnum>;
 export type FlatRateConfig = z.infer<typeof flatRateConfigSchema>;

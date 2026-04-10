@@ -1,12 +1,12 @@
 import { prisma } from "../lib/prisma.js";
-import { domainEvents } from "../events/emitter.js";
 import { EVENT_TYPES, isValidStatusTransition } from "@utility-cis/shared";
+import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
 import type {
   CreateServiceAgreementInput,
   UpdateServiceAgreementInput,
   ServiceAgreementQuery,
 } from "@utility-cis/shared";
-import { paginationArgs, paginatedResponse } from "../lib/pagination.js";
+import { paginatedTenantList } from "../lib/pagination.js";
 
 const fullInclude = {
   account: true,
@@ -35,16 +35,7 @@ export async function listServiceAgreements(
   if (query.premiseId) where.premiseId = query.premiseId;
   if (query.status) where.status = query.status;
 
-  const [data, total] = await Promise.all([
-    prisma.serviceAgreement.findMany({
-      where,
-      ...paginationArgs(query),
-      include: fullInclude,
-    }),
-    prisma.serviceAgreement.count({ where }),
-  ]);
-
-  return paginatedResponse(data, total, query);
+  return paginatedTenantList(prisma.serviceAgreement, where, query, { include: fullInclude });
 }
 
 export async function getServiceAgreement(id: string, utilityId: string) {
@@ -67,8 +58,10 @@ export async function createServiceAgreement(
     metersToCreate[0] = { ...metersToCreate[0], isPrimary: true };
   }
 
-  // Wrap uniqueness check and create in a transaction to prevent race conditions
-  const agreement = await prisma.$transaction(async (tx) => {
+  return auditCreate(
+    { utilityId, actorId, actorName, entityType: "ServiceAgreement" },
+    EVENT_TYPES.SERVICE_AGREEMENT_CREATED,
+    () => prisma.$transaction(async (tx) => {
     // Rule 1: Check meter uniqueness per commodity
     for (const m of metersToCreate) {
       const existing = await tx.serviceAgreementMeter.findFirst({
@@ -114,21 +107,8 @@ export async function createServiceAgreement(
       },
       include: fullInclude,
     });
-  });
-
-  domainEvents.emitDomainEvent({
-    type: EVENT_TYPES.SERVICE_AGREEMENT_CREATED,
-    entityType: "ServiceAgreement",
-    entityId: agreement.id,
-    utilityId,
-    actorId,
-    actorName,
-    beforeState: null,
-    afterState: agreement as unknown as Record<string, unknown>,
-    timestamp: new Date().toISOString(),
-  });
-
-  return agreement;
+  })
+  );
 }
 
 export async function addMeterToAgreement(
@@ -209,23 +189,15 @@ export async function updateServiceAgreement(
   if (data.status !== undefined) updateData.status = data.status;
   if (data.readSequence !== undefined) updateData.readSequence = data.readSequence;
 
-  const agreement = await prisma.serviceAgreement.update({
-    where: { id, utilityId },
-    data: updateData,
-    include: fullInclude,
-  });
-
-  domainEvents.emitDomainEvent({
-    type: EVENT_TYPES.SERVICE_AGREEMENT_UPDATED,
-    entityType: "ServiceAgreement",
-    entityId: agreement.id,
-    utilityId,
-    actorId,
-    actorName,
-    beforeState: before as unknown as Record<string, unknown>,
-    afterState: agreement as unknown as Record<string, unknown>,
-    timestamp: new Date().toISOString(),
-  });
-
-  return agreement;
+  return auditUpdate(
+    { utilityId, actorId, actorName, entityType: "ServiceAgreement" },
+    EVENT_TYPES.SERVICE_AGREEMENT_UPDATED,
+    before,
+    () =>
+      prisma.serviceAgreement.update({
+        where: { id, utilityId },
+        data: updateData,
+        include: fullInclude,
+      })
+  );
 }

@@ -1,55 +1,100 @@
-import { describe, it, expect } from "vitest";
-import { createTestApp } from "../setup.js";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { createTestApp, createTestToken } from "../setup.js";
+import { prisma } from "../../lib/prisma.js";
+
+/**
+ * Smoke-test that every top-level route is registered and reachable.
+ *
+ * The previous implementation asserted substrings of Fastify's radix-tree
+ * `printRoutes()` output, which compresses shared prefixes in ways that
+ * change whenever a sibling route is added (e.g. "customers" gets split
+ * into "cu" + "stomers" once a second "cu*" route appears). That made the
+ * test fragile and uninformative.
+ *
+ * This version injects a real HTTP request to each known path and asserts
+ * the response is NOT 404 — it may be 200, 400 (validation), 403 (authz),
+ * or 500 (unmocked DB), all of which prove the route is registered.
+ */
+
+const EXPECTED_ROUTES: Array<{ method: "GET" | "POST"; path: string }> = [
+  { method: "GET", path: "/api/v1/commodities" },
+  { method: "GET", path: "/api/v1/uom" },
+  { method: "GET", path: "/api/v1/premises" },
+  { method: "GET", path: "/api/v1/meters" },
+  { method: "GET", path: "/api/v1/accounts" },
+  { method: "GET", path: "/api/v1/customers" },
+  { method: "GET", path: "/api/v1/contacts?accountId=11111111-1111-4111-8111-111111111111" },
+  { method: "GET", path: "/api/v1/billing-addresses?accountId=11111111-1111-4111-8111-111111111111" },
+  { method: "GET", path: "/api/v1/billing-cycles" },
+  { method: "GET", path: "/api/v1/service-agreements" },
+  { method: "GET", path: "/api/v1/rate-schedules" },
+  { method: "GET", path: "/api/v1/theme" },
+  { method: "GET", path: "/api/v1/audit-log" },
+  { method: "GET", path: "/api/v1/users" },
+  { method: "GET", path: "/api/v1/roles" },
+  { method: "GET", path: "/api/v1/attachments?entityType=Premise&entityId=11111111-1111-4111-8111-111111111111" },
+  { method: "GET", path: "/api/v1/auth/me" },
+];
 
 describe("Route registration", () => {
-  it("has all expected routes registered", async () => {
-    const app = await createTestApp();
-    // Fastify's printRoutes() returns a tree structure, not flat paths.
-    // The routes are nested under /api/v1/ so we check for the leaf segments.
-    const routes = app.printRoutes();
+  const token = createTestToken();
+  const headers = { authorization: `Bearer ${token}` };
 
-    // Fastify printRoutes() returns a radix tree where shared prefixes are compressed.
-    // Instead of checking exact path segments (which break when new routes change the tree),
-    // check that key HTTP methods + path suffixes are present.
-    expect(routes).toContain("health");
-    expect(routes).toContain("api/v1/");
-    expect(routes).toContain("uom");
-    expect(routes).toContain("premises");
-    expect(routes).toContain("geo");
-    expect(routes).toContain("meters");
-    expect(routes).toContain("service-agreements");
-    expect(routes).toContain("rate-schedules");
-    expect(routes).toContain("theme");
-    // These share radix prefixes — check for unique suffixes
-    expect(routes).toContain("mmodities"); // co + mmodities
-    expect(routes).toContain("ntacts");    // co + ntacts
-    expect(routes).toContain("stomers");   // cu + stomers
-    expect(routes).toContain("ccounts");   // a + ccounts
-    expect(routes).toContain("udit-log");  // a + udit-log
-    expect(routes).toContain("billing-");  // billing-cycles + billing-addresses
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Enable every module + grant full admin permissions so authorization
+    // doesn't 403 before the route handler is reached.
+    const ALL_MODULES = [
+      "customers",
+      "premises",
+      "meters",
+      "accounts",
+      "agreements",
+      "commodities",
+      "rate_schedules",
+      "billing_cycles",
+      "attachments",
+      "audit_log",
+      "settings",
+      "theme",
+    ];
+    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue(
+      ALL_MODULES.map((moduleKey) => ({ moduleKey }))
+    );
+    (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "test-user-001",
+      utilityId: "test-utility-001",
+      roleId: "role-admin",
+      isActive: true,
+      role: {
+        name: "Admin",
+        permissions: Object.fromEntries(
+          ALL_MODULES.map((m) => [m, ["VIEW", "CREATE", "EDIT", "DELETE"]])
+        ),
+      },
+    });
   });
 
   it("health route returns 200", async () => {
     const app = await createTestApp();
     const response = await app.inject({ method: "GET", url: "/health" });
     expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ status: "ok" });
   });
 
-  it("returns 401 for unknown authenticated routes (auth runs before 404)", async () => {
+  it("returns 401 for unknown routes under /api/v1 without auth", async () => {
     const app = await createTestApp();
-    // Auth middleware runs before route resolution, so unknown routes in /api/ return 401
     const response = await app.inject({ method: "GET", url: "/api/v1/nonexistent" });
     expect(response.statusCode).toBe(401);
   });
 
-  it("returns 404 for unknown routes outside auth scope", async () => {
-    const app = await createTestApp();
-    // A completely unknown non-API route should return 404 (Fastify default)
-    // Note: auth middleware still runs, but a non-existent route outside /api/v1/ returns 404
-    // Since auth is a global onRequest hook, it runs first.
-    // For the health check bypass we need /health specifically.
-    // Test that the health route (skipAuth) does work:
-    const healthResponse = await app.inject({ method: "GET", url: "/health" });
-    expect(healthResponse.statusCode).toBe(200);
-  });
+  for (const { method, path } of EXPECTED_ROUTES) {
+    it(`${method} ${path.split("?")[0]} is registered`, async () => {
+      const app = await createTestApp();
+      const response = await app.inject({ method, url: path, headers });
+      // 404 = route not registered. Anything else means the route exists
+      // and was reachable through the middleware stack.
+      expect(response.statusCode).not.toBe(404);
+    });
+  }
 });
