@@ -6,6 +6,8 @@ import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 interface BillingCycle {
   id: string;
@@ -45,6 +47,7 @@ const inputStyle = {
 export default function BillingCycleDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { toast } = useToast();
+  const { canView, canEdit, canDelete } = usePermission("billing_cycles");
   const [cycle, setCycle] = useState<BillingCycle | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
@@ -129,6 +132,7 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
   if (loading) {
     return <div style={{ color: "var(--text-muted)", fontSize: "14px", padding: "40px 0" }}>Loading...</div>;
   }
+  if (!canView) return <AccessDenied />;
   if (!cycle) {
     return <div style={{ color: "var(--text-muted)", fontSize: "14px", padding: "40px 0" }}>Billing cycle not found.</div>;
   }
@@ -157,7 +161,7 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
             {/* Edit / Save / Cancel buttons */}
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px", gap: "8px" }}>
               <div>
-                {!editing && cycle.active && (
+                {canDelete && !editing && cycle.active && (
                   <button
                     onClick={() => setShowDeactivateConfirm(true)}
                     title="BR-BC-003: Billing cycles cannot be deleted, only deactivated."
@@ -184,14 +188,14 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
                       {saving ? "Saving..." : "Save"}
                     </button>
                   </>
-                ) : (
+                ) : canEdit ? (
                   <button
                     onClick={handleEdit}
                     style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
                   >
                     Edit
                   </button>
-                )}
+                ) : null}
               </div>
             </div>
 

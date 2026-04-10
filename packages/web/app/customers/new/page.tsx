@@ -7,6 +7,8 @@ import { FormField } from "@/components/ui/form-field";
 import { useToast } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
 import { DatePicker } from "@/components/ui/date-picker";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 const inputStyle = {
   padding: "8px 12px",
@@ -26,6 +28,7 @@ type CustomerMode = "INDIVIDUAL" | "ORGANIZATION";
 export default function NewCustomerPage() {
   const router = useRouter();
   const { toast } = useToast();
+  const { canCreate } = usePermission("customers");
   const [submitting, setSubmitting] = useState(false);
   const [mode, setMode] = useState<CustomerMode>("INDIVIDUAL");
 
@@ -77,6 +80,8 @@ export default function NewCustomerPage() {
       setSubmitting(false);
     }
   };
+
+  if (!canCreate) return <AccessDenied />;
 
   const toggleStyle = (active: boolean) => ({
     flex: 1,

@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/page-header";
 import { FormField } from "@/components/ui/form-field";
 import { apiClient } from "@/lib/api-client";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 const FREQUENCIES = ["MONTHLY", "BIMONTHLY", "QUARTERLY", "ANNUAL"];
 
@@ -23,6 +25,7 @@ const inputStyle = {
 
 export default function NewBillingCyclePage() {
   const router = useRouter();
+  const { canCreate } = usePermission("billing_cycles");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,6 +61,8 @@ export default function NewBillingCyclePage() {
       setSubmitting(false);
     }
   };
+
+  if (!canCreate) return <AccessDenied />;
 
   return (
     <div style={{ maxWidth: "560px" }}>

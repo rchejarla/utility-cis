@@ -11,6 +11,8 @@ import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { DatePicker } from "@/components/ui/date-picker";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 interface Meter {
   id: string;
@@ -66,6 +68,7 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
   const { id } = use(params);
   const router = useRouter();
   const { toast } = useToast();
+  const { canView, canEdit, canDelete } = usePermission("meters");
   const [meter, setMeter] = useState<Meter | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
@@ -167,6 +170,7 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
   if (loading) {
     return <div style={{ color: "var(--text-muted)", fontSize: "14px", padding: "40px 0" }}>Loading...</div>;
   }
+  if (!canView) return <AccessDenied />;
   if (!meter) {
     return <div style={{ color: "var(--text-muted)", fontSize: "14px", padding: "40px 0" }}>Meter not found.</div>;
   }
@@ -220,7 +224,7 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
             {/* Edit / Save / Cancel buttons */}
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px", gap: "8px" }}>
               <div>
-                {!editing && meter.status === "ACTIVE" && (
+                {canDelete && !editing && meter.status === "ACTIVE" && (
                   <button
                     onClick={() => setShowRemoveConfirm(true)}
                     title="BR-MT-005: Meters cannot be deleted, only removed. History is retained."
@@ -247,14 +251,14 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
                       {saving ? "Saving..." : "Save"}
                     </button>
                   </>
-                ) : (
+                ) : canEdit ? (
                   <button
                     onClick={handleEdit}
                     style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
                   >
                     Edit
                   </button>
-                )}
+                ) : null}
               </div>
             </div>
 

@@ -6,6 +6,8 @@ import { PageHeader } from "@/components/ui/page-header";
 import { FormField } from "@/components/ui/form-field";
 import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 interface Commodity {
   id: string;
@@ -43,6 +45,7 @@ const inputStyle = {
 
 export default function NewMeterPage() {
   const router = useRouter();
+  const { canCreate } = usePermission("meters");
   const [commodities, setCommodities] = useState<Commodity[]>([]);
   const [allUoms, setAllUoms] = useState<UOM[]>([]);
   const [premises, setPremises] = useState<Premise[]>([]);
@@ -105,6 +108,8 @@ export default function NewMeterPage() {
       setSubmitting(false);
     }
   };
+
+  if (!canCreate) return <AccessDenied />;
 
   return (
     <div style={{ maxWidth: "720px" }}>

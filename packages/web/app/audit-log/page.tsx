@@ -6,6 +6,8 @@ import { FilterBar } from "@/components/ui/filter-bar";
 import { DataTable } from "@/components/ui/data-table";
 import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 interface AuditEntry {
   id: string;
@@ -51,6 +53,7 @@ const inputStyle = {
 };
 
 export default function AuditLogPage() {
+  const { canView } = usePermission("audit_log");
   const [data, setData] = useState<AuditEntry[]>([]);
   const [meta, setMeta] = useState({ total: 0, page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
@@ -81,6 +84,8 @@ export default function AuditLogPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  if (!canView) return <AccessDenied />;
 
   const columns = [
     {

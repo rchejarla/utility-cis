@@ -12,6 +12,8 @@ import { useToast } from "@/components/ui/toast";
 import { MetersTab } from "@/components/premises/meters-tab";
 import { AgreementsTab } from "@/components/premises/agreements-tab";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 interface Premise {
   id: string;
@@ -115,6 +117,9 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
   const { id } = use(params);
   const router = useRouter();
   const { toast } = useToast();
+  const { canView, canEdit, canDelete } = usePermission("premises");
+  const { canCreate: canCreateMeter } = usePermission("meters");
+  const { canCreate: canCreateAgreement } = usePermission("agreements");
   const [premise, setPremise] = useState<Premise | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -253,6 +258,8 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
     );
   }
 
+  if (!canView) return <AccessDenied />;
+
   if (!premise) {
     return (
       <div style={{ color: "var(--text-muted)", fontSize: "14px", padding: "40px 0" }}>
@@ -283,7 +290,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
         activeTab={activeTab}
         onTabChange={(t) => { setActiveTab(t); setShowAddMeter(false); setShowAddAgreement(false); setShowUpload(false); }}
         action={
-          activeTab === "meters" && !showAddMeter ? (
+          activeTab === "meters" && !showAddMeter && canCreateMeter ? (
             <button
               onClick={() => setShowAddMeter(true)}
               style={{
@@ -301,7 +308,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
             >
               + Add Meter
             </button>
-          ) : activeTab === "agreements" && !showAddAgreement ? (
+          ) : activeTab === "agreements" && !showAddAgreement && canCreateAgreement ? (
             <button
               onClick={() => setShowAddAgreement(true)}
               style={{
@@ -352,7 +359,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
             {/* Edit / Save / Cancel buttons */}
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px", gap: "8px" }}>
               <div>
-                {!editing && premise.status === "ACTIVE" && (
+                {canDelete && !editing && premise.status === "ACTIVE" && (
                   <button
                     onClick={() => setShowDeactivateConfirm(true)}
                     title="BR-PR-004: Premises cannot be deleted, only deactivated."
@@ -379,14 +386,14 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
                       {saving ? "Saving..." : "Save"}
                     </button>
                   </>
-                ) : (
+                ) : canEdit ? (
                   <button
                     onClick={handleEdit}
                     style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
                   >
                     Edit
                   </button>
-                )}
+                ) : null}
               </div>
             </div>
 

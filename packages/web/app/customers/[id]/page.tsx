@@ -18,6 +18,8 @@ import { AccountsTab } from "@/components/customers/accounts-tab";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 interface Contact {
   id: string;
@@ -181,6 +183,8 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   const { id } = use(params);
   const router = useRouter();
   const { toast } = useToast();
+  const { canView, canEdit, canDelete } = usePermission("customers");
+  const { canCreate: canCreateAccount } = usePermission("accounts");
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
@@ -280,6 +284,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   if (loading) {
     return <div style={{ color: "var(--text-muted)", padding: "40px 0" }}>Loading...</div>;
   }
+  if (!canView) return <AccessDenied />;
   if (!customer) {
     return <div style={{ color: "var(--text-muted)", padding: "40px 0" }}>Customer not found.</div>;
   }
@@ -380,7 +385,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
           setShowUpload(false);
         }}
         action={
-          activeTab === "accounts" ? (
+          activeTab === "accounts" && canCreateAccount ? (
             <button
               onClick={() => setShowAddAccount((v) => !v)}
               style={{
@@ -431,7 +436,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
             {/* Edit / Save / Cancel buttons */}
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px", gap: "8px" }}>
               <div>
-                {!editing && customer.status === "ACTIVE" && (
+                {canDelete && !editing && customer.status === "ACTIVE" && (
                   <button
                     onClick={() => setShowDeactivateConfirm(true)}
                     title="BR-CU-004: Customer can only be deactivated if all accounts are closed or inactive."
@@ -458,14 +463,14 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
                       {saving ? "Saving..." : "Save"}
                     </button>
                   </>
-                ) : (
+                ) : canEdit ? (
                   <button
                     onClick={handleEdit}
                     style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
                   >
                     Edit
                   </button>
-                )}
+                ) : null}
               </div>
             </div>
 
@@ -738,27 +743,29 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
                 marginBottom: "12px",
               }}
             >
-              <button
-                style={{
-                  padding: "7px 16px",
-                  borderRadius: "var(--radius)",
-                  border: "none",
-                  background: "var(--accent-primary)",
-                  color: "#fff",
-                  fontSize: "13px",
-                  fontWeight: "500",
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                }}
-                onClick={() => {
-                  // Navigate to add contact — link to first account if available
-                  if (accounts.length > 0) {
-                    router.push(`/accounts/${accounts[0].id}?tab=contacts`);
-                  }
-                }}
-              >
-                + Add Contact
-              </button>
+              {canCreateAccount && (
+                <button
+                  style={{
+                    padding: "7px 16px",
+                    borderRadius: "var(--radius)",
+                    border: "none",
+                    background: "var(--accent-primary)",
+                    color: "#fff",
+                    fontSize: "13px",
+                    fontWeight: "500",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                  }}
+                  onClick={() => {
+                    // Navigate to add contact — link to first account if available
+                    if (accounts.length > 0) {
+                      router.push(`/accounts/${accounts[0].id}?tab=contacts`);
+                    }
+                  }}
+                >
+                  + Add Contact
+                </button>
+              )}
             </div>
             <DataTable
               columns={[

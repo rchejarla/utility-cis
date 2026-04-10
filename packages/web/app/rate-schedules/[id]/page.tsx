@@ -9,6 +9,8 @@ import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { DataTable } from "@/components/ui/data-table";
 import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 interface RateSchedule {
   id: string;
@@ -53,6 +55,7 @@ const valueStyle = { fontSize: "13px", color: "var(--text-primary)" };
 export default function RateScheduleDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const { canView, canEdit } = usePermission("rate_schedules");
   const [rs, setRs] = useState<RateSchedule | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -100,6 +103,7 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
   if (loading) {
     return <div style={{ color: "var(--text-muted)", padding: "40px 0" }}>Loading...</div>;
   }
+  if (!canView) return <AccessDenied />;
   if (!rs) {
     return <div style={{ color: "var(--text-muted)", padding: "40px 0" }}>Rate schedule not found.</div>;
   }
@@ -123,7 +127,7 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
             {rs.code} — v{rs.version}
           </p>
         </div>
-        {!rs.supersededById && (
+        {canEdit && !rs.supersededById && (
           <button
             onClick={() => setShowReviseDialog(true)}
             style={{

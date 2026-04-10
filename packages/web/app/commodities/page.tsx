@@ -5,6 +5,8 @@ import { PageHeader } from "@/components/ui/page-header";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 interface Commodity {
   id: string;
@@ -27,6 +29,8 @@ interface Uom {
 
 export default function CommoditiesPage() {
   const { toast } = useToast();
+  const { canView, canCreate, canEdit, canDelete } = usePermission("commodities");
+  if (!canView) return <AccessDenied />;
   const [commodities, setCommodities] = useState<Commodity[]>([]);
   const [uoms, setUoms] = useState<Uom[]>([]);
   const [loading, setLoading] = useState(true);
@@ -174,7 +178,7 @@ export default function CommoditiesPage() {
       <PageHeader
         title="Commodities & Units of Measure"
         subtitle={`${commodities.length} commodities · ${uoms.length} units`}
-        action={{ label: "+ Add Commodity", href: "#", onClick: () => setShowNewForm(true) }}
+        action={canCreate ? { label: "+ Add Commodity", href: "#", onClick: () => setShowNewForm(true) } : undefined}
       />
 
       {/* New Commodity Form */}
@@ -224,12 +228,14 @@ export default function CommoditiesPage() {
                       <StatusBadge status={c.isActive ? "ACTIVE" : "INACTIVE"} />
                       <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Order: {c.displayOrder}</span>
                     </div>
-                    <button
-                      onClick={() => { setEditingCommodity(c.id); setEditForm({ code: c.code, name: c.name, displayOrder: c.displayOrder }); }}
-                      style={{ ...btnStyle, background: "transparent", color: "var(--text-secondary)", border: "1px solid var(--border)" }}
-                    >
-                      Edit
-                    </button>
+                    {canEdit && (
+                      <button
+                        onClick={() => { setEditingCommodity(c.id); setEditForm({ code: c.code, name: c.name, displayOrder: c.displayOrder }); }}
+                        style={{ ...btnStyle, background: "transparent", color: "var(--text-secondary)", border: "1px solid var(--border)" }}
+                      >
+                        Edit
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -284,8 +290,8 @@ export default function CommoditiesPage() {
                             </div>
                           ) : (
                             <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
-                              <button onClick={() => { setEditingUom(u.id); setEditUomForm({ name: u.name, conversionFactor: String(u.conversionFactor), isBaseUnit: u.isBaseUnit }); }} style={{ ...btnStyle, background: "transparent", color: "var(--text-secondary)", padding: "3px 10px", border: "1px solid var(--border)" }}>Edit</button>
-                              <button onClick={() => setDeleteUomId(u.id)} style={{ ...btnStyle, background: "transparent", color: "#f87171", padding: "3px 10px", border: "1px solid rgba(239,68,68,0.3)" }}>Delete</button>
+                              {canEdit && <button onClick={() => { setEditingUom(u.id); setEditUomForm({ name: u.name, conversionFactor: String(u.conversionFactor), isBaseUnit: u.isBaseUnit }); }} style={{ ...btnStyle, background: "transparent", color: "var(--text-secondary)", padding: "3px 10px", border: "1px solid var(--border)" }}>Edit</button>}
+                              {canDelete && <button onClick={() => setDeleteUomId(u.id)} style={{ ...btnStyle, background: "transparent", color: "#f87171", padding: "3px 10px", border: "1px solid rgba(239,68,68,0.3)" }}>Delete</button>}
                             </div>
                           )}
                         </td>
@@ -323,7 +329,7 @@ export default function CommoditiesPage() {
                     <button onClick={() => handleCreateUom(c.id)} style={{ ...btnStyle, background: "var(--accent-primary)", color: "#fff" }}>Add</button>
                     <button onClick={() => setShowNewUom(null)} style={{ ...btnStyle, background: "transparent", color: "var(--text-muted)" }}>Cancel</button>
                   </div>
-                ) : (
+                ) : canCreate ? (
                   <div style={{ padding: "8px 18px", borderTop: "1px solid var(--border-subtle)" }}>
                     <button
                       onClick={() => { setShowNewUom(c.id); setNewUomForm({ code: "", name: "", conversionFactor: "1", isBaseUnit: false }); }}
@@ -332,7 +338,7 @@ export default function CommoditiesPage() {
                       + Add Unit of Measure
                     </button>
                   </div>
-                )}
+                ) : null}
               </div>
             </div>
           );

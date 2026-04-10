@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/page-header";
 import { DataTable } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 interface BillingCycle {
   id: string;
@@ -23,6 +25,8 @@ interface BCResponse {
 
 export default function BillingCyclesPage() {
   const router = useRouter();
+  const { canView, canCreate } = usePermission("billing_cycles");
+  if (!canView) return <AccessDenied />;
   const [data, setData] = useState<BillingCycle[]>([]);
   const [meta, setMeta] = useState({ total: 0, page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
@@ -105,7 +109,7 @@ export default function BillingCyclesPage() {
       <PageHeader
         title="Billing Cycles"
         subtitle={`${meta.total.toLocaleString()} total cycles`}
-        action={{ label: "Add Billing Cycle", href: "/billing-cycles/new" }}
+        action={canCreate ? { label: "Add Billing Cycle", href: "/billing-cycles/new" } : undefined}
       />
 
       <DataTable

@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/page-header";
 import { FormField } from "@/components/ui/form-field";
 import { apiClient } from "@/lib/api-client";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 const US_STATES = [
   "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME",
@@ -43,6 +45,7 @@ const inputStyle = {
 
 export default function NewPremisePage() {
   const router = useRouter();
+  const { canCreate } = usePermission("premises");
   const [commodities, setCommodities] = useState<Commodity[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -113,6 +116,8 @@ export default function NewPremisePage() {
       setSubmitting(false);
     }
   };
+
+  if (!canCreate) return <AccessDenied />;
 
   return (
     <div style={{ maxWidth: "720px" }}>

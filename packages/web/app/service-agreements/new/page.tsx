@@ -7,6 +7,8 @@ import { FormField } from "@/components/ui/form-field";
 import { HelpTooltip } from "@/components/ui/tooltip";
 import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 interface Account {
   id: string;
@@ -66,6 +68,7 @@ interface MeterEntry {
 
 export default function NewServiceAgreementPage() {
   const router = useRouter();
+  const { canCreate } = usePermission("agreements");
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [premises, setPremises] = useState<Premise[]>([]);
   const [commodities, setCommodities] = useState<Commodity[]>([]);
@@ -165,6 +168,8 @@ export default function NewServiceAgreementPage() {
       setSubmitting(false);
     }
   };
+
+  if (!canCreate) return <AccessDenied />;
 
   return (
     <div style={{ maxWidth: "800px" }}>

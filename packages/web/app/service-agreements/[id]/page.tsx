@@ -12,6 +12,8 @@ import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { MeterManagementTab } from "@/components/service-agreements/meters-tab";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 interface ServiceAgreement {
   id: string;
@@ -104,6 +106,8 @@ export default function ServiceAgreementDetailPage({
   const { id } = use(params);
   const router = useRouter();
   const { toast } = useToast();
+  const { canView, canEdit, canDelete } = usePermission("agreements");
+  const { canEdit: canEditMeter } = usePermission("meters");
   const [sa, setSa] = useState<ServiceAgreement | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -214,6 +218,7 @@ export default function ServiceAgreementDetailPage({
   if (loading) {
     return <div style={{ color: "var(--text-muted)", padding: "40px 0" }}>Loading...</div>;
   }
+  if (!canView) return <AccessDenied />;
   if (!sa) {
     return <div style={{ color: "var(--text-muted)", padding: "40px 0" }}>Agreement not found.</div>;
   }
@@ -246,7 +251,7 @@ export default function ServiceAgreementDetailPage({
             {sa.account?.accountNumber} — {sa.premise?.addressLine1}
           </p>
         </div>
-        {availableTransitions.length > 0 && (
+        {canEdit && availableTransitions.length > 0 && (
           <div style={{ display: "flex", gap: "8px" }}>
             {availableTransitions.map((nextStatus) => (
               <button
@@ -283,7 +288,7 @@ export default function ServiceAgreementDetailPage({
         activeTab={activeTab}
         onTabChange={(t) => { setActiveTab(t); setShowAddMeter(false); setShowUpload(false); }}
         action={
-          activeTab === "meters" && !showAddMeter ? (
+          activeTab === "meters" && !showAddMeter && canEditMeter ? (
             <button
               onClick={() => setShowAddMeter(true)}
               style={{
@@ -349,14 +354,14 @@ export default function ServiceAgreementDetailPage({
                     {saving ? "Saving..." : "Save"}
                   </button>
                 </>
-              ) : (
+              ) : canEdit ? (
                 <button
                   onClick={handleEdit}
                   style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
                 >
                   Edit
                 </button>
-              )}
+              ) : null}
             </div>
 
             <div style={fieldStyle}>

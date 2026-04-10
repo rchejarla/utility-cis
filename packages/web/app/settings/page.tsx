@@ -1,8 +1,13 @@
 "use client";
 
 import { PageHeader } from "../../components/ui/page-header";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 export default function SettingsPage() {
+  const { canView } = usePermission("settings");
+  if (!canView) return <AccessDenied />;
+
   return (
     <div>
       <PageHeader title="Settings" subtitle="Tenant configuration" />

@@ -5,6 +5,8 @@ import { ColorPickerField } from "@/components/theme/color-picker-field";
 import { PresetGrid, ThemePreset } from "@/components/theme/preset-grid";
 import { LivePreview, PreviewTheme } from "@/components/theme/live-preview";
 import { apiClient, API_URL } from "@/lib/api-client";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 // ──────────────────────────────────────────────────────────────
 // Types
@@ -120,6 +122,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 // ──────────────────────────────────────────────────────────────
 
 export default function ThemeEditorPage() {
+  const { canView, canEdit } = usePermission("theme");
   const [theme, setTheme] = useState<WorkingTheme>(DEFAULT_THEME);
   const [selectedPreset, setSelectedPreset] = useState<string | undefined>("Midnight");
   const [saving, setSaving] = useState(false);
@@ -221,6 +224,8 @@ export default function ThemeEditorPage() {
     }
   };
 
+  if (!canView) return <AccessDenied />;
+
   const previewTheme = workingToPreview(theme);
 
   // ── Shared input style ────────────────────────────────────
@@ -288,44 +293,48 @@ export default function ThemeEditorPage() {
               {message.text}
             </span>
           )}
-          <button
-            onClick={handleReset}
-            disabled={resetting}
-            style={{
-              padding: "8px 16px",
-              borderRadius: "var(--radius)",
-              border: "1px solid var(--border)",
-              background: "transparent",
-              color: "var(--text-secondary)",
-              fontSize: "13px",
-              fontWeight: "500",
-              cursor: resetting ? "not-allowed" : "pointer",
-              fontFamily: "inherit",
-              opacity: resetting ? 0.6 : 1,
-              transition: "opacity 0.15s ease",
-            }}
-          >
-            {resetting ? "Resetting…" : "Reset to Default"}
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            style={{
-              padding: "8px 20px",
-              borderRadius: "var(--radius)",
-              background: "var(--accent-primary)",
-              border: "none",
-              color: "#fff",
-              fontSize: "13px",
-              fontWeight: "600",
-              cursor: saving ? "not-allowed" : "pointer",
-              fontFamily: "inherit",
-              opacity: saving ? 0.7 : 1,
-              transition: "opacity 0.15s ease",
-            }}
-          >
-            {saving ? "Saving…" : "Save Theme"}
-          </button>
+          {canEdit && (
+            <button
+              onClick={handleReset}
+              disabled={resetting}
+              style={{
+                padding: "8px 16px",
+                borderRadius: "var(--radius)",
+                border: "1px solid var(--border)",
+                background: "transparent",
+                color: "var(--text-secondary)",
+                fontSize: "13px",
+                fontWeight: "500",
+                cursor: resetting ? "not-allowed" : "pointer",
+                fontFamily: "inherit",
+                opacity: resetting ? 0.6 : 1,
+                transition: "opacity 0.15s ease",
+              }}
+            >
+              {resetting ? "Resetting…" : "Reset to Default"}
+            </button>
+          )}
+          {canEdit && (
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              style={{
+                padding: "8px 20px",
+                borderRadius: "var(--radius)",
+                background: "var(--accent-primary)",
+                border: "none",
+                color: "#fff",
+                fontSize: "13px",
+                fontWeight: "600",
+                cursor: saving ? "not-allowed" : "pointer",
+                fontFamily: "inherit",
+                opacity: saving ? 0.7 : 1,
+                transition: "opacity 0.15s ease",
+              }}
+            >
+              {saving ? "Saving…" : "Save Theme"}
+            </button>
+          )}
         </div>
       </div>
 

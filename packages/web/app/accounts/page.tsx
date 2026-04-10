@@ -7,6 +7,8 @@ import { FilterBar } from "@/components/ui/filter-bar";
 import { DataTable } from "@/components/ui/data-table";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { apiClient } from "@/lib/api-client";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 interface Account {
   id: string;
@@ -38,6 +40,8 @@ const STATUS_OPTIONS = [
 
 export default function AccountsPage() {
   const router = useRouter();
+  const { canView, canCreate } = usePermission("accounts");
+  if (!canView) return <AccessDenied />;
   const [data, setData] = useState<Account[]>([]);
   const [meta, setMeta] = useState({ total: 0, page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
@@ -112,7 +116,7 @@ export default function AccountsPage() {
       <PageHeader
         title="Accounts"
         subtitle={`${meta.total.toLocaleString()} total accounts`}
-        action={{ label: "Add Account", href: "/accounts/new" }}
+        action={canCreate ? { label: "Add Account", href: "/accounts/new" } : undefined}
       />
 
       <div style={{ marginBottom: "8px" }}>

@@ -7,6 +7,8 @@ import { FilterBar } from "@/components/ui/filter-bar";
 import { DataTable } from "@/components/ui/data-table";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { apiClient } from "@/lib/api-client";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 interface RateSchedule {
   id: string;
@@ -45,6 +47,8 @@ const ACTIVE_OPTIONS = [
 
 export default function RateSchedulesPage() {
   const router = useRouter();
+  const { canView, canCreate } = usePermission("rate_schedules");
+  if (!canView) return <AccessDenied />;
   const [data, setData] = useState<RateSchedule[]>([]);
   const [meta, setMeta] = useState({ total: 0, page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
@@ -137,7 +141,7 @@ export default function RateSchedulesPage() {
       <PageHeader
         title="Rate Schedules"
         subtitle={`${meta.total.toLocaleString()} total schedules`}
-        action={{ label: "Add Rate Schedule", href: "/rate-schedules/new" }}
+        action={canCreate ? { label: "Add Rate Schedule", href: "/rate-schedules/new" } : undefined}
       />
 
       <FilterBar

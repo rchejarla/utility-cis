@@ -11,6 +11,8 @@ import { useToast } from "@/components/ui/toast";
 import { ContactsTab } from "@/components/accounts/contacts-tab";
 import { BillingAddressesTab } from "@/components/accounts/billing-addresses-tab";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
+import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 
 interface Contact {
   id: string;
@@ -106,6 +108,8 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
   const { id } = use(params);
   const router = useRouter();
   const { toast } = useToast();
+  const { canView, canEdit, canDelete } = usePermission("accounts");
+  const { canCreate: canCreateContact } = usePermission("customers");
   const [account, setAccount] = useState<Account | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -213,6 +217,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
   if (loading) {
     return <div style={{ color: "var(--text-muted)", padding: "40px 0" }}>Loading...</div>;
   }
+  if (!canView) return <AccessDenied />;
   if (!account) {
     return <div style={{ color: "var(--text-muted)", padding: "40px 0" }}>Account not found.</div>;
   }
@@ -241,7 +246,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
           setShowUpload(false);
         }}
         action={
-          activeTab === "contacts" ? (
+          activeTab === "contacts" && canCreateContact ? (
             <button
               onClick={() => setShowAddContact((v) => !v)}
               style={{
@@ -258,7 +263,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
             >
               {showAddContact ? "Cancel" : "+ Add Contact"}
             </button>
-          ) : activeTab === "billing-addresses" ? (
+          ) : activeTab === "billing-addresses" && canEdit ? (
             <button
               onClick={() => setShowAddAddress((v) => !v)}
               style={{
@@ -308,7 +313,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
             {/* Edit / Save / Cancel buttons */}
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px", gap: "8px" }}>
               <div>
-                {!editing && (account.status === "ACTIVE" || account.status === "FINAL") && (
+                {canDelete && !editing && (account.status === "ACTIVE" || account.status === "FINAL") && (
                   <button
                     onClick={() => setShowCloseConfirm(true)}
                     title="BR-AC-004: Account cannot be closed while it has active service agreements."
@@ -335,14 +340,14 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
                       {saving ? "Saving..." : "Save"}
                     </button>
                   </>
-                ) : (
+                ) : canEdit ? (
                   <button
                     onClick={handleEdit}
                     style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
                   >
                     Edit
                   </button>
-                )}
+                ) : null}
               </div>
             </div>
 
