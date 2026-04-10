@@ -21,6 +21,8 @@ import { contactRoutes } from "./routes/contacts.js";
 import { billingAddressRoutes } from "./routes/billing-addresses.js";
 import { attachmentRoutes } from "./routes/attachments.js";
 import { authRoutes } from "./routes/auth.js";
+import { userRoutes } from "./routes/users.js";
+import { roleRoutes } from "./routes/roles.js";
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -56,6 +58,8 @@ export async function buildApp() {
   await app.register(billingAddressRoutes);
   await app.register(attachmentRoutes);
   await app.register(authRoutes);
+  await app.register(userRoutes);
+  await app.register(roleRoutes);
 
   startAuditWriter();
 
