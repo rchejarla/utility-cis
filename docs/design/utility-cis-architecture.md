@@ -105,7 +105,7 @@ Every significant CIS state change emits a domain event. ApptorFlow subscribes a
 
 ### 4.1 Entity Summary
 
-**18 entities** across 5 categories:
+**21 entities** across 5 categories:
 
 | Category | Entities |
 |----------|----------|
@@ -116,6 +116,7 @@ Every significant CIS state change emits a domain event. ApptorFlow subscribes a
 | **Configuration** | RateSchedule, BillingCycle |
 | **Operations** | MeterRead (TimescaleDB hypertable), Attachment |
 | **System** | AuditLog, TenantTheme, UserPreference |
+| **RBAC** | CisUser, CisRole, TenantModule |
 
 ### 4.2 Entity Relationship Diagram
 
@@ -499,10 +500,11 @@ Generic file attachment for any entity. Uses entityType + entityId pattern to as
 
 All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `/health`).
 
-### 5.2 Endpoints (48 current)
+### 5.2 Endpoints (59 current)
 
 | Method | Path | Module |
 |--------|------|--------|
+| GET | `/api/v1/auth/me` | Auth (RBAC) |
 | GET | `/api/v1/customers` | Customer |
 | POST | `/api/v1/customers` | Customer |
 | GET | `/api/v1/customers/:id` | Customer |
@@ -556,6 +558,16 @@ All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `
 | POST | `/api/v1/attachments` | Attachment |
 | GET | `/api/v1/attachments/:id/download` | Attachment |
 | DELETE | `/api/v1/attachments/:id` | Attachment |
+| GET | `/api/v1/users` | RBAC (settings) |
+| POST | `/api/v1/users` | RBAC (settings) |
+| GET | `/api/v1/users/:id` | RBAC (settings) |
+| PATCH | `/api/v1/users/:id` | RBAC (settings) |
+| GET | `/api/v1/roles` | RBAC (settings) |
+| POST | `/api/v1/roles` | RBAC (settings) |
+| GET | `/api/v1/roles/:id` | RBAC (settings) |
+| PATCH | `/api/v1/roles/:id` | RBAC (settings) |
+| DELETE | `/api/v1/roles/:id` | RBAC (settings) |
+| GET | `/api/v1/tenant-modules` | RBAC (settings) |
 
 ### 5.3 Cross-Cutting Patterns
 
@@ -631,7 +643,7 @@ All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `
 
 - **JWT verification:** Signatures verified with jose + NEXTAUTH_SECRET
 - **SQL injection:** UUID validation before any raw SQL interpolation
-- **RLS:** PostgreSQL Row-Level Security on all 18 entity tables
+- **RLS:** PostgreSQL Row-Level Security on all 21 entity tables
 - **Defense in depth:** All GET-by-ID queries include utility_id in WHERE clause
 - **Race conditions:** $transaction for account closure guard and meter uniqueness
 - **PII:** SSN/payment card data never stored in CIS (SaaSLogic handles payments)
@@ -646,6 +658,8 @@ Core foundation: 17 entities, 29 API endpoints, admin UI with map view and theme
 
 ### Phase 2 (In Progress)
 Enhanced CIS + UI: Customer CRUD API (4 endpoints), Contact CRUD API (4 endpoints), BillingAddress CRUD API (3 endpoints), Agreement meter assignment endpoints (2 endpoints), Attachment CRUD (4 endpoints), UOM delete endpoint (1 endpoint) — total 48 endpoints live. Customer list/detail UI with command center, inline editing on all detail pages (Premise, Customer, Account, Meter, Agreement, BillingCycle), Deactivate/Close/Remove buttons with confirmation dialogs, Add Meter/Agreement inline forms on Premise detail, Add Contact/BillingAddress tabs on Account detail, Add Account inline form on Customer detail, Add/remove meter assignments on Agreement detail, SearchableSelect + DatePicker + HelpTooltip components, navigation progress bar, contextual business rule tooltips on all create forms, owner filter on Premise list, commodity badges on map popups. Attachment tab added to all 5 detail pages (Premise, Customer, Account, Meter, ServiceAgreement) with Upload button in tab bar. Commodity editing on Premise inline edit (toggle buttons). Meter detail: install date, UOM, removal date now editable with DatePicker. UOM inline edit + delete with confirmation (BR-UO-005/BR-UO-006 guard). BR-UO-003 auto-enforcement (setting isBaseUnit=true unmarks existing base unit). Conversion factor label shows base unit dynamically. Agreement status transitions corrected: PENDING→ACTIVE→FINAL→CLOSED (no INACTIVE). Modern thin scrollbars. PageHeader supports onClick action. HelpTooltip uses styled popup (not native title).
+
+RBAC (complete): CisUser, CisRole, TenantModule entities added (+3 entities, now 21 total). Authorization middleware with Redis caching (user role 5min TTL, tenant modules 10min TTL). GET /api/v1/auth/me endpoint. User CRUD (4 endpoints) and Role CRUD (5 endpoints) under settings:VIEW/CREATE/EDIT/DELETE permissions. Tenant modules list endpoint. Frontend AuthContext + usePermission hook + ModuleContext. Sidebar permission filtering. Route permission declarations on all /api/v1/* routes. UI button permission gating across all pages. Settings page with Users tab and Roles tab (permissions matrix). Total: 59 endpoints live (+11 RBAC endpoints).
 
 Still planned for Phase 2: GIS integration, move-in/move-out, MeterRead CRUD, meter events, container/cart management for solid waste, full-text search, transfer of service.
 

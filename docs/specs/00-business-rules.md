@@ -193,3 +193,19 @@
 | BR-GN-003 | All timestamps use TIMESTAMPTZ (timezone-aware). | Prisma schema |
 | BR-GN-004 | Pagination limit is capped at 500 per request. | Zod validators |
 | BR-GN-005 | Effective dating is used for time-sensitive records (rate schedules, service agreements, meter assignments). | effectiveDate / expirationDate or startDate / endDate |
+
+---
+
+## BR-RB: RBAC Rules
+
+| ID | Rule | Enforcement |
+|----|------|-------------|
+| BR-RB-001 | Every user must have exactly one role. | FK constraint |
+| BR-RB-002 | System roles (is_system=true) cannot be deleted. | API validation |
+| BR-RB-003 | A role cannot be deleted if users are assigned to it. | API validation |
+| BR-RB-004 | CREATE, EDIT, DELETE implicitly require VIEW. | UI auto-check + API validation |
+| BR-RB-005 | Tenant modules are managed by SaaSLogic, not by CIS admin UI. | No UI for TenantModule |
+| BR-RB-006 | User role and tenant modules are cached in Redis (5min/10min TTL). | Cache + invalidation |
+| BR-RB-007 | Routes without module declaration are allowed but logged in dev. | Middleware behavior |
+| BR-RB-008 | The last System Admin cannot have their role changed. | API validation |
+| BR-RB-009 | Deactivated users (is_active=false) are rejected at auth middleware. | Auth check |
