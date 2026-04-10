@@ -1,6 +1,7 @@
 "use client";
 
 import { useBreakpoint } from "@/lib/use-media-query";
+import { AuthPermissionProvider } from "@/lib/auth-context";
 import { Sidebar } from "./sidebar";
 import { Topbar } from "./topbar";
 import { BottomNav } from "./bottom-nav";
@@ -9,6 +10,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { isMobile, isTablet } = useBreakpoint();
 
   return (
+    <AuthPermissionProvider>
     <div style={{ display: "flex", height: "100vh" }}>
       {/* Sidebar: hidden on mobile, icon-only on tablet */}
       {!isMobile && <Sidebar defaultCollapsed={isTablet} />}
@@ -32,5 +34,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* Bottom nav: mobile only */}
       {isMobile && <BottomNav />}
     </div>
+    </AuthPermissionProvider>
   );
 }
