@@ -71,8 +71,8 @@ export function RolesTab({ showAddForm, onAddFormClose }: RolesTabProps) {
 
   const fetchRoles = useCallback(async () => {
     try {
-      const res = await apiClient.get<{ data: Role[] }>("/api/v1/roles");
-      setRoles(res.data ?? []);
+      const res = await apiClient.get<Role[] | { data: Role[] }>("/api/v1/roles");
+      setRoles(Array.isArray(res) ? res : res.data ?? []);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to load roles";
       toast(msg, "error");
