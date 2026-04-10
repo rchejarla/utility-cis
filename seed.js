@@ -4,6 +4,9 @@ const UID = "00000000-0000-4000-8000-000000000001";
 
 async function main() {
   console.log("Clearing existing data...");
+  await p.cisUser.deleteMany({});
+  await p.role.deleteMany({});
+  await p.tenantModule.deleteMany({});
   await p.serviceAgreementMeter.deleteMany({});
   await p.serviceAgreement.deleteMany({});
   await p.meterRegister.deleteMany({});
@@ -194,6 +197,79 @@ async function main() {
     },
   });
   console.log("  theme");
+
+  // Seed preset roles
+  const allModules = ["customers","premises","meters","accounts","agreements","commodities","rate_schedules","billing_cycles","audit_log","attachments","theme","settings"];
+  const allPerms = ["VIEW","CREATE","EDIT","DELETE"];
+
+  const roles = [
+    {
+      name: "System Admin",
+      description: "Full access to everything including system settings",
+      permissions: Object.fromEntries(allModules.map(m => [m, allPerms])),
+      isSystem: true,
+    },
+    {
+      name: "Utility Admin",
+      description: "Full access except system settings modification",
+      permissions: { ...Object.fromEntries(allModules.map(m => [m, allPerms])), settings: ["VIEW"] },
+      isSystem: true,
+    },
+    {
+      name: "CSR",
+      description: "Customer service operations",
+      permissions: {
+        customers: ["VIEW","CREATE","EDIT"], premises: ["VIEW","CREATE","EDIT"],
+        meters: ["VIEW"], accounts: ["VIEW","CREATE","EDIT"],
+        agreements: ["VIEW","CREATE","EDIT"], commodities: ["VIEW"],
+        rate_schedules: ["VIEW"], billing_cycles: ["VIEW"],
+        audit_log: ["VIEW"], attachments: ["VIEW","CREATE","EDIT"],
+      },
+      isSystem: true,
+    },
+    {
+      name: "Field Technician",
+      description: "Meter and premise field operations",
+      permissions: {
+        customers: ["VIEW"], premises: ["VIEW","EDIT"],
+        meters: ["VIEW","EDIT"], accounts: ["VIEW"],
+        agreements: ["VIEW"], commodities: ["VIEW"],
+        audit_log: ["VIEW"], attachments: ["VIEW","CREATE","EDIT"],
+      },
+      isSystem: true,
+    },
+    {
+      name: "Read-Only",
+      description: "View access to all operational data",
+      permissions: Object.fromEntries(
+        ["customers","premises","meters","accounts","agreements","commodities","rate_schedules","billing_cycles","audit_log","attachments"].map(m => [m, ["VIEW"]])
+      ),
+      isSystem: true,
+    },
+  ];
+
+  const roleArr = [];
+  for (const r of roles) {
+    roleArr.push(await p.role.create({ data: { utilityId: UID, ...r } }));
+  }
+  console.log("  " + roleArr.length + " preset roles");
+
+  const moduleKeys = ["customers","premises","meters","accounts","agreements","commodities","rate_schedules","billing_cycles","audit_log","attachments","theme","settings"];
+  for (const mk of moduleKeys) {
+    await p.tenantModule.create({ data: { utilityId: UID, moduleKey: mk, isEnabled: true } });
+  }
+  console.log("  " + moduleKeys.length + " tenant modules");
+
+  await p.cisUser.create({
+    data: {
+      utilityId: UID,
+      email: "admin@utility.com",
+      name: "Admin User",
+      roleId: roleArr[0].id, // System Admin
+      isActive: true,
+    },
+  });
+  console.log("  1 admin user");
 
   console.log("\nDone! 10 premises, 8 accounts, 15 meters, 10 agreements, 3 customers, 4 contacts, 3 billing addresses");
 }
