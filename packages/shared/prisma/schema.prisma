@@ -167,14 +167,14 @@ enum ContactRole {
 // ─── Models ───────────────────────────────────────────────────────────────────
 
 model Commodity {
-  id             String   @id @default(uuid()) @db.Uuid
-  utilityId      String   @map("utility_id") @db.Uuid
-  code           String   @map("code") @db.VarChar(50)
-  name           String   @map("name") @db.VarChar(100)
-  defaultUomId   String?  @map("default_uom_id") @db.Uuid
-  isActive       Boolean  @default(true) @map("is_active")
-  displayOrder   Int      @default(0) @map("display_order")
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  id           String   @id @default(uuid()) @db.Uuid
+  utilityId    String   @map("utility_id") @db.Uuid
+  code         String   @map("code") @db.VarChar(50)
+  name         String   @map("name") @db.VarChar(100)
+  defaultUomId String?  @map("default_uom_id") @db.Uuid
+  isActive     Boolean  @default(true) @map("is_active")
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   // Relations
   defaultUom        UnitOfMeasure?     @relation("DefaultUom", fields: [defaultUomId], references: [id], onDelete: SetNull)
@@ -233,6 +233,8 @@ model Premise {
   meters            Meter[]
   serviceAgreements ServiceAgreement[]
   owner             Customer?          @relation("PremiseOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  containers        Container[]
+  serviceEvents     ServiceEvent[]
 
   @@index([utilityId, status])
   @@index([ownerId])
@@ -264,6 +266,7 @@ model Meter {
   meterReads             MeterRead[]
   serviceAgreementMeters ServiceAgreementMeter[]
   registers              MeterRegister[]
+  events                 MeterEvent[]
 
   @@unique([utilityId, meterNumber])
   @@index([premiseId])
@@ -320,13 +323,16 @@ model ServiceAgreement {
   updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz
 
   // Relations
-  account      Account                 @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  premise      Premise                 @relation(fields: [premiseId], references: [id], onDelete: Restrict)
-  commodity    Commodity               @relation(fields: [commodityId], references: [id], onDelete: Restrict)
-  rateSchedule RateSchedule            @relation(fields: [rateScheduleId], references: [id], onDelete: Restrict)
-  billingCycle BillingCycle            @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
-  meters       ServiceAgreementMeter[]
-  meterReads   MeterRead[]
+  account       Account                 @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  premise       Premise                 @relation(fields: [premiseId], references: [id], onDelete: Restrict)
+  commodity     Commodity               @relation(fields: [commodityId], references: [id], onDelete: Restrict)
+  rateSchedule  RateSchedule            @relation(fields: [rateScheduleId], references: [id], onDelete: Restrict)
+  billingCycle  BillingCycle            @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
+  meters        ServiceAgreementMeter[]
+  meterReads    MeterRead[]
+  containers    Container[]
+  suspensions   ServiceSuspension[]
+  serviceEvents ServiceEvent[]
 
   @@unique([utilityId, agreementNumber])
   @@index([accountId])
@@ -405,7 +411,7 @@ model BillingCycle {
 }
 
 model MeterRead {
-  id                 String     @id @default(uuid()) @db.Uuid
+  id                 String     @default(uuid()) @db.Uuid
   utilityId          String     @map("utility_id") @db.Uuid
   meterId            String     @map("meter_id") @db.Uuid
   serviceAgreementId String     @map("service_agreement_id") @db.Uuid
@@ -432,6 +438,12 @@ model MeterRead {
   serviceAgreement ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Restrict)
   register         MeterRegister?   @relation(fields: [registerId], references: [id], onDelete: SetNull)
 
+  // Composite PK: TimescaleDB hypertables require the partition column
+  // (readDatetime) to appear in every unique constraint, including the PK.
+  // Service code that only knows `id` must use `findFirst({ where: { id, utilityId } })`
+  // rather than `findUnique`.
+  @@id([id, readDatetime])
+  @@index([id])
   @@index([meterId, readDatetime])
   @@index([serviceAgreementId, readDatetime])
   @@index([registerId])
@@ -646,4 +658,241 @@ model TenantModule {
 
   @@unique([utilityId, moduleKey])
   @@map("tenant_module")
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Phase 2 — Operations entities: meter events, containers, suspensions,
+// service events (RAMS), and import batches. Added in the same pass as the
+// MeterRead CRUD, solid-waste, transfer-of-service, and move-in/out work.
+// ────────────────────────────────────────────────────────────────────────────
+
+enum MeterEventType {
+  LEAK
+  TAMPER
+  REVERSE_FLOW
+  HIGH_USAGE
+  NO_SIGNAL
+  BATTERY_LOW
+  COVER_OPEN
+  BURST_PIPE
+  FREEZE
+  OTHER
+}
+
+enum MeterEventStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  DISMISSED
+}
+
+enum MeterEventSource {
+  AMI
+  FIELD
+  MANUAL
+  RULE
+}
+
+model MeterEvent {
+  id              String           @id @default(uuid()) @db.Uuid
+  utilityId       String           @map("utility_id") @db.Uuid
+  meterId         String           @map("meter_id") @db.Uuid
+  eventType       MeterEventType   @map("event_type")
+  status          MeterEventStatus @default(OPEN) @map("status")
+  severity        Int              @default(1) @map("severity")
+  eventDatetime   DateTime         @map("event_datetime") @db.Timestamptz
+  source          MeterEventSource @map("source")
+  description     String?          @map("description") @db.Text
+  resolvedBy      String?          @map("resolved_by") @db.Uuid
+  resolvedAt      DateTime?        @map("resolved_at") @db.Timestamptz
+  resolutionNotes String?          @map("resolution_notes") @db.Text
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  meter Meter @relation(fields: [meterId], references: [id], onDelete: Cascade)
+
+  @@index([utilityId, status])
+  @@index([meterId, eventDatetime])
+  @@index([utilityId, eventType, status])
+  @@map("meter_event")
+}
+
+enum ContainerType {
+  CART_GARBAGE
+  CART_RECYCLING
+  CART_ORGANICS
+  CART_YARD_WASTE
+  DUMPSTER
+  ROLL_OFF
+}
+
+enum ContainerStatus {
+  ACTIVE
+  SUSPENDED
+  RETURNED
+  LOST
+  DAMAGED
+}
+
+model Container {
+  id                 String          @id @default(uuid()) @db.Uuid
+  utilityId          String          @map("utility_id") @db.Uuid
+  premiseId          String          @map("premise_id") @db.Uuid
+  serviceAgreementId String?         @map("service_agreement_id") @db.Uuid
+  containerType      ContainerType   @map("container_type")
+  sizeGallons        Int             @map("size_gallons")
+  quantity           Int             @default(1) @map("quantity")
+  serialNumber       String?         @map("serial_number") @db.VarChar(100)
+  rfidTag            String?         @map("rfid_tag") @db.VarChar(100)
+  status             ContainerStatus @default(ACTIVE) @map("status")
+  deliveryDate       DateTime        @map("delivery_date") @db.Date
+  removalDate        DateTime?       @map("removal_date") @db.Date
+  ramsContainerId    String?         @map("rams_container_id") @db.VarChar(100)
+  locationNotes      String?         @map("location_notes") @db.VarChar(500)
+  createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime        @updatedAt @map("updated_at") @db.Timestamptz
+
+  premise          Premise           @relation(fields: [premiseId], references: [id], onDelete: Restrict)
+  serviceAgreement ServiceAgreement? @relation(fields: [serviceAgreementId], references: [id], onDelete: SetNull)
+  serviceEvents    ServiceEvent[]
+
+  @@index([utilityId, premiseId])
+  @@index([utilityId, serviceAgreementId])
+  @@index([utilityId, serialNumber])
+  @@index([utilityId, status])
+  @@map("container")
+}
+
+enum SuspensionType {
+  VACATION_HOLD
+  SEASONAL
+  TEMPORARY
+  DISPUTE
+}
+
+enum SuspensionStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+model ServiceSuspension {
+  id                 String           @id @default(uuid()) @db.Uuid
+  utilityId          String           @map("utility_id") @db.Uuid
+  serviceAgreementId String           @map("service_agreement_id") @db.Uuid
+  suspensionType     SuspensionType   @map("suspension_type")
+  status             SuspensionStatus @default(PENDING) @map("status")
+  startDate          DateTime         @map("start_date") @db.Date
+  endDate            DateTime?        @map("end_date") @db.Date
+  billingSuspended   Boolean          @default(true) @map("billing_suspended")
+  prorateOnStart     Boolean          @default(true) @map("prorate_on_start")
+  prorateOnEnd       Boolean          @default(true) @map("prorate_on_end")
+  reason             String?          @map("reason") @db.Text
+  requestedBy        String?          @map("requested_by") @db.Uuid
+  approvedBy         String?          @map("approved_by") @db.Uuid
+  ramsNotified       Boolean          @default(false) @map("rams_notified")
+  ramsNotifiedAt     DateTime?        @map("rams_notified_at") @db.Timestamptz
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  serviceAgreement ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Cascade)
+
+  @@index([utilityId, serviceAgreementId])
+  @@index([utilityId, status])
+  @@index([utilityId, startDate, endDate])
+  @@map("service_suspension")
+}
+
+enum ServiceEventType {
+  MISSED_COLLECTION
+  CONTAMINATION
+  EXTRA_PICKUP
+  BULKY_ITEM
+  CART_DAMAGED
+  CART_STOLEN
+  CART_SWAP
+}
+
+enum ServiceEventSource {
+  RAMS
+  MANUAL
+  DRIVER_APP
+  CUSTOMER_REPORT
+}
+
+enum ServiceEventStatus {
+  RECEIVED
+  REVIEWED
+  ADJUSTMENT_PENDING
+  RESOLVED
+}
+
+enum ServiceEventBillingAction {
+  CREDIT_ISSUED
+  CHARGE_ISSUED
+  NO_ACTION
+}
+
+model ServiceEvent {
+  id                 String                     @id @default(uuid()) @db.Uuid
+  utilityId          String                     @map("utility_id") @db.Uuid
+  premiseId          String                     @map("premise_id") @db.Uuid
+  serviceAgreementId String?                    @map("service_agreement_id") @db.Uuid
+  containerId        String?                    @map("container_id") @db.Uuid
+  eventType          ServiceEventType           @map("event_type")
+  eventDate          DateTime                   @map("event_date") @db.Date
+  eventDatetime      DateTime                   @map("event_datetime") @db.Timestamptz
+  source             ServiceEventSource         @map("source")
+  ramsEventId        String?                    @map("rams_event_id") @db.VarChar(100)
+  status             ServiceEventStatus         @default(RECEIVED) @map("status")
+  billingAction      ServiceEventBillingAction? @map("billing_action")
+  billingAmount      Decimal?                   @map("billing_amount") @db.Decimal(10, 2)
+  notes              String?                    @map("notes") @db.Text
+  createdAt          DateTime                   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime                   @updatedAt @map("updated_at") @db.Timestamptz
+
+  premise          Premise           @relation(fields: [premiseId], references: [id], onDelete: Cascade)
+  serviceAgreement ServiceAgreement? @relation(fields: [serviceAgreementId], references: [id], onDelete: SetNull)
+  container        Container?        @relation(fields: [containerId], references: [id], onDelete: SetNull)
+
+  @@index([utilityId, premiseId, eventDate])
+  @@index([utilityId, status])
+  @@index([utilityId, eventType])
+  @@index([utilityId, ramsEventId])
+  @@map("service_event")
+}
+
+enum ImportBatchSource {
+  AMR
+  AMI
+  MANUAL_UPLOAD
+  API
+}
+
+enum ImportBatchStatus {
+  PENDING
+  PROCESSING
+  COMPLETE
+  FAILED
+}
+
+model ImportBatch {
+  id             String            @id @default(uuid()) @db.Uuid
+  utilityId      String            @map("utility_id") @db.Uuid
+  source         ImportBatchSource @map("source")
+  fileName       String?           @map("file_name") @db.VarChar(500)
+  recordCount    Int               @default(0) @map("record_count")
+  importedCount  Int               @default(0) @map("imported_count")
+  exceptionCount Int               @default(0) @map("exception_count")
+  errorCount     Int               @default(0) @map("error_count")
+  status         ImportBatchStatus @default(PENDING) @map("status")
+  errors         Json?             @map("errors")
+  createdBy      String            @map("created_by") @db.Uuid
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz
+  completedAt    DateTime?         @map("completed_at") @db.Timestamptz
+
+  @@index([utilityId, status])
+  @@index([utilityId, createdAt])
+  @@map("import_batch")
 }

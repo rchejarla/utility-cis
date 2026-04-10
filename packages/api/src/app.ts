@@ -24,6 +24,12 @@ import { attachmentRoutes } from "./routes/attachments.js";
 import { authRoutes } from "./routes/auth.js";
 import { userRoutes } from "./routes/users.js";
 import { roleRoutes } from "./routes/roles.js";
+import { meterReadRoutes } from "./routes/meter-reads.js";
+import { meterEventRoutes } from "./routes/meter-events.js";
+import { containerRoutes } from "./routes/containers.js";
+import { serviceSuspensionRoutes } from "./routes/service-suspensions.js";
+import { serviceEventRoutes } from "./routes/service-events.js";
+import { workflowRoutes } from "./routes/workflows.js";
 import { buildOpenApiDocument } from "./lib/openapi.js";
 
 export async function buildApp() {
@@ -77,6 +83,12 @@ export async function buildApp() {
   await app.register(authRoutes);
   await app.register(userRoutes);
   await app.register(roleRoutes);
+  await app.register(meterReadRoutes);
+  await app.register(meterEventRoutes);
+  await app.register(containerRoutes);
+  await app.register(serviceSuspensionRoutes);
+  await app.register(serviceEventRoutes);
+  await app.register(workflowRoutes);
 
   startAuditWriter();
 
