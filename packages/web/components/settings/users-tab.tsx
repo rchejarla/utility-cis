@@ -95,11 +95,11 @@ export function UsersTab({ showAddForm, onAddFormClose }: UsersTabProps) {
   const fetchData = useCallback(async () => {
     try {
       const [usersRes, rolesRes] = await Promise.all([
-        apiClient.get<{ data: User[] }>("/api/v1/users"),
-        apiClient.get<{ data: Role[] }>("/api/v1/roles"),
+        apiClient.get<User[] | { data: User[] }>("/api/v1/users"),
+        apiClient.get<Role[] | { data: Role[] }>("/api/v1/roles"),
       ]);
-      setUsers(usersRes.data ?? []);
-      setRoles(rolesRes.data ?? []);
+      setUsers(Array.isArray(usersRes) ? usersRes : usersRes.data ?? []);
+      setRoles(Array.isArray(rolesRes) ? rolesRes : rolesRes.data ?? []);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to load data";
       toast(msg, "error");
@@ -323,12 +323,12 @@ export function UsersTab({ showAddForm, onAddFormClose }: UsersTabProps) {
       >
         <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
           <colgroup>
-            <col style={{ width: "20%" }} />
-            <col style={{ width: "25%" }} />
             <col style={{ width: "18%" }} />
-            <col style={{ width: "12%" }} />
-            <col style={{ width: "15%" }} />
-            {canEdit && <col style={{ width: "10%" }} />}
+            <col style={{ width: "22%" }} />
+            <col style={{ width: "16%" }} />
+            <col style={{ width: "10%" }} />
+            <col style={{ width: "14%" }} />
+            {canEdit && <col style={{ width: "20%" }} />}
           </colgroup>
           <thead>
             <tr style={{ background: "var(--bg-elevated)" }}>
