@@ -205,6 +205,40 @@ async function computeConsumption(
   };
 }
 
+/**
+ * Resolve which service agreement a read belongs to by looking up the
+ * active ServiceAgreementMeter row for the meter on the given date.
+ * A meter should have at most one active assignment at any moment
+ * (`removed_date IS NULL OR removed_date >= readDate`, and
+ * `added_date <= readDate`). If none exists, the read can't be
+ * recorded — meter reads require an owning agreement for billing.
+ */
+async function resolveServiceAgreementId(
+  utilityId: string,
+  meterId: string,
+  readDate: Date,
+): Promise<string> {
+  const assignment = await prisma.serviceAgreementMeter.findFirst({
+    where: {
+      utilityId,
+      meterId,
+      addedDate: { lte: readDate },
+      OR: [{ removedDate: null }, { removedDate: { gte: readDate } }],
+    },
+    orderBy: { addedDate: "desc" },
+    select: { serviceAgreementId: true },
+  });
+  if (!assignment) {
+    throw Object.assign(
+      new Error(
+        "Meter is not assigned to any active service agreement at the given read date. Assign the meter to an agreement before recording a read.",
+      ),
+      { statusCode: 400, code: "METER_NOT_ASSIGNED" },
+    );
+  }
+  return assignment.serviceAgreementId;
+}
+
 export async function createMeterRead(
   utilityId: string,
   actorId: string,
@@ -212,6 +246,15 @@ export async function createMeterRead(
   data: CreateMeterReadInput,
 ) {
   const readDatetime = new Date(data.readDatetime);
+  const readDate = new Date(data.readDate);
+
+  // Resolve the owning agreement from the junction table if the caller
+  // didn't supply one explicitly. Supplied values still win so bulk
+  // imports with authoritative agreement data don't incur an extra lookup.
+  const serviceAgreementId =
+    data.serviceAgreementId ??
+    (await resolveServiceAgreementId(utilityId, data.meterId, readDate));
+
   const { priorReading, consumption, exceptionCode: autoException } =
     await computeConsumption(
       utilityId,
@@ -229,9 +272,9 @@ export async function createMeterRead(
         data: {
           utilityId,
           meterId: data.meterId,
-          serviceAgreementId: data.serviceAgreementId,
+          serviceAgreementId,
           registerId: data.registerId ?? null,
-          readDate: new Date(data.readDate),
+          readDate,
           readDatetime,
           reading: data.reading,
           priorReading,
@@ -316,6 +359,65 @@ export async function correctMeterRead(
   );
 
   return corrected;
+}
+
+/**
+ * Hard-delete a meter read. Guarded:
+ *   - Frozen reads (already billed) cannot be deleted. The rebill
+ *     workflow in Phase 3 is the correct path for retroactive changes
+ *     to billed data.
+ *   - Reads that have been corrected by a subsequent CORRECTED row
+ *     also cannot be deleted — deleting them would orphan the
+ *     correction chain and make the audit trail lie. Delete the
+ *     correction first if one exists.
+ *
+ * Hard-delete (vs soft-delete) is acceptable here because the audit
+ * log preserves the before state via the emitted domain event.
+ */
+export async function deleteMeterRead(
+  utilityId: string,
+  actorId: string,
+  actorName: string,
+  id: string,
+): Promise<void> {
+  const before = await prisma.meterRead.findFirst({
+    where: { id, utilityId },
+  });
+  if (!before) {
+    throw Object.assign(new Error("Meter read not found"), { statusCode: 404 });
+  }
+  if (before.isFrozen) {
+    throw Object.assign(
+      new Error("Cannot delete a frozen (already billed) read. Use the rebill workflow instead."),
+      { statusCode: 400, code: "READ_FROZEN" },
+    );
+  }
+  const correctedBy = await prisma.meterRead.findFirst({
+    where: { utilityId, correctsReadId: before.id },
+    select: { id: true, readDatetime: true },
+  });
+  if (correctedBy) {
+    throw Object.assign(
+      new Error(
+        "Cannot delete a read that has been corrected by a subsequent CORRECTED row. Delete the correction first.",
+      ),
+      { statusCode: 400, code: "READ_HAS_CORRECTION" },
+    );
+  }
+
+  await prisma.meterRead.deleteMany({
+    where: { id, utilityId, readDatetime: before.readDatetime },
+  });
+
+  emitMeterReadEvent(
+    "meter_read.updated",
+    utilityId,
+    actorId,
+    actorName,
+    before.id,
+    before,
+    null,
+  );
 }
 
 /**

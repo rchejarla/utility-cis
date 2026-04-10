@@ -7,6 +7,7 @@ import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { useToast } from "@/components/ui/toast";
+import { SearchableEntitySelect } from "@/components/ui/searchable-entity-select";
 
 /**
  * Move-in wizard — a three-step guided flow for onboarding a customer
@@ -326,18 +327,18 @@ export default function MoveInWizardPage() {
           <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
             <div>
               <label style={labelStyle}>PREMISE</label>
-              <select
-                value={premiseId}
-                onChange={(e) => setPremiseId(e.target.value)}
-                style={fieldStyle}
-              >
-                <option value="">Select premise...</option>
-                {premises.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.addressLine1}, {p.city}, {p.state} {p.zip}
-                  </option>
-                ))}
-              </select>
+              <SearchableEntitySelect<Premise>
+                value={premiseId || undefined}
+                onChange={(v) => setPremiseId(v ?? "")}
+                endpoint="/api/v1/premises"
+                placeholder="Search premises by address..."
+                label="Premise"
+                mapOption={(p) => ({
+                  value: String(p.id),
+                  label: String(p.addressLine1),
+                  sublabel: `${p.city}, ${p.state} ${p.zip}`,
+                })}
+              />
             </div>
             <div>
               <label style={labelStyle}>MOVE-IN DATE</label>
@@ -452,18 +453,18 @@ export default function MoveInWizardPage() {
             {customerMode === "EXISTING" && (
               <div>
                 <label style={labelStyle}>SELECT CUSTOMER</label>
-                <select
-                  value={existingCustomerId}
-                  onChange={(e) => setExistingCustomerId(e.target.value)}
-                  style={fieldStyle}
-                >
-                  <option value="">Select customer...</option>
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {customerLabel(c)}
-                    </option>
-                  ))}
-                </select>
+                <SearchableEntitySelect<Customer>
+                  value={existingCustomerId || undefined}
+                  onChange={(v) => setExistingCustomerId(v ?? "")}
+                  endpoint="/api/v1/customers"
+                  placeholder="Search customers by name or email..."
+                  label="Customer"
+                  mapOption={(c) => ({
+                    value: String(c.id),
+                    label: customerLabel(c),
+                    sublabel: c.email ?? undefined,
+                  })}
+                />
               </div>
             )}
 

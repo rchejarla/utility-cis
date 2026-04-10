@@ -10,6 +10,9 @@ export async function listMeters(utilityId: string, query: MeterQuery) {
   if (query.premiseId) where.premiseId = query.premiseId;
   if (query.commodityId) where.commodityId = query.commodityId;
   if (query.status) where.status = query.status;
+  if (query.search) {
+    where.meterNumber = { contains: query.search, mode: "insensitive" };
+  }
 
   return paginatedTenantList(prisma.meter, where, query, {
     include: { premise: true, commodity: true, uom: true },

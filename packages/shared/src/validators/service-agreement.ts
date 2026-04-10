@@ -70,6 +70,8 @@ export const serviceAgreementQuerySchema = z.object({
   accountId: z.string().uuid().optional(),
   premiseId: z.string().uuid().optional(),
   status: agreementStatusEnum.optional(),
+  /** Substring match against agreement_number, used by the entity picker. */
+  search: z.string().optional(),
 }).strict();
 
 export type MeterAssignment = z.infer<typeof meterAssignmentSchema>;

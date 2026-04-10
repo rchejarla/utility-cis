@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { PageHeader } from "./page-header";
 import { FormField } from "./form-field";
 import { AccessDenied } from "./access-denied";
+import { SearchableEntitySelect } from "./searchable-entity-select";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { useEntityForm } from "@/lib/use-entity-form";
@@ -292,9 +293,30 @@ export function EntityFormPage<T extends Record<string, unknown>>(
     }
 
     if (field.type === "select") {
-      const options = Array.isArray(field.options)
-        ? field.options
-        : dynamicOptions[field.key] ?? [];
+      // Dynamic-options selects delegate to SearchableEntitySelect so
+      // the backend is only queried on demand instead of loading every
+      // row into the dropdown on mount. This matters for any form
+      // picking from customers/premises/accounts/meters at scale —
+      // a 50k-row endpoint would otherwise hang the page on open.
+      // Static-options selects stay as plain native <select>s because
+      // the value set is small and known upfront.
+      if (field.options && !Array.isArray(field.options)) {
+        const dyn = field.options;
+        return (
+          <FormField key={field.key} {...common}>
+            <SearchableEntitySelect<Record<string, unknown>>
+              value={stringValue || undefined}
+              onChange={(v) => setValue(field.key, (v ?? "") as T[keyof T & string])}
+              endpoint={dyn.endpoint}
+              extraParams={dyn.params}
+              mapOption={dyn.mapOption}
+              placeholder={field.emptyOption ?? "Select..."}
+              label={field.label}
+            />
+          </FormField>
+        );
+      }
+      const options = Array.isArray(field.options) ? field.options : [];
       return (
         <FormField key={field.key} {...common}>
           <select

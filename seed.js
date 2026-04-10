@@ -198,8 +198,15 @@ async function main() {
   });
   console.log("  theme");
 
-  // Seed preset roles
-  const allModules = ["customers","premises","meters","accounts","agreements","commodities","rate_schedules","billing_cycles","audit_log","attachments","theme","settings"];
+  // Seed preset roles — MUST stay in sync with packages/shared/src/modules/constants.ts MODULES
+  // When a new module is added there, append it here AND update the permission maps below.
+  const allModules = [
+    "customers","premises","meters","meter_reads","meter_events",
+    "accounts","agreements","commodities","rate_schedules","billing_cycles",
+    "containers","service_suspensions","service_events",
+    "workflows","search",
+    "audit_log","attachments","theme","settings"
+  ];
   const allPerms = ["VIEW","CREATE","EDIT","DELETE"];
 
   const roles = [
@@ -220,9 +227,14 @@ async function main() {
       description: "Customer service operations",
       permissions: {
         customers: ["VIEW","CREATE","EDIT"], premises: ["VIEW","CREATE","EDIT"],
-        meters: ["VIEW"], accounts: ["VIEW","CREATE","EDIT"],
+        meters: ["VIEW"], meter_reads: ["VIEW","CREATE"],
+        accounts: ["VIEW","CREATE","EDIT"],
         agreements: ["VIEW","CREATE","EDIT"], commodities: ["VIEW"],
         rate_schedules: ["VIEW"], billing_cycles: ["VIEW"],
+        containers: ["VIEW","CREATE","EDIT"],
+        service_suspensions: ["VIEW","CREATE","EDIT"],
+        workflows: ["VIEW","CREATE"],
+        search: ["VIEW"],
         audit_log: ["VIEW"], attachments: ["VIEW","CREATE","EDIT"],
       },
       isSystem: true,
@@ -232,8 +244,13 @@ async function main() {
       description: "Meter and premise field operations",
       permissions: {
         customers: ["VIEW"], premises: ["VIEW","EDIT"],
-        meters: ["VIEW","EDIT"], accounts: ["VIEW"],
+        meters: ["VIEW","EDIT"],
+        meter_reads: ["VIEW","CREATE","EDIT"],
+        meter_events: ["VIEW","CREATE","EDIT"],
+        accounts: ["VIEW"],
         agreements: ["VIEW"], commodities: ["VIEW"],
+        containers: ["VIEW","EDIT"],
+        search: ["VIEW"],
         audit_log: ["VIEW"], attachments: ["VIEW","CREATE","EDIT"],
       },
       isSystem: true,
@@ -242,7 +259,7 @@ async function main() {
       name: "Read-Only",
       description: "View access to all operational data",
       permissions: Object.fromEntries(
-        ["customers","premises","meters","accounts","agreements","commodities","rate_schedules","billing_cycles","audit_log","attachments"].map(m => [m, ["VIEW"]])
+        allModules.filter(m => m !== "settings" && m !== "theme").map(m => [m, ["VIEW"]])
       ),
       isSystem: true,
     },
@@ -254,7 +271,7 @@ async function main() {
   }
   console.log("  " + roleArr.length + " preset roles");
 
-  const moduleKeys = ["customers","premises","meters","accounts","agreements","commodities","rate_schedules","billing_cycles","audit_log","attachments","theme","settings"];
+  const moduleKeys = allModules;
   for (const mk of moduleKeys) {
     await p.tenantModule.create({ data: { utilityId: UID, moduleKey: mk, isEnabled: true } });
   }

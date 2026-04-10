@@ -35,14 +35,25 @@ export const meterReadSortFields = [
 ] as const;
 
 /**
- * Creating a single meter read. The service is responsible for computing
- * `priorReading` and `consumption` from the meter history — callers should
- * not supply those directly. Same for `is_frozen` / `billed_at`, which are
- * managed by the billing engine in Phase 3.
+ * Creating a single meter read.
+ *
+ * The service is responsible for computing `priorReading` and
+ * `consumption` from the meter history — callers must not supply them
+ * directly. `is_frozen` / `billed_at` are managed by the billing
+ * engine in Phase 3 and are not exposed.
+ *
+ * `serviceAgreementId` is optional because the service will resolve
+ * it from the `ServiceAgreementMeter` junction table using the meter
+ * id and read date: at any given date there's at most one active
+ * meter assignment per meter, so the agreement is deterministic.
+ * Callers CAN still supply it explicitly (e.g. for bulk import where
+ * the file has both), in which case the supplied value wins. If
+ * neither is provided and no active assignment exists at the read
+ * date, the service raises a clear 400.
  */
 export const createMeterReadSchema = z.object({
   meterId: z.string().uuid(),
-  serviceAgreementId: z.string().uuid(),
+  serviceAgreementId: z.string().uuid().optional(),
   registerId: z.string().uuid().optional(),
   readDate: z.string().date(),
   readDatetime: z.string().datetime(),

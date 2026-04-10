@@ -13,6 +13,7 @@ import {
   createMeterRead,
   correctMeterRead,
   resolveException,
+  deleteMeterRead,
 } from "../services/meter-read.service.js";
 import { idParamSchema } from "../lib/route-schemas.js";
 import { z } from "zod";
@@ -97,6 +98,21 @@ export async function meterReadRoutes(app: FastifyInstance) {
       const data = resolveExceptionSchema.parse(request.body);
       const read = await resolveException(utilityId, actorId, actorName, id, data);
       return reply.send(read);
+    },
+  );
+
+  // Hard-delete a meter read. Guarded server-side against deleting
+  // frozen (billed) reads or reads that have been corrected by a
+  // subsequent CORRECTED row. See deleteMeterRead in the service for
+  // the full rule set.
+  app.delete(
+    "/api/v1/meter-reads/:id",
+    { config: { module: "meter_reads", permission: "DELETE" } },
+    async (request, reply) => {
+      const { utilityId, id: actorId, name: actorName } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      await deleteMeterRead(utilityId, actorId, actorName, id);
+      return reply.status(204).send();
     },
   );
 

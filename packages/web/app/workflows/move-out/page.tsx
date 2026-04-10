@@ -7,6 +7,7 @@ import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { useToast } from "@/components/ui/toast";
+import { SearchableEntitySelect } from "@/components/ui/searchable-entity-select";
 
 /**
  * Move-out wizard. Flow:
@@ -268,18 +269,19 @@ export default function MoveOutWizardPage() {
         {step === 1 && (
           <div>
             <label style={labelStyle}>ACCOUNT</label>
-            <select
-              value={accountId}
-              onChange={(e) => setAccountId(e.target.value)}
-              style={fieldStyle}
-            >
-              <option value="">Select account...</option>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {accountLabel(a)}
-                </option>
-              ))}
-            </select>
+            <SearchableEntitySelect<Account>
+              value={accountId || undefined}
+              onChange={(v) => setAccountId(v ?? "")}
+              endpoint="/api/v1/accounts"
+              extraParams={{ status: "ACTIVE" }}
+              placeholder="Search accounts by number or name..."
+              label="Account"
+              mapOption={(a) => ({
+                value: String(a.id),
+                label: accountLabel(a),
+                sublabel: a.accountNumber,
+              })}
+            />
             {accountId && (
               <div
                 style={{

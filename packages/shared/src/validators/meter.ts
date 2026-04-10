@@ -39,6 +39,12 @@ export const meterQuerySchema = z.object({
   meterType: meterTypeEnum.optional(),
   premiseId: z.string().uuid().optional(),
   commodityId: z.string().uuid().optional(),
+  /**
+   * Substring match against meter_number. Used by the searchable
+   * entity picker so operators can find a meter by typing its number
+   * instead of scrolling through thousands of rows.
+   */
+  search: z.string().optional(),
 }).strict();
 
 export type MeterType = z.infer<typeof meterTypeEnum>;

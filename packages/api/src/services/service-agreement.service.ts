@@ -34,6 +34,9 @@ export async function listServiceAgreements(
   if (query.accountId) where.accountId = query.accountId;
   if (query.premiseId) where.premiseId = query.premiseId;
   if (query.status) where.status = query.status;
+  if (query.search) {
+    where.agreementNumber = { contains: query.search, mode: "insensitive" };
+  }
 
   return paginatedTenantList(prisma.serviceAgreement, where, query, { include: fullInclude });
 }

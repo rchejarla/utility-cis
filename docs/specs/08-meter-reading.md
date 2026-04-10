@@ -86,23 +86,24 @@ Tracks bulk read imports for reconciliation and error handling.
 
 ## API Endpoints
 
-All endpoints are planned for Phase 2.
+| Method | Path | Status | Description |
+|--------|------|--------|-------------|
+| GET | `/api/v1/meter-reads` | live | List reads (filterable by meter, date range, type, exception, frozen state) |
+| POST | `/api/v1/meter-reads` | live | Create a single meter read. `serviceAgreementId` is optional in the request body — the service resolves it from `ServiceAgreementMeter` using meter id + read date, erroring with `METER_NOT_ASSIGNED` if no active assignment exists at that date. |
+| GET | `/api/v1/meter-reads/:id` | live | Get read detail with meter, agreement, account, premise, commodity, and register hydrated |
+| PATCH | `/api/v1/meter-reads/:id` | live | Correct a read. Does NOT mutate the original row — creates a new `CORRECTED` row with `correctsReadId` pointing at the original. Returns 201 with the new row. |
+| DELETE | `/api/v1/meter-reads/:id` | live | Hard-delete a read. Guarded: frozen (billed) reads cannot be deleted, and reads that have been corrected by a subsequent CORRECTED row cannot be deleted without first deleting the correction. Emits a domain event with the before-state so the audit log preserves a record of the deletion. |
+| GET | `/api/v1/meters/:id/reads` | live | All reads for a specific meter, newest first |
+| GET | `/api/v1/meter-reads/exceptions` | live | Exception queue: reads flagged for review (non-frozen with an `exceptionCode`) |
+| POST | `/api/v1/meter-reads/:id/resolve-exception` | live | Mark exception resolved (approve / hold for re-read / estimate). Errors with `READ_FROZEN` if the read is already billed. |
+| POST | `/api/v1/meter-reads/import` | planned | Bulk import backend (file parser + ImportBatch job runner). The UI at `/meter-reads/import` exists and exercises the flow via client-side CSV/JSON parsing, but the server-side commit endpoint is Phase 3. |
+| GET | `/api/v1/meter-reads/import/:batchId` | planned | Import batch status and error report |
+| GET | `/api/v1/exception-thresholds` | planned | Exception threshold rules (Phase 3) |
+| POST/PATCH/DELETE | `/api/v1/exception-thresholds` | planned | CRUD for tenant-configurable threshold rules (Phase 3) |
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/meter-reads` | List reads (filterable by meter, date range, type, exception) |
-| POST | `/api/v1/meter-reads` | Create a single manual meter read |
-| GET | `/api/v1/meter-reads/:id` | Get read detail |
-| PATCH | `/api/v1/meter-reads/:id` | Correct a read (creates CORRECTED read, marks original) |
-| GET | `/api/v1/meters/:id/reads` | All reads for a specific meter, newest first |
-| POST | `/api/v1/meter-reads/import` | Bulk import reads (AMR/AMI file upload or JSON payload) |
-| GET | `/api/v1/meter-reads/import/:batchId` | Get import batch status and errors |
-| GET | `/api/v1/meter-reads/exceptions` | Exception queue: reads flagged for review |
-| POST | `/api/v1/meter-reads/:id/resolve-exception` | Mark exception resolved, optionally re-estimate |
-| GET | `/api/v1/exception-thresholds` | List configured exception thresholds |
-| POST | `/api/v1/exception-thresholds` | Create threshold rule |
-| PATCH | `/api/v1/exception-thresholds/:id` | Update threshold |
-| DELETE | `/api/v1/exception-thresholds/:id` | Deactivate threshold |
+### Meter list query enhancement
+
+`/api/v1/meters` now accepts a `search` query parameter that does a case-insensitive substring match against `meter_number`. Used by the meter picker in the read-entry form for server-side search instead of loading every meter into a dropdown.
 
 ### Import Endpoint
 
@@ -145,43 +146,33 @@ Supported file formats (configurable per tenant):
 
 ## UI Pages
 
-All pages are planned for Phase 2.
+### Meter Reads List (`/meter-reads`) — live
 
-### Meter Reads List (`/meter-reads`)
+Table: meter number (monospace), read date, reading, consumption, read-type badge (ACTUAL/ESTIMATED/CORRECTED/FINAL/AMI color-coded), read source, exception code chip (if any), frozen indicator (`❄`). Filter pills for type, source, exception presence, billed state. Header strip has "+ New Read," "⚠ Exception Queue," and "↑ Import Reads" action buttons.
 
-- Table: meter number, premise address, read date, reading, consumption, read_type badge, read_source, exception indicator
-- Filters: date range, commodity, read_type, read_source, has exception toggle
-- Quick-entry form for manual reads (meter lookup, read value, date)
-- "Import Reads" button → import modal
+### Record Meter Read (`/meter-reads/new`) — live
 
-### Exception Queue (`/meter-reads/exceptions`)
+Hand-rolled form (not the `EntityFormPage` shell) with a **premise → meter cascade**: user searches premises with `SearchableEntitySelect`, then the meter picker scopes to that premise's meters only. Clicking a meter immediately fires two parallel fetches — `GET /api/v1/meters/:id` and `GET /api/v1/meters/:id/reads?limit=1` — and renders a **context card** with meter number, commodity + UOM (code + name), active agreement number with status, last read value + date, and the multiplier formula if not 1. If the meter has no active `ServiceAgreementMeter` assignment, the context card is replaced by a red warning banner and every remaining form field is disabled. The reading input's label shows the UOM code (e.g. `Reading (KWH)`). `serviceAgreementId` is never asked for — the backend resolves it on submit.
 
-- Table of reads with unresolved exception_codes
-- Grouped by exception type
-- Per-row actions: Approve, Estimate, Correct, Flag for re-read
-- Bulk resolve selected rows
-- Exception summary counts by type (dashboard widget)
+### Meter Read Detail (`/meter-reads/:id`) — live
 
-### Import Center (`/meter-reads/import`)
+Full field display with a dedicated 4-column consumption calculation card showing READING / PRIOR / × MULTIPLIER / = CONSUMPTION in large monospace, plus a formula line beneath (`(12,345.67 − 12,000.00) × 1 = 345.67`). Four context cards in a 2×2 grid cover meter info, service agreement with account + premise + commodity links, read metadata (type, source, dates, reader), and audit (created, updated, frozen, correction chain links). Exception panel renders only if the read is flagged. Header has `Correct` and `Delete` action buttons, both disabled (with explanatory tooltips) when the read is frozen.
 
-- Upload interface: drag-and-drop file or paste JSON
-- Column mapping configuration (saved per tenant per source)
-- Preview: first 10 rows with parsed values before confirming import
-- Batch status tracking: progress bar for large imports
-- Results summary: imported / exceptions / errors with downloadable error report
+**Correction workflow.** Clicking `Correct` reveals an inline form with the current reading pre-filled and a required notes field. Submitting calls `PATCH /api/v1/meter-reads/:id`, which creates a new `CORRECTED` row via the same service path as a manual correction — the original is never mutated. On success, the page redirects to the new corrected row's detail page so the operator can verify the recalculated consumption.
 
-### Meter Read Detail (`/meter-reads/:id`)
+**Delete workflow.** Clicking `Delete` opens the shared `ConfirmDialog` with a clear warning naming the reading value, date, and meter. Submitting calls `DELETE /api/v1/meter-reads/:id`, which enforces the frozen + correction-chain guards server-side. On success, toast + redirect to the list.
 
-- Full field display
-- Consumption calculation shown step-by-step (reading - prior × multiplier)
-- Exception history (if flagged and resolved)
-- Correction chain (if this read corrects another, or has been corrected)
-- Audit log entries for this read
+### Exception Queue (`/meter-reads/exceptions`) — live
 
-### Meter Detail Enhancement (`/meters/:id`)
+Distinctive custom design (not shell-based): sticky header strip showing per-exception-code counts with a pulsing red dot when the open count is non-zero, grouped sections by exception code with terminal-style headers, per-row monospace layout with tabular-numeric alignment for the reading columns. Bulk action bar slides up from the bottom when rows are selected, offering `✓ APPROVE AS-IS` and `⏸ HOLD FOR RE-READ` as the two bulk operations. Escape key clears selection.
 
-- Read history tab: chart of consumption over time, table of reads
-- Exception history tab
+### Import Center (`/meter-reads/import`) — live (UI), partial (backend)
+
+Three-stage wizard: UPLOAD → PREVIEW → COMMIT, with a numbered stage rail on the left that shows active/done state. Drag-and-drop file dropzone or paste-JSON fallback; client-side CSV/JSON parser with per-row validation. Preview shows the first 10 rows with ready/error status. Commit fires an animated progress bar and renders a three-card results summary (imported / exceptions / errors). The backend commit endpoint (`POST /api/v1/meter-reads/import`) is not yet deployed — the UI exercises the flow end-to-end up to the commit step and then surfaces a clean error. The client-side parser + preview is useful for dev/test but genuine bulk ingestion is a Phase 3 follow-up.
+
+### Meter Detail Enhancement (`/meters/:id`) — planned
+
+Read history tab with a consumption-over-time chart and a table of recent reads. Exception history tab. Deferred to a small follow-up pass; the underlying endpoint (`GET /api/v1/meters/:id/reads`) is live.
 
 ## Phase Roadmap
 
@@ -191,14 +182,19 @@ All pages are planned for Phase 2.
   - MeterRead CRUD API: list, get, per-meter history, manual create, correction (produces new CORRECTED row), exception queue, resolve-exception
   - MeterEvent entity + CRUD (LEAK, TAMPER, REVERSE_FLOW, HIGH_USAGE, NO_SIGNAL, BATTERY_LOW, COVER_OPEN, BURST_PIPE, FREEZE, OTHER)
   - ImportBatch entity (tracks bulk import jobs with error reporting)
-  - Manual read entry UI (shell-based form at /meter-reads/new)
+  - Manual read entry UI (hand-rolled form at /meter-reads/new with premise → meter cascade and automatic service-agreement resolution)
   - Meter Reads list page with exception indicator, read-type badges, frozen indicator, filter pills for type/source/exception/billed
+  - **Meter Read detail page** (/meter-reads/:id): full field display, consumption calculation card with formula line, 2×2 context grid (meter / agreement / metadata / audit), exception panel when flagged, correction chain links
+  - **Correct workflow** on the detail page: inline form with pre-filled reading + required notes, submits `PATCH /api/v1/meter-reads/:id` which creates a new `CORRECTED` row preserving the original via `corrects_read_id`, redirects to the new row's detail page
+  - **Delete workflow** on the detail page: `ConfirmDialog` with warning naming the reading value and date, calls `DELETE /api/v1/meter-reads/:id`, guarded server-side against frozen reads and reads with downstream corrections
   - Exception queue UI (/meter-reads/exceptions): grouped by exception code, sticky count strip with pulse indicator for open items, bulk approve / bulk hold-for-reread action bar, keyboard escape to clear selection
-  - Import Center UI (/meter-reads/import): three-stage wizard (upload → preview → commit) with drag-and-drop file drop, CSV/JSON client-side parser, per-row validation status, progress bar, results summary with error panel
+  - Import Center UI (/meter-reads/import): three-stage wizard (upload → preview → commit) with drag-and-drop file drop, CSV/JSON client-side parser, per-row validation status, progress bar, results summary with error panel. Backend commit endpoint deferred to Phase 3.
   - Consumption calculation in service layer with rollover detection (respects meter.dial_count)
   - Reverse-flow detection (negative consumption with no rollover flag)
   - Correction chain via corrects_read_id self-reference — correction inserts a new row instead of mutating the original
-  - Freeze-after-bill guard: cannot resolve exceptions on frozen (already-billed) reads
+  - Freeze-after-bill guard: cannot resolve exceptions on frozen (already-billed) reads, cannot delete frozen reads
+  - **Auto-resolve service agreement**: `createMeterReadSchema.serviceAgreementId` is optional; the backend resolves the owning agreement from the `ServiceAgreementMeter` junction table using `meter_id + read_date`, returning `METER_NOT_ASSIGNED` if no active assignment exists at the read date. Operators never pick the agreement manually — preventing the class of bug where a read gets attributed to a closed-out customer.
+  - **Server-side meter search**: `GET /api/v1/meters?search=<q>` does a case-insensitive substring match on `meter_number`, backing the meter picker in the read-entry form so dropdowns don't preload unbounded lists.
 - **Phase 2 (Deferred to Phase 3):**
   - Bulk import backend (CSV/XML/MV90 parser and ImportBatch job runner — the UI exercises the flow via client-side parsing only)
   - Estimated read generation (trailing 3-month average)

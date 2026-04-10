@@ -143,13 +143,18 @@ describe("EntityFormPage", () => {
     expect(screen.queryByLabelText(/Premium Count/)).not.toBeInTheDocument();
   });
 
-  it("fetches dynamic select options from the configured endpoint", async () => {
-    mockedGet.mockResolvedValueOnce({
+  it("fetches dynamic select options from the configured endpoint on open", async () => {
+    // Dynamic-options selects now delegate to SearchableEntitySelect which
+    // only fetches on user interaction (open the combobox or type a query),
+    // not on mount. So the test flow is: render → click the combobox trigger
+    // → assert the fetch fired and the options showed up in the listbox.
+    mockedGet.mockResolvedValue({
       data: [
         { id: "c1", name: "Water" },
         { id: "c2", name: "Electric" },
       ],
     });
+    const user = userEvent.setup();
 
     render(
       <EntityFormPage<Form>
@@ -171,9 +176,17 @@ describe("EntityFormPage", () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(mockedGet).toHaveBeenCalledWith("/api/v1/commodities", undefined),
-    );
+    // The combobox trigger is rendered, but no fetch happens until the user
+    // opens it — that's the whole point of the async search pattern.
+    const trigger = screen.getByRole("combobox", { name: "Type" });
+    await user.click(trigger);
+
+    await waitFor(() => {
+      expect(mockedGet).toHaveBeenCalledWith(
+        "/api/v1/commodities",
+        expect.objectContaining({ limit: "20" }),
+      );
+    });
     await waitFor(() => {
       expect(screen.getByRole("option", { name: "Water" })).toBeInTheDocument();
       expect(screen.getByRole("option", { name: "Electric" })).toBeInTheDocument();

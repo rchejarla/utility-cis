@@ -7,6 +7,7 @@ import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { useToast } from "@/components/ui/toast";
+import { SearchableEntitySelect } from "@/components/ui/searchable-entity-select";
 
 /**
  * Transfer-of-service wizard. Side-by-side "from → to" layout makes

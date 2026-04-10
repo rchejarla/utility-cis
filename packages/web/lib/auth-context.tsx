@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useState, useEffect } from "react";
 import { apiClient } from "./api-client";
+import { MODULES } from "@utility-cis/shared";
 
 interface AuthUser {
   id: string;
@@ -48,16 +49,17 @@ export function AuthPermissionProvider({ children }: { children: React.ReactNode
       setPermissions(data.permissions);
       setEnabledModules(data.enabledModules);
     } catch (err) {
-      // Fallback: grant all permissions (backwards compatibility during migration)
+      // Fallback: grant all permissions from the canonical MODULES list in
+      // shared/. Previously this had its own hardcoded 12-entry list which
+      // silently drifted whenever new Phase 2 modules were added — keeping
+      // the source of truth in shared/ means the sidebar can never miss a
+      // module just because auth/me had a transient failure.
       console.warn("Failed to fetch auth/me — falling back to full permissions", err);
-      const allModules = [
-        "customers", "premises", "meters", "accounts", "agreements",
-        "commodities", "rate_schedules", "billing_cycles", "audit_log",
-        "attachments", "theme", "settings",
-      ];
       const allPerms = ["VIEW", "CREATE", "EDIT", "DELETE"];
-      setPermissions(Object.fromEntries(allModules.map((m) => [m, allPerms])));
-      setEnabledModules(allModules);
+      setPermissions(
+        Object.fromEntries(MODULES.map((m) => [m, allPerms])),
+      );
+      setEnabledModules([...MODULES]);
     } finally {
       setLoading(false);
     }
