@@ -6,35 +6,26 @@ import {
   createAccount,
   updateAccount,
 } from "../services/account.service.js";
-import { idParamSchema } from "../lib/route-schemas.js";
+import { registerCrudRoutes } from "../lib/crud-routes.js";
 
 export async function accountRoutes(app: FastifyInstance) {
-  app.get("/api/v1/accounts", { config: { module: "accounts", permission: "VIEW" } }, async (request, reply) => {
-    const { utilityId } = request.user;
-    const query = accountQuerySchema.parse(request.query);
-    const result = await listAccounts(utilityId, query);
-    return reply.send(result);
-  });
-
-  app.get("/api/v1/accounts/:id", { config: { module: "accounts", permission: "VIEW" } }, async (request, reply) => {
-    const { utilityId } = request.user;
-    const { id } = idParamSchema.parse(request.params);
-    const account = await getAccount(id, utilityId);
-    return reply.send(account);
-  });
-
-  app.post("/api/v1/accounts", { config: { module: "accounts", permission: "CREATE" } }, async (request, reply) => {
-    const { utilityId, id: actorId, name: actorName } = request.user;
-    const data = createAccountSchema.parse(request.body);
-    const account = await createAccount(utilityId, actorId, actorName, data);
-    return reply.status(201).send(account);
-  });
-
-  app.patch("/api/v1/accounts/:id", { config: { module: "accounts", permission: "EDIT" } }, async (request, reply) => {
-    const { utilityId, id: actorId, name: actorName } = request.user;
-    const { id } = idParamSchema.parse(request.params);
-    const data = updateAccountSchema.parse(request.body);
-    const account = await updateAccount(utilityId, actorId, actorName, id, data);
-    return reply.send(account);
+  registerCrudRoutes(app, {
+    basePath: "/api/v1/accounts",
+    module: "accounts",
+    list: {
+      querySchema: accountQuerySchema,
+      service: (utilityId, query) => listAccounts(utilityId, query as never),
+    },
+    get: getAccount,
+    create: {
+      bodySchema: createAccountSchema,
+      service: (user, data) =>
+        createAccount(user.utilityId, user.actorId, user.actorName, data as never),
+    },
+    update: {
+      bodySchema: updateAccountSchema,
+      service: (user, id, data) =>
+        updateAccount(user.utilityId, user.actorId, user.actorName, id, data as never),
+    },
   });
 }

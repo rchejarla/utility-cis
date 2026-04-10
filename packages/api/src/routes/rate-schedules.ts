@@ -7,34 +7,34 @@ import {
   reviseRateSchedule,
 } from "../services/rate-schedule.service.js";
 import { idParamSchema } from "../lib/route-schemas.js";
+import { registerCrudRoutes } from "../lib/crud-routes.js";
 
 export async function rateScheduleRoutes(app: FastifyInstance) {
-  app.get("/api/v1/rate-schedules", { config: { module: "rate_schedules", permission: "VIEW" } }, async (request, reply) => {
-    const { utilityId } = request.user;
-    const query = rateScheduleQuerySchema.parse(request.query);
-    const result = await listRateSchedules(utilityId, query);
-    return reply.send(result);
+  registerCrudRoutes(app, {
+    basePath: "/api/v1/rate-schedules",
+    module: "rate_schedules",
+    list: {
+      querySchema: rateScheduleQuerySchema,
+      service: (utilityId, query) => listRateSchedules(utilityId, query as never),
+    },
+    get: getRateSchedule,
+    create: {
+      bodySchema: createRateScheduleSchema,
+      service: (user, data) =>
+        createRateSchedule(user.utilityId, user.actorId, user.actorName, data as never),
+    },
+    // No PATCH — rate schedules are immutable. Revisions go through POST /:id/revise below.
   });
 
-  app.get("/api/v1/rate-schedules/:id", { config: { module: "rate_schedules", permission: "VIEW" } }, async (request, reply) => {
-    const { utilityId } = request.user;
-    const { id } = idParamSchema.parse(request.params);
-    const schedule = await getRateSchedule(id, utilityId);
-    return reply.send(schedule);
-  });
-
-  app.post("/api/v1/rate-schedules", { config: { module: "rate_schedules", permission: "CREATE" } }, async (request, reply) => {
-    const { utilityId, id: actorId, name: actorName } = request.user;
-    const data = createRateScheduleSchema.parse(request.body);
-    const schedule = await createRateSchedule(utilityId, actorId, actorName, data);
-    return reply.status(201).send(schedule);
-  });
-
-  app.post("/api/v1/rate-schedules/:id/revise", { config: { module: "rate_schedules", permission: "EDIT" } }, async (request, reply) => {
-    const { utilityId, id: actorId, name: actorName } = request.user;
-    const { id } = idParamSchema.parse(request.params);
-    const data = createRateScheduleSchema.parse(request.body);
-    const schedule = await reviseRateSchedule(utilityId, actorId, actorName, id, data);
-    return reply.status(201).send(schedule);
-  });
+  app.post(
+    "/api/v1/rate-schedules/:id/revise",
+    { config: { module: "rate_schedules", permission: "EDIT" } },
+    async (request, reply) => {
+      const { utilityId, id: actorId, name: actorName } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      const data = createRateScheduleSchema.parse(request.body);
+      const schedule = await reviseRateSchedule(utilityId, actorId, actorName, id, data);
+      return reply.status(201).send(schedule);
+    }
+  );
 }

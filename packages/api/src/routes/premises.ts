@@ -7,41 +7,37 @@ import {
   createPremise,
   updatePremise,
 } from "../services/premise.service.js";
-import { idParamSchema } from "../lib/route-schemas.js";
+import { registerCrudRoutes } from "../lib/crud-routes.js";
 
 export async function premiseRoutes(app: FastifyInstance) {
-  app.get("/api/v1/premises", { config: { module: "premises", permission: "VIEW" } }, async (request, reply) => {
-    const { utilityId } = request.user;
-    const query = premiseQuerySchema.parse(request.query);
-    const result = await listPremises(utilityId, query);
-    return reply.send(result);
-  });
+  // Custom /geo route must be registered BEFORE the factory's /:id route
+  // so Fastify's radix tree matches it first.
+  app.get(
+    "/api/v1/premises/geo",
+    { config: { module: "premises", permission: "VIEW" } },
+    async (request, reply) => {
+      const geoJson = await getPremisesGeo(request.user.utilityId);
+      return reply.send(geoJson);
+    }
+  );
 
-  app.get("/api/v1/premises/geo", { config: { module: "premises", permission: "VIEW" } }, async (request, reply) => {
-    const { utilityId } = request.user;
-    const geoJson = await getPremisesGeo(utilityId);
-    return reply.send(geoJson);
-  });
-
-  app.get("/api/v1/premises/:id", { config: { module: "premises", permission: "VIEW" } }, async (request, reply) => {
-    const { utilityId } = request.user;
-    const { id } = idParamSchema.parse(request.params);
-    const premise = await getPremise(id, utilityId);
-    return reply.send(premise);
-  });
-
-  app.post("/api/v1/premises", { config: { module: "premises", permission: "CREATE" } }, async (request, reply) => {
-    const { utilityId, id: actorId, name: actorName } = request.user;
-    const data = createPremiseSchema.parse(request.body);
-    const premise = await createPremise(utilityId, actorId, actorName, data);
-    return reply.status(201).send(premise);
-  });
-
-  app.patch("/api/v1/premises/:id", { config: { module: "premises", permission: "EDIT" } }, async (request, reply) => {
-    const { utilityId, id: actorId, name: actorName } = request.user;
-    const { id } = idParamSchema.parse(request.params);
-    const data = updatePremiseSchema.parse(request.body);
-    const premise = await updatePremise(utilityId, actorId, actorName, id, data);
-    return reply.send(premise);
+  registerCrudRoutes(app, {
+    basePath: "/api/v1/premises",
+    module: "premises",
+    list: {
+      querySchema: premiseQuerySchema,
+      service: (utilityId, query) => listPremises(utilityId, query as never),
+    },
+    get: getPremise,
+    create: {
+      bodySchema: createPremiseSchema,
+      service: (user, data) =>
+        createPremise(user.utilityId, user.actorId, user.actorName, data as never),
+    },
+    update: {
+      bodySchema: updatePremiseSchema,
+      service: (user, id, data) =>
+        updatePremise(user.utilityId, user.actorId, user.actorName, id, data as never),
+    },
   });
 }

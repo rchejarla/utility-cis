@@ -6,34 +6,23 @@ import {
   createBillingCycle,
   updateBillingCycle,
 } from "../services/billing-cycle.service.js";
-import { idParamSchema } from "../lib/route-schemas.js";
+import { registerCrudRoutes } from "../lib/crud-routes.js";
 
 export async function billingCycleRoutes(app: FastifyInstance) {
-  app.get("/api/v1/billing-cycles", { config: { module: "billing_cycles", permission: "VIEW" } }, async (request, reply) => {
-    const { utilityId } = request.user;
-    const result = await listBillingCycles(utilityId);
-    return reply.send(result);
-  });
-
-  app.get("/api/v1/billing-cycles/:id", { config: { module: "billing_cycles", permission: "VIEW" } }, async (request, reply) => {
-    const { utilityId } = request.user;
-    const { id } = idParamSchema.parse(request.params);
-    const result = await getBillingCycle(id, utilityId);
-    return reply.send(result);
-  });
-
-  app.post("/api/v1/billing-cycles", { config: { module: "billing_cycles", permission: "CREATE" } }, async (request, reply) => {
-    const { utilityId, id: actorId, name: actorName } = request.user;
-    const data = createBillingCycleSchema.parse(request.body);
-    const billingCycle = await createBillingCycle(utilityId, actorId, actorName, data);
-    return reply.status(201).send(billingCycle);
-  });
-
-  app.patch("/api/v1/billing-cycles/:id", { config: { module: "billing_cycles", permission: "EDIT" } }, async (request, reply) => {
-    const { utilityId, id: actorId, name: actorName } = request.user;
-    const { id } = idParamSchema.parse(request.params);
-    const data = updateBillingCycleSchema.parse(request.body);
-    const billingCycle = await updateBillingCycle(utilityId, actorId, actorName, id, data);
-    return reply.send(billingCycle);
+  registerCrudRoutes(app, {
+    basePath: "/api/v1/billing-cycles",
+    module: "billing_cycles",
+    list: { service: listBillingCycles },
+    get: getBillingCycle,
+    create: {
+      bodySchema: createBillingCycleSchema,
+      service: (user, data) =>
+        createBillingCycle(user.utilityId, user.actorId, user.actorName, data as never),
+    },
+    update: {
+      bodySchema: updateBillingCycleSchema,
+      service: (user, id, data) =>
+        updateBillingCycle(user.utilityId, user.actorId, user.actorName, id, data as never),
+    },
   });
 }

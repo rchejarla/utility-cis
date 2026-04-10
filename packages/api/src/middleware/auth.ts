@@ -21,8 +21,11 @@ export async function authMiddleware(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> {
-  // Bypass auth for health check
-  if (request.routeOptions?.url === "/health") {
+  // Bypass auth when a route is explicitly marked { config: { skipAuth: true } }.
+  // /health and /api/v1/openapi.json are the two public routes today; adding
+  // more only requires setting skipAuth on the route options.
+  const routeConfig = (request.routeOptions?.config ?? {}) as { skipAuth?: boolean };
+  if (routeConfig.skipAuth || request.routeOptions?.url === "/health") {
     return;
   }
 

@@ -5,8 +5,10 @@ export async function tenantMiddleware(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> {
-  // Bypass for health check (user may not be set)
-  if (request.routeOptions?.url === "/health") {
+  // Bypass for routes explicitly marked { config: { skipAuth: true } }
+  // or for the legacy /health path (kept for compatibility).
+  const routeConfig = (request.routeOptions?.config ?? {}) as { skipAuth?: boolean };
+  if (routeConfig.skipAuth || request.routeOptions?.url === "/health") {
     return;
   }
 

@@ -88,6 +88,16 @@ describe("Route registration", () => {
     expect(response.statusCode).toBe(401);
   });
 
+  it("serves the OpenAPI document at /api/v1/openapi.json without auth", async () => {
+    const app = await createTestApp();
+    const response = await app.inject({ method: "GET", url: "/api/v1/openapi.json" });
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.openapi).toBe("3.1.0");
+    expect(body.paths).toHaveProperty("/api/v1/accounts");
+    expect(body.components.schemas).toHaveProperty("CreateAccount");
+  });
+
   for (const { method, path } of EXPECTED_ROUTES) {
     it(`${method} ${path.split("?")[0]} is registered`, async () => {
       const app = await createTestApp();

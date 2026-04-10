@@ -24,6 +24,7 @@ import { attachmentRoutes } from "./routes/attachments.js";
 import { authRoutes } from "./routes/auth.js";
 import { userRoutes } from "./routes/users.js";
 import { roleRoutes } from "./routes/roles.js";
+import { buildOpenApiDocument } from "./lib/openapi.js";
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -50,6 +51,13 @@ export async function buildApp() {
 
   app.get("/health", { config: { skipAuth: true } }, async (_request, reply) => {
     return reply.send({ status: "ok" });
+  });
+
+  // Public OpenAPI document — generated from Zod validators so the spec
+  // is always in sync with the runtime contract. Unauthenticated so
+  // clients can pull it before provisioning credentials.
+  app.get("/api/v1/openapi.json", { config: { skipAuth: true } }, async (_request, reply) => {
+    return reply.send(buildOpenApiDocument());
   });
 
   await app.register(commodityRoutes);

@@ -1,18 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faMagnifyingGlass } from "@fortawesome/pro-solid-svg-icons";
-import { PageHeader } from "@/components/ui/page-header";
-import { FilterBar } from "@/components/ui/filter-bar";
-import { DataTable } from "@/components/ui/data-table";
+import { useState, useEffect } from "react";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { TypeBadge } from "@/components/ui/type-badge";
 import { StatCard } from "@/components/ui/stat-card";
+import { EntityListPage } from "@/components/ui/entity-list-page";
+import type { Column } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
-import { usePermission } from "@/lib/use-permission";
-import { AccessDenied } from "@/components/ui/access-denied";
 
 interface Customer {
   id: string;
@@ -26,9 +20,8 @@ interface Customer {
   accounts?: Array<unknown>;
 }
 
-interface CustomersResponse {
-  data: Customer[];
-  meta: { total: number; page: number; limit: number; pages: number };
+interface CountEnvelope {
+  meta?: { total?: number };
 }
 
 const CUSTOMER_TYPE_OPTIONS = [
@@ -41,218 +34,123 @@ const STATUS_OPTIONS = [
   { label: "Inactive", value: "INACTIVE" },
 ];
 
-export default function CustomersPage() {
-  const router = useRouter();
-  const { canView, canCreate } = usePermission("customers");
-  const [data, setData] = useState<Customer[]>([]);
-  const [meta, setMeta] = useState({ total: 0, page: 1, limit: 20, pages: 0 });
-  const [loading, setLoading] = useState(true);
-  const [customerType, setCustomerType] = useState<string | undefined>(undefined);
-  const [status, setStatus] = useState<string | undefined>(undefined);
-  const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+const columns: Column<Customer>[] = [
+  {
+    key: "name",
+    header: "Name",
+    render: (row) => (
+      <span style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "13px" }}>
+        {row.customerType === "ORGANIZATION"
+          ? row.organizationName ?? "—"
+          : `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim() || "—"}
+      </span>
+    ),
+  },
+  {
+    key: "customerType",
+    header: "Type",
+    render: (row) => <TypeBadge type={row.customerType} />,
+  },
+  {
+    key: "email",
+    header: "Email",
+    render: (row) => (
+      <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>{row.email ?? "—"}</span>
+    ),
+  },
+  {
+    key: "phone",
+    header: "Phone",
+    render: (row) => (
+      <span style={{ fontFamily: "monospace", fontSize: "12px", color: "var(--text-secondary)" }}>
+        {row.phone ?? "—"}
+      </span>
+    ),
+  },
+  {
+    key: "accounts",
+    header: "Accounts",
+    render: (row) => (
+      <span style={{ fontFamily: "monospace", fontSize: "12px" }}>
+        {row.accounts?.length ?? 0}
+      </span>
+    ),
+  },
+  {
+    key: "status",
+    header: "Status",
+    render: (row) => <StatusBadge status={row.status} />,
+  },
+];
 
-  // Stats derived from current data — supplement with a separate all-customers fetch
+function CustomerStats() {
   const [stats, setStats] = useState({ total: 0, individuals: 0, organizations: 0, active: 0 });
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params: Record<string, string> = { page: String(page), limit: "20" };
-      if (customerType) params.customerType = customerType;
-      if (status) params.status = status;
-      if (search) params.search = search;
-      const res = await apiClient.get<CustomersResponse>("/api/v1/customers", params);
-      setData(res.data);
-      setMeta(res.meta);
-    } catch (err) {
-      console.error("Failed to fetch customers", err);
-    } finally {
-      setLoading(false);
-    }
-  }, [page, customerType, status, search]);
-
-  const fetchStats = useCallback(async () => {
-    try {
-      const [all, indiv, orgs, active] = await Promise.all([
-        apiClient.get<CustomersResponse>("/api/v1/customers", { page: "1", limit: "1" }),
-        apiClient.get<CustomersResponse>("/api/v1/customers", { page: "1", limit: "1", customerType: "INDIVIDUAL" }),
-        apiClient.get<CustomersResponse>("/api/v1/customers", { page: "1", limit: "1", customerType: "ORGANIZATION" }),
-        apiClient.get<CustomersResponse>("/api/v1/customers", { page: "1", limit: "1", status: "ACTIVE" }),
-      ]);
-      setStats({
-        total: all.meta?.total ?? 0,
-        individuals: indiv.meta?.total ?? 0,
-        organizations: orgs.meta?.total ?? 0,
-        active: active.meta?.total ?? 0,
-      });
-    } catch (err) {
-      console.error("Failed to fetch stats", err);
-    }
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      apiClient.get<CountEnvelope>("/api/v1/customers", { page: "1", limit: "1" }),
+      apiClient.get<CountEnvelope>("/api/v1/customers", {
+        page: "1",
+        limit: "1",
+        customerType: "INDIVIDUAL",
+      }),
+      apiClient.get<CountEnvelope>("/api/v1/customers", {
+        page: "1",
+        limit: "1",
+        customerType: "ORGANIZATION",
+      }),
+      apiClient.get<CountEnvelope>("/api/v1/customers", {
+        page: "1",
+        limit: "1",
+        status: "ACTIVE",
+      }),
+    ])
+      .then(([all, indiv, orgs, active]) => {
+        if (cancelled) return;
+        setStats({
+          total: all.meta?.total ?? 0,
+          individuals: indiv.meta?.total ?? 0,
+          organizations: orgs.meta?.total ?? 0,
+          active: active.meta?.total ?? 0,
+        });
+      })
+      .catch((err) => console.error("Failed to fetch customer stats", err));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  useEffect(() => {
-    fetchStats();
-  }, [fetchStats]);
-
-  if (!canView) return <AccessDenied />;
-
-  const handleSearchChange = (value: string) => {
-    setSearchInput(value);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      setSearch(value);
-      setPage(1);
-    }, 300);
-  };
-
-  const columns = [
-    {
-      key: "name",
-      header: "Name",
-      render: (row: Customer) => (
-        <span style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "13px" }}>
-          {row.customerType === "ORGANIZATION"
-            ? (row.organizationName ?? "—")
-            : `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim() || "—"}
-        </span>
-      ),
-    },
-    {
-      key: "customerType",
-      header: "Type",
-      render: (row: Customer) => <TypeBadge type={row.customerType} />,
-    },
-    {
-      key: "email",
-      header: "Email",
-      render: (row: Customer) => (
-        <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>{row.email ?? "—"}</span>
-      ),
-    },
-    {
-      key: "phone",
-      header: "Phone",
-      render: (row: Customer) => (
-        <span style={{ fontFamily: "monospace", fontSize: "12px", color: "var(--text-secondary)" }}>
-          {row.phone ?? "—"}
-        </span>
-      ),
-    },
-    {
-      key: "accounts",
-      header: "Accounts",
-      render: (row: Customer) => (
-        <span style={{ fontFamily: "monospace", fontSize: "12px" }}>
-          {row.accounts?.length ?? 0}
-        </span>
-      ),
-    },
-    {
-      key: "status",
-      header: "Status",
-      render: (row: Customer) => <StatusBadge status={row.status} />,
-    },
-  ];
-
   return (
-    <div>
-      <PageHeader
-        title="Customers"
-        subtitle={`${meta.total.toLocaleString()} total customers`}
-        action={canCreate ? { label: "Add Customer", href: "/customers/new" } : undefined}
-      />
-
-      {/* Stat cards */}
-      <div style={{ display: "flex", gap: "12px", marginBottom: "20px", flexWrap: "wrap" }}>
-        <StatCard label="Total Customers" value={stats.total} icon="👥" />
-        <StatCard label="Individuals" value={stats.individuals} icon="👤" />
-        <StatCard label="Organizations" value={stats.organizations} icon="🏢" />
-        <StatCard label="Active" value={stats.active} icon="✓" />
-      </div>
-
-      {/* Prominent search bar */}
-      <div
-        style={{
-          position: "relative",
-          marginBottom: "12px",
-        }}
-      >
-        <div
-          style={{
-            position: "absolute",
-            left: "16px",
-            top: "50%",
-            transform: "translateY(-50%)",
-            color: "var(--text-muted)",
-            pointerEvents: "none",
-            display: "flex",
-            alignItems: "center",
-          }}
-        >
-          <FontAwesomeIcon icon={faMagnifyingGlass} style={{ width: 16, height: 16 }} />
-        </div>
-        <input
-          style={{
-            width: "100%",
-            padding: "12px 16px 12px 44px",
-            borderRadius: "var(--radius)",
-            border: "1px solid var(--border)",
-            background: "var(--bg-elevated)",
-            color: "var(--text-primary)",
-            fontSize: "14px",
-            fontFamily: "inherit",
-            outline: "none",
-            boxSizing: "border-box",
-            transition: "border-color 0.15s ease, box-shadow 0.15s ease",
-          }}
-          placeholder="Search by name, email, or phone..."
-          value={searchInput}
-          onChange={(e) => handleSearchChange(e.target.value)}
-          onFocus={(e) => {
-            e.currentTarget.style.borderColor = "var(--accent-primary)";
-            e.currentTarget.style.boxShadow = "0 0 0 3px rgba(59,130,246,0.15)";
-          }}
-          onBlur={(e) => {
-            e.currentTarget.style.borderColor = "var(--border)";
-            e.currentTarget.style.boxShadow = "none";
-          }}
-        />
-      </div>
-
-      <FilterBar
-        filters={[
-          {
-            key: "customerType",
-            label: "Type",
-            options: CUSTOMER_TYPE_OPTIONS,
-            value: customerType,
-            onChange: (v) => { setCustomerType(v); setPage(1); },
-          },
-          {
-            key: "status",
-            label: "Status",
-            options: STATUS_OPTIONS,
-            value: status,
-            onChange: (v) => { setStatus(v); setPage(1); },
-          },
-        ]}
-      />
-
-      <DataTable
-        columns={columns as any}
-        data={data as any}
-        meta={meta}
-        loading={loading}
-        onPageChange={setPage}
-        onRowClick={(row: any) => router.push(`/customers/${row.id}`)}
-      />
+    <div style={{ display: "flex", gap: "12px", marginBottom: "20px", flexWrap: "wrap" }}>
+      <StatCard label="Total Customers" value={stats.total} icon="👥" />
+      <StatCard label="Individuals" value={stats.individuals} icon="👤" />
+      <StatCard label="Organizations" value={stats.organizations} icon="🏢" />
+      <StatCard label="Active" value={stats.active} icon="✓" />
     </div>
+  );
+}
+
+export default function CustomersPage() {
+  return (
+    <EntityListPage<Customer>
+      title="Customers"
+      subject="customers"
+      module="customers"
+      endpoint="/api/v1/customers"
+      getDetailHref={(row) => `/customers/${row.id}`}
+      columns={columns}
+      newAction={{ label: "Add Customer", href: "/customers/new" }}
+      headerSlot={<CustomerStats />}
+      search={{
+        paramKey: "search",
+        placeholder: "Search by name, email, or phone...",
+        variant: "prominent",
+      }}
+      filters={[
+        { key: "customerType", label: "Type", options: CUSTOMER_TYPE_OPTIONS },
+        { key: "status", label: "Status", options: STATUS_OPTIONS },
+      ]}
+    />
   );
 }
