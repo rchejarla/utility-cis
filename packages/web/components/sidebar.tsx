@@ -21,6 +21,12 @@ import {
   faGear,
   faChevronLeft,
   faChevronRight,
+  faBolt,
+  faTriangleExclamation,
+  faDumpster,
+  faPauseCircle,
+  faTruck,
+  faArrowRightArrowLeft,
 } from "@fortawesome/pro-solid-svg-icons";
 
 interface NavItem {
@@ -42,8 +48,19 @@ const navSections: NavSection[] = [
       { href: "/customers", label: "Customers", icon: faUsers, module: "customers" },
       { href: "/premises", label: "Premises", icon: faLocationDot, module: "premises" },
       { href: "/meters", label: "Meters", icon: faGauge, module: "meters" },
+      { href: "/meter-reads", label: "Meter Reads", icon: faBolt, module: "meter_reads" },
+      { href: "/meter-events", label: "Meter Events", icon: faTriangleExclamation, module: "meter_events" },
       { href: "/accounts", label: "Accounts", icon: faUser, module: "accounts" },
       { href: "/service-agreements", label: "Agreements", icon: faFileContract, module: "agreements" },
+      { href: "/workflows", label: "Workflows", icon: faArrowRightArrowLeft, module: "workflows" },
+    ],
+  },
+  {
+    title: "Solid Waste",
+    items: [
+      { href: "/containers", label: "Containers", icon: faDumpster, module: "containers" },
+      { href: "/service-suspensions", label: "Service Holds", icon: faPauseCircle, module: "service_suspensions" },
+      { href: "/service-events", label: "RAMS Events", icon: faTruck, module: "service_events" },
     ],
   },
   {

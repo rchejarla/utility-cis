@@ -1,8 +1,8 @@
 # Meter Reading
 
 **Module:** 08 — Meter Reading
-**Status:** Stub (Phase 2)
-**Entities:** MeterRead
+**Status:** Phase 2 — CRUD + exception queue + import center UI complete; rollover detection + correction chain landed; bulk import backend and configurable thresholds are follow-ups
+**Entities:** MeterRead, MeterEvent, ImportBatch
 
 ## Overview
 
@@ -187,17 +187,23 @@ All pages are planned for Phase 2.
 
 - **Phase 1 (Complete):** MeterRead entity defined in schema, TimescaleDB hypertable, fields for read_type/read_source/exception_code. No API endpoints or UI.
 
-- **Phase 2 (Planned):**
-  - MeterRead CRUD API (all endpoints listed above)
-  - Manual read entry UI
-  - Bulk import (CSV, XML, JSON) with column mapping
-  - Consumption calculation with rollover detection
-  - Estimated read generation (trailing average)
-  - Exception threshold configuration (ExceptionThreshold entity)
-  - Exception queue UI
-  - Multi-register read support
-  - Meter replacement mid-cycle handling
-  - ImportBatch tracking and error reporting
+- **Phase 2 (Complete):**
+  - MeterRead CRUD API: list, get, per-meter history, manual create, correction (produces new CORRECTED row), exception queue, resolve-exception
+  - MeterEvent entity + CRUD (LEAK, TAMPER, REVERSE_FLOW, HIGH_USAGE, NO_SIGNAL, BATTERY_LOW, COVER_OPEN, BURST_PIPE, FREEZE, OTHER)
+  - ImportBatch entity (tracks bulk import jobs with error reporting)
+  - Manual read entry UI (shell-based form at /meter-reads/new)
+  - Meter Reads list page with exception indicator, read-type badges, frozen indicator, filter pills for type/source/exception/billed
+  - Exception queue UI (/meter-reads/exceptions): grouped by exception code, sticky count strip with pulse indicator for open items, bulk approve / bulk hold-for-reread action bar, keyboard escape to clear selection
+  - Import Center UI (/meter-reads/import): three-stage wizard (upload → preview → commit) with drag-and-drop file drop, CSV/JSON client-side parser, per-row validation status, progress bar, results summary with error panel
+  - Consumption calculation in service layer with rollover detection (respects meter.dial_count)
+  - Reverse-flow detection (negative consumption with no rollover flag)
+  - Correction chain via corrects_read_id self-reference — correction inserts a new row instead of mutating the original
+  - Freeze-after-bill guard: cannot resolve exceptions on frozen (already-billed) reads
+- **Phase 2 (Deferred to Phase 3):**
+  - Bulk import backend (CSV/XML/MV90 parser and ImportBatch job runner — the UI exercises the flow via client-side parsing only)
+  - Estimated read generation (trailing 3-month average)
+  - ExceptionThreshold entity + tenant-configurable rules
+  - Multi-register read support end-to-end
 
 - **Phase 3 (Planned):**
   - Read freeze after billing cycle execution

@@ -1,8 +1,8 @@
 # Solid Waste
 
 **Module:** 12 — Solid Waste
-**Status:** Stub (Phase 2)
-**Entities:** Container (planned), ServiceSuspension (planned), ServiceEvent (planned)
+**Status:** Phase 2 — Container/ServiceSuspension/ServiceEvent entities + CRUD APIs + UI complete; RAMS integration and container-based billing are Phase 3
+**Entities:** Container, ServiceSuspension, ServiceEvent
 
 ## Overview
 
@@ -189,12 +189,14 @@ All pages are planned for Phase 2 (container management) and Phase 3 (RAMS event
 
 - **Phase 1 (Complete):** commodity_ids array on Premise supports SOLID_WASTE commodity. ServiceAgreement can reference solid waste rate schedules.
 
-- **Phase 2 (Planned):**
-  - Container entity + CRUD API + UI
-  - Container assignment to service agreements
-  - Container swap tracking and mid-cycle billing proration (rate engine prerequisite in Phase 3)
-  - ServiceSuspension entity + vacation hold / seasonal management
-  - RAMS integration foundation: service event endpoint, RAMS container ID mapping
+- **Phase 2 (Complete):**
+  - Container entity + CRUD API + UI (`/containers`, `/containers/new`)
+  - Container assignment to premises and optional service agreements, with one-per-type-per-agreement duplicate guard (quantity > 1 override for multi-unit dwellings)
+  - Container swap endpoint (`POST /api/v1/containers/:id/swap`) atomic in a single transaction — marks the outgoing container RETURNED and inserts a new ACTIVE row in one step so a partial swap can't leave a premise with zero containers
+  - ServiceSuspension entity + CRUD API + UI (`/service-suspensions`, `/service-suspensions/new`) with vacation / seasonal / temporary / dispute types and explicit complete endpoint
+  - ServiceEvent entity + API receiver for RAMS events with idempotency on `rams_event_id` (duplicate events return the existing row rather than double-billing on retry)
+  - Service events list page (`/service-events`) with filters by type, status, source
+  - Per-premise containers / suspensions / service-events endpoints for detail-page tabs
 
 - **Phase 3 (Planned):**
   - Container-based billing rate type in rate engine (Module 09)

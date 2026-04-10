@@ -2,7 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { useTheme } from "@/lib/theme-provider";
-import { useState } from "react";
+import { GlobalSearch } from "./ui/global-search";
 
 function getBreadcrumbs(pathname: string): string[] {
   const segments = pathname.split("/").filter(Boolean);
@@ -56,24 +56,6 @@ function MoonIcon() {
   );
 }
 
-function SearchIcon() {
-  return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="11" cy="11" r="8" />
-      <line x1="21" y1="21" x2="16.65" y2="16.65" />
-    </svg>
-  );
-}
-
 interface TopbarProps {
   compact?: boolean;
 }
@@ -81,7 +63,6 @@ interface TopbarProps {
 export function Topbar({ compact = false }: TopbarProps) {
   const pathname = usePathname();
   const { mode, toggle } = useTheme();
-  const [searchValue, setSearchValue] = useState("");
 
   const breadcrumbs = getBreadcrumbs(pathname);
   const effectiveMode = mode === "system"
@@ -195,37 +176,10 @@ export function Topbar({ compact = false }: TopbarProps) {
         ))}
       </nav>
 
-      {/* Search */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          background: "var(--bg-card)",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius)",
-          padding: "6px 12px",
-          width: "240px",
-        }}
-      >
-        <span style={{ color: "var(--text-muted)" }}>
-          <SearchIcon />
-        </span>
-        <input
-          type="text"
-          value={searchValue}
-          onChange={(e) => setSearchValue(e.target.value)}
-          placeholder="Search..."
-          style={{
-            background: "transparent",
-            border: "none",
-            outline: "none",
-            color: "var(--text-primary)",
-            fontSize: "13px",
-            width: "100%",
-          }}
-        />
-      </div>
+      {/* Global search — opens a Cmd/Ctrl+K overlay that queries the
+          full-text search endpoint across customers, premises, accounts,
+          and meters. The overlay itself is inside GlobalSearch. */}
+      <GlobalSearch />
 
       {/* Theme toggle */}
       <button

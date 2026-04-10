@@ -105,7 +105,7 @@ Every significant CIS state change emits a domain event. ApptorFlow subscribes a
 
 ### 4.1 Entity Summary
 
-**21 entities** across 8 categories:
+**26 entities** across 9 categories:
 
 | Category | Entities |
 |----------|----------|
@@ -114,7 +114,8 @@ Every significant CIS state change emits a domain event. ApptorFlow subscribes a
 | **Core** | Premise, Meter, MeterRegister, Account |
 | **Agreement** | ServiceAgreement, ServiceAgreementMeter (junction) |
 | **Configuration** | RateSchedule, BillingCycle |
-| **Operations** | MeterRead (TimescaleDB hypertable), Attachment |
+| **Operations** | MeterRead (TimescaleDB hypertable, composite PK on `(id, read_datetime)`), MeterEvent, ImportBatch, Attachment |
+| **Solid Waste** | Container, ServiceSuspension, ServiceEvent |
 | **System** | AuditLog, TenantTheme, UserPreference |
 | **RBAC** | CisUser, Role, TenantModule |
 
@@ -514,7 +515,7 @@ The design principle is **defense in depth**: Zod returns nice errors at the API
 
 All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id` claim except for two explicitly public routes: `/health` (liveness probe) and `/api/v1/openapi.json` (machine-readable API contract). Public routes are marked with `{ config: { skipAuth: true } }` on the route options; the auth and tenant middlewares honor that flag so adding a new public route is a one-line config change rather than a middleware edit.
 
-### 5.2 Endpoints (60 current)
+### 5.2 Endpoints (~85 current)
 
 | Method | Path | Module |
 |--------|------|--------|
@@ -583,6 +584,32 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | PATCH | `/api/v1/roles/:id` | RBAC (settings) |
 | DELETE | `/api/v1/roles/:id` | RBAC (settings) |
 | GET | `/api/v1/tenant-modules` | RBAC (settings) |
+| GET | `/api/v1/meter-reads` | Meter Reads |
+| GET | `/api/v1/meter-reads/exceptions` | Meter Reads (exception queue) |
+| GET | `/api/v1/meter-reads/:id` | Meter Reads |
+| POST | `/api/v1/meter-reads` | Meter Reads (manual entry) |
+| PATCH | `/api/v1/meter-reads/:id` | Meter Reads (creates CORRECTED row) |
+| POST | `/api/v1/meter-reads/:id/resolve-exception` | Meter Reads |
+| GET | `/api/v1/meters/:meterId/reads` | Meter Reads (per-meter history) |
+| GET | `/api/v1/meter-events` | Meter Events |
+| GET/POST/PATCH | `/api/v1/meter-events[/:id]` | Meter Events |
+| GET | `/api/v1/containers` | Containers (solid waste) |
+| GET/POST/PATCH | `/api/v1/containers[/:id]` | Containers |
+| POST | `/api/v1/containers/:id/swap` | Containers (atomic size/type swap) |
+| GET | `/api/v1/premises/:premiseId/containers` | Containers |
+| GET | `/api/v1/service-agreements/:agreementId/containers` | Containers |
+| GET | `/api/v1/service-suspensions` | Service Suspensions |
+| GET/POST/PATCH | `/api/v1/service-suspensions[/:id]` | Service Suspensions |
+| POST | `/api/v1/service-suspensions/:id/complete` | Service Suspensions |
+| GET | `/api/v1/service-agreements/:agreementId/suspensions` | Service Suspensions |
+| GET | `/api/v1/service-events` | RAMS Events |
+| GET/POST | `/api/v1/service-events[/:id]` | RAMS Events |
+| POST | `/api/v1/service-events/:id/resolve` | RAMS Events |
+| GET | `/api/v1/premises/:premiseId/service-events` | RAMS Events |
+| POST | `/api/v1/service-agreements/:id/transfer` | Workflows (transfer of service) |
+| POST | `/api/v1/workflows/move-in` | Workflows (coordinated customer + account + agreement) |
+| POST | `/api/v1/workflows/move-out` | Workflows (atomic finalize + final reads) |
+| GET | `/api/v1/search` | Full-text search across customers/premises/accounts/meters |
 
 ### 5.3 Cross-Cutting Patterns
 
@@ -605,7 +632,23 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 - **Rate versioning:** Creating a new version auto-expires predecessor (in $transaction)
 - **Soft delete only:** Status changes to INACTIVE/CLOSED/REMOVED — no hard deletes
 
-### 5.5 OpenAPI Contract
+### 5.5 Cross-entity Workflows
+
+Phase 2 adds three multi-entity operations that don't fit any single CRUD shape and therefore have their own endpoints. Each wraps its work in a single PostgreSQL transaction so partial state is impossible — every row lands or none do — and each emits a dedicated audit event (`workflow.transfer_service`, `workflow.move_in`, `workflow.move_out`) so the audit log shows the logical operation rather than a fan-out of per-entity updates.
+
+**Transfer of service** (`POST /api/v1/service-agreements/:id/transfer`): reassigns an active service agreement from the source account to a target account as of the transfer date. Flow inside the transaction: optionally record a FINAL meter read on the source's primary meter → mark the source agreement `status=FINAL` with `end_date=transferDate` → create a new agreement on the target account cloning `premise/commodity/rateSchedule/billingCycle/readSequence` with `start_date=transferDate` → copy over the active meter assignments → optionally record an ACTUAL read on the new side. The source account must be different from the target and the source agreement must not already be closed.
+
+**Move-in** (`POST /api/v1/workflows/move-in`): coordinated setup of a new customer (or reference to existing) + account + one-or-more service agreements + optional initial meter reads at a premise. The request body's `existingCustomerId` and `newCustomer` are mutually exclusive — exactly one must be present, enforced by the Zod schema's refine rule. All rows land in a single transaction keyed on `move_in_date`.
+
+**Move-out** (`POST /api/v1/workflows/move-out`): finalizes every active or pending agreement on a given account at a given premise. Flow: look up active agreements → for each meter on each agreement, record a FINAL read if one was supplied and mark the meter assignment removed → transition each agreement to `status=FINAL` with `end_date=moveOutDate` → optionally close the account if no other agreements remain on it. The "close other premises first" guard is checked inside the transaction before the account is closed so it cannot be bypassed by concurrent writes.
+
+### 5.6 Full-text Search
+
+A single `GET /api/v1/search?q=...` endpoint queries the four entity kinds users search by name or identifier: customers (weighted on name → email → phone), premises (weighted on address → city/state/zip), accounts (account number), and meters (meter number). Each table has a Postgres `tsvector` generated column kept in sync by the database itself plus a GIN index, defined in `packages/shared/prisma/migrations/02_fts/migration.sql`. The service layer uses raw parameterized SQL via `$queryRawUnsafe` against those columns — Prisma doesn't need to model the tsvector column for application-layer code to work. Results from all four kinds are merged and sorted by `ts_rank` descending before being capped to the query's limit.
+
+Query terms are split on whitespace, non-word characters are stripped for safety, and each term is converted into a prefix match (`term:*`) before being joined with `&` so "jon mai" finds "jones main street". The web side wires this into a Cmd/Ctrl+K overlay in the topbar with debounced fetches and keyboard navigation through the result list.
+
+### 5.7 OpenAPI Contract
 
 The API exposes a machine-readable OpenAPI 3.1 document at `GET /api/v1/openapi.json` (unauthenticated). The document is generated at request time from the Zod validators in `@utility-cis/shared` via `zod-to-json-schema`; no hand-written schema files exist, which means the contract cannot drift from runtime validation. The generator lives in `packages/api/src/lib/openapi.ts` and registers:
 
@@ -697,7 +740,9 @@ RBAC (complete): CisUser, Role, TenantModule entities added (+3 entities, now 21
 
 Structural review + hardening (complete): End-to-end adversarial review across security, data model, API contract, UI/a11y, modularity, and testability. Security hardening (parameterized `set_config`, dev-endpoint gating, tenant-scoped RBAC cache, attachment path and MIME hardening, `@fastify/helmet`); data-model tightening (onDelete on every FK, 20+ new FK indexes, MeterRead freeze/correction fields, rate schedule date index, CHECK constraints for non-negative numerics, date ordering, day-of-month bounds, email and language-tag format, non-empty identifiers); API contract (Prisma error code mapping, sort allowlisting, strict create/query schemas, shared `idParamSchema`, machine-readable OpenAPI 3.1 document at `/api/v1/openapi.json` generated from Zod); UI/WCAG (error boundaries, WCAG AA `StatusBadge`, accessible `ConfirmDialog`, `FormField` aria injection, `SearchableSelect` ARIA combobox, `DataTable` scope + keyboard nav, skip-to-main-content, theme-aware semantic badges). Modularity: `auditWrap` helper applied to 10 services, `paginatedTenantList` to 6, `registerCrudRoutes` factory to 8 route files, `EntityListPage` + `usePaginatedList` shell adopted by 6 list pages, badge consolidation, `@fastify/helmet`. Latent middleware bug fixed: `skipAuth` route config is now honored by both auth and tenant middlewares. Test count grew from 32 to **184** (47 shared + 121 api + 16 web) across 20 files; web package now has a full vitest + React Testing Library + jsdom setup wired into `pnpm verify`. Total: 60 endpoints live (+1 `/api/v1/openapi.json`).
 
-Still planned for Phase 2: GIS integration, move-in/move-out, MeterRead CRUD, meter events, container/cart management for solid waste, full-text search, transfer of service.
+Phase 2 operations work landed (2026-04-10): MeterRead CRUD API with consumption + rollover + reverse-flow detection, correction chain (CORRECTED rows preserve originals via `corrects_read_id`), exception queue endpoint + UI, import center UI (three-stage wizard). MeterEvent entity + CRUD for LEAK/TAMPER/BURST_PIPE/FREEZE/REVERSE_FLOW/HIGH_USAGE/BATTERY_LOW/NO_SIGNAL/COVER_OPEN/OTHER with severity + resolution. Solid waste: Container + ServiceSuspension + ServiceEvent entities with CRUD, atomic container swap transaction, RAMS event receiver with idempotency on `rams_event_id`, per-premise/agreement detail tabs. Cross-entity workflows: transfer of service (atomic close-source + open-target), move-in (coordinated customer + account + agreements + initial reads), move-out (finalize all agreements at a premise + final reads + optional account close). Full-text search via Postgres tsvector generated columns + GIN indexes on customer/premise/account/meter, exposed as `GET /api/v1/search` and wired to a Cmd/Ctrl+K topbar overlay. Nine new modules added to the RBAC module list (meter_reads, meter_events, containers, service_suspensions, service_events, workflows, search) with preset-role permission matrices updated for CSR / Field Tech / Read-Only. Sidebar extended with Operations and Solid Waste sections. Total: ~85 endpoints live.
+
+Still planned for Phase 2: GIS integration (deferred to Phase 3 as it depends on the map-tile integration and a service territory entity).
 
 ### Phase 3
 Billing engine + notifications + delinquency: Rate engine calculations (including WQA), billing cycle execution, SaaSLogic integration, bill document generation, late fees, payment plans, delinquency management, notification engine.

@@ -1,0 +1,133 @@
+"use client";
+
+import { EntityListPage } from "@/components/ui/entity-list-page";
+import type { Column } from "@/components/ui/data-table";
+
+interface ServiceSuspension {
+  id: string;
+  suspensionType: string;
+  status: string;
+  startDate: string;
+  endDate?: string | null;
+  billingSuspended: boolean;
+  ramsNotified: boolean;
+  reason?: string | null;
+  serviceAgreement?: { agreementNumber: string };
+}
+
+const TYPE_OPTIONS = [
+  { value: "VACATION_HOLD", label: "Vacation hold" },
+  { value: "SEASONAL", label: "Seasonal" },
+  { value: "TEMPORARY", label: "Temporary" },
+  { value: "DISPUTE", label: "Dispute" },
+];
+
+const STATUS_OPTIONS = [
+  { value: "PENDING", label: "Pending" },
+  { value: "ACTIVE", label: "Active" },
+  { value: "COMPLETED", label: "Completed" },
+  { value: "CANCELLED", label: "Cancelled" },
+];
+
+const columns: Column<ServiceSuspension>[] = [
+  {
+    key: "suspensionType",
+    header: "Type",
+    render: (row) => (
+      <span style={{ fontSize: "11px", fontWeight: 700, letterSpacing: "0.04em" }}>
+        {row.suspensionType.replace("_", " ")}
+      </span>
+    ),
+  },
+  {
+    key: "serviceAgreement",
+    header: "Agreement",
+    render: (row) => (
+      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>
+        {row.serviceAgreement?.agreementNumber ?? "—"}
+      </span>
+    ),
+  },
+  {
+    key: "period",
+    header: "Period",
+    render: (row) => (
+      <span style={{ fontSize: "12px" }}>
+        {row.startDate?.slice(0, 10) ?? "?"} →{" "}
+        {row.endDate ? row.endDate.slice(0, 10) : <em style={{ color: "var(--text-muted)" }}>open</em>}
+      </span>
+    ),
+  },
+  {
+    key: "billingSuspended",
+    header: "Billing",
+    render: (row) => (
+      <span
+        style={{
+          fontSize: "10px",
+          fontWeight: 700,
+          color: row.billingSuspended ? "var(--warning)" : "var(--text-muted)",
+        }}
+      >
+        {row.billingSuspended ? "◉ SUSPENDED" : "○ ACTIVE"}
+      </span>
+    ),
+  },
+  {
+    key: "ramsNotified",
+    header: "RAMS",
+    render: (row) => (
+      <span
+        style={{
+          fontSize: "10px",
+          color: row.ramsNotified ? "var(--success)" : "var(--danger)",
+        }}
+      >
+        {row.ramsNotified ? "✓ synced" : "✗ pending"}
+      </span>
+    ),
+  },
+  {
+    key: "status",
+    header: "Status",
+    render: (row) => (
+      <span
+        style={{
+          display: "inline-flex",
+          padding: "2px 8px",
+          borderRadius: "999px",
+          fontSize: "10px",
+          fontWeight: 700,
+          letterSpacing: "0.04em",
+          background: row.status === "ACTIVE" ? "var(--warning-subtle)" : "var(--bg-elevated)",
+          color: row.status === "ACTIVE" ? "var(--warning)" : "var(--text-secondary)",
+          border:
+            row.status === "ACTIVE"
+              ? "1px solid var(--warning)"
+              : "1px solid var(--border)",
+          width: "fit-content",
+        }}
+      >
+        {row.status}
+      </span>
+    ),
+  },
+];
+
+export default function SuspensionsPage() {
+  return (
+    <EntityListPage<ServiceSuspension>
+      title="Service Holds"
+      subject="holds"
+      module="service_suspensions"
+      endpoint="/api/v1/service-suspensions"
+      getDetailHref={(row) => `/service-suspensions/${row.id}`}
+      columns={columns}
+      newAction={{ label: "+ New Hold", href: "/service-suspensions/new" }}
+      filters={[
+        { key: "status", label: "Status", options: STATUS_OPTIONS },
+        { key: "suspensionType", label: "Type", options: TYPE_OPTIONS },
+      ]}
+    />
+  );
+}
