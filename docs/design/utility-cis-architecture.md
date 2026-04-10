@@ -105,7 +105,7 @@ Every significant CIS state change emits a domain event. ApptorFlow subscribes a
 
 ### 4.1 Entity Summary
 
-**21 entities** across 5 categories:
+**21 entities** across 8 categories:
 
 | Category | Entities |
 |----------|----------|
@@ -116,7 +116,7 @@ Every significant CIS state change emits a domain event. ApptorFlow subscribes a
 | **Configuration** | RateSchedule, BillingCycle |
 | **Operations** | MeterRead (TimescaleDB hypertable), Attachment |
 | **System** | AuditLog, TenantTheme, UserPreference |
-| **RBAC** | CisUser, CisRole, TenantModule |
+| **RBAC** | CisUser, Role, TenantModule |
 
 ### 4.2 Entity Relationship Diagram
 
@@ -492,18 +492,33 @@ Generic file attachment for any entity. Uses entityType + entityId pattern to as
 
 **Indexes:** [utility_id, entity_type, entity_id]
 
+### 4.21 Database Invariants (CHECK constraints)
+
+Zod validators guard the API boundary, but any backstop invariants that absolutely must hold — regardless of which service, migration, or ad-hoc SQL session writes the data — live as PostgreSQL CHECK constraints. The full list is in `packages/shared/prisma/migrations/01_check_constraints/migration.sql` and is applied automatically by `setup_db.bat` after the RLS migration. The file is idempotent (`DROP CONSTRAINT IF EXISTS` + `ADD CONSTRAINT`) so re-running setup is safe.
+
+| Constraint category | Examples |
+|---|---|
+| Non-negative / positive numerics | `account.deposit_amount >= 0`, `uom.conversion_factor > 0`, `meter.multiplier > 0`, `meter.dial_count > 0`, `commodity.display_order >= 0`, `rate_schedule.version >= 1` |
+| Date ordering | `rate_schedule.expiration_date > effective_date`, `service_agreement.end_date >= start_date`, `meter.removal_date >= install_date`, `service_agreement_meter.removed_date >= added_date` |
+| Day-of-month bounds | `billing_cycle.read_day_of_month BETWEEN 1 AND 31`, same for `bill_day_of_month` (Zod tightens further to 1–28 at the API boundary; CHECK is the calendar floor) |
+| Format checks | `customer.email` / `contact.email` / `cis_user.email` match a basic email regex; `account.language_pref` matches `^[a-z]{2}-[A-Z]{2}$` |
+| Non-empty identifiers | `account.account_number`, `meter.meter_number`, `service_agreement.agreement_number`, `commodity.code`, `uom.code`, `billing_cycle.cycle_code`, `rate_schedule.code` |
+
+The design principle is **defense in depth**: Zod returns nice errors at the API boundary, Prisma constrains the schema at application build time, and CHECK constraints are the storage-layer backstop. A bug in any single layer cannot produce data that violates the other layers' assumptions.
+
 ---
 
 ## 5. API Design
 
 ### 5.1 Base URL & Auth
 
-All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `/health`).
+All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id` claim except for two explicitly public routes: `/health` (liveness probe) and `/api/v1/openapi.json` (machine-readable API contract). Public routes are marked with `{ config: { skipAuth: true } }` on the route options; the auth and tenant middlewares honor that flag so adding a new public route is a one-line config change rather than a middleware edit.
 
-### 5.2 Endpoints (59 current)
+### 5.2 Endpoints (60 current)
 
 | Method | Path | Module |
 |--------|------|--------|
+| GET | `/api/v1/openapi.json` | Meta (public, no auth) |
 | GET | `/api/v1/auth/me` | Auth (RBAC) |
 | GET | `/api/v1/customers` | Customer |
 | POST | `/api/v1/customers` | Customer |
@@ -571,11 +586,15 @@ All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `
 
 ### 5.3 Cross-Cutting Patterns
 
-**Pagination:** `?page=1&limit=25&sort=createdAt&order=desc` → `{ data: [...], meta: { total, page, limit, pages } }`
+**Pagination:** `?page=1&limit=25&sort=createdAt&order=desc` → `{ data: [...], meta: { total, page, limit, pages } }`. Sort fields are allowlisted per entity; values outside the allowlist fall back to the entity's default sort.
 
-**Errors:** `{ error: { code: "VALIDATION_ERROR", message: "...", details: [...] } }`
+**Errors:** `{ error: { code: "VALIDATION_ERROR", message: "...", details: [...] } }`. Prisma error codes (P2002 unique constraint, P2025 record not found, P2003 foreign key, P2014 relation constraint) are mapped to HTTP status codes and friendly messages by a central error handler.
 
-**Validation:** Zod schemas in shared package, reused by API and UI.
+**Validation:** Zod schemas live in the `@utility-cis/shared` package and are reused by the API (as runtime validators) and by the web (for form validation and TypeScript types via `z.infer`). The same schemas also feed the OpenAPI document generator (5.5), which keeps the machine-readable API contract in lockstep with the runtime contract.
+
+**CRUD factory:** Entities that follow the standard list/get/create/update shape register their routes via `registerCrudRoutes(app, config)` from `packages/api/src/lib/crud-routes.ts`. The factory owns RBAC config, Zod parsing, `request.user` extraction, and status-code shaping; route files just declare their `basePath`, `module`, and service adapter closures. Entities with unusual requirements (premises with its `/geo` endpoint, rate-schedules with `/:id/revise` and no PATCH, roles with DELETE) supply whatever subset fits and add custom routes alongside the factory call.
+
+**Audit events:** Mutating services wrap their create/update operations in `auditCreate` / `auditUpdate` from `packages/api/src/lib/audit-wrap.ts`, which emits a `domain-event` carrying `beforeState` / `afterState` / actor / timestamp. A single writer subscribes and persists to `audit_log`, so no service owns event shaping directly.
 
 ### 5.4 Business Rules
 
@@ -585,6 +604,16 @@ All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `
 - **Account closure guard:** Cannot close account with active agreements (enforced in $transaction)
 - **Rate versioning:** Creating a new version auto-expires predecessor (in $transaction)
 - **Soft delete only:** Status changes to INACTIVE/CLOSED/REMOVED — no hard deletes
+
+### 5.5 OpenAPI Contract
+
+The API exposes a machine-readable OpenAPI 3.1 document at `GET /api/v1/openapi.json` (unauthenticated). The document is generated at request time from the Zod validators in `@utility-cis/shared` via `zod-to-json-schema`; no hand-written schema files exist, which means the contract cannot drift from runtime validation. The generator lives in `packages/api/src/lib/openapi.ts` and registers:
+
+- **Component schemas** — every `create*Schema`, `update*Schema`, and `*QuerySchema` for the major entities (32 schemas total).
+- **Paths** — every endpoint with its method, tags, security scheme (`bearerAuth`), request body and query parameter `$ref`s, standard error responses (400/401/403/404), and the correct success status (200 on read/update, 201 on create, 204 on delete).
+- **Paginated envelope shape** — list endpoints declare the `{ data: [...], meta: { total, page, limit, pages } }` wrapper so clients can generate correct response types.
+
+Clients can pull the document and generate SDKs, contract tests, or API consoles. The structural test suite at `packages/api/src/__tests__/openapi.test.ts` enforces that the document stays well-formed: required paths and methods are present, every `$ref` resolves to a defined component, paginated envelopes are declared on list endpoints, creates return 201, and `:id` path parameters are `uuid` format.
 
 ---
 
@@ -625,9 +654,14 @@ All endpoints under `/api/v1`. All require JWT with `utility_id` claim (except `
 
 | Component | Purpose |
 |-----------|---------|
+| `EntityListPage` | Declarative list-page shell (title, subject, module, endpoint, columns, filters, search, newAction, headerSlot). Owns state, fetching, debounce, page-reset on filter change, and permission gating. Used by customers, accounts, meters, service-agreements, rate-schedules, billing-cycles. |
+| `usePaginatedList` | Data hook behind EntityListPage: owns data/meta/loading/page state, handles both paginated envelopes and plain-array endpoints, drops undefined query params, guards against setState after unmount. |
 | `SearchableSelect` | Dropdown with live search for customer/owner selection; used on Premise create/edit and Customer detail |
 | `DatePicker` | Calendar picker for date fields (install date, start date, etc.) |
 | `HelpTooltip` | Inline icon button that displays business rule references in a popover |
+| `StatusBadge` / `CommodityBadge` / `TypeBadge` | Theme-aware badges driven by semantic CSS variables (`--success`, `--warning`, `--danger`, `--info`) so they automatically re-tone between light and dark modes. |
+| `ConfirmDialog` | Accessible confirmation modal (role=dialog, aria-modal, ESC, focus trap, return focus) for destructive actions. |
+| `FormField` | Injects `aria-invalid` / `aria-describedby` via `cloneElement` so error messages are announced by assistive tech. |
 | Navigation progress bar | Thin loading bar at top of page on all route transitions |
 
 ### 6.4 Theme System
@@ -659,7 +693,9 @@ Core foundation: 17 entities, 29 API endpoints, admin UI with map view and theme
 ### Phase 2 (In Progress)
 Enhanced CIS + UI: Customer CRUD API (4 endpoints), Contact CRUD API (4 endpoints), BillingAddress CRUD API (3 endpoints), Agreement meter assignment endpoints (2 endpoints), Attachment CRUD (4 endpoints), UOM delete endpoint (1 endpoint) — total 48 endpoints live. Customer list/detail UI with command center, inline editing on all detail pages (Premise, Customer, Account, Meter, Agreement, BillingCycle), Deactivate/Close/Remove buttons with confirmation dialogs, Add Meter/Agreement inline forms on Premise detail, Add Contact/BillingAddress tabs on Account detail, Add Account inline form on Customer detail, Add/remove meter assignments on Agreement detail, SearchableSelect + DatePicker + HelpTooltip components, navigation progress bar, contextual business rule tooltips on all create forms, owner filter on Premise list, commodity badges on map popups. Attachment tab added to all 5 detail pages (Premise, Customer, Account, Meter, ServiceAgreement) with Upload button in tab bar. Commodity editing on Premise inline edit (toggle buttons). Meter detail: install date, UOM, removal date now editable with DatePicker. UOM inline edit + delete with confirmation (BR-UO-005/BR-UO-006 guard). BR-UO-003 auto-enforcement (setting isBaseUnit=true unmarks existing base unit). Conversion factor label shows base unit dynamically. Agreement status transitions corrected: PENDING→ACTIVE→FINAL→CLOSED (no INACTIVE). Modern thin scrollbars. PageHeader supports onClick action. HelpTooltip uses styled popup (not native title).
 
-RBAC (complete): CisUser, CisRole, TenantModule entities added (+3 entities, now 21 total). Authorization middleware with Redis caching (user role 5min TTL, tenant modules 10min TTL). GET /api/v1/auth/me endpoint. User CRUD (4 endpoints) and Role CRUD (5 endpoints) under settings:VIEW/CREATE/EDIT/DELETE permissions. Tenant modules list endpoint. Frontend AuthContext + usePermission hook + ModuleContext. Sidebar permission filtering. Route permission declarations on all /api/v1/* routes. UI button permission gating across all pages. Settings page with Users tab and Roles tab (permissions matrix). Total: 59 endpoints live (+11 RBAC endpoints).
+RBAC (complete): CisUser, Role, TenantModule entities added (+3 entities, now 21 total). Authorization middleware with Redis caching (user role 5min TTL, tenant modules 10min TTL). GET /api/v1/auth/me endpoint. User CRUD (4 endpoints) and Role CRUD (5 endpoints) under settings:VIEW/CREATE/EDIT/DELETE permissions. Tenant modules list endpoint. Frontend AuthContext + usePermission hook + ModuleContext. Sidebar permission filtering. Route permission declarations on all /api/v1/* routes. UI button permission gating across all pages. Settings page with Users tab and Roles tab (permissions matrix).
+
+Structural review + hardening (complete): End-to-end adversarial review across security, data model, API contract, UI/a11y, modularity, and testability. Security hardening (parameterized `set_config`, dev-endpoint gating, tenant-scoped RBAC cache, attachment path and MIME hardening, `@fastify/helmet`); data-model tightening (onDelete on every FK, 20+ new FK indexes, MeterRead freeze/correction fields, rate schedule date index, CHECK constraints for non-negative numerics, date ordering, day-of-month bounds, email and language-tag format, non-empty identifiers); API contract (Prisma error code mapping, sort allowlisting, strict create/query schemas, shared `idParamSchema`, machine-readable OpenAPI 3.1 document at `/api/v1/openapi.json` generated from Zod); UI/WCAG (error boundaries, WCAG AA `StatusBadge`, accessible `ConfirmDialog`, `FormField` aria injection, `SearchableSelect` ARIA combobox, `DataTable` scope + keyboard nav, skip-to-main-content, theme-aware semantic badges). Modularity: `auditWrap` helper applied to 10 services, `paginatedTenantList` to 6, `registerCrudRoutes` factory to 8 route files, `EntityListPage` + `usePaginatedList` shell adopted by 6 list pages, badge consolidation, `@fastify/helmet`. Latent middleware bug fixed: `skipAuth` route config is now honored by both auth and tenant middlewares. Test count grew from 32 to **184** (47 shared + 121 api + 16 web) across 20 files; web package now has a full vitest + React Testing Library + jsdom setup wired into `pnpm verify`. Total: 60 endpoints live (+1 `/api/v1/openapi.json`).
 
 Still planned for Phase 2: GIS integration, move-in/move-out, MeterRead CRUD, meter events, container/cart management for solid waste, full-text search, transfer of service.
 

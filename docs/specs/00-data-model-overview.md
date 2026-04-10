@@ -2,7 +2,7 @@
 
 **Module:** 00 — Data Model Overview
 **Status:** Built (Phase 1 complete, Phase 2 in progress)
-**Entities:** All 18
+**Entities:** All 21
 
 ## Overview
 
@@ -12,7 +12,7 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 
 ## Entity Summary
 
-**18 entities** across 5 categories:
+**21 entities** across 6 categories (RBAC category added in Phase 2):
 
 | # | Entity | Table | Category | Phase Built | Key Relationships |
 |---|--------|-------|----------|-------------|-------------------|
@@ -34,6 +34,9 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 | 16 | TenantTheme | `tenant_theme` | System | Phase 1 | One per utility (unique on utility_id) |
 | 17 | UserPreference | `user_preference` | System | Phase 1 | One per user per utility (unique on utility_id + user_id) |
 | 18 | Attachment | `attachment` | Operations | Phase 2 | Generic file attachment for any entity (entityType + entityId pattern); RLS enforced |
+| 19 | Role | `role` | RBAC | Phase 2 | Per-tenant permission bundle; referenced by CisUser |
+| 20 | CisUser | `cis_user` | RBAC | Phase 2 | Admin/back-office user; belongs to Role; scoped by utility_id |
+| 21 | TenantModule | `tenant_module` | RBAC | Phase 2 | Per-tenant module enablement (maps `moduleKey` → enabled) |
 
 ## ER Diagram
 
@@ -85,3 +88,31 @@ The API validates `utility_id` as a UUID before interpolation and sets the RLS c
 - **CIS owns utility domain; SaaSLogic owns money.** The integration boundary is a structured billing instruction.
 - **Configurable, not customizable.** All tenant-specific variation is driven by data (commodities, rate schedules, billing cycles), not code branches.
 - **Event-driven audit.** All state changes emit internal domain events that write to `audit_log` with before/after state.
+- **Defense in depth for data integrity.** Zod validators guard the API boundary, Prisma constrains the schema, and PostgreSQL CHECK constraints enforce invariants at the storage layer. A bug in any single layer can't produce data that breaks the others.
+
+## Database Invariants (CHECK constraints)
+
+The following invariants are enforced at the PostgreSQL layer via CHECK constraints. They apply regardless of which service (or ad-hoc SQL session) writes the data. Zod mirrors these at the API boundary with friendlier error messages, but these are the backstop. The full list lives in `packages/shared/prisma/migrations/01_check_constraints/migration.sql` and is applied after RLS by `setup_db.bat`.
+
+**Non-negative / positive numerics**
+- `account.deposit_amount >= 0`
+- `unit_of_measure.conversion_factor > 0`
+- `meter.multiplier > 0`, `meter.dial_count > 0` (when not null)
+- `commodity.display_order >= 0`
+- `rate_schedule.version >= 1`
+
+**Date ordering**
+- `rate_schedule.expiration_date` is null or strictly after `effective_date`
+- `service_agreement.end_date` is null or >= `start_date`
+- `meter.removal_date` is null or >= `install_date`
+- `service_agreement_meter.removed_date` is null or >= `added_date`
+
+**Day-of-month bounds**
+- `billing_cycle.read_day_of_month` and `bill_day_of_month` between 1 and 31. The CHECK is the calendar floor; Zod tightens this further to 1–28 at the API boundary (see [07 — Rate Management](./07-rate-management.md#billing-cycle)) to avoid month-end ambiguity. The two bounds are layered intentionally: Zod enforces the business rule, CHECK enforces physical possibility.
+
+**Format checks**
+- `customer.email`, `contact.email`, `cis_user.email` match a basic email regex (null allowed where the column is optional)
+- `account.language_pref` matches IETF tag shape `^[a-z]{2}-[A-Z]{2}$` (e.g. `en-US`)
+
+**Non-empty business identifiers**
+- `account.account_number`, `meter.meter_number`, `service_agreement.agreement_number`, `commodity.code`, `unit_of_measure.code`, `billing_cycle.cycle_code`, `rate_schedule.code` — all must be non-whitespace strings

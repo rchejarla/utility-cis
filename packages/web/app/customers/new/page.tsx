@@ -1,130 +1,66 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { PageHeader } from "@/components/ui/page-header";
-import { FormField } from "@/components/ui/form-field";
-import { useToast } from "@/components/ui/toast";
-import { apiClient } from "@/lib/api-client";
 import { DatePicker } from "@/components/ui/date-picker";
-import { usePermission } from "@/lib/use-permission";
-import { AccessDenied } from "@/components/ui/access-denied";
+import { EntityFormPage } from "@/components/ui/entity-form-page";
 
-const inputStyle = {
-  padding: "8px 12px",
-  borderRadius: "var(--radius)",
-  border: "1px solid var(--border)",
-  background: "var(--bg-elevated)",
-  color: "var(--text-primary)",
+interface CustomerForm extends Record<string, unknown> {
+  customerType: "INDIVIDUAL" | "ORGANIZATION";
+  firstName: string;
+  lastName: string;
+  dateOfBirth: string;
+  driversLicense: string;
+  organizationName: string;
+  taxId: string;
+  email: string;
+  phone: string;
+  altPhone: string;
+}
+
+const toggleStyle = (active: boolean) => ({
+  flex: 1,
+  padding: "9px 0",
+  borderRadius: "calc(var(--radius) - 2px)",
+  border: "none",
+  background: active ? "var(--accent-primary)" : "transparent",
+  color: active ? "#fff" : "var(--text-secondary)",
   fontSize: "13px",
-  fontFamily: "inherit",
-  outline: "none",
-  width: "100%",
-  boxSizing: "border-box" as const,
-};
+  fontWeight: active ? 600 : 400,
+  cursor: "pointer",
+  fontFamily: "inherit" as const,
+  transition: "all 0.15s ease",
+});
 
-type CustomerMode = "INDIVIDUAL" | "ORGANIZATION";
+const isIndividual = (v: CustomerForm) => v.customerType === "INDIVIDUAL";
+const isOrganization = (v: CustomerForm) => v.customerType === "ORGANIZATION";
 
 export default function NewCustomerPage() {
-  const router = useRouter();
-  const { toast } = useToast();
-  const { canCreate } = usePermission("customers");
-  const [submitting, setSubmitting] = useState(false);
-  const [mode, setMode] = useState<CustomerMode>("INDIVIDUAL");
-
-  const [form, setForm] = useState({
-    // Individual
-    firstName: "",
-    lastName: "",
-    dateOfBirth: "",
-    driversLicense: "",
-    // Organization
-    organizationName: "",
-    taxId: "",
-    // Shared
-    email: "",
-    phone: "",
-    altPhone: "",
-  });
-
-  const set = (key: string, value: string) =>
-    setForm((prev) => ({ ...prev, [key]: value }));
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmitting(true);
-    try {
-      const body: Record<string, unknown> = {
-        customerType: mode,
-        email: form.email || undefined,
-        phone: form.phone || undefined,
-        altPhone: form.altPhone || undefined,
-      };
-
-      if (mode === "INDIVIDUAL") {
-        body.firstName = form.firstName;
-        body.lastName = form.lastName;
-        if (form.dateOfBirth) body.dateOfBirth = form.dateOfBirth;
-        if (form.driversLicense) body.driversLicense = form.driversLicense;
-      } else {
-        body.organizationName = form.organizationName;
-        if (form.taxId) body.taxId = form.taxId;
-      }
-
-      const created = await apiClient.post<{ id: string }>("/api/v1/customers", body);
-      toast("Customer created successfully", "success");
-      router.push(`/customers/${created.id}`);
-    } catch (err: any) {
-      toast(err.message || "Failed to create customer", "error");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  if (!canCreate) return <AccessDenied />;
-
-  const toggleStyle = (active: boolean) => ({
-    flex: 1,
-    padding: "9px 0",
-    borderRadius: "calc(var(--radius) - 2px)",
-    border: "none",
-    background: active ? "var(--accent-primary)" : "transparent",
-    color: active ? "#fff" : "var(--text-secondary)",
-    fontSize: "13px",
-    fontWeight: active ? 600 : 400,
-    cursor: "pointer",
-    fontFamily: "inherit",
-    transition: "all 0.15s ease",
-  });
-
   return (
-    <div style={{ maxWidth: "640px" }}>
-      <PageHeader title="Add Customer" subtitle="Create a new customer record" />
-
-      <form onSubmit={handleSubmit}>
-        <div
-          style={{
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius)",
-            padding: "24px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "20px",
-          }}
-        >
-          {/* Customer type toggle */}
-          <div>
-            <div
-              style={{
-                fontSize: "13px",
-                fontWeight: "500",
-                color: "var(--text-secondary)",
-                marginBottom: "8px",
-              }}
-            >
-              Customer Type
-            </div>
+    <EntityFormPage<CustomerForm>
+      title="Add Customer"
+      subtitle="Create a new customer record"
+      module="customers"
+      endpoint="/api/v1/customers"
+      returnTo="/customers"
+      submitLabel="Create Customer"
+      initialValues={{
+        customerType: "INDIVIDUAL",
+        firstName: "",
+        lastName: "",
+        dateOfBirth: "",
+        driversLicense: "",
+        organizationName: "",
+        taxId: "",
+        email: "",
+        phone: "",
+        altPhone: "",
+      }}
+      fields={[
+        {
+          key: "customerType",
+          label: "Customer Type",
+          type: "custom",
+          hint: "BR-CU-003: Customer type cannot be changed after creation",
+          render: ({ value, setValue }) => (
             <div
               style={{
                 display: "flex",
@@ -137,183 +73,128 @@ export default function NewCustomerPage() {
             >
               <button
                 type="button"
-                onClick={() => setMode("INDIVIDUAL")}
-                style={toggleStyle(mode === "INDIVIDUAL")}
+                onClick={() => setValue("INDIVIDUAL" as never)}
+                style={toggleStyle(value === "INDIVIDUAL")}
               >
                 Individual
               </button>
               <button
                 type="button"
-                onClick={() => setMode("ORGANIZATION")}
-                style={toggleStyle(mode === "ORGANIZATION")}
+                onClick={() => setValue("ORGANIZATION" as never)}
+                style={toggleStyle(value === "ORGANIZATION")}
               >
                 Organization
               </button>
             </div>
-            <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "4px" }}>
-              BR-CU-003: Customer type cannot be changed after creation
-            </div>
-          </div>
-
-          {/* Individual fields */}
-          {mode === "INDIVIDUAL" && (
-            <>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                <FormField label="First Name" required>
-                  <input
-                    style={inputStyle}
-                    value={form.firstName}
-                    onChange={(e) => set("firstName", e.target.value)}
-                    placeholder="Jane"
-                    required
-                  />
-                </FormField>
-                <FormField label="Last Name" required>
-                  <input
-                    style={inputStyle}
-                    value={form.lastName}
-                    onChange={(e) => set("lastName", e.target.value)}
-                    placeholder="Smith"
-                    required
-                  />
-                </FormField>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                <FormField label="Date of Birth">
-                  <DatePicker
-                    value={form.dateOfBirth}
-                    onChange={(v) => set("dateOfBirth", v)}
-                    placeholder="Select date..."
-                  />
-                </FormField>
-                <FormField label="Driver's License">
-                  <input
-                    style={inputStyle}
-                    value={form.driversLicense}
-                    onChange={(e) => set("driversLicense", e.target.value)}
-                    placeholder="DL-12345678"
-                  />
-                </FormField>
-              </div>
-            </>
-          )}
-
-          {/* Organization fields */}
-          {mode === "ORGANIZATION" && (
-            <>
-              <FormField label="Organization Name" required>
-                <input
-                  style={inputStyle}
-                  value={form.organizationName}
-                  onChange={(e) => set("organizationName", e.target.value)}
-                  placeholder="Acme Corporation"
-                  required
+          ),
+        },
+        {
+          row: [
+            {
+              key: "firstName",
+              label: "First Name",
+              type: "text",
+              required: true,
+              placeholder: "Jane",
+              visibleWhen: isIndividual,
+            },
+            {
+              key: "lastName",
+              label: "Last Name",
+              type: "text",
+              required: true,
+              placeholder: "Smith",
+              visibleWhen: isIndividual,
+            },
+          ],
+        },
+        {
+          row: [
+            {
+              key: "dateOfBirth",
+              label: "Date of Birth",
+              type: "custom",
+              visibleWhen: isIndividual,
+              render: ({ value, setValue }) => (
+                <DatePicker
+                  value={String(value ?? "")}
+                  onChange={(v) => setValue(v as never)}
+                  placeholder="Select date..."
                 />
-              </FormField>
-              <FormField label="Tax ID / EIN" hint="e.g. 12-3456789">
-                <input
-                  style={inputStyle}
-                  value={form.taxId}
-                  onChange={(e) => set("taxId", e.target.value)}
-                  placeholder="12-3456789"
-                />
-              </FormField>
-            </>
-          )}
+              ),
+            },
+            {
+              key: "driversLicense",
+              label: "Driver's License",
+              type: "text",
+              placeholder: "DL-12345678",
+              visibleWhen: isIndividual,
+            },
+          ],
+        },
+        {
+          key: "organizationName",
+          label: "Organization Name",
+          type: "text",
+          required: true,
+          placeholder: "Acme Corporation",
+          visibleWhen: isOrganization,
+        },
+        {
+          key: "taxId",
+          label: "Tax ID / EIN",
+          type: "text",
+          placeholder: "12-3456789",
+          hint: "e.g. 12-3456789",
+          visibleWhen: isOrganization,
+        },
+        {
+          key: "email",
+          label: "Email",
+          type: "text",
+          placeholder: "customer@example.com",
+          hint: "Used for notifications and portal access",
+        },
+        {
+          row: [
+            {
+              key: "phone",
+              label: "Phone",
+              type: "text",
+              placeholder: "(555) 000-0000",
+            },
+            {
+              key: "altPhone",
+              label: "Alternate Phone",
+              type: "text",
+              placeholder: "(555) 000-0000",
+            },
+          ],
+        },
+      ]}
+      toRequestBody={(form) => {
+        const body: Record<string, unknown> = {
+          customerType: form.customerType,
+        };
+        if (form.email) body.email = form.email;
+        if (form.phone) body.phone = form.phone;
+        if (form.altPhone) body.altPhone = form.altPhone;
 
-          {/* Shared contact fields */}
-          <div
-            style={{
-              borderTop: "1px solid var(--border)",
-              paddingTop: "16px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "16px",
-            }}
-          >
-            <div
-              style={{
-                fontSize: "11px",
-                fontWeight: "600",
-                color: "var(--text-muted)",
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-              }}
-            >
-              Contact Information
-            </div>
-
-            <FormField label="Email" hint="Used for notifications and portal access">
-              <input
-                style={inputStyle}
-                type="email"
-                value={form.email}
-                onChange={(e) => set("email", e.target.value)}
-                placeholder="customer@example.com"
-              />
-            </FormField>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-              <FormField label="Phone">
-                <input
-                  style={{ ...inputStyle, fontFamily: "monospace" }}
-                  type="tel"
-                  value={form.phone}
-                  onChange={(e) => set("phone", e.target.value)}
-                  placeholder="(555) 000-0000"
-                />
-              </FormField>
-              <FormField label="Alternate Phone">
-                <input
-                  style={{ ...inputStyle, fontFamily: "monospace" }}
-                  type="tel"
-                  value={form.altPhone}
-                  onChange={(e) => set("altPhone", e.target.value)}
-                  placeholder="(555) 000-0000"
-                />
-              </FormField>
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
-            <button
-              type="button"
-              onClick={() => router.push("/customers")}
-              style={{
-                padding: "8px 20px",
-                borderRadius: "var(--radius)",
-                border: "1px solid var(--border)",
-                background: "transparent",
-                color: "var(--text-secondary)",
-                fontSize: "13px",
-                cursor: "pointer",
-                fontFamily: "inherit",
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={submitting}
-              style={{
-                padding: "8px 20px",
-                borderRadius: "var(--radius)",
-                border: "none",
-                background: "var(--accent-primary)",
-                color: "#fff",
-                fontSize: "13px",
-                fontWeight: "500",
-                cursor: submitting ? "not-allowed" : "pointer",
-                opacity: submitting ? 0.7 : 1,
-                fontFamily: "inherit",
-              }}
-            >
-              {submitting ? "Creating..." : "Create Customer"}
-            </button>
-          </div>
-        </div>
-      </form>
-    </div>
+        if (form.customerType === "INDIVIDUAL") {
+          body.firstName = form.firstName;
+          body.lastName = form.lastName;
+          if (form.dateOfBirth) body.dateOfBirth = form.dateOfBirth;
+          if (form.driversLicense) body.driversLicense = form.driversLicense;
+        } else {
+          body.organizationName = form.organizationName;
+          if (form.taxId) body.taxId = form.taxId;
+        }
+        return body;
+      }}
+      onSuccess={(response) => {
+        const id = (response as { id?: string })?.id;
+        return id ? `/customers/${id}` : undefined;
+      }}
+    />
   );
 }
