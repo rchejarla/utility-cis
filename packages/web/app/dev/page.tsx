@@ -40,9 +40,8 @@ export default function DevLaunchPage() {
   const switchRole = async (roleId: string) => {
     setSwitching(roleId);
     try {
-      // Update the dev user's role
-      const userId = user?.id ?? "00000000-0000-4000-8000-000000000099";
-      await apiClient.patch(`/api/v1/users/${userId}`, { roleId });
+      // Dev-only endpoint — bypasses permission checks
+      await apiClient.post("/api/v1/auth/switch-role", { roleId });
       // Refresh auth context to pick up new permissions
       await refresh();
       router.push("/premises");
