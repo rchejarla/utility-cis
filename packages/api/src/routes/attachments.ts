@@ -3,14 +3,14 @@ import * as attachmentService from "../services/attachment.service.js";
 
 export async function attachmentRoutes(app: FastifyInstance) {
   // List attachments for an entity
-  app.get("/api/v1/attachments", async (request) => {
+  app.get("/api/v1/attachments", { config: { module: "attachments", permission: "VIEW" } }, async (request) => {
     const { utilityId } = request.user;
     const { entityType, entityId } = request.query as { entityType: string; entityId: string };
     return attachmentService.listAttachments(utilityId, entityType, entityId);
   });
 
   // Upload attachment
-  app.post("/api/v1/attachments", async (request, reply) => {
+  app.post("/api/v1/attachments", { config: { module: "attachments", permission: "CREATE" } }, async (request, reply) => {
     const { utilityId, id: actorId } = request.user;
     const data = await request.file();
     if (!data) {
@@ -55,7 +55,7 @@ export async function attachmentRoutes(app: FastifyInstance) {
   });
 
   // Download attachment
-  app.get("/api/v1/attachments/:id/download", async (request, reply) => {
+  app.get("/api/v1/attachments/:id/download", { config: { module: "attachments", permission: "VIEW" } }, async (request, reply) => {
     const { utilityId } = request.user;
     const { id } = request.params as { id: string };
     const { attachment, buffer } = await attachmentService.getAttachmentFile(id, utilityId);
@@ -67,7 +67,7 @@ export async function attachmentRoutes(app: FastifyInstance) {
   });
 
   // Delete attachment
-  app.delete("/api/v1/attachments/:id", async (request, reply) => {
+  app.delete("/api/v1/attachments/:id", { config: { module: "attachments", permission: "DELETE" } }, async (request, reply) => {
     const { utilityId } = request.user;
     const { id } = request.params as { id: string };
     await attachmentService.deleteAttachment(id, utilityId);

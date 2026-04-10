@@ -14,28 +14,28 @@ import {
 } from "../services/service-agreement.service.js";
 
 export async function serviceAgreementRoutes(app: FastifyInstance) {
-  app.get("/api/v1/service-agreements", async (request, reply) => {
+  app.get("/api/v1/service-agreements", { config: { module: "agreements", permission: "VIEW" } }, async (request, reply) => {
     const { utilityId } = request.user;
     const query = serviceAgreementQuerySchema.parse(request.query);
     const result = await listServiceAgreements(utilityId, query);
     return reply.send(result);
   });
 
-  app.get("/api/v1/service-agreements/:id", async (request, reply) => {
+  app.get("/api/v1/service-agreements/:id", { config: { module: "agreements", permission: "VIEW" } }, async (request, reply) => {
     const { utilityId } = request.user;
     const { id } = request.params as { id: string };
     const agreement = await getServiceAgreement(id, utilityId);
     return reply.send(agreement);
   });
 
-  app.post("/api/v1/service-agreements", async (request, reply) => {
+  app.post("/api/v1/service-agreements", { config: { module: "agreements", permission: "CREATE" } }, async (request, reply) => {
     const { utilityId, id: actorId, name: actorName } = request.user;
     const data = createServiceAgreementSchema.parse(request.body);
     const agreement = await createServiceAgreement(utilityId, actorId, actorName, data);
     return reply.status(201).send(agreement);
   });
 
-  app.patch("/api/v1/service-agreements/:id", async (request, reply) => {
+  app.patch("/api/v1/service-agreements/:id", { config: { module: "agreements", permission: "EDIT" } }, async (request, reply) => {
     const { utilityId, id: actorId, name: actorName } = request.user;
     const { id } = request.params as { id: string };
     const data = updateServiceAgreementSchema.parse(request.body);
@@ -44,7 +44,7 @@ export async function serviceAgreementRoutes(app: FastifyInstance) {
   });
 
   // Add meter to agreement
-  app.post("/api/v1/service-agreements/:id/meters", async (request, reply) => {
+  app.post("/api/v1/service-agreements/:id/meters", { config: { module: "agreements", permission: "EDIT" } }, async (request, reply) => {
     const { utilityId } = request.user;
     const { id } = request.params as { id: string };
     const { meterId } = request.body as { meterId: string };
@@ -53,7 +53,7 @@ export async function serviceAgreementRoutes(app: FastifyInstance) {
   });
 
   // Remove meter from agreement (set removedDate)
-  app.patch("/api/v1/service-agreements/:id/meters/:samId", async (request, reply) => {
+  app.patch("/api/v1/service-agreements/:id/meters/:samId", { config: { module: "agreements", permission: "EDIT" } }, async (request, reply) => {
     const { utilityId } = request.user;
     const { samId } = request.params as { id: string; samId: string };
     const sam = await removeMeterFromAgreement(utilityId, samId);

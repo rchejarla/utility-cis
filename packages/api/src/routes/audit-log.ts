@@ -17,7 +17,7 @@ const auditQuerySchema = z.object({
 });
 
 export async function auditLogRoutes(app: FastifyInstance) {
-  app.get("/api/v1/audit-log", async (request, reply) => {
+  app.get("/api/v1/audit-log", { config: { module: "audit_log", permission: "VIEW" } }, async (request, reply) => {
     const { utilityId } = request.user;
     const query = auditQuerySchema.parse(request.query);
 
