@@ -3,7 +3,7 @@ import { invalidateUserRoleCache } from "./rbac.service.js";
 import type { CreateRoleInput, UpdateRoleInput } from "@utility-cis/shared";
 
 export async function listRoles(utilityId: string) {
-  return prisma.cisRole.findMany({
+  return prisma.role.findMany({
     where: { utilityId },
     include: { _count: { select: { users: true } } },
     orderBy: [{ isSystem: "desc" }, { name: "asc" }],
@@ -11,21 +11,21 @@ export async function listRoles(utilityId: string) {
 }
 
 export async function getRole(id: string, utilityId: string) {
-  return prisma.cisRole.findUniqueOrThrow({
+  return prisma.role.findUniqueOrThrow({
     where: { id, utilityId },
     include: { _count: { select: { users: true } } },
   });
 }
 
 export async function createRole(utilityId: string, data: CreateRoleInput) {
-  return prisma.cisRole.create({
+  return prisma.role.create({
     data: { ...data, utilityId },
     include: { _count: { select: { users: true } } },
   });
 }
 
 export async function updateRole(utilityId: string, id: string, data: UpdateRoleInput) {
-  const role = await prisma.cisRole.update({
+  const role = await prisma.role.update({
     where: { id, utilityId },
     data,
     include: { _count: { select: { users: true } } },
@@ -42,7 +42,7 @@ export async function updateRole(utilityId: string, id: string, data: UpdateRole
 
 export async function deleteRole(utilityId: string, id: string) {
   // BR-RB-002: System roles cannot be deleted
-  const role = await prisma.cisRole.findUnique({ where: { id, utilityId } });
+  const role = await prisma.role.findUnique({ where: { id, utilityId } });
   if (!role) {
     throw Object.assign(new Error("Role not found"), { statusCode: 404 });
   }
@@ -62,7 +62,7 @@ export async function deleteRole(utilityId: string, id: string) {
     );
   }
 
-  const result = await prisma.cisRole.deleteMany({ where: { id, utilityId } });
+  const result = await prisma.role.deleteMany({ where: { id, utilityId } });
   if (result.count === 0) {
     throw Object.assign(new Error("Role not found"), { statusCode: 404 });
   }
