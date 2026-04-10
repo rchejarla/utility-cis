@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Bash(cd:*)",
+      "Bash(git:*)",
+      "Bash(node:*)",
+      "Bash(npx:*)",
+      "Bash(pnpm:*)",
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)",
+      "Glob(*)",
+      "Grep(*)",
+      "Agent(*)"
+    ]
+  }
+}
