@@ -85,7 +85,9 @@ export function UsersTab({ showAddForm, onAddFormClose }: UsersTabProps) {
   const [submitting, setSubmitting] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState<{ roleId: string; isActive: boolean }>({
+  const [editForm, setEditForm] = useState<{ name: string; email: string; roleId: string; isActive: boolean }>({
+    name: "",
+    email: "",
     roleId: "",
     isActive: true,
   });
@@ -152,13 +154,14 @@ export function UsersTab({ showAddForm, onAddFormClose }: UsersTabProps) {
 
   const handleStartEdit = (user: User) => {
     setEditingId(user.id);
-    setEditForm({ roleId: user.roleId, isActive: user.isActive });
+    setEditForm({ name: user.name, email: user.email, roleId: user.roleId, isActive: user.isActive });
   };
 
   const handleSaveEdit = async (userId: string) => {
     setSubmitting(true);
     try {
       await apiClient.patch(`/api/v1/users/${userId}`, {
+        name: editForm.name.trim(),
         roleId: editForm.roleId,
         isActive: editForm.isActive,
       });
@@ -404,7 +407,17 @@ export function UsersTab({ showAddForm, onAddFormClose }: UsersTabProps) {
                     key={user.id}
                     style={{ background: isEditing ? "rgba(var(--accent-rgb),0.04)" : "transparent" }}
                   >
-                    <td style={cellStyle}>{user.name}</td>
+                    <td style={cellStyle}>
+                      {isEditing ? (
+                        <input
+                          style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: "12px" }}
+                          value={editForm.name}
+                          onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                        />
+                      ) : (
+                        user.name
+                      )}
+                    </td>
                     <td
                       style={{
                         ...cellStyle,
