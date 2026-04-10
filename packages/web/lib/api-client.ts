@@ -6,13 +6,27 @@ export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001
 let cachedToken: string | null = null;
 let cacheExpiry = 0;
 
+// Dev user identity — can be changed via setDevUser()
+let devUserId = "00000000-0000-4000-8000-000000000091";
+let devUserEmail = "sysadmin@utility.com";
+let devUserName = "Sarah Mitchell";
+
+export function setDevUser(id: string, email: string, name: string) {
+  devUserId = id;
+  devUserEmail = email;
+  devUserName = name;
+  // Clear cached token so next request uses the new identity
+  cachedToken = null;
+  cacheExpiry = 0;
+}
+
 function createDevToken(): string {
   const header = btoa(JSON.stringify({ alg: "none" }));
   const payload = btoa(JSON.stringify({
-    sub: "00000000-0000-4000-8000-000000000099",
+    sub: devUserId,
     utility_id: "00000000-0000-4000-8000-000000000001",
-    email: "dev@example.com",
-    name: "Admin User",
+    email: devUserEmail,
+    name: devUserName,
     role: "admin",
   }));
   return `${header}.${payload}.dev`;

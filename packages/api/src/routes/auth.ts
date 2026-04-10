@@ -36,6 +36,17 @@ export async function authRoutes(app: FastifyInstance) {
     reply.send(authData);
   });
 
+  // Dev-only: list all users with roles (no permission check)
+  app.get("/api/v1/auth/dev-users", async (request) => {
+    const { utilityId } = request.user;
+    const users = await prisma.cisUser.findMany({
+      where: { utilityId },
+      include: { role: { select: { id: true, name: true } } },
+      orderBy: { name: "asc" },
+    });
+    return users;
+  });
+
   // Dev-only: list all roles without permission check
   app.get("/api/v1/auth/roles", async (request) => {
     const { utilityId } = request.user;

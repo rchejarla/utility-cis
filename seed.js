@@ -260,17 +260,19 @@ async function main() {
   }
   console.log("  " + moduleKeys.length + " tenant modules");
 
-  await p.cisUser.create({
-    data: {
-      id: "00000000-0000-4000-8000-000000000099", // matches dev token sub
-      utilityId: UID,
-      email: "admin@utility.com",
-      name: "Admin User",
-      roleId: roleArr[0].id, // System Admin
-      isActive: true,
-    },
-  });
-  console.log("  1 admin user");
+  const testUsers = [
+    { id: "00000000-0000-4000-8000-000000000091", email: "sysadmin@utility.com", name: "Sarah Mitchell", roleIdx: 0 },  // System Admin
+    { id: "00000000-0000-4000-8000-000000000092", email: "admin@utility.com", name: "Michael Chen", roleIdx: 1 },       // Utility Admin
+    { id: "00000000-0000-4000-8000-000000000093", email: "csr@utility.com", name: "Jessica Rodriguez", roleIdx: 2 },     // CSR
+    { id: "00000000-0000-4000-8000-000000000094", email: "tech@utility.com", name: "David Park", roleIdx: 3 },           // Field Technician
+    { id: "00000000-0000-4000-8000-000000000095", email: "viewer@utility.com", name: "Emily Thompson", roleIdx: 4 },     // Read-Only
+  ];
+  for (const u of testUsers) {
+    await p.cisUser.create({
+      data: { id: u.id, utilityId: UID, email: u.email, name: u.name, roleId: roleArr[u.roleIdx].id, isActive: true },
+    });
+  }
+  console.log("  " + testUsers.length + " test users");
 
   console.log("\nDone! 10 premises, 8 accounts, 15 meters, 10 agreements, 3 customers, 4 contacts, 3 billing addresses");
 }
