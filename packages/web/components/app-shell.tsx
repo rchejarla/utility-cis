@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import { useBreakpoint } from "@/lib/use-media-query";
 import { AuthPermissionProvider } from "@/lib/auth-context";
 import { Sidebar } from "./sidebar";
@@ -7,7 +8,13 @@ import { Topbar } from "./topbar";
 import { BottomNav } from "./bottom-nav";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const { isMobile, isTablet } = useBreakpoint();
+
+  // Dev pages render without shell (no sidebar/topbar)
+  if (pathname.startsWith("/dev")) {
+    return <AuthPermissionProvider>{children}</AuthPermissionProvider>;
+  }
 
   return (
     <AuthPermissionProvider>
