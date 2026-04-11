@@ -45,12 +45,147 @@ export const customFieldEntityEnum = z.enum(CUSTOM_FIELD_ENTITY_TYPES);
  * Primitive field types supported in v1. Deliberately narrow — the
  * point is to let tenants capture extra scalar facts, not to build a
  * full forms-designer surface.
+ *
+ * `type` is the **data type** — what the validator enforces on write.
+ * It determines the shape of the stored value and the Zod schema
+ * used by buildZodFromFields. It does NOT determine the input
+ * widget; that's `displayType` below.
  */
 export const FIELD_TYPES = ["string", "number", "date", "boolean", "enum"] as const;
 
 export type FieldType = (typeof FIELD_TYPES)[number];
 
 export const fieldTypeEnum = z.enum(FIELD_TYPES);
+
+/**
+ * Display type — which input widget the renderer shows. Decoupled
+ * from `type` so one data type can have multiple presentations
+ * (e.g. a string can render as a single-line input, a multi-line
+ * textarea, an email input, a URL input, or a phone input). The
+ * Zod validator for a field ignores displayType entirely — a text
+ * and a textarea string both validate as strings.
+ */
+export const FIELD_DISPLAY_TYPES = [
+  // string displays
+  "text",
+  "textarea",
+  "email",
+  "url",
+  "phone",
+  // number displays
+  "number",
+  // date displays
+  "date",
+  // boolean displays
+  "checkbox",
+  // enum displays
+  "select",
+  "radio",
+] as const;
+
+/*
+ * Note on datetime: a "date and time" display was considered but
+ * deferred to Phase 2. Reason: datetime values require a different
+ * validator (`z.string().datetime()` for ISO 8601 with time) from
+ * the `date` data type's validator (`z.string().date()` for
+ * YYYY-MM-DD). Supporting it cleanly means adding a new `datetime`
+ * entry to FIELD_TYPES, not just a new display type. See spec 20.
+ */
+
+export type DisplayType = (typeof FIELD_DISPLAY_TYPES)[number];
+
+export const fieldDisplayTypeEnum = z.enum(FIELD_DISPLAY_TYPES);
+
+/**
+ * Allowed display types per data type. The validator uses this to
+ * reject combinations like `type: "number"` with
+ * `displayType: "textarea"` at schema save time.
+ *
+ * The first entry in each array is the default when the admin
+ * doesn't specify a displayType explicitly — used by
+ * defaultDisplayType() and by the renderer as a fallback when
+ * older stored FieldDefinitions don't have a displayType field yet.
+ */
+const ALLOWED_DISPLAY_TYPES: Record<FieldType, readonly DisplayType[]> = {
+  string: ["text", "textarea", "email", "url", "phone"],
+  number: ["number"],
+  date: ["date"],
+  boolean: ["checkbox"],
+  enum: ["select", "radio"],
+};
+
+export function defaultDisplayType(type: FieldType): DisplayType {
+  return ALLOWED_DISPLAY_TYPES[type][0];
+}
+
+export function isValidDisplayType(
+  type: FieldType,
+  displayType: DisplayType,
+): boolean {
+  return ALLOWED_DISPLAY_TYPES[type].includes(displayType);
+}
+
+/**
+ * Unified admin-facing "Kind" — what shows up in the admin UI's
+ * Type dropdown. Each Kind maps to an internal (dataType,
+ * displayType) pair so the admin never sees the data-vs-display
+ * split and doesn't have to understand which data types allow
+ * which display widgets.
+ *
+ * `hasOptions` flags the kinds that need a list of values
+ * (enumOptions). The admin UI uses this to conditionally show
+ * the options editor.
+ *
+ * Order here is the order shown in the admin UI dropdown. Put
+ * the most common kinds first.
+ */
+export interface CustomFieldKind {
+  /** Stable value for the admin UI select. */
+  value: string;
+  /** Label shown in the dropdown. */
+  label: string;
+  /** Stored FieldDefinition.type. */
+  dataType: FieldType;
+  /** Stored FieldDefinition.displayType. */
+  displayType: DisplayType;
+  /** Whether this kind requires a list of enumOptions. */
+  hasOptions: boolean;
+}
+
+export const CUSTOM_FIELD_KINDS: readonly CustomFieldKind[] = [
+  { value: "text", label: "Text (single line)", dataType: "string", displayType: "text", hasOptions: false },
+  { value: "textarea", label: "Long text (multi-line)", dataType: "string", displayType: "textarea", hasOptions: false },
+  { value: "email", label: "Email", dataType: "string", displayType: "email", hasOptions: false },
+  { value: "url", label: "URL", dataType: "string", displayType: "url", hasOptions: false },
+  { value: "phone", label: "Phone", dataType: "string", displayType: "phone", hasOptions: false },
+  { value: "number", label: "Number", dataType: "number", displayType: "number", hasOptions: false },
+  { value: "date", label: "Date", dataType: "date", displayType: "date", hasOptions: false },
+  { value: "checkbox", label: "Yes / No (checkbox)", dataType: "boolean", displayType: "checkbox", hasOptions: false },
+  { value: "dropdown", label: "Dropdown (single choice from list)", dataType: "enum", displayType: "select", hasOptions: true },
+  { value: "radio", label: "Radio group (single choice from list)", dataType: "enum", displayType: "radio", hasOptions: true },
+];
+
+/**
+ * Resolve a stored FieldDefinition back to its admin-facing Kind.
+ * Used when the admin UI renders an existing field and needs to
+ * show which Kind dropdown option was picked. Falls back to the
+ * first kind matching the data type if no exact match is found
+ * (shouldn't happen in practice, but defensive).
+ */
+export function kindForField(field: {
+  type: FieldType;
+  displayType?: DisplayType;
+}): CustomFieldKind {
+  const effectiveDisplay = field.displayType ?? defaultDisplayType(field.type);
+  const match = CUSTOM_FIELD_KINDS.find(
+    (k) => k.dataType === field.type && k.displayType === effectiveDisplay,
+  );
+  if (match) return match;
+  // Shouldn't reach here unless stored data is corrupt — fall back
+  // to the first kind matching the data type so rendering doesn't
+  // blow up.
+  return CUSTOM_FIELD_KINDS.find((k) => k.dataType === field.type) ?? CUSTOM_FIELD_KINDS[0];
+}
 
 /**
  * An enum option used when a field's type is "enum". Value is the
@@ -88,8 +223,15 @@ export interface FieldDefinition {
   label: string;
   /** Optional help text rendered under the input. */
   description?: string;
-  /** Primitive type. Determines rendering and validation. */
+  /** Primitive data type — drives validation via buildZodFromFields. */
   type: FieldType;
+  /**
+   * Display widget — drives rendering. Optional for backward
+   * compatibility; when absent, defaultDisplayType(type) is used.
+   * Must be in ALLOWED_DISPLAY_TYPES[type] — the validator
+   * enforces this at save time.
+   */
+  displayType?: DisplayType;
   /** Whether the field is required on create/update. */
   required: boolean;
   /** Whether this field gets a filter pill on list pages. */
@@ -118,6 +260,7 @@ export const fieldDefinitionSchema = z
     label: z.string().min(1).max(200),
     description: z.string().max(500).optional(),
     type: fieldTypeEnum,
+    displayType: fieldDisplayTypeEnum.optional(),
     required: z.boolean().default(false),
     searchable: z.boolean().default(false),
     order: z.number().int().nonnegative().default(100),
@@ -147,6 +290,16 @@ export const fieldDefinitionSchema = z
           seen.add(opt.value);
         }
       }
+    }
+    // Validate displayType against the field's data type. A textarea
+    // displayType on a number field, for example, gets rejected here
+    // rather than blowing up at render time.
+    if (def.displayType && !isValidDisplayType(def.type, def.displayType)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Display type "${def.displayType}" is not valid for field type "${def.type}". Allowed: ${ALLOWED_DISPLAY_TYPES[def.type].join(", ")}`,
+        path: ["displayType"],
+      });
     }
   });
 
@@ -179,9 +332,13 @@ export const fieldDefinitionListSchema = z
 export const addFieldDefinitionSchema = fieldDefinitionSchema;
 export const updateFieldDefinitionSchema = z
   .object({
-    // key is immutable — not accepted on update
+    // key is immutable — not accepted on update. type is also
+    // immutable because changing the data type of a field with
+    // existing stored values would orphan or invalidate them;
+    // admins should deprecate + re-add instead.
     label: z.string().min(1).max(200).optional(),
     description: z.string().max(500).optional(),
+    displayType: fieldDisplayTypeEnum.optional(),
     required: z.boolean().optional(),
     searchable: z.boolean().optional(),
     order: z.number().int().nonnegative().optional(),

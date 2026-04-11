@@ -1,6 +1,8 @@
 "use client";
 
 import type { FieldDefinition } from "@utility-cis/shared";
+import { defaultDisplayType } from "@utility-cis/shared";
+import { DatePicker } from "./date-picker";
 
 /**
  * Renders the "Custom Fields" section for an entity form.
@@ -257,14 +259,63 @@ function renderControl(
     ...overrideStyle,
   };
 
-  switch (field.type) {
-    case "string":
+  // Dispatch on displayType (falling back to the data type's default
+  // widget) so one data type can render multiple ways. See
+  // CUSTOM_FIELD_KINDS for the user-facing options the admin picks
+  // from; each maps to a (type, displayType) pair handled here.
+  const displayType = field.displayType ?? defaultDisplayType(field.type);
+
+  switch (displayType) {
+    case "text":
       return (
         <input
           type="text"
           value={(value as string | null | undefined) ?? ""}
           onChange={(e) => onChange(e.target.value || null)}
           disabled={disabled}
+          style={commonStyle}
+        />
+      );
+    case "textarea":
+      return (
+        <textarea
+          value={(value as string | null | undefined) ?? ""}
+          onChange={(e) => onChange(e.target.value || null)}
+          disabled={disabled}
+          rows={4}
+          style={{ ...commonStyle, resize: "vertical", minHeight: 80, fontFamily: "inherit" }}
+        />
+      );
+    case "email":
+      return (
+        <input
+          type="email"
+          value={(value as string | null | undefined) ?? ""}
+          onChange={(e) => onChange(e.target.value || null)}
+          disabled={disabled}
+          placeholder="name@example.com"
+          style={commonStyle}
+        />
+      );
+    case "url":
+      return (
+        <input
+          type="url"
+          value={(value as string | null | undefined) ?? ""}
+          onChange={(e) => onChange(e.target.value || null)}
+          disabled={disabled}
+          placeholder="https://example.com"
+          style={commonStyle}
+        />
+      );
+    case "phone":
+      return (
+        <input
+          type="tel"
+          value={(value as string | null | undefined) ?? ""}
+          onChange={(e) => onChange(e.target.value || null)}
+          disabled={disabled}
+          placeholder="+1 (555) 000-0000"
           style={commonStyle}
         />
       );
@@ -285,15 +336,13 @@ function renderControl(
       );
     case "date":
       return (
-        <input
-          type="date"
+        <DatePicker
           value={(value as string | null | undefined) ?? ""}
-          onChange={(e) => onChange(e.target.value || null)}
-          disabled={disabled}
-          style={commonStyle}
+          onChange={(v) => onChange(v || null)}
+          triggerStyle={commonStyle}
         />
       );
-    case "boolean":
+    case "checkbox":
       return (
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
           <input
@@ -305,7 +354,7 @@ function renderControl(
           <span>Yes</span>
         </label>
       );
-    case "enum":
+    case "select":
       return (
         <select
           value={(value as string | null | undefined) ?? ""}
@@ -320,6 +369,34 @@ function renderControl(
             </option>
           ))}
         </select>
+      );
+    case "radio":
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {field.enumOptions?.map((opt) => (
+            <label
+              key={opt.value}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontSize: 13,
+                color: "var(--text-primary)",
+                cursor: disabled ? "not-allowed" : "pointer",
+              }}
+            >
+              <input
+                type="radio"
+                name={`cf-${field.key}`}
+                value={opt.value}
+                checked={value === opt.value}
+                onChange={() => onChange(opt.value)}
+                disabled={disabled}
+              />
+              <span>{opt.label}</span>
+            </label>
+          ))}
+        </div>
       );
   }
 }

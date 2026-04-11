@@ -5,7 +5,11 @@ import {
   fieldDefinitionListSchema,
   isReservedFieldKey,
   parseCustomFields,
+  defaultDisplayType,
+  isValidDisplayType,
+  kindForField,
   CORE_FIELD_KEYS,
+  CUSTOM_FIELD_KINDS,
   type FieldDefinition,
 } from "../custom-fields";
 
@@ -284,6 +288,156 @@ describe("custom-fields shared module", () => {
         expect(CORE_FIELD_KEYS[entity]).toContain("utility_id");
         expect(CORE_FIELD_KEYS[entity]).toContain("custom_fields");
       }
+    });
+  });
+
+  describe("displayType", () => {
+    it("defaultDisplayType returns the first allowed display per data type", () => {
+      expect(defaultDisplayType("string")).toBe("text");
+      expect(defaultDisplayType("number")).toBe("number");
+      expect(defaultDisplayType("date")).toBe("date");
+      expect(defaultDisplayType("boolean")).toBe("checkbox");
+      expect(defaultDisplayType("enum")).toBe("select");
+    });
+
+    it("isValidDisplayType accepts all string display types", () => {
+      expect(isValidDisplayType("string", "text")).toBe(true);
+      expect(isValidDisplayType("string", "textarea")).toBe(true);
+      expect(isValidDisplayType("string", "email")).toBe(true);
+      expect(isValidDisplayType("string", "url")).toBe(true);
+      expect(isValidDisplayType("string", "phone")).toBe(true);
+    });
+
+    it("isValidDisplayType rejects mismatched pairs", () => {
+      expect(isValidDisplayType("number", "textarea")).toBe(false);
+      expect(isValidDisplayType("boolean", "text")).toBe(false);
+      expect(isValidDisplayType("string", "radio")).toBe(false);
+      expect(isValidDisplayType("enum", "checkbox")).toBe(false);
+      expect(isValidDisplayType("date", "select")).toBe(false);
+    });
+
+    it("accepts enum displayType of radio (not just select)", () => {
+      expect(isValidDisplayType("enum", "select")).toBe(true);
+      expect(isValidDisplayType("enum", "radio")).toBe(true);
+    });
+
+    it("date data type only allows 'date' display for now (datetime deferred to Phase 2)", () => {
+      expect(isValidDisplayType("date", "date")).toBe(true);
+      // datetime is intentionally not in the display type enum —
+      // it needs a separate data type with z.string().datetime()
+      // validation, which is a Phase 2 scope item.
+    });
+
+    it("fieldDefinitionSchema accepts a valid displayType", () => {
+      const parsed = fieldDefinitionSchema.parse({
+        key: "bio",
+        label: "Bio",
+        type: "string",
+        displayType: "textarea",
+        required: false,
+        searchable: false,
+        order: 10,
+        deprecated: false,
+      });
+      expect(parsed.displayType).toBe("textarea");
+    });
+
+    it("fieldDefinitionSchema rejects displayType that doesn't match data type", () => {
+      expect(() =>
+        fieldDefinitionSchema.parse({
+          key: "score",
+          label: "Score",
+          type: "number",
+          displayType: "textarea",
+          required: false,
+          searchable: false,
+          order: 10,
+          deprecated: false,
+        }),
+      ).toThrow(/Display type/);
+    });
+
+    it("fieldDefinitionSchema allows displayType to be omitted", () => {
+      const parsed = fieldDefinitionSchema.parse({
+        key: "name",
+        label: "Name",
+        type: "string",
+        required: false,
+        searchable: false,
+        order: 10,
+        deprecated: false,
+      });
+      expect(parsed.displayType).toBeUndefined();
+    });
+
+    it("fieldDefinitionSchema accepts enum with radio displayType", () => {
+      const parsed = fieldDefinitionSchema.parse({
+        key: "tier",
+        label: "Tier",
+        type: "enum",
+        displayType: "radio",
+        required: false,
+        searchable: false,
+        order: 10,
+        deprecated: false,
+        enumOptions: [
+          { value: "GOLD", label: "Gold" },
+          { value: "SILVER", label: "Silver" },
+        ],
+      });
+      expect(parsed.displayType).toBe("radio");
+    });
+  });
+
+  describe("CUSTOM_FIELD_KINDS", () => {
+    it("includes the expected user-facing kinds", () => {
+      const values = CUSTOM_FIELD_KINDS.map((k) => k.value);
+      expect(values).toContain("text");
+      expect(values).toContain("textarea");
+      expect(values).toContain("email");
+      expect(values).toContain("dropdown");
+      expect(values).toContain("radio");
+      expect(values).toContain("checkbox");
+      expect(values).toContain("date");
+      // datetime is intentionally not in the list — deferred to
+      // Phase 2 (needs a separate data type with datetime validator).
+      expect(values).not.toContain("datetime");
+    });
+
+    it("dropdown and radio kinds have hasOptions=true, others have hasOptions=false", () => {
+      const dropdown = CUSTOM_FIELD_KINDS.find((k) => k.value === "dropdown");
+      const radio = CUSTOM_FIELD_KINDS.find((k) => k.value === "radio");
+      const text = CUSTOM_FIELD_KINDS.find((k) => k.value === "text");
+      const checkbox = CUSTOM_FIELD_KINDS.find((k) => k.value === "checkbox");
+      expect(dropdown?.hasOptions).toBe(true);
+      expect(radio?.hasOptions).toBe(true);
+      expect(text?.hasOptions).toBe(false);
+      expect(checkbox?.hasOptions).toBe(false);
+    });
+
+    it("every kind maps to a valid (dataType, displayType) pair", () => {
+      for (const kind of CUSTOM_FIELD_KINDS) {
+        expect(isValidDisplayType(kind.dataType, kind.displayType)).toBe(true);
+      }
+    });
+
+    it("kindForField finds the matching Kind for a stored field", () => {
+      const textarea = kindForField({ type: "string", displayType: "textarea" });
+      expect(textarea.value).toBe("textarea");
+
+      const radio = kindForField({ type: "enum", displayType: "radio" });
+      expect(radio.value).toBe("radio");
+    });
+
+    it("kindForField falls back to the default display when no displayType is stored", () => {
+      // A legacy field created before the displayType concept existed
+      // has just `type: "string"` and no displayType. kindForField
+      // should treat it as "text" (the default for string).
+      const legacy = kindForField({ type: "string" });
+      expect(legacy.value).toBe("text");
+
+      const legacyEnum = kindForField({ type: "enum" });
+      expect(legacyEnum.value).toBe("dropdown");
     });
   });
 });

@@ -40,14 +40,63 @@ interface FieldDefinition {
   key: string;              // immutable once created; lowercase alphanumeric + underscore, starts with letter
   label: string;            // display label
   description?: string;     // optional help text rendered under the input
-  type: "string" | "number" | "date" | "boolean" | "enum";
+  type: "string" | "number" | "date" | "boolean" | "enum";    // data type — drives validation
+  displayType?: DisplayType;   // widget — drives rendering; see table below
   required: boolean;
   searchable: boolean;      // Phase 1: not yet wired to list filters
   order: number;            // display order within the Custom Fields section
   deprecated: boolean;      // hides from forms but preserves stored values
   enumOptions?: { value: string; label: string }[]; // required when type === "enum"
 }
+
+type DisplayType =
+  | "text" | "textarea" | "email" | "url" | "phone"  // string displays
+  | "number"                                          // number displays
+  | "date"                                            // date displays
+  | "checkbox"                                        // boolean displays
+  | "select" | "radio";                               // enum displays
 ```
+
+## Data type vs display type
+
+The stored `FieldDefinition` carries two fields that govern behavior separately: `type` (the data type, which drives validation) and `displayType` (the widget, which drives rendering).
+
+**Data type** determines the shape of the stored value and the Zod validator used by `buildZodFromFields`. A `string` field validates as a string regardless of whether it renders as a single-line input or a textarea. An `enum` field validates against the allowed option values regardless of whether it renders as a dropdown or a radio group.
+
+**Display type** controls which input widget `CustomFieldsSection` renders. Each data type has an allowlist of valid display types; the validator rejects invalid combinations at schema save time (e.g. `type: number` with `displayType: textarea` returns a 400 with `CUSTOM_FIELDS_INVALID`).
+
+| Data type | Allowed display types | Default |
+|---|---|---|
+| `string` | `text`, `textarea`, `email`, `url`, `phone` | `text` |
+| `number` | `number` | `number` |
+| `date` | `date` | `date` |
+| `boolean` | `checkbox` | `checkbox` |
+| `enum` | `select`, `radio` | `select` |
+
+**Backward compatibility**: when `displayType` is absent from a stored FieldDefinition (e.g. a legacy row created before the split existed), the renderer uses `defaultDisplayType(type)` which returns the first entry from the allowlist for that type.
+
+**Note on datetime**: a "Date and time" option was considered for Phase 1 but deferred. Representing datetime cleanly requires a new data type (`datetime`) with its own `z.string().datetime()` validator — it can't just be a display type of `date` because the existing `z.string().date()` validator only accepts `YYYY-MM-DD`. See the Phase 2 roadmap.
+
+## Unified admin-facing Kind
+
+Admins don't see the raw data-type vs display-type split. The admin Type dropdown shows a flat list of 10 user-facing "Kinds", each of which maps to a `(type, displayType)` pair internally:
+
+| Admin sees | `type` | `displayType` | Uses enumOptions? |
+|---|---|---|---|
+| Text (single line) | string | text | no |
+| Long text (multi-line) | string | textarea | no |
+| Email | string | email | no |
+| URL | string | url | no |
+| Phone | string | phone | no |
+| Number | number | number | no |
+| Date | date | date | no |
+| Yes / No (checkbox) | boolean | checkbox | no |
+| Dropdown (single choice from list) | enum | select | **yes** |
+| Radio group (single choice from list) | enum | radio | **yes** |
+
+The `CUSTOM_FIELD_KINDS` constant in `packages/shared/src/lib/custom-fields.ts` is the single source of truth for this mapping. Adding a new display type or data type starts by appending to this list and adding the corresponding render case in `CustomFieldsSection`.
+
+The admin Add Field / Edit Field form picks a Kind and the code then writes `type` and `displayType` together so they stay consistent. The "List of Values" editor (for enumOptions) only appears when the selected Kind has `hasOptions: true` — i.e. Dropdown or Radio group.
 
 ## Storage model on core entities
 
@@ -151,25 +200,59 @@ The service maintains an in-memory cache of `(utilityId, entityType) → FieldDe
 
 ### Settings → Custom Fields tab (`/settings`, Custom Fields tab)
 
-Admin-only (requires `settings.EDIT` for mutations; any authenticated user can view). Renders:
+Admin-only (requires `settings.EDIT` for most mutations, `settings.DELETE` for the destructive delete path). Authenticated users without edit permission see a read-only field list. Renders:
 
-- **Entity picker**: five pill buttons (Customer, Account, Premise, Service Agreement, Meter). Clicking switches the view to that entity's field list.
-- **Field list**: all current fields for the selected entity, active ones first and deprecated ones at the bottom (greyed out). Each row shows the key (immutable), type, and inline editors for label, required, and searchable. A "Deprecate" button on each active row triggers `POST /fields/:key/deprecate` after a confirm dialog.
-- **Add Field form**: dashed border, collapsed by default. Expands to a form with key, label, type, required, searchable, description, and (when type is enum) a dynamic list of value/label pairs. On submit, calls `POST /fields`.
+- **Entity picker** — five pill buttons (Customer, Account, Premise, Service Agreement, Meter). Clicking switches the view to that entity's field list. Switching entities also clears any in-progress add-or-edit state.
+- **Field list** — all current fields for the selected entity, active ones first and deprecated ones at the bottom (greyed out). Each row shows the key (immutable), the unified Kind label (e.g. "Dropdown (single choice from list)"), a deprecated badge if applicable, and inline editors for label, required, and searchable. Three action buttons sit on the right of each row:
+  - **Edit** (blue border) — expands the row into the shared FieldForm in edit mode. Only one row can be in edit mode at a time; opening a second closes the first.
+  - **Deprecate** (grey border) — triggers `POST /fields/:key/deprecate` after a confirm dialog. Hidden on rows that are already deprecated.
+  - **Delete** (red border) — triggers the two-phase delete flow described under "Deleting a custom field" below.
+- **Add Field form** — dashed border, collapsed by default. Click **+ Add Field** to expand.
+- **FieldForm** — the shared form component that handles both Add and Edit. Differences between the two modes:
+  - **Create mode**: Key input is editable with live reserved-key / duplicate-key validation (inline red error as you type). Type dropdown shows all 10 Kinds.
+  - **Edit mode**: Key input is disabled and labeled "(locked)". Type dropdown is filtered to alternatives within the same data type so admins can safely switch display widgets (text ↔ textarea ↔ email, dropdown ↔ radio) without risking data migration. Changing the data type is blocked entirely — an explanatory note appears under the Type dropdown directing admins to deprecate and recreate instead.
+  - Both modes: required inputs (Key, Label, Type, and List of Values when applicable) are marked with a red asterisk via a reusable `RequiredMark` component.
+
+#### Deleting a custom field
+
+The Delete button initiates a two-phase destructive flow (see `deleteCustomField` in `custom-field-schema.service.ts`):
+
+1. Initial confirm dialog. If the admin cancels here, nothing happens.
+2. Client calls `DELETE /api/v1/custom-fields/:entity/fields/:fieldKey` (default, no `force`).
+3. Backend counts rows in the entity table whose `custom_fields` jsonb contains the target key (`custom_fields ? $key`). If count is 0, deletes cleanly. If count > 0, returns `400 CUSTOM_FIELD_HAS_DATA` with the count in the error's `meta.rowCount`.
+4. Client parses the row count out of the error message, shows a second confirm dialog with the number (e.g. "42 row(s) contain data for this field. Continuing will permanently erase those values."), and on approval retries with `?force=true`.
+5. Force-mode backend scrubs the key from every matching row via `UPDATE <entity_table> SET custom_fields = custom_fields - $key WHERE utility_id = $1 AND custom_fields ? $key`, then removes the field from the schema and invalidates the tenant cache.
 
 ### Customer create form (`/customers/new`)
 
-Loads `/api/v1/custom-fields/customer` on mount. When the response contains fields, a "Custom Fields" section renders at the bottom of the form (below the built-in phone/alt-phone row). Each field is rendered by `CustomFieldsSection` using a switch on type:
+Loads `/api/v1/custom-fields/customer` on mount. When the response contains fields, a "Custom Fields" section renders at the bottom of the form (below the built-in phone/alt-phone row). Each field is rendered by `CustomFieldsSection` using a switch on `displayType` (falling back to `defaultDisplayType(type)` for legacy rows):
 
-- `string` → text input
+- `text` → single-line text input
+- `textarea` → multi-line textarea (4 rows default, resizable)
+- `email` → `<input type="email">` with a placeholder
+- `url` → `<input type="url">` with a placeholder
+- `phone` → `<input type="tel">` with a placeholder
 - `number` → number input (client coerces to null on empty)
-- `date` → HTML date picker
-- `boolean` → checkbox
-- `enum` → select dropdown with the declared options
+- `date` → project `DatePicker` component (calendar popup, not the native browser date input)
+- `checkbox` → single checkbox labeled "Yes"
+- `select` → `<select>` dropdown populated from `enumOptions`
+- `radio` → radio group with one button per `enumOption`, keyed by the field key so multiple fields on the same form don't collide
+
+Required fields show a red asterisk next to their label. The section respects the host's visual conventions via optional `inputStyle`, `fieldStyle`, `labelStyle`, and `hideHeader` props — see `CustomFieldsSectionProps` for the full list.
 
 Submit merges custom values into the request body under the `customFields` key, which the backend validates via `validateCustomFields` before writing.
 
 When the tenant has no custom fields configured, the section renders nothing and the form looks identical to the original.
+
+### Customer detail page (`/customers/[id]`)
+
+**View mode**: the Custom Fields section renders between the Contact and System sections as a label/value grid matching the page's core `fieldStyle` (180px label column + value column). Values are formatted by data type: booleans render as "Yes"/"No", enums resolve to their option labels, everything else renders as stored. Missing values render as an em-dash.
+
+Deprecated fields with stored values render below the active ones at 60% opacity with a small red "deprecated" tag next to the label, so legacy data stays visible.
+
+**Edit mode**: replaces the view-mode grid with `CustomFieldsSection`. Host styles (`fieldStyle`, `labelStyle`, `inputStyle`) are passed through so custom fields visually match the core inline-edit inputs on the same page — darker `--bg-deep` background, 180px left column for labels, etc. The section's own heading is suppressed via `hideHeader` because the page renders its own "Custom Fields" section header to match the "Contact" and "System" headers around it.
+
+On Save, the page diffs the edited custom fields against the stored values via JSON comparison and only includes `customFields` in the PATCH body when they actually differ.
 
 ## Scope and limits for Phase 1
 
@@ -185,21 +268,30 @@ Deliberately narrow for v1:
 
 **Phase 1 (complete):**
 - Database: `custom_fields` column on 5 entity tables + `custom_field_schema` table + RLS policy
-- Shared: `FieldDefinition` type, `buildZodFromFields` validator builder, admin CRUD validators
-- API: `custom-field-schema.service.ts` with read, upsert, add/update/deprecate, validateCustomFields helper, in-memory cache
-- API routes: `/api/v1/custom-fields/:entity` and nested field routes
-- Customer service wired to validate and persist custom fields on create/update
-- Web: `<CustomFieldsSection>` component with dispatch on field type
-- Customer form (`/customers/new`) integrated end to end
-- Settings → Custom Fields admin tab with entity picker, field list, and Add Field form
-- 20 shared tests for validators and the Zod builder
-- 14 API service tests for validateCustomFields
+- Shared: `FieldDefinition` type (with optional `displayType`), `buildZodFromFields` validator builder, admin CRUD validators, `CORE_FIELD_KEYS` reserved-key list with `isReservedFieldKey` helper
+- Shared: `FIELD_DISPLAY_TYPES` constant, `ALLOWED_DISPLAY_TYPES` per-data-type allowlist, `CUSTOM_FIELD_KINDS` unified admin Kind list, `defaultDisplayType` / `isValidDisplayType` / `kindForField` helpers
+- API: `custom-field-schema.service.ts` with read, upsert, add/update/deprecate/delete, validateCustomFields helper with create/update merge semantics and deprecated-field preservation, in-memory per-tenant cache (60s TTL)
+- API: reserved-key rejection on addCustomField / replaceCustomFieldSchema (`CUSTOM_FIELD_KEY_RESERVED`)
+- API: two-phase deleteCustomField with data-safety gate (`CUSTOM_FIELD_HAS_DATA` on count > 0, force-mode scrubs jsonb values before removing the field)
+- API routes: `GET/PUT /api/v1/custom-fields/:entity`, `POST/PATCH/DELETE /fields/:fieldKey`, `POST /fields/:fieldKey/deprecate`
+- Customer service wired to validate and persist custom fields on create/update (pilot)
+- Web: `<CustomFieldsSection>` component with dispatch on `displayType`, supporting text, textarea, email, url, phone, number, date (via project DatePicker), checkbox, select, and radio display widgets
+- Web: `<CustomFieldsSection>` host overrides — `inputStyle`, `fieldStyle`, `labelStyle`, `hideHeader` — so detail pages and form shells can both render the section in their own visual language
+- Web: `<DatePicker>` extended with optional `triggerStyle` prop for theme matching
+- Customer create form (`/customers/new`) integrated end to end
+- Customer detail page (`/customers/[id]`) — view mode uses page fieldStyle grid for label/value display; edit mode uses CustomFieldsSection with host styles passed through; save diffs custom fields and PATCHes only when changed
+- Settings → Custom Fields admin tab with entity picker (5 pills), field list, Add Field form, Edit button (inline expand into shared FieldForm with locked key and restricted Kind dropdown), Deprecate and two-phase Delete buttons
+- Shared FieldForm handles both create and edit via `mode` prop; required fields marked with red asterisks via reusable `RequiredMark` helper; live reserved-key validation on the key input
+- 40 shared tests for validators, Zod builder, displayType, reserved keys, CUSTOM_FIELD_KINDS invariants
+- 28 API service tests for validateCustomFields, addCustomField, replaceCustomFieldSchema, and deleteCustomField (all paths including reserved-key and data-safety gates)
 
 **Phase 2 (planned):**
 - Wire validateCustomFields into Account, Premise, ServiceAgreement, Meter create/update services
-- Integrate `<CustomFieldsSection>` into the four corresponding create/edit forms
-- Display custom field values on entity detail pages (read-only grid section)
-- Customer edit form wiring (currently only `new` uses the section)
+- Integrate `<CustomFieldsSection>` into the four corresponding create forms
+- Display custom field values on entity detail pages for Account, Premise, ServiceAgreement, Meter (read-only grid in view mode + inline CustomFieldsSection in edit mode, following the Customer pattern)
+- **Datetime support** — add `datetime` as a new entry in `FIELD_TYPES` with its own `z.string().datetime()` validator (ISO 8601 with time offset). Currently datetime is intentionally NOT supported because making it a display type of the `date` data type would cause the validator to reject any value with a time portion. The proper fix is a new data type alongside `date`, with a dedicated display type and either a DateTimePicker component or a composed DatePicker + time input. Estimated 1–2 hours of focused work once we have a real use case.
+- **Enum option cleanup on removal** — when an admin removes an enum option that still has stored values in some rows, warn with a row count and offer to scrub. Currently removing an option just orphans the data against the new schema, which will reject future updates on those rows.
+- **Compile-time CORE_FIELD_KEYS coverage check** — assert that the reserved-key list covers every column in the Prisma schema for extendable entities, so drift is caught at CI time instead of relying on manual maintenance.
 
 **Phase 3 (planned):**
 - **Searchable fields** — translate the `searchable` flag into real index management. Admin marks a field searchable → backend runs `CREATE INDEX CONCURRENTLY ... ON <table> ((custom_fields->>'<key>'))`. The list page reads searchable fields from the schema and renders filter pills above the table that map to query params like `cf_taxId=123`. Entity list services recognize the `cf_*` query params and translate them to Prisma filters using the expression index.

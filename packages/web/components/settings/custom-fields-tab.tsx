@@ -3,11 +3,13 @@
 import { useEffect, useState } from "react";
 import {
   CUSTOM_FIELD_ENTITY_TYPES,
+  CUSTOM_FIELD_KINDS,
   isReservedFieldKey,
+  kindForField,
   type CustomFieldEntityType,
+  type CustomFieldKind,
   type CustomFieldSchemaDTO,
   type FieldDefinition,
-  type FieldType,
 } from "@utility-cis/shared";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
@@ -43,13 +45,6 @@ const ENTITY_LABELS: Record<CustomFieldEntityType, string> = {
   meter: "Meter",
 };
 
-const FIELD_TYPE_OPTIONS: Array<{ value: FieldType; label: string }> = [
-  { value: "string", label: "String (text)" },
-  { value: "number", label: "Number" },
-  { value: "date", label: "Date" },
-  { value: "boolean", label: "Boolean (yes/no)" },
-  { value: "enum", label: "Enum (dropdown)" },
-];
 
 export function CustomFieldsTab() {
   const { canEdit } = usePermission("settings");
@@ -59,6 +54,9 @@ export function CustomFieldsTab() {
   const [schema, setSchema] = useState<CustomFieldSchemaDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
+  // Tracks which field's key is currently open in inline edit mode.
+  // Null means no field is being edited. Switching entities clears it.
+  const [editingKey, setEditingKey] = useState<string | null>(null);
 
   async function load(next: CustomFieldEntityType) {
     setLoading(true);
@@ -76,6 +74,10 @@ export function CustomFieldsTab() {
   }
 
   useEffect(() => {
+    // Close any open edit form when the admin switches entity tabs
+    // so state doesn't bleed across schemas.
+    setEditingKey(null);
+    setAdding(false);
     void load(entity);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entity]);
@@ -104,6 +106,34 @@ export function CustomFieldsTab() {
       toast(`Updated field "${key}"`, "success");
     } catch (err) {
       toast(err instanceof Error ? err.message : "Failed to update field", "error");
+    }
+  }
+
+  async function handleSaveEdit(key: string, next: FieldDefinition) {
+    // Called from the inline edit form. Sends a full PATCH with
+    // every editable property so the admin can change label, type
+    // (same-dataType only), description, enum options, required,
+    // and searchable in one round trip.
+    try {
+      const patch: Partial<FieldDefinition> = {
+        label: next.label,
+        description: next.description,
+        displayType: next.displayType,
+        required: next.required,
+        searchable: next.searchable,
+      };
+      if (next.enumOptions !== undefined) {
+        patch.enumOptions = next.enumOptions;
+      }
+      const res = await apiClient.patch<CustomFieldSchemaDTO>(
+        `/api/v1/custom-fields/${entity}/fields/${key}`,
+        patch,
+      );
+      setSchema(res);
+      setEditingKey(null);
+      toast(`Updated field "${key}"`, "success");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to save", "error");
     }
   }
 
@@ -220,6 +250,10 @@ export function CustomFieldsTab() {
           <FieldList
             fields={schema?.fields ?? []}
             canEdit={canEdit}
+            editingKey={editingKey}
+            onStartEdit={(k) => setEditingKey(k)}
+            onCancelEdit={() => setEditingKey(null)}
+            onSaveEdit={handleSaveEdit}
             onUpdate={handleUpdate}
             onDeprecate={handleDeprecate}
             onDelete={handleDelete}
@@ -246,11 +280,12 @@ export function CustomFieldsTab() {
           )}
 
           {canEdit && adding && (
-            <AddFieldForm
+            <FieldForm
+              mode="create"
               entityType={entity}
               existingKeys={(schema?.fields ?? []).map((f) => f.key)}
               onCancel={() => setAdding(false)}
-              onAdd={handleAdd}
+              onSave={handleAdd}
             />
           )}
         </>
@@ -264,12 +299,20 @@ export function CustomFieldsTab() {
 function FieldList({
   fields,
   canEdit,
+  editingKey,
+  onStartEdit,
+  onCancelEdit,
+  onSaveEdit,
   onUpdate,
   onDeprecate,
   onDelete,
 }: {
   fields: FieldDefinition[];
   canEdit: boolean;
+  editingKey: string | null;
+  onStartEdit: (key: string) => void;
+  onCancelEdit: () => void;
+  onSaveEdit: (key: string, next: FieldDefinition) => void;
   onUpdate: (key: string, patch: Partial<FieldDefinition>) => void;
   onDeprecate: (key: string) => void;
   onDelete: (key: string) => void;
@@ -289,16 +332,36 @@ function FieldList({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {sorted.map((field) => (
-        <FieldRow
-          key={field.key}
-          field={field}
-          canEdit={canEdit}
-          onUpdate={(patch) => onUpdate(field.key, patch)}
-          onDeprecate={() => onDeprecate(field.key)}
-          onDelete={() => onDelete(field.key)}
-        />
-      ))}
+      {sorted.map((field) => {
+        // When this row is in edit mode, replace the standard
+        // FieldRow with the shared form component in "edit"
+        // mode (initialField supplied). Otherwise render the
+        // compact summary row.
+        if (editingKey === field.key) {
+          return (
+            <FieldForm
+              key={field.key}
+              mode="edit"
+              initialField={field}
+              existingKeys={[]}
+              entityType={"customer" /* unused in edit mode; retained for API parity */ as any}
+              onCancel={onCancelEdit}
+              onSave={(next) => onSaveEdit(field.key, next)}
+            />
+          );
+        }
+        return (
+          <FieldRow
+            key={field.key}
+            field={field}
+            canEdit={canEdit}
+            onStartEdit={() => onStartEdit(field.key)}
+            onUpdate={(patch) => onUpdate(field.key, patch)}
+            onDeprecate={() => onDeprecate(field.key)}
+            onDelete={() => onDelete(field.key)}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -306,12 +369,14 @@ function FieldList({
 function FieldRow({
   field,
   canEdit,
+  onStartEdit,
   onUpdate,
   onDeprecate,
   onDelete,
 }: {
   field: FieldDefinition;
   canEdit: boolean;
+  onStartEdit: () => void;
   onUpdate: (patch: Partial<FieldDefinition>) => void;
   onDeprecate: () => void;
   onDelete: () => void;
@@ -332,7 +397,7 @@ function FieldRow({
             {field.key}
           </code>
           <span style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: 10 }}>
-            {field.type}
+            {kindForField(field).label}
           </span>
           {field.deprecated && (
             <span
@@ -352,23 +417,42 @@ function FieldRow({
         {canEdit && (
           <div style={{ display: "flex", gap: 6 }}>
             {!field.deprecated && (
-              <button
-                type="button"
-                onClick={onDeprecate}
-                style={{
-                  background: "transparent",
-                  border: "1px solid var(--border)",
-                  color: "var(--text-muted)",
-                  padding: "4px 10px",
-                  fontSize: 10,
-                  borderRadius: 4,
-                  cursor: "pointer",
-                  letterSpacing: "0.04em",
-                  textTransform: "uppercase",
-                }}
-              >
-                Deprecate
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={onStartEdit}
+                  style={{
+                    background: "transparent",
+                    border: "1px solid var(--accent-primary)",
+                    color: "var(--accent-primary)",
+                    padding: "4px 10px",
+                    fontSize: 10,
+                    borderRadius: 4,
+                    cursor: "pointer",
+                    letterSpacing: "0.04em",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={onDeprecate}
+                  style={{
+                    background: "transparent",
+                    border: "1px solid var(--border)",
+                    color: "var(--text-muted)",
+                    padding: "4px 10px",
+                    fontSize: 10,
+                    borderRadius: 4,
+                    cursor: "pointer",
+                    letterSpacing: "0.04em",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  Deprecate
+                </button>
+              </>
             )}
             <button
               type="button"
@@ -437,34 +521,76 @@ function FieldRow({
 
 // ─── Add-field form ─────────────────────────────────────────────────
 
-function AddFieldForm({
+/**
+ * Shared form for creating and editing custom field definitions.
+ *
+ * Modes:
+ *   - create: key input is editable, Kind dropdown shows all kinds,
+ *     reserved-key and duplicate-key checks run against existingKeys.
+ *   - edit: key input is disabled (immutable), Kind dropdown is
+ *     restricted to the field's current data type so the admin can
+ *     switch display widgets (text↔textarea↔email) or (dropdown↔radio)
+ *     without risking data migration. Changing the data type is
+ *     blocked — admins must deprecate + re-add for that.
+ *
+ * The form seeds from initialField in edit mode and emits the full
+ * FieldDefinition on save. The parent decides whether to POST or
+ * PATCH; this component doesn't know about transport.
+ */
+function FieldForm({
+  mode,
+  initialField,
   entityType,
   existingKeys,
   onCancel,
-  onAdd,
+  onSave,
 }: {
+  mode: "create" | "edit";
+  initialField?: FieldDefinition;
   entityType: CustomFieldEntityType;
   existingKeys: string[];
   onCancel: () => void;
-  onAdd: (field: FieldDefinition) => void;
+  onSave: (field: FieldDefinition) => void;
 }) {
-  const [key, setKey] = useState("");
-  const [label, setLabel] = useState("");
-  const [type, setType] = useState<FieldType>("string");
-  const [required, setRequired] = useState(false);
-  const [searchable, setSearchable] = useState(false);
-  const [description, setDescription] = useState("");
-  const [enumOptions, setEnumOptions] = useState<Array<{ value: string; label: string }>>([
-    { value: "", label: "" },
-  ]);
+  const [key, setKey] = useState(initialField?.key ?? "");
+  const [label, setLabel] = useState(initialField?.label ?? "");
+  const [kindValue, setKindValue] = useState<string>(
+    initialField ? kindForField(initialField).value : "text",
+  );
+  const [required, setRequired] = useState(initialField?.required ?? false);
+  const [searchable, setSearchable] = useState(initialField?.searchable ?? false);
+  const [description, setDescription] = useState(initialField?.description ?? "");
+  const [enumOptions, setEnumOptions] = useState<Array<{ value: string; label: string }>>(
+    initialField?.enumOptions && initialField.enumOptions.length > 0
+      ? initialField.enumOptions.map((o) => ({ value: o.value, label: o.label }))
+      : [{ value: "", label: "" }],
+  );
   const [error, setError] = useState<string | null>(null);
+
+  const isEdit = mode === "edit";
+  const keyLocked = isEdit; // Key is immutable on existing fields
+
+  // In edit mode, restrict the Kind dropdown to alternatives within
+  // the same data type. Changing the data type would require migrating
+  // every stored value — out of scope for inline edit. Same-dataType
+  // changes (text ↔ textarea ↔ email, dropdown ↔ radio, etc.) are
+  // safe because storage shape doesn't change.
+  const availableKinds = isEdit && initialField
+    ? CUSTOM_FIELD_KINDS.filter((k) => k.dataType === initialField.type)
+    : CUSTOM_FIELD_KINDS;
+
+  // Look up the full Kind record whenever kindValue changes so the
+  // form can conditionally show the enum-options editor and the
+  // save path knows which (dataType, displayType) to persist.
+  const kind: CustomFieldKind =
+    CUSTOM_FIELD_KINDS.find((k) => k.value === kindValue) ?? CUSTOM_FIELD_KINDS[0];
 
   // Live reserved-key check so the admin sees the collision as soon
   // as they finish typing a bad key — no need to hit the server.
-  // The server still enforces the same rule, so this is purely UX.
+  // Skipped in edit mode because the key is locked.
   const keyMatchesFormat = /^[a-z][a-z0-9_]*$/.test(key);
-  const keyIsReserved = keyMatchesFormat && isReservedFieldKey(entityType, key);
-  const keyAlreadyExists = keyMatchesFormat && existingKeys.includes(key);
+  const keyIsReserved = !isEdit && keyMatchesFormat && isReservedFieldKey(entityType, key);
+  const keyAlreadyExists = !isEdit && keyMatchesFormat && existingKeys.includes(key);
   const liveKeyWarning = keyIsReserved
     ? `"${key}" is reserved — it matches a core column on ${entityType}. Pick a different key.`
     : keyAlreadyExists
@@ -477,13 +603,15 @@ function AddFieldForm({
       setError("Key must start with a lowercase letter and contain only lowercase letters, digits, and underscores");
       return null;
     }
-    if (isReservedFieldKey(entityType, key)) {
+    // Reserved/duplicate checks only apply on create — the key is
+    // immutable on edit so it's known-valid.
+    if (!isEdit && isReservedFieldKey(entityType, key)) {
       setError(
         `Key "${key}" is reserved — it matches a core column on ${entityType}. Pick a different key.`,
       );
       return null;
     }
-    if (existingKeys.includes(key)) {
+    if (!isEdit && existingKeys.includes(key)) {
       setError(`Key "${key}" already exists`);
       return null;
     }
@@ -494,17 +622,20 @@ function AddFieldForm({
     const field: FieldDefinition = {
       key,
       label: label.trim(),
-      type,
+      type: kind.dataType,
+      displayType: kind.displayType,
       required,
       searchable,
-      order: 100,
-      deprecated: false,
+      // Preserve the existing order on edit so re-saving doesn't
+      // accidentally reshuffle the admin's field list.
+      order: initialField?.order ?? 100,
+      deprecated: initialField?.deprecated ?? false,
       description: description.trim() || undefined,
     };
-    if (type === "enum") {
+    if (kind.hasOptions) {
       const validOptions = enumOptions.filter((o) => o.value.trim() && o.label.trim());
       if (validOptions.length === 0) {
-        setError("Enum fields need at least one option");
+        setError(`${kind.label} needs at least one option in the list of values`);
         return null;
       }
       field.enumOptions = validOptions;
@@ -514,7 +645,7 @@ function AddFieldForm({
 
   function handleSubmit() {
     const field = validate();
-    if (field) onAdd(field);
+    if (field) onSave(field);
   }
 
   return (
@@ -526,7 +657,9 @@ function AddFieldForm({
         background: "var(--bg-surface)",
       }}
     >
-      <h3 style={{ fontSize: 13, fontWeight: 700, marginTop: 0, marginBottom: 14 }}>Add Field</h3>
+      <h3 style={{ fontSize: 13, fontWeight: 700, marginTop: 0, marginBottom: 14 }}>
+        {isEdit ? `Edit "${initialField?.key}"` : "Add Field"}
+      </h3>
 
       {error && (
         <div
@@ -545,15 +678,22 @@ function AddFieldForm({
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
         <div>
-          <label style={tinyLabelStyle}>Key (immutable once saved)</label>
+          <label style={tinyLabelStyle}>
+            Key <RequiredMark />
+            {keyLocked && <span style={{ marginLeft: 6, color: "var(--text-muted)", fontSize: 9 }}>(locked)</span>}
+            {!keyLocked && <span style={{ marginLeft: 6, color: "var(--text-muted)", fontSize: 9 }}>(immutable once saved)</span>}
+          </label>
           <input
             type="text"
             value={key}
             onChange={(e) => setKey(e.target.value)}
+            disabled={keyLocked}
             placeholder="membership_tier"
             style={{
               ...inputStyle,
               borderColor: liveKeyWarning ? "var(--danger)" : "var(--border)",
+              opacity: keyLocked ? 0.6 : 1,
+              cursor: keyLocked ? "not-allowed" : "text",
             }}
           />
           {liveKeyWarning && (
@@ -563,7 +703,9 @@ function AddFieldForm({
           )}
         </div>
         <div>
-          <label style={tinyLabelStyle}>Label</label>
+          <label style={tinyLabelStyle}>
+            Label <RequiredMark />
+          </label>
           <input
             type="text"
             value={label}
@@ -576,18 +718,25 @@ function AddFieldForm({
 
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
         <div>
-          <label style={tinyLabelStyle}>Type</label>
+          <label style={tinyLabelStyle}>
+            Type <RequiredMark />
+          </label>
           <select
-            value={type}
-            onChange={(e) => setType(e.target.value as FieldType)}
+            value={kindValue}
+            onChange={(e) => setKindValue(e.target.value)}
             style={inputStyle}
           >
-            {FIELD_TYPE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
+            {availableKinds.map((k) => (
+              <option key={k.value} value={k.value}>
+                {k.label}
               </option>
             ))}
           </select>
+          {isEdit && (
+            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
+              Limited to same data type. Changing data type requires deprecating and recreating the field.
+            </div>
+          )}
         </div>
         <div>
           <label style={tinyLabelStyle}>Required</label>
@@ -620,9 +769,11 @@ function AddFieldForm({
         />
       </div>
 
-      {type === "enum" && (
+      {kind.hasOptions && (
         <div style={{ marginBottom: 12 }}>
-          <label style={tinyLabelStyle}>Options</label>
+          <label style={tinyLabelStyle}>
+            List of Values <RequiredMark />
+          </label>
           {enumOptions.map((opt, idx) => (
             <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, marginBottom: 6 }}>
               <input
@@ -711,10 +862,28 @@ function AddFieldForm({
             cursor: "pointer",
           }}
         >
-          Add Field
+          {isEdit ? "Save Changes" : "Add Field"}
         </button>
       </div>
     </div>
+  );
+}
+
+// Tiny reusable red asterisk for required-field indicators on
+// admin form labels. Matches the visual used by CustomFieldsSection
+// for end-user forms so the whole app renders required markers the
+// same way.
+function RequiredMark() {
+  return (
+    <span
+      style={{
+        color: "var(--danger)",
+        fontWeight: 700,
+        marginLeft: 2,
+      }}
+    >
+      *
+    </span>
   );
 }
 

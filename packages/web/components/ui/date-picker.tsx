@@ -6,6 +6,14 @@ interface DatePickerProps {
   value: string; // YYYY-MM-DD
   onChange: (value: string) => void;
   placeholder?: string;
+  /**
+   * Override the default trigger-button style so the picker blends
+   * into surrounding inputs. The defaults match the customer detail
+   * page's --bg-deep inline-edit inputs. Pass a different style here
+   * when embedding the picker inside a form shell that uses a
+   * different background (e.g. EntityFormPage uses --bg-elevated).
+   */
+  triggerStyle?: React.CSSProperties;
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -21,7 +29,7 @@ function formatDisplay(dateStr: string): string {
   return `${MONTHS[m - 1]} ${d}, ${y}`;
 }
 
-export function DatePicker({ value, onChange, placeholder = "Select date..." }: DatePickerProps) {
+export function DatePicker({ value, onChange, placeholder = "Select date...", triggerStyle }: DatePickerProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -88,6 +96,10 @@ export function DatePicker({ value, onChange, placeholder = "Select date..." }: 
         type="button"
         onClick={() => setOpen(!open)}
         style={{
+          // Defaults first; caller overrides (e.g. background,
+          // padding) come last via triggerStyle spread. The color
+          // depends on whether a value is set, so apply it after
+          // the spread so callers don't accidentally reset it.
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
@@ -97,10 +109,11 @@ export function DatePicker({ value, onChange, placeholder = "Select date..." }: 
           background: "var(--bg-deep)",
           border: "1px solid var(--border)",
           borderRadius: "var(--radius, 10px)",
-          color: value ? "var(--text-primary)" : "var(--text-muted)",
           cursor: "pointer",
           fontFamily: "inherit",
           textAlign: "left",
+          ...triggerStyle,
+          color: value ? "var(--text-primary)" : "var(--text-muted)",
         }}
       >
         <span>{value ? formatDisplay(value) : placeholder}</span>
