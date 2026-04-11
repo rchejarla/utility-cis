@@ -803,7 +803,20 @@ Meter-read UX hardening (follow-up pass): the read-entry form rebuilt with a pre
 Still planned for Phase 2: GIS integration (deferred to Phase 3 as it depends on the map-tile integration and a service territory entity).
 
 ### Phase 3
-Billing engine + notifications + delinquency: Rate engine calculations (including WQA), billing cycle execution, SaaSLogic integration, bill document generation, late fees, payment plans, delinquency management, notification engine.
+Billing integration + notifications + delinquency. **CIS does not calculate charges** — rating, invoicing, and delivery are owned by the external [SaaSLogic](https://docs.saaslogic.io) billing platform. CIS is the system of record for meters, premises, agreements, and interval reads, and acts as the integration shell that feeds SaaSLogic usage data and surfaces invoices back to end users.
+
+Architecture (see `docs/specs/21-saaslogic-billing.md` for the full spec):
+
+- **SaaSLogic client package** (`@utility-cis/saaslogic`) — typed REST client with bearer-token auth, retry with backoff, idempotency keys on mutations, call-log emission.
+- **Customer and subscription mirroring** — lazy upsert. A SaaSLogic customer is created only when a ServiceAgreement first activates; subscription is provisioned with the `saaslogicPlanId` stored on the RateSchedule. IDs are mirrored on `customer.saaslogic_customer_id` and `service_agreement.saaslogic_subscription_id`.
+- **Resource reference table** (`saaslogic_resource`) — reusable resource definitions (e.g., `electric_kwh`) shared across meters. `Commodity.saaslogic_resource_id` FK binds a commodity to the resource used for usage push.
+- **Interval reads** — new TimescaleDB hypertable `meter_interval_read` partitioned by `ts`, separate from the existing low-frequency `MeterRead` entity. Ingested via `POST /api/v1/meters/:id/interval-reads`.
+- **Billing cycle close** — aggregates intervals per (agreement, commodity), writes `BillingLineItem` rows, batch-pushes via `POST /subscriptions/{id}/resources` with a per-line idempotency key. Line items move through `PENDING → SENT → ACKED` with `FAILED` retry.
+- **Invoice mirror** — `Invoice` table populated by a polling reconciler (`GET /invoices?updated_since=...`) running every 5 minutes per tenant. Webhook receiver can be added later without schema changes if SaaSLogic exposes events.
+- **Payment methods** — redirect-only. A button on the agreement detail page fetches a hosted portal URL from SaaSLogic and navigates the browser there. CIS holds no card data and is out of PCI scope entirely.
+- **Ad-hoc charges** — `POST /invoices/on-demand` exposed through a UI action for one-off fees (reconnection, deposits, adjustments) without waiting for the next cycle.
+
+Also in Phase 3: notification engine, delinquency rules and notices, late fees and payment plans (as line items fed to SaaSLogic).
 
 ### Phase 4
 Customer portal + service requests: Self-service portal, service request lifecycle, ApptorFlow workflows.

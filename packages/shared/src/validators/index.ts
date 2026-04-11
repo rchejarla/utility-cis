@@ -19,3 +19,4 @@ export * from "./service-suspension";
 export * from "./suspension-type-def";
 export * from "./service-event";
 export * from "./workflows";
+export * from "./tenant-settings";

@@ -18,6 +18,7 @@ import {
   faClipboardList,
   faPalette,
   faGear,
+  faUserShield,
   faXmark,
 } from "@fortawesome/pro-solid-svg-icons";
 
@@ -35,6 +36,7 @@ const moreNav = [
   { href: "/commodities", label: "Commodities", icon: faDroplet, module: "commodities" },
   { href: "/audit-log", label: "Audit Log", icon: faClipboardList, module: "audit_log" },
   { href: "/theme", label: "Theme", icon: faPalette, module: "theme" },
+  { href: "/users-roles", label: "Users & Roles", icon: faUserShield, module: "settings" },
   { href: "/settings", label: "Settings", icon: faGear, module: "settings" },
 ];
 

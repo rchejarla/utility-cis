@@ -19,14 +19,14 @@ import {
   faClipboardList,
   faPalette,
   faGear,
-  faChevronLeft,
-  faChevronRight,
+  faBars,
   faBolt,
   faTriangleExclamation,
   faDumpster,
   faPauseCircle,
   faTruck,
   faArrowRightArrowLeft,
+  faUserShield,
 } from "@fortawesome/pro-solid-svg-icons";
 
 interface NavItem {
@@ -76,6 +76,12 @@ const navSections: NavSection[] = [
     items: [
       { href: "/audit-log", label: "Audit Log", icon: faClipboardList, module: "audit_log" },
       { href: "/theme", label: "Theme Editor", icon: faPalette, module: "theme" },
+    ],
+  },
+  {
+    title: "Administration",
+    items: [
+      { href: "/users-roles", label: "Users & Roles", icon: faUserShield, module: "settings" },
       { href: "/settings", label: "Settings", icon: faGear, module: "settings" },
     ],
   },
@@ -143,45 +149,79 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
         position: "relative",
       }}
     >
-      {/* Brand */}
+      {/* Brand + hamburger toggle. In expanded mode shows logo + name + toggle
+          on the right. In collapsed mode only the hamburger remains so the
+          user can always toggle back. */}
       <div
         style={{
-          padding: collapsed ? "16px 0" : "16px 20px",
+          height: 56,
+          padding: collapsed ? 0 : "0 8px 0 20px",
           borderBottom: "1px solid var(--border)",
           display: "flex",
           alignItems: "center",
           gap: "10px",
-          minHeight: 56,
           justifyContent: collapsed ? "center" : "flex-start",
+          flexShrink: 0,
         }}
       >
-        <div
+        {!collapsed && (
+          <>
+            <div
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                background: "var(--accent-primary)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+                color: "white",
+                fontWeight: "bold",
+                fontSize: 14,
+              }}
+            >
+              U
+            </div>
+            <div style={{ overflow: "hidden", flex: 1 }}>
+              <div style={{ color: "var(--text-primary)", fontWeight: 600, fontSize: 14, lineHeight: 1.2, whiteSpace: "nowrap" }}>
+                Utility CIS
+              </div>
+              <div style={{ color: "var(--text-muted)", fontSize: 11, whiteSpace: "nowrap" }}>
+                Admin Portal
+              </div>
+            </div>
+          </>
+        )}
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           style={{
-            width: 32,
-            height: 32,
-            borderRadius: 8,
-            background: "var(--accent-primary)",
+            width: 36,
+            height: 36,
+            borderRadius: "var(--radius)",
+            background: "transparent",
+            border: "none",
+            color: "var(--text-secondary)",
+            cursor: "pointer",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             flexShrink: 0,
-            color: "white",
-            fontWeight: "bold",
-            fontSize: 14,
+            transition: "background 0.15s ease, color 0.15s ease",
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = "var(--bg-hover)";
+            (e.currentTarget as HTMLButtonElement).style.color = "var(--text-primary)";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+            (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)";
           }}
         >
-          U
-        </div>
-        {!collapsed && (
-          <div style={{ overflow: "hidden" }}>
-            <div style={{ color: "var(--text-primary)", fontWeight: 600, fontSize: 14, lineHeight: 1.2, whiteSpace: "nowrap" }}>
-              Utility CIS
-            </div>
-            <div style={{ color: "var(--text-muted)", fontSize: 11, whiteSpace: "nowrap" }}>
-              Admin Portal
-            </div>
-          </div>
-        )}
+          <FontAwesomeIcon icon={faBars} style={{ width: 16, height: 16 }} />
+        </button>
       </div>
 
       {/* Nav */}
@@ -221,9 +261,8 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
         ))}
       </nav>
 
-      {/* User + Collapse toggle */}
+      {/* User — collapse toggle moved to the brand header */}
       <div style={{ borderTop: "1px solid var(--border)" }}>
-        {/* User */}
         <div
           style={{
             padding: collapsed ? "10px 0" : "10px 16px",
@@ -263,34 +302,6 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
             </div>
           )}
         </div>
-
-        {/* Collapse toggle */}
-        <button
-          onClick={() => setCollapsed(!collapsed)}
-          style={{
-            width: "100%",
-            padding: "10px 0",
-            background: "none",
-            border: "none",
-            borderTop: "1px solid var(--border)",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 8,
-            color: "var(--text-muted)",
-            fontSize: 12,
-            fontFamily: "inherit",
-            transition: "color 0.15s ease",
-          }}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        >
-          <FontAwesomeIcon
-            icon={collapsed ? faChevronRight : faChevronLeft}
-            style={{ width: 10, height: 10 }}
-          />
-          {!collapsed && <span>Collapse</span>}
-        </button>
       </div>
     </aside>
   );

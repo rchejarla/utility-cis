@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agreement SA-30188 · Billing — Utility CIS</title>
+<link rel="stylesheet" href="billing.css" />
+</head>
+<body>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">U</div>
+      <div>
+        <div class="name">Utility CIS</div>
+        <span class="tenant">Bozeman · dev</span>
+      </div>
+    </div>
+    <div class="nav-wrap">
+      <div class="group">Operations</div>
+      <div class="nav">
+        <a href="#"><span class="dot"></span>Dashboard</a>
+        <a href="#"><span class="dot"></span>Customers</a>
+        <a href="#"><span class="dot"></span>Premises</a>
+        <a href="#"><span class="dot"></span>Meters</a>
+        <a href="#"><span class="dot"></span>Accounts</a>
+        <a href="#" class="active"><span class="dot"></span>Agreements</a>
+      </div>
+
+      <div class="group">Billing</div>
+      <div class="nav">
+        <a href="#"><span class="dot"></span>Cycles</a>
+        <a href="#"><span class="dot"></span>Invoices</a>
+        <a href="#"><span class="dot"></span>Rate schedules</a>
+      </div>
+
+      <div class="group">Admin</div>
+      <div class="nav">
+        <a href="#"><span class="dot"></span>Users &amp; roles</a>
+        <a href="#"><span class="dot"></span>Settings</a>
+      </div>
+    </div>
+  </aside>
+
+  <div class="content">
+
+    <header class="topbar">
+      <nav class="bc">
+        <span class="c">Agreements</span>
+        <span class="s">/</span>
+        <span class="c last">SA-30188</span>
+      </nav>
+      <div class="search">
+        <span>🔍</span>
+        <span>Search customers, premises, meters…</span>
+        <span class="kbd">⌘K</span>
+      </div>
+      <button class="icon-btn" title="Switch to light mode" aria-label="Switch theme">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+      </button>
+      <button class="avatar" title="User menu">A</button>
+    </header>
+
+    <main class="main">
+
+      <div class="page-header">
+      <div>
+        <h1>
+          SA-30188
+          <span class="badge success" style="margin-left: 10px; vertical-align: middle;"><span class="d"></span>Active</span>
+        </h1>
+        <p>Katherine Okafor · 3015 Birchwood Ln · electric + water + waste · Residential A cycle</p>
+      </div>
+      <div class="actions">
+        <a href="#" class="btn">Edit</a>
+        <a href="#" class="btn">Close agreement</a>
+      </div>
+    </div>
+
+    <!-- Tabs as they appear on agreement detail -->
+    <div class="tabs">
+      <div class="tab">Overview</div>
+      <div class="tab">Meters</div>
+      <div class="tab">Reads</div>
+      <div class="tab active">Billing</div>
+      <div class="tab">Suspensions</div>
+      <div class="tab">Attachments</div>
+      <div class="tab">Audit log</div>
+    </div>
+
+    <!-- Billing tab content: two cards over a table -->
+    <div class="two-col" style="margin-bottom: 16px;">
+
+      <!-- SaaSLogic linkage card -->
+      <div class="card">
+        <h3>SaaSLogic Subscription</h3>
+        <div class="field">
+          <div class="k">Subscription ID</div>
+          <div class="v mono">sub_01HX8Y2M9</div>
+        </div>
+        <div class="field">
+          <div class="k">Plan</div>
+          <div class="v mono">plan_res_tier_2</div>
+        </div>
+        <div class="field">
+          <div class="k">Provisioned</div>
+          <div class="v">Jan 14, 2026 · 14:22 UTC</div>
+        </div>
+        <div class="field">
+          <div class="k">Link status</div>
+          <div class="v"><span class="badge success"><span class="d"></span>Synced</span></div>
+        </div>
+        <div class="field">
+          <div class="k">Last reconciled</div>
+          <div class="v muted">36 seconds ago</div>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 14px;">
+          <a href="#" class="btn">Manage payment methods</a>
+          <a href="#" class="btn btn-primary">Issue charge now</a>
+        </div>
+      </div>
+
+      <!-- Current cycle snapshot card -->
+      <div class="card">
+        <h3>Current Cycle Snapshot</h3>
+        <div class="field">
+          <div class="k">Period</div>
+          <div class="v">Apr 01 – Apr 30, 2026</div>
+        </div>
+        <div class="field">
+          <div class="k">Closes in</div>
+          <div class="v">3 days</div>
+        </div>
+        <div class="field">
+          <div class="k">Accumulated usage</div>
+          <div class="v mono">847 kWh · 3.2 kgal · 1 cart</div>
+        </div>
+        <div class="field">
+          <div class="k">Estimated charge</div>
+          <div class="v mono strong">$412.80</div>
+        </div>
+        <div class="field">
+          <div class="k">Last interval read</div>
+          <div class="v muted">Apr 11, 2026 · 06:00</div>
+        </div>
+        <div class="field">
+          <div class="k">Line item state</div>
+          <div class="v"><span class="badge neutral"><span class="d"></span>Pending cycle close</span></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Recent activity table -->
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th style="width: 160px;">When</th>
+            <th style="width: 180px;">Event</th>
+            <th>Detail</th>
+            <th style="width: 120px; text-align: right;">Amount</th>
+            <th style="width: 120px;">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="muted">Apr 11 · 02:16</span></td>
+            <td>Line item pushed</td>
+            <td><span class="dim">April cycle · electric · 847 kWh</span></td>
+            <td class="right mono strong">$412.80</td>
+            <td><span class="badge info"><span class="d"></span>Sent</span></td>
+          </tr>
+          <tr>
+            <td><span class="muted">Apr 03 · 09:12</span></td>
+            <td>Invoice settled</td>
+            <td><span class="dim">INV-2603-0398 · auto-pay · card **** 4721</span></td>
+            <td class="right mono strong">$389.42</td>
+            <td><span class="badge success"><span class="d"></span>Paid</span></td>
+          </tr>
+          <tr>
+            <td><span class="muted">Mar 14 · 10:05</span></td>
+            <td>Invoice settled</td>
+            <td><span class="dim">INV-2602-0301 · $80.00 follow-up paid</span></td>
+            <td class="right mono strong">$420.00</td>
+            <td><span class="badge success"><span class="d"></span>Paid</span></td>
+          </tr>
+          <tr>
+            <td><span class="muted">Jan 14 · 14:22</span></td>
+            <td>Subscription provisioned</td>
+            <td><span class="dim">sub_01HX8Y2M9 · plan plan_res_tier_2</span></td>
+            <td class="right dim">—</td>
+            <td><span class="badge neutral"><span class="d"></span>Synced</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    </main>
+  </div>
+</div>
+
+</body>
+</html>

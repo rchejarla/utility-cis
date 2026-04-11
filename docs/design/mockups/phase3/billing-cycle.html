@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cycle 2026-04 · Residential A — Utility CIS</title>
+<link rel="stylesheet" href="billing.css" />
+</head>
+<body>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">U</div>
+      <div>
+        <div class="name">Utility CIS</div>
+        <span class="tenant">Bozeman · dev</span>
+      </div>
+    </div>
+    <div class="nav-wrap">
+      <div class="group">Operations</div>
+      <div class="nav">
+        <a href="#"><span class="dot"></span>Dashboard</a>
+        <a href="#"><span class="dot"></span>Customers</a>
+        <a href="#"><span class="dot"></span>Premises</a>
+        <a href="#"><span class="dot"></span>Meters</a>
+        <a href="#"><span class="dot"></span>Accounts</a>
+        <a href="#"><span class="dot"></span>Agreements</a>
+      </div>
+
+      <div class="group">Billing</div>
+      <div class="nav">
+        <a href="#" class="active"><span class="dot"></span>Cycles</a>
+        <a href="#"><span class="dot"></span>Invoices</a>
+        <a href="#"><span class="dot"></span>Rate schedules</a>
+      </div>
+
+      <div class="group">Admin</div>
+      <div class="nav">
+        <a href="#"><span class="dot"></span>Users &amp; roles</a>
+        <a href="#"><span class="dot"></span>Settings</a>
+      </div>
+    </div>
+  </aside>
+
+  <div class="content">
+
+    <header class="topbar">
+      <nav class="bc">
+        <span class="c">Billing</span>
+        <span class="s">/</span>
+        <span class="c">Cycles</span>
+        <span class="s">/</span>
+        <span class="c last">2026-04 · Residential A</span>
+      </nav>
+      <div class="search">
+        <span>🔍</span>
+        <span>Search customers, premises, meters…</span>
+        <span class="kbd">⌘K</span>
+      </div>
+      <button class="icon-btn" title="Switch to light mode" aria-label="Switch theme">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+      </button>
+      <button class="avatar" title="User menu">A</button>
+    </header>
+
+    <main class="main">
+
+      <div class="page-header">
+      <div>
+        <h1>Cycle 2026-04 · Residential A</h1>
+        <p>Apr 01 – Apr 30, 2026 · closed Apr 30 at 23:00 · pushing line items to SaaSLogic</p>
+      </div>
+      <div class="actions">
+        <a href="#" class="btn">Export batch report</a>
+        <a href="#" class="btn btn-primary">Retry failed (7)</a>
+      </div>
+    </div>
+
+    <!-- Stat cards summarising the cycle -->
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="icon">📄</div>
+        <div>
+          <div class="val">9,042</div>
+          <div class="lbl">Line items</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="icon">👥</div>
+        <div>
+          <div class="val">4,218</div>
+          <div class="lbl">Agreements in cycle</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="icon">✓</div>
+        <div>
+          <div class="val success">$1,264,880</div>
+          <div class="lbl">Pushed so far</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="icon">⚠</div>
+        <div>
+          <div class="val danger">7</div>
+          <div class="lbl">Failures</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <div class="tab active">Line items</div>
+      <div class="tab">Aggregation rules</div>
+      <div class="tab">Agreements in cycle</div>
+      <div class="tab">Call log</div>
+    </div>
+
+    <!-- Kanban columns for line-item state machine -->
+    <div class="kanban">
+
+      <div class="kcol">
+        <div class="kcol-head"><span>Pending</span><span class="count">312</span></div>
+        <div class="kcol-body">
+          <div class="kitem">
+            <div class="who">SA-30214 · C. Reyes</div>
+            <div class="what"><span>electric · 340 kWh</span><span class="amt">$72.80</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30215 · T. Okoro</div>
+            <div class="what"><span>water · 4.8 kgal</span><span class="amt">$38.14</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30218 · M. Haddad</div>
+            <div class="what"><span>waste · 1 cart</span><span class="amt">$24.00</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30222 · D. Lamarr</div>
+            <div class="what"><span>electric · 812 kWh</span><span class="amt">$148.10</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30228 · B. Vasquez</div>
+            <div class="what"><span>water · 2.1 kgal</span><span class="amt">$18.44</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="kcol">
+        <div class="kcol-head"><span>Sent</span><span class="count">4,912</span></div>
+        <div class="kcol-body">
+          <div class="kitem">
+            <div class="who">SA-30184 · A. Fitzgerald</div>
+            <div class="what"><span>posted 02:14</span><span class="amt">$212.56</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30185 · J. Stoyanov</div>
+            <div class="what"><span>posted 02:14</span><span class="amt">$98.40</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30186 · R. Nakamura</div>
+            <div class="what"><span>posted 02:15</span><span class="amt">$404.22</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30187 · L. Bianchi</div>
+            <div class="what"><span>posted 02:15</span><span class="amt">$156.18</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30188 · K. Okafor</div>
+            <div class="what"><span>posted 02:16</span><span class="amt">$412.80</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="kcol">
+        <div class="kcol-head"><span>Acked</span><span class="count">3,811</span></div>
+        <div class="kcol-body">
+          <div class="kitem">
+            <div class="who">SA-30102 · V. Andersson</div>
+            <div class="what"><span>invoice #0188</span><span class="amt">$282.00</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30103 · E. Morales</div>
+            <div class="what"><span>invoice #0189</span><span class="amt">$344.12</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30104 · W. Chen</div>
+            <div class="what"><span>invoice #0190</span><span class="amt">$198.80</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30105 · N. Johansen</div>
+            <div class="what"><span>invoice #0191</span><span class="amt">$620.14</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30106 · P. Ferreira</div>
+            <div class="what"><span>invoice #0192</span><span class="amt">$108.00</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="kcol">
+        <div class="kcol-head"><span>Failed</span><span class="count" style="color: var(--danger);">7</span></div>
+        <div class="kcol-body">
+          <div class="kitem">
+            <div class="who">SA-30091 · G. Rashid</div>
+            <div class="what"><span style="color: var(--danger);">plan_not_found</span><span class="amt">retry</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30092 · I. Petrov</div>
+            <div class="what"><span style="color: var(--danger);">subscription_inactive</span><span class="amt">retry</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30098 · H. Tanaka</div>
+            <div class="what"><span style="color: var(--danger);">resource_unknown</span><span class="amt">investigate</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30111 · Y. Bennett</div>
+            <div class="what"><span style="color: var(--danger);">rate_limit · 429</span><span class="amt">retry</span></div>
+          </div>
+          <div class="kitem">
+            <div class="who">SA-30129 · O. Moreau</div>
+            <div class="what"><span style="color: var(--danger);">timeout</span><span class="amt">retry</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    </main>
+  </div>
+</div>
+
+</body>
+</html>

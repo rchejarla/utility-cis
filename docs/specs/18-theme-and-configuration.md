@@ -144,11 +144,34 @@ Tenant-wide configuration flags that don't belong to the theme module. One row p
   "numberFormats": {
     "agreement": { "template": "SA-{YYYY}-{seq:4}", "startAt": 1 },
     "account":   { "template": "AC-{seq:5}",        "startAt": 1000 }
+  },
+  "branding": {
+    "logoUrl": "https://cdn.example.com/logo.svg",
+    "loginSplashUrl": "https://cdn.example.com/splash.jpg"
+  },
+  "notifications": {
+    "senderEmail": "billing@example-utility.gov",
+    "dailyDigestEnabled": false
+  },
+  "retention": {
+    "auditRetentionDays": 2555,
+    "softDeletePurgeDays": 90,
+    "intervalReadRetentionDays": 1095,
+    "attachmentRetentionYears": 10
+  },
+  "billing": {
+    "saaslogicBaseUrl": "https://api-sandbox.saaslogic.io/v1",
+    "sandbox": true,
+    "pollMinutes": 5
   }
 }
 ```
 
-The `numberFormats` key controls auto-generation of human-readable identifiers on create forms — see the Identifier Generation section below. Other keys can be added to this bucket for future tenant-level flags without schema changes.
+The `numberFormats` key controls auto-generation of human-readable identifiers on create forms — see the Identifier Generation section below.
+
+Four additional namespaces are reserved for the Settings sub-pages (`/settings/branding`, `/settings/notifications`, `/settings/retention`, `/settings/billing`). Each has a typed Zod schema in `packages/shared/src/validators/tenant-settings.ts` (`brandingSettingsSchema`, `notificationSettingsSchema`, `retentionSettingsSchema`, `billingIntegrationSettingsSchema`) and is patched through the top-level fields `branding`, `notifications`, `retention`, and `billing` on `PATCH /api/v1/tenant-config`. The route shallow-merges each namespace so partial updates preserve unrelated keys, and individual field validators enforce bounds (e.g. `auditRetentionDays` must be between 365 and 3650).
+
+Additional keys can be added to the bucket for future tenant-level flags without schema changes.
 
 ---
 
@@ -207,8 +230,8 @@ Every template must contain exactly one `{seq}` or `{seq:N}` token. Zero or mult
 | POST | `/api/v1/theme/reset` | Reset theme to default preset values |
 | GET | `/api/v1/preferences` | Get current user's preferences |
 | PUT | `/api/v1/preferences` | Create or replace current user's preferences |
-| GET | `/api/v1/tenant-config` | Get tenant-wide config (`requireHoldApproval`, `settings.numberFormats`, etc.). Authenticated — no module permission required so client pages can read it freely. |
-| PATCH | `/api/v1/tenant-config` | Update tenant config. Gated by `settings.EDIT`. Validates any `numberFormats` payload against the shared template parser at save time so an invalid template is rejected with a clean 400. |
+| GET | `/api/v1/tenant-config` | Get tenant-wide config (`requireHoldApproval`, `settings.numberFormats`, `settings.branding`, `settings.notifications`, `settings.retention`, `settings.billing`, etc.). Authenticated — no module permission required so client pages can read it freely. |
+| PATCH | `/api/v1/tenant-config` | Update tenant config. Gated by `settings.EDIT`. Accepts `requireHoldApproval`, `numberFormats`, a generic `settings` passthrough, and the four namespaced blocks (`branding`, `notifications`, `retention`, `billing`). Each namespace is validated by its Zod schema and shallow-merged into `settings.<namespace>` so partial updates preserve unrelated keys. |
 
 ### GET /api/v1/theme
 
