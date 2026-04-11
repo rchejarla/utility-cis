@@ -23,6 +23,8 @@ export const createMeterSchema = z.object({
   installDate: z.string().date(),
   status: meterStatusEnum.default("ACTIVE"),
   notes: z.string().optional(),
+  // Tenant-configurable custom fields. Validated server-side.
+  customFields: z.record(z.unknown()).optional(),
 }).strict();
 
 // Update schemas intentionally strip unknown keys (forgiving PATCH semantics).

@@ -44,6 +44,8 @@ export const createServiceAgreementSchema = z.object({
   status: agreementStatusEnum.default("PENDING"),
   readSequence: z.number().int().optional(),
   meters: z.array(meterAssignmentSchema).min(1),
+  // Tenant-configurable custom fields. Validated server-side.
+  customFields: z.record(z.unknown()).optional(),
 }).strict();
 
 // Update schemas intentionally strip unknown keys (forgiving PATCH semantics).
@@ -53,6 +55,7 @@ export const updateServiceAgreementSchema = z.object({
   endDate: z.string().date().optional(),
   status: agreementStatusEnum.optional(),
   readSequence: z.number().int().optional(),
+  customFields: z.record(z.unknown()).optional(),
 });
 
 export const addMeterToAgreementSchema = z.object({

@@ -2,10 +2,12 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import type { FieldDefinition } from "@utility-cis/shared";
 import { PageHeader } from "@/components/ui/page-header";
 import { FormField } from "@/components/ui/form-field";
 import { HelpTooltip } from "@/components/ui/tooltip";
 import { DatePicker } from "@/components/ui/date-picker";
+import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
@@ -77,6 +79,23 @@ export default function NewServiceAgreementPage() {
   const [allMeters, setAllMeters] = useState<Meter[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Tenant custom-field schema for service agreements.
+  const [customSchema, setCustomSchema] = useState<FieldDefinition[]>([]);
+  const [customValues, setCustomValues] = useState<Record<string, unknown>>({});
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiClient.get<{ fields: FieldDefinition[] }>(
+          "/api/v1/custom-fields/service_agreement",
+        );
+        setCustomSchema(res.fields ?? []);
+      } catch (err) {
+        console.error("[service-agreements/new] failed to load schema", err);
+        setCustomSchema([]);
+      }
+    })();
+  }, []);
 
   const [form, setForm] = useState({
     accountId: "",
@@ -159,6 +178,7 @@ export default function NewServiceAgreementPage() {
       if (form.rateScheduleId) body.rateScheduleId = form.rateScheduleId;
       if (form.billingCycleId) body.billingCycleId = form.billingCycleId;
       if (form.endDate) body.endDate = form.endDate;
+      if (Object.keys(customValues).length > 0) body.customFields = customValues;
 
       await apiClient.post("/api/v1/service-agreements", body);
       router.push("/service-agreements");
@@ -403,6 +423,14 @@ export default function NewServiceAgreementPage() {
               {error}
             </div>
           )}
+
+          {/* Tenant-configurable custom fields. Renders nothing when
+              the tenant has no schema configured for service_agreement. */}
+          <CustomFieldsSection
+            schema={customSchema}
+            values={customValues}
+            onChange={setCustomValues}
+          />
 
           <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
             <button

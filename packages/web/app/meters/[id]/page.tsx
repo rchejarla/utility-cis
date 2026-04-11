@@ -2,6 +2,7 @@
 
 import { useState, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
+import type { FieldDefinition } from "@utility-cis/shared";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -11,6 +12,7 @@ import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { DatePicker } from "@/components/ui/date-picker";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
+import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
 
@@ -23,6 +25,7 @@ interface Meter {
   installDate?: string;
   removalDate?: string;
   notes?: string;
+  customFields?: Record<string, unknown>;
   premise?: { id: string; addressLine1: string; city: string; state: string };
   commodity?: { id: string; name: string };
   uom?: { id: string; name: string; code: string };
@@ -74,6 +77,8 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
   const [activeTab, setActiveTab] = useState("overview");
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [editCustomFields, setEditCustomFields] = useState<Record<string, unknown>>({});
+  const [customFieldSchema, setCustomFieldSchema] = useState<FieldDefinition[]>([]);
   const [saving, setSaving] = useState(false);
   const [uoms, setUoms] = useState<Array<{ id: string; code: string; name: string; commodityId: string }>>([]);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
@@ -96,6 +101,21 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
     loadMeter();
   }, [id]);
 
+  // Tenant custom-field schema for meters.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiClient.get<{ fields: FieldDefinition[] }>(
+          "/api/v1/custom-fields/meter",
+        );
+        setCustomFieldSchema(res.fields ?? []);
+      } catch (err) {
+        console.error("[meters/detail] failed to load custom field schema", err);
+        setCustomFieldSchema([]);
+      }
+    })();
+  }, []);
+
   const handleEdit = async () => {
     if (!meter) return;
     setEditForm({
@@ -114,12 +134,14 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
     } catch (err) {
       console.error("Failed to fetch UOMs", err);
     }
+    setEditCustomFields({ ...(meter.customFields ?? {}) });
     setEditing(true);
   };
 
   const handleCancel = () => {
     setEditing(false);
     setEditForm({});
+    setEditCustomFields({});
   };
 
   const handleRemove = async () => {
@@ -155,6 +177,13 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
       const removalVal = editForm.removalDate || null;
       const currentRemoval = meter.removalDate ? meter.removalDate.slice(0, 10) : null;
       if (removalVal !== currentRemoval) changes.removalDate = removalVal;
+
+      // Custom fields: include only when they actually changed.
+      const storedCustomJson = JSON.stringify(meter.customFields ?? {});
+      const editedCustomJson = JSON.stringify(editCustomFields ?? {});
+      if (storedCustomJson !== editedCustomJson) {
+        changes.customFields = editCustomFields;
+      }
 
       await apiClient.patch(`/api/v1/meters/${id}`, changes);
       await loadMeter();
@@ -393,6 +422,74 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
                 <span style={valueStyle}>{meter.notes || "—"}</span>
               )}
             </div>
+
+            {/* Tenant-configurable custom fields. */}
+            {(() => {
+              const stored = meter.customFields ?? {};
+              const hasSchema = customFieldSchema.length > 0;
+              const hasStoredValues = Object.keys(stored).length > 0;
+              if (!hasSchema && !hasStoredValues) return null;
+
+              if (editing) {
+                return (
+                  <>
+                    <div style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: "20px", marginBottom: "4px" }}>
+                      Custom Fields
+                    </div>
+                    <CustomFieldsSection
+                      schema={customFieldSchema}
+                      values={editCustomFields}
+                      onChange={setEditCustomFields}
+                      fieldStyle={fieldStyle}
+                      labelStyle={labelStyle}
+                      hideHeader
+                    />
+                  </>
+                );
+              }
+
+              const activeFields = customFieldSchema.filter((f) => !f.deprecated);
+              const deprecatedWithValue = customFieldSchema.filter(
+                (f) => f.deprecated && stored[f.key] !== undefined && stored[f.key] !== null,
+              );
+              activeFields.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key));
+              deprecatedWithValue.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key));
+
+              const renderValue = (field: typeof activeFields[number]) => {
+                const v = stored[field.key];
+                if (v === undefined || v === null || v === "") return "—";
+                if (field.type === "boolean") return v ? "Yes" : "No";
+                if (field.type === "enum") {
+                  const match = field.enumOptions?.find((o) => o.value === v);
+                  return match?.label ?? String(v);
+                }
+                return String(v);
+              };
+
+              return (
+                <>
+                  <div style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: "20px", marginBottom: "4px" }}>
+                    Custom Fields
+                  </div>
+                  {activeFields.map((field) => (
+                    <div key={field.key} style={fieldStyle}>
+                      <span style={labelStyle}>{field.label}</span>
+                      <span style={valueStyle}>{renderValue(field)}</span>
+                    </div>
+                  ))}
+                  {deprecatedWithValue.map((field) => (
+                    <div key={field.key} style={{ ...fieldStyle, opacity: 0.6 }}>
+                      <span style={labelStyle}>
+                        {field.label}
+                        <span style={{ fontSize: 9, color: "var(--danger)", marginLeft: 6, letterSpacing: "0.06em", textTransform: "uppercase" }}>deprecated</span>
+                      </span>
+                      <span style={valueStyle}>{renderValue(field)}</span>
+                    </div>
+                  ))}
+                </>
+              );
+            })()}
+
             <div style={{ ...fieldStyle, borderBottom: "none" }}>
               <span style={labelStyle}>Meter ID</span>
               <span style={{ ...valueStyle, fontFamily: "monospace", fontSize: "11px", color: "var(--text-muted)" }}>

@@ -28,6 +28,10 @@ export const createAccountSchema = z.object({
   paperlessBilling: z.boolean().default(false),
   budgetBilling: z.boolean().default(false),
   saaslogicAccountId: z.string().uuid().optional(),
+  // Tenant-configurable custom fields. Validated server-side at the
+  // service layer against the tenant's custom_field_schema row, not
+  // against this static Zod schema. See spec 20.
+  customFields: z.record(z.unknown()).optional(),
 }).strict();
 
 // Update schemas intentionally strip unknown keys (forgiving PATCH semantics).

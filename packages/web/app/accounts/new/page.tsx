@@ -1,6 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import type { FieldDefinition } from "@utility-cis/shared";
 import { EntityFormPage } from "@/components/ui/entity-form-page";
+import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
+import { apiClient } from "@/lib/api-client";
 
 interface AccountForm extends Record<string, unknown> {
   accountNumber: string;
@@ -8,6 +12,7 @@ interface AccountForm extends Record<string, unknown> {
   creditRating: string;
   depositAmount: string;
   languagePref: string;
+  customFields: Record<string, unknown>;
 }
 
 const ACCOUNT_TYPES = [
@@ -34,6 +39,23 @@ const LANGUAGE_PREFS = [
 ];
 
 export default function NewAccountPage() {
+  // Tenant custom-field schema for accounts. Loaded once on mount;
+  // when empty, the section renders nothing and the form is unchanged.
+  const [customSchema, setCustomSchema] = useState<FieldDefinition[]>([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiClient.get<{ fields: FieldDefinition[] }>(
+          "/api/v1/custom-fields/account",
+        );
+        setCustomSchema(res.fields ?? []);
+      } catch (err) {
+        console.error("[accounts/new] failed to load custom field schema", err);
+        setCustomSchema([]);
+      }
+    })();
+  }, []);
+
   return (
     <EntityFormPage<AccountForm>
       title="Add Account"
@@ -48,6 +70,7 @@ export default function NewAccountPage() {
         creditRating: "",
         depositAmount: "",
         languagePref: "en-US",
+        customFields: {},
       }}
       fields={[
         {
@@ -94,6 +117,20 @@ export default function NewAccountPage() {
           type: "select",
           options: LANGUAGE_PREFS,
         },
+        // Tenant-configurable custom fields appended to the bottom.
+        // Renders nothing when the tenant has no schema configured.
+        {
+          key: "customFields",
+          label: "",
+          type: "custom",
+          render: ({ value, setValue }) => (
+            <CustomFieldsSection
+              schema={customSchema}
+              values={(value as Record<string, unknown>) ?? {}}
+              onChange={(next) => setValue(next as never)}
+            />
+          ),
+        },
       ]}
       toRequestBody={(form) => {
         const body: Record<string, unknown> = {
@@ -106,6 +143,9 @@ export default function NewAccountPage() {
         if (form.accountNumber) body.accountNumber = form.accountNumber;
         if (form.creditRating) body.creditRating = form.creditRating;
         if (form.depositAmount) body.depositAmount = parseFloat(form.depositAmount);
+        if (form.customFields && Object.keys(form.customFields).length > 0) {
+          body.customFields = form.customFields;
+        }
         return body;
       }}
     />

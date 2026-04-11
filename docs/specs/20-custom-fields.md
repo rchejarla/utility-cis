@@ -183,14 +183,14 @@ export async function createCustomer(utilityId, actorId, actorName, data) {
 }
 ```
 
-**Phase 1 wiring status:**
-- ✅ Customer (pilot)
-- ⬜ Account
-- ⬜ Premise
-- ⬜ ServiceAgreement
-- ⬜ Meter
+**Wiring status (all five entities now complete):**
+- ✅ Customer (Phase 1 pilot)
+- ✅ Account (Phase 2)
+- ✅ Premise (Phase 2)
+- ✅ ServiceAgreement (Phase 2)
+- ✅ Meter (Phase 2)
 
-The other four entities are mechanical repetition of the same pattern — they're deferred to Phase 2 so the Customer pilot can be verified end to end first.
+Every extendable entity now follows the same pattern: validators accept an optional `customFields` passthrough; services split it off the payload, validate via `validateCustomFields` against the tenant schema, and persist into the jsonb column. New forms render `<CustomFieldsSection>` at the bottom and only include `customFields` in the request body when at least one value is set. Detail pages show stored values as label/value rows in view mode and switch to `<CustomFieldsSection>` (with the page's local `fieldStyle`/`labelStyle`/`hideHeader` overrides) in edit mode.
 
 ## Caching
 
@@ -285,16 +285,18 @@ Deliberately narrow for v1:
 - 40 shared tests for validators, Zod builder, displayType, reserved keys, CUSTOM_FIELD_KINDS invariants
 - 28 API service tests for validateCustomFields, addCustomField, replaceCustomFieldSchema, and deleteCustomField (all paths including reserved-key and data-safety gates)
 
-**Phase 2 (planned):**
-- Wire validateCustomFields into Account, Premise, ServiceAgreement, Meter create/update services
-- Integrate `<CustomFieldsSection>` into the four corresponding create forms
-- Display custom field values on entity detail pages for Account, Premise, ServiceAgreement, Meter (read-only grid in view mode + inline CustomFieldsSection in edit mode, following the Customer pattern)
+**Phase 2 (complete):**
+- ✅ Wired `validateCustomFields` into Account, Premise, ServiceAgreement, Meter create/update services with full merge semantics
+- ✅ Integrated `<CustomFieldsSection>` into the four corresponding create forms (`/accounts/new`, `/premises/new`, `/service-agreements/new`, `/meters/new`)
+- ✅ Custom field display on all four detail pages — view mode renders stored values as label/value rows matching each page's local `fieldStyle` grid; edit mode swaps in `<CustomFieldsSection>` with host styles passed through so inputs blend with the surrounding inline-edit fields
+- ✅ Each detail page's `handleSave` diffs custom fields against stored values and only includes them in the PATCH body when they actually changed
+- ✅ Each detail page's `handleEdit` seeds `editCustomFields` from `entity.customFields` and `handleCancel` clears the bucket so re-entering edit mode starts fresh
+
+**Phase 3 (planned):**
 - **Datetime support** — add `datetime` as a new entry in `FIELD_TYPES` with its own `z.string().datetime()` validator (ISO 8601 with time offset). Currently datetime is intentionally NOT supported because making it a display type of the `date` data type would cause the validator to reject any value with a time portion. The proper fix is a new data type alongside `date`, with a dedicated display type and either a DateTimePicker component or a composed DatePicker + time input. Estimated 1–2 hours of focused work once we have a real use case.
 - **Enum option cleanup on removal** — when an admin removes an enum option that still has stored values in some rows, warn with a row count and offer to scrub. Currently removing an option just orphans the data against the new schema, which will reject future updates on those rows.
 - **Compile-time CORE_FIELD_KEYS coverage check** — assert that the reserved-key list covers every column in the Prisma schema for extendable entities, so drift is caught at CI time instead of relying on manual maintenance.
-
-**Phase 3 (planned):**
-- **Searchable fields** — translate the `searchable` flag into real index management. Admin marks a field searchable → backend runs `CREATE INDEX CONCURRENTLY ... ON <table> ((custom_fields->>'<key>'))`. The list page reads searchable fields from the schema and renders filter pills above the table that map to query params like `cf_taxId=123`. Entity list services recognize the `cf_*` query params and translate them to Prisma filters using the expression index.
+- **Searchable fields** — translate the `searchable` flag into real index management. Admin marks a field searchable → backend runs `CREATE INDEX CONCURRENTLY ... ON <table> ((custom_fields->>'<key>'))`. The list page reads searchable fields from the schema and renders filter pills above the table that map to query params like `cf_taxId=123`. Entity list services recognize the `cf_*` query params and translate them to Prisma filters using the expression index. (Was originally Phase 3; promoted here.)
 - Full-text search integration — custom-field values included in the tsvector for searchable fields
 - Export / import schemas as JSON for sharing between environments
 

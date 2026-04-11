@@ -3,6 +3,7 @@ import { EVENT_TYPES } from "@utility-cis/shared";
 import type { CreateMeterInput, UpdateMeterInput, MeterQuery } from "@utility-cis/shared";
 import { paginatedTenantList } from "../lib/pagination.js";
 import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
+import { validateCustomFields } from "./custom-field-schema.service.js";
 
 export async function listMeters(utilityId: string, query: MeterQuery) {
   const where: Record<string, unknown> = { utilityId };
@@ -53,13 +54,24 @@ export async function createMeter(
     );
   }
 
-  const { installDate, ...rest } = data;
+  const { installDate, customFields: rawCustom, ...rest } = data;
+  const validatedCustom = await validateCustomFields(
+    utilityId,
+    "meter",
+    rawCustom,
+    { mode: "create" },
+  );
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "Meter" },
     EVENT_TYPES.METER_CREATED,
     () =>
       prisma.meter.create({
-        data: { ...rest, utilityId, installDate: new Date(installDate) },
+        data: {
+          ...rest,
+          utilityId,
+          installDate: new Date(installDate),
+          customFields: validatedCustom as object,
+        },
         include: { premise: true, commodity: true, uom: true },
       })
   );
@@ -73,6 +85,15 @@ export async function updateMeter(
   data: UpdateMeterInput
 ) {
   const before = await prisma.meter.findUniqueOrThrow({ where: { id, utilityId } });
+  const { customFields: rawCustom, ...core } = data;
+  const existingStored = (before.customFields as Record<string, unknown>) ?? {};
+  const mergedCustom =
+    rawCustom === undefined
+      ? existingStored
+      : await validateCustomFields(utilityId, "meter", rawCustom, {
+          mode: "update",
+          existingStored,
+        });
   return auditUpdate(
     { utilityId, actorId, actorName, entityType: "Meter" },
     EVENT_TYPES.METER_UPDATED,
@@ -80,7 +101,7 @@ export async function updateMeter(
     () =>
       prisma.meter.update({
         where: { id, utilityId },
-        data,
+        data: { ...core, customFields: mergedCustom as object },
         include: { premise: true, commodity: true, uom: true },
       })
   );

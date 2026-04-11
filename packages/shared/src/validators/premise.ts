@@ -28,6 +28,8 @@ export const createPremiseSchema = z.object({
   municipalityCode: z.string().max(50).optional(),
   ownerId: z.string().uuid().optional(),
   status: premiseStatusEnum.default("ACTIVE"),
+  // Tenant-configurable custom fields. Validated server-side.
+  customFields: z.record(z.unknown()).optional(),
 }).strict();
 
 // Update schemas intentionally strip unknown keys (forgiving PATCH semantics).

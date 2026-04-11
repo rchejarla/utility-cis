@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { FieldDefinition } from "@utility-cis/shared";
 import { EntityFormPage } from "@/components/ui/entity-form-page";
+import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { apiClient } from "@/lib/api-client";
 
 interface PremiseForm extends Record<string, unknown> {
@@ -17,6 +19,7 @@ interface PremiseForm extends Record<string, unknown> {
   serviceTerritoryId: string;
   municipalityCode: string;
   ownerId: string;
+  customFields: Record<string, unknown>;
 }
 
 interface Commodity {
@@ -48,12 +51,28 @@ export default function NewPremisePage() {
   // is a multi-select pill UI that doesn't fit the stock select type;
   // we need the full list accessible to the custom render closure.
   const [commodities, setCommodities] = useState<Commodity[]>([]);
+  // Tenant custom-field schema for premises.
+  const [customSchema, setCustomSchema] = useState<FieldDefinition[]>([]);
 
   useEffect(() => {
     apiClient
       .get<Commodity[] | { data: Commodity[] }>("/api/v1/commodities")
       .then((res) => setCommodities(Array.isArray(res) ? res : res.data ?? []))
       .catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiClient.get<{ fields: FieldDefinition[] }>(
+          "/api/v1/custom-fields/premise",
+        );
+        setCustomSchema(res.fields ?? []);
+      } catch (err) {
+        console.error("[premises/new] failed to load custom field schema", err);
+        setCustomSchema([]);
+      }
+    })();
   }, []);
 
   return (
@@ -78,6 +97,7 @@ export default function NewPremisePage() {
         serviceTerritoryId: "",
         municipalityCode: "",
         ownerId: "",
+        customFields: {},
       }}
       fields={[
         {
@@ -226,6 +246,20 @@ export default function NewPremisePage() {
             }),
           },
         },
+        // Tenant-configurable custom fields. Renders nothing when no
+        // schema is configured.
+        {
+          key: "customFields",
+          label: "",
+          type: "custom",
+          render: ({ value, setValue }) => (
+            <CustomFieldsSection
+              schema={customSchema}
+              values={(value as Record<string, unknown>) ?? {}}
+              onChange={(next) => setValue(next as never)}
+            />
+          ),
+        },
       ]}
       toRequestBody={(form) => {
         const body: Record<string, unknown> = {
@@ -242,6 +276,9 @@ export default function NewPremisePage() {
         if (form.serviceTerritoryId) body.serviceTerritoryId = form.serviceTerritoryId;
         if (form.municipalityCode) body.municipalityCode = form.municipalityCode;
         if (form.ownerId) body.ownerId = form.ownerId;
+        if (form.customFields && Object.keys(form.customFields).length > 0) {
+          body.customFields = form.customFields;
+        }
         return body;
       }}
     />

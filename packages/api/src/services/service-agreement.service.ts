@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { generateNumber } from "../lib/number-generator.js";
+import { validateCustomFields } from "./custom-field-schema.service.js";
 import { EVENT_TYPES, isValidStatusTransition } from "@utility-cis/shared";
 import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
 import type {
@@ -62,6 +63,16 @@ export async function createServiceAgreement(
     metersToCreate[0] = { ...metersToCreate[0], isPrimary: true };
   }
 
+  // Validate custom fields against the tenant schema before opening
+  // the transaction. The validator does its own DB read so it can
+  // run outside the tx safely.
+  const validatedCustom = await validateCustomFields(
+    utilityId,
+    "service_agreement",
+    data.customFields,
+    { mode: "create" },
+  );
+
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "ServiceAgreement" },
     EVENT_TYPES.SERVICE_AGREEMENT_CREATED,
@@ -113,6 +124,7 @@ export async function createServiceAgreement(
         endDate: data.endDate ? new Date(data.endDate) : null,
         status: data.status || "PENDING",
         readSequence: data.readSequence,
+        customFields: validatedCustom as object,
         meters: {
           create: metersToCreate.map((m) => ({
             utilityId,
@@ -205,6 +217,19 @@ export async function updateServiceAgreement(
   if (data.endDate !== undefined) updateData.endDate = new Date(data.endDate);
   if (data.status !== undefined) updateData.status = data.status;
   if (data.readSequence !== undefined) updateData.readSequence = data.readSequence;
+
+  // Custom fields: validate against tenant schema and merge with
+  // existing stored values (preserving deprecated keys).
+  if (data.customFields !== undefined) {
+    const existingStored = (before.customFields as Record<string, unknown>) ?? {};
+    const merged = await validateCustomFields(
+      utilityId,
+      "service_agreement",
+      data.customFields,
+      { mode: "update", existingStored },
+    );
+    updateData.customFields = merged as object;
+  }
 
   return auditUpdate(
     { utilityId, actorId, actorName, entityType: "ServiceAgreement" },

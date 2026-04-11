@@ -4,6 +4,7 @@ import type { CreateAccountInput, UpdateAccountInput, AccountQuery } from "@util
 import { paginatedTenantList } from "../lib/pagination.js";
 import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
 import { generateNumber } from "../lib/number-generator.js";
+import { validateCustomFields } from "./custom-field-schema.service.js";
 
 export async function listAccounts(utilityId: string, query: AccountQuery) {
   const where: Record<string, unknown> = { utilityId };
@@ -43,13 +44,25 @@ export async function createAccount(
   actorName: string,
   data: CreateAccountInput
 ) {
+  // Split custom fields off the payload — the core create() only
+  // touches Prisma-modeled columns; customFields gets validated
+  // against the tenant's custom_field_schema before being merged
+  // into the jsonb column on the same row.
+  const { customFields: rawCustom, ...core } = data;
+  const validatedCustom = await validateCustomFields(
+    utilityId,
+    "account",
+    rawCustom,
+    { mode: "create" },
+  );
+
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "Account" },
     EVENT_TYPES.ACCOUNT_CREATED,
     () => prisma.$transaction(async (tx) => {
       // Auto-generate account number from tenant template when absent.
       const accountNumber =
-        data.accountNumber ??
+        core.accountNumber ??
         (await generateNumber({
           utilityId,
           entity: "account",
@@ -59,7 +72,12 @@ export async function createAccount(
           db: tx,
         }));
       return tx.account.create({
-        data: { ...data, accountNumber, utilityId },
+        data: {
+          ...core,
+          accountNumber,
+          utilityId,
+          customFields: validatedCustom as object,
+        },
       });
     })
   );
@@ -73,13 +91,26 @@ export async function updateAccount(
   data: UpdateAccountInput
 ) {
   const before = await prisma.account.findUniqueOrThrow({ where: { id, utilityId } });
+
+  // Merge incoming custom fields against stored values so partial
+  // updates don't clobber fields the caller didn't touch.
+  const { customFields: rawCustom, ...core } = data;
+  const existingStored = (before.customFields as Record<string, unknown>) ?? {};
+  const mergedCustom =
+    rawCustom === undefined
+      ? existingStored
+      : await validateCustomFields(utilityId, "account", rawCustom, {
+          mode: "update",
+          existingStored,
+        });
+
   return auditUpdate(
     { utilityId, actorId, actorName, entityType: "Account" },
     EVENT_TYPES.ACCOUNT_UPDATED,
     before,
     () =>
       prisma.$transaction(async (tx) => {
-        if (data.status === "CLOSED") {
+        if (core.status === "CLOSED") {
           const activeCount = await tx.serviceAgreement.count({
             where: {
               accountId: id,
@@ -95,7 +126,10 @@ export async function updateAccount(
           }
         }
 
-        return tx.account.update({ where: { id, utilityId }, data });
+        return tx.account.update({
+          where: { id, utilityId },
+          data: { ...core, customFields: mergedCustom as object },
+        });
       })
   );
 }

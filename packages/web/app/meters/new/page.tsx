@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { FieldDefinition } from "@utility-cis/shared";
 import { DatePicker } from "@/components/ui/date-picker";
 import {
   EntityFormPage,
   formInputStyle,
 } from "@/components/ui/entity-form-page";
+import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { apiClient } from "@/lib/api-client";
 
 interface MeterForm extends Record<string, unknown> {
@@ -17,6 +19,7 @@ interface MeterForm extends Record<string, unknown> {
   multiplier: string;
   installDate: string;
   notes: string;
+  customFields: Record<string, unknown>;
 }
 
 interface UOM {
@@ -42,12 +45,27 @@ export default function NewMeterPage() {
   // shell's static options system doesn't model. Premises and commodities
   // are loaded via the shell's dynamic options instead.
   const [allUoms, setAllUoms] = useState<UOM[]>([]);
+  const [customSchema, setCustomSchema] = useState<FieldDefinition[]>([]);
 
   useEffect(() => {
     apiClient
       .get<{ data: UOM[] } | UOM[]>("/api/v1/uoms")
       .then((res) => setAllUoms(Array.isArray(res) ? res : res.data ?? []))
       .catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiClient.get<{ fields: FieldDefinition[] }>(
+          "/api/v1/custom-fields/meter",
+        );
+        setCustomSchema(res.fields ?? []);
+      } catch (err) {
+        console.error("[meters/new] failed to load custom field schema", err);
+        setCustomSchema([]);
+      }
+    })();
   }, []);
 
   return (
@@ -68,6 +86,7 @@ export default function NewMeterPage() {
         multiplier: "1",
         installDate: "",
         notes: "",
+        customFields: {},
       }}
       fields={[
         {
@@ -175,6 +194,20 @@ export default function NewMeterPage() {
           placeholder: "Optional notes...",
           rows: 4,
         },
+        // Tenant-configurable custom fields. Renders nothing when no
+        // schema is configured.
+        {
+          key: "customFields",
+          label: "",
+          type: "custom",
+          render: ({ value, setValue }) => (
+            <CustomFieldsSection
+              schema={customSchema}
+              values={(value as Record<string, unknown>) ?? {}}
+              onChange={(next) => setValue(next as never)}
+            />
+          ),
+        },
       ]}
       toRequestBody={(form) => {
         const body: Record<string, unknown> = {
@@ -187,6 +220,9 @@ export default function NewMeterPage() {
         if (form.uomId) body.uomId = form.uomId;
         if (form.installDate) body.installDate = form.installDate;
         if (form.notes) body.notes = form.notes;
+        if (form.customFields && Object.keys(form.customFields).length > 0) {
+          body.customFields = form.customFields;
+        }
         return body;
       }}
     />

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
+import type { FieldDefinition } from "@utility-cis/shared";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -11,6 +12,7 @@ import { useToast } from "@/components/ui/toast";
 import { ContactsTab } from "@/components/accounts/contacts-tab";
 import { BillingAddressesTab } from "@/components/accounts/billing-addresses-tab";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
+import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
 
@@ -49,6 +51,7 @@ interface Account {
   budgetBilling?: boolean;
   customerId?: string;
   saaslogicAccountId?: string;
+  customFields?: Record<string, unknown>;
   serviceAgreements?: Array<{
     id: string;
     agreementNumber: string;
@@ -116,6 +119,10 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
   const [activeTab, setActiveTab] = useState("overview");
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState<Record<string, string | boolean>>({});
+  // Custom-fields edit state — typed as Record<string, unknown> because
+  // values can be string/number/boolean/date depending on field type.
+  const [editCustomFields, setEditCustomFields] = useState<Record<string, unknown>>({});
+  const [customFieldSchema, setCustomFieldSchema] = useState<FieldDefinition[]>([]);
   const [saving, setSaving] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -138,6 +145,21 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
   useEffect(() => {
     loadAccount();
   }, [id]);
+
+  // Load tenant custom-field schema once on mount.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiClient.get<{ fields: FieldDefinition[] }>(
+          "/api/v1/custom-fields/account",
+        );
+        setCustomFieldSchema(res.fields ?? []);
+      } catch (err) {
+        console.error("[accounts/detail] failed to load custom field schema", err);
+        setCustomFieldSchema([]);
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     if (activeTab === "audit") {
@@ -164,12 +186,14 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
       paperlessBilling: account.paperlessBilling ?? false,
       budgetBilling: account.budgetBilling ?? false,
     });
+    setEditCustomFields({ ...(account.customFields ?? {}) });
     setEditing(true);
   };
 
   const handleCancel = () => {
     setEditing(false);
     setEditForm({});
+    setEditCustomFields({});
   };
 
   const handleClose = async () => {
@@ -202,6 +226,13 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
       if (editForm.languagePref !== (account.languagePref ?? "")) changes.languagePref = editForm.languagePref;
       if (editForm.paperlessBilling !== (account.paperlessBilling ?? false)) changes.paperlessBilling = editForm.paperlessBilling;
       if (editForm.budgetBilling !== (account.budgetBilling ?? false)) changes.budgetBilling = editForm.budgetBilling;
+
+      // Custom fields: include only when they actually changed.
+      const storedCustomJson = JSON.stringify(account.customFields ?? {});
+      const editedCustomJson = JSON.stringify(editCustomFields ?? {});
+      if (storedCustomJson !== editedCustomJson) {
+        changes.customFields = editCustomFields;
+      }
 
       await apiClient.patch(`/api/v1/accounts/${id}`, changes);
       await loadAccount();
@@ -500,6 +531,102 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
                 <span style={valueStyle}>{account.budgetBilling ? "Yes" : "No"}</span>
               )}
             </div>
+
+            {/* Tenant-configurable custom fields. View mode renders
+                stored values as label/value rows matching the page's
+                fieldStyle grid. Edit mode renders CustomFieldsSection
+                with the page's local fieldStyle/labelStyle passed
+                through so the inputs blend in. Renders nothing when
+                the tenant has no schema configured AND there's no
+                stored data. */}
+            {(() => {
+              const stored = account.customFields ?? {};
+              const hasSchema = customFieldSchema.length > 0;
+              const hasStoredValues = Object.keys(stored).length > 0;
+              if (!hasSchema && !hasStoredValues) return null;
+
+              if (editing) {
+                return (
+                  <>
+                    <div
+                      style={{
+                        fontSize: "11px",
+                        fontWeight: "600",
+                        color: "var(--text-muted)",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        marginTop: "20px",
+                        marginBottom: "4px",
+                      }}
+                    >
+                      Custom Fields
+                    </div>
+                    <CustomFieldsSection
+                      schema={customFieldSchema}
+                      values={editCustomFields}
+                      onChange={setEditCustomFields}
+                      fieldStyle={fieldStyle}
+                      labelStyle={labelStyle}
+                      hideHeader
+                    />
+                  </>
+                );
+              }
+
+              const activeFields = customFieldSchema.filter((f) => !f.deprecated);
+              const deprecatedWithValue = customFieldSchema.filter(
+                (f) => f.deprecated && stored[f.key] !== undefined && stored[f.key] !== null,
+              );
+              activeFields.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key));
+              deprecatedWithValue.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key));
+
+              const renderValue = (field: typeof activeFields[number]) => {
+                const v = stored[field.key];
+                if (v === undefined || v === null || v === "") return "—";
+                if (field.type === "boolean") return v ? "Yes" : "No";
+                if (field.type === "enum") {
+                  const match = field.enumOptions?.find((o) => o.value === v);
+                  return match?.label ?? String(v);
+                }
+                return String(v);
+              };
+
+              return (
+                <>
+                  <div
+                    style={{
+                      fontSize: "11px",
+                      fontWeight: "600",
+                      color: "var(--text-muted)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.08em",
+                      marginTop: "20px",
+                      marginBottom: "4px",
+                    }}
+                  >
+                    Custom Fields
+                  </div>
+                  {activeFields.map((field) => (
+                    <div key={field.key} style={fieldStyle}>
+                      <span style={labelStyle}>{field.label}</span>
+                      <span style={valueStyle}>{renderValue(field)}</span>
+                    </div>
+                  ))}
+                  {deprecatedWithValue.map((field) => (
+                    <div key={field.key} style={{ ...fieldStyle, opacity: 0.6 }}>
+                      <span style={labelStyle}>
+                        {field.label}
+                        <span style={{ fontSize: 9, color: "var(--danger)", marginLeft: 6, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                          deprecated
+                        </span>
+                      </span>
+                      <span style={valueStyle}>{renderValue(field)}</span>
+                    </div>
+                  ))}
+                </>
+              );
+            })()}
+
             {account.createdAt && (
               <div style={fieldStyle}>
                 <span style={labelStyle}>Created</span>
