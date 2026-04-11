@@ -1,11 +1,14 @@
 import { z } from "zod";
 
-export const suspensionTypeEnum = z.enum([
-  "VACATION_HOLD",
-  "SEASONAL",
-  "TEMPORARY",
-  "DISPUTE",
-]);
+// Hold type is now a free string that must match a code in the
+// suspension_type_def reference table (global or tenant-scoped). The
+// service layer enforces the FK check. This used to be a hard enum with
+// four values; see suspension-type-def.ts and the Plan A migration.
+const suspensionTypeCode = z
+  .string()
+  .min(1)
+  .max(50)
+  .regex(/^[A-Z0-9_]+$/, "Type code must be uppercase letters, digits, and underscores");
 
 export const suspensionStatusEnum = z.enum([
   "PENDING",
@@ -23,7 +26,7 @@ export const suspensionSortFields = [
 
 export const createSuspensionSchema = z.object({
   serviceAgreementId: z.string().uuid(),
-  suspensionType: suspensionTypeEnum,
+  suspensionType: suspensionTypeCode,
   startDate: z.string().date(),
   endDate: z.string().date().optional(),
   billingSuspended: z.boolean().default(true),
@@ -46,12 +49,11 @@ export const suspensionQuerySchema = z.object({
   sort: z.enum(suspensionSortFields).default("startDate"),
   order: z.enum(["asc", "desc"]).default("desc"),
   serviceAgreementId: z.string().uuid().optional(),
-  suspensionType: suspensionTypeEnum.optional(),
+  suspensionType: suspensionTypeCode.optional(),
   status: suspensionStatusEnum.optional(),
   activeOn: z.string().date().optional(),
 }).strict();
 
-export type SuspensionType = z.infer<typeof suspensionTypeEnum>;
 export type SuspensionStatus = z.infer<typeof suspensionStatusEnum>;
 export type CreateSuspensionInput = z.infer<typeof createSuspensionSchema>;
 export type UpdateSuspensionInput = z.infer<typeof updateSuspensionSchema>;

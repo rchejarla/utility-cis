@@ -105,7 +105,7 @@ Every significant CIS state change emits a domain event. ApptorFlow subscribes a
 
 ### 4.1 Entity Summary
 
-**26 entities** across 9 categories:
+**28 entities** across 9 categories:
 
 | Category | Entities |
 |----------|----------|
@@ -493,7 +493,47 @@ Generic file attachment for any entity. Uses entityType + entityId pattern to as
 
 **Indexes:** [utility_id, entity_type, entity_id]
 
-### 4.21 Database Invariants (CHECK constraints)
+### 4.21 TenantConfig
+
+Per-tenant configuration flags. One row per utility, created lazily the first time any flag is set; absence of a row means "all defaults."
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | Unique — one config per tenant |
+| require_hold_approval | BOOLEAN | Default false. Gates ServiceSuspension activation on the APPROVE permission. See spec 12. |
+| settings | JSONB | Extensible bucket for tenant flags. Currently carries `numberFormats.{agreement,account}` — see §5.3 "Identifier generation." |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | |
+
+**Unique:** [utility_id]
+**RLS:** standard `utility_id = current_setting('app.current_utility_id')::uuid`.
+
+### 4.22 SuspensionTypeDef
+
+Reference table for service-hold type codes. Replaces the former `SuspensionType` Prisma enum. A row with `utility_id IS NULL` is a global system code visible to every tenant; a row with a set `utility_id` is a tenant-scoped custom code.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | Nullable; NULL = global, visible to all tenants |
+| code | VARCHAR(50) | Uppercase alphanumeric + underscore |
+| label | VARCHAR(100) | Display label |
+| description | TEXT | |
+| category | VARCHAR(50) | |
+| sort_order | INT | Default 100 |
+| is_active | BOOLEAN | Default true |
+| default_billing_suspended | BOOLEAN | Per-type form default (wired in Phase 3) |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | |
+
+**Unique:** [utility_id, code] — lets tenants override a global code by inserting a tenant-specific row with the same code (shadow resolution in the service layer).
+
+**RLS:** non-standard policy: `utility_id IS NULL OR utility_id = current_setting('app.current_utility_id')::uuid`. Global rows are readable across all tenants, custom rows remain tenant-isolated.
+
+**Seeded codes** (global, inserted by `seed.js`): `VACATION_HOLD`, `SEASONAL`, `TEMPORARY`, `DISPUTE`, `UNAVAILABLE`, `REGULATORY`.
+
+### 4.23 Database Invariants (CHECK constraints)
 
 Zod validators guard the API boundary, but any backstop invariants that absolutely must hold — regardless of which service, migration, or ad-hoc SQL session writes the data — live as PostgreSQL CHECK constraints. The full list is in `packages/shared/prisma/migrations/01_check_constraints/migration.sql` and is applied automatically by `setup_db.bat` after the RLS migration. The file is idempotent (`DROP CONSTRAINT IF EXISTS` + `ADD CONSTRAINT`) so re-running setup is safe.
 
@@ -602,7 +642,13 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | GET | `/api/v1/service-suspensions` | Service Suspensions |
 | GET/POST/PATCH | `/api/v1/service-suspensions[/:id]` | Service Suspensions |
 | POST | `/api/v1/service-suspensions/:id/complete` | Service Suspensions |
+| POST | `/api/v1/service-suspensions/:id/approve` | Service Suspensions (APPROVE permission; stamps `approved_by`) |
+| POST | `/api/v1/service-suspensions/:id/activate` | Service Suspensions (manual PENDING → ACTIVE; refuses if approval gate not met) |
+| POST | `/api/v1/service-suspensions/:id/cancel` | Service Suspensions |
 | GET | `/api/v1/service-agreements/:agreementId/suspensions` | Service Suspensions |
+| GET | `/api/v1/suspension-types` | Suspension type reference table (global + per-tenant codes) |
+| POST/PATCH | `/api/v1/suspension-types[/:id]` | Suspension type admin (settings:EDIT) |
+| GET/PATCH | `/api/v1/tenant-config` | Tenant-level config (`requireHoldApproval`, `numberFormats.{agreement,account}`, etc.; settings:EDIT for PATCH) |
 | GET | `/api/v1/service-events` | RAMS Events |
 | GET/POST | `/api/v1/service-events[/:id]` | RAMS Events |
 | POST | `/api/v1/service-events/:id/resolve` | RAMS Events |
@@ -623,6 +669,12 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 **CRUD factory:** Entities that follow the standard list/get/create/update shape register their routes via `registerCrudRoutes(app, config)` from `packages/api/src/lib/crud-routes.ts`. The factory owns RBAC config, Zod parsing, `request.user` extraction, and status-code shaping; route files just declare their `basePath`, `module`, and service adapter closures. Entities with unusual requirements (premises with its `/geo` endpoint, rate-schedules with `/:id/revise` and no PATCH, roles with DELETE) supply whatever subset fits and add custom routes alongside the factory call.
 
 **Audit events:** Mutating services wrap their create/update operations in `auditCreate` / `auditUpdate` from `packages/api/src/lib/audit-wrap.ts`, which emits a `domain-event` carrying `beforeState` / `afterState` / actor / timestamp. A single writer subscribes and persists to `audit_log`, so no service owns event shaping directly.
+
+**List query schemas:** Every list endpoint's query validator extends the shared `baseListQuerySchema` from `packages/shared/src/lib/base-list-query.ts`, which defines `page` / `limit` / `search` / `sort` / `order` as optional. Routes add their entity-specific filters on top and keep `.strict()` so truly unknown keys still get rejected. The base exists because `SearchableEntitySelect` (and any other picker component) always attaches `limit`/`page`/`search` to its fetch, regardless of whether the target endpoint paginates or searches; a route that defined its own `.strict()` schema without those keys would 400 the picker the moment it mounted. Small reference-table routes (e.g. `/api/v1/suspension-types`) accept and ignore the base keys; larger collection routes honor them for real.
+
+**Background schedulers:** Long-running, time-driven work runs in-process via `setInterval` from `packages/api/src/schedulers/*`. Schedulers register themselves from `buildApp` after the Fastify instance is constructed, gated by the `DISABLE_SCHEDULERS` environment variable so tests and worker processes can opt out of side effects. Currently one scheduler exists — the suspension scheduler — which ticks hourly and flips `PENDING → ACTIVE` and `ACTIVE → COMPLETED` on ServiceSuspensions whose dates have arrived, respecting the per-tenant approval gate (see spec 12). **Single-instance only.** Running two API processes will transition the same hold twice and emit duplicate audit events. When the deployment moves to multi-instance, replace the in-process scheduler with BullMQ + Redis-backed job locking; the transition helper (`transitionSuspensions(utilityId, now)`) is already factored so the scheduler wrapper can be swapped without touching service logic.
+
+**Identifier generation:** Human-readable identifiers (`account_number`, `agreement_number`) are auto-generated by the backend when the caller omits them on create. The number format is tenant-configurable via a template grammar stored in `tenant_config.settings.numberFormats.{agreement|account}`. Supported tokens: `{YYYY}` (4-digit year), `{YY}` (2-digit year), `{MM}` (2-digit month), `{seq:N}` (sequence zero-padded to N digits), `{seq}` (unpadded). Exactly one sequence token per template is required. The parser lives in `packages/shared/src/lib/number-template.ts` (pure, unit-tested) and is consumed by both the API generator in `packages/api/src/lib/number-generator.ts` and the web settings UI's live preview, guaranteeing identical behavior. The generator substitutes the current date into the template, builds a regex from the literal parts with `\d+` standing in for the seq token, queries the highest existing match for the tenant, takes `max(startAt, existing+1)`, and formats back — retrying the wrapped `create` up to 3 times on P2002 unique-constraint races. Because the regex is rebuilt from the current date on every call, sequence resets are implicit: including `{YYYY}` in the template automatically resets the counter every January 1 (new year prefix → no matching rows → restart from `startAt`); including `{MM}` resets monthly; templates with no date tokens never reset. Format changes are non-destructive — legacy rows keep their old identifiers forever because the new regex simply won't match them, and new rows follow whatever template is current. Defaults used when a tenant has no configuration: `SA-{seq:4}` for agreements, `AC-{seq:5}` for accounts. CSRs can still type a custom identifier on any create form to override the generator; uniqueness is enforced at the DB level regardless.
 
 ### 5.4 Business Rules
 

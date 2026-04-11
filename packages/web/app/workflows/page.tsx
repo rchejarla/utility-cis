@@ -23,7 +23,7 @@ interface WorkflowTile {
 
 const TILES: WorkflowTile[] = [
   {
-    title: "Move-In",
+    title: "Move In",
     description:
       "Onboard a new customer at a premise: create customer, account, and service agreements in one atomic transaction, with optional initial meter reads.",
     href: "/workflows/move-in",
@@ -32,7 +32,7 @@ const TILES: WorkflowTile[] = [
     module: "workflows",
   },
   {
-    title: "Move-Out",
+    title: "Move Out",
     description:
       "Close out all active service agreements on an account at a premise. Record final meter reads, capture a forwarding address, and optionally close the account.",
     href: "/workflows/move-out",

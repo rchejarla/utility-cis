@@ -3,6 +3,7 @@ import { EVENT_TYPES } from "@utility-cis/shared";
 import type { CreateAccountInput, UpdateAccountInput, AccountQuery } from "@utility-cis/shared";
 import { paginatedTenantList } from "../lib/pagination.js";
 import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
+import { generateNumber } from "../lib/number-generator.js";
 
 export async function listAccounts(utilityId: string, query: AccountQuery) {
   const where: Record<string, unknown> = { utilityId };
@@ -45,7 +46,22 @@ export async function createAccount(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "Account" },
     EVENT_TYPES.ACCOUNT_CREATED,
-    () => prisma.account.create({ data: { ...data, utilityId } })
+    () => prisma.$transaction(async (tx) => {
+      // Auto-generate account number from tenant template when absent.
+      const accountNumber =
+        data.accountNumber ??
+        (await generateNumber({
+          utilityId,
+          entity: "account",
+          defaultTemplate: "AC-{seq:5}",
+          tableName: "account",
+          columnName: "account_number",
+          db: tx,
+        }));
+      return tx.account.create({
+        data: { ...data, accountNumber, utilityId },
+      });
+    })
   );
 }
 

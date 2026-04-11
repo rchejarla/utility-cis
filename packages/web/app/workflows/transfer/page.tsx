@@ -6,6 +6,7 @@ import Link from "next/link";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
+import { PageHeader } from "@/components/ui/page-header";
 import { useToast } from "@/components/ui/toast";
 import { SearchableEntitySelect } from "@/components/ui/searchable-entity-select";
 
@@ -98,7 +99,8 @@ export default function TransferWizardPage() {
   const source = agreements.find((a) => a.id === sourceId);
   const target = accounts.find((a) => a.id === targetAccountId);
 
-  const valid = sourceId && targetAccountId && transferDate && newAgreementNumber;
+  // newAgreementNumber is optional — backend auto-generates when blank.
+  const valid = sourceId && targetAccountId && transferDate;
 
   const submit = async () => {
     if (!canCreate) {
@@ -114,7 +116,7 @@ export default function TransferWizardPage() {
       const body: Record<string, unknown> = {
         targetAccountId,
         transferDate,
-        newAgreementNumber,
+        ...(newAgreementNumber ? { newAgreementNumber } : {}),
       };
       if (finalReading) body.finalMeterReading = parseFloat(finalReading);
       if (initialReading) body.initialMeterReading = parseFloat(initialReading);
@@ -156,32 +158,10 @@ export default function TransferWizardPage() {
 
   return (
     <div style={{ maxWidth: "960px" }}>
-      <div
-        style={{
-          marginBottom: "8px",
-          fontFamily: "'JetBrains Mono', monospace",
-          fontSize: "11px",
-          color: "var(--text-muted)",
-        }}
-      >
-        <Link href="/workflows" style={{ color: "var(--text-muted)", textDecoration: "none" }}>
-          ← /workflows
-        </Link>
-      </div>
-      <h1
-        style={{
-          fontFamily: "'JetBrains Mono', monospace",
-          fontSize: "24px",
-          fontWeight: 700,
-          margin: "0 0 6px 0",
-          color: "var(--text-primary)",
-        }}
-      >
-        TRANSFER_SERVICE
-      </h1>
-      <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: "0 0 24px 0" }}>
-        Reassign an active service agreement from one account to another. The source is finalized and a new agreement is opened on the target account at the transfer date.
-      </p>
+      <PageHeader
+        title="Transfer Service"
+        subtitle="Reassign an active service agreement from one account to another. The source is finalized and a new agreement is opened on the target account at the transfer date."
+      />
 
       {/* Source / arrow / target layout */}
       <div
@@ -343,11 +323,11 @@ export default function TransferWizardPage() {
             </div>
           )}
           <div style={{ marginTop: "14px" }}>
-            <label style={labelStyle}>NEW AGREEMENT NUMBER</label>
+            <label style={labelStyle}>NEW AGREEMENT NUMBER (OPTIONAL)</label>
             <input
               value={newAgreementNumber}
               onChange={(e) => setNewAgreementNumber(e.target.value)}
-              placeholder="SA-0042"
+              placeholder="Auto-generate"
               style={fieldStyle}
             />
           </div>

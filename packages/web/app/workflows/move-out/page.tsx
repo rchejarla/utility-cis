@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
+import { PageHeader } from "@/components/ui/page-header";
 import { useToast } from "@/components/ui/toast";
 import { SearchableEntitySelect } from "@/components/ui/searchable-entity-select";
 
@@ -180,32 +180,10 @@ export default function MoveOutWizardPage() {
 
   return (
     <div style={{ maxWidth: "820px" }}>
-      <div
-        style={{
-          marginBottom: "8px",
-          fontFamily: "'JetBrains Mono', monospace",
-          fontSize: "11px",
-          color: "var(--text-muted)",
-        }}
-      >
-        <Link href="/workflows" style={{ color: "var(--text-muted)", textDecoration: "none" }}>
-          ← /workflows
-        </Link>
-      </div>
-      <h1
-        style={{
-          fontFamily: "'JetBrains Mono', monospace",
-          fontSize: "24px",
-          fontWeight: 700,
-          margin: "0 0 6px 0",
-          color: "var(--text-primary)",
-        }}
-      >
-        MOVE_OUT
-      </h1>
-      <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: "0 0 24px 0" }}>
-        Finalize all active service agreements on an account at a premise. Final reads are captured in the same transaction.
-      </p>
+      <PageHeader
+        title="Move Out"
+        subtitle="Finalize all active service agreements on an account at a premise. Final reads are captured in the same transaction."
+      />
 
       {/* Stepper */}
       <div style={{ display: "flex", gap: "8px", marginBottom: "24px" }}>
@@ -266,7 +244,15 @@ export default function MoveOutWizardPage() {
           padding: "24px",
         }}
       >
-        {step === 1 && (
+        {/*
+         * Steps render inside always-mounted wrappers (hidden via the
+         * native `hidden` attribute) instead of being conditionally
+         * mounted. Keeping the account SearchableEntitySelect mounted
+         * across step navigation preserves its `knownLabels` cache so
+         * clicking Back from step 2 doesn't show the raw UUID in the
+         * account trigger.
+         */}
+        <div hidden={step !== 1}>
           <div>
             <label style={labelStyle}>ACCOUNT</label>
             <SearchableEntitySelect<Account>
@@ -298,9 +284,9 @@ export default function MoveOutWizardPage() {
               </div>
             )}
           </div>
-        )}
+        </div>
 
-        {step === 2 && (
+        <div hidden={step !== 2}>
           <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
             <div>
               <label style={labelStyle}>PREMISE TO LEAVE</label>
@@ -345,9 +331,9 @@ export default function MoveOutWizardPage() {
               </div>
             )}
           </div>
-        )}
+        </div>
 
-        {step === 3 && (
+        <div hidden={step !== 3}>
           <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             <div>
               <label style={labelStyle}>FINAL METER READINGS</label>
@@ -439,7 +425,7 @@ export default function MoveOutWizardPage() {
               />
             </div>
           </div>
-        )}
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: "12px", marginTop: "18px", justifyContent: "space-between" }}>

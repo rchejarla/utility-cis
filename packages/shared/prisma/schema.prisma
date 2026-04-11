@@ -763,13 +763,6 @@ model Container {
   @@map("container")
 }
 
-enum SuspensionType {
-  VACATION_HOLD
-  SEASONAL
-  TEMPORARY
-  DISPUTE
-}
-
 enum SuspensionStatus {
   PENDING
   ACTIVE
@@ -777,11 +770,48 @@ enum SuspensionStatus {
   CANCELLED
 }
 
+// Tenant-level configuration for service-hold behaviour. Lives alongside
+// TenantTheme/TenantModule. A row is created lazily the first time a flag
+// is set; absence of a row means "all defaults".
+model TenantConfig {
+  id                   String   @id @default(uuid()) @db.Uuid
+  utilityId            String   @unique @map("utility_id") @db.Uuid
+  requireHoldApproval  Boolean  @default(false) @map("require_hold_approval")
+  settings             Json     @default("{}") @map("settings")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("tenant_config")
+}
+
+// Reference table for suspension (hold) types. Replaces the old
+// SuspensionType enum. utilityId IS NULL means a system-global code that
+// every tenant sees; utilityId set means a tenant-specific code. The
+// unique constraint lets both coexist — a tenant can override a global
+// label by inserting a row with the same code.
+model SuspensionTypeDef {
+  id                       String   @id @default(uuid()) @db.Uuid
+  utilityId                String?  @map("utility_id") @db.Uuid
+  code                     String   @db.VarChar(50)
+  label                    String   @db.VarChar(100)
+  description              String?  @db.Text
+  category                 String?  @db.VarChar(50)
+  sortOrder                Int      @default(100) @map("sort_order")
+  isActive                 Boolean  @default(true) @map("is_active")
+  defaultBillingSuspended  Boolean  @default(true) @map("default_billing_suspended")
+  createdAt                DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt                DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([utilityId, code])
+  @@index([isActive, sortOrder])
+  @@map("suspension_type_def")
+}
+
 model ServiceSuspension {
   id                 String           @id @default(uuid()) @db.Uuid
   utilityId          String           @map("utility_id") @db.Uuid
   serviceAgreementId String           @map("service_agreement_id") @db.Uuid
-  suspensionType     SuspensionType   @map("suspension_type")
+  suspensionType     String           @map("suspension_type") @db.VarChar(50)
   status             SuspensionStatus @default(PENDING) @map("status")
   startDate          DateTime         @map("start_date") @db.Date
   endDate            DateTime?        @map("end_date") @db.Date

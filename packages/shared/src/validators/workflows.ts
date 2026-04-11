@@ -12,7 +12,9 @@ import { z } from "zod";
 export const transferServiceSchema = z.object({
   targetAccountId: z.string().uuid(),
   transferDate: z.string().date(),
-  newAgreementNumber: z.string().min(1).max(50),
+  // Optional: backend auto-generates via the tenant's configured
+  // numberFormats.agreement template when absent.
+  newAgreementNumber: z.string().min(1).max(50).optional(),
   finalMeterReading: z.number().nonnegative().optional(),
   initialMeterReading: z.number().nonnegative().optional(),
   reason: z.string().max(2000).optional(),
@@ -36,7 +38,8 @@ const newCustomerPayload = z.object({
 export const moveInSchema = z.object({
   premiseId: z.string().uuid(),
   moveInDate: z.string().date(),
-  accountNumber: z.string().min(1).max(50),
+  // Optional: auto-generated via tenant numberFormats.account if absent.
+  accountNumber: z.string().min(1).max(50).optional(),
   accountType: z.enum(["RESIDENTIAL", "COMMERCIAL", "INDUSTRIAL", "MUNICIPAL"]),
   existingCustomerId: z.string().uuid().optional(),
   newCustomer: newCustomerPayload.optional(),
@@ -44,7 +47,8 @@ export const moveInSchema = z.object({
     commodityId: z.string().uuid(),
     rateScheduleId: z.string().uuid(),
     billingCycleId: z.string().uuid(),
-    agreementNumber: z.string().min(1).max(50),
+    // Optional: auto-generated per agreement from the tenant template.
+    agreementNumber: z.string().min(1).max(50).optional(),
     initialMeterReadings: z.array(z.object({
       meterId: z.string().uuid(),
       reading: z.number().nonnegative(),

@@ -4,9 +4,25 @@ const UID = "00000000-0000-4000-8000-000000000001";
 
 async function main() {
   console.log("Clearing existing data...");
+  // Order matters — child tables before their parents. Phase 2 tables
+  // (meter_read, service_suspension, meter_event, service_event,
+  // container, import_batch) hold FKs into service_agreement and meter,
+  // so they must be cleared before those parents can be deleted. The
+  // original seed script predates Phase 2 and skipped them, which now
+  // blocks reseeding any DB that has accumulated operational data.
   await p.cisUser.deleteMany({});
   await p.role.deleteMany({});
   await p.tenantModule.deleteMany({});
+
+  // Phase 2 operational entities — delete first.
+  if (p.serviceSuspension) await p.serviceSuspension.deleteMany({});
+  if (p.serviceEvent) await p.serviceEvent.deleteMany({});
+  if (p.meterEvent) await p.meterEvent.deleteMany({});
+  if (p.container) await p.container.deleteMany({});
+  if (p.importBatch) await p.importBatch.deleteMany({});
+  await p.meterRead.deleteMany({});
+  if (p.attachment) await p.attachment.deleteMany({});
+
   await p.serviceAgreementMeter.deleteMany({});
   await p.serviceAgreement.deleteMany({});
   await p.meterRegister.deleteMany({});
@@ -21,8 +37,14 @@ async function main() {
   await p.commodity.deleteMany({});
   await p.customer.deleteMany({});
   await p.tenantTheme.deleteMany({});
+  if (p.tenantConfig) await p.tenantConfig.deleteMany({});
   await p.auditLog.deleteMany({});
   await p.userPreference.deleteMany({});
+  // Tenant-scoped suspension type defs only — do NOT delete global
+  // (utility_id IS NULL) rows because re-seeding re-inserts them below.
+  if (p.suspensionTypeDef) {
+    await p.suspensionTypeDef.deleteMany({ where: { utilityId: { not: null } } });
+  }
   console.log("  Cleared.");
 
   console.log("Seeding...");
@@ -213,13 +235,20 @@ async function main() {
     {
       name: "System Admin",
       description: "Full access to everything including system settings",
-      permissions: Object.fromEntries(allModules.map(m => [m, allPerms])),
+      permissions: {
+        ...Object.fromEntries(allModules.map(m => [m, allPerms])),
+        service_suspensions: ["VIEW","CREATE","EDIT","DELETE","APPROVE"],
+      },
       isSystem: true,
     },
     {
       name: "Utility Admin",
       description: "Full access except system settings modification",
-      permissions: { ...Object.fromEntries(allModules.map(m => [m, allPerms])), settings: ["VIEW"] },
+      permissions: {
+        ...Object.fromEntries(allModules.map(m => [m, allPerms])),
+        service_suspensions: ["VIEW","CREATE","EDIT","DELETE","APPROVE"],
+        settings: ["VIEW"],
+      },
       isSystem: true,
     },
     {
@@ -276,6 +305,26 @@ async function main() {
     await p.tenantModule.create({ data: { utilityId: UID, moduleKey: mk, isEnabled: true } });
   }
   console.log("  " + moduleKeys.length + " tenant modules");
+
+  // Seed global suspension (hold) type codes. utilityId null = visible to
+  // every tenant. Tenants can later insert their own rows with a non-null
+  // utilityId to add or override codes. Use upsert-by-composite-unique so
+  // re-running seed doesn't duplicate.
+  const suspensionTypes = [
+    { code: "VACATION_HOLD", label: "Vacation hold", description: "Customer is out of town for a short period", sortOrder: 10, defaultBillingSuspended: true },
+    { code: "SEASONAL",      label: "Seasonal",      description: "Seasonal property closed part of the year",  sortOrder: 20, defaultBillingSuspended: true },
+    { code: "TEMPORARY",     label: "Temporary",     description: "General short-term suspension",              sortOrder: 30, defaultBillingSuspended: true },
+    { code: "DISPUTE",       label: "Dispute",       description: "Service paused pending dispute resolution",  sortOrder: 40, defaultBillingSuspended: true },
+    { code: "UNAVAILABLE",   label: "Unavailable",   description: "Service physically unavailable at premise",  sortOrder: 50, defaultBillingSuspended: true },
+    { code: "REGULATORY",    label: "Regulatory",    description: "Legally mandated pause",                     sortOrder: 60, defaultBillingSuspended: false },
+  ];
+  for (const t of suspensionTypes) {
+    const existing = await p.suspensionTypeDef.findFirst({ where: { utilityId: null, code: t.code } });
+    if (!existing) {
+      await p.suspensionTypeDef.create({ data: { utilityId: null, ...t } });
+    }
+  }
+  console.log("  " + suspensionTypes.length + " suspension type defs");
 
   const testUsers = [
     { id: "00000000-0000-4000-8000-000000000091", email: "sysadmin@utility.com", name: "Sarah Mitchell", roleIdx: 0 },  // System Admin

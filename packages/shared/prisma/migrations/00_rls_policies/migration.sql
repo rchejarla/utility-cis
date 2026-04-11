@@ -29,6 +29,18 @@ ALTER TABLE attachment ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cis_user ENABLE ROW LEVEL SECURITY;
 ALTER TABLE role ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_module ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_config ENABLE ROW LEVEL SECURITY;
+ALTER TABLE suspension_type_def ENABLE ROW LEVEL SECURITY;
+
+-- Phase 2 operational entities — RLS was missed when these tables were
+-- added. Tenant isolation was previously enforced only at the service
+-- layer; adding RLS here makes the tenant boundary a defense-in-depth
+-- guarantee so a future service bug cannot leak rows cross-tenant.
+ALTER TABLE meter_event ENABLE ROW LEVEL SECURITY;
+ALTER TABLE container ENABLE ROW LEVEL SECURITY;
+ALTER TABLE service_suspension ENABLE ROW LEVEL SECURITY;
+ALTER TABLE service_event ENABLE ROW LEVEL SECURITY;
+ALTER TABLE import_batch ENABLE ROW LEVEL SECURITY;
 
 -- ─── Tenant Isolation Policies (drop first if exists) ────────────────────────
 
@@ -114,6 +126,42 @@ CREATE POLICY tenant_isolation ON role
 
 DROP POLICY IF EXISTS tenant_isolation ON tenant_module;
 CREATE POLICY tenant_isolation ON tenant_module
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON tenant_config;
+CREATE POLICY tenant_isolation ON tenant_config
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
+
+-- suspension_type_def holds BOTH global codes (utility_id IS NULL,
+-- seeded in seed.js) and per-tenant overrides. The RLS policy must
+-- allow every tenant to SELECT the global rows while still isolating
+-- their own tenant-specific rows from other tenants.
+DROP POLICY IF EXISTS tenant_isolation ON suspension_type_def;
+CREATE POLICY tenant_isolation ON suspension_type_def
+  USING (
+    utility_id IS NULL
+    OR utility_id = current_setting('app.current_utility_id')::uuid
+  );
+
+-- Phase 2 operational entities — standard tenant isolation.
+DROP POLICY IF EXISTS tenant_isolation ON meter_event;
+CREATE POLICY tenant_isolation ON meter_event
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON container;
+CREATE POLICY tenant_isolation ON container
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON service_suspension;
+CREATE POLICY tenant_isolation ON service_suspension
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON service_event;
+CREATE POLICY tenant_isolation ON service_event
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON import_batch;
+CREATE POLICY tenant_isolation ON import_batch
   USING (utility_id = current_setting('app.current_utility_id')::uuid);
 
 -- ─── TimescaleDB Hypertable ───────────────────────────────────────────────────

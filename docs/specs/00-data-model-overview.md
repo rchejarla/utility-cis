@@ -12,7 +12,7 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 
 ## Entity Summary
 
-**21 entities** across 6 categories (RBAC category added in Phase 2):
+**23 entities** across 6 categories (RBAC category added in Phase 2; TenantConfig and SuspensionTypeDef added alongside Service Holds v1):
 
 | # | Entity | Table | Category | Phase Built | Key Relationships |
 |---|--------|-------|----------|-------------|-------------------|
@@ -37,6 +37,8 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 | 19 | Role | `role` | RBAC | Phase 2 | Per-tenant permission bundle; referenced by CisUser |
 | 20 | CisUser | `cis_user` | RBAC | Phase 2 | Admin/back-office user; belongs to Role; scoped by utility_id |
 | 21 | TenantModule | `tenant_module` | RBAC | Phase 2 | Per-tenant module enablement (maps `moduleKey` → enabled) |
+| 22 | TenantConfig | `tenant_config` | System | Phase 2 | One per utility (unique on utility_id); holds `require_hold_approval` and an extensible `settings` JSONB bucket (currently carries `numberFormats` for identifier generation) |
+| 23 | SuspensionTypeDef | `suspension_type_def` | Reference | Phase 2 | Per-tenant (or global, with `utility_id IS NULL`) reference table for service-hold type codes. Replaces the former `SuspensionType` Prisma enum. RLS policy allows global rows to be visible across all tenants. |
 
 ## ER Diagram
 

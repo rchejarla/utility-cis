@@ -41,29 +41,55 @@ A physical cart or container assigned to a premise for solid waste service.
 
 ---
 
-### ServiceSuspension (planned)
+### ServiceSuspension
 
-Temporary suspension of a solid waste (or other) service. Covers vacation holds and seasonal service suspensions.
+Temporary suspension of a service (solid waste, water, electric, etc.) — despite living in the solid-waste spec for historical reasons, this entity applies to every commodity. Covers vacation holds, seasonal service pauses, regulatory holds, dispute holds, and "service physically unavailable" scenarios.
 
 | Field | Type | Notes |
 |-------|------|-------|
 | id | UUID | PK |
 | utility_id | UUID | Tenant scope |
 | service_agreement_id | UUID | FK → ServiceAgreement |
-| suspension_type | ENUM | VACATION_HOLD, SEASONAL, TEMPORARY, DISPUTE |
+| suspension_type | VARCHAR(50) | String code, FK-style reference to `suspension_type_def.code` (global OR tenant-scoped). No longer a hard Prisma enum — see SuspensionTypeDef below. |
 | status | ENUM | PENDING, ACTIVE, COMPLETED, CANCELLED |
 | start_date | DATE | When service suspension begins |
-| end_date | DATE | When service resumes (nullable = indefinite) |
-| billing_suspended | BOOLEAN | Whether charges are suspended during hold |
-| prorate_on_start | BOOLEAN | Whether to prorate the bill for the suspension start period |
-| prorate_on_end | BOOLEAN | Whether to prorate the bill for the suspension end period |
+| end_date | DATE | When service resumes (nullable = indefinite / open-ended) |
+| billing_suspended | BOOLEAN | Whether charges are suspended during hold (default true) |
+| prorate_on_start | BOOLEAN | Whether to prorate the bill for the suspension start period (default true) |
+| prorate_on_end | BOOLEAN | Whether to prorate the bill for the suspension end period (default true) |
 | reason | TEXT | Nullable |
-| requested_by | UUID | FK → User or null (customer self-service, Phase 4) |
-| approved_by | UUID | Nullable FK → User |
-| rams_notified | BOOLEAN | Whether RAMS has been updated about the suspension |
+| requested_by | UUID | Bare UUID reference to cis_user — NOT a Prisma relation so deleting a user doesn't cascade to hold history |
+| approved_by | UUID | Nullable bare UUID reference to cis_user. Set by `POST /:id/approve`. |
+| rams_notified | BOOLEAN | Whether RAMS has been updated about the suspension (wiring deferred to Phase 3) |
 | rams_notified_at | TIMESTAMPTZ | |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
+
+---
+
+### SuspensionTypeDef
+
+Reference table for hold type codes. Replaces the previous `SuspensionType` Prisma enum so tenants can add or override codes without a schema migration.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID (nullable) | NULL = system-global code visible to every tenant; set = tenant-scoped override |
+| code | VARCHAR(50) | Uppercase alphanumeric + underscore. Unique per (utility_id, code). |
+| label | VARCHAR(100) | Display label shown in dropdowns and the detail page |
+| description | TEXT | Nullable long-form description |
+| category | VARCHAR(50) | Nullable grouping hint for the admin UI |
+| sort_order | INT | Default 100 — controls order in dropdowns |
+| is_active | BOOLEAN | Default true — inactive codes are hidden from creation dropdowns but existing holds continue to reference them |
+| default_billing_suspended | BOOLEAN | Per-type default for the billing_suspended checkbox on the create form (Phase 3 wiring) |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | |
+
+**Seed:** six system-global codes are inserted by `seed.js` — `VACATION_HOLD`, `SEASONAL`, `TEMPORARY`, `DISPUTE`, `UNAVAILABLE`, `REGULATORY`.
+
+**Tenant override behaviour:** if a tenant inserts a row with the same `code` as a global row, the tenant row "shadows" the global one in listings. The `listSuspensionTypes` service resolves this by grouping by code and preferring the tenant row when both exist.
+
+**RLS:** `suspension_type_def` has a custom RLS policy permitting `utility_id IS NULL OR utility_id = current_setting('app.current_utility_id')::uuid`, so every tenant can read global codes while remaining isolated from other tenants' custom codes.
 
 ---
 
@@ -113,12 +139,23 @@ All endpoints are planned for Phase 2 (container management) and Phase 3 (billin
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/service-suspensions` | List suspensions (filterable by agreement, status, date) |
-| POST | `/api/v1/service-suspensions` | Create vacation hold or seasonal suspension |
-| GET | `/api/v1/service-suspensions/:id` | Get suspension detail |
-| PATCH | `/api/v1/service-suspensions/:id` | Update dates or cancel |
-| POST | `/api/v1/service-suspensions/:id/complete` | Mark suspension ended (if end_date was open) |
+| GET | `/api/v1/service-suspensions` | List suspensions (filterable by agreement, status, type, activeOn date) |
+| POST | `/api/v1/service-suspensions` | Create vacation hold or seasonal suspension. Validates `suspensionType` against `suspension_type_def`. |
+| GET | `/api/v1/service-suspensions/:id` | Get suspension detail — backend also resolves `requested_by` / `approved_by` UUIDs to user names and returns them as `requestedByName` / `approvedByName` via a single tenant-scoped `cisUser.findMany`. |
+| PATCH | `/api/v1/service-suspensions/:id` | Update dates, reason, billing flag, or status |
+| POST | `/api/v1/service-suspensions/:id/complete` | Mark COMPLETED (backfills end_date if open-ended). Refuses if already COMPLETED or CANCELLED. |
+| POST | `/api/v1/service-suspensions/:id/approve` | Stamp `approved_by = actor`. Gated by `service_suspensions.APPROVE` permission. Refuses if not PENDING or already approved. |
+| POST | `/api/v1/service-suspensions/:id/activate` | Manual PENDING → ACTIVE. Refuses if tenant has `requireHoldApproval = true` and the hold has no `approved_by`. |
+| POST | `/api/v1/service-suspensions/:id/cancel` | Mark CANCELLED. Refuses from COMPLETED or already-CANCELLED. |
 | GET | `/api/v1/service-agreements/:id/suspensions` | All suspensions for an agreement |
+
+### Suspension Type Reference Table
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/suspension-types` | List active codes for this tenant (globals + tenant-specific, with shadow resolution). Authenticated but no module permission required — it's reference data every form needs. |
+| POST | `/api/v1/suspension-types` | Admin-only (gated by `settings.EDIT`): insert a tenant-scoped code |
+| PATCH | `/api/v1/suspension-types/:id` | Admin-only: update a tenant-scoped code (global rows are read-only) |
 
 ### Service Events (RAMS Integration)
 
@@ -157,6 +194,20 @@ All endpoints are planned for Phase 2 (container management) and Phase 3 (billin
 
 12. **Container damage/loss:** When a container is reported DAMAGED or LOST (ServiceEvent or manual status change), CIS creates an AdhocCharge for the replacement cost (configurable per container_type and size_gallons). Approval required above a configured threshold.
 
+13. **Hold lifecycle state machine:** ServiceSuspension has four statuses: `PENDING → ACTIVE → COMPLETED`, plus `CANCELLED` (reachable from PENDING or ACTIVE). Transitions happen via two mechanisms:
+    - **Manual**: the detail page exposes Approve / Activate / Complete / Cancel buttons subject to the visibility rules below.
+    - **Scheduled**: an in-process `setInterval` scheduler runs once per hour (see `packages/api/src/schedulers/suspension-scheduler.ts`) and flips `PENDING → ACTIVE` for any hold whose `start_date` has arrived and whose approval gate is satisfied, then flips `ACTIVE → COMPLETED` for any hold whose `end_date` has passed. Open-ended holds (`end_date IS NULL`) are deliberately skipped on the completion pass — they require manual completion. **Single-instance deployment only**: running two API processes will flip the same hold twice and emit duplicate audit events. When multi-instance is needed, replace with BullMQ + Redis-backed job locking.
+
+14. **Tenant-level approval gate:** Each tenant has a `require_hold_approval` flag on `tenant_config` (default false). When true, new holds remain in PENDING and cannot be activated (neither manually nor by the scheduler) until a user with the `service_suspensions.APPROVE` permission calls `POST /:id/approve`. The approval stamps `approved_by` but does NOT change `status`. Activation remains a separate step. When the flag is false, the scheduler auto-activates on `start_date` without inspecting `approved_by`.
+
+15. **Compound status presentation:** The detail page renders a compound badge derived from `status + approved_by + tenant.require_hold_approval`:
+    - `requireHoldApproval = true` AND `status = PENDING` AND `approved_by IS NULL` → **AWAITING APPROVAL** (red)
+    - `requireHoldApproval = true` AND `status = PENDING` AND `approved_by IS NOT NULL` → **APPROVED · AWAITING START** (blue)
+    - Otherwise `status = PENDING` → **PENDING** (neutral)
+    - `ACTIVE` / `COMPLETED` / `CANCELLED` use their stored values directly.
+
+    The underlying `SuspensionStatus` enum still has exactly four values — the compound labels are purely presentational.
+
 ## UI Pages
 
 All pages are planned for Phase 2 (container management) and Phase 3 (RAMS events, billing integration).
@@ -169,9 +220,30 @@ All pages are planned for Phase 2 (container management) and Phase 3 (RAMS event
 
 ### Service Suspensions (`/service-suspensions`)
 
-- Active suspensions table: agreement, type, start/end dates, billing suspended flag, RAMS notified status
-- Upcoming suspensions (start in next 30 days)
-- "New Suspension" → form with agreement lookup, type, dates
+**List** (`/service-suspensions`)
+- Columns: type (raw code), agreement number, period, billing flag, RAMS sync, status badge
+- Filters: status (PENDING/ACTIVE/COMPLETED/CANCELLED), type (dynamically fetched from `/api/v1/suspension-types`)
+- "+ New Hold" → new-form page
+
+**New form** (`/service-suspensions/new`)
+- Service agreement picker (async search via `SearchableEntitySelect`, filtered to ACTIVE agreements)
+- Hold type dropdown (populated from `/api/v1/suspension-types`)
+- Start date, optional end date
+- Reason (free text)
+- Advanced "Billing options" section exposing `billing_suspended`, `prorate_on_start`, `prorate_on_end` checkboxes (all default true)
+- On submit, POSTs to `/api/v1/service-suspensions`. Every new hold starts as `PENDING` regardless of the tenant approval setting.
+
+**Detail** (`/service-suspensions/[id]`)
+- Header: type label, compound status badge (see rule 15)
+- Two-column card grid: Agreement, Period, Billing flags, Approval state
+- Reason card (full width, rendered only if reason is set)
+- Metadata footer: created/updated timestamps, requester and approver names (resolved backend-side from the bare UUID references)
+- Action buttons (conditional):
+  - **Approve** — shown when `canApprove && requireHoldApproval && status === "PENDING" && !isApproved`
+  - **Activate now** — shown when `canEdit && status === "PENDING" && (!requireHoldApproval || isApproved)`
+  - **Complete** — shown when `canEdit && status === "ACTIVE"`
+  - **Cancel hold** — shown when `canEdit && (status === "PENDING" || status === "ACTIVE")`
+  - All actions go through a ConfirmDialog before committing, and the page reloads in place so the CSR sees the updated state (stays on detail, does not navigate away).
 
 ### RAMS Events Queue (`/service-events`)
 

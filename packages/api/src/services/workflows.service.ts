@@ -7,6 +7,7 @@ import type {
   SearchQuery,
 } from "@utility-cis/shared";
 import { domainEvents } from "../events/emitter.js";
+import { generateNumber } from "../lib/number-generator.js";
 
 /**
  * Cross-entity workflows. Each function wraps a multi-step business
@@ -108,11 +109,23 @@ export async function transferService(
       data: { status: "FINAL", endDate: transferDate },
     });
 
-    // Create new agreement on target account, cloning the core fields
+    // Create new agreement on target account, cloning the core fields.
+    // If no explicit number was provided, generate from the tenant
+    // template (same pattern as move-in).
+    const newAgreementNumber =
+      data.newAgreementNumber ??
+      (await generateNumber({
+        utilityId,
+        entity: "agreement",
+        defaultTemplate: "SA-{seq:4}",
+        tableName: "service_agreement",
+        columnName: "agreement_number",
+        db: tx,
+      }));
     const newAgreement = await tx.serviceAgreement.create({
       data: {
         utilityId,
-        agreementNumber: data.newAgreementNumber,
+        agreementNumber: newAgreementNumber,
         accountId: data.targetAccountId,
         premiseId: source.premiseId,
         commodityId: source.commodityId,
@@ -216,11 +229,23 @@ export async function moveIn(
 
     const moveInDate = new Date(data.moveInDate);
 
-    // Create account
+    // Create account. accountNumber is optional in the move-in payload;
+    // if absent, generate from the tenant's numberFormats.account
+    // template inside this transaction.
+    const accountNumber =
+      data.accountNumber ??
+      (await generateNumber({
+        utilityId,
+        entity: "account",
+        defaultTemplate: "AC-{seq:5}",
+        tableName: "account",
+        columnName: "account_number",
+        db: tx,
+      }));
     const account = await tx.account.create({
       data: {
         utilityId,
-        accountNumber: data.accountNumber,
+        accountNumber,
         customerId,
         accountType: data.accountType,
         status: "ACTIVE",
@@ -228,13 +253,26 @@ export async function moveIn(
       },
     });
 
-    // Create service agreements with optional initial meter readings
+    // Create service agreements with optional initial meter readings.
+    // Each agreement's number is auto-generated if the caller omitted
+    // it; the generator runs inside this tx so the second agreement
+    // sees the first one's row when picking its next sequence.
     const agreements = [];
     for (const agreement of data.agreements) {
+      const agreementNumber =
+        agreement.agreementNumber ??
+        (await generateNumber({
+          utilityId,
+          entity: "agreement",
+          defaultTemplate: "SA-{seq:4}",
+          tableName: "service_agreement",
+          columnName: "agreement_number",
+          db: tx,
+        }));
       const sa = await tx.serviceAgreement.create({
         data: {
           utilityId,
-          agreementNumber: agreement.agreementNumber,
+          agreementNumber,
           accountId: account.id,
           premiseId: data.premiseId,
           commodityId: agreement.commodityId,

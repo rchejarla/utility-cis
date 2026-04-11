@@ -15,13 +15,9 @@ interface ServiceSuspension {
   serviceAgreement?: { agreementNumber: string };
 }
 
-const TYPE_OPTIONS = [
-  { value: "VACATION_HOLD", label: "Vacation hold" },
-  { value: "SEASONAL", label: "Seasonal" },
-  { value: "TEMPORARY", label: "Temporary" },
-  { value: "DISPUTE", label: "Dispute" },
-];
-
+// Hold types come from the suspension_type_def reference table now,
+// not from a hardcoded const. The EntityListPage dynamic filter fetches
+// /api/v1/suspension-types on mount and populates the pill options.
 const STATUS_OPTIONS = [
   { value: "PENDING", label: "Pending" },
   { value: "ACTIVE", label: "Active" },
@@ -126,7 +122,15 @@ export default function SuspensionsPage() {
       newAction={{ label: "+ New Hold", href: "/service-suspensions/new" }}
       filters={[
         { key: "status", label: "Status", options: STATUS_OPTIONS },
-        { key: "suspensionType", label: "Type", options: TYPE_OPTIONS },
+        {
+          key: "suspensionType",
+          label: "Type",
+          optionsEndpoint: "/api/v1/suspension-types",
+          mapOption: (t) => ({
+            value: String(t.code),
+            label: String(t.label),
+          }),
+        },
       ]}
     />
   );

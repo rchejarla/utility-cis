@@ -52,11 +52,10 @@ export default function NewAccountPage() {
       fields={[
         {
           key: "accountNumber",
-          label: "Account Number",
+          label: "Account Number (optional)",
           type: "text",
-          required: true,
-          placeholder: "ACC-000001",
-          tooltip: "Cannot be changed after creation",
+          placeholder: "Auto-generate",
+          tooltip: "Leave blank to auto-generate using the tenant numbering template. Cannot be changed after creation.",
           tooltipRuleId: "BR-AC-005",
         },
         {
@@ -98,10 +97,13 @@ export default function NewAccountPage() {
       ]}
       toRequestBody={(form) => {
         const body: Record<string, unknown> = {
-          accountNumber: form.accountNumber,
           accountType: form.accountType,
           languagePref: form.languagePref,
         };
+        // Only include accountNumber when the user explicitly typed
+        // one — the backend generates from the tenant template when
+        // absent.
+        if (form.accountNumber) body.accountNumber = form.accountNumber;
         if (form.creditRating) body.creditRating = form.creditRating;
         if (form.depositAmount) body.depositAmount = parseFloat(form.depositAmount);
         return body;

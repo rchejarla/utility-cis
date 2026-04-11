@@ -16,5 +16,6 @@ export * from "./meter-read";
 export * from "./meter-event";
 export * from "./container";
 export * from "./service-suspension";
+export * from "./suspension-type-def";
 export * from "./service-event";
 export * from "./workflows";

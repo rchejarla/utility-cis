@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
+import { PageHeader } from "@/components/ui/page-header";
 import { useToast } from "@/components/ui/toast";
 import { SearchableEntitySelect } from "@/components/ui/searchable-entity-select";
 
@@ -152,15 +152,16 @@ export default function MoveInWizardPage() {
     setAgreements((prev) => prev.map((a) => (a.key === key ? { ...a, ...patch } : a)));
 
   const step1Valid = premiseId && moveInDate;
+  // accountNumber is optional — backend auto-generates via the tenant
+  // template when absent. Same for each agreement number below.
   const step2Valid =
-    accountNumber &&
     accountType &&
     ((customerMode === "EXISTING" && existingCustomerId) ||
       (customerMode === "NEW" &&
         ((customerType === "INDIVIDUAL" && firstName && lastName) ||
           (customerType === "ORGANIZATION" && organizationName))));
   const step3Valid = agreements.every(
-    (a) => a.commodityId && a.rateScheduleId && a.billingCycleId && a.agreementNumber,
+    (a) => a.commodityId && a.rateScheduleId && a.billingCycleId,
   );
 
   const submit = async () => {
@@ -173,13 +174,15 @@ export default function MoveInWizardPage() {
       const body: Record<string, unknown> = {
         premiseId,
         moveInDate,
-        accountNumber,
         accountType,
+        // Omit accountNumber when blank so the backend generates one.
+        ...(accountNumber ? { accountNumber } : {}),
         agreements: agreements.map((a) => ({
           commodityId: a.commodityId,
           rateScheduleId: a.rateScheduleId,
           billingCycleId: a.billingCycleId,
-          agreementNumber: a.agreementNumber,
+          // Same for each agreement — omit when blank.
+          ...(a.agreementNumber ? { agreementNumber: a.agreementNumber } : {}),
         })),
       };
       if (depositAmount) body.depositAmount = parseFloat(depositAmount);
@@ -286,32 +289,10 @@ export default function MoveInWizardPage() {
 
   return (
     <div style={{ maxWidth: "820px" }}>
-      <div
-        style={{
-          marginBottom: "8px",
-          fontFamily: "'JetBrains Mono', monospace",
-          fontSize: "11px",
-          color: "var(--text-muted)",
-        }}
-      >
-        <Link href="/workflows" style={{ color: "var(--text-muted)", textDecoration: "none" }}>
-          ← /workflows
-        </Link>
-      </div>
-      <h1
-        style={{
-          fontFamily: "'JetBrains Mono', monospace",
-          fontSize: "24px",
-          fontWeight: 700,
-          margin: "0 0 6px 0",
-          color: "var(--text-primary)",
-        }}
-      >
-        MOVE_IN
-      </h1>
-      <p style={{ fontSize: "13px", color: "var(--text-secondary)", margin: "0 0 24px 0" }}>
-        Three steps, one atomic commit. If any part of the submission fails, nothing lands in the database.
-      </p>
+      <PageHeader
+        title="Move In"
+        subtitle="Three steps, one atomic commit. If any part of the submission fails, nothing lands in the database."
+      />
 
       {stepperBar}
 
@@ -323,7 +304,16 @@ export default function MoveInWizardPage() {
           padding: "24px",
         }}
       >
-        {step === 1 && (
+        {/*
+         * Steps render inside always-mounted wrappers (hidden via the
+         * native `hidden` attribute) instead of being conditionally
+         * mounted. Keeping SearchableEntitySelect mounted across step
+         * navigation preserves its internal `knownLabels` cache so the
+         * trigger button renders the human-readable label after Back —
+         * otherwise the component remounts with just the stored UUID
+         * and nothing to resolve it to.
+         */}
+        <div hidden={step !== 1}>
           <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
             <div>
               <label style={labelStyle}>PREMISE</label>
@@ -350,9 +340,9 @@ export default function MoveInWizardPage() {
               />
             </div>
           </div>
-        )}
+        </div>
 
-        {step === 2 && (
+        <div hidden={step !== 2}>
           <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
             {/* Customer mode toggle */}
             <div>
@@ -470,11 +460,11 @@ export default function MoveInWizardPage() {
 
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "12px" }}>
               <div>
-                <label style={labelStyle}>ACCOUNT NUMBER</label>
+                <label style={labelStyle}>ACCOUNT NUMBER (OPTIONAL)</label>
                 <input
                   value={accountNumber}
                   onChange={(e) => setAccountNumber(e.target.value)}
-                  placeholder="ACC-000001"
+                  placeholder="Auto-generate"
                   style={fieldStyle}
                 />
               </div>
@@ -501,9 +491,9 @@ export default function MoveInWizardPage() {
               </div>
             </div>
           </div>
-        )}
+        </div>
 
-        {step === 3 && (
+        <div hidden={step !== 3}>
           <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
             {agreements.map((a, i) => (
               <div
@@ -603,11 +593,11 @@ export default function MoveInWizardPage() {
                     </select>
                   </div>
                   <div>
-                    <label style={labelStyle}>NUMBER</label>
+                    <label style={labelStyle}>NUMBER (OPTIONAL)</label>
                     <input
                       value={a.agreementNumber}
                       onChange={(e) => updateAgreement(a.key, { agreementNumber: e.target.value })}
-                      placeholder="SA-0001"
+                      placeholder="Auto-generate"
                       style={fieldStyle}
                     />
                   </div>
@@ -686,7 +676,7 @@ export default function MoveInWizardPage() {
               </div>
             </div>
           </div>
-        )}
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: "12px", marginTop: "18px", justifyContent: "space-between" }}>

@@ -30,7 +30,10 @@ export const serviceAgreementSortFields = [
 ] as const;
 
 export const createServiceAgreementSchema = z.object({
-  agreementNumber: z.string().min(1).max(50),
+  // Optional: backend auto-generates via the tenant's configured
+  // numberFormats.agreement template when absent. CSRs can still
+  // supply a custom number to override.
+  agreementNumber: z.string().min(1).max(50).optional(),
   accountId: z.string().uuid(),
   premiseId: z.string().uuid(),
   commodityId: z.string().uuid(),

@@ -9,15 +9,15 @@ const permissionMapSchema = z.record(
   z.array(permissionEnum)
 ).refine(
   (map) => {
-    // BR-RB-004: CREATE/EDIT/DELETE require VIEW
+    // BR-RB-004: CREATE/EDIT/DELETE/APPROVE require VIEW
     for (const [, perms] of Object.entries(map)) {
-      if ((perms.includes("CREATE") || perms.includes("EDIT") || perms.includes("DELETE")) && !perms.includes("VIEW")) {
+      if ((perms.includes("CREATE") || perms.includes("EDIT") || perms.includes("DELETE") || perms.includes("APPROVE")) && !perms.includes("VIEW")) {
         return false;
       }
     }
     return true;
   },
-  { message: "CREATE, EDIT, DELETE require VIEW permission (BR-RB-004)" }
+  { message: "CREATE, EDIT, DELETE, APPROVE require VIEW permission (BR-RB-004)" }
 );
 
 export const createRoleSchema = z.object({

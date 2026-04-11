@@ -14,7 +14,9 @@ export const accountSortFields = [
 ] as const;
 
 export const createAccountSchema = z.object({
-  accountNumber: z.string().min(1).max(50),
+  // Optional: backend auto-generates via the tenant's configured
+  // numberFormats.account template when absent.
+  accountNumber: z.string().min(1).max(50).optional(),
   customerId: z.string().uuid().optional(),
   accountType: accountTypeEnum,
   status: accountStatusEnum.default("ACTIVE"),

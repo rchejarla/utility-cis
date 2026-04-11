@@ -28,7 +28,10 @@ import { meterReadRoutes } from "./routes/meter-reads.js";
 import { meterEventRoutes } from "./routes/meter-events.js";
 import { containerRoutes } from "./routes/containers.js";
 import { serviceSuspensionRoutes } from "./routes/service-suspensions.js";
+import { suspensionTypeDefRoutes } from "./routes/suspension-type-defs.js";
+import { tenantConfigRoutes } from "./routes/tenant-config.js";
 import { serviceEventRoutes } from "./routes/service-events.js";
+import { startSuspensionScheduler } from "./schedulers/suspension-scheduler.js";
 import { workflowRoutes } from "./routes/workflows.js";
 import { buildOpenApiDocument } from "./lib/openapi.js";
 
@@ -87,10 +90,20 @@ export async function buildApp() {
   await app.register(meterEventRoutes);
   await app.register(containerRoutes);
   await app.register(serviceSuspensionRoutes);
+  await app.register(suspensionTypeDefRoutes);
+  await app.register(tenantConfigRoutes);
   await app.register(serviceEventRoutes);
   await app.register(workflowRoutes);
 
   startAuditWriter();
+
+  // Background schedulers. The suspension scheduler flips holds from
+  // PENDING → ACTIVE at startDate and ACTIVE → COMPLETED at endDate.
+  // In-process setInterval, single-instance only. Set DISABLE_SCHEDULERS
+  // in tests and any worker process that shouldn't run side effects.
+  if (process.env.DISABLE_SCHEDULERS !== "true") {
+    startSuspensionScheduler(app.log);
+  }
 
   return app;
 }

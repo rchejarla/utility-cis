@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma.js";
+import { generateNumber } from "../lib/number-generator.js";
 import { EVENT_TYPES, isValidStatusTransition } from "@utility-cis/shared";
 import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
 import type {
@@ -85,11 +86,24 @@ export async function createServiceAgreement(
       }
     }
 
-    // Rule 3: Create the agreement with nested meters
+    // Rule 3: Create the agreement with nested meters. If the caller
+    // didn't supply an agreementNumber, generate one from the tenant
+    // template inside this same tx so the max-query sees any rows
+    // the caller has already inserted.
+    const agreementNumber =
+      data.agreementNumber ??
+      (await generateNumber({
+        utilityId,
+        entity: "agreement",
+        defaultTemplate: "SA-{seq:4}",
+        tableName: "service_agreement",
+        columnName: "agreement_number",
+        db: tx,
+      }));
     return tx.serviceAgreement.create({
       data: {
         utilityId,
-        agreementNumber: data.agreementNumber,
+        agreementNumber,
         accountId: data.accountId,
         premiseId: data.premiseId,
         commodityId: data.commodityId,

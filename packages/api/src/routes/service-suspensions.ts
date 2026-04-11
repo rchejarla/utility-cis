@@ -10,6 +10,9 @@ import {
   createSuspension,
   updateSuspension,
   completeSuspension,
+  approveSuspension,
+  activateSuspension,
+  cancelSuspension,
   suspensionsForAgreement,
 } from "../services/service-suspension.service.js";
 import { registerCrudRoutes } from "../lib/crud-routes.js";
@@ -48,6 +51,45 @@ export async function serviceSuspensionRoutes(app: FastifyInstance) {
       const { id } = idParamSchema.parse(request.params);
       const { endDate } = completeBody.parse(request.body ?? {});
       const result = await completeSuspension(utilityId, actorId, actorName, id, endDate);
+      return reply.send(result);
+    },
+  );
+
+  // Approve a PENDING hold. Gated by the APPROVE permission — CSR and
+  // Field Tech roles do not get this by default; only admin tiers do.
+  app.post(
+    "/api/v1/service-suspensions/:id/approve",
+    { config: { module: "service_suspensions", permission: "APPROVE" } },
+    async (request, reply) => {
+      const { utilityId, id: actorId, name: actorName } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      const result = await approveSuspension(utilityId, actorId, actorName, id);
+      return reply.send(result);
+    },
+  );
+
+  // Manual PENDING → ACTIVE transition. Useful when a user wants to
+  // start a hold right now instead of waiting for the scheduler to pick
+  // it up at the next hourly tick. Refuses if approval is required and
+  // not yet granted.
+  app.post(
+    "/api/v1/service-suspensions/:id/activate",
+    { config: { module: "service_suspensions", permission: "EDIT" } },
+    async (request, reply) => {
+      const { utilityId, id: actorId, name: actorName } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      const result = await activateSuspension(utilityId, actorId, actorName, id);
+      return reply.send(result);
+    },
+  );
+
+  app.post(
+    "/api/v1/service-suspensions/:id/cancel",
+    { config: { module: "service_suspensions", permission: "EDIT" } },
+    async (request, reply) => {
+      const { utilityId, id: actorId, name: actorName } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      const result = await cancelSuspension(utilityId, actorId, actorName, id);
       return reply.send(result);
     },
   );

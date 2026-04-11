@@ -46,7 +46,12 @@ export const MODULES = [
 
 export type ModuleKey = (typeof MODULES)[number];
 
-export const PERMISSIONS = ["VIEW", "CREATE", "EDIT", "DELETE"] as const;
+// APPROVE is a specialized permission currently used only by the
+// service_suspensions module (for the optional "requires approval" flow
+// controlled by TenantConfig.requireHoldApproval). Adding it to the
+// global tuple keeps the RBAC check uniform; roles that don't need it
+// simply omit it from their module permission list.
+export const PERMISSIONS = ["VIEW", "CREATE", "EDIT", "DELETE", "APPROVE"] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -80,13 +85,17 @@ export const PRESET_ROLES: Array<{ name: string; description: string; permission
   {
     name: "System Admin",
     description: "Full access to everything including system settings",
-    permissions: Object.fromEntries(MODULES.map((m) => [m, ["VIEW", "CREATE", "EDIT", "DELETE"]])) as PermissionMap,
+    permissions: {
+      ...Object.fromEntries(MODULES.map((m) => [m, ["VIEW", "CREATE", "EDIT", "DELETE"]])),
+      service_suspensions: ["VIEW", "CREATE", "EDIT", "DELETE", "APPROVE"],
+    } as PermissionMap,
   },
   {
     name: "Utility Admin",
     description: "Full access except system settings modification",
     permissions: {
       ...Object.fromEntries(MODULES.map((m) => [m, ["VIEW", "CREATE", "EDIT", "DELETE"]])),
+      service_suspensions: ["VIEW", "CREATE", "EDIT", "DELETE", "APPROVE"],
       settings: ["VIEW"],
     } as PermissionMap,
   },

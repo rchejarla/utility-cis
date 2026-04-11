@@ -42,17 +42,5 @@
       "Bash(pnpm --filter @utility-cis/shared build)",
       "Bash(pnpm verify:*)"
     ]
-  },
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "Check if any schema changes (Prisma models, validators, API routes, or UI pages) were made in this session. If yes, remind the assistant to update the relevant functional spec in docs/specs/ and the design document at docs/superpowers/specs/2026-04-08-utility-cis-phase1-design.md before the session ends. If no schema/code changes were made, do nothing."
-          }
-        ]
-      }
-    ]
   }
 }
