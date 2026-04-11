@@ -12,7 +12,7 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 
 ## Entity Summary
 
-**23 entities** across 6 categories (RBAC category added in Phase 2; TenantConfig and SuspensionTypeDef added alongside Service Holds v1):
+**24 entities** across 6 categories (RBAC category added in Phase 2; TenantConfig and SuspensionTypeDef added alongside Service Holds v1; CustomFieldSchema added in Custom Fields Phase 1):
 
 | # | Entity | Table | Category | Phase Built | Key Relationships |
 |---|--------|-------|----------|-------------|-------------------|
@@ -39,6 +39,7 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 | 21 | TenantModule | `tenant_module` | RBAC | Phase 2 | Per-tenant module enablement (maps `moduleKey` → enabled) |
 | 22 | TenantConfig | `tenant_config` | System | Phase 2 | One per utility (unique on utility_id); holds `require_hold_approval` and an extensible `settings` JSONB bucket (currently carries `numberFormats` for identifier generation) |
 | 23 | SuspensionTypeDef | `suspension_type_def` | Reference | Phase 2 | Per-tenant (or global, with `utility_id IS NULL`) reference table for service-hold type codes. Replaces the former `SuspensionType` Prisma enum. RLS policy allows global rows to be visible across all tenants. |
+| 24 | CustomFieldSchema | `custom_field_schema` | System | Phase 2 | One row per (utility, entity_type) holding the tenant's custom-field schema as a JSONB FieldDefinition array. Powers the `custom_fields` JSONB column on Customer/Account/Premise/ServiceAgreement/Meter. See spec 20. |
 
 ## ER Diagram
 

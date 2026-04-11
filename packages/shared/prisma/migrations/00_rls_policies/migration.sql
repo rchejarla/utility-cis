@@ -42,6 +42,12 @@ ALTER TABLE service_suspension ENABLE ROW LEVEL SECURITY;
 ALTER TABLE service_event ENABLE ROW LEVEL SECURITY;
 ALTER TABLE import_batch ENABLE ROW LEVEL SECURITY;
 
+-- Custom field schema is per-tenant — standard tenant isolation. The
+-- entity tables (customer, account, etc.) that carry the custom_fields
+-- jsonb column already have their own RLS policies, so the payload is
+-- isolated through those.
+ALTER TABLE custom_field_schema ENABLE ROW LEVEL SECURITY;
+
 -- ─── Tenant Isolation Policies (drop first if exists) ────────────────────────
 
 DROP POLICY IF EXISTS tenant_isolation ON commodity;
@@ -162,6 +168,10 @@ CREATE POLICY tenant_isolation ON service_event
 
 DROP POLICY IF EXISTS tenant_isolation ON import_batch;
 CREATE POLICY tenant_isolation ON import_batch
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON custom_field_schema;
+CREATE POLICY tenant_isolation ON custom_field_schema
   USING (utility_id = current_setting('app.current_utility_id')::uuid);
 
 -- ─── TimescaleDB Hypertable ───────────────────────────────────────────────────

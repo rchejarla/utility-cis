@@ -36,6 +36,7 @@ vi.mock("../lib/prisma.js", () => {
       $executeRawUnsafe: vi.fn().mockResolvedValue(undefined),
       $executeRaw: vi.fn().mockResolvedValue(undefined),
       $queryRaw: vi.fn().mockResolvedValue([]),
+      $queryRawUnsafe: vi.fn().mockResolvedValue([]),
       $transaction: vi.fn((fn: any) =>
         typeof fn === "function" ? fn({}) : Promise.resolve([])
       ),
@@ -61,6 +62,7 @@ vi.mock("../lib/prisma.js", () => {
       userPreference: crud(),
       tenantModule: crud(),
       tenantConfig: crud(),
+      customFieldSchema: crud(),
       serviceSuspension: crud(),
       suspensionTypeDef: crud(),
       meterEvent: crud(),

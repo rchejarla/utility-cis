@@ -9,12 +9,14 @@ import { UsersTab } from "@/components/settings/users-tab";
 import { RolesTab } from "@/components/settings/roles-tab";
 import { NumberingTab } from "@/components/settings/numbering-tab";
 import { GeneralTab } from "@/components/settings/general-tab";
+import { CustomFieldsTab } from "@/components/settings/custom-fields-tab";
 
 const TABS = [
   { key: "general", label: "General" },
   { key: "users", label: "Users" },
   { key: "roles", label: "Roles" },
   { key: "numbering", label: "Numbering" },
+  { key: "custom-fields", label: "Custom Fields" },
 ];
 
 export default function SettingsPage() {
@@ -57,7 +59,10 @@ export default function SettingsPage() {
         title="Settings"
         subtitle="Manage users and roles for your organization"
         action={
-          canCreate && activeTab !== "numbering" && activeTab !== "general"
+          canCreate &&
+          activeTab !== "numbering" &&
+          activeTab !== "general" &&
+          activeTab !== "custom-fields"
             ? {
                 label: actionLabel,
                 onClick: handleAddAction,
@@ -81,6 +86,7 @@ export default function SettingsPage() {
         )}
         {activeTab === "numbering" && <NumberingTab />}
         {activeTab === "general" && <GeneralTab />}
+        {activeTab === "custom-fields" && <CustomFieldsTab />}
       </Tabs>
     </div>
   );

@@ -15,6 +15,12 @@ const customerBaseSchema = z.object({
   driversLicense: z.string().max(50).optional(),
   taxId: z.string().max(50).optional(),
   status: customerStatusEnum.default("ACTIVE"),
+  // Passthrough bucket for tenant-configurable custom fields. The
+  // per-field shape is validated at the service layer by
+  // validateCustomFields against the tenant's custom_field_schema
+  // row — not here, because this static Zod schema has no knowledge
+  // of what fields the tenant has configured.
+  customFields: z.record(z.unknown()).optional(),
 });
 
 export const customerSortFields = [

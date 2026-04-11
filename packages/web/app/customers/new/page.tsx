@@ -1,7 +1,11 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import type { FieldDefinition } from "@utility-cis/shared";
 import { DatePicker } from "@/components/ui/date-picker";
 import { EntityFormPage } from "@/components/ui/entity-form-page";
+import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
+import { apiClient } from "@/lib/api-client";
 
 interface CustomerForm extends Record<string, unknown> {
   customerType: "INDIVIDUAL" | "ORGANIZATION";
@@ -14,6 +18,11 @@ interface CustomerForm extends Record<string, unknown> {
   email: string;
   phone: string;
   altPhone: string;
+  // Custom-fields bucket — values keyed by the tenant's field keys.
+  // Kept as an opaque Record at this layer; the CustomFieldsSection
+  // component owns the per-field rendering and validation is done
+  // server-side against the tenant's custom_field_schema row.
+  customFields: Record<string, unknown>;
 }
 
 const toggleStyle = (active: boolean) => ({
@@ -34,6 +43,30 @@ const isIndividual = (v: CustomerForm) => v.customerType === "INDIVIDUAL";
 const isOrganization = (v: CustomerForm) => v.customerType === "ORGANIZATION";
 
 export default function NewCustomerPage() {
+  // Load the tenant's custom-field schema once on mount. If the
+  // tenant hasn't configured any custom fields the response is an
+  // empty array and the CustomFieldsSection renders nothing, so the
+  // form looks identical to before. Errors are logged (not silenced)
+  // so a misconfigured backend surfaces in devtools rather than
+  // looking like "the feature just doesn't work."
+  const [customSchema, setCustomSchema] = useState<FieldDefinition[]>([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiClient.get<{ fields: FieldDefinition[] }>(
+          "/api/v1/custom-fields/customer",
+        );
+        setCustomSchema(res.fields ?? []);
+      } catch (err) {
+        console.error(
+          "[customers/new] failed to load custom field schema",
+          err,
+        );
+        setCustomSchema([]);
+      }
+    })();
+  }, []);
+
   return (
     <EntityFormPage<CustomerForm>
       title="Add Customer"
@@ -53,6 +86,7 @@ export default function NewCustomerPage() {
         email: "",
         phone: "",
         altPhone: "",
+        customFields: {},
       }}
       fields={[
         {
@@ -171,6 +205,24 @@ export default function NewCustomerPage() {
             },
           ],
         },
+        // Tenant-configurable custom fields. Injected as one synthetic
+        // field so EntityFormPage's rendering loop still owns layout,
+        // but the actual inputs come from CustomFieldsSection which
+        // reads the tenant schema loaded above. Renders nothing if
+        // the tenant has no custom fields configured — so unmanaged
+        // tenants see no change to the form.
+        {
+          key: "customFields",
+          label: "",
+          type: "custom",
+          render: ({ value, setValue }) => (
+            <CustomFieldsSection
+              schema={customSchema}
+              values={(value as Record<string, unknown>) ?? {}}
+              onChange={(next) => setValue(next as never)}
+            />
+          ),
+        },
       ]}
       toRequestBody={(form) => {
         const body: Record<string, unknown> = {
@@ -188,6 +240,13 @@ export default function NewCustomerPage() {
         } else {
           body.organizationName = form.organizationName;
           if (form.taxId) body.taxId = form.taxId;
+        }
+        // Only include customFields when the user has populated at
+        // least one value — a blank bucket just means "no custom
+        // fields provided" which the backend validator treats as
+        // "use the empty default."
+        if (form.customFields && Object.keys(form.customFields).length > 0) {
+          body.customFields = form.customFields;
         }
         return body;
       }}

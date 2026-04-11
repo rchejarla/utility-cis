@@ -4,6 +4,7 @@ import { useState, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faEnvelope, faPhone } from "@fortawesome/pro-solid-svg-icons";
+import type { FieldDefinition } from "@utility-cis/shared";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -12,6 +13,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { DatePicker } from "@/components/ui/date-picker";
 import { AccountsTab } from "@/components/customers/accounts-tab";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
+import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { usePermission } from "@/lib/use-permission";
@@ -60,6 +62,7 @@ interface Customer {
   dateOfBirth?: string;
   driversLicense?: string;
   taxId?: string;
+  customFields?: Record<string, unknown>;
   accounts?: Account[];
   contacts?: Contact[];
   ownedPremises?: Premise[];
@@ -80,6 +83,12 @@ const fieldStyle = {
 const labelStyle = { fontSize: "12px", color: "var(--text-muted)", fontWeight: "500" as const };
 const valueStyle = { fontSize: "13px", color: "var(--text-primary)" };
 
+// Detail-page inline inputs deliberately use the darker --bg-deep
+// background instead of --bg-elevated (which is the form-shell
+// convention used by EntityFormPage). Reason: on a data-heavy read
+// surface, the darker input slot gives a clearer "this is an edit
+// affordance" signal. The Custom Fields section receives this same
+// style via its `inputStyle` prop so it matches.
 const inputStyle = {
   padding: "6px 10px",
   fontSize: "13px",
@@ -161,6 +170,12 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   const [activeTab, setActiveTab] = useState("overview");
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
+  // Separate state bucket for the tenant-configurable custom fields
+  // because their value types (string/number/date/boolean/enum) don't
+  // fit the plain Record<string, string> shape the rest of editForm
+  // uses. Seeded on handleEdit from customer.customFields.
+  const [editCustomFields, setEditCustomFields] = useState<Record<string, unknown>>({});
+  const [customFieldSchema, setCustomFieldSchema] = useState<FieldDefinition[]>([]);
   const [saving, setSaving] = useState(false);
   const [showDeactivateConfirm, setShowDeactivateConfirm] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
@@ -183,6 +198,24 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
     loadCustomer();
   }, [id]);
 
+  // Load the tenant's custom-field schema once on mount. Separate
+  // from loadCustomer because the schema is tenant-scoped config,
+  // not per-customer, and we want it to survive customer reloads
+  // without refetching.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiClient.get<{ fields: FieldDefinition[] }>(
+          "/api/v1/custom-fields/customer",
+        );
+        setCustomFieldSchema(res.fields ?? []);
+      } catch (err) {
+        console.error("[customers/detail] failed to load custom field schema", err);
+        setCustomFieldSchema([]);
+      }
+    })();
+  }, []);
+
   const handleEdit = () => {
     if (!customer) return;
     setEditForm({
@@ -197,12 +230,17 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
       taxId: customer.taxId ?? "",
       status: customer.status ?? "",
     });
+    // Seed custom-field edit state from the currently stored values.
+    // Shallow-clone so the input components can mutate freely without
+    // affecting the view-mode display if the user cancels.
+    setEditCustomFields({ ...(customer.customFields ?? {}) });
     setEditing(true);
   };
 
   const handleCancel = () => {
     setEditing(false);
     setEditForm({});
+    setEditCustomFields({});
   };
 
   const handleDeactivate = async () => {
@@ -240,6 +278,19 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
       if (editForm.phone !== (customer.phone ?? "")) changes.phone = editForm.phone;
       if (editForm.altPhone !== (customer.altPhone ?? "")) changes.altPhone = editForm.altPhone;
       if (editForm.status !== (customer.status ?? "")) changes.status = editForm.status;
+
+      // Custom fields: send the whole customFields bucket if any
+      // value differs from the stored state. The backend's
+      // validateCustomFields handles the merge with existing stored
+      // values, so the patch only needs to include the keys that
+      // changed — but sending the whole object is fine too and
+      // simpler on the client. The deep-equality check keeps the
+      // PATCH body tidy when nothing changed.
+      const storedCustomJson = JSON.stringify(customer.customFields ?? {});
+      const editedCustomJson = JSON.stringify(editCustomFields ?? {});
+      if (storedCustomJson !== editedCustomJson) {
+        changes.customFields = editCustomFields;
+      }
 
       await apiClient.patch(`/api/v1/customers/${id}`, changes);
       await loadCustomer();
@@ -593,6 +644,131 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
                 <span style={{ ...valueStyle, fontFamily: "monospace" }}>{customer.altPhone ?? "—"}</span>
               )}
             </div>
+
+            {/*
+             * Custom Fields section — tenant-configurable.
+             *
+             * View mode: render one line per active field using the
+             * same fieldStyle/labelStyle/valueStyle grid as the built-
+             * in fields, so the section looks like a native part of
+             * the detail page. Deprecated fields still appear when
+             * the customer has stored values for them (greyed out)
+             * so legacy data remains visible.
+             *
+             * Edit mode: hand off to <CustomFieldsSection>, the same
+             * form renderer the /customers/new page uses, bound to
+             * editCustomFields. On save, handleSave diffs
+             * editCustomFields against customer.customFields and
+             * includes it in the PATCH body if anything changed.
+             *
+             * Renders nothing when the tenant has no schema
+             * configured AND the customer has no stored values, so
+             * untouched tenants see no change to the page.
+             */}
+            {(() => {
+              const stored = customer.customFields ?? {};
+              const hasSchema = customFieldSchema.length > 0;
+              const hasStoredValues = Object.keys(stored).length > 0;
+              if (!hasSchema && !hasStoredValues) return null;
+
+              if (editing) {
+                return (
+                  <>
+                    <div
+                      style={{
+                        fontSize: "11px",
+                        fontWeight: "600",
+                        color: "var(--text-muted)",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        marginTop: "20px",
+                        marginBottom: "4px",
+                      }}
+                    >
+                      Custom Fields
+                    </div>
+                    <CustomFieldsSection
+                      schema={customFieldSchema}
+                      values={editCustomFields}
+                      onChange={setEditCustomFields}
+                      inputStyle={inputStyle}
+                      fieldStyle={fieldStyle}
+                      labelStyle={labelStyle}
+                      hideHeader
+                    />
+                  </>
+                );
+              }
+
+              // View mode: build display rows from the schema + stored
+              // values, matching the built-in field layout.
+              const activeFields = customFieldSchema.filter((f) => !f.deprecated);
+              const deprecatedWithValue = customFieldSchema.filter(
+                (f) => f.deprecated && stored[f.key] !== undefined && stored[f.key] !== null,
+              );
+              activeFields.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key));
+              deprecatedWithValue.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key));
+
+              const renderValue = (field: FieldDefinition) => {
+                const v = stored[field.key];
+                if (v === undefined || v === null || v === "") return "—";
+                if (field.type === "boolean") return v ? "Yes" : "No";
+                if (field.type === "enum") {
+                  const match = field.enumOptions?.find((o) => o.value === v);
+                  return match?.label ?? String(v);
+                }
+                return String(v);
+              };
+
+              return (
+                <>
+                  <div
+                    style={{
+                      fontSize: "11px",
+                      fontWeight: "600",
+                      color: "var(--text-muted)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.08em",
+                      marginTop: "20px",
+                      marginBottom: "4px",
+                    }}
+                  >
+                    Custom Fields
+                  </div>
+                  {activeFields.map((field) => (
+                    <div key={field.key} style={fieldStyle}>
+                      <span style={labelStyle}>{field.label}</span>
+                      <span style={valueStyle}>{renderValue(field)}</span>
+                    </div>
+                  ))}
+                  {deprecatedWithValue.map((field) => (
+                    <div key={field.key} style={{ ...fieldStyle, opacity: 0.6 }}>
+                      <span style={labelStyle}>
+                        {field.label}
+                        <span
+                          style={{
+                            fontSize: 9,
+                            color: "var(--danger)",
+                            marginLeft: 6,
+                            letterSpacing: "0.06em",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          deprecated
+                        </span>
+                      </span>
+                      <span style={valueStyle}>{renderValue(field)}</span>
+                    </div>
+                  ))}
+                  {activeFields.length === 0 && deprecatedWithValue.length === 0 && (
+                    <div style={{ ...fieldStyle, color: "var(--text-muted)", fontStyle: "italic" }}>
+                      <span style={labelStyle}>—</span>
+                      <span style={valueStyle}>No custom fields configured</span>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
 
             {/* System section */}
             <div

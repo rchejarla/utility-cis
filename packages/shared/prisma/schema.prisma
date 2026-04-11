@@ -226,6 +226,7 @@ model Premise {
   municipalityCode   String?       @map("municipality_code") @db.VarChar(50)
   status             PremiseStatus @default(ACTIVE) @map("status")
   ownerId            String?       @map("owner_id") @db.Uuid
+  customFields       Json          @default("{}") @map("custom_fields")
   createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz
   updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -256,6 +257,7 @@ model Meter {
   removalDate DateTime?   @map("removal_date") @db.Date
   status      MeterStatus @map("status")
   notes       String?     @map("notes") @db.Text
+  customFields Json       @default("{}") @map("custom_fields")
   createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz
   updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -291,6 +293,7 @@ model Account {
   paperlessBilling    Boolean       @default(false) @map("paperless_billing")
   budgetBilling       Boolean       @default(false) @map("budget_billing")
   saaslogicAccountId  String?       @map("saaslogic_account_id") @db.Uuid
+  customFields        Json          @default("{}") @map("custom_fields")
   createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz
   closedAt            DateTime?     @map("closed_at") @db.Timestamptz
 
@@ -319,6 +322,7 @@ model ServiceAgreement {
   endDate         DateTime?              @map("end_date") @db.Date
   status          ServiceAgreementStatus @default(PENDING) @map("status")
   readSequence    Int?                   @map("read_sequence")
+  customFields    Json                   @default("{}") @map("custom_fields")
   createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz
   updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -511,6 +515,7 @@ model Customer {
   driversLicense   String?        @map("drivers_license") @db.VarChar(50)
   taxId            String?        @map("tax_id") @db.VarChar(50)
   status           CustomerStatus @default(ACTIVE)
+  customFields     Json           @default("{}") @map("custom_fields")
   createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz
   updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -768,6 +773,32 @@ enum SuspensionStatus {
   ACTIVE
   COMPLETED
   CANCELLED
+}
+
+// Per-tenant schema definitions for custom fields on extendable
+// entities (Customer, Account, Premise, ServiceAgreement, Meter).
+// One row per (utility_id, entity_type). The `fields` jsonb column
+// holds a FieldDefinition[] array — see packages/shared/src/lib/
+// custom-fields.ts for the TypeScript shape. Absence of a row means
+// "this tenant has not configured any custom fields for this entity"
+// and the customFields column on the corresponding entity row will
+// simply be an empty object.
+//
+// The schema is authoritative: validateCustomFields on the API side
+// loads the row, builds a Zod validator from the fields array, and
+// uses it to reject unknown keys or type-mismatched values at write
+// time. The web form uses the same shape to render inputs.
+model CustomFieldSchema {
+  id         String   @id @default(uuid()) @db.Uuid
+  utilityId  String   @map("utility_id") @db.Uuid
+  entityType String   @map("entity_type") @db.VarChar(50)
+  fields     Json     @default("[]") @map("fields")
+  version    Int      @default(1) @map("version")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([utilityId, entityType])
+  @@map("custom_field_schema")
 }
 
 // Tenant-level configuration for service-hold behaviour. Lives alongside

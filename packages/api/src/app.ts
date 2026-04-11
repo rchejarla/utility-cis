@@ -30,6 +30,7 @@ import { containerRoutes } from "./routes/containers.js";
 import { serviceSuspensionRoutes } from "./routes/service-suspensions.js";
 import { suspensionTypeDefRoutes } from "./routes/suspension-type-defs.js";
 import { tenantConfigRoutes } from "./routes/tenant-config.js";
+import { customFieldSchemaRoutes } from "./routes/custom-field-schemas.js";
 import { serviceEventRoutes } from "./routes/service-events.js";
 import { startSuspensionScheduler } from "./schedulers/suspension-scheduler.js";
 import { workflowRoutes } from "./routes/workflows.js";
@@ -92,6 +93,7 @@ export async function buildApp() {
   await app.register(serviceSuspensionRoutes);
   await app.register(suspensionTypeDefRoutes);
   await app.register(tenantConfigRoutes);
+  await app.register(customFieldSchemaRoutes);
   await app.register(serviceEventRoutes);
   await app.register(workflowRoutes);
 
