@@ -11,8 +11,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { isMobile, isTablet } = useBreakpoint();
 
-  // Dev pages render without shell (no sidebar/topbar)
-  if (pathname.startsWith("/dev")) {
+  // Portal, login, and dev pages render without the admin shell
+  if (pathname.startsWith("/dev") || pathname.startsWith("/portal") || pathname.startsWith("/login")) {
     return <AuthPermissionProvider>{children}</AuthPermissionProvider>;
   }
 

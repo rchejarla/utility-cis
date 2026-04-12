@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import { logout } from "@/lib/api-client";
 
 const NAV_ITEMS = [
   { href: "/portal/dashboard", label: "Dashboard" },
@@ -108,16 +109,19 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
         </nav>
 
         {/* Logout */}
-        <Link
-          href="/portal/login"
+        <button
+          onClick={logout}
           style={{
             fontSize: 12,
             color: "var(--text-muted)",
-            textDecoration: "none",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            fontFamily: "inherit",
           }}
         >
           Sign out
-        </Link>
+        </button>
       </header>
 
       {/* Main content */}

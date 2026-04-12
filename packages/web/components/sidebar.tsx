@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { useSession } from "next-auth/react";
+import { logout } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
@@ -300,6 +301,24 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
                 {session?.user?.email ?? "admin@utility.com"}
               </div>
             </div>
+          )}
+          {!collapsed && (
+            <button
+              onClick={logout}
+              title="Sign out"
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                fontSize: 11,
+                cursor: "pointer",
+                fontFamily: "inherit",
+                flexShrink: 0,
+                padding: "4px 8px",
+              }}
+            >
+              Sign out
+            </button>
           )}
         </div>
       </div>

@@ -1,204 +1,167 @@
 "use client";
 
-import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { API_URL, setAuthToken } from "@/lib/api-client";
+
+const inputStyle = {
+  padding: "10px 14px",
+  fontSize: 14,
+  background: "var(--bg-deep)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius)",
+  color: "var(--text-primary)",
+  fontFamily: "inherit",
+  outline: "none",
+  width: "100%",
+  boxSizing: "border-box" as const,
+};
 
 export default function LoginPage() {
   const router = useRouter();
+  const params = useSearchParams();
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const presetEmail = params.get("email");
+  useEffect(() => {
+    if (presetEmail) {
+      setEmail(presetEmail);
+      doLogin(presetEmail);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presetEmail]);
+
+  async function doLogin(loginEmail: string) {
+    setError("");
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/v1/auth/dev-login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: loginEmail }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error?.message ?? "Login failed");
+        setLoading(false);
+        return;
+      }
+
+      setAuthToken(data.token, data.user);
+
+      if (data.isPortal) {
+        localStorage.setItem("portal_token", data.token);
+        localStorage.setItem("portal_user", JSON.stringify(data.user));
+      }
+
+      router.push(data.redirectTo ?? "/premises");
+    } catch {
+      setError("Network error — is the API server running?");
+      setLoading(false);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
-    setLoading(true);
-
-    try {
-      const result = await signIn("credentials", {
-        email,
-        password,
-        redirect: false,
-      });
-
-      if (result?.error) {
-        setError("Invalid credentials. Please try again.");
-      } else {
-        router.push("/premises");
-      }
-    } catch {
-      setError("An unexpected error occurred.");
-    } finally {
-      setLoading(false);
-    }
+    await doLogin(email);
   }
 
   return (
     <div
       style={{
+        minHeight: "100vh",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        minHeight: "100vh",
         background: "var(--bg-deep)",
-        padding: "24px",
+        padding: 24,
       }}
     >
       <div
         style={{
           width: "100%",
-          maxWidth: "400px",
+          maxWidth: 420,
           background: "var(--bg-card)",
           border: "1px solid var(--border)",
           borderRadius: "var(--radius)",
-          padding: "40px",
+          padding: "40px 32px",
         }}
       >
-        {/* Logo / Brand */}
-        <div style={{ textAlign: "center", marginBottom: "32px" }}>
+        {/* Logo */}
+        <div style={{ textAlign: "center", marginBottom: 32 }}>
           <div
             style={{
-              width: "48px",
-              height: "48px",
-              borderRadius: "12px",
+              width: 48,
+              height: 48,
+              borderRadius: 12,
               background: "var(--accent-primary)",
               display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",
-              color: "white",
-              fontWeight: "bold",
-              fontSize: "20px",
-              marginBottom: "16px",
+              color: "#fff",
+              fontWeight: 700,
+              fontSize: 20,
+              marginBottom: 16,
             }}
           >
             U
           </div>
           <h1
             style={{
-              margin: 0,
+              fontSize: 22,
+              fontWeight: 600,
               color: "var(--text-primary)",
-              fontSize: "22px",
-              fontWeight: "600",
+              margin: "0 0 4px",
             }}
           >
             Utility CIS
           </h1>
-          <p
-            style={{
-              margin: "6px 0 0",
-              color: "var(--text-secondary)",
-              fontSize: "13px",
-            }}
-          >
+          <p style={{ fontSize: 14, color: "var(--text-secondary)", margin: 0 }}>
             Sign in to continue
           </p>
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div>
             <label
               htmlFor="email"
               style={{
                 display: "block",
-                marginBottom: "6px",
+                marginBottom: 6,
+                fontSize: 13,
+                fontWeight: 500,
                 color: "var(--text-secondary)",
-                fontSize: "13px",
-                fontWeight: "500",
               }}
             >
               Email
             </label>
             <input
               id="email"
-              name="email"
               type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
               required
               autoComplete="email"
-              placeholder="admin@utility.com"
-              aria-invalid={error ? "true" : undefined}
-              aria-describedby={error ? "login-error" : undefined}
-              onFocus={(e) => {
-                e.currentTarget.style.outline = "2px solid var(--accent-primary)";
-                e.currentTarget.style.outlineOffset = "2px";
-              }}
-              onBlur={(e) => {
-                e.currentTarget.style.outline = "none";
-              }}
-              style={{
-                width: "100%",
-                padding: "10px 12px",
-                background: "var(--bg-elevated)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius)",
-                color: "var(--text-primary)",
-                fontSize: "14px",
-                outline: "none",
-                boxSizing: "border-box",
-              }}
-            />
-          </div>
-
-          <div>
-            <label
-              htmlFor="password"
-              style={{
-                display: "block",
-                marginBottom: "6px",
-                color: "var(--text-secondary)",
-                fontSize: "13px",
-                fontWeight: "500",
-              }}
-            >
-              Password
-            </label>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete="current-password"
-              placeholder="••••••••"
-              aria-invalid={error ? "true" : undefined}
-              aria-describedby={error ? "login-error" : undefined}
-              onFocus={(e) => {
-                e.currentTarget.style.outline = "2px solid var(--accent-primary)";
-                e.currentTarget.style.outlineOffset = "2px";
-              }}
-              onBlur={(e) => {
-                e.currentTarget.style.outline = "none";
-              }}
-              style={{
-                width: "100%",
-                padding: "10px 12px",
-                background: "var(--bg-elevated)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius)",
-                color: "var(--text-primary)",
-                fontSize: "14px",
-                outline: "none",
-                boxSizing: "border-box",
-              }}
+              placeholder="you@utility.com"
+              style={inputStyle}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoFocus={!presetEmail}
             />
           </div>
 
           {error && (
             <div
-              id="login-error"
               role="alert"
               style={{
-                padding: "10px 12px",
-                background: "rgba(239, 68, 68, 0.1)",
-                border: "1px solid rgba(239, 68, 68, 0.3)",
+                padding: "10px 14px",
+                background: "var(--danger-subtle)",
+                border: "1px solid var(--danger)",
                 borderRadius: "var(--radius)",
-                color: "#ef4444",
-                fontSize: "13px",
+                color: "var(--danger)",
+                fontSize: 13,
               }}
             >
               {error}
@@ -211,20 +174,85 @@ export default function LoginPage() {
             style={{
               padding: "11px 16px",
               background: loading ? "var(--bg-elevated)" : "var(--accent-primary)",
-              color: loading ? "var(--text-muted)" : "white",
+              color: loading ? "var(--text-muted)" : "#fff",
               border: "none",
               borderRadius: "var(--radius)",
-              fontSize: "14px",
-              fontWeight: "500",
+              fontSize: 14,
+              fontWeight: 600,
               cursor: loading ? "not-allowed" : "pointer",
-              transition: "all 0.15s ease",
-              marginTop: "4px",
+              fontFamily: "inherit",
+              marginTop: 4,
             }}
           >
-            {loading ? "Signing in..." : "Sign in"}
+            {loading ? "Signing in…" : "Sign in"}
           </button>
         </form>
+
+        {/* Quick-login pills for dev testing */}
+        <div
+          style={{
+            marginTop: 28,
+            paddingTop: 20,
+            borderTop: "1px solid var(--border-subtle)",
+          }}
+        >
+          <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "0 0 10px", textAlign: "center", letterSpacing: "0.06em", textTransform: "uppercase", fontWeight: 600 }}>
+            Dev quick login
+          </p>
+
+          <div style={{ fontSize: 10, color: "var(--text-muted)", textAlign: "center", marginBottom: 10, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+            Staff
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center", marginBottom: 12 }}>
+            <QuickBtn label="System Admin" email="sysadmin@utility.com" color="#ef4444" onClick={doLogin} />
+            <QuickBtn label="Utility Admin" email="admin@utility.com" color="#f59e0b" onClick={doLogin} />
+            <QuickBtn label="CSR" email="csr@utility.com" color="#3b82f6" onClick={doLogin} />
+            <QuickBtn label="Field Tech" email="tech@utility.com" color="#22c55e" onClick={doLogin} />
+            <QuickBtn label="Read-Only" email="viewer@utility.com" color="#8b5cf6" onClick={doLogin} />
+          </div>
+
+          <div style={{ fontSize: 10, color: "var(--text-muted)", textAlign: "center", marginBottom: 10, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+            Portal customers
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
+            <QuickBtn label="Jane Smith" email="jane.smith@example.com" color="#f59e0b" onClick={doLogin} />
+            <QuickBtn label="Robert Johnson" email="robert.j@example.com" color="#f59e0b" onClick={doLogin} />
+          </div>
+        </div>
       </div>
     </div>
+  );
+}
+
+function QuickBtn({
+  label,
+  email,
+  color,
+  onClick,
+}: {
+  label: string;
+  email: string;
+  color: string;
+  onClick: (email: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(email)}
+      title={email}
+      style={{
+        padding: "4px 10px",
+        fontSize: 11,
+        fontWeight: 600,
+        background: `${color}18`,
+        color,
+        border: `1px solid ${color}40`,
+        borderRadius: 999,
+        cursor: "pointer",
+        fontFamily: "inherit",
+      }}
+    >
+      {label}
+    </button>
   );
 }

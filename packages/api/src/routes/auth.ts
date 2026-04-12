@@ -30,6 +30,61 @@ export async function authRoutes(app: FastifyInstance) {
     };
   });
 
+  // Dev-login: unauthenticated, available in non-prod only. Takes an email
+  // and returns a dev JWT with the right claims (including customer_id for
+  // portal users). Used by the /login page and the /dev card launcher.
+  if (!IS_PROD) {
+    const devLoginSchema = z.object({
+      email: z.string().email(),
+      utilityId: z.string().uuid().default("00000000-0000-4000-8000-000000000001"),
+    });
+
+    app.post(
+      "/api/v1/auth/dev-login",
+      { config: { skipAuth: true } },
+      async (request, reply) => {
+        const { email, utilityId } = devLoginSchema.parse(request.body);
+
+        const user = await prisma.cisUser.findFirst({
+          where: { utilityId, email: email.toLowerCase(), isActive: true },
+          include: { role: true },
+        });
+
+        if (!user) {
+          return reply.status(401).send({
+            error: { code: "USER_NOT_FOUND", message: "No active user found with this email" },
+          });
+        }
+
+        const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+        const payload = Buffer.from(JSON.stringify({
+          sub: user.id,
+          utility_id: utilityId,
+          email: user.email,
+          name: user.name,
+          role: user.role.name,
+          customer_id: user.customerId ?? undefined,
+        })).toString("base64url");
+        const token = `${header}.${payload}.dev`;
+
+        const isPortal = user.customerId !== null;
+
+        return reply.send({
+          token,
+          user: {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            roleName: user.role.name,
+            customerId: user.customerId ?? null,
+          },
+          isPortal,
+          redirectTo: isPortal ? "/portal/dashboard" : "/premises",
+        });
+      },
+    );
+  }
+
   if (!DEV_AUTH_ENDPOINTS_ENABLED) {
     app.log.info(
       "[auth] dev-only endpoints disabled (set ENABLE_DEV_AUTH_ENDPOINTS=true in non-prod to enable)"

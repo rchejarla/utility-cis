@@ -2,34 +2,60 @@ import { getSession } from "next-auth/react";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
-// Cache the token so we don't call getSession() on every request
-let cachedToken: string | null = null;
-let cacheExpiry = 0;
+const TOKEN_KEY = "cis_token";
+const USER_KEY = "cis_user";
 
-// Dev user identity — can be changed via setDevUser()
-let devUserId = "00000000-0000-4000-8000-000000000091";
-let devUserEmail = "sysadmin@utility.com";
-let devUserName = "Sarah Mitchell";
-
-export function setDevUser(id: string, email: string, name: string) {
-  devUserId = id;
-  devUserEmail = email;
-  devUserName = name;
-  // Clear cached token so next request uses the new identity
-  cachedToken = null;
-  cacheExpiry = 0;
+/**
+ * Store auth credentials after a successful login. Called by the
+ * /login page after POST /api/v1/auth/dev-login returns a token.
+ */
+export function setAuthToken(token: string, user?: Record<string, unknown>) {
+  if (typeof window !== "undefined") {
+    localStorage.setItem(TOKEN_KEY, token);
+    if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
+  }
 }
 
-function createDevToken(): string {
+/**
+ * Clear stored credentials and redirect to /login.
+ */
+export function logout() {
+  if (typeof window !== "undefined") {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    localStorage.removeItem("portal_token");
+    localStorage.removeItem("portal_user");
+    window.location.href = "/login";
+  }
+}
+
+/**
+ * Read the stored user object (or null if not logged in).
+ */
+export function getStoredUser(): Record<string, unknown> | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(USER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Legacy compat for the /dev page impersonation flow.
+// setDevUser now writes to localStorage so the token persists across
+// refreshes, and the old in-memory state is gone.
+export function setDevUser(id: string, email: string, name: string) {
   const header = btoa(JSON.stringify({ alg: "none" }));
   const payload = btoa(JSON.stringify({
-    sub: devUserId,
+    sub: id,
     utility_id: "00000000-0000-4000-8000-000000000001",
-    email: devUserEmail,
-    name: devUserName,
+    email,
+    name,
     role: "admin",
   }));
-  return `${header}.${payload}.dev`;
+  const token = `${header}.${payload}.dev`;
+  setAuthToken(token, { id, email, name });
 }
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
@@ -37,28 +63,27 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
     "Content-Type": "application/json",
   };
 
-  // Use cached token if still valid (cache for 5 minutes)
-  if (cachedToken && Date.now() < cacheExpiry) {
-    headers["Authorization"] = `Bearer ${cachedToken}`;
-    return headers;
+  // 1. Token from localStorage (login page or dev impersonation)
+  if (typeof window !== "undefined") {
+    const stored = localStorage.getItem(TOKEN_KEY);
+    if (stored) {
+      headers["Authorization"] = `Bearer ${stored}`;
+      return headers;
+    }
   }
 
-  // Try to get session token
+  // 2. NextAuth session token (production SSO path)
   const session = await getSession();
   if (session) {
     const token = (session as any).accessToken;
     if (token && typeof token === "string") {
-      cachedToken = token;
-      cacheExpiry = Date.now() + 5 * 60 * 1000; // 5 min cache
       headers["Authorization"] = `Bearer ${token}`;
       return headers;
     }
   }
 
-  // Dev fallback
-  cachedToken = createDevToken();
-  cacheExpiry = Date.now() + 5 * 60 * 1000;
-  headers["Authorization"] = `Bearer ${cachedToken}`;
+  // 3. No token — requests will get 401. The auth context fallback
+  //    handles this gracefully by granting all perms in dev mode.
   return headers;
 }
 
@@ -82,26 +107,10 @@ async function handleResponse<T>(response: Response): Promise<T> {
 
 export const apiClient = {
   async getAuthHeadersOnly(): Promise<Record<string, string>> {
-    const headers: Record<string, string> = {};
-    if (cachedToken && Date.now() < cacheExpiry) {
-      headers["Authorization"] = `Bearer ${cachedToken}`;
-    } else {
-      const session = await getSession();
-      if (session) {
-        const token = (session as any).accessToken;
-        if (token && typeof token === "string") {
-          cachedToken = token;
-          cacheExpiry = Date.now() + 5 * 60 * 1000;
-          headers["Authorization"] = `Bearer ${token}`;
-        }
-      }
-      if (!headers["Authorization"]) {
-        cachedToken = createDevToken();
-        cacheExpiry = Date.now() + 5 * 60 * 1000;
-        headers["Authorization"] = `Bearer ${cachedToken}`;
-      }
-    }
-    return headers;
+    const h = await getAuthHeaders();
+    const out: Record<string, string> = {};
+    if (h["Authorization"]) out["Authorization"] = h["Authorization"];
+    return out;
   },
 
   async get<T>(path: string, params?: Record<string, string>): Promise<T> {
@@ -161,27 +170,8 @@ export const apiClient = {
   },
 
   async upload<T>(path: string, formData: FormData): Promise<T> {
-    // Build auth header only — DO NOT set Content-Type; browser sets multipart boundary automatically
-    const headers: Record<string, string> = {};
-    if (cachedToken && Date.now() < cacheExpiry) {
-      headers["Authorization"] = `Bearer ${cachedToken}`;
-    } else {
-      const session = await getSession();
-      if (session) {
-        const token = (session as any).accessToken;
-        if (token && typeof token === "string") {
-          cachedToken = token;
-          cacheExpiry = Date.now() + 5 * 60 * 1000;
-          headers["Authorization"] = `Bearer ${token}`;
-        }
-      }
-      if (!headers["Authorization"]) {
-        cachedToken = createDevToken();
-        cacheExpiry = Date.now() + 5 * 60 * 1000;
-        headers["Authorization"] = `Bearer ${cachedToken}`;
-      }
-    }
-    const response = await fetch(`${API_URL}${path}`, { method: "POST", headers, body: formData });
+    const authOnly = await this.getAuthHeadersOnly();
+    const response = await fetch(`${API_URL}${path}`, { method: "POST", headers: authOnly, body: formData });
     return handleResponse<T>(response);
   },
 };
