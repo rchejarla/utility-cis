@@ -350,9 +350,31 @@ async function main() {
       data: { id: u.id, utilityId: UID, email: u.email, name: u.name, roleId: roleArr[u.roleIdx].id, isActive: true },
     });
   }
-  console.log("  " + testUsers.length + " test users");
+  console.log("  " + testUsers.length + " test users (admin)");
 
-  console.log("\nDone! 10 premises, 8 accounts, 15 meters, 10 agreements, 3 customers, 4 contacts, 3 billing addresses");
+  // Seed portal customer logins. Each is a CisUser with the Portal Customer
+  // role (roleArr[5]) linked to an existing Customer record via customerId.
+  // Login credentials: email from the customer record, no password (dev JWT).
+  const portalUsers = [
+    { id: "00000000-0000-4000-8000-0000000000a1", email: "jane.smith@example.com", name: "Jane Smith", customerIdx: 0 },
+    { id: "00000000-0000-4000-8000-0000000000a2", email: "robert.j@example.com", name: "Robert Johnson", customerIdx: 1 },
+  ];
+  for (const pu of portalUsers) {
+    await p.cisUser.create({
+      data: {
+        id: pu.id,
+        utilityId: UID,
+        email: pu.email,
+        name: pu.name,
+        roleId: roleArr[5].id,  // Portal Customer
+        customerId: cArr[pu.customerIdx].id,
+        isActive: true,
+      },
+    });
+  }
+  console.log("  " + portalUsers.length + " portal customer users");
+
+  console.log("\nDone! 10 premises, 8 accounts, 15 meters, 10 agreements, 3 customers, 4 contacts, 3 billing addresses, 2 portal users");
 }
 
 main().catch(e => { console.error("SEED ERROR:", e); process.exit(1); }).finally(() => p.$disconnect());
