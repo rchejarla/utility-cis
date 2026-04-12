@@ -2,6 +2,21 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+interface Agreement {
+  id: string;
+  agreementNumber: string;
+  status: string;
+  commodity?: { name: string };
+  premise?: { addressLine1: string; city: string; state: string; zip: string };
+  billingCycle?: { name: string };
+}
+
+interface AccountWithAgreements {
+  id: string;
+  accountNumber: string;
+  serviceAgreements: Agreement[];
+}
+
 interface ReadRow {
   id: string;
   readDate: string;
@@ -12,7 +27,7 @@ interface ReadRow {
 }
 
 function portalFetch<T>(path: string): Promise<T> {
-  const token = localStorage.getItem("portal_token") ?? "";
+  const token = typeof window !== "undefined" ? localStorage.getItem("portal_token") ?? localStorage.getItem("cis_token") ?? "" : "";
   return fetch(`http://localhost:3001${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   }).then((r) => {
@@ -21,42 +36,47 @@ function portalFetch<T>(path: string): Promise<T> {
   });
 }
 
-/**
- * Portal usage page. Shows a simple bar chart of monthly consumption
- * from the MeterRead table, plus a data table underneath.
- *
- * This is a read-only view scoped to the authenticated customer's
- * agreements. When interval reads land in Phase 3, this will also
- * show hourly/daily granularity from the hypertable.
- */
+type Granularity = "monthly" | "daily" | "hourly";
+
 export default function PortalUsagePage() {
+  const [accounts, setAccounts] = useState<AccountWithAgreements[]>([]);
+  const [selectedAgreementId, setSelectedAgreementId] = useState<string | null>(null);
   const [reads, setReads] = useState<ReadRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [agreementId, setAgreementId] = useState<string | null>(null);
-  const [agreements, setAgreements] = useState<Array<{ id: string; agreementNumber: string }>>([]);
+  const [readsLoading, setReadsLoading] = useState(false);
+  const [granularity, setGranularity] = useState<Granularity>("monthly");
 
   useEffect(() => {
-    portalFetch<{ accounts: Array<{ serviceAgreements: Array<{ id: string; agreementNumber: string }> }> }>(
-      "/portal/api/dashboard",
-    )
+    portalFetch<{ accounts: AccountWithAgreements[] }>("/portal/api/dashboard")
       .then((data) => {
-        const all = data.accounts.flatMap((a) => a.serviceAgreements);
-        setAgreements(all);
-        if (all.length > 0 && !agreementId) setAgreementId(all[0].id);
+        setAccounts(data.accounts ?? []);
+        const all = (data.accounts ?? []).flatMap((a) => a.serviceAgreements);
+        if (all.length > 0 && !selectedAgreementId) {
+          setSelectedAgreementId(all[0].id);
+        }
       })
-      .catch(console.error);
+      .catch(console.error)
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
-    if (!agreementId) return;
-    setLoading(true);
+    if (!selectedAgreementId) return;
+    setReadsLoading(true);
     portalFetch<{ data: ReadRow[] }>(
-      `/portal/api/agreements/${agreementId}/usage?months=12`,
+      `/portal/api/agreements/${selectedAgreementId}/usage?months=12`,
     )
       .then((res) => setReads(res.data ?? []))
       .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [agreementId]);
+      .finally(() => setReadsLoading(false));
+  }, [selectedAgreementId]);
+
+  const selectedAgreement = useMemo(() => {
+    for (const acct of accounts) {
+      const found = acct.serviceAgreements.find((sa) => sa.id === selectedAgreementId);
+      if (found) return found;
+    }
+    return null;
+  }, [accounts, selectedAgreementId]);
 
   const monthlyData = useMemo(() => {
     const map = new Map<string, number>();
@@ -71,52 +91,124 @@ export default function PortalUsagePage() {
 
   const maxVal = Math.max(1, ...monthlyData.map((d) => d.total));
 
+  if (loading) {
+    return <p style={{ color: "var(--text-muted)", padding: 24 }}>Loading…</p>;
+  }
+
   return (
     <div>
+      {/* Header */}
       <div style={{ marginBottom: 24 }}>
-        <h1
-          style={{
-            fontSize: 22,
-            fontWeight: 600,
-            color: "var(--text-primary)",
-            margin: "0 0 4px",
-          }}
-        >
+        <h1 style={{ fontSize: 22, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px" }}>
           Usage
         </h1>
         <p style={{ fontSize: 14, color: "var(--text-secondary)", margin: 0 }}>
-          Monthly consumption from meter reads
+          Consumption history across your premises and meters
         </p>
       </div>
 
-      {agreements.length > 1 && (
-        <div style={{ marginBottom: 20 }}>
-          <label style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500, display: "block", marginBottom: 6 }}>
-            Agreement
-          </label>
-          <select
-            value={agreementId ?? ""}
-            onChange={(e) => setAgreementId(e.target.value)}
-            style={{
-              padding: "8px 12px",
-              fontSize: 13,
-              background: "var(--bg-deep)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius)",
-              color: "var(--text-primary)",
-              fontFamily: "inherit",
-            }}
-          >
-            {agreements.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.agreementNumber}
-              </option>
-            ))}
-          </select>
+      {/* Premise / meter selector */}
+      <div
+        style={{
+          background: "var(--bg-card)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          padding: "16px 20px",
+          marginBottom: 20,
+        }}
+      >
+        <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", marginBottom: 12 }}>
+          Select a service point
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {accounts.map((acct) => (
+            <div key={acct.id}>
+              <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4, fontWeight: 500 }}>
+                Account {acct.accountNumber}
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {acct.serviceAgreements.map((sa) => {
+                  const isSelected = sa.id === selectedAgreementId;
+                  return (
+                    <button
+                      key={sa.id}
+                      onClick={() => setSelectedAgreementId(sa.id)}
+                      style={{
+                        padding: "8px 14px",
+                        borderRadius: "var(--radius)",
+                        fontSize: 12,
+                        fontWeight: isSelected ? 600 : 500,
+                        color: isSelected ? "var(--accent-primary-hover)" : "var(--text-secondary)",
+                        background: isSelected ? "var(--accent-primary-subtle)" : "var(--bg-elevated)",
+                        border: isSelected ? "1px solid var(--accent-primary)" : "1px solid var(--border)",
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                        textAlign: "left",
+                        transition: "all 0.12s",
+                      }}
+                    >
+                      <div>{sa.commodity?.name ?? "—"} · {sa.agreementNumber}</div>
+                      <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+                        {sa.premise ? `${sa.premise.addressLine1}, ${sa.premise.city}` : "—"}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          {accounts.length === 0 && (
+            <div style={{ color: "var(--text-muted)", fontSize: 13 }}>No accounts found</div>
+          )}
+        </div>
+      </div>
+
+      {/* Granularity selector */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
+        {(["monthly", "daily", "hourly"] as Granularity[]).map((g) => {
+          const isActive = granularity === g;
+          const isDisabled = g !== "monthly";
+          return (
+            <button
+              key={g}
+              onClick={() => !isDisabled && setGranularity(g)}
+              disabled={isDisabled}
+              title={isDisabled ? "Interval data available in Phase 3" : undefined}
+              style={{
+                padding: "6px 14px",
+                fontSize: 12,
+                fontWeight: isActive ? 600 : 500,
+                borderRadius: "var(--radius)",
+                border: isActive ? "1px solid var(--accent-primary)" : "1px solid var(--border)",
+                background: isActive ? "var(--accent-primary-subtle)" : "var(--bg-card)",
+                color: isActive ? "var(--accent-primary-hover)" : isDisabled ? "var(--text-muted)" : "var(--text-secondary)",
+                cursor: isDisabled ? "not-allowed" : "pointer",
+                fontFamily: "inherit",
+                opacity: isDisabled ? 0.5 : 1,
+              }}
+            >
+              {g.charAt(0).toUpperCase() + g.slice(1)}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Context banner */}
+      {selectedAgreement && (
+        <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
+          Showing {granularity} consumption for{" "}
+          <strong style={{ color: "var(--text-secondary)" }}>
+            {selectedAgreement.commodity?.name}
+          </strong>{" "}
+          at{" "}
+          <strong style={{ color: "var(--text-secondary)" }}>
+            {selectedAgreement.premise?.addressLine1}, {selectedAgreement.premise?.city}
+          </strong>{" "}
+          · last 12 months
         </div>
       )}
 
-      {loading ? (
+      {readsLoading ? (
         <p style={{ color: "var(--text-muted)" }}>Loading usage data…</p>
       ) : monthlyData.length === 0 ? (
         <div
@@ -129,11 +221,11 @@ export default function PortalUsagePage() {
             borderRadius: "var(--radius)",
           }}
         >
-          No usage data available for this agreement
+          No usage data available for this service point
         </div>
       ) : (
         <>
-          {/* Simple bar chart */}
+          {/* Bar chart */}
           <div
             style={{
               background: "var(--bg-card)",
@@ -143,25 +235,18 @@ export default function PortalUsagePage() {
               marginBottom: 20,
             }}
           >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "flex-end",
-                gap: 6,
-                height: 180,
-              }}
-            >
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 200 }}>
               {monthlyData.map((d) => (
                 <div
                   key={d.month}
-                  style={{
-                    flex: 1,
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: 6,
-                  }}
+                  style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}
                 >
+                  <div
+                    style={{ fontSize: 10, color: "var(--text-muted)", whiteSpace: "nowrap" }}
+                    title={`${d.total.toLocaleString()}`}
+                  >
+                    {d.total.toLocaleString()}
+                  </div>
                   <div
                     style={{
                       width: "100%",
@@ -171,16 +256,9 @@ export default function PortalUsagePage() {
                       height: `${Math.max(4, (d.total / maxVal) * 160)}px`,
                       transition: "height 0.3s ease",
                     }}
-                    title={`${d.month}: ${d.total}`}
                   />
-                  <span
-                    style={{
-                      fontSize: 9,
-                      color: "var(--text-muted)",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {d.month.slice(5)}
+                  <span style={{ fontSize: 9, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                    {new Date(d.month + "-01").toLocaleDateString(undefined, { month: "short" })}
                   </span>
                 </div>
               ))}
@@ -217,20 +295,12 @@ export default function PortalUsagePage() {
                     </td>
                     <td style={tdStyle}>{Number(r.reading).toLocaleString()}</td>
                     <td style={{ ...tdStyle, textAlign: "right" }}>
-                      <span
-                        style={{
-                          fontFamily: "'JetBrains Mono', monospace",
-                          fontSize: 13,
-                          fontWeight: 600,
-                        }}
-                      >
+                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 600 }}>
                         {Number(r.consumption).toLocaleString()}
                       </span>
                     </td>
                     <td style={tdStyle}>
-                      <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                        {r.readType}
-                      </span>
+                      <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{r.readType}</span>
                     </td>
                   </tr>
                 ))}

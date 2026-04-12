@@ -155,6 +155,50 @@ async function main() {
   }
   console.log("  " + saData.length + " service agreements");
 
+  // Seed 12 months of meter reads for SA-0001 (water, WM-001) and SA-0006 (electric, EM-002).
+  // These give the portal usage page real data to chart. Each month has one ACTUAL read.
+  const saList = await p.serviceAgreement.findMany({
+    where: { utilityId: UID },
+    include: { meters: true },
+    orderBy: { agreementNumber: "asc" },
+  });
+  const sa0001 = saList.find(s => s.agreementNumber === "SA-0001");
+  const sa0006 = saList.find(s => s.agreementNumber === "SA-0006");
+  let readCount = 0;
+  for (const { sa, baseReading, monthlyUsage } of [
+    { sa: sa0001, baseReading: 1200, monthlyUsage: () => 3500 + Math.floor(Math.random() * 2000) },  // water: gallons
+    { sa: sa0006, baseReading: 45000, monthlyUsage: () => 650 + Math.floor(Math.random() * 300) },   // electric: kWh
+  ]) {
+    if (!sa || !sa.meters[0]) continue;
+    const meterId = sa.meters[0].meterId;
+    let running = baseReading;
+    for (let m = 11; m >= 0; m--) {
+      const d = new Date();
+      d.setDate(15);
+      d.setMonth(d.getMonth() - m);
+      const usage = monthlyUsage();
+      const prior = running;
+      running += usage;
+      await p.meterRead.create({
+        data: {
+          utilityId: UID,
+          meterId,
+          serviceAgreementId: sa.id,
+          readDate: d,
+          readDatetime: d,
+          reading: running,
+          priorReading: prior,
+          consumption: usage,
+          readType: "ACTUAL",
+          readSource: "AMR",
+          isFrozen: false,
+        },
+      });
+      readCount++;
+    }
+  }
+  console.log("  " + readCount + " meter reads");
+
   const customerData = [
     { customerType: "INDIVIDUAL", firstName: "Jane", lastName: "Smith", email: "jane.smith@example.com", phone: "555-100-0001", status: "ACTIVE" },
     { customerType: "INDIVIDUAL", firstName: "Robert", lastName: "Johnson", email: "robert.j@example.com", phone: "555-100-0002", status: "ACTIVE" },
