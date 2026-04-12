@@ -1,240 +1,294 @@
 # Notifications
 
 **Module:** 13 — Notifications
-**Status:** Stub (Phase 3)
-**Entities:** NotificationTemplate (planned), CommunicationLog (planned), CommunicationPreference (planned)
+**Status:** Phase 3 — design complete, implementation starting
+**Entities:** `NotificationTemplate`, `Notification` (send log / outbox)
 
 ## Overview
 
-The Notifications module provides a configurable, multi-channel communication engine for all utility-to-customer communications. It handles email, SMS, and physical mail delivery using event-driven triggers from across the CIS domain. Staff can manage templates, configure automatic triggers, send bulk communications to customer segments, and track the full history of every message sent.
+The Notification module provides a template-driven messaging engine for sending email and SMS notifications to customers and staff. It is the delivery backbone for delinquency notices (Module 11), portal communications, meter event alerts, and any other system-generated message.
 
-Customers (in Phase 4) can manage their own channel preferences and opt-in/opt-out settings through the portal.
+SaaSLogic handles billing-specific notifications (invoice delivery via `POST /invoices/{id}/send`). CIS handles everything else: delinquency notices, usage alerts, service request updates, portal emails, and operational digests.
 
-Primary users: billing administrators, communications staff, CSRs, utility managers.
+The module has three layers:
 
-## Planned Entities
+1. **Template library** — tenant-configurable message templates with `{{variable}}` substitution, per-channel content (email subject + body, SMS body), and a live preview editor.
+2. **Notification engine** — resolves template variables from CIS entity data, renders the message, writes an outbox row, and hands off to a provider for delivery.
+3. **Provider adapters** — thin wrappers around external services (SendGrid for email, Twilio for SMS, console for dev). Configurable per tenant via the Settings → Notifications page.
 
-### NotificationTemplate (planned)
+Primary users: utility administrators (template management), the system itself (automated sends), CSRs (viewing send history).
 
-Reusable message templates for each notification type. Supports multi-channel (email, SMS, mail) with variable substitution.
+## Entities
+
+### NotificationTemplate
+
+One row per business event per tenant. Channel-specific content stored as JSONB so a single template can have both an email and SMS rendering.
 
 | Field | Type | Notes |
-|-------|------|-------|
+|---|---|---|
 | id | UUID | PK |
 | utility_id | UUID | Tenant scope |
-| template_name | VARCHAR(255) | Internal name |
-| event_type | VARCHAR(100) | e.g. "BILL_GENERATED", "PAYMENT_RECEIVED", "DELINQUENCY_TIER_1", "SHUTOFF_NOTICE" |
-| channel | ENUM | EMAIL, SMS, MAIL |
-| subject | VARCHAR(500) | Nullable: used for EMAIL channel |
-| body_text | TEXT | Plain text version (used for SMS; fallback for email) |
-| body_html | TEXT | Nullable: HTML version for EMAIL |
-| body_print | TEXT | Nullable: formatted text for MAIL/print-vendor |
-| variables | JSONB | Array of variable names used in template, e.g. `["account_number", "balance_due", "due_date"]` |
-| language_code | CHAR(5) | Default "en-US"; for multi-language support |
-| is_active | BOOLEAN | |
-| is_system | BOOLEAN | True for system-required templates (cannot be deleted) |
-| version | INTEGER | Default 1 |
+| name | VARCHAR(255) | Human-readable: "Past Due Notice — Tier 1" |
+| event_type | VARCHAR(100) | Machine key: `delinquency.tier_1`, `portal.welcome`, `meter.leak_alert` |
+| description | TEXT | What this template is for — shown in the admin template editor |
+| channels | JSONB | Per-channel content. See shape below. |
+| variables | JSONB | Declared variable list with descriptions for the template editor UI |
+| is_active | BOOLEAN | Inactive templates are skipped by the engine |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
-**Unique constraint:** `[utility_id, event_type, channel, language_code]` — one active template per event/channel/language combination.
+**Unique:** `(utility_id, event_type)`
+**RLS:** standard `utility_id` policy.
 
-**Template variable syntax:** `{{account_number}}`, `{{customer_name}}`, `{{balance_due}}`, etc. Variables are resolved at send time from entity data.
+#### channels JSONB shape
 
----
+```json
+{
+  "email": {
+    "subject": "Past due notice — Account {{account.accountNumber}}",
+    "body": "Dear {{customer.firstName}},\n\nYour account {{account.accountNumber}} has a balance of {{delinquency.balance}} that is {{delinquency.daysPastDue}} days past due.\n\nPlease contact us at {{utility.phone}} or pay online at {{portal.paymentUrl}}.\n\nThank you,\n{{utility.name}}"
+  },
+  "sms": {
+    "body": "{{customer.firstName}}, your utility account {{account.accountNumber}} is {{delinquency.daysPastDue}} days past due. Balance: {{delinquency.balance}}. Pay at {{portal.paymentUrl}}"
+  }
+}
+```
 
-### CommunicationLog (planned)
+Both `email` and `sms` keys are optional — a template may support only one channel.
 
-Every message sent to a customer, regardless of channel. The permanent communication history.
+#### variables JSONB shape
 
-| Field | Type | Notes |
-|-------|------|-------|
-| id | UUID | PK |
-| utility_id | UUID | Tenant scope |
-| account_id | UUID | FK → Account |
-| customer_id | UUID | Nullable FK → Customer |
-| template_id | UUID | Nullable FK → NotificationTemplate (null for ad hoc messages) |
-| event_type | VARCHAR(100) | Copy of template event_type, or "AD_HOC" |
-| channel | ENUM | EMAIL, SMS, MAIL, PORTAL |
-| recipient_address | VARCHAR(500) | Email, phone, or mailing address used |
-| subject | VARCHAR(500) | Nullable |
-| body_snapshot | TEXT | Rendered message body at time of send |
-| status | ENUM | QUEUED, SENT, DELIVERED, FAILED, BOUNCED, OPTED_OUT |
-| sent_at | TIMESTAMPTZ | |
-| delivered_at | TIMESTAMPTZ | Nullable |
-| failure_reason | VARCHAR(500) | Nullable |
-| is_bulk | BOOLEAN | True if part of a bulk send campaign |
-| bulk_campaign_id | UUID | Nullable: groups bulk sends |
-| related_entity_type | VARCHAR(100) | Nullable: e.g. "BillingRecord", "DelinquencyAction" |
-| related_entity_id | UUID | Nullable: FK to the triggering entity |
-| created_at | TIMESTAMPTZ | |
+Declared list of variables this template uses. Powers the template editor's variable picker and the preview panel.
 
-**Indexes:** `[utility_id, account_id, sent_at DESC]`, `[utility_id, event_type, sent_at DESC]`, `[utility_id, status]`
+```json
+[
+  { "key": "customer.firstName", "label": "Customer first name", "sample": "Jane" },
+  { "key": "account.accountNumber", "label": "Account number", "sample": "AC-00001" },
+  { "key": "delinquency.balance", "label": "Delinquent balance", "sample": "$412.80" },
+  { "key": "delinquency.daysPastDue", "label": "Days past due", "sample": "15" }
+]
+```
 
----
+### Notification
 
-### CommunicationPreference (planned)
-
-Customer-level opt-in/opt-out settings per channel and notification type. Manages SMS consent and channel preferences.
+The send log / outbox. One row per message sent or attempted. Frozen at render time so the exact content delivered is preserved for audit regardless of later template changes.
 
 | Field | Type | Notes |
-|-------|------|-------|
+|---|---|---|
 | id | UUID | PK |
 | utility_id | UUID | Tenant scope |
-| account_id | UUID | FK → Account |
-| channel | ENUM | EMAIL, SMS, MAIL |
-| category | ENUM | BILLING, PAYMENT, DELINQUENCY, OUTAGE, GENERAL, MARKETING |
-| opted_in | BOOLEAN | True = customer wants this channel/category |
-| opt_in_date | TIMESTAMPTZ | When opt-in was recorded |
-| opt_out_date | TIMESTAMPTZ | Nullable: when opt-out was recorded |
-| opt_in_source | ENUM | CUSTOMER_PORTAL, CSR_ENTRY, IMPORT, IVR |
-| sms_consent_text | TEXT | Nullable: exact text customer agreed to (SMS TCPA compliance) |
+| template_id | UUID FK | Which template was used (nullable for ad-hoc sends) |
+| event_type | VARCHAR(100) | Denormalized from template for query convenience |
+| channel | ENUM | `EMAIL`, `SMS` |
+| recipient_email | VARCHAR(255) | For EMAIL channel |
+| recipient_phone | VARCHAR(20) | For SMS channel |
+| customer_id | UUID FK | Nullable — who this was sent to |
+| account_id | UUID FK | Nullable — which account this relates to |
+| context | JSONB | The raw context IDs passed by the caller |
+| resolved_variables | JSONB | The flat variable map after entity resolution |
+| resolved_subject | TEXT | Rendered email subject (null for SMS) |
+| resolved_body | TEXT | Rendered body |
+| status | ENUM | `PENDING`, `SENDING`, `SENT`, `FAILED` |
+| provider | VARCHAR(50) | `sendgrid`, `twilio`, `smtp`, `console` |
+| provider_message_id | VARCHAR(255) | External tracking ID from the provider |
+| error | TEXT | Populated on FAILED |
+| attempts | INT | Number of delivery attempts (for retry tracking) |
+| sent_at | TIMESTAMPTZ | When delivery was confirmed |
 | created_at | TIMESTAMPTZ | |
-| updated_at | TIMESTAMPTZ | |
 
-**Unique constraint:** `[utility_id, account_id, channel, category]`
+**Indexes:** `(utility_id, status, created_at)`, `(customer_id, created_at DESC)`, `(account_id, created_at DESC)`, `(template_id)`, `(event_type, created_at DESC)`.
+**RLS:** standard `utility_id` policy.
 
-**Note:** Regulatory notices (delinquency, shutoff) must always be delivered via at least one channel, regardless of opt-out. MAIL is used as the fallback for regulatory notices when email and SMS are opted out.
+## Template Variable System
 
----
+Simple `{{namespace.field}}` substitution. No conditionals, loops, or logic in v1 — intentionally simple so non-technical utility admins can edit templates. Future versions can add conditionals if needed.
+
+### Standard variable namespaces
+
+| Namespace | Source entity | Variables |
+|---|---|---|
+| `customer` | Customer | `firstName`, `lastName`, `organizationName`, `email`, `phone`, `customerType` |
+| `account` | Account | `accountNumber`, `accountType`, `status` |
+| `premise` | Premise | `addressLine1`, `addressLine2`, `city`, `state`, `zip` |
+| `agreement` | ServiceAgreement | `agreementNumber`, `commodityName`, `status`, `startDate` |
+| `meter` | Meter | `meterNumber`, `meterType`, `uomCode` |
+| `delinquency` | DelinquencyAction context | `balance`, `daysPastDue`, `tierName`, `dueDate`, `actionType` |
+| `portal` | System URLs | `loginUrl`, `paymentUrl`, `usageUrl`, `profileUrl` |
+| `utility` | TenantConfig + branding | `name`, `phone`, `email`, `website`, `logoUrl` |
+
+### Variable resolution
+
+The caller passes a context object with entity IDs:
+```json
+{ "customerId": "...", "accountId": "...", "premiseId": "...", "delinquencyActionId": "..." }
+```
+
+The engine loads each referenced entity from the database and builds a flat `Record<string, string>` variable map. Each `{{key}}` in the template is replaced with the corresponding value. Unresolved variables render as an empty string with a warning logged (not a hard error).
+
+The resolved variable map is stored on `Notification.resolved_variables` as the audit record of exactly what values were substituted.
+
+## Engine
+
+### `sendNotification()` — the public API
+
+```typescript
+interface SendNotificationInput {
+  eventType: string;
+  channel: "EMAIL" | "SMS";
+  recipientId: string;        // customerId — engine resolves email/phone
+  context: Record<string, string>;
+  recipientOverride?: { email?: string; phone?: string };
+}
+
+async function sendNotification(
+  utilityId: string,
+  input: SendNotificationInput,
+): Promise<string | null>
+// Returns the Notification ID, or null if template not found/inactive
+```
+
+### Flow
+
+1. Load `NotificationTemplate` by `(utilityId, eventType)`. If not found or inactive, log warning and return null.
+2. Check the template has content for the requested channel. If not, skip with a warning.
+3. Load the recipient's contact info from `Customer` (email for EMAIL, phone for SMS). Use `recipientOverride` if provided.
+4. Resolve variables: load entities from the context IDs, build the flat variable map.
+5. Render: replace `{{key}}` tokens in subject and body.
+6. Insert a `Notification` row with `status = PENDING`, the rendered content, and the frozen variable map.
+7. Return the Notification ID. Delivery happens asynchronously via the send job.
+
+### Send job (background)
+
+A background job (same `setInterval` pattern as the suspension scheduler) picks up `PENDING` notifications:
+
+1. Query: `WHERE status = 'PENDING' ORDER BY created_at LIMIT 50`
+2. For each: set `status = SENDING`, call the provider adapter, update to `SENT` or `FAILED`.
+3. On failure: increment `attempts`. If `attempts < 3`, set back to `PENDING` for retry. If `attempts >= 3`, leave as `FAILED`.
+4. Tick interval: every 10 seconds (configurable).
+
+### Provider adapters
+
+```typescript
+interface NotificationProvider {
+  channel: "EMAIL" | "SMS";
+  send(to: string, subject: string | null, body: string): Promise<{ messageId: string }>;
+}
+```
+
+| Provider | Channel | Config source |
+|---|---|---|
+| `ConsoleProvider` | EMAIL + SMS | Dev mode — logs to stdout. Default when no provider configured. |
+| `SendGridProvider` | EMAIL | `settings.notifications.emailApiKey` |
+| `TwilioProvider` | SMS | `settings.notifications.smsApiKey` |
+| `SmtpProvider` | EMAIL | `settings.notifications.smtpHost/port/user/pass` |
+
+Provider selection reads from `TenantConfig.settings.notifications`. Defaults to `console` in dev.
 
 ## API Endpoints
 
-All endpoints are planned for Phase 3.
-
-### Templates
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/notification-templates` | List templates (filterable by event_type, channel) |
-| POST | `/api/v1/notification-templates` | Create template |
-| GET | `/api/v1/notification-templates/:id` | Get template with variable list |
-| PATCH | `/api/v1/notification-templates/:id` | Update template content |
-| DELETE | `/api/v1/notification-templates/:id` | Deactivate (non-system templates only) |
-| POST | `/api/v1/notification-templates/:id/preview` | Render template with sample data |
-
-### Sending
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/notifications/send` | Send a notification to one account |
-| POST | `/api/v1/notifications/bulk` | Send to a segment (filtered account list) |
-| GET | `/api/v1/notifications/bulk/:campaignId` | Get bulk send status and counts |
-
-### Communication Log
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/communication-logs` | List logs (filterable by account, channel, status, date) |
-| GET | `/api/v1/communication-logs/:id` | Get log entry with body snapshot |
-| GET | `/api/v1/accounts/:id/communications` | Full communication history for an account |
-
-### Communication Preferences
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/accounts/:id/communication-preferences` | Get all preferences for an account |
-| PUT | `/api/v1/accounts/:id/communication-preferences` | Set preferences (upsert all) |
-| PATCH | `/api/v1/accounts/:id/communication-preferences/:id` | Update one preference |
-
-## Business Rules
-
-1. **Event-driven architecture:** Notification triggers originate from domain events emitted by other modules. Examples:
-   - `billing.record.generated` → send BILL_GENERATED email
-   - `payment.received` → send PAYMENT_CONFIRMATION SMS or email
-   - `delinquency.action.created` → send appropriate tier notice
-   - `service_request.completed` → send completion notification
-   
-   In Phase 1/2, these are internal EventEmitter events. Phase 3+ will use a message queue (Kafka or RabbitMQ) for reliability.
-
-2. **Template resolution:** When a notification is triggered, the system selects the template by matching `[utility_id, event_type, channel, language_code]`. Falls back to "en-US" if customer's language preference has no template. If no template exists for a channel, that channel is skipped.
-
-3. **Channel preference enforcement:** Before sending on any channel, CommunicationPreference is checked. If the customer is opted out of that channel/category, the message is skipped. For regulatory categories (DELINQUENCY, billing notices), MAIL is always used as a fallback channel even if email/SMS are opted out.
-
-4. **SMS consent:** SMS messages are only sent to customers with `opted_in=true` for the SMS channel and a recorded `sms_consent_text` (TCPA compliance). CIS records consent timestamp and text. SMS consent cannot be set by staff without customer confirmation (except for re-enablement flows with audit trail).
-
-5. **Variable substitution:** Template variables are resolved server-side at send time. The rendered body is stored in `CommunicationLog.body_snapshot` so the exact message sent can always be retrieved, even if data changes later.
-
-6. **Delivery provider abstraction:** CIS sends through a configurable delivery layer:
-   - **Email:** SendGrid, AWS SES, or Postmark (configured per tenant)
-   - **SMS:** Twilio or AWS SNS
-   - **Mail:** Print vendor export file (same mechanism as bill documents in Module 09)
-   
-   Delivery status callbacks (bounces, delivery confirmations) update the CommunicationLog.status.
-
-7. **Bulk communications:** Bulk sends accept a filter criteria (account type, commodity, billing cycle, geographic area, balance threshold, etc.) and a template. A preview step shows recipient count before confirmation. Bulk sends are rate-limited to avoid delivery provider throttling.
-
-8. **Opt-out processing:** Customer opt-out requests (received via unsubscribe link, STOP SMS reply, or CSR entry) are recorded immediately in CommunicationPreference. Subsequent sends for that channel/category are blocked. Opt-out events are logged in AuditLog.
-
-9. **Communication history retention:** CommunicationLog records are retained indefinitely (or per tenant's data retention policy). body_snapshot ensures regulatory notices can be retrieved years later.
-
-10. **Delinquency notice integration:** When a DelinquencyAction is created (Module 11), if the action_type is NOTICE_EMAIL or NOTICE_SMS, the notifications module is called with the action's `notice_template_id`. The resulting CommunicationLog.id is stored back on the DelinquencyAction.
+| Method | Path | Module | Description |
+|---|---|---|---|
+| GET | `/api/v1/notification-templates` | settings | List templates (filterable by event_type, is_active) |
+| POST | `/api/v1/notification-templates` | settings | Create template |
+| GET | `/api/v1/notification-templates/:id` | settings | Get template detail |
+| PATCH | `/api/v1/notification-templates/:id` | settings | Update template |
+| DELETE | `/api/v1/notification-templates/:id` | settings | Deactivate (soft delete) |
+| POST | `/api/v1/notification-templates/:id/preview` | settings | Render with sample data, return rendered content without sending |
+| GET | `/api/v1/notifications` | settings | Send log (filterable by status, channel, customer_id, event_type, date range) |
+| GET | `/api/v1/notifications/:id` | settings | Single notification detail |
+| POST | `/api/v1/notifications/send` | settings | Manual one-off send (admin-triggered) |
 
 ## UI Pages
 
-All pages are planned for Phase 3.
+### Settings → Notification Templates (`/settings/notification-templates`)
 
-### Notification Templates (`/notifications/templates`)
+- Template list: name, event type, channel badges (email/sms), active toggle
+- Template editor: name, event type, description, per-channel content tabs (email subject + body, SMS body), variables list, live preview panel with sample data rendering
 
-- Table: template_name, event_type, channel, language, status
-- Filter by event_type, channel
-- "New Template" → form with body editor (with variable helper), preview button
-- Edit: update template content with version tracking
+### Settings → Notifications (`/settings/notifications`) — already stubbed
 
-### Template Preview (`/notifications/templates/:id/preview`)
+Wire the existing page to manage: sender email, email/SMS provider selection, API keys (masked), daily digest toggle.
 
-- Renders template with sample data for the tenant (actual account values for realism)
-- Shows resolved variables
-- Toggle between HTML/text/print views
+### Notification Send Log (`/notifications`)
 
-### Communication History (`/notifications/history`)
+- Searchable table: date, event type, channel, recipient, status badge, template name
+- Click to view: full rendered content, variable values, provider response, error
+- Filter by: status, channel, date range, customer
 
-- Global log across all accounts
-- Filters: channel, status, event_type, date range, account search
-- Per-row: account, customer, channel, subject, status, sent date
-- Click through to message body snapshot
+### Account / Customer Detail — Notifications Tab
 
-### Account Communications (within Account Detail)
+- Notification history scoped to the entity
+- Same table as the main send log, filtered by customer_id or account_id
 
-- Tab showing all communications for the account
-- Filter by channel and category
-- Preference management: per-channel opt-in/opt-out toggles
+## Seed Templates
 
-### Bulk Send (`/notifications/bulk`)
+| Event type | Name | Channels |
+|---|---|---|
+| `delinquency.tier_1` | Past Due Reminder | email, sms |
+| `delinquency.tier_2` | Formal Past Due Notice | email |
+| `delinquency.tier_3` | Shut-Off Warning — 48 Hours | email, sms |
+| `delinquency.tier_4` | Service Disconnection Notice | email, sms |
+| `portal.welcome` | Portal Welcome | email |
+| `portal.password_reset` | Password Reset | email |
+| `meter.high_usage` | High Usage Alert | email, sms |
+| `meter.leak_detected` | Possible Leak Detected | email, sms |
+| `service.move_in_confirmation` | Move-In Confirmation | email |
+| `service.move_out_confirmation` | Move-Out Confirmation | email |
 
-- Step 1: Select template (event_type/channel)
-- Step 2: Define recipient filter (account type, status, geography, etc.)
-- Step 3: Preview (recipient count, sample rendered message)
-- Step 4: Confirm and queue
-- Status dashboard showing active/completed bulk campaigns
+## Integration Points
+
+### Module 11 — Delinquency (primary consumer)
+
+When the delinquency evaluation job creates a notice-type `DelinquencyAction`, it calls `sendNotification` with `eventType: delinquency.tier_N`. The returned notification ID is stored on the action row. When the notification reaches `SENT`, the delinquency action transitions to `COMPLETED`.
+
+### Customer Portal
+
+`portal.welcome` sent on registration. `portal.password_reset` when real auth is wired.
+
+### Meter Events
+
+`meter.high_usage` and `meter.leak_detected` sent when the meter event handler creates a relevant event.
+
+### Operations Digest
+
+The daily digest is a special template (`operations.daily_digest`) sent to a staff email list. Rendered by a daily job that aggregates overdue accounts, failed reads, and exception queue counts.
+
+## Business Rules
+
+1. **Template uniqueness:** One template per `(utility_id, event_type)`.
+2. **Missing template = skip, not crash:** `sendNotification` returns null if the template is missing or inactive.
+3. **Missing variable = empty, not crash:** Unresolved `{{variable}}` renders as empty string with a warning.
+4. **Frozen content:** Rendered subject, body, and variables on the Notification row are immutable after render.
+5. **Retry with backoff:** Failed sends retry up to 3 times. After 3 failures, status stays FAILED.
+6. **Rate limiting:** Send job processes 50 per tick (10-second interval). Configurable per tenant.
+7. **Dev mode:** `ConsoleProvider` logs rendered messages to stdout. Notification rows are created with `status = SENT` so the rest of the system works identically.
 
 ## Phase Roadmap
 
-- **Phase 1 (Complete):** Account.paperless_billing and Account.language_pref fields. AuditLog captures all state changes.
+### Phase 3.1 (Building now)
+- NotificationTemplate + Notification entities (Prisma)
+- Template CRUD API + Zod validators
+- Template variable resolution engine
+- ConsoleProvider (dev mode)
+- Background send job
+- Send log API
+- Template editor UI with live preview
+- Wire Settings → Notifications page
+- Seed starter templates
 
-- **Phase 3 (Planned):**
-  - NotificationTemplate entity + CRUD + preview UI
-  - CommunicationLog entity
-  - CommunicationPreference entity + opt-in/opt-out management
-  - Email delivery integration (SendGrid/SES/Postmark)
-  - SMS delivery integration (Twilio/SNS)
-  - Event-driven triggers from billing, payment, delinquency events
-  - Bulk send capability with segmentation
-  - Mail/print vendor export for physical notices
-  - Delinquency notice integration (Module 11)
-  - Bill notification on generation (Module 09)
-  - Payment confirmation notifications (Module 10)
+### Phase 3.2 (After Module 11)
+- Wire delinquency integration
+- Wire portal welcome email
+- Customer/account detail Notifications tab
 
-- **Phase 4 (Planned):** Customer portal self-service preference management. Portal notification inbox. Outage/service status notifications.
+### Phase 3.3 (When provider accounts are set up)
+- SendGridProvider, TwilioProvider, SmtpProvider
+- Encrypted API key storage
+- Delivery status webhooks from providers
 
-## Bozeman RFP Coverage
-
-| Req | Requirement | Coverage |
-|-----|-------------|----------|
-| 27 | Automated notifications (email, SMS, mail) | Phase 3: multi-channel notification engine |
-| 28 | Configurable notification triggers | Phase 3: event-driven trigger configuration |
-| 29 | Staff-managed communication templates | Phase 3: NotificationTemplate entity + editor |
-| 30 | Bulk/mass communications to segments | Phase 3: bulk send with segmentation filters |
-| 31 | Opt-in/opt-out management, SMS consent | Phase 3: CommunicationPreference + TCPA compliance |
-| 32 | Customer communication preferences | Phase 3: per-channel/category preferences |
-| 33 | Communication history per customer | Phase 3: CommunicationLog with body snapshots |
+### Phase 3.4 (Future)
+- Customer notification preferences (opt-in/opt-out per event per channel)
+- Template versioning
+- Rich HTML email layout builder
+- Operations daily digest job
+- Email attachment support
