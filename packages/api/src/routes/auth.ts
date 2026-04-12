@@ -138,6 +138,7 @@ export async function authRoutes(app: FastifyInstance) {
           email: true,
           name: true,
           isActive: true,
+          customerId: true,
           role: { select: { id: true, name: true } },
         },
         orderBy: { name: "asc" },
