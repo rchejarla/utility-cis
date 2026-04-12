@@ -110,7 +110,7 @@ export async function portalApiRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/portal/api/accounts/:accountId/agreements",
+    "/portal/api/accounts/:accountId",
     { config: { module: "portal_accounts", permission: "VIEW" } },
     async (request, reply) => {
       const customerId = requireCustomerId(request);
@@ -118,6 +118,30 @@ export async function portalApiRoutes(app: FastifyInstance) {
 
       const account = await prisma.account.findFirst({
         where: { id: accountId, customerId },
+        include: {
+          serviceAgreements: {
+            include: {
+              commodity: { select: { id: true, name: true } },
+              premise: { select: { id: true, addressLine1: true, city: true, state: true, zip: true } },
+              billingCycle: { select: { id: true, name: true } },
+              rateSchedule: { select: { id: true, name: true } },
+              meters: {
+                include: {
+                  meter: {
+                    select: {
+                      id: true,
+                      meterNumber: true,
+                      meterType: true,
+                      status: true,
+                      uom: { select: { code: true, name: true } },
+                    },
+                  },
+                },
+              },
+            },
+            orderBy: { startDate: "desc" },
+          },
+        },
       });
 
       if (!account) {
@@ -126,17 +150,7 @@ export async function portalApiRoutes(app: FastifyInstance) {
         });
       }
 
-      const agreements = await prisma.serviceAgreement.findMany({
-        where: { accountId },
-        include: {
-          commodity: { select: { name: true } },
-          premise: { select: { addressLine1: true, city: true, state: true } },
-          billingCycle: { select: { name: true } },
-        },
-        orderBy: { startDate: "desc" },
-      });
-
-      return reply.send({ data: agreements });
+      return reply.send({ data: account });
     },
   );
 

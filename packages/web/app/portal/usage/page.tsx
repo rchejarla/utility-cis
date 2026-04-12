@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { apiClient } from "@/lib/api-client";
 import { MonthPicker } from "@/components/ui/month-picker";
 
@@ -32,8 +33,10 @@ interface ReadRow {
 type Granularity = "monthly" | "daily" | "hourly";
 
 export default function PortalUsagePage() {
+  const searchParams = useSearchParams();
+  const presetAgreement = searchParams.get("agreement");
   const [accounts, setAccounts] = useState<AccountWithAgreements[]>([]);
-  const [selectedAgreementId, setSelectedAgreementId] = useState<string | null>(null);
+  const [selectedAgreementId, setSelectedAgreementId] = useState<string | null>(presetAgreement);
   const [reads, setReads] = useState<ReadRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [readsLoading, setReadsLoading] = useState(false);
@@ -54,7 +57,7 @@ export default function PortalUsagePage() {
       .then((data) => {
         setAccounts(data.accounts ?? []);
         const all = (data.accounts ?? []).flatMap((a) => a.serviceAgreements);
-        if (all.length > 0 && !selectedAgreementId) {
+        if (all.length > 0 && !selectedAgreementId && !presetAgreement) {
           setSelectedAgreementId(all[0].id);
         }
       })
