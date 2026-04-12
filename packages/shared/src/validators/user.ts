@@ -13,6 +13,7 @@ export const createUserSchema = z.object({
   name: z.string().min(1).max(255),
   roleId: z.string().uuid(),
   externalId: z.string().max(255).optional(),
+  customerId: z.string().uuid().optional(),
   isActive: z.boolean().default(true),
 }).strict();
 

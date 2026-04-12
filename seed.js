@@ -227,7 +227,8 @@ async function main() {
     "accounts","agreements","commodities","rate_schedules","billing_cycles",
     "containers","service_suspensions","service_events",
     "workflows","search",
-    "audit_log","attachments","theme","settings"
+    "audit_log","attachments","theme","settings",
+    "portal_accounts","portal_billing","portal_usage","portal_profile"
   ];
   const allPerms = ["VIEW","CREATE","EDIT","DELETE"];
 
@@ -288,8 +289,19 @@ async function main() {
       name: "Read-Only",
       description: "View access to all operational data",
       permissions: Object.fromEntries(
-        allModules.filter(m => m !== "settings" && m !== "theme").map(m => [m, ["VIEW"]])
+        allModules.filter(m => m !== "settings" && m !== "theme" && !m.startsWith("portal_")).map(m => [m, ["VIEW"]])
       ),
+      isSystem: true,
+    },
+    {
+      name: "Portal Customer",
+      description: "Self-service portal — view own accounts, bills, usage; edit profile",
+      permissions: {
+        portal_accounts: ["VIEW"],
+        portal_billing: ["VIEW"],
+        portal_usage: ["VIEW"],
+        portal_profile: ["VIEW","EDIT"],
+      },
       isSystem: true,
     },
   ];

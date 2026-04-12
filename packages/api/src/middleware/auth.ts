@@ -7,6 +7,7 @@ export interface AuthUser {
   email: string;
   name: string;
   role: string;
+  customerId: string | null;
 }
 
 declare module "fastify" {
@@ -74,6 +75,7 @@ function assignUser(
     email: (payload.email as string) ?? "",
     name: (payload.name as string) ?? (payload.email as string) ?? "Unknown",
     role: (payload.role as string) ?? "user",
+    customerId: (payload.customer_id as string) ?? (payload.customerId as string) ?? null,
   };
 }
 

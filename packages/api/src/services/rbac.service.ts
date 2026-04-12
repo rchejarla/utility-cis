@@ -9,6 +9,7 @@ interface UserRoleResult {
   roleName: string;
   permissions: PermissionMap;
   isActive: boolean;
+  customerId: string | null;
 }
 
 function userRoleCacheKey(utilityId: string, userId: string): string {
@@ -45,6 +46,7 @@ export async function getUserRole(
     roleName: cisUser.role.name,
     permissions: cisUser.role.permissions as PermissionMap,
     isActive: cisUser.isActive,
+    customerId: cisUser.customerId ?? null,
   };
 
   await redis.setex(cacheKey, 300, JSON.stringify(result));

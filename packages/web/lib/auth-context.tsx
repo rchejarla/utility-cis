@@ -10,6 +10,7 @@ interface AuthUser {
   name: string;
   roleId: string | null;
   roleName: string;
+  customerId: string | null;
 }
 
 interface AuthContextValue {

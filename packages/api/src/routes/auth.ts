@@ -13,7 +13,7 @@ const switchRoleSchema = z.object({
 
 export async function authRoutes(app: FastifyInstance) {
   app.get("/api/v1/auth/me", async (request) => {
-    const { id: userId, utilityId, email, name } = request.user;
+    const { id: userId, utilityId, email, name, customerId } = request.user;
     const authData = await getAuthMe(userId, utilityId);
 
     return {
@@ -23,6 +23,7 @@ export async function authRoutes(app: FastifyInstance) {
         name,
         roleId: authData.user?.roleId ?? null,
         roleName: authData.user?.roleName ?? "unknown",
+        customerId: customerId ?? authData.user?.customerId ?? null,
       },
       permissions: authData.permissions,
       enabledModules: authData.enabledModules,

@@ -34,6 +34,8 @@ import { customFieldSchemaRoutes } from "./routes/custom-field-schemas.js";
 import { serviceEventRoutes } from "./routes/service-events.js";
 import { startSuspensionScheduler } from "./schedulers/suspension-scheduler.js";
 import { workflowRoutes } from "./routes/workflows.js";
+import { portalAuthRoutes } from "./routes/portal-auth.js";
+import { portalApiRoutes } from "./routes/portal-api.js";
 import { buildOpenApiDocument } from "./lib/openapi.js";
 
 export async function buildApp() {
@@ -96,6 +98,8 @@ export async function buildApp() {
   await app.register(customFieldSchemaRoutes);
   await app.register(serviceEventRoutes);
   await app.register(workflowRoutes);
+  await app.register(portalAuthRoutes);
+  await app.register(portalApiRoutes);
 
   startAuditWriter();
 

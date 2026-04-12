@@ -42,6 +42,10 @@ export const MODULES = [
   "attachments",
   "theme",
   "settings",
+  "portal_accounts",
+  "portal_billing",
+  "portal_usage",
+  "portal_profile",
 ] as const;
 
 export type ModuleKey = (typeof MODULES)[number];
@@ -78,6 +82,10 @@ export const MODULE_META: Record<ModuleKey, { label: string; icon: string }> = {
   attachments: { label: "Attachments", icon: "faPaperclip" },
   theme: { label: "Theme Editor", icon: "faPalette" },
   settings: { label: "Settings", icon: "faGear" },
+  portal_accounts: { label: "Portal: Accounts", icon: "faUser" },
+  portal_billing: { label: "Portal: Billing", icon: "faMoneyBill" },
+  portal_usage: { label: "Portal: Usage", icon: "faBolt" },
+  portal_profile: { label: "Portal: Profile", icon: "faUser" },
 };
 
 // Preset role definitions
@@ -158,6 +166,16 @@ export const PRESET_ROLES: Array<{ name: string; description: string; permission
       search: ["VIEW"],
       audit_log: ["VIEW"],
       attachments: ["VIEW"],
+    },
+  },
+  {
+    name: "Portal Customer",
+    description: "Self-service portal — view own accounts, bills, usage; edit profile",
+    permissions: {
+      portal_accounts: ["VIEW"],
+      portal_billing: ["VIEW"],
+      portal_usage: ["VIEW"],
+      portal_profile: ["VIEW", "EDIT"],
     },
   },
 ];
