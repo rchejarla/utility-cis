@@ -97,6 +97,17 @@ async function handleResponse<T>(response: Response): Promise<T> {
       }
       throw new Error("Session expired — redirecting to login");
     }
+    if (response.status === 403 && typeof window !== "undefined") {
+      try {
+        const u = JSON.parse(localStorage.getItem(USER_KEY) ?? "{}");
+        if (u.customerId && !window.location.pathname.startsWith("/portal")) {
+          window.location.href = "/portal/dashboard";
+          throw new Error("Portal user on admin page — redirecting");
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.includes("redirecting")) throw e;
+      }
+    }
     let errorDetails: string;
     try {
       const errorBody = await response.json();
