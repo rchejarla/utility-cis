@@ -157,8 +157,13 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
 
 function AvatarMenu() {
   const [open, setOpen] = useState(false);
+  const [user, setUser] = useState<Record<string, unknown> | null>(null);
   const ref = useRef<HTMLDivElement>(null);
-  const user = getStoredUser();
+
+  useEffect(() => {
+    setUser(getStoredUser());
+  }, []);
+
   const initial = (user?.name as string)?.[0]?.toUpperCase() ?? "?";
   const displayName = (user?.name as string) ?? "Customer";
   const displayEmail = (user?.email as string) ?? "";
