@@ -27,7 +27,9 @@ docs/specs/
 ├── 12-solid-waste.md                — Container, cart management
 ├── 13-notifications.md              — Templates, email/SMS/mail
 ├── 14-service-requests.md           — SR lifecycle, SLAs
-├── 15-customer-portal.md            — Self-service portal
+├── 15-customer-portal.md            — Self-service portal (Phase 4.1 MVP complete)
+├── 20-custom-fields.md              — Custom fields (Phase 1+2 complete)
+├── 21-saaslogic-billing.md          — SaaSLogic billing integration (Phase 3 design)
 ├── 16-special-assessments.md        — Districts, parcel assessments
 ├── 17-reporting-and-audit.md        — Audit log, reports
 ├── 18-theme-and-configuration.md    — Tenant theme, settings
@@ -68,3 +70,11 @@ Single overarching architecture and data model reference for the entire system (
 ## Multi-tenancy
 
 Every entity has `utility_id`. PostgreSQL RLS enforces tenant isolation at DB level. The API sets `app.current_utility_id` per request via JWT claims. Dev tenant UUID: `00000000-0000-4000-8000-000000000001`.
+
+## Portal
+
+Customer portal lives at `/portal/*` as a route segment in the web app. Unified JWT format shared with admin — portal tokens carry a `customer_id` claim. Portal users are `CisUser` rows with a `customerId` FK to `Customer` and a `Portal Customer` role with `portal_*` module permissions. Admin chrome (sidebar/topbar) is skipped for `/portal/*`, `/login`, and `/dev` routes.
+
+**Portal API routes:** `/portal/api/auth/register`, `/portal/api/auth/login`, `/portal/api/dashboard`, `/portal/api/accounts`, `/portal/api/accounts/:id`, `/portal/api/agreements/:id/usage`, `/portal/api/profile` (GET + PATCH).
+
+**Dev test credentials:** `jane.smith@example.com` and `robert.j@example.com` (seeded via `seed_db.bat`). Login at `/login` and click the portal customer quick-login pills.

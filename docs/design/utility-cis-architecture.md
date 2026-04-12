@@ -125,6 +125,9 @@ Every significant CIS state change emits a domain event. ApptorFlow subscribes a
 Customer ──────┬──→ Account ──────→ ServiceAgreement ──→ ServiceAgreementMeter ──→ Meter
 (person/org)   │   (billing)       (the core unit)      (junction, 1 or many)     (device)
                │       │                  │                                          │
+               ├──→ CisUser (portal)      │                                          │
+               │   (customerId FK)        │                                          │
+               │       │                  │                                          │
                │       ├──→ Contact       ├──→ Premise ←────────────────────────────┘
                │       └──→ BillingAddress│   (location)                    (belongs to)
                │                          │
@@ -657,6 +660,15 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | POST | `/api/v1/workflows/move-in` | Workflows (coordinated customer + account + agreement) |
 | POST | `/api/v1/workflows/move-out` | Workflows (atomic finalize + final reads) |
 | GET | `/api/v1/search` | Full-text search across customers/premises/accounts/meters |
+| POST | `/api/v1/auth/dev-login` | Unified dev login for admin and portal (non-prod, skipAuth) |
+| POST | `/portal/api/auth/register` | Portal self-registration (account number + email → CisUser + JWT) |
+| POST | `/portal/api/auth/login` | Portal login (email → JWT with customer_id claim) |
+| GET | `/portal/api/dashboard` | Portal dashboard (customer + accounts + agreements, customer-scoped) |
+| GET | `/portal/api/accounts` | Portal account list (customer-scoped) |
+| GET | `/portal/api/accounts/:id` | Portal account detail with agreements, meters, premises |
+| GET | `/portal/api/agreements/:id/usage` | Portal usage data (meter reads, from/to date range, customer-scoped) |
+| GET | `/portal/api/profile` | Portal customer profile (read) |
+| PATCH | `/portal/api/profile` | Portal customer profile (edit email, phone, altPhone) |
 
 ### 5.3 Cross-Cutting Patterns
 
@@ -819,7 +831,15 @@ Architecture (see `docs/specs/21-saaslogic-billing.md` for the full spec):
 Also in Phase 3: notification engine, delinquency rules and notices, late fees and payment plans (as line items fed to SaaSLogic).
 
 ### Phase 4
-Customer portal + service requests: Self-service portal, service request lifecycle, ApptorFlow workflows.
+Customer portal + service requests. See `docs/specs/15-customer-portal.md` for the full spec.
+
+Phase 4.1 (complete — portal MVP): Unified JWT auth with `CisUser.customerId` FK to `Customer` (no separate PortalUser entity). Portal Customer preset role with four portal-specific RBAC modules (`portal_accounts`, `portal_billing`, `portal_usage`, `portal_profile`). Portal is a route segment in the existing Next.js app (`/portal/*`) with its own layout (horizontal nav, avatar dropdown, no admin sidebar). Dev-mode registration (account number + email verification) and login via `POST /api/v1/auth/dev-login`. Token persistence in localStorage with 401→login and 403→portal redirects. Pages: dashboard (pending payments from mock invoice data, current usage from MeterRead, account cards), bills (invoice list with status badges), invoice detail (payment summary + disabled Pay Now), usage (premise/meter picker, MonthPicker date range, monthly bar chart with UOM), account detail (premises → agreements → meters hierarchy), profile (view + inline edit). All portal data endpoints are customer-scoped via `customerId` on the token.
+
+Phase 4.2 (planned, blocked on Phase 3): real invoice data from SaaSLogic mirror, Pay Now redirect, charge breakdown, autopay enrollment, paperless billing toggle.
+
+Phase 4.3 (planned, blocked on Modules 13+14): service request submission/tracking, start/stop/transfer wizards (ApptorFlow), communication preferences, solid waste vacation hold.
+
+Phase 4.4 (planned): multi-account view, third-party payer access, outage/status page, real auth via ApptorID (password hashing, MFA, email verification), AMI interval data on usage page.
 
 ### Phase 5
 Special assessments: Assessment districts, parcel-based assessments, installment billing.

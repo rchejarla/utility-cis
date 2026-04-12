@@ -29,15 +29,15 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 | 11 | ServiceAgreementMeter | `service_agreement_meter` | Agreement | Phase 1 | Junction: ServiceAgreement ↔ Meter |
 | 12 | RateSchedule | `rate_schedule` | Configuration | Phase 1 | Belongs to Commodity; referenced by ServiceAgreement; self-references for versioning |
 | 13 | BillingCycle | `billing_cycle` | Configuration | Phase 1 | Referenced by ServiceAgreement |
-| 14 | MeterRead | `meter_read` | Operations | Phase 1 | Belongs to Meter + ServiceAgreement; optionally linked to MeterRegister |
+| 14 | MeterRead | `meter_read` | Operations | Phase 1 | Belongs to Meter + ServiceAgreement + UnitOfMeasure; optionally linked to MeterRegister. `uom_id` frozen at write time from the meter's UOM. |
 | 15 | AuditLog | `audit_log` | System | Phase 1 | Records all entity state changes; references actor by user UUID |
 | 16 | TenantTheme | `tenant_theme` | System | Phase 1 | One per utility (unique on utility_id) |
 | 17 | UserPreference | `user_preference` | System | Phase 1 | One per user per utility (unique on utility_id + user_id) |
 | 18 | Attachment | `attachment` | Operations | Phase 2 | Generic file attachment for any entity (entityType + entityId pattern); RLS enforced |
 | 19 | Role | `role` | RBAC | Phase 2 | Per-tenant permission bundle; referenced by CisUser |
-| 20 | CisUser | `cis_user` | RBAC | Phase 2 | Admin/back-office user; belongs to Role; scoped by utility_id |
+| 20 | CisUser | `cis_user` | RBAC | Phase 2 | Admin or portal user; belongs to Role; scoped by utility_id. Nullable `customer_id` FK to Customer — null for staff, set for portal customers. Portal users see only their own accounts/data via customer-scoped API endpoints. |
 | 21 | TenantModule | `tenant_module` | RBAC | Phase 2 | Per-tenant module enablement (maps `moduleKey` → enabled) |
-| 22 | TenantConfig | `tenant_config` | System | Phase 2 | One per utility (unique on utility_id); holds `require_hold_approval` and an extensible `settings` JSONB bucket (currently carries `numberFormats` for identifier generation) |
+| 22 | TenantConfig | `tenant_config` | System | Phase 2 | One per utility (unique on utility_id); holds `require_hold_approval` and an extensible `settings` JSONB bucket carrying `numberFormats` (identifier generation), `branding`, `notifications`, `retention`, and `billing` namespaces (see spec 18). |
 | 23 | SuspensionTypeDef | `suspension_type_def` | Reference | Phase 2 | Per-tenant (or global, with `utility_id IS NULL`) reference table for service-hold type codes. Replaces the former `SuspensionType` Prisma enum. RLS policy allows global rows to be visible across all tenants. |
 | 24 | CustomFieldSchema | `custom_field_schema` | System | Phase 2 | One row per (utility, entity_type) holding the tenant's custom-field schema as a JSONB FieldDefinition array. Powers the `custom_fields` JSONB column on Customer/Account/Premise/ServiceAgreement/Meter. See spec 20. |
 
@@ -46,6 +46,9 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 ```
 Customer ──────┬──→ Account ──────→ ServiceAgreement ──→ ServiceAgreementMeter ──→ Meter
 (person/org)   │   (billing)       (the core unit)      (junction, 1 or many)     (device)
+               │       │                  │                                          │
+               ├──→ CisUser (portal)      │                                          │
+               │   (customerId FK)        │                                          │
                │       │                  │                                          │
                │       ├──→ Contact       ├──→ Premise ←────────────────────────────┘
                │       └──→ BillingAddress│   (location)                    (belongs to)
