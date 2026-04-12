@@ -16,7 +16,7 @@ export async function notificationRoutes(app: FastifyInstance) {
 
   app.get(
     "/api/v1/notification-templates",
-    { config: { module: "settings", permission: "VIEW" } },
+    { config: { module: "notifications", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const query = notificationTemplateQuerySchema.parse(request.query);
@@ -33,7 +33,7 @@ export async function notificationRoutes(app: FastifyInstance) {
 
   app.post(
     "/api/v1/notification-templates",
-    { config: { module: "settings", permission: "CREATE" } },
+    { config: { module: "notifications", permission: "CREATE" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const data = createNotificationTemplateSchema.parse(request.body);
@@ -56,7 +56,7 @@ export async function notificationRoutes(app: FastifyInstance) {
 
   app.get(
     "/api/v1/notification-templates/:id",
-    { config: { module: "settings", permission: "VIEW" } },
+    { config: { module: "notifications", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = request.params as { id: string };
@@ -77,7 +77,7 @@ export async function notificationRoutes(app: FastifyInstance) {
 
   app.patch(
     "/api/v1/notification-templates/:id",
-    { config: { module: "settings", permission: "EDIT" } },
+    { config: { module: "notifications", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = request.params as { id: string };
@@ -101,7 +101,7 @@ export async function notificationRoutes(app: FastifyInstance) {
 
   app.delete(
     "/api/v1/notification-templates/:id",
-    { config: { module: "settings", permission: "DELETE" } },
+    { config: { module: "notifications", permission: "DELETE" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = request.params as { id: string };
@@ -119,7 +119,7 @@ export async function notificationRoutes(app: FastifyInstance) {
 
   app.post(
     "/api/v1/notification-templates/:id/preview",
-    { config: { module: "settings", permission: "VIEW" } },
+    { config: { module: "notifications", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = request.params as { id: string };
@@ -140,7 +140,7 @@ export async function notificationRoutes(app: FastifyInstance) {
 
   app.get(
     "/api/v1/notifications",
-    { config: { module: "settings", permission: "VIEW" } },
+    { config: { module: "notifications", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const query = notificationQuerySchema.parse(request.query);
@@ -161,7 +161,7 @@ export async function notificationRoutes(app: FastifyInstance) {
 
   app.get(
     "/api/v1/notifications/:id",
-    { config: { module: "settings", permission: "VIEW" } },
+    { config: { module: "notifications", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = request.params as { id: string };
@@ -185,7 +185,7 @@ export async function notificationRoutes(app: FastifyInstance) {
 
   app.post(
     "/api/v1/notifications/send",
-    { config: { module: "settings", permission: "CREATE" } },
+    { config: { module: "notifications", permission: "CREATE" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const data = manualSendSchema.parse(request.body);

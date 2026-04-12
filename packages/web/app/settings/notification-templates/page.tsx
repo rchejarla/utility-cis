@@ -43,7 +43,7 @@ const textareaStyle = {
 };
 
 export default function NotificationTemplatesPage() {
-  const { canView, canCreate, canEdit } = usePermission("settings");
+  const { canView, canCreate, canEdit } = usePermission("notifications");
   const { toast } = useToast();
   const [templates, setTemplates] = useState<NotificationTemplate[]>([]);
   const [loading, setLoading] = useState(true);

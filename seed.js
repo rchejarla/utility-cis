@@ -273,7 +273,7 @@ async function main() {
     "accounts","agreements","commodities","rate_schedules","billing_cycles",
     "containers","service_suspensions","service_events",
     "workflows","search",
-    "audit_log","attachments","theme","settings",
+    "audit_log","attachments","theme","settings","notifications",
     "portal_accounts","portal_billing","portal_usage","portal_profile"
   ];
   const allPerms = ["VIEW","CREATE","EDIT","DELETE"];

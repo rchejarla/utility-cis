@@ -32,7 +32,7 @@ const statusMap: Record<string, string> = {
 };
 
 export default function NotificationLogPage() {
-  const { canView } = usePermission("settings");
+  const { canView } = usePermission("notifications");
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<NotificationRow | null>(null);
