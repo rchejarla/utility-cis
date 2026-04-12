@@ -49,7 +49,10 @@ export async function portalApiRoutes(app: FastifyInstance) {
 
       if (!customer) {
         return reply.status(404).send({
-          error: { code: "CUSTOMER_NOT_FOUND", message: "Customer record not found" },
+          error: {
+            code: "CUSTOMER_NOT_FOUND",
+            message: "Customer record not found. If you recently re-seeded the database, log out and log back in to refresh your session.",
+          },
         });
       }
 

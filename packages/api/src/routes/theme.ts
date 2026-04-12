@@ -3,7 +3,7 @@ import { updateThemeSchema } from "@utility-cis/shared";
 import { getTheme, updateTheme, resetTheme } from "../services/theme.service.js";
 
 export async function themeRoutes(app: FastifyInstance) {
-  app.get("/api/v1/theme", { config: { module: "theme", permission: "VIEW" } }, async (request, reply) => {
+  app.get("/api/v1/theme", async (request, reply) => {
     const { utilityId } = request.user;
     const theme = await getTheme(utilityId);
     return reply.send(theme);
