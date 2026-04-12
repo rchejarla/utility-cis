@@ -55,6 +55,7 @@ const navSections: NavSection[] = [
       { href: "/accounts", label: "Accounts", icon: faUser, module: "accounts" },
       { href: "/service-agreements", label: "Agreements", icon: faFileContract, module: "agreements" },
       { href: "/workflows", label: "Workflows", icon: faArrowRightArrowLeft, module: "workflows" },
+      { href: "/notifications", label: "Notifications", icon: faEnvelope, module: "notifications" },
     ],
   },
   {
@@ -77,7 +78,6 @@ const navSections: NavSection[] = [
     title: "System",
     items: [
       { href: "/audit-log", label: "Audit Log", icon: faClipboardList, module: "audit_log" },
-      { href: "/notifications", label: "Notifications", icon: faEnvelope, module: "notifications" },
       { href: "/theme", label: "Theme Editor", icon: faPalette, module: "theme" },
     ],
   },
