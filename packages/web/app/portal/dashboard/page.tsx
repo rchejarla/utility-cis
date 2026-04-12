@@ -8,7 +8,6 @@ import { apiClient } from "@/lib/api-client";
 import {
   mockCustomerBills,
   fmtMoney,
-  fmtDateRange,
   type MockInvoice,
 } from "@/lib/mock-billing";
 
@@ -53,8 +52,6 @@ export default function PortalDashboardPage() {
   const [data, setData] = useState<PortalDashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [latestReads, setLatestReads] = useState<Map<string, ReadRow>>(new Map());
-  const [expandedInvoice, setExpandedInvoice] = useState<string | null>(null);
-
   useEffect(() => {
     apiClient.get<PortalDashboardData>("/portal/api/dashboard")
       .then((d) => {
@@ -122,12 +119,7 @@ export default function PortalDashboardPage() {
           ) : (
             <div>
               {pendingInvoices.map((inv) => (
-                <InvoiceRow
-                  key={inv.id}
-                  invoice={inv}
-                  expanded={expandedInvoice === inv.id}
-                  onToggle={() => setExpandedInvoice(expandedInvoice === inv.id ? null : inv.id)}
-                />
+                <InvoiceRow key={inv.id} invoice={inv} onClick={() => router.push(`/portal/invoices/${inv.id}`)} />
               ))}
               <div style={{ padding: "10px 16px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 600 }}>
                 <span style={{ color: "var(--text-secondary)" }}>Total due</span>
@@ -262,81 +254,35 @@ export default function PortalDashboardPage() {
   );
 }
 
-function InvoiceRow({
-  invoice,
-  expanded,
-  onToggle,
-}: {
-  invoice: MockInvoice;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
+function InvoiceRow({ invoice, onClick }: { invoice: MockInvoice; onClick: () => void }) {
   const due = invoice.total - invoice.amountPaid;
   const statusColor = invoice.status === "OVERDUE" ? "var(--danger)" : invoice.status === "PARTIAL" ? "var(--warning)" : "var(--info)";
   const statusLabel = invoice.status === "OVERDUE" ? "Overdue" : invoice.status === "PARTIAL" ? "Partial" : "Due";
 
   return (
-    <div>
-      <div
-        onClick={onToggle}
-        style={{
-          padding: "12px 16px",
-          borderBottom: "1px solid var(--border-subtle)",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          cursor: "pointer",
-          transition: "background 0.1s",
-        }}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)"; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-      >
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 500, color: "var(--text-primary)" }}>{invoice.invoiceNumber}</div>
-          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 1 }}>{invoice.commodities.join(" · ")}</div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: statusColor }}>{statusLabel}</span>
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>{fmtMoney(due)}</span>
-          <span style={{ fontSize: 12, color: "var(--text-muted)", transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "none" }}>›</span>
-        </div>
+    <div
+      onClick={onClick}
+      style={{
+        padding: "12px 16px",
+        borderBottom: "1px solid var(--border-subtle)",
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        cursor: "pointer",
+        transition: "background 0.1s",
+      }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)"; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+    >
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 500, color: "var(--text-primary)" }}>{invoice.invoiceNumber}</div>
+        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 1 }}>{invoice.commodities.join(" · ")}</div>
       </div>
-
-      {expanded && (
-        <div style={{ padding: "12px 16px 16px", background: "var(--bg-surface)", borderBottom: "1px solid var(--border-subtle)" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: "6px 12px", fontSize: 12, marginBottom: 12 }}>
-            <span style={{ color: "var(--text-muted)" }}>Period</span>
-            <span style={{ color: "var(--text-primary)" }}>{fmtDateRange(invoice.periodStart, invoice.periodEnd)}</span>
-            <span style={{ color: "var(--text-muted)" }}>Total</span>
-            <span style={{ color: "var(--text-primary)", fontFamily: "'JetBrains Mono', monospace" }}>{fmtMoney(invoice.total)}</span>
-            {invoice.amountPaid > 0 && (
-              <>
-                <span style={{ color: "var(--text-muted)" }}>Paid</span>
-                <span style={{ color: "var(--success)", fontFamily: "'JetBrains Mono', monospace" }}>{fmtMoney(invoice.amountPaid)}</span>
-              </>
-            )}
-            <span style={{ color: "var(--text-muted)" }}>Amount due</span>
-            <span style={{ color: "var(--danger)", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>{fmtMoney(due)}</span>
-          </div>
-          <button
-            disabled
-            title="Payment via SaaSLogic — coming in Phase 3"
-            style={{
-              padding: "8px 16px",
-              fontSize: 12,
-              fontWeight: 600,
-              background: "var(--bg-elevated)",
-              color: "var(--text-muted)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius)",
-              cursor: "not-allowed",
-              fontFamily: "inherit",
-            }}
-          >
-            Pay Now (Phase 3)
-          </button>
-        </div>
-      )}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: statusColor }}>{statusLabel}</span>
+        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>{fmtMoney(due)}</span>
+        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>→</span>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import Link from "next/link";
 import { StatCard } from "@/components/ui/stat-card";
 import {
   mockCustomerBills,
@@ -184,9 +185,12 @@ export function CustomerBillsTab({
                   <InvoiceStatusBadge status={inv.status} />
                 </Td>
                 <Td>
-                  <span style={{ fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                    {inv.status === "DRAFT" ? "Draft" : "View (Phase 3)"}
-                  </span>
+                  <Link
+                    href={`/portal/invoices/${inv.id}`}
+                    style={{ fontSize: 12, color: "var(--accent-primary)", textDecoration: "none" }}
+                  >
+                    View →
+                  </Link>
                 </Td>
               </tr>
             ))}
