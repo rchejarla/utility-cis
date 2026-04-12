@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { apiClient } from "@/lib/api-client";
+import { MonthPicker } from "@/components/ui/month-picker";
 
 interface Agreement {
   id: string;
@@ -181,19 +182,13 @@ export default function PortalUsagePage() {
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <label style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>From</label>
-          <input
-            type="month"
-            value={fromMonth}
-            onChange={(e) => setFromMonth(e.target.value)}
-            style={monthInputStyle}
-          />
+          <div style={{ width: 150 }}>
+            <MonthPicker value={fromMonth} onChange={setFromMonth} placeholder="Start month" />
+          </div>
           <label style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>To</label>
-          <input
-            type="month"
-            value={toMonth}
-            onChange={(e) => setToMonth(e.target.value)}
-            style={monthInputStyle}
-          />
+          <div style={{ width: 150 }}>
+            <MonthPicker value={toMonth} onChange={setToMonth} placeholder="End month" />
+          </div>
         </div>
         <div style={{ width: 1, height: 24, background: "var(--border)", flexShrink: 0 }} />
       </div>
@@ -364,17 +359,6 @@ export default function PortalUsagePage() {
     </div>
   );
 }
-
-const monthInputStyle: React.CSSProperties = {
-  padding: "6px 10px",
-  fontSize: 13,
-  background: "var(--bg-deep)",
-  border: "1px solid var(--border)",
-  borderRadius: "var(--radius)",
-  color: "var(--text-primary)",
-  fontFamily: "inherit",
-  outline: "none",
-};
 
 const thStyle: React.CSSProperties = {
   padding: "10px 16px",
