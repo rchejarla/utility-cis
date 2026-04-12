@@ -2,21 +2,16 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useState, useEffect, useRef } from "react";
 import type { ReactNode } from "react";
-import { logout } from "@/lib/api-client";
+import { logout, getStoredUser } from "@/lib/api-client";
 
 const NAV_ITEMS = [
   { href: "/portal/dashboard", label: "Dashboard" },
   { href: "/portal/bills", label: "Bills" },
   { href: "/portal/usage", label: "Usage" },
-  { href: "/portal/profile", label: "Profile" },
 ];
 
-/**
- * Portal layout — customer-facing. No admin sidebar, no admin topbar.
- * Responsive mobile-first with a sticky header bar and a bottom nav on
- * small screens.
- */
 export default function PortalLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const isAuthPage = pathname?.startsWith("/portal/login") || pathname?.startsWith("/portal/register");
@@ -27,7 +22,6 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-      {/* Top header */}
       <header
         style={{
           height: 56,
@@ -40,6 +34,7 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
           flexShrink: 0,
         }}
       >
+        {/* Brand */}
         <Link
           href="/portal/dashboard"
           style={{
@@ -66,27 +61,15 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
           >
             U
           </div>
-          <span
-            style={{
-              color: "var(--text-primary)",
-              fontWeight: 600,
-              fontSize: 15,
-            }}
-          >
+          <span style={{ color: "var(--text-primary)", fontWeight: 600, fontSize: 15 }}>
             My Utility
           </span>
         </Link>
 
         {/* Desktop nav */}
-        <nav
-          style={{
-            display: "flex",
-            gap: 2,
-          }}
-        >
+        <nav style={{ display: "flex", gap: 2 }}>
           {NAV_ITEMS.map((item) => {
-            const isActive =
-              pathname === item.href || pathname?.startsWith(item.href + "/");
+            const isActive = pathname === item.href || pathname?.startsWith(item.href + "/");
             return (
               <Link
                 key={item.href}
@@ -108,23 +91,10 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
           })}
         </nav>
 
-        {/* Logout */}
-        <button
-          onClick={logout}
-          style={{
-            fontSize: 12,
-            color: "var(--text-muted)",
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            fontFamily: "inherit",
-          }}
-        >
-          Sign out
-        </button>
+        {/* User name + avatar dropdown */}
+        <AvatarMenu />
       </header>
 
-      {/* Main content */}
       <main
         style={{
           flex: 1,
@@ -176,12 +146,139 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
         })}
       </nav>
 
-      {/* Show bottom nav on mobile only */}
       <style>{`
         @media (max-width: 767px) {
           .portal-bottom-nav { display: flex !important; }
         }
       `}</style>
+    </div>
+  );
+}
+
+function AvatarMenu() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const user = getStoredUser();
+  const initial = (user?.name as string)?.[0]?.toUpperCase() ?? "?";
+  const displayName = (user?.name as string) ?? "Customer";
+  const displayEmail = (user?.email as string) ?? "";
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    if (open) document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title="Account menu"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          padding: 0,
+          fontFamily: "inherit",
+        }}
+      >
+        <span style={{ fontSize: 13, color: "var(--text-secondary)", fontWeight: 500 }}>
+          {displayName}
+        </span>
+        <div
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: "50%",
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--border)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "var(--text-secondary)",
+            fontSize: 13,
+            fontWeight: 600,
+            flexShrink: 0,
+            transition: "background 0.12s",
+          }}
+        >
+          {initial}
+        </div>
+      </button>
+
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 8px)",
+            right: 0,
+            width: 240,
+            background: "var(--bg-card)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+            zIndex: 200,
+            overflow: "hidden",
+          }}
+        >
+          {/* User info */}
+          <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>
+              {displayName}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+              {displayEmail}
+            </div>
+          </div>
+
+          {/* Menu items */}
+          <div style={{ padding: "6px 0" }}>
+            <Link
+              href="/portal/profile"
+              onClick={() => setOpen(false)}
+              style={{
+                display: "block",
+                padding: "10px 16px",
+                fontSize: 13,
+                color: "var(--text-secondary)",
+                textDecoration: "none",
+                transition: "background 0.1s",
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+            >
+              Profile
+            </Link>
+            <button
+              onClick={logout}
+              style={{
+                display: "block",
+                width: "100%",
+                padding: "10px 16px",
+                fontSize: 13,
+                color: "var(--danger)",
+                background: "none",
+                border: "none",
+                textAlign: "left",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                transition: "background 0.1s",
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
