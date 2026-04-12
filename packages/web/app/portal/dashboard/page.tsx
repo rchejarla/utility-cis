@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { StatCard } from "@/components/ui/stat-card";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { apiClient } from "@/lib/api-client";
 
 interface PortalDashboardData {
   customer: {
@@ -30,22 +31,12 @@ interface PortalDashboardData {
   }>;
 }
 
-function portalFetch<T>(path: string): Promise<T> {
-  const token = localStorage.getItem("portal_token") ?? "";
-  return fetch(`http://localhost:3001${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  }).then((r) => {
-    if (!r.ok) throw new Error(`${r.status}`);
-    return r.json() as Promise<T>;
-  });
-}
-
 export default function PortalDashboardPage() {
   const [data, setData] = useState<PortalDashboardData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    portalFetch<PortalDashboardData>("/portal/api/dashboard")
+    apiClient.get<PortalDashboardData>("/portal/api/dashboard")
       .then(setData)
       .catch(console.error)
       .finally(() => setLoading(false));

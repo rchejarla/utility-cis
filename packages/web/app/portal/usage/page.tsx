@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { apiClient } from "@/lib/api-client";
 
 interface Agreement {
   id: string;
@@ -26,16 +27,6 @@ interface ReadRow {
   meter: { meterNumber: string };
 }
 
-function portalFetch<T>(path: string): Promise<T> {
-  const token = typeof window !== "undefined" ? localStorage.getItem("portal_token") ?? localStorage.getItem("cis_token") ?? "" : "";
-  return fetch(`http://localhost:3001${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  }).then((r) => {
-    if (!r.ok) throw new Error(`${r.status}`);
-    return r.json() as Promise<T>;
-  });
-}
-
 type Granularity = "monthly" | "daily" | "hourly";
 
 export default function PortalUsagePage() {
@@ -47,7 +38,7 @@ export default function PortalUsagePage() {
   const [granularity, setGranularity] = useState<Granularity>("monthly");
 
   useEffect(() => {
-    portalFetch<{ accounts: AccountWithAgreements[] }>("/portal/api/dashboard")
+    apiClient.get<{ accounts: AccountWithAgreements[] }>("/portal/api/dashboard")
       .then((data) => {
         setAccounts(data.accounts ?? []);
         const all = (data.accounts ?? []).flatMap((a) => a.serviceAgreements);
@@ -62,7 +53,7 @@ export default function PortalUsagePage() {
   useEffect(() => {
     if (!selectedAgreementId) return;
     setReadsLoading(true);
-    portalFetch<{ data: ReadRow[] }>(
+    apiClient.get<{ data: ReadRow[] }>(
       `/portal/api/agreements/${selectedAgreementId}/usage?months=12`,
     )
       .then((res) => setReads(res.data ?? []))

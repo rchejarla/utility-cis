@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useToast } from "@/components/ui/toast";
+import { apiClient } from "@/lib/api-client";
 
 interface CustomerProfile {
   id: string;
@@ -13,21 +14,6 @@ interface CustomerProfile {
   phone?: string;
   altPhone?: string;
   status: string;
-}
-
-function portalFetch<T>(path: string, opts?: RequestInit): Promise<T> {
-  const token = localStorage.getItem("portal_token") ?? "";
-  return fetch(`http://localhost:3001${path}`, {
-    ...opts,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      ...opts?.headers,
-    },
-  }).then((r) => {
-    if (!r.ok) throw new Error(`${r.status}`);
-    return r.json() as Promise<T>;
-  });
 }
 
 const fieldStyle = {
@@ -61,7 +47,7 @@ export default function PortalProfilePage() {
   const [editForm, setEditForm] = useState({ email: "", phone: "", altPhone: "" });
 
   useEffect(() => {
-    portalFetch<{ data: CustomerProfile }>("/portal/api/profile")
+    apiClient.get<{ data: CustomerProfile }>("/portal/api/profile")
       .then((res) => {
         setProfile(res.data);
         setEditForm({
@@ -77,10 +63,7 @@ export default function PortalProfilePage() {
   async function handleSave() {
     setSaving(true);
     try {
-      const res = await portalFetch<{ data: CustomerProfile }>("/portal/api/profile", {
-        method: "PATCH",
-        body: JSON.stringify(editForm),
-      });
+      const res = await apiClient.patch<{ data: CustomerProfile }>("/portal/api/profile", editForm);
       setProfile(res.data);
       setEditing(false);
       toast("Profile updated", "success");
