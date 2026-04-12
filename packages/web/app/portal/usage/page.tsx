@@ -25,6 +25,7 @@ interface ReadRow {
   consumption: string;
   readType: string;
   meter: { meterNumber: string };
+  uom?: { code: string; name: string };
 }
 
 type Granularity = "monthly" | "daily" | "hourly";
@@ -60,6 +61,9 @@ export default function PortalUsagePage() {
       .catch(console.error)
       .finally(() => setReadsLoading(false));
   }, [selectedAgreementId]);
+
+  const uomLabel = reads[0]?.uom?.code ?? "";
+  const uomName = reads[0]?.uom?.name ?? "";
 
   const selectedAgreement = useMemo(() => {
     for (const acct of accounts) {
@@ -194,8 +198,11 @@ export default function PortalUsagePage() {
           at{" "}
           <strong style={{ color: "var(--text-secondary)" }}>
             {selectedAgreement.premise?.addressLine1}, {selectedAgreement.premise?.city}
-          </strong>{" "}
-          · last 12 months
+          </strong>
+          {uomLabel && (
+            <> · measured in <strong style={{ color: "var(--text-secondary)" }}>{uomName || uomLabel}</strong> ({uomLabel})</>
+          )}
+          {" "}· last 12 months
         </div>
       )}
 
@@ -234,7 +241,7 @@ export default function PortalUsagePage() {
                 >
                   <div
                     style={{ fontSize: 10, color: "var(--text-muted)", whiteSpace: "nowrap" }}
-                    title={`${d.total.toLocaleString()}`}
+                    title={`${d.total.toLocaleString()} ${uomLabel}`}
                   >
                     {d.total.toLocaleString()}
                   </div>
@@ -271,7 +278,7 @@ export default function PortalUsagePage() {
                   <th style={thStyle}>Date</th>
                   <th style={thStyle}>Meter</th>
                   <th style={thStyle}>Reading</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>Consumption</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>Consumption{uomLabel ? ` (${uomLabel})` : ""}</th>
                   <th style={thStyle}>Type</th>
                 </tr>
               </thead>
