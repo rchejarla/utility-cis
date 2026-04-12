@@ -3,7 +3,7 @@
 **Module:** 21 — SaaSLogic Billing Integration
 **Status:** Phase 3 — design complete, implementation pending
 **External system:** [SaaSLogic](https://docs.saaslogic.io) — third-party subscription billing platform
-**Entities:** new `SaaslogicResource`, `BillingLineItem`, `MeterIntervalRead`, `Invoice`, `SaaslogicCallLog`, `PollCursor`; new columns on `Customer`, `Commodity`, `RateSchedule`, `ServiceAgreement`
+**Entities:** new `BillingLineItem`, `MeterIntervalRead`, `Invoice`, `SaaslogicCallLog`, `PollCursor`; new columns on `Customer`, `Commodity`, `UnitOfMeasure`, `RateSchedule`, `ServiceAgreement`
 
 ## Overview
 
@@ -51,51 +51,50 @@ SaaSLogic base URL (sandbox): `https://api-sandbox.saaslogic.io/v1`. Production 
 | Entity | Column | Type | Notes |
 |---|---|---|---|
 | `customer` | `saaslogic_customer_id` | VARCHAR | Null until first subscription. Set by lazy upsert. |
-| `commodity` | `saaslogic_resource_id` | UUID FK | References `saaslogic_resource`. Null means commodity is not metered in SaaSLogic. |
+| `commodity` | `saaslogic_resource_id` | VARCHAR | Matching resource identifier in SaaSLogic. Null means commodity is not metered in SaaSLogic. |
+| `unit_of_measure` | `saaslogic_uom_id` | VARCHAR | Matching UOM identifier in SaaSLogic (the `uomId` field on usage records). Required for any UOM used by a commodity that is pushed to SaaSLogic. |
 | `rate_schedule` | `saaslogic_plan_id` | VARCHAR | Manually entered by admin. Null means rate is informational only. |
 | `service_agreement` | `saaslogic_subscription_id` | VARCHAR | Set when agreement activates and subscription is provisioned. |
 
-### SaaslogicResource
-
-Reference table of reusable metered resources defined on the SaaSLogic side. A single resource (e.g., "electric_kwh") is shared across every meter that measures that commodity.
-
-| Field | Type | Notes |
-|---|---|---|
-| id | UUID | PK |
-| utility_id | UUID | Tenant scope |
-| code | VARCHAR(64) | CIS-local code, e.g., `electric_kwh` |
-| saaslogic_resource_id | VARCHAR | Matching resource identifier in SaaSLogic |
-| description | TEXT | |
-| created_at / updated_at | TIMESTAMPTZ | |
-
-**Unique:** `(utility_id, code)`, `(utility_id, saaslogic_resource_id)`
-
 ### BillingLineItem
 
-A pending-or-sent charge for one agreement for one cycle. Metered consumption and fixed charges both land here before being pushed to SaaSLogic.
+One row per (agreement, commodity) per push event. Mirrors a single entry in the `usageDetails[]` array of a `POST /subscriptions/{subscriptionId}/resources` call. Multiple rows with the same `service_agreement_id` and `usage_date` are pushed together in a single POST — the array the user sends is built by grouping by agreement.
+
+All the SaaSLogic-side IDs (`subscriptionId`, `resourceId`, `uomId`) are **resolved at push time** from the normalized FKs below. They are not duplicated into dedicated columns because those mappings already live on their canonical entities (`service_agreement.saaslogic_subscription_id`, `commodity.saaslogic_resource_id`, `unit_of_measure.saaslogic_uom_id`). The exact resolved payload IS preserved on the row, but only inside the frozen `request_payload` JSONB — see below.
 
 | Field | Type | Notes |
 |---|---|---|
 | id | UUID | PK |
 | utility_id | UUID | Tenant scope |
-| service_agreement_id | UUID FK | |
-| billing_cycle_id | UUID FK | |
-| period_start | DATE | |
-| period_end | DATE | |
-| kind | ENUM | `METERED_CONSUMPTION`, `FIXED_CHARGE`, `ONE_TIME_FEE`, `ADJUSTMENT`, `DEPOSIT_APPLIED` |
-| commodity_id | UUID FK | Null for non-metered kinds |
-| saaslogic_resource_id | VARCHAR | Denormalized from commodity for the push payload |
-| quantity | NUMERIC(18,6) | |
-| uom | VARCHAR | Display only; SaaSLogic derives unit from resource |
-| description | TEXT | Free text shown on invoice |
-| source_ref | JSONB | Audit pointer (e.g., `{intervalReadIds: [...]}` or `{rateScheduleId, chargeCode}`) |
-| state | ENUM | `PENDING`, `SENT`, `ACKED`, `FAILED` |
-| idempotency_key | VARCHAR | `{cycle}:{subscription}:{resource}:{kind}` — unique |
-| saaslogic_response | JSONB | Raw response for audit |
-| error | TEXT | Populated when state = FAILED |
+| service_agreement_id | UUID FK | Subscription resolved at push time from `service_agreement.saaslogic_subscription_id` |
+| commodity_id | UUID FK | `saaslogic_resource_id` resolved at push time from `commodity.saaslogic_resource_id` |
+| uom_id | UUID FK | `saaslogic_uom_id` resolved at push time from `unit_of_measure.saaslogic_uom_id` |
+| value | NUMERIC(18,6) | Quantity sent in the push (aggregated from interval reads or direct from a `MeterRead` delta) |
+| usage_date | TIMESTAMPTZ | The `usageDate` on the POST body |
+| reporting_type | VARCHAR(16) | Default `Replace` — see idempotency note below |
+| billing_cycle_id | UUID FK | Which CIS cycle this row belongs to |
+| source_ref | JSONB | Audit pointer back into CIS (e.g. `{intervalReadIds: [...]}` or `{meterReadId: '...'}`) |
+| push_status | ENUM | `PENDING`, `PUSHED`, `FAILED`. Per-call status — there is no separate "sent vs acked" state because the push call is synchronous from CIS's perspective. |
+| request_payload | JSONB | **Frozen snapshot** of the exact JSON sent to SaaSLogic at push time, with resolved `subscriptionId`, `resourceId`, `uomId`, and `value`. This is the audit record of "what did we tell SaaSLogic" and survives any later re-mapping of commodity / UOM IDs. |
+| push_response | JSONB | SaaSLogic's response body. Pending confirmation of its shape. |
+| pushed_at | TIMESTAMPTZ | When the push succeeded |
+| error | TEXT | Populated when `push_status = FAILED` |
 | created_at / updated_at | TIMESTAMPTZ | |
 
-**Indexes:** `(billing_cycle_id, state)`, `(service_agreement_id, period_start)`, unique on `idempotency_key`.
+**Unique constraint:** `(service_agreement_id, commodity_id, usage_date)` — one row per commodity per push event per agreement. Retries update the existing row instead of creating new ones.
+
+**Indexes:** `(billing_cycle_id, push_status)`, `(service_agreement_id, usage_date DESC)`.
+
+#### Idempotency — `reportingType: "Replace"`
+
+SaaSLogic's `POST /subscriptions/{id}/resources` accepts a `reportingType` field on the request body. The two observed values so far are `Add` (cumulative — appends to whatever total is already reported for that period) and `Replace` (overwrites the prior value for the same `(subscriptionId, resourceId, usageDate)` tuple).
+
+CIS uses **`Replace`** as the default because it makes retries safe:
+
+- If a POST succeeded on SaaSLogic's side but the CIS process crashed before marking `push_status = PUSHED`, the retry sets the same value with `Replace` and no double-count occurs.
+- If a meter read is corrected after the cycle closed, CIS re-aggregates the line item and re-POSTs with the same `usage_date`. SaaSLogic overwrites the prior value. No separate reversal or credit memo flow is needed.
+
+**Assumption to confirm:** that `Replace` is in fact a supported `reportingType` value. Once we have SaaSLogic sandbox access this needs a live test — if `Replace` is rejected, we fall back to `Add` plus CIS-side client-tracked idempotency on `(service_agreement_id, commodity_id, usage_date)`, accepting that a crash between success and status write is a small double-count risk.
 
 ### MeterIntervalRead
 
@@ -228,14 +227,19 @@ Runs when a `BillingCycle` reaches its close date. For each ACTIVE agreement in 
 1. For each commodity served by the agreement's meters:
    - Sum `meter_interval_read.value` in `[period_start, period_end)`
    - Fall back to `(end_reading - start_reading) * multiplier` from `MeterRead` if interval data is missing
-   - Write one `BillingLineItem` with `kind = METERED_CONSUMPTION`
-2. For each fixed charge in the rate schedule:
-   - Write one `BillingLineItem` with `kind = FIXED_CHARGE`
-3. Batch-push all PENDING line items for the agreement via `POST /subscriptions/{id}/resources`
-4. Update line item state to `SENT` on 2xx, `FAILED` with error on non-retryable failure
-5. Retry FAILED items up to 3 times on a follow-up job run
+   - Upsert a `BillingLineItem` row keyed on `(service_agreement_id, commodity_id, usage_date)` with `value` set to the aggregated quantity and `push_status = PENDING`. `usage_date` is a stable value tied to the cycle's close date (e.g. `period_end 23:59:59`) so retries target the same row.
+2. Build one POST body per agreement: `{ usageDate, reportingType: "Replace", usageDetails: [...] }`. The `usageDetails` array is built by resolving each `BillingLineItem` row:
+   - `resourceId` ← `commodity.saaslogic_resource_id`
+   - `uomId` ← `unit_of_measure.saaslogic_uom_id`
+   - `value` ← `billing_line_item.value`
+3. POST to `/subscriptions/{subscriptionId}/resources` where `subscriptionId` comes from `service_agreement.saaslogic_subscription_id`.
+4. On 2xx: mark every row included in the payload as `PUSHED`, record `pushed_at`, and freeze the exact request JSON into `request_payload`.
+5. On non-2xx: mark every row included in the payload as `FAILED`, record the response body into `push_response`, and capture the error text.
+6. Retry FAILED rows on a follow-up job run. Because `reportingType: "Replace"` overwrites at SaaSLogic's side, retries are idempotent — a retry after a partial failure is safe even if the first call actually reached SaaSLogic.
 
-The idempotency key on each line item guarantees that a retried cycle close does not double-bill.
+The push call is all-or-nothing per agreement: the `usageDetails` array is a single SaaSLogic call, so every row in that array shares the same outcome. A failure is therefore one agreement, not one line item. This matches how the operator UI reports failures in the "Close history" tab.
+
+**Fixed charges and one-time fees.** The v1 cycle-close job pushes only metered consumption. Fixed charges (base fees, connection fees, monthly service charges) are assumed to live in the SaaSLogic plan configuration and are priced there automatically — CIS does not send them. If a use case emerges for sending fixed charges as line items, the natural path is `POST /invoices/on-demand` rather than the metered `/resources` endpoint, and would be a separate flow.
 
 ### Invoice reconciler (polling)
 
@@ -264,19 +268,20 @@ UI button on agreement detail → backend calls `GET /subscriptions/url` (or equ
 | GET | `/api/v1/invoices/:id` | Invoice detail (local mirror) | `billing:read` |
 | POST | `/api/v1/service-agreements/:id/ad-hoc-charge` | Create on-demand invoice in SaaSLogic | `billing:write` |
 | GET | `/api/v1/service-agreements/:id/payment-portal-url` | Fetch hosted portal redirect URL | `billing:read` |
-| POST | `/api/v1/billing-cycles/:id/close` | Trigger cycle close + push (idempotent) | `billing:admin` |
-| POST | `/api/v1/saaslogic-resources` / CRUD | Admin-manage resource reference table | `admin` |
+| POST | `/api/v1/billing-cycles/:id/close` | Trigger cycle close + push (idempotent via `Replace`) | `billing:admin` |
 
 New permission strings: `billing:read`, `billing:write`, `billing:admin`. Added to the RBAC seed.
 
 ## UI pages
 
-- **Settings → Billing** — SaaSLogic connection config (token, base URL), resource reference table management, test-connection button.
+- **Settings → Billing** — SaaSLogic connection config (token, base URL, sandbox toggle, polling interval). Commodity and UOM mapping to SaaSLogic IDs happens on the Commodity and UOM admin pages, not here.
+- **Commodity edit page** — adds `saaslogicResourceId` input with help text.
+- **Unit of measure edit page** — adds `saaslogicUomId` input with help text.
 - **Rate Schedule edit page** — adds `saaslogicPlanId` input with help text.
-- **ServiceAgreement detail page** — new "Billing" section showing subscription ID, link to SaaSLogic, "Issue ad-hoc charge" button, "Manage payment methods" button (redirect).
-- **Customer detail page** — new "Bills" tab listing mirrored invoices with hosted-URL link-outs and status badges.
-- **Meter detail page** — new "Interval reads" tab with a simple chart of recent intervals and a CSV import button.
-- **Billing cycle detail page** — shows line item batch state, counts by state, retry-failed button.
+- **ServiceAgreement detail page** — "Billing" tab showing subscription ID, last push timestamp, current cycle snapshot, recent invoices. "Manage payment methods" button redirects to SaaSLogic hosted portal.
+- **Customer detail page** — "Bills" tab listing mirrored invoices with hosted-URL link-outs and status badges.
+- **Meter detail page** — "Interval reads" tab with a simple chart of recent intervals and a CSV import button.
+- **Billing cycle detail page** — Overview tab with schedule + counts, Close history tab with prior cycle-close runs and per-run failure summaries. Failures are grouped by root cause (missing plan ID, missing resource mapping, etc.) so operators fix config once and re-run, rather than retrying rows individually.
 
 ## Security and compliance
 
@@ -289,18 +294,22 @@ New permission strings: `billing:read`, `billing:write`, `billing:admin`. Added 
 
 | Sub-phase | Scope | User-visible? |
 |---|---|---|
-| 3.2 | SaaSLogic client package, auth, call log, resource reference table, rate schedule `saaslogicPlanId` field, lazy customer upsert, subscription provisioning on agreement activate | Admin only |
+| 3.2 | SaaSLogic client package, auth, call log, `commodity.saaslogic_resource_id` + `unit_of_measure.saaslogic_uom_id` + `rate_schedule.saaslogic_plan_id` admin fields, lazy customer upsert, subscription provisioning on agreement activate | Admin only |
 | 3.3 | Interval read hypertable, ingestion endpoint, basic meter-detail chart | Yes |
-| 3.4 | Cycle close, aggregation, usage push, line item state machine, retry job | Admin only |
+| 3.4 | Cycle close — aggregation, `BillingLineItem` upsert, usage push with `reportingType: "Replace"`, retry job | Admin only |
 | 3.5 | Invoice mirror, polling reconciler, Bills tab on customer detail, payment-method redirect button | Yes |
-| 3.6 | On-demand invoice UI, ad-hoc charge flow, billing cycle retry-failed UI | Yes |
+| 3.6 | On-demand invoice UI, ad-hoc charge flow, billing cycle Close history tab with grouped failures | Yes |
 
 Each sub-phase is independently shippable and testable against the SaaSLogic sandbox.
 
 ## Open items
 
-1. **Webhook catalog** — confirm with SaaSLogic whether webhooks exist. If yes, replace polling with push in a follow-up.
-2. **Payment portal URL endpoint** — verify the exact endpoint and whether SSO token passing is required. Current design assumes `GET /subscriptions/url` returns a usable redirect URL.
-3. **Resource granularity on usage push** — confirm that `POST /subscriptions/{id}/resources` accepts one usage record per resource per cycle, not per meter per cycle. Design assumes the former.
-4. **Tax handling** — confirm SaaSLogic computes tax from plan + customer address, or whether CIS needs to send tax line items separately.
-5. **Multi-currency** — out of scope for 3.x. Single currency per tenant, stored in the tenant settings.
+Pending confirmation via SaaSLogic sandbox access or partner contact:
+
+1. **`reportingType: "Replace"` is a supported value.** This is the assumed idempotency mechanism for cycle close and retry safety. Must be verified with a live call. If rejected, fall back to `Add` + CIS-side state gating on `(service_agreement_id, commodity_id, usage_date)` uniqueness.
+2. **Response body shape for `POST /subscriptions/{id}/resources`.** Needed to know what to store in `BillingLineItem.push_response` and to surface useful error detail in the UI. Expected to include at minimum `{success: bool}` or an error object on failure; exact field names unknown.
+3. **Error structure on 4xx/5xx.** Structured codes vs free-text. If structured, CIS can group failures by code in the Close history view; if free-text, CIS has to regex-match common patterns or just display the raw string.
+4. **Webhook catalog** — confirm whether webhooks exist. If yes, replace polling with push in a follow-up. Design works either way.
+5. **Payment portal URL endpoint** — verify the exact endpoint and whether SSO token passing is required. Current design assumes `GET /subscriptions/url` returns a usable redirect URL.
+6. **Tax handling** — confirm SaaSLogic computes tax from plan + customer address, or whether CIS needs to send tax separately. Current design assumes SaaSLogic owns tax.
+7. **Multi-currency** — out of scope for 3.x. Single currency per tenant, stored in the tenant settings.

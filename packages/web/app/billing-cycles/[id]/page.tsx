@@ -4,7 +4,6 @@ import { useState, useEffect, use } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { CycleLineItemsTab } from "@/components/billing/cycle-line-items-tab";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { usePermission } from "@/lib/use-permission";
@@ -146,10 +145,7 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
       />
 
       <Tabs
-        tabs={[
-          { key: "overview", label: "Overview" },
-          { key: "line-items", label: "Line items" },
-        ]}
+        tabs={[{ key: "overview", label: "Overview" }]}
         activeTab={activeTab}
         onTabChange={setActiveTab}
       >
@@ -294,8 +290,6 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
             </div>
           </div>
         )}
-
-        {activeTab === "line-items" && <CycleLineItemsTab cycleId={cycle.id} />}
 
         {showDeactivateConfirm && (
           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>

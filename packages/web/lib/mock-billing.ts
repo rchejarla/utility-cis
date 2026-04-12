@@ -69,31 +69,6 @@ export interface MockAgreementBilling {
   }>;
 }
 
-export type LineItemState = "PENDING" | "SENT" | "ACKED" | "FAILED";
-
-export interface MockLineItem {
-  id: string;
-  agreementNumber: string;
-  customerName: string;
-  description: string;
-  amount: number;
-  state: LineItemState;
-  error?: string;
-  postedAt?: string;
-  saaslogicInvoice?: string;
-}
-
-export interface MockCycleLineItems {
-  totals: {
-    lineItems: number;
-    agreements: number;
-    pushedAmount: number;
-    failures: number;
-  };
-  byState: Record<LineItemState, MockLineItem[]>;
-  stateCounts: Record<LineItemState, number>;
-}
-
 // ─── Determinism helpers ─────────────────────────────────────────────
 
 /** Simple 32-bit hash so a given entity ID always produces the same
@@ -264,70 +239,6 @@ export function mockAgreementBilling(agreementId: string): MockAgreementBilling 
         status: "SYNCED",
       },
     ],
-  };
-}
-
-export function mockCycleLineItems(cycleId: string): MockCycleLineItems {
-  const rand = seededRandom(cycleId);
-
-  const mk = (
-    agreementNumber: string,
-    customerName: string,
-    description: string,
-    amount: number,
-    state: LineItemState,
-    extras: Partial<MockLineItem> = {},
-  ): MockLineItem => ({
-    id: `${cycleId}-${agreementNumber}`,
-    agreementNumber,
-    customerName,
-    description,
-    amount,
-    state,
-    ...extras,
-  });
-
-  const pending = [
-    mk("SA-30214", "C. Reyes", "electric · 340 kWh", 72.8, "PENDING"),
-    mk("SA-30215", "T. Okoro", "water · 4.8 kgal", 38.14, "PENDING"),
-    mk("SA-30218", "M. Haddad", "waste · 1 cart", 24.0, "PENDING"),
-    mk("SA-30222", "D. Lamarr", "electric · 812 kWh", 148.1, "PENDING"),
-    mk("SA-30228", "B. Vasquez", "water · 2.1 kgal", 18.44, "PENDING"),
-  ];
-  const sent = [
-    mk("SA-30184", "A. Fitzgerald", "posted 02:14", 212.56, "SENT", { postedAt: "02:14" }),
-    mk("SA-30185", "J. Stoyanov", "posted 02:14", 98.4, "SENT", { postedAt: "02:14" }),
-    mk("SA-30186", "R. Nakamura", "posted 02:15", 404.22, "SENT", { postedAt: "02:15" }),
-    mk("SA-30187", "L. Bianchi", "posted 02:15", 156.18, "SENT", { postedAt: "02:15" }),
-    mk("SA-30188", "K. Okafor", "posted 02:16", 412.8, "SENT", { postedAt: "02:16" }),
-  ];
-  const acked = [
-    mk("SA-30102", "V. Andersson", "invoice #0188", 282.0, "ACKED", { saaslogicInvoice: "#0188" }),
-    mk("SA-30103", "E. Morales", "invoice #0189", 344.12, "ACKED", { saaslogicInvoice: "#0189" }),
-    mk("SA-30104", "W. Chen", "invoice #0190", 198.8, "ACKED", { saaslogicInvoice: "#0190" }),
-    mk("SA-30105", "N. Johansen", "invoice #0191", 620.14, "ACKED", { saaslogicInvoice: "#0191" }),
-    mk("SA-30106", "P. Ferreira", "invoice #0192", 108.0, "ACKED", { saaslogicInvoice: "#0192" }),
-  ];
-  const failed = [
-    mk("SA-30091", "G. Rashid", "plan_not_found", 0, "FAILED", { error: "plan_not_found" }),
-    mk("SA-30092", "I. Petrov", "subscription_inactive", 0, "FAILED", { error: "subscription_inactive" }),
-    mk("SA-30098", "H. Tanaka", "resource_unknown", 0, "FAILED", { error: "resource_unknown" }),
-    mk("SA-30111", "Y. Bennett", "rate_limit · 429", 0, "FAILED", { error: "rate_limit · 429" }),
-    mk("SA-30129", "O. Moreau", "timeout", 0, "FAILED", { error: "timeout" }),
-  ];
-
-  // Totals are deterministic so they don't jitter between renders.
-  const pushed = round2(1_260_000 + rand() * 5000);
-
-  return {
-    totals: {
-      lineItems: 9042,
-      agreements: 4218,
-      pushedAmount: pushed,
-      failures: 7,
-    },
-    byState: { PENDING: pending, SENT: sent, ACKED: acked, FAILED: failed },
-    stateCounts: { PENDING: 312, SENT: 4912, ACKED: 3811, FAILED: 7 },
   };
 }
 
