@@ -38,6 +38,16 @@ export default function PortalUsagePage() {
   const [readsLoading, setReadsLoading] = useState(false);
   const [granularity, setGranularity] = useState<Granularity>("monthly");
 
+  // Date range — default trailing 12 months
+  const defaultTo = new Date().toISOString().slice(0, 7);
+  const defaultFrom = (() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 11);
+    return d.toISOString().slice(0, 7);
+  })();
+  const [fromMonth, setFromMonth] = useState(defaultFrom);
+  const [toMonth, setToMonth] = useState(defaultTo);
+
   useEffect(() => {
     apiClient.get<{ accounts: AccountWithAgreements[] }>("/portal/api/dashboard")
       .then((data) => {
@@ -55,12 +65,13 @@ export default function PortalUsagePage() {
     if (!selectedAgreementId) return;
     setReadsLoading(true);
     apiClient.get<{ data: ReadRow[] }>(
-      `/portal/api/agreements/${selectedAgreementId}/usage?months=12`,
+      `/portal/api/agreements/${selectedAgreementId}/usage`,
+      { from: fromMonth, to: toMonth },
     )
       .then((res) => setReads(res.data ?? []))
       .catch(console.error)
       .finally(() => setReadsLoading(false));
-  }, [selectedAgreementId]);
+  }, [selectedAgreementId, fromMonth, toMonth]);
 
   const uomLabel = reads[0]?.uom?.code ?? "";
   const uomName = reads[0]?.uom?.name ?? "";
@@ -158,7 +169,34 @@ export default function PortalUsagePage() {
         </div>
       </div>
 
-      {/* Granularity selector */}
+      {/* Date range + granularity */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 16,
+          marginBottom: 20,
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>From</label>
+          <input
+            type="month"
+            value={fromMonth}
+            onChange={(e) => setFromMonth(e.target.value)}
+            style={monthInputStyle}
+          />
+          <label style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 500 }}>To</label>
+          <input
+            type="month"
+            value={toMonth}
+            onChange={(e) => setToMonth(e.target.value)}
+            style={monthInputStyle}
+          />
+        </div>
+        <div style={{ width: 1, height: 24, background: "var(--border)", flexShrink: 0 }} />
+      </div>
       <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
         {(["monthly", "daily", "hourly"] as Granularity[]).map((g) => {
           const isActive = granularity === g;
@@ -202,7 +240,7 @@ export default function PortalUsagePage() {
           {uomLabel && (
             <> · measured in <strong style={{ color: "var(--text-secondary)" }}>{uomName || uomLabel}</strong> ({uomLabel})</>
           )}
-          {" "}· last 12 months
+          {" "}· {fromMonth} to {toMonth}
         </div>
       )}
 
@@ -307,9 +345,36 @@ export default function PortalUsagePage() {
           </div>
         </>
       )}
+
+      {/* Cost note */}
+      <div
+        style={{
+          marginTop: 20,
+          padding: "12px 16px",
+          background: "var(--bg-card)",
+          border: "1px dashed var(--border)",
+          borderRadius: "var(--radius)",
+          fontSize: 12,
+          color: "var(--text-muted)",
+          lineHeight: 1.6,
+        }}
+      >
+        Cost data will be available here once the billing integration with SaaSLogic is live. Until then, only consumption quantities are shown. For your current charges, check the Bills page.
+      </div>
     </div>
   );
 }
+
+const monthInputStyle: React.CSSProperties = {
+  padding: "6px 10px",
+  fontSize: 13,
+  background: "var(--bg-deep)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius)",
+  color: "var(--text-primary)",
+  fontFamily: "inherit",
+  outline: "none",
+};
 
 const thStyle: React.CSSProperties = {
   padding: "10px 16px",

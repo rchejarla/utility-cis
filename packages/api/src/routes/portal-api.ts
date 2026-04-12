@@ -141,7 +141,8 @@ export async function portalApiRoutes(app: FastifyInstance) {
   );
 
   const usageQuerySchema = z.object({
-    months: z.coerce.number().int().min(1).max(36).default(12),
+    from: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+    to: z.string().regex(/^\d{4}-\d{2}$/).optional(),
   });
 
   app.get(
@@ -150,7 +151,14 @@ export async function portalApiRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const customerId = requireCustomerId(request);
       const { agreementId } = request.params as { agreementId: string };
-      const { months } = usageQuerySchema.parse(request.query);
+      const query = usageQuerySchema.parse(request.query);
+
+      // Default: trailing 12 months. Max range: 36 months.
+      const now = new Date();
+      const toDate = query.to ? new Date(query.to + "-28") : now;
+      const defaultFrom = new Date(now);
+      defaultFrom.setMonth(defaultFrom.getMonth() - 12);
+      const fromDate = query.from ? new Date(query.from + "-01") : defaultFrom;
 
       const agreement = await prisma.serviceAgreement.findFirst({
         where: {
@@ -166,13 +174,10 @@ export async function portalApiRoutes(app: FastifyInstance) {
         });
       }
 
-      const since = new Date();
-      since.setMonth(since.getMonth() - months);
-
       const reads = await prisma.meterRead.findMany({
         where: {
           serviceAgreementId: agreementId,
-          readDate: { gte: since },
+          readDate: { gte: fromDate, lte: toDate },
         },
         select: {
           id: true,
