@@ -14,7 +14,6 @@ export const SETTINGS_SECTIONS: SettingsSectionLink[] = [
   { slug: "branding", label: "Branding" },
   { slug: "numbering", label: "Numbering" },
   { slug: "custom-fields", label: "Custom Fields" },
-  { slug: "notification-templates", label: "Notification Templates" },
   { slug: "billing", label: "Billing Integration" },
   { slug: "notifications", label: "Notifications" },
   { slug: "retention", label: "Retention & Audit" },
