@@ -63,6 +63,8 @@ vi.mock("../lib/prisma.js", () => {
       tenantModule: crud(),
       tenantConfig: crud(),
       customFieldSchema: crud(),
+      notificationTemplate: crud(),
+      notification: crud(),
       serviceSuspension: crud(),
       suspensionTypeDef: crud(),
       meterEvent: crud(),

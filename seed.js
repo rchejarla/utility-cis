@@ -384,6 +384,185 @@ async function main() {
   }
   console.log("  " + suspensionTypes.length + " suspension type defs");
 
+  // Seed notification templates
+  const notifTemplates = [
+    {
+      name: "Past Due Reminder",
+      eventType: "delinquency.tier_1",
+      description: "First notice — friendly reminder that the account is past due.",
+      channels: {
+        email: {
+          subject: "Reminder: Your utility account {{account.accountNumber}} is past due",
+          body: "Dear {{customer.firstName}},\n\nThis is a friendly reminder that your account {{account.accountNumber}} has a balance of {{delinquency.balance}} that is {{delinquency.daysPastDue}} days past due.\n\nPlease make a payment at your earliest convenience.\n\nThank you,\n{{utility.name}}",
+        },
+        sms: { body: "{{customer.firstName}}, your utility account {{account.accountNumber}} is {{delinquency.daysPastDue}} days past due. Balance: {{delinquency.balance}}." },
+      },
+      variables: [
+        { key: "customer.firstName", label: "Customer first name", sample: "Jane" },
+        { key: "account.accountNumber", label: "Account number", sample: "AC-00001" },
+        { key: "delinquency.balance", label: "Balance due", sample: "$412.80" },
+        { key: "delinquency.daysPastDue", label: "Days past due", sample: "10" },
+        { key: "utility.name", label: "Utility name", sample: "Bozeman Utilities" },
+      ],
+    },
+    {
+      name: "Formal Past Due Notice",
+      eventType: "delinquency.tier_2",
+      description: "Second notice — formal letter warning of potential shut-off.",
+      channels: {
+        email: {
+          subject: "IMPORTANT: Past due notice for account {{account.accountNumber}}",
+          body: "Dear {{customer.firstName}},\n\nYour account {{account.accountNumber}} has an outstanding balance of {{delinquency.balance}}, now {{delinquency.daysPastDue}} days past due.\n\nIf payment is not received within 10 days, your service may be subject to disconnection.\n\nPlease contact us at {{utility.email}} to discuss payment options.\n\n{{utility.name}}",
+        },
+      },
+      variables: [
+        { key: "customer.firstName", label: "Customer first name", sample: "Jane" },
+        { key: "account.accountNumber", label: "Account number", sample: "AC-00001" },
+        { key: "delinquency.balance", label: "Balance due", sample: "$412.80" },
+        { key: "delinquency.daysPastDue", label: "Days past due", sample: "20" },
+        { key: "utility.email", label: "Utility email", sample: "billing@bozeman.gov" },
+        { key: "utility.name", label: "Utility name", sample: "Bozeman Utilities" },
+      ],
+    },
+    {
+      name: "Shut-Off Warning — 48 Hours",
+      eventType: "delinquency.tier_3",
+      description: "Final warning before shut-off eligibility.",
+      channels: {
+        email: {
+          subject: "URGENT: Service disconnection warning — {{account.accountNumber}}",
+          body: "Dear {{customer.firstName}},\n\nThis is your final notice. Your account {{account.accountNumber}} has an unpaid balance of {{delinquency.balance}}, now {{delinquency.daysPastDue}} days past due.\n\nYour service will be eligible for disconnection in 48 hours unless payment is received.\n\nPay now: {{portal.paymentUrl}}\n\n{{utility.name}}",
+        },
+        sms: { body: "URGENT: {{customer.firstName}}, your utility service may be disconnected in 48 hours. Balance: {{delinquency.balance}}. Pay now: {{portal.paymentUrl}}" },
+      },
+      variables: [
+        { key: "customer.firstName", label: "Customer first name", sample: "Jane" },
+        { key: "account.accountNumber", label: "Account number", sample: "AC-00001" },
+        { key: "delinquency.balance", label: "Balance due", sample: "$412.80" },
+        { key: "delinquency.daysPastDue", label: "Days past due", sample: "30" },
+        { key: "portal.paymentUrl", label: "Payment URL", sample: "https://portal.example.com/bills" },
+        { key: "utility.name", label: "Utility name", sample: "Bozeman Utilities" },
+      ],
+    },
+    {
+      name: "Service Disconnection Notice",
+      eventType: "delinquency.tier_4",
+      description: "Notice that service has been or will be disconnected.",
+      channels: {
+        email: {
+          subject: "Service disconnection — Account {{account.accountNumber}}",
+          body: "Dear {{customer.firstName}},\n\nYour service on account {{account.accountNumber}} has been scheduled for disconnection due to an unpaid balance of {{delinquency.balance}}.\n\nTo restore service, please pay the full balance and contact us to schedule reconnection.\n\n{{utility.name}}\n{{utility.email}}",
+        },
+        sms: { body: "{{customer.firstName}}, your utility service on account {{account.accountNumber}} is being disconnected. Balance: {{delinquency.balance}}. Contact us to resolve." },
+      },
+      variables: [
+        { key: "customer.firstName", label: "Customer first name", sample: "Jane" },
+        { key: "account.accountNumber", label: "Account number", sample: "AC-00001" },
+        { key: "delinquency.balance", label: "Balance due", sample: "$412.80" },
+        { key: "utility.name", label: "Utility name", sample: "Bozeman Utilities" },
+        { key: "utility.email", label: "Utility email", sample: "billing@bozeman.gov" },
+      ],
+    },
+    {
+      name: "Portal Welcome",
+      eventType: "portal.welcome",
+      description: "Sent when a customer registers for portal access.",
+      channels: {
+        email: {
+          subject: "Welcome to {{utility.name}} Customer Portal",
+          body: "Dear {{customer.firstName}},\n\nYour customer portal account has been created. You can now view your bills, monitor usage, and manage your account online.\n\nLog in: {{portal.loginUrl}}\n\nWelcome aboard!\n{{utility.name}}",
+        },
+      },
+      variables: [
+        { key: "customer.firstName", label: "Customer first name", sample: "Jane" },
+        { key: "portal.loginUrl", label: "Portal login URL", sample: "https://portal.example.com/login" },
+        { key: "utility.name", label: "Utility name", sample: "Bozeman Utilities" },
+      ],
+    },
+    {
+      name: "High Usage Alert",
+      eventType: "meter.high_usage",
+      description: "Sent when consumption exceeds a threshold.",
+      channels: {
+        email: {
+          subject: "High usage alert — {{meter.meterNumber}} at {{premise.addressLine1}}",
+          body: "Dear {{customer.firstName}},\n\nWe detected unusually high consumption on meter {{meter.meterNumber}} at {{premise.addressLine1}}, {{premise.city}}.\n\nPlease check for leaks or unexpected usage. View your usage: {{portal.usageUrl}}\n\n{{utility.name}}",
+        },
+        sms: { body: "{{customer.firstName}}, high usage detected on meter {{meter.meterNumber}} at {{premise.addressLine1}}. Check for leaks. Details: {{portal.usageUrl}}" },
+      },
+      variables: [
+        { key: "customer.firstName", label: "Customer first name", sample: "Jane" },
+        { key: "meter.meterNumber", label: "Meter number", sample: "WM-001" },
+        { key: "premise.addressLine1", label: "Address", sample: "123 Main St" },
+        { key: "premise.city", label: "City", sample: "Bozeman" },
+        { key: "portal.usageUrl", label: "Usage URL", sample: "https://portal.example.com/usage" },
+        { key: "utility.name", label: "Utility name", sample: "Bozeman Utilities" },
+      ],
+    },
+    {
+      name: "Possible Leak Detected",
+      eventType: "meter.leak_detected",
+      description: "Sent when continuous non-zero usage is detected during off-hours.",
+      channels: {
+        email: {
+          subject: "Possible leak detected at {{premise.addressLine1}}",
+          body: "Dear {{customer.firstName}},\n\nMeter {{meter.meterNumber}} at {{premise.addressLine1}} is showing continuous consumption during hours when usage is typically zero. This may indicate a leak.\n\nPlease investigate or contact us for assistance.\n\n{{utility.name}}",
+        },
+        sms: { body: "{{customer.firstName}}, possible leak detected at {{premise.addressLine1}} (meter {{meter.meterNumber}}). Please investigate." },
+      },
+      variables: [
+        { key: "customer.firstName", label: "Customer first name", sample: "Jane" },
+        { key: "meter.meterNumber", label: "Meter number", sample: "WM-001" },
+        { key: "premise.addressLine1", label: "Address", sample: "123 Main St" },
+        { key: "utility.name", label: "Utility name", sample: "Bozeman Utilities" },
+      ],
+    },
+    {
+      name: "Move-In Confirmation",
+      eventType: "service.move_in_confirmation",
+      description: "Sent after a successful move-in workflow.",
+      channels: {
+        email: {
+          subject: "Service activated at {{premise.addressLine1}} — Account {{account.accountNumber}}",
+          body: "Dear {{customer.firstName}},\n\nYour utility service has been activated at {{premise.addressLine1}}, {{premise.city}}, {{premise.state}} {{premise.zip}}.\n\nAccount number: {{account.accountNumber}}\n\nView your account: {{portal.loginUrl}}\n\n{{utility.name}}",
+        },
+      },
+      variables: [
+        { key: "customer.firstName", label: "Customer first name", sample: "Jane" },
+        { key: "account.accountNumber", label: "Account number", sample: "AC-00001" },
+        { key: "premise.addressLine1", label: "Address", sample: "123 Main St" },
+        { key: "premise.city", label: "City", sample: "Bozeman" },
+        { key: "premise.state", label: "State", sample: "MT" },
+        { key: "premise.zip", label: "ZIP", sample: "59715" },
+        { key: "portal.loginUrl", label: "Portal URL", sample: "https://portal.example.com/login" },
+        { key: "utility.name", label: "Utility name", sample: "Bozeman Utilities" },
+      ],
+    },
+    {
+      name: "Move-Out Confirmation",
+      eventType: "service.move_out_confirmation",
+      description: "Sent after a successful move-out workflow.",
+      channels: {
+        email: {
+          subject: "Service closed at {{premise.addressLine1}} — Final bill pending",
+          body: "Dear {{customer.firstName}},\n\nYour utility service at {{premise.addressLine1}} has been closed as of your requested date.\n\nA final bill will be generated and sent to you shortly.\n\nThank you for being a customer.\n{{utility.name}}",
+        },
+      },
+      variables: [
+        { key: "customer.firstName", label: "Customer first name", sample: "Jane" },
+        { key: "premise.addressLine1", label: "Address", sample: "123 Main St" },
+        { key: "utility.name", label: "Utility name", sample: "Bozeman Utilities" },
+      ],
+    },
+  ];
+  for (const t of notifTemplates) {
+    const existing = await p.notificationTemplate.findUnique({ where: { utilityId_eventType: { utilityId: UID, eventType: t.eventType } } });
+    if (!existing) {
+      await p.notificationTemplate.create({ data: { utilityId: UID, ...t } });
+    }
+  }
+  console.log("  " + notifTemplates.length + " notification templates");
+
   const testUsers = [
     { id: "00000000-0000-4000-8000-000000000091", email: "sysadmin@utility.com", name: "Sarah Mitchell", roleIdx: 0 },  // System Admin
     { id: "00000000-0000-4000-8000-000000000092", email: "admin@utility.com", name: "Michael Chen", roleIdx: 1 },       // Utility Admin

@@ -33,7 +33,9 @@ import { tenantConfigRoutes } from "./routes/tenant-config.js";
 import { customFieldSchemaRoutes } from "./routes/custom-field-schemas.js";
 import { serviceEventRoutes } from "./routes/service-events.js";
 import { startSuspensionScheduler } from "./schedulers/suspension-scheduler.js";
+import { startNotificationSendJob } from "./services/notification.service.js";
 import { workflowRoutes } from "./routes/workflows.js";
+import { notificationRoutes } from "./routes/notifications.js";
 import { portalAuthRoutes } from "./routes/portal-auth.js";
 import { portalApiRoutes } from "./routes/portal-api.js";
 import { buildOpenApiDocument } from "./lib/openapi.js";
@@ -98,6 +100,7 @@ export async function buildApp() {
   await app.register(customFieldSchemaRoutes);
   await app.register(serviceEventRoutes);
   await app.register(workflowRoutes);
+  await app.register(notificationRoutes);
   await app.register(portalAuthRoutes);
   await app.register(portalApiRoutes);
 
@@ -109,6 +112,7 @@ export async function buildApp() {
   // in tests and any worker process that shouldn't run side effects.
   if (process.env.DISABLE_SCHEDULERS !== "true") {
     startSuspensionScheduler(app.log);
+    startNotificationSendJob(app.log);
   }
 
   return app;

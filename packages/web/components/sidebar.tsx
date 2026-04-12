@@ -28,6 +28,7 @@ import {
   faTruck,
   faArrowRightArrowLeft,
   faUserShield,
+  faEnvelope,
 } from "@fortawesome/pro-solid-svg-icons";
 
 interface NavItem {
@@ -76,6 +77,7 @@ const navSections: NavSection[] = [
     title: "System",
     items: [
       { href: "/audit-log", label: "Audit Log", icon: faClipboardList, module: "audit_log" },
+      { href: "/notifications", label: "Notifications", icon: faEnvelope, module: "settings" },
       { href: "/theme", label: "Theme Editor", icon: faPalette, module: "theme" },
     ],
   },

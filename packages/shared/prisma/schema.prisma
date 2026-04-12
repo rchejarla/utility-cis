@@ -525,8 +525,9 @@ model Customer {
   // Relations
   accounts      Account[]
   contacts      Contact[]
-  ownedPremises Premise[]  @relation("PremiseOwner")
+  ownedPremises Premise[]      @relation("PremiseOwner")
   portalUsers   CisUser[]
+  notifications Notification[]
 
   @@index([utilityId, lastName, firstName])
   @@index([utilityId, email])
@@ -963,4 +964,74 @@ model ImportBatch {
   @@index([utilityId, status])
   @@index([utilityId, createdAt])
   @@map("import_batch")
+}
+
+// ─── Notifications (Module 13) ──────────────────────────────────
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+
+  @@map("notification_channel")
+}
+
+enum NotificationStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+
+  @@map("notification_status")
+}
+
+model NotificationTemplate {
+  id          String   @id @default(uuid()) @db.Uuid
+  utilityId   String   @map("utility_id") @db.Uuid
+  name        String   @db.VarChar(255)
+  eventType   String   @map("event_type") @db.VarChar(100)
+  description String?  @db.Text
+  channels    Json     @default("{}") @map("channels")
+  variables   Json     @default("[]") @map("variables")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  notifications Notification[]
+
+  @@unique([utilityId, eventType])
+  @@index([utilityId, isActive])
+  @@map("notification_template")
+}
+
+model Notification {
+  id                String              @id @default(uuid()) @db.Uuid
+  utilityId         String              @map("utility_id") @db.Uuid
+  templateId        String?             @map("template_id") @db.Uuid
+  eventType         String              @map("event_type") @db.VarChar(100)
+  channel           NotificationChannel
+  recipientEmail    String?             @map("recipient_email") @db.VarChar(255)
+  recipientPhone    String?             @map("recipient_phone") @db.VarChar(20)
+  customerId        String?             @map("customer_id") @db.Uuid
+  accountId         String?             @map("account_id") @db.Uuid
+  context           Json                @default("{}") @map("context")
+  resolvedVariables Json                @default("{}") @map("resolved_variables")
+  resolvedSubject   String?             @map("resolved_subject") @db.Text
+  resolvedBody      String              @map("resolved_body") @db.Text
+  status            NotificationStatus  @default(PENDING)
+  provider          String?             @db.VarChar(50)
+  providerMessageId String?             @map("provider_message_id") @db.VarChar(255)
+  error             String?             @db.Text
+  attempts          Int                 @default(0)
+  sentAt            DateTime?           @map("sent_at") @db.Timestamptz
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz
+
+  template NotificationTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  customer Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([utilityId, status, createdAt])
+  @@index([customerId, createdAt])
+  @@index([accountId, createdAt])
+  @@index([templateId])
+  @@index([eventType, createdAt])
+  @@map("notification")
 }
