@@ -255,14 +255,20 @@ export async function createMeterRead(
     data.serviceAgreementId ??
     (await resolveServiceAgreementId(utilityId, data.meterId, readDate));
 
-  const { priorReading, consumption, exceptionCode: autoException } =
-    await computeConsumption(
-      utilityId,
-      data.meterId,
-      data.registerId ?? null,
-      data.reading,
-      readDatetime,
-    );
+  const [{ priorReading, consumption, exceptionCode: autoException }, meter] =
+    await Promise.all([
+      computeConsumption(
+        utilityId,
+        data.meterId,
+        data.registerId ?? null,
+        data.reading,
+        readDatetime,
+      ),
+      prisma.meter.findUniqueOrThrow({
+        where: { id: data.meterId },
+        select: { uomId: true },
+      }),
+    ]);
 
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "MeterRead" },
@@ -274,6 +280,7 @@ export async function createMeterRead(
           meterId: data.meterId,
           serviceAgreementId,
           registerId: data.registerId ?? null,
+          uomId: meter.uomId,
           readDate,
           readDatetime,
           reading: data.reading,
@@ -327,12 +334,18 @@ export async function correctMeterRead(
       readDatetime,
     );
 
+  const meter = await prisma.meter.findUniqueOrThrow({
+    where: { id: original.meterId },
+    select: { uomId: true },
+  });
+
   const corrected = await prisma.meterRead.create({
     data: {
       utilityId,
       meterId: original.meterId,
       serviceAgreementId: original.serviceAgreementId,
       registerId: original.registerId,
+      uomId: meter.uomId,
       readDate,
       readDatetime,
       reading: data.reading,

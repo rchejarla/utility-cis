@@ -85,11 +85,13 @@ export async function transferService(
     if (data.finalMeterReading !== undefined) {
       const primary = source.meters.find((m) => m.isPrimary) ?? source.meters[0];
       if (primary) {
+        const pm = await tx.meter.findUniqueOrThrow({ where: { id: primary.meterId }, select: { uomId: true } });
         await tx.meterRead.create({
           data: {
             utilityId,
             meterId: primary.meterId,
             serviceAgreementId: source.id,
+            uomId: pm.uomId,
             readDate: transferDate,
             readDatetime: transferDate,
             reading: data.finalMeterReading,
@@ -150,11 +152,13 @@ export async function transferService(
     if (data.initialMeterReading !== undefined) {
       const primary = newAgreement.meters.find((m) => m.isPrimary) ?? newAgreement.meters[0];
       if (primary) {
+        const pm2 = await tx.meter.findUniqueOrThrow({ where: { id: primary.meterId }, select: { uomId: true } });
         await tx.meterRead.create({
           data: {
             utilityId,
             meterId: primary.meterId,
             serviceAgreementId: newAgreement.id,
+            uomId: pm2.uomId,
             readDate: transferDate,
             readDatetime: transferDate,
             reading: data.initialMeterReading,
@@ -294,11 +298,13 @@ export async function moveIn(
               addedDate: moveInDate,
             },
           });
+          const irm = await tx.meter.findUniqueOrThrow({ where: { id: ir.meterId }, select: { uomId: true } });
           await tx.meterRead.create({
             data: {
               utilityId,
               meterId: ir.meterId,
               serviceAgreementId: sa.id,
+              uomId: irm.uomId,
               readDate: moveInDate,
               readDatetime: moveInDate,
               reading: ir.reading,
@@ -379,11 +385,13 @@ export async function moveOut(
       for (const am of agreementMeters) {
         const reading = readingsByMeter.get(am.meterId);
         if (reading !== undefined) {
+          const fmr = await tx.meter.findUniqueOrThrow({ where: { id: am.meterId }, select: { uomId: true } });
           await tx.meterRead.create({
             data: {
               utilityId,
               meterId: am.meterId,
               serviceAgreementId: sa.id,
+              uomId: fmr.uomId,
               readDate: moveOutDate,
               readDatetime: moveOutDate,
               reading,

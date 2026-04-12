@@ -159,7 +159,7 @@ async function main() {
   // These give the portal usage page real data to chart. Each month has one ACTUAL read.
   const saList = await p.serviceAgreement.findMany({
     where: { utilityId: UID },
-    include: { meters: true },
+    include: { meters: { include: { meter: { select: { uomId: true } } } } },
     orderBy: { agreementNumber: "asc" },
   });
   const sa0001 = saList.find(s => s.agreementNumber === "SA-0001");
@@ -171,6 +171,7 @@ async function main() {
   ]) {
     if (!sa || !sa.meters[0]) continue;
     const meterId = sa.meters[0].meterId;
+    const uomId = sa.meters[0].meter.uomId;
     let running = baseReading;
     for (let m = 11; m >= 0; m--) {
       const d = new Date();
@@ -184,6 +185,7 @@ async function main() {
           utilityId: UID,
           meterId,
           serviceAgreementId: sa.id,
+          uomId,
           readDate: d,
           readDatetime: d,
           reading: running,

@@ -204,6 +204,7 @@ model UnitOfMeasure {
   commodityDefault Commodity[]     @relation("DefaultUom")
   meters           Meter[]
   meterRegisters   MeterRegister[]
+  meterReads       MeterRead[]
 
   @@unique([utilityId, commodityId, code])
   @@index([commodityId])
@@ -420,6 +421,7 @@ model MeterRead {
   meterId            String     @map("meter_id") @db.Uuid
   serviceAgreementId String     @map("service_agreement_id") @db.Uuid
   registerId         String?    @map("register_id") @db.Uuid
+  uomId              String     @map("uom_id") @db.Uuid
   readDate           DateTime   @map("read_date") @db.Date
   readDatetime       DateTime   @map("read_datetime") @db.Timestamptz
   reading            Decimal    @map("reading") @db.Decimal(12, 4)
@@ -441,6 +443,7 @@ model MeterRead {
   meter            Meter            @relation(fields: [meterId], references: [id], onDelete: Restrict)
   serviceAgreement ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Restrict)
   register         MeterRegister?   @relation(fields: [registerId], references: [id], onDelete: SetNull)
+  uom              UnitOfMeasure    @relation(fields: [uomId], references: [id], onDelete: Restrict)
 
   // Composite PK: TimescaleDB hypertables require the partition column
   // (readDatetime) to appear in every unique constraint, including the PK.

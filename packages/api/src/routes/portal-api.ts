@@ -178,6 +178,7 @@ export async function portalApiRoutes(app: FastifyInstance) {
           consumption: true,
           readType: true,
           meter: { select: { meterNumber: true } },
+          uom: { select: { code: true, name: true } },
         },
         orderBy: { readDate: "asc" },
       });
