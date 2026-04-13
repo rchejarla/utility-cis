@@ -126,6 +126,115 @@ function NavItemWithPermission({ item, collapsed, isActive }: { item: NavItem; c
   );
 }
 
+const SECTION_COLLAPSE_KEY = "cis_nav_collapsed_sections";
+
+function getCollapsedSections(): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = localStorage.getItem(SECTION_COLLAPSE_KEY);
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveCollapsedSections(set: Set<string>) {
+  if (typeof window !== "undefined") {
+    localStorage.setItem(SECTION_COLLAPSE_KEY, JSON.stringify([...set]));
+  }
+}
+
+function CollapsibleSection({
+  section,
+  pathname,
+  sidebarCollapsed,
+}: {
+  section: NavSection;
+  pathname: string;
+  sidebarCollapsed: boolean;
+}) {
+  const hasActiveItem = section.items.some(
+    (item) => pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href)),
+  );
+
+  const [sectionOpen, setSectionOpen] = useState(() => {
+    if (hasActiveItem) return true;
+    return !getCollapsedSections().has(section.title);
+  });
+
+  useEffect(() => {
+    if (hasActiveItem && !sectionOpen) setSectionOpen(true);
+  }, [hasActiveItem]);
+
+  const toggleSection = () => {
+    const next = !sectionOpen;
+    setSectionOpen(next);
+    const set = getCollapsedSections();
+    if (next) set.delete(section.title);
+    else set.add(section.title);
+    saveCollapsedSections(set);
+  };
+
+  return (
+    <div style={{ marginBottom: 4 }}>
+      {!sidebarCollapsed && (
+        <button
+          onClick={toggleSection}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            width: "100%",
+            padding: "8px 20px 4px",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            fontFamily: "inherit",
+          }}
+        >
+          <span
+            style={{
+              color: "var(--text-muted)",
+              fontSize: 10,
+              fontWeight: 600,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {section.title}
+          </span>
+          <span
+            style={{
+              fontSize: 8,
+              color: "var(--text-muted)",
+              transition: "transform 0.15s",
+              transform: sectionOpen ? "rotate(0deg)" : "rotate(-90deg)",
+            }}
+          >
+            ▼
+          </span>
+        </button>
+      )}
+      {sidebarCollapsed && section !== navSections[0] && (
+        <div style={{ height: 1, background: "var(--border)", margin: "6px 12px" }} />
+      )}
+      {(sidebarCollapsed || sectionOpen) &&
+        section.items.map((item) => {
+          const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
+          return (
+            <NavItemWithPermission
+              key={item.href}
+              item={item}
+              collapsed={sidebarCollapsed}
+              isActive={isActive}
+            />
+          );
+        })}
+    </div>
+  );
+}
+
 interface SidebarProps {
   defaultCollapsed?: boolean;
 }
@@ -230,37 +339,12 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
       {/* Nav */}
       <nav style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "12px 0" }}>
         {navSections.map((section) => (
-          <div key={section.title} style={{ marginBottom: 4 }}>
-            {!collapsed && (
-              <div
-                style={{
-                  padding: "8px 20px 4px",
-                  color: "var(--text-muted)",
-                  fontSize: 10,
-                  fontWeight: 600,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.08em",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {section.title}
-              </div>
-            )}
-            {collapsed && section !== navSections[0] && (
-              <div style={{ height: 1, background: "var(--border)", margin: "6px 12px" }} />
-            )}
-            {section.items.map((item) => {
-              const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
-              return (
-                <NavItemWithPermission
-                  key={item.href}
-                  item={item}
-                  collapsed={collapsed}
-                  isActive={isActive}
-                />
-              );
-            })}
-          </div>
+          <CollapsibleSection
+            key={section.title}
+            section={section}
+            pathname={pathname}
+            sidebarCollapsed={collapsed}
+          />
         ))}
       </nav>
 
