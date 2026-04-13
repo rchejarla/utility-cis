@@ -5,3 +5,4 @@ export * from "./modules/constants";
 export * from "./lib/number-template";
 export * from "./lib/base-list-query";
 export * from "./lib/custom-fields";
+export * from "./lib/notification-events";

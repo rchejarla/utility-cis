@@ -9,6 +9,7 @@ import { usePermission } from "@/lib/use-permission";
 import { useToast } from "@/components/ui/toast";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { settingInputStyle } from "@/components/settings/settings-shell";
+import { NOTIFICATION_EVENT_TYPES } from "@utility-cis/shared";
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -380,7 +381,31 @@ function TemplateForm({ initial, onSave, onCancel }: TemplateFormProps) {
         </div>
         <div>
           <SmallLabel>Event type</SmallLabel>
-          <input style={{ ...settingInputStyle, width: "100%", fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }} value={eventType} onChange={(e) => setEventType(e.target.value)} placeholder="delinquency.tier_1" disabled={!!initial} />
+          {initial ? (
+            <input style={{ ...settingInputStyle, width: "100%", fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }} value={eventType} disabled />
+          ) : (
+            <select
+              style={{ ...settingInputStyle, width: "100%" }}
+              value={eventType}
+              onChange={(e) => setEventType(e.target.value)}
+            >
+              <option value="">Select event type...</option>
+              {Object.entries(
+                NOTIFICATION_EVENT_TYPES.reduce<Record<string, typeof NOTIFICATION_EVENT_TYPES[number][]>>((acc, ev) => {
+                  (acc[ev.category] ??= []).push(ev);
+                  return acc;
+                }, {}),
+              ).map(([category, events]) => (
+                <optgroup key={category} label={category}>
+                  {events.map((ev) => (
+                    <option key={ev.key} value={ev.key}>
+                      {ev.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          )}
         </div>
       </div>
       <div style={{ marginBottom: 16 }}>
