@@ -273,7 +273,7 @@ async function main() {
     "accounts","agreements","commodities","rate_schedules","billing_cycles",
     "containers","service_suspensions","service_events",
     "workflows","search",
-    "audit_log","attachments","theme","settings","notifications",
+    "audit_log","attachments","theme","settings","notifications","delinquency",
     "portal_accounts","portal_billing","portal_usage","portal_profile"
   ];
   const allPerms = ["VIEW","CREATE","EDIT","DELETE"];
@@ -562,6 +562,33 @@ async function main() {
     }
   }
   console.log("  " + notifTemplates.length + " notification templates");
+
+  // Seed delinquency rules — 5-tier escalation chain
+  const delinqRules = [
+    { name: "Past Due Reminder", tier: 1, daysPastDue: 10, minBalance: 25, actionType: "NOTICE_EMAIL", notificationEventType: "delinquency.tier_1", autoApply: true },
+    { name: "Formal Past Due Notice", tier: 2, daysPastDue: 20, minBalance: 25, actionType: "NOTICE_EMAIL", notificationEventType: "delinquency.tier_2", autoApply: true },
+    { name: "Shut-Off Warning — 48 Hours", tier: 3, daysPastDue: 30, minBalance: 50, actionType: "NOTICE_SMS", notificationEventType: "delinquency.tier_3", autoApply: true },
+    { name: "Shut-Off Eligible", tier: 4, daysPastDue: 35, minBalance: 50, actionType: "SHUT_OFF_ELIGIBLE", notificationEventType: null, autoApply: true },
+    { name: "Disconnect", tier: 5, daysPastDue: 37, minBalance: 50, actionType: "DISCONNECT", notificationEventType: "delinquency.tier_4", autoApply: false },
+  ];
+  for (const r of delinqRules) {
+    const existing = await p.delinquencyRule.findFirst({ where: { utilityId: UID, tier: r.tier, accountType: null } });
+    if (!existing) {
+      await p.delinquencyRule.create({ data: { utilityId: UID, ...r, minBalance: r.minBalance, effectiveDate: new Date("2025-01-01") } });
+    }
+  }
+  console.log("  " + delinqRules.length + " delinquency rules");
+
+  // Set balance and lastDueDate on a couple of accounts for delinquency testing
+  // aArr[0] = Jane Smith's first account, aArr[1] = Acme's account
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  const fifteenDaysAgo = new Date();
+  fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
+
+  await p.account.update({ where: { id: aArr[0].id }, data: { balance: 412.80, lastDueDate: thirtyDaysAgo } });
+  await p.account.update({ where: { id: aArr[1].id }, data: { balance: 85.50, lastDueDate: fifteenDaysAgo } });
+  console.log("  2 accounts with delinquent balances");
 
   const testUsers = [
     { id: "00000000-0000-4000-8000-000000000091", email: "sysadmin@utility.com", name: "Sarah Mitchell", roleIdx: 0 },  // System Admin

@@ -182,6 +182,7 @@ model Commodity {
   meters            Meter[]
   serviceAgreements ServiceAgreement[]
   rateSchedules     RateSchedule[]
+  delinquencyRules  DelinquencyRule[]
 
   @@unique([utilityId, code])
   @@index([defaultUomId])
@@ -294,19 +295,25 @@ model Account {
   paperlessBilling    Boolean       @default(false) @map("paperless_billing")
   budgetBilling       Boolean       @default(false) @map("budget_billing")
   saaslogicAccountId  String?       @map("saaslogic_account_id") @db.Uuid
+  balance             Decimal       @default(0) @map("balance") @db.Decimal(14, 2)
+  lastDueDate         DateTime?     @map("last_due_date") @db.Date
+  isProtected         Boolean       @default(false) @map("is_protected")
+  protectionReason    String?       @map("protection_reason") @db.Text
   customFields        Json          @default("{}") @map("custom_fields")
   createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz
   closedAt            DateTime?     @map("closed_at") @db.Timestamptz
 
   // Relations
-  customer          Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  serviceAgreements ServiceAgreement[]
-  contacts          Contact[]
-  billingAddresses  BillingAddress[]
+  customer           Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  serviceAgreements  ServiceAgreement[]
+  contacts           Contact[]
+  billingAddresses   BillingAddress[]
+  delinquencyActions DelinquencyAction[]
 
   @@unique([utilityId, accountNumber])
   @@index([customerId])
   @@index([utilityId, status])
+  @@index([utilityId, balance])
   @@map("account")
 }
 
@@ -1034,4 +1041,68 @@ model Notification {
   @@index([templateId])
   @@index([eventType, createdAt])
   @@map("notification")
+}
+
+// ─── Delinquency (Module 11) ────────────────────────────────────
+
+enum DelinquencyActionStatus {
+  PENDING
+  COMPLETED
+  RESOLVED
+  CANCELLED
+
+  @@map("delinquency_action_status")
+}
+
+model DelinquencyRule {
+  id                    String       @id @default(uuid()) @db.Uuid
+  utilityId             String       @map("utility_id") @db.Uuid
+  name                  String       @db.VarChar(255)
+  accountType           AccountType? @map("account_type")
+  commodityId           String?      @map("commodity_id") @db.Uuid
+  tier                  Int
+  daysPastDue           Int          @map("days_past_due")
+  minBalance            Decimal      @map("min_balance") @db.Decimal(10, 2)
+  actionType            String       @map("action_type") @db.VarChar(50)
+  notificationEventType String?      @map("notification_event_type") @db.VarChar(100)
+  autoApply             Boolean      @default(true) @map("auto_apply")
+  isActive              Boolean      @default(true) @map("is_active")
+  effectiveDate         DateTime     @default(now()) @map("effective_date") @db.Date
+  createdAt             DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt             DateTime     @updatedAt @map("updated_at") @db.Timestamptz
+
+  commodity Commodity? @relation(fields: [commodityId], references: [id], onDelete: SetNull)
+  actions   DelinquencyAction[]
+
+  @@unique([utilityId, accountType, tier])
+  @@index([utilityId, isActive, tier])
+  @@map("delinquency_rule")
+}
+
+model DelinquencyAction {
+  id                  String                  @id @default(uuid()) @db.Uuid
+  utilityId           String                  @map("utility_id") @db.Uuid
+  accountId           String                  @map("account_id") @db.Uuid
+  ruleId              String                  @map("rule_id") @db.Uuid
+  tier                Int
+  actionType          String                  @map("action_type") @db.VarChar(50)
+  status              DelinquencyActionStatus @default(PENDING)
+  balanceAtAction     Decimal                 @map("balance_at_action") @db.Decimal(10, 2)
+  daysPastDueAtAction Int                     @map("days_past_due_at_action")
+  triggeredBy         String                  @map("triggered_by") @db.VarChar(20)
+  triggeredByUserId   String?                 @map("triggered_by_user_id") @db.Uuid
+  notificationId      String?                 @map("notification_id") @db.Uuid
+  resolvedAt          DateTime?               @map("resolved_at") @db.Timestamptz
+  resolutionType      String?                 @map("resolution_type") @db.VarChar(50)
+  notes               String?                 @db.Text
+  createdAt           DateTime                @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime                @updatedAt @map("updated_at") @db.Timestamptz
+
+  account Account          @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  rule    DelinquencyRule   @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+
+  @@index([accountId, status])
+  @@index([utilityId, status, tier])
+  @@index([ruleId])
+  @@map("delinquency_action")
 }

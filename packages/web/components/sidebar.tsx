@@ -29,6 +29,8 @@ import {
   faArrowRightArrowLeft,
   faUserShield,
   faEnvelope,
+  faScaleUnbalanced,
+  faPlugCircleXmark,
 } from "@fortawesome/pro-solid-svg-icons";
 
 interface NavItem {
@@ -64,6 +66,13 @@ const navSections: NavSection[] = [
       { href: "/containers", label: "Containers", icon: faDumpster, module: "containers" },
       { href: "/service-suspensions", label: "Service Holds", icon: faPauseCircle, module: "service_suspensions" },
       { href: "/service-events", label: "RAMS Events", icon: faTruck, module: "service_events" },
+    ],
+  },
+  {
+    title: "Collections",
+    items: [
+      { href: "/delinquency", label: "Delinquency", icon: faScaleUnbalanced, module: "delinquency" },
+      { href: "/delinquency/shutoff-eligible", label: "Shut-Off Queue", icon: faPlugCircleXmark, module: "delinquency" },
     ],
   },
   {
