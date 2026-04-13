@@ -63,6 +63,7 @@ const statusMap: Record<string, string> = {
 export default function NotificationsPage() {
   const { canView, canCreate, canEdit } = usePermission("notifications");
   const [activeTab, setActiveTab] = useState("templates");
+  const [showCreate, setShowCreate] = useState(false);
 
   if (!canView) return <AccessDenied />;
 
@@ -79,10 +80,30 @@ export default function NotificationsPage() {
           { key: "log", label: "Send Log" },
         ]}
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={(t) => { setActiveTab(t); setShowCreate(false); }}
+        action={
+          activeTab === "templates" && canCreate ? (
+            <button
+              onClick={() => setShowCreate((v) => !v)}
+              style={{
+                padding: "5px 12px",
+                fontSize: 12,
+                fontWeight: 500,
+                background: showCreate ? "transparent" : "var(--accent-primary)",
+                color: showCreate ? "var(--text-secondary)" : "#fff",
+                border: showCreate ? "1px solid var(--border)" : "none",
+                borderRadius: "var(--radius)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              {showCreate ? "Cancel" : "+ New Template"}
+            </button>
+          ) : undefined
+        }
       >
         {activeTab === "templates" && (
-          <TemplatesTab canCreate={canCreate} canEdit={canEdit} />
+          <TemplatesTab canCreate={canCreate} canEdit={canEdit} showCreate={showCreate} onShowCreateChange={setShowCreate} />
         )}
         {activeTab === "log" && <SendLogTab />}
       </Tabs>
@@ -92,12 +113,11 @@ export default function NotificationsPage() {
 
 // ─── Templates tab ───────────────────────────────────────────────
 
-function TemplatesTab({ canCreate, canEdit }: { canCreate: boolean; canEdit: boolean }) {
+function TemplatesTab({ canCreate, canEdit, showCreate, onShowCreateChange }: { canCreate: boolean; canEdit: boolean; showCreate: boolean; onShowCreateChange: (v: boolean) => void }) {
   const { toast } = useToast();
   const [templates, setTemplates] = useState<NotificationTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [showCreate, setShowCreate] = useState(false);
 
   const loadTemplates = async () => {
     try {
@@ -119,33 +139,16 @@ function TemplatesTab({ canCreate, canEdit }: { canCreate: boolean; canEdit: boo
 
   return (
     <div>
-      {canCreate && (
-        <div style={{ marginBottom: 16 }}>
-          <button
-            onClick={() => { setShowCreate(!showCreate); setEditingId(null); }}
-            style={{
-              padding: "8px 16px", fontSize: 13, fontWeight: 500,
-              background: showCreate ? "transparent" : "var(--accent-primary)",
-              color: showCreate ? "var(--text-secondary)" : "#fff",
-              border: showCreate ? "1px solid var(--border)" : "none",
-              borderRadius: "var(--radius)", cursor: "pointer", fontFamily: "inherit",
-            }}
-          >
-            {showCreate ? "Cancel" : "+ New Template"}
-          </button>
-        </div>
-      )}
-
       {showCreate && (
         <div style={{ marginBottom: 20 }}>
           <TemplateForm
             onSave={async (data) => {
               await apiClient.post("/api/v1/notification-templates", data);
               toast("Template created", "success");
-              setShowCreate(false);
+              onShowCreateChange(false);
               loadTemplates();
             }}
-            onCancel={() => setShowCreate(false)}
+            onCancel={() => onShowCreateChange(false)}
           />
         </div>
       )}
@@ -178,7 +181,7 @@ function TemplatesTab({ canCreate, canEdit }: { canCreate: boolean; canEdit: boo
                 onClick={() => {
                   if (!canEdit) return;
                   setEditingId(editingId === t.id ? null : t.id);
-                  setShowCreate(false);
+                  onShowCreateChange(false);
                 }}
                 onMouseEnter={(e) => { if (canEdit) (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)"; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
