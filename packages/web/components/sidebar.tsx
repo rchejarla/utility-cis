@@ -164,7 +164,7 @@ function CollapsibleSection({
   sidebarCollapsed: boolean;
 }) {
   const hasActiveItem = section.items.some(
-    (item) => pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href)),
+    (item) => pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href + "/")),
   );
 
   const [sectionOpen, setSectionOpen] = useState(() => {
@@ -231,7 +231,7 @@ function CollapsibleSection({
       )}
       {(sidebarCollapsed || sectionOpen) &&
         section.items.map((item) => {
-          const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
+          const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href + "/"));
           return (
             <NavItemWithPermission
               key={item.href}
