@@ -1,18 +1,18 @@
 # Data Model Overview
 
 **Module:** 00 — Data Model Overview
-**Status:** Built (Phase 1 complete, Phase 2 in progress)
-**Entities:** All 21
+**Status:** Built (Phase 1 complete, Phase 2 in progress, Phase 3 partial)
+**Entities:** All 28
 
 ## Overview
 
-This document is the master entity reference for the Utility CIS data model. It describes all 18 entities, their database tables, categories, the phase in which they were built, and their key relationships. Use this as the index when navigating module-level specs.
+This document is the master entity reference for the Utility CIS data model. It describes all 28 entities, their database tables, categories, the phase in which they were built, and their key relationships. Use this as the index when navigating module-level specs.
 
 The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isolation is enforced at the database level via PostgreSQL Row-Level Security (RLS) policies, with the `utility_id` claim from the JWT applied per-request.
 
 ## Entity Summary
 
-**24 entities** across 6 categories (RBAC category added in Phase 2; TenantConfig and SuspensionTypeDef added alongside Service Holds v1; CustomFieldSchema added in Custom Fields Phase 1):
+**28 entities** across 8 categories (RBAC category added in Phase 2; TenantConfig and SuspensionTypeDef added alongside Service Holds v1; CustomFieldSchema added in Custom Fields Phase 1; Notifications and Delinquency categories added in Phase 3):
 
 | # | Entity | Table | Category | Phase Built | Key Relationships |
 |---|--------|-------|----------|-------------|-------------------|
@@ -24,7 +24,7 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 | 6 | Premise | `premise` | Core | Phase 1 | Has many Meters, ServiceAgreements; optionally owned by Customer |
 | 7 | Meter | `meter` | Core | Phase 1 | Belongs to Premise + Commodity + UOM; has many Registers, Reads, ServiceAgreementMeters |
 | 8 | MeterRegister | `meter_register` | Core | Phase 1 | Belongs to Meter; referenced by MeterRead |
-| 9 | Account | `account` | Core | Phase 1 | Belongs to Customer; has many ServiceAgreements, Contacts, BillingAddresses |
+| 9 | Account | `account` | Core | Phase 1 | Belongs to Customer; has many ServiceAgreements, Contacts, BillingAddresses. Extended with `balance`, `last_due_date`, `is_protected` columns for delinquency evaluation. |
 | 10 | ServiceAgreement | `service_agreement` | Agreement | Phase 1 | Belongs to Account + Premise + Commodity + RateSchedule + BillingCycle; has many ServiceAgreementMeters, MeterReads |
 | 11 | ServiceAgreementMeter | `service_agreement_meter` | Agreement | Phase 1 | Junction: ServiceAgreement ↔ Meter |
 | 12 | RateSchedule | `rate_schedule` | Configuration | Phase 1 | Belongs to Commodity; referenced by ServiceAgreement; self-references for versioning |
@@ -40,6 +40,10 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 | 22 | TenantConfig | `tenant_config` | System | Phase 2 | One per utility (unique on utility_id); holds `require_hold_approval` and an extensible `settings` JSONB bucket carrying `numberFormats` (identifier generation), `branding`, `notifications`, `retention`, and `billing` namespaces (see spec 18). |
 | 23 | SuspensionTypeDef | `suspension_type_def` | Reference | Phase 2 | Per-tenant (or global, with `utility_id IS NULL`) reference table for service-hold type codes. Replaces the former `SuspensionType` Prisma enum. RLS policy allows global rows to be visible across all tenants. |
 | 24 | CustomFieldSchema | `custom_field_schema` | System | Phase 2 | One row per (utility, entity_type) holding the tenant's custom-field schema as a JSONB FieldDefinition array. Powers the `custom_fields` JSONB column on Customer/Account/Premise/ServiceAgreement/Meter. See spec 20. |
+| 25 | NotificationTemplate | `notification_template` | Notifications | Phase 3 | Per-tenant template with channel (EMAIL/SMS/MAIL), Mustache body, variable interpolation, optional event-trigger binding. See spec 13. |
+| 26 | Notification | `notification` | Notifications | Phase 3 | Individual notification instance sent from a template; tracks recipient, channel, status (PENDING/SENT/FAILED), and send timestamp. See spec 13. |
+| 27 | DelinquencyRule | `delinquency_rule` | Delinquency | Phase 3 | Per-tenant rule with configurable thresholds (days past due, minimum balance), escalation tier, and linked notification template. See spec 11. |
+| 28 | DelinquencyAction | `delinquency_action` | Delinquency | Phase 3 | Log of delinquency rule firings per account; records rule, account, action taken, and timestamp. See spec 11. |
 
 ## ER Diagram
 

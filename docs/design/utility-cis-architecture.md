@@ -1,7 +1,7 @@
 # Utility CIS — System Architecture & Design
 
-**Last updated:** 2026-04-08
-**Status:** Phase 1 complete, Phase 2 in progress
+**Last updated:** 2026-04-11
+**Status:** Phase 1 complete, Phase 2 complete, Phase 3 in progress
 
 ---
 
@@ -105,7 +105,7 @@ Every significant CIS state change emits a domain event. ApptorFlow subscribes a
 
 ### 4.1 Entity Summary
 
-**29 entities** across 9 categories:
+**33 entities** across 11 categories:
 
 | Category | Entities |
 |----------|----------|
@@ -118,6 +118,8 @@ Every significant CIS state change emits a domain event. ApptorFlow subscribes a
 | **Solid Waste** | Container, ServiceSuspension, ServiceEvent |
 | **System** | AuditLog, TenantTheme, UserPreference |
 | **RBAC** | CisUser, Role, TenantModule |
+| **Notifications** | NotificationTemplate, Notification |
+| **Delinquency** | DelinquencyRule, DelinquencyAction |
 
 ### 4.2 Entity Relationship Diagram
 
@@ -669,6 +671,10 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | GET | `/portal/api/agreements/:id/usage` | Portal usage data (meter reads, from/to date range, customer-scoped) |
 | GET | `/portal/api/profile` | Portal customer profile (read) |
 | PATCH | `/portal/api/profile` | Portal customer profile (edit email, phone, altPhone) |
+| GET/POST/PATCH/DELETE | `/api/v1/notification-templates[/:id]` | Notification Templates CRUD |
+| GET/POST | `/api/v1/notifications[/:id]` | Notification list + send |
+| GET/POST/PATCH/DELETE | `/api/v1/delinquency-rules[/:id]` | Delinquency Rules CRUD |
+| GET/POST | `/api/v1/delinquency-actions[/:id]` | Delinquency Actions list + create |
 
 ### 5.3 Cross-Cutting Patterns
 
@@ -731,7 +737,7 @@ Clients can pull the document and generate SDKs, contract tests, or API consoles
 
 ### 6.1 Layout
 
-- Collapsible sidebar with Font Awesome Pro icons (Operations / Configuration / System sections)
+- Collapsible sidebar with Font Awesome Pro icons and hamburger toggle; sections: Operations, Collections, Configuration, System; avatar dropdown
 - Top bar with breadcrumbs, global search, theme toggle
 - Navigation progress bar on link clicks
 
@@ -758,7 +764,7 @@ Clients can pull the document and generate SDKs, contract tests, or API consoles
 | Commodities & UOM | `/commodities` | Inline edit, UOM table per commodity |
 | Audit Log | `/audit-log` | Searchable by entity type, action, actor, date range |
 | Theme Editor | `/theme` | Presets, color pickers, typography, live preview |
-| Settings | `/settings` | Placeholder |
+| Settings | `/settings` | Left-rail nav with 9 sections (General, Number Formats, Branding, Notifications, Retention, Billing, Users, Roles, Modules); 4 sections wired to tenant config |
 
 ### 6.3 Shared UI Components (Phase 2)
 
@@ -828,7 +834,11 @@ Architecture (see `docs/specs/21-saaslogic-billing.md` for the full spec):
 - **Payment methods** — redirect-only. A button on the agreement detail page fetches a hosted portal URL from SaaSLogic and navigates the browser there. CIS holds no card data and is out of PCI scope entirely.
 - **Ad-hoc charges** — `POST /invoices/on-demand` exposed through a UI action for one-off fees (reconnection, deposits, adjustments) without waiting for the next cycle.
 
-Also in Phase 3: notification engine, delinquency rules and notices, late fees and payment plans (as line items fed to SaaSLogic).
+Notifications (complete): NotificationTemplate + Notification entities. Template CRUD with channel (EMAIL/SMS/MAIL), Mustache body with variable interpolation, event-trigger binding. Notification send + list endpoints. RBAC module `notifications` with VIEW/CREATE/EDIT/DELETE permissions. See `docs/specs/13-notifications.md`.
+
+Delinquency (complete): DelinquencyRule + DelinquencyAction entities. Rule CRUD with configurable thresholds (days past due, minimum balance), escalation tiers, and linked notification templates. Action log tracks rule firings per account. RBAC module `delinquency` with VIEW/CREATE/EDIT/DELETE permissions. Account entity extended with `balance`, `lastDueDate`, and `isProtected` columns to support delinquency evaluation. See `docs/specs/11-delinquency.md`.
+
+Still planned for Phase 3: late fees and payment plans (as line items fed to SaaSLogic).
 
 ### Phase 4
 Customer portal + service requests. See `docs/specs/15-customer-portal.md` for the full spec.
