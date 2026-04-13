@@ -1,194 +1,241 @@
 # Delinquency
 
 **Module:** 11 — Delinquency
-**Status:** Stub (Phase 3)
-**Entities:** DelinquencyRule (planned), DelinquencyAction (planned)
+**Status:** Phase 3 — design complete, implementation starting
+**Entities:** `DelinquencyRule`, `DelinquencyAction`; new columns on `Account`
 
 ## Overview
 
-The Delinquency module manages the full lifecycle of account delinquency — from initial past-due detection through multi-tier notice escalation, shut-off eligibility determination, field work order generation (door hangers, shut-off, reconnection), and resolution. It integrates with the billing engine (Module 09), notifications (Module 13), service requests (Module 14), and payment processing (Module 10).
+The Delinquency module manages the lifecycle of past-due accounts — from initial detection through multi-tier notice escalation, shut-off eligibility, and resolution. It integrates with the Notification engine (Module 13) for automated notice delivery and will integrate with SaaSLogic payment webhooks (Module 10) and Service Requests (Module 14) when those modules ship.
 
-Delinquency rules are tenant-configurable, allowing each utility to define their own escalation timelines, notice types, and shut-off thresholds in accordance with local ordinance.
+Delinquency rules are tenant-configurable: each utility defines its own escalation timelines, notice types, balance thresholds, and shut-off policies in accordance with local ordinance.
 
-Primary users: collections staff, field operations supervisors, CSRs, billing administrators.
+Primary users: collections staff, billing supervisors, CSRs.
 
-## Planned Entities
+## Data Model
 
-### DelinquencyRule (planned)
+### Account — new columns
 
-Tenant-configured rules that define escalation tiers, waiting periods, and actions at each tier.
+| Column | Type | Notes |
+|---|---|---|
+| `balance` | DECIMAL(14,2) | Current outstanding balance. Default 0. Updated manually by CSR or by future SaaSLogic webhook. |
+| `last_due_date` | DATE | Most recent invoice due date. Nullable. Used by the evaluation job to compute days past due. |
+| `is_protected` | BOOLEAN | Default false. Exempt from SHUT_OFF_ELIGIBLE and DISCONNECT actions. |
+| `protection_reason` | TEXT | Nullable. Why the account is protected (e.g., "life support equipment", "extreme weather moratorium"). |
+
+### DelinquencyRule
+
+Tenant-configured escalation rules. One row per tier per account type. Rules form a chain: tier 1 triggers first, tier 2 triggers if tier 1 is unresolved after more days, and so on.
 
 | Field | Type | Notes |
-|-------|------|-------|
+|---|---|---|
 | id | UUID | PK |
 | utility_id | UUID | Tenant scope |
-| rule_name | VARCHAR(255) | |
-| account_type | ENUM | Nullable: RESIDENTIAL, COMMERCIAL, INDUSTRIAL, MUNICIPAL; null = all |
-| commodity_id | UUID | Nullable FK → Commodity; null = all commodities |
-| tier | INTEGER | Escalation tier: 1 (first notice), 2, 3... |
-| days_past_due | INTEGER | Days after due date to trigger this tier |
+| name | VARCHAR(255) | "Past Due Reminder" |
+| account_type | ENUM | Nullable — null means all account types |
+| commodity_id | UUID FK | Nullable — null means all commodities |
+| tier | INT | Escalation order: 1, 2, 3, 4... |
+| days_past_due | INT | Days after due date to trigger this tier |
 | min_balance | DECIMAL(10,2) | Minimum balance for this tier to apply |
-| action_type | ENUM | NOTICE_EMAIL, NOTICE_SMS, NOTICE_MAIL, DOOR_HANGER, SHUT_OFF_ELIGIBLE, DISCONNECT |
-| notice_template_id | UUID | Nullable FK → NotificationTemplate (Module 13) |
-| auto_apply | BOOLEAN | If true, trigger is automatic on schedule; if false, requires staff action |
+| action_type | VARCHAR(50) | `NOTICE_EMAIL`, `NOTICE_SMS`, `DOOR_HANGER`, `SHUT_OFF_ELIGIBLE`, `DISCONNECT` |
+| notification_event_type | VARCHAR(100) | Maps to a NotificationTemplate event type (e.g., `delinquency.tier_1`). Nullable for non-notice action types. |
+| auto_apply | BOOLEAN | If true, nightly job triggers automatically. If false, requires staff action. |
 | is_active | BOOLEAN | |
-| effective_date | DATE | |
-| created_at | TIMESTAMPTZ | |
+| effective_date | DATE | Rule takes effect on this date |
+| created_at / updated_at | TIMESTAMPTZ | |
+
+**Unique:** `(utility_id, account_type, tier)` — one rule per tier per account type per tenant. Null account_type = "default for all types."
+**Index:** `(utility_id, is_active, tier)`
 
 **Example rule chain:**
-- Tier 1 (day 10, $25 min): NOTICE_EMAIL — past due reminder
-- Tier 2 (day 20, $25 min): NOTICE_MAIL — formal notice with door hanger warning
-- Tier 3 (day 30, $50 min): DOOR_HANGER — physical door notice, 48-hour warning
-- Tier 4 (day 35, $50 min): SHUT_OFF_ELIGIBLE — account eligible for service disconnection
-- Tier 5 (day 37, $50 min): DISCONNECT — field work order created
+- Tier 1 (day 10, $25 min): NOTICE_EMAIL → `delinquency.tier_1`
+- Tier 2 (day 20, $25 min): NOTICE_EMAIL → `delinquency.tier_2`
+- Tier 3 (day 30, $50 min): NOTICE_SMS → `delinquency.tier_3`
+- Tier 4 (day 35, $50 min): SHUT_OFF_ELIGIBLE → no notification
+- Tier 5 (day 37, $50 min): DISCONNECT → `delinquency.tier_4`
 
----
+### DelinquencyAction
 
-### DelinquencyAction (planned)
-
-Records each delinquency action taken against an account — the audit trail of the delinquency lifecycle.
+One row per action taken or scheduled against an account. The audit trail of the entire delinquency lifecycle.
 
 | Field | Type | Notes |
-|-------|------|-------|
+|---|---|---|
 | id | UUID | PK |
 | utility_id | UUID | Tenant scope |
-| account_id | UUID | FK → Account |
-| service_agreement_id | UUID | Nullable FK → ServiceAgreement |
-| rule_id | UUID | FK → DelinquencyRule |
-| tier | INTEGER | Copy of rule tier at time of action |
-| action_type | ENUM | Matches DelinquencyRule.action_type |
-| status | ENUM | PENDING, SENT, COMPLETED, RESOLVED, CANCELLED |
-| balance_at_action | DECIMAL(10,2) | Account balance when action was triggered |
-| days_past_due_at_action | INTEGER | |
-| triggered_by | ENUM | AUTOMATED, MANUAL |
-| triggered_by_user | UUID | Nullable FK → User (for MANUAL) |
-| resolved_at | TIMESTAMPTZ | Nullable: when delinquency resolved (payment received) |
-| resolution_type | ENUM | Nullable: PAYMENT_RECEIVED, PAYMENT_PLAN, WRITE_OFF, WAIVED, REINSTATED |
-| service_request_id | UUID | Nullable FK → ServiceRequest (for DOOR_HANGER/DISCONNECT) |
-| communication_log_id | UUID | Nullable FK → CommunicationLog (Module 13) |
+| account_id | UUID FK | Which account |
+| rule_id | UUID FK | Which rule triggered this |
+| tier | INT | Copy of rule tier at trigger time (frozen) |
+| action_type | VARCHAR(50) | Copy of rule action_type (frozen) |
+| status | ENUM | `PENDING`, `COMPLETED`, `RESOLVED`, `CANCELLED` |
+| balance_at_action | DECIMAL(10,2) | Balance when triggered (frozen) |
+| days_past_due_at_action | INT | Days past due when triggered (frozen) |
+| triggered_by | VARCHAR(20) | `AUTOMATED` or `MANUAL` |
+| triggered_by_user_id | UUID | Nullable — for MANUAL triggers |
+| notification_id | UUID FK | Nullable — links to the Notification row when a notice was sent |
+| resolved_at | TIMESTAMPTZ | Nullable — when delinquency was resolved |
+| resolution_type | VARCHAR(50) | Nullable — `PAYMENT_RECEIVED`, `PAYMENT_PLAN`, `WRITE_OFF`, `WAIVED` |
 | notes | TEXT | |
-| created_at | TIMESTAMPTZ | |
-| updated_at | TIMESTAMPTZ | |
+| created_at / updated_at | TIMESTAMPTZ | |
 
----
+**Indexes:** `(account_id, status)`, `(utility_id, status, tier)`, `(rule_id)`
+
+### Status lifecycle
+
+```
+PENDING → COMPLETED    (notification delivered or staff confirmed field work)
+PENDING → RESOLVED     (payment received before action was carried out)
+PENDING → CANCELLED    (staff waived, payment plan created, superseded)
+COMPLETED → RESOLVED   (payment received after action was carried out)
+```
+
+On payment:
+- Actions in `PENDING` → `CANCELLED` (no longer needed)
+- The most recent action in `COMPLETED` or `PENDING` → `RESOLVED` with `resolution_type`
+- Earlier `COMPLETED` actions stay `COMPLETED` (they are historical facts)
+
+### Protected accounts
+
+Accounts with `is_protected = true` are excluded from `SHUT_OFF_ELIGIBLE` and `DISCONNECT` action types. The evaluation job skips those tiers for protected accounts. Notice tiers (NOTICE_EMAIL, NOTICE_SMS) still apply — the customer still gets past-due reminders, they just cannot be shut off.
+
+## Nightly Evaluation Job
+
+Same `setInterval` pattern as the suspension scheduler and notification send job. Registered in `app.ts`, gated by `DISABLE_SCHEDULERS`.
+
+**Algorithm:**
+
+1. Query all accounts where `balance > 0` and `lastDueDate IS NOT NULL`.
+2. For each account, compute `daysPastDue = floor((today - lastDueDate) / 1 day)`.
+3. Load active rules for this account's type, ordered by tier ascending.
+4. For each rule where `daysPastDue >= rule.daysPastDue` and `balance >= rule.minBalance`:
+   - Check if a DelinquencyAction already exists for this (account, rule). If yes, skip (no duplicate actions).
+   - If account is protected and action_type is `SHUT_OFF_ELIGIBLE` or `DISCONNECT`, skip.
+   - If `rule.autoApply` is false, skip (requires manual escalation).
+   - Create DelinquencyAction with `status = PENDING`, `triggeredBy = AUTOMATED`.
+   - If `rule.notificationEventType` is set, call `sendNotification()` and store the notification ID on the action.
+5. For actions where the linked notification has reached `status = SENT`, update the action to `COMPLETED`.
+
+**Tick interval:** hourly (same as suspension scheduler). Delinquency evaluation is not time-sensitive to the second — hourly is sufficient.
 
 ## API Endpoints
 
-All endpoints are planned for Phase 3.
-
 ### Delinquency Rules
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/delinquency-rules` | List configured rules |
-| POST | `/api/v1/delinquency-rules` | Create a rule |
-| PATCH | `/api/v1/delinquency-rules/:id` | Update a rule |
-| DELETE | `/api/v1/delinquency-rules/:id` | Deactivate a rule |
+| Method | Path | Module | Description |
+|---|---|---|---|
+| GET | `/api/v1/delinquency-rules` | delinquency | List rules (filterable by account_type, is_active) |
+| POST | `/api/v1/delinquency-rules` | delinquency | Create rule |
+| GET | `/api/v1/delinquency-rules/:id` | delinquency | Get rule detail |
+| PATCH | `/api/v1/delinquency-rules/:id` | delinquency | Update rule |
+| DELETE | `/api/v1/delinquency-rules/:id` | delinquency | Deactivate rule |
 
 ### Delinquency Actions
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/delinquency-actions` | List actions (filterable by account, tier, status) |
-| GET | `/api/v1/delinquency-actions/:id` | Get action detail |
-| POST | `/api/v1/delinquency-actions/:id/cancel` | Cancel a pending action |
-| POST | `/api/v1/accounts/:id/delinquency/escalate` | Manually escalate account to next tier |
-| POST | `/api/v1/accounts/:id/delinquency/resolve` | Mark delinquency resolved (on payment confirmation) |
-| GET | `/api/v1/accounts/:id/delinquency` | Full delinquency history for an account |
+| Method | Path | Module | Description |
+|---|---|---|---|
+| GET | `/api/v1/delinquency-actions` | delinquency | List actions (filterable by account, tier, status) |
+| GET | `/api/v1/delinquency-actions/:id` | delinquency | Action detail |
+| POST | `/api/v1/delinquency-actions/:id/cancel` | delinquency | Cancel a pending action |
+| POST | `/api/v1/accounts/:id/delinquency/escalate` | delinquency | Manually escalate to next tier |
+| POST | `/api/v1/accounts/:id/delinquency/resolve` | delinquency | Mark delinquency resolved |
+| GET | `/api/v1/accounts/:id/delinquency` | delinquency | Full delinquency history for an account |
 
 ### Reporting
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/delinquency/eligible-for-shutoff` | Accounts at SHUT_OFF_ELIGIBLE tier |
-| GET | `/api/v1/delinquency/summary` | Counts by tier and total delinquent balance |
+| Method | Path | Module | Description |
+|---|---|---|---|
+| GET | `/api/v1/delinquency/eligible-for-shutoff` | delinquency | Accounts at SHUT_OFF_ELIGIBLE tier |
+| GET | `/api/v1/delinquency/summary` | delinquency | Counts by tier and total delinquent balance |
 
-## Business Rules
+### Operations
 
-1. **Automated nightly evaluation:** A scheduled job runs nightly to evaluate all active service agreements against DelinquencyRule definitions. Accounts meeting tier criteria have DelinquencyActions created automatically if `auto_apply=true`.
-
-2. **Tier progression:** Tiers escalate sequentially. An account cannot skip from Tier 1 to Tier 4 automatically. Each tier creates a DelinquencyAction; if unresolved, the account progresses to the next tier on the next evaluation cycle.
-
-3. **Resolution clears delinquency:** When a payment event is received from SaaSLogic (Module 10 webhook), all open DelinquencyActions for the account are resolved with `resolution_type=PAYMENT_RECEIVED`. If the payment only partially resolves the balance, resolution only occurs when balance drops below the tier's `min_balance`.
-
-4. **Payment plan stays delinquency:** Creating a payment plan (Module 10) can halt further delinquency escalation if the plan includes a `resolution_type=PAYMENT_PLAN` resolution on the current tier. New escalation resumes only if the payment plan defaults.
-
-5. **Shut-off eligibility:** Accounts at the SHUT_OFF_ELIGIBLE tier are listed in the eligible-for-shutoff report. A supervisor must manually authorize the disconnect action (DISCONNECT tier), which then creates a ServiceRequest (Module 14) for field work.
-
-6. **Protected accounts:** Certain accounts may be exempt from shut-off (e.g., life support equipment registered, extreme weather moratorium). This requires a protection flag on the Account entity (to be added in Phase 3). Protected accounts are excluded from DISCONNECT actions.
-
-7. **Door hangers:** The DOOR_HANGER action creates a ServiceRequest of type DOOR_HANGER in Module 14. The field crew delivers the physical notice and marks the SR complete. The DelinquencyAction updates to COMPLETED on SR closure.
-
-8. **Reconnection work orders:** After shut-off, when the account pays and resolves delinquency, a RECONNECT ServiceRequest is created automatically (Bozeman Req 199). Reconnection may require a reconnection fee (AdhocCharge via Module 10).
-
-9. **Delinquency visibility in CSR:** Account lookups in the admin UI surface an active delinquency indicator when any DelinquencyAction is in PENDING or SENT status (Bozeman Req 23). The indicator shows current tier and next action.
-
-10. **Municipal accounts:** MUNICIPAL account type may have different rules (e.g., no automatic shut-off). Handled by creating separate DelinquencyRule rows with `account_type=MUNICIPAL` and appropriate action types (omitting DISCONNECT).
-
-11. **Audit trail:** All DelinquencyAction state changes are logged in AuditLog with actor, timestamp, and before/after state. Manual escalations include the user who triggered them.
-
-12. **Notification integration:** NOTICE_EMAIL and NOTICE_SMS action types trigger notification sends via Module 13. The `notice_template_id` on the rule references a NotificationTemplate. The resulting CommunicationLog ID is stored on the DelinquencyAction.
+| Method | Path | Module | Description |
+|---|---|---|---|
+| POST | `/api/v1/delinquency/evaluate` | delinquency | Manual trigger of the evaluation job (admin use) |
 
 ## UI Pages
 
-All pages are planned for Phase 3.
-
 ### Delinquency Dashboard (`/delinquency`)
 
-- Summary cards: accounts by tier (Tier 1, 2, 3+), total delinquent balance, accounts eligible for shut-off, pending door hangers
-- Aging breakdown chart (30/60/90/120+ days)
-- "Run Delinquency Evaluation" manual trigger (in addition to nightly automatic)
-- List: accounts by tier with balance, days past due, last action
+- Summary cards: accounts by tier, total delinquent balance, accounts eligible for shut-off, pending actions count
+- Account list: sortable table showing account number, customer name, balance, days past due, current tier, last action date, status
+- "Run Evaluation" button for manual trigger
+- Filter by: tier, account type, balance range, status
 
 ### Shut-Off Eligibility Queue (`/delinquency/shutoff-eligible`)
 
-- Table of SHUT_OFF_ELIGIBLE accounts
-- Per-row: account, customer, balance, days past due, last notice date
-- Actions: Authorize Disconnect (creates DISCONNECT DelinquencyAction + ServiceRequest), Waive (with reason), Mark Payment Plan
+- Table of accounts at SHUT_OFF_ELIGIBLE tier
+- Per row: account number, customer, balance, days past due, last notice date, protection status
+- Actions per row: Authorize Disconnect (creates DISCONNECT action), Waive (with reason), Mark Payment Plan
 - Bulk authorize selected accounts
-- Filter: by commodity, account type, balance threshold
+- Protected accounts shown but with a shield indicator and disabled disconnect button
 
-### Account Delinquency Detail (within Account Detail tab)
+### Account Detail — Delinquency Tab
 
-- Current delinquency tier indicator
-- Timeline of all DelinquencyActions: tier, action type, date, status, resolution
-- Links to associated ServiceRequests and CommunicationLogs
-- Manual escalation and resolution actions
+- Timeline of all DelinquencyActions for this account, newest first
+- Each action: tier, action type, status badge, date, balance at action, notification link
+- Manual escalation and resolution buttons
+- Current balance and days past due at the top
+- Protection toggle (admin only)
 
-### Delinquency Rules Configuration (`/settings/delinquency-rules`)
+### Settings → Delinquency Rules (`/settings/delinquency-rules`)
 
-- Table of rules organized by account type and tier
-- Edit rule: days_past_due, min_balance, action_type, notice template
-- Rule chain preview: visualizes the escalation timeline for a given account type
-- Enable/disable individual rules
+- Table of rules organized by tier
+- Create/edit: tier, days past due, min balance, action type, notification event type (dropdown), auto-apply toggle
+- Rule chain preview: shows the escalation timeline visually
+
+## Sidebar
+
+New **Collections** section in the sidebar with:
+- Delinquency Dashboard
+- Shut-Off Queue
+
+## RBAC
+
+New `delinquency` module added to MODULES constant. Permissions:
+- System Admin / Utility Admin: full CRUD + evaluate
+- CSR: VIEW + manual escalate/resolve
+- Read-Only: VIEW
+
+## Seed Data
+
+- 5 sample delinquency rules (tier 1–5 as described in the example chain)
+- Set balance and lastDueDate on a few seeded accounts so the evaluation job has something to process
+- 2–3 sample DelinquencyActions showing different statuses
+
+## Business Rules
+
+1. **Tier progression:** tiers escalate sequentially. An account cannot skip tiers automatically. Each tier creates one action; if unresolved, the next tier triggers on the next evaluation cycle.
+2. **No duplicate actions:** the evaluation job checks for existing actions per (account, rule) before creating. Re-running the job is idempotent.
+3. **Protected accounts:** exempt from shut-off tiers. Notice tiers still apply.
+4. **Resolution clears current tier:** when payment resolves delinquency, the current PENDING action → CANCELLED, the most recent active action → RESOLVED. Earlier COMPLETED actions are not touched.
+5. **Partial payment:** if payment drops balance below the current tier's min_balance but not below a lower tier's, only the current tier resolves. The account drops back to the appropriate lower tier on the next evaluation cycle.
+6. **Notification integration:** notice-type actions call `sendNotification()` with the rule's `notificationEventType`. The notification ID is stored on the action. When the notification reaches SENT status, the action transitions to COMPLETED.
+7. **Manual escalation:** staff can escalate an account to the next tier without waiting for the nightly job. This creates a new action with `triggeredBy = MANUAL`.
+8. **Audit trail:** all DelinquencyAction state changes are logged in AuditLog.
 
 ## Phase Roadmap
 
-- **Phase 1 (Complete):** Account.status includes SUSPENDED. AuditLog for all changes.
+### Phase 3.1 (Building now)
+- Account balance/lastDueDate/isProtected columns
+- DelinquencyRule + DelinquencyAction entities
+- Rule CRUD API + validators
+- Action CRUD API (list, detail, cancel, escalate, resolve)
+- Evaluation service + nightly job
+- Notification integration (sendNotification calls)
+- Reporting endpoints (eligible-for-shutoff, summary)
+- Seed rules + test data
+- Delinquency dashboard + shut-off queue UI
+- Account detail delinquency tab
+- Settings → Delinquency Rules
+- RBAC module + permissions
 
-- **Phase 3 (Planned):**
-  - DelinquencyRule entity + configuration UI
-  - DelinquencyAction entity + lifecycle management
-  - Nightly automated delinquency evaluation job
-  - Integration with SaaSLogic payment webhooks (Module 10) for resolution
-  - Integration with NotificationTemplate (Module 13) for notice sending
-  - Integration with ServiceRequest (Module 14) for door hangers and disconnect/reconnect work orders
-  - Delinquency dashboard and shut-off eligibility queue
-  - Account-level delinquency status indicator in CSR UI
-  - Protected account flag (life support, weather moratorium)
-  - Reporting: aging summary, shut-off report
+### Phase 3.2 (After SaaSLogic billing)
+- Auto-update balance and lastDueDate from SaaSLogic invoice/payment webhooks
+- Auto-resolve delinquency on payment confirmation
+- Reconnection fee as ad-hoc charge on resolution after disconnect
 
-- **Phase 4 (Planned):** Customer portal alerts for delinquency status. Self-service payment to resolve delinquency.
-
-## Bozeman RFP Coverage
-
-| Req | Requirement | Coverage |
-|-----|-------------|----------|
-| 23 | Delinquency flagging visible during lookup | Phase 3: delinquency indicator on account lookup |
-| 124 | Shut-off rules | Phase 3: DelinquencyRule with SHUT_OFF_ELIGIBLE action |
-| 125 | Multi-tier notices | Phase 3: tier-based rule chain with configurable notice types |
-| 126 | Auto-identification of shut-off candidates | Phase 3: nightly job + shut-off eligibility queue |
-| 127 | Delinquency reporting | Phase 3: aging dashboard, shut-off report |
-| 151 | Shut-off eligibility rules | Phase 3: SHUT_OFF_ELIGIBLE tier action |
-| 198 | Delinquency work orders (door hangers, shut-offs) | Phase 3: DOOR_HANGER and DISCONNECT DelinquencyActions → ServiceRequests |
-| 199 | Reconnection work orders | Phase 3: auto-created RECONNECT ServiceRequest on payment resolution |
+### Phase 3.3 (After Module 14 — Service Requests)
+- DOOR_HANGER action creates a ServiceRequest of type DOOR_HANGER
+- DISCONNECT action creates a ServiceRequest for field crew
+- Reconnection ServiceRequest created on payment after disconnect
+- DelinquencyAction.status updated on SR closure
