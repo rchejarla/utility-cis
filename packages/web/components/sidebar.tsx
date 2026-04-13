@@ -231,7 +231,13 @@ function CollapsibleSection({
       )}
       {(sidebarCollapsed || sectionOpen) &&
         section.items.map((item) => {
-          const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href + "/"));
+          const exactMatch = pathname === item.href;
+          const prefixMatch = item.href !== "/" && pathname.startsWith(item.href + "/");
+          const hasBetterMatch = !exactMatch && prefixMatch && section.items.some(
+            (other) => other.href !== item.href && other.href.length > item.href.length &&
+              (pathname === other.href || pathname.startsWith(other.href + "/")),
+          );
+          const isActive = exactMatch || (prefixMatch && !hasBetterMatch);
           return (
             <NavItemWithPermission
               key={item.href}
