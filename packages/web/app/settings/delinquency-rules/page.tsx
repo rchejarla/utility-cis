@@ -113,9 +113,27 @@ function RuleEditor({ rule, onSave, onCancel }: { rule: DelinquencyRule; onSave:
   const [name, setName] = useState(rule.name);
   const [daysPastDue, setDaysPastDue] = useState(String(rule.daysPastDue));
   const [minBalance, setMinBalance] = useState(String(Number(rule.minBalance)));
+  const [actionType, setActionType] = useState(rule.actionType);
+  const [notificationEventType, setNotificationEventType] = useState(rule.notificationEventType ?? "");
   const [autoApply, setAutoApply] = useState(rule.autoApply);
   const [isActive, setIsActive] = useState(rule.isActive);
   const [saving, setSaving] = useState(false);
+
+  const ACTION_TYPES = [
+    { value: "NOTICE_EMAIL", label: "Send Email Notice" },
+    { value: "NOTICE_SMS", label: "Send SMS Notice" },
+    { value: "DOOR_HANGER", label: "Door Hanger (field crew)" },
+    { value: "SHUT_OFF_ELIGIBLE", label: "Mark Shut-Off Eligible" },
+    { value: "DISCONNECT", label: "Disconnect Service" },
+  ];
+
+  const NOTIF_EVENTS = [
+    { value: "", label: "None" },
+    { value: "delinquency.tier_1", label: "Past Due Reminder (Tier 1)" },
+    { value: "delinquency.tier_2", label: "Formal Past Due Notice (Tier 2)" },
+    { value: "delinquency.tier_3", label: "Shut-Off Warning (Tier 3)" },
+    { value: "delinquency.tier_4", label: "Disconnection Notice (Tier 4)" },
+  ];
 
   return (
     <SettingsCard>
@@ -136,6 +154,20 @@ function RuleEditor({ rule, onSave, onCancel }: { rule: DelinquencyRule; onSave:
           <input type="number" style={{ ...settingInputStyle, width: "100%" }} value={minBalance} onChange={(e) => setMinBalance(e.target.value)} />
         </div>
       </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+        <div>
+          <Label>Action type</Label>
+          <select style={{ ...settingInputStyle, width: "100%" }} value={actionType} onChange={(e) => setActionType(e.target.value)}>
+            {ACTION_TYPES.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <Label>Notification template</Label>
+          <select style={{ ...settingInputStyle, width: "100%" }} value={notificationEventType} onChange={(e) => setNotificationEventType(e.target.value)}>
+            {NOTIF_EVENTS.map((n) => <option key={n.value} value={n.value}>{n.label}</option>)}
+          </select>
+        </div>
+      </div>
       <div style={{ display: "flex", gap: 16, marginBottom: 16 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text-secondary)", cursor: "pointer" }}>
           <input type="checkbox" checked={autoApply} onChange={(e) => setAutoApply(e.target.checked)} style={{ width: 16, height: 16, accentColor: "var(--accent-primary)" }} />
@@ -152,7 +184,15 @@ function RuleEditor({ rule, onSave, onCancel }: { rule: DelinquencyRule; onSave:
           onClick={async () => {
             setSaving(true);
             try {
-              await onSave({ name, daysPastDue: Number(daysPastDue), minBalance: Number(minBalance), autoApply, isActive });
+              await onSave({
+                name,
+                daysPastDue: Number(daysPastDue),
+                minBalance: Number(minBalance),
+                actionType,
+                notificationEventType: notificationEventType || null,
+                autoApply,
+                isActive,
+              });
             } finally { setSaving(false); }
           }}
           disabled={saving}
