@@ -30,6 +30,7 @@ export default function DelinquencyRulesPage() {
   const [rules, setRules] = useState<DelinquencyRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
 
   const loadRules = () => {
     apiClient
@@ -50,6 +51,38 @@ export default function DelinquencyRulesPage() {
       title="Delinquency Rules"
       description="Configure the escalation chain — each tier defines when and how to act on past-due accounts. Rules apply in tier order."
     >
+      {canCreate && (
+        <div style={{ marginBottom: 16 }}>
+          <button
+            onClick={() => { setShowCreate(!showCreate); setEditingId(null); }}
+            style={{
+              padding: "8px 16px", fontSize: 13, fontWeight: 500,
+              background: showCreate ? "transparent" : "var(--accent-primary)",
+              color: showCreate ? "var(--text-secondary)" : "#fff",
+              border: showCreate ? "1px solid var(--border)" : "none",
+              borderRadius: "var(--radius)", cursor: "pointer", fontFamily: "inherit",
+            }}
+          >
+            {showCreate ? "Cancel" : "+ New Rule"}
+          </button>
+        </div>
+      )}
+
+      {showCreate && (
+        <div style={{ marginBottom: 16 }}>
+          <RuleEditor
+            onSave={async (data) => {
+              await apiClient.post("/api/v1/delinquency-rules", data);
+              toast("Rule created", "success");
+              setShowCreate(false);
+              loadRules();
+            }}
+            onCancel={() => setShowCreate(false)}
+            nextTier={(rules[rules.length - 1]?.tier ?? 0) + 1}
+          />
+        </div>
+      )}
+
       <SettingsCard padded={false}>
         {rules.length === 0 ? (
           <div style={{ padding: "32px 24px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
@@ -73,7 +106,7 @@ export default function DelinquencyRulesPage() {
                 <tr
                   key={r.id}
                   style={{ cursor: canEdit ? "pointer" : "default", transition: "background 0.1s" }}
-                  onClick={() => canEdit && setEditingId(editingId === r.id ? null : r.id)}
+                  onClick={() => { if (canEdit) { setEditingId(editingId === r.id ? null : r.id); setShowCreate(false); } }}
                   onMouseEnter={(e) => { if (canEdit) (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)"; }}
                   onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                 >
@@ -109,14 +142,16 @@ export default function DelinquencyRulesPage() {
   );
 }
 
-function RuleEditor({ rule, onSave, onCancel }: { rule: DelinquencyRule; onSave: (data: Record<string, unknown>) => Promise<void>; onCancel: () => void }) {
-  const [name, setName] = useState(rule.name);
-  const [daysPastDue, setDaysPastDue] = useState(String(rule.daysPastDue));
-  const [minBalance, setMinBalance] = useState(String(Number(rule.minBalance)));
-  const [actionType, setActionType] = useState(rule.actionType);
-  const [notificationEventType, setNotificationEventType] = useState(rule.notificationEventType ?? "");
-  const [autoApply, setAutoApply] = useState(rule.autoApply);
-  const [isActive, setIsActive] = useState(rule.isActive);
+function RuleEditor({ rule, onSave, onCancel, nextTier }: { rule?: DelinquencyRule; onSave: (data: Record<string, unknown>) => Promise<void>; onCancel: () => void; nextTier?: number }) {
+  const isCreate = !rule;
+  const [name, setName] = useState(rule?.name ?? "");
+  const [tier, setTier] = useState(String(rule?.tier ?? nextTier ?? 1));
+  const [daysPastDue, setDaysPastDue] = useState(String(rule?.daysPastDue ?? ""));
+  const [minBalance, setMinBalance] = useState(String(rule ? Number(rule.minBalance) : ""));
+  const [actionType, setActionType] = useState(rule?.actionType ?? "NOTICE_EMAIL");
+  const [notificationEventType, setNotificationEventType] = useState(rule?.notificationEventType ?? "");
+  const [autoApply, setAutoApply] = useState(rule?.autoApply ?? true);
+  const [isActive, setIsActive] = useState(rule?.isActive ?? true);
   const [saving, setSaving] = useState(false);
 
   const ACTION_TYPES = [
@@ -138,20 +173,26 @@ function RuleEditor({ rule, onSave, onCancel }: { rule: DelinquencyRule; onSave:
   return (
     <SettingsCard>
       <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", marginBottom: 16 }}>
-        Edit Tier {rule.tier} — {rule.name}
+        {isCreate ? "Create New Rule" : `Edit Tier ${rule.tier} — ${rule.name}`}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isCreate ? "0.5fr 1fr 1fr 1fr" : "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+        {isCreate && (
+          <div>
+            <Label>Tier</Label>
+            <input type="number" min={1} style={{ ...settingInputStyle, width: "100%" }} value={tier} onChange={(e) => setTier(e.target.value)} />
+          </div>
+        )}
         <div>
           <Label>Name</Label>
-          <input style={{ ...settingInputStyle, width: "100%" }} value={name} onChange={(e) => setName(e.target.value)} />
+          <input style={{ ...settingInputStyle, width: "100%" }} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Final Warning" />
         </div>
         <div>
           <Label>Days past due</Label>
-          <input type="number" style={{ ...settingInputStyle, width: "100%" }} value={daysPastDue} onChange={(e) => setDaysPastDue(e.target.value)} />
+          <input type="number" style={{ ...settingInputStyle, width: "100%" }} value={daysPastDue} onChange={(e) => setDaysPastDue(e.target.value)} placeholder="e.g. 30" />
         </div>
         <div>
           <Label>Min balance ($)</Label>
-          <input type="number" style={{ ...settingInputStyle, width: "100%" }} value={minBalance} onChange={(e) => setMinBalance(e.target.value)} />
+          <input type="number" style={{ ...settingInputStyle, width: "100%" }} value={minBalance} onChange={(e) => setMinBalance(e.target.value)} placeholder="e.g. 50" />
         </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
@@ -185,11 +226,12 @@ function RuleEditor({ rule, onSave, onCancel }: { rule: DelinquencyRule; onSave:
             setSaving(true);
             try {
               await onSave({
+                ...(isCreate ? { tier: Number(tier) } : {}),
                 name,
                 daysPastDue: Number(daysPastDue),
                 minBalance: Number(minBalance),
                 actionType,
-                notificationEventType: notificationEventType || null,
+                notificationEventType: notificationEventType || undefined,
                 autoApply,
                 isActive,
               });
@@ -198,7 +240,7 @@ function RuleEditor({ rule, onSave, onCancel }: { rule: DelinquencyRule; onSave:
           disabled={saving}
           style={{ padding: "8px 20px", fontSize: 13, fontWeight: 600, background: "var(--accent-primary)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
         >
-          {saving ? "Saving..." : "Save"}
+          {saving ? "Saving..." : isCreate ? "Create Rule" : "Save"}
         </button>
       </div>
     </SettingsCard>
