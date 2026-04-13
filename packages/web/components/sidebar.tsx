@@ -73,7 +73,7 @@ const navSections: NavSection[] = [
     items: [
       { href: "/delinquency", label: "Delinquency", icon: faScaleUnbalanced, module: "delinquency" },
       { href: "/delinquency/shutoff-eligible", label: "Shut-Off Queue", icon: faPlugCircleXmark, module: "delinquency" },
-      { href: "/settings/delinquency-rules", label: "Rules", icon: faGear, module: "delinquency" },
+      { href: "/delinquency/rules", label: "Rules", icon: faGear, module: "delinquency" },
     ],
   },
   {

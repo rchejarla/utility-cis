@@ -1,15 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { PageHeader } from "@/components/ui/page-header";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { usePermission } from "@/lib/use-permission";
+import { AccessDenied } from "@/components/ui/access-denied";
 import { StatusBadge } from "@/components/ui/status-badge";
-import {
-  SettingsSection,
-  SettingsCard,
-  settingInputStyle,
-} from "@/components/settings/settings-shell";
+import { settingInputStyle } from "@/components/settings/settings-shell";
 
 interface DelinquencyRule {
   id: string;
@@ -25,7 +23,7 @@ interface DelinquencyRule {
 }
 
 export default function DelinquencyRulesPage() {
-  const { canEdit, canCreate } = usePermission("delinquency");
+  const { canView, canEdit, canCreate } = usePermission("delinquency");
   const { toast } = useToast();
   const [rules, setRules] = useState<DelinquencyRule[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,15 +40,20 @@ export default function DelinquencyRulesPage() {
 
   useEffect(() => { loadRules(); }, []);
 
+  if (!canView) return <AccessDenied />;
+
   if (loading) {
-    return <SettingsSection title="Delinquency Rules" description="Loading..."><p style={{ color: "var(--text-muted)" }}>Loading...</p></SettingsSection>;
+    return (
+      <div>
+        <PageHeader title="Delinquency Rules" subtitle="Loading..." />
+        <p style={{ color: "var(--text-muted)" }}>Loading...</p>
+      </div>
+    );
   }
 
   return (
-    <SettingsSection
-      title="Delinquency Rules"
-      description="Configure the escalation chain — each tier defines when and how to act on past-due accounts. Rules apply in tier order."
-    >
+    <div>
+      <PageHeader title="Delinquency Rules" subtitle="Configure the escalation chain — each tier defines when and how to act on past-due accounts" />
       {canCreate && (
         <div style={{ marginBottom: 16 }}>
           <button
@@ -83,7 +86,7 @@ export default function DelinquencyRulesPage() {
         </div>
       )}
 
-      <SettingsCard padded={false}>
+      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden" }}>
         {rules.length === 0 ? (
           <div style={{ padding: "32px 24px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
             No rules configured. Run seed_db.bat to load the default 5-tier escalation chain.
@@ -122,7 +125,7 @@ export default function DelinquencyRulesPage() {
             </tbody>
           </table>
         )}
-      </SettingsCard>
+      </div>
 
       {editingId && (
         <div style={{ marginTop: 16 }}>
@@ -138,7 +141,7 @@ export default function DelinquencyRulesPage() {
           />
         </div>
       )}
-    </SettingsSection>
+    </div>
   );
 }
 
@@ -171,7 +174,7 @@ function RuleEditor({ rule, onSave, onCancel, nextTier }: { rule?: DelinquencyRu
   ];
 
   return (
-    <SettingsCard>
+    <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "4px 24px" }}>
       <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", marginBottom: 16 }}>
         {isCreate ? "Create New Rule" : `Edit Tier ${rule.tier} — ${rule.name}`}
       </div>
@@ -243,7 +246,7 @@ function RuleEditor({ rule, onSave, onCancel, nextTier }: { rule?: DelinquencyRu
           {saving ? "Saving..." : isCreate ? "Create Rule" : "Save"}
         </button>
       </div>
-    </SettingsCard>
+    </div>
   );
 }
 
