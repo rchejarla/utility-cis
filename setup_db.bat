@@ -1,23 +1,25 @@
 @echo off
+REM First-time database setup.
+REM Starts the Postgres + Redis containers, then applies every migration in
+REM packages/shared/prisma/migrations in order via `prisma migrate deploy`.
+REM Run seed_db.bat afterwards to populate dev data.
+
 echo Starting containers...
 docker compose up -d
 
 echo Waiting for PostgreSQL to be ready...
-timeout /t 5 /nobreak >nul
+:wait_loop
+docker compose exec -T db pg_isready -U postgres -d utility_cis >nul 2>&1
+if errorlevel 1 (
+  timeout /t 2 /nobreak >nul
+  goto wait_loop
+)
 
-echo Pushing Prisma schema...
+echo Applying Prisma migrations...
 cd packages\shared
-call npx prisma db push
-
-echo Applying RLS policies and TimescaleDB hypertable...
-type prisma\migrations\00_rls_policies\migration.sql | docker compose exec -T db psql -U cis -d utility_cis
-
-echo Applying CHECK constraints...
-type prisma\migrations\01_check_constraints\migration.sql | docker compose exec -T db psql -U cis -d utility_cis
-
-echo Applying full-text search columns and indexes...
-type prisma\migrations\02_fts\migration.sql | docker compose exec -T db psql -U cis -d utility_cis
-
+call npx prisma migrate deploy
 cd ..\..
+
 echo.
 echo Database setup complete!
+echo Run seed_db.bat next to populate dev data.
