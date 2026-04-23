@@ -74,7 +74,7 @@ export function Topbar({ compact = false }: TopbarProps) {
       <header
         style={{
           height: "56px",
-          background: "var(--bg-surface)",
+          background: "var(--header-bg)",
           borderBottom: "1px solid var(--border)",
           display: "flex",
           alignItems: "center",
@@ -142,7 +142,7 @@ export function Topbar({ compact = false }: TopbarProps) {
     <header
       style={{
         height: "56px",
-        background: "var(--bg-surface)",
+        background: "var(--header-bg)",
         borderBottom: "1px solid var(--border)",
         display: "flex",
         alignItems: "center",

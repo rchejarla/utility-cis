@@ -18,7 +18,6 @@ import {
   faCalendarDays,
   faDroplet,
   faClipboardList,
-  faPalette,
   faGear,
   faBars,
   faBolt,
@@ -88,7 +87,6 @@ const navSections: NavSection[] = [
     title: "System",
     items: [
       { href: "/audit-log", label: "Audit Log", icon: faClipboardList, module: "audit_log" },
-      { href: "/theme", label: "Theme Editor", icon: faPalette, module: "theme" },
     ],
   },
   {
@@ -112,19 +110,23 @@ function NavItemWithPermission({ item, collapsed, isActive }: { item: NavItem; c
         display: "flex",
         alignItems: "center",
         gap: 10,
-        padding: collapsed ? "10px 0" : "8px 16px",
+        padding: collapsed ? "10px 0" : "8px 13px",
         margin: collapsed ? "2px 8px" : "1px 8px",
         borderRadius: "var(--radius)",
-        background: isActive ? "var(--bg-hover)" : "transparent",
-        color: isActive ? "var(--accent-primary)" : "var(--text-secondary)",
+        background: isActive ? "var(--accent-primary)" : "transparent",
+        color: isActive ? "#ffffff" : "var(--text-secondary)",
         textDecoration: "none",
         fontSize: 13,
-        fontWeight: isActive ? 500 : 400,
+        fontWeight: isActive ? 600 : 400,
         transition: "all 0.15s ease",
         whiteSpace: "nowrap",
         overflow: "hidden",
         justifyContent: collapsed ? "center" : "flex-start",
         position: "relative",
+        // 3px darker-indigo rail inside the active pill — gives the
+        // anchor a subtle depth cue on the left edge. Unused when
+        // inactive (transparent keeps layout steady between states).
+        borderLeft: collapsed ? "none" : `3px solid ${isActive ? "var(--accent-primary-hover)" : "transparent"}`,
       }}
     >
       <FontAwesomeIcon
@@ -167,10 +169,19 @@ function CollapsibleSection({
     (item) => pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href + "/")),
   );
 
-  const [sectionOpen, setSectionOpen] = useState(() => {
-    if (hasActiveItem) return true;
-    return !getCollapsedSections().has(section.title);
-  });
+  // Always start open on first render. The persisted collapse state
+  // lives in localStorage and gets synced in the mount effect below —
+  // reading it in the useState initializer ran on both server (empty)
+  // and client (populated) and caused a hydration mismatch.
+  const [sectionOpen, setSectionOpen] = useState(true);
+
+  useEffect(() => {
+    if (!hasActiveItem && getCollapsedSections().has(section.title)) {
+      setSectionOpen(false);
+    }
+    // Mount-only: user toggles go through toggleSection() directly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (hasActiveItem && !sectionOpen) setSectionOpen(true);
@@ -267,7 +278,7 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
       style={{
         width,
         minWidth: width,
-        background: "var(--bg-surface)",
+        background: "var(--sidebar-bg)",
         borderRight: "1px solid var(--border)",
         display: "flex",
         flexDirection: "column",

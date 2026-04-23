@@ -31,6 +31,20 @@ export function PageHeader({ title, subtitle, action }: PageHeaderProps) {
         >
           {title}
         </h1>
+        {/* Signature gradient underline beneath every page title — one of
+            the few places the indigo→violet→cyan accent gradient appears
+            in the light theme, so the brand shows without decorating
+            every surface. */}
+        <div
+          aria-hidden
+          style={{
+            height: "2px",
+            width: "32px",
+            borderRadius: "2px",
+            background: "var(--accent-gradient)",
+            margin: subtitle ? "0 0 6px" : "0",
+          }}
+        />
         {subtitle && (
           <p
             style={{

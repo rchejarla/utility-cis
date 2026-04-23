@@ -1,17 +1,34 @@
 "use client";
 
+type StatAccent = "primary" | "secondary" | "tertiary" | "success" | "warning" | "danger" | "info";
+
 interface StatCardProps {
   label: string;
   value: string | number;
   icon?: string;
+  // Colored 3px left rail. Defaults to the brand primary so existing
+  // call sites get a subtle accent without changes. Dashboards with
+  // multiple tiles can vary accent for at-a-glance category cues.
+  accent?: StatAccent;
 }
 
-export function StatCard({ label, value, icon }: StatCardProps) {
+const ACCENT_VAR: Record<StatAccent, string> = {
+  primary: "var(--accent-primary)",
+  secondary: "var(--accent-secondary)",
+  tertiary: "var(--accent-tertiary)",
+  success: "var(--success)",
+  warning: "var(--warning)",
+  danger: "var(--danger)",
+  info: "var(--info)",
+};
+
+export function StatCard({ label, value, icon, accent = "primary" }: StatCardProps) {
   return (
     <div
       style={{
         background: "var(--bg-card)",
         border: "1px solid var(--border)",
+        borderLeft: `3px solid ${ACCENT_VAR[accent]}`,
         borderRadius: "var(--radius)",
         padding: "16px 20px",
         display: "flex",

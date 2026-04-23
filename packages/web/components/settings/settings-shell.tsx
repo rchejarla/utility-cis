@@ -12,6 +12,7 @@ export interface SettingsSectionLink {
 export const SETTINGS_SECTIONS: SettingsSectionLink[] = [
   { slug: "general", label: "General" },
   { slug: "branding", label: "Branding" },
+  { slug: "theme", label: "Theme" },
   { slug: "numbering", label: "Numbering" },
   { slug: "custom-fields", label: "Custom Fields" },
   { slug: "billing", label: "Billing Integration" },

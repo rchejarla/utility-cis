@@ -1,17 +1,23 @@
 import { z } from "zod";
 
-export const colorSetSchema = z.object({
-  primary: z.string(),
-  secondary: z.string().optional(),
-  accent: z.string().optional(),
-  background: z.string().optional(),
-  surface: z.string().optional(),
-  text: z.string().optional(),
-});
+// A color set is an arbitrary map of CSS custom-property names (e.g.
+// `--bg-deep`, `--accent-primary`) to CSS color values. Keys must start
+// with `--` so applyCSSVariables can set them directly on the root
+// element without prefixing. Values are strings because CSS accepts a
+// wide range of color formats (hex, rgb(), oklch(), gradients).
+//
+// Previously this schema whitelisted a handful of abstract keys
+// (`primary`, `surface`, etc.) that nothing in the codebase actually
+// used — the theme editor sends raw CSS-var names. Zod silently stripped
+// every incoming key, so "Save Theme" round-tripped to an empty object.
+export const colorSetSchema = z.record(
+  z.string().regex(/^--[a-z][a-z0-9-]*$/, "Color keys must be CSS custom properties, e.g. --bg-deep"),
+  z.string().min(1),
+);
 
 export const colorsSchema = z.object({
-  dark: colorSetSchema,
-  light: colorSetSchema,
+  dark: colorSetSchema.optional(),
+  light: colorSetSchema.optional(),
 });
 
 export const typographySchema = z.object({

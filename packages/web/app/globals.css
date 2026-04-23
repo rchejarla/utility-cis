@@ -15,6 +15,13 @@
   --text-secondary: #8494ad;
   --text-muted: #4a5a73;
 
+  /* Chrome surfaces — sidebar and header get dedicated tokens so
+     the theme editor can tune them independently from shared
+     form/list surfaces. Defaults match --bg-surface so no visual
+     change ships alongside the split. */
+  --sidebar-bg: var(--bg-surface);
+  --header-bg: var(--bg-surface);
+
   /* Brand accents — indigo primary, cyan secondary, violet tertiary */
   --accent-primary: #6366f1;      /* indigo-500 — lifted from flat blue */
   --accent-primary-hover: #818cf8;
@@ -41,20 +48,27 @@
 }
 
 [data-theme="light"] {
-  /* ─── Light theme ──────────────────────────────────────────
-     Surfaces carry a very subtle cool tint (slate-50/100) instead
-     of pure white, so cards and elevated panels have visual depth
-     without feeling gray. */
-  --bg-deep: #fbfcfe;        /* near-white with a whisper of blue */
-  --bg-surface: #f4f6fb;     /* slate-50 with a hint of indigo */
+  /* ─── Light theme — "indigo-washed" ────────────────────────
+     Surfaces use the indigo family (50/100/200) instead of slate.
+     Cards stay pure white so they float above the tinted page.
+     Text colors remain slate — readability and visual hierarchy
+     before hue; swapping these to indigo tints flattens the
+     primary/secondary/muted distinction. */
+  --bg-deep: #eef2ff;        /* indigo-50 — page background */
+  --bg-surface: #e0e7ff;     /* indigo-100 — sidebar, form group bg */
   --bg-card: #ffffff;
-  --bg-elevated: #eef1f8;    /* slightly cooler than default slate-100 */
-  --bg-hover: #e2e8f4;
-  --border: #dbe1ec;
-  --border-subtle: #edf0f7;
+  --bg-elevated: #dbe4ff;    /* between indigo-100 and 200 — chips, icon wells */
+  --bg-hover: #d2dcff;       /* row hover reads as a real indigo touch */
+  --border: #c7d2fe;         /* indigo-200 — replaces slate borders */
+  --border-subtle: #dbe4ff;
   --text-primary: #0f172a;
   --text-secondary: #475569;
   --text-muted: #64748b;
+
+  /* Light-mode chrome defaults to the indigo-washed surface. Editable
+     independently via the theme editor. */
+  --sidebar-bg: var(--bg-surface);
+  --header-bg: var(--bg-surface);
 
   /* Brand accents — vivid but AA-compliant on white
      #4f46e5 indigo-600 on #ffffff ≈ 7.1 : 1 */
