@@ -41,6 +41,7 @@ interface MeterReadDetail {
   isFrozen: boolean;
   billedAt?: string | null;
   correctsReadId?: string | null;
+  readEventId?: string | null;
   readerId?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -106,6 +107,13 @@ export default function MeterReadDetailPage({ params }: PageProps) {
   const { canView, canEdit, canDelete } = usePermission("meter_reads");
   const { toast } = useToast();
   const [read, setRead] = useState<MeterReadDetail | null>(null);
+  const [siblings, setSiblings] = useState<Array<{
+    id: string;
+    reading: string;
+    consumption: string;
+    exceptionCode?: string | null;
+    register?: { id: string; registerNumber: string } | null;
+  }> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -122,9 +130,31 @@ export default function MeterReadDetailPage({ params }: PageProps) {
   useEffect(() => {
     setLoading(true);
     setError(null);
+    setSiblings(null);
     apiClient
       .get<MeterReadDetail>(`/api/v1/meter-reads/${id}`)
-      .then(setRead)
+      .then(async (r) => {
+        setRead(r);
+        // If this read is part of a multi-register event, fetch its
+        // siblings so we can show which other registers were captured
+        // at the same moment (demand vs. usage, etc.).
+        if (r.readEventId) {
+          try {
+            const sibRes = await apiClient.get<{
+              data: Array<{
+                id: string;
+                reading: string;
+                consumption: string;
+                exceptionCode?: string | null;
+                register?: { id: string; registerNumber: string } | null;
+              }>;
+            }>(`/api/v1/meter-reads`, { readEventId: r.readEventId, limit: "50" });
+            setSiblings(sibRes.data.filter((s) => s.id !== r.id));
+          } catch {
+            setSiblings([]);
+          }
+        }
+      })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load meter read"))
       .finally(() => setLoading(false));
   }, [id]);
@@ -541,6 +571,61 @@ export default function MeterReadDetailPage({ params }: PageProps) {
           )}
         </div>
       </div>
+
+      {/* Sibling registers card — only rendered when this read is part
+          of a multi-register read event. Shows the other registers that
+          were captured at the same read_datetime under the same event. */}
+      {read.readEventId && siblings && siblings.length > 0 && (
+        <div
+          style={{
+            background: "var(--bg-card)",
+            border: "1px solid var(--border)",
+            borderLeft: "3px solid var(--accent-primary)",
+            borderRadius: "var(--radius)",
+            padding: "18px",
+            marginBottom: "20px",
+          }}
+        >
+          <SectionLabel>SIBLING REGISTERS</SectionLabel>
+          <div style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "10px", fontFamily: "'JetBrains Mono', monospace" }}>
+            event {read.readEventId.slice(0, 8)}… · captured at the same read_datetime as this row
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            {siblings.map((s) => (
+              <div
+                key={s.id}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "80px 1fr 1fr 80px",
+                  gap: "12px",
+                  alignItems: "center",
+                  padding: "8px 12px",
+                  background: "var(--bg-elevated)",
+                  borderRadius: "var(--radius)",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: "12px",
+                }}
+              >
+                <div style={{ color: "var(--text-muted)" }}>
+                  R{s.register?.registerNumber ?? "—"}
+                </div>
+                <div style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-primary)" }}>
+                  reading {fmtNumber(s.reading)}
+                </div>
+                <div style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-secondary)" }}>
+                  consumption {fmtNumber(s.consumption)}
+                </div>
+                <Link
+                  href={`/meter-reads/${s.id}`}
+                  style={{ color: "var(--accent-primary)", textDecoration: "none", textAlign: "right" }}
+                >
+                  view →
+                </Link>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Context grid: meter, agreement, premise, account */}
       <div

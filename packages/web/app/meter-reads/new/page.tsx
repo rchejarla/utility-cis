@@ -48,6 +48,14 @@ interface MeterRow {
   uom?: { code: string; name: string };
 }
 
+interface MeterRegister {
+  id: string;
+  registerNumber: number;
+  description: string | null;
+  multiplier: string;
+  uom?: { code: string; name: string };
+}
+
 interface MeterDetail {
   id: string;
   meterNumber: string;
@@ -61,7 +69,14 @@ interface MeterDetail {
       status: string;
     };
   }>;
+  registers?: MeterRegister[];
 }
+
+const SKIP_REASONS = [
+  { value: "OUT_OF_SERVICE", label: "Out of service" },
+  { value: "INACCESSIBLE", label: "Inaccessible" },
+  { value: "DEFECTIVE", label: "Defective" },
+];
 
 interface MeterReadRow {
   id: string;
@@ -103,6 +118,11 @@ export default function NewMeterReadPage() {
   const [contextLoading, setContextLoading] = useState(false);
   const [readDate, setReadDate] = useState(today);
   const [reading, setReading] = useState("");
+  // Per-register state keyed by registerId. Used only when the meter has
+  // 2+ active registers; single-register meters keep the `reading` field.
+  const [registerReadings, setRegisterReadings] = useState<
+    Record<string, { reading: string; skip: boolean; skipReason: string }>
+  >({});
   const [readType, setReadType] = useState("ACTUAL");
   const [readSource, setReadSource] = useState("MANUAL");
   const [notes, setNotes] = useState("");
@@ -130,6 +150,16 @@ export default function NewMeterReadPage() {
         if (cancelled) return;
         setMeterDetail(detail);
         setLastRead(readsRes.data?.[0] ?? null);
+        // Seed per-register state (empty) for multi-register meters.
+        if (detail.registers && detail.registers.length >= 2) {
+          const seed: Record<string, { reading: string; skip: boolean; skipReason: string }> = {};
+          for (const r of detail.registers) {
+            seed[r.id] = { reading: "", skip: false, skipReason: "OUT_OF_SERVICE" };
+          }
+          setRegisterReadings(seed);
+        } else {
+          setRegisterReadings({});
+        }
       })
       .catch((err) => {
         if (cancelled) return;
@@ -159,6 +189,25 @@ export default function NewMeterReadPage() {
   );
   const canRecord = Boolean(meterDetail && activeAssignment);
   const unitLabel = meterDetail?.uom?.code ?? "";
+  const isMultiRegister = (meterDetail?.registers?.length ?? 0) >= 2;
+
+  // For multi-register meters, submit is only enabled when every active
+  // register is either read (non-empty number) or explicitly skipped.
+  const multiRegisterReady = isMultiRegister
+    ? (meterDetail?.registers ?? []).every((r) => {
+        const entry = registerReadings[r.id];
+        if (!entry) return false;
+        if (entry.skip) return true;
+        const n = parseFloat(entry.reading);
+        return Number.isFinite(n) && n >= 0;
+      })
+    : true;
+  const multiRegisterReadyCount = isMultiRegister
+    ? (meterDetail?.registers ?? []).filter((r) => {
+        const e = registerReadings[r.id];
+        return e && (e.skip || parseFloat(e.reading) >= 0);
+      }).length
+    : 0;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -173,15 +222,46 @@ export default function NewMeterReadPage() {
     setSubmitting(true);
     setError(null);
     try {
-      const body: Record<string, unknown> = {
-        meterId,
-        readDate,
-        readDatetime: new Date(readDate).toISOString(),
-        reading: parseFloat(reading),
-        readType,
-        readSource,
-      };
-      if (notes) body.exceptionNotes = notes;
+      let body: Record<string, unknown>;
+      if (isMultiRegister) {
+        const readings: Array<{ registerId: string; reading: number; exceptionNotes?: string }> = [];
+        const skips: Array<{ registerId: string; skipReason: string; notes?: string }> = [];
+        for (const r of meterDetail!.registers ?? []) {
+          const entry = registerReadings[r.id];
+          if (!entry) continue;
+          if (entry.skip) {
+            skips.push({
+              registerId: r.id,
+              skipReason: entry.skipReason,
+              ...(notes ? { notes } : {}),
+            });
+          } else {
+            readings.push({
+              registerId: r.id,
+              reading: parseFloat(entry.reading),
+            });
+          }
+        }
+        body = {
+          meterId,
+          readDate,
+          readDatetime: new Date(readDate).toISOString(),
+          readings,
+          skips,
+          readType,
+          readSource,
+        };
+      } else {
+        body = {
+          meterId,
+          readDate,
+          readDatetime: new Date(readDate).toISOString(),
+          reading: parseFloat(reading),
+          readType,
+          readSource,
+        };
+        if (notes) body.exceptionNotes = notes;
+      }
       // NOTE: serviceAgreementId is intentionally omitted — the API
       // resolves it from meter + date via ServiceAgreementMeter.
       await apiClient.post("/api/v1/meter-reads", body);
@@ -457,7 +537,7 @@ export default function NewMeterReadPage() {
             </div>
           )}
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: isMultiRegister ? "1fr" : "1fr 1fr", gap: "12px" }}>
             <FormField label="Read Date" required>
               <input
                 type="date"
@@ -467,32 +547,185 @@ export default function NewMeterReadPage() {
                 required
               />
             </FormField>
-            <FormField
-              label={unitLabel ? `Reading (${unitLabel})` : "Reading"}
-              required
-              hint={
-                lastRead
-                  ? `Prior: ${fmtNumber(lastRead.reading)}${unitLabel ? ` ${unitLabel}` : ""}`
-                  : undefined
-              }
-            >
-              <input
-                type="number"
-                step="any"
-                min="0"
-                value={reading}
-                onChange={(e) => setReading(e.target.value)}
-                placeholder="12345.67"
-                style={{
-                  ...formInputStyle,
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontVariantNumeric: "tabular-nums",
-                }}
+            {!isMultiRegister && (
+              <FormField
+                label={unitLabel ? `Reading (${unitLabel})` : "Reading"}
                 required
-                disabled={!canRecord}
-              />
-            </FormField>
+                hint={
+                  lastRead
+                    ? `Prior: ${fmtNumber(lastRead.reading)}${unitLabel ? ` ${unitLabel}` : ""}`
+                    : undefined
+                }
+              >
+                <input
+                  type="number"
+                  step="any"
+                  min="0"
+                  value={reading}
+                  onChange={(e) => setReading(e.target.value)}
+                  placeholder="12345.67"
+                  style={{
+                    ...formInputStyle,
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                  required
+                  disabled={!canRecord}
+                />
+              </FormField>
+            )}
           </div>
+
+          {/* Multi-register read table. Appears only when the meter has
+              2+ active registers. Each row takes an independent reading
+              (in that register's UoM) or an explicit skip with reason.
+              Submit is disabled until every register is covered. */}
+          {isMultiRegister && canRecord && meterDetail?.registers && (
+            <div
+              style={{
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "60px 1fr 80px 1fr 160px",
+                  gap: "8px",
+                  padding: "8px 12px",
+                  background: "var(--bg-elevated)",
+                  borderBottom: "1px solid var(--border)",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: "10px",
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
+                  color: "var(--text-muted)",
+                  textTransform: "uppercase",
+                }}
+              >
+                <div>#</div>
+                <div>Description</div>
+                <div>UoM</div>
+                <div>Reading</div>
+                <div>Skip</div>
+              </div>
+              {meterDetail.registers.map((r) => {
+                const entry = registerReadings[r.id] ?? { reading: "", skip: false, skipReason: "OUT_OF_SERVICE" };
+                return (
+                  <div
+                    key={r.id}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "60px 1fr 80px 1fr 160px",
+                      gap: "8px",
+                      padding: "10px 12px",
+                      alignItems: "center",
+                      borderBottom: "1px solid var(--border-subtle)",
+                      fontSize: "13px",
+                    }}
+                  >
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>
+                      R{r.registerNumber}
+                    </div>
+                    <div style={{ color: "var(--text-primary)" }}>
+                      {r.description ?? <span style={{ color: "var(--text-muted)" }}>—</span>}
+                    </div>
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--text-muted)" }}>
+                      {r.uom?.code ?? "—"}
+                    </div>
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      value={entry.reading}
+                      onChange={(e) =>
+                        setRegisterReadings((prev) => ({
+                          ...prev,
+                          [r.id]: { ...entry, reading: e.target.value, skip: false },
+                        }))
+                      }
+                      placeholder={entry.skip ? "(skipped)" : "12345.67"}
+                      disabled={entry.skip}
+                      style={{
+                        ...formInputStyle,
+                        padding: "6px 10px",
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontVariantNumeric: "tabular-nums",
+                        opacity: entry.skip ? 0.5 : 1,
+                      }}
+                    />
+                    <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "4px",
+                          fontSize: "12px",
+                          color: "var(--text-secondary)",
+                          cursor: "pointer",
+                          userSelect: "none",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={entry.skip}
+                          onChange={(e) =>
+                            setRegisterReadings((prev) => ({
+                              ...prev,
+                              [r.id]: {
+                                ...entry,
+                                skip: e.target.checked,
+                                reading: e.target.checked ? "" : entry.reading,
+                              },
+                            }))
+                          }
+                        />
+                        skip
+                      </label>
+                      {entry.skip && (
+                        <select
+                          value={entry.skipReason}
+                          onChange={(e) =>
+                            setRegisterReadings((prev) => ({
+                              ...prev,
+                              [r.id]: { ...entry, skipReason: e.target.value },
+                            }))
+                          }
+                          style={{ ...formInputStyle, padding: "4px 8px", fontSize: "12px", flex: 1 }}
+                        >
+                          {SKIP_REASONS.map((s) => (
+                            <option key={s.value} value={s.value}>
+                              {s.label}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              <div
+                style={{
+                  padding: "8px 12px",
+                  background: "var(--bg-elevated)",
+                  borderTop: "1px solid var(--border)",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: "11px",
+                  color: multiRegisterReady ? "var(--success)" : "var(--text-muted)",
+                }}
+              >
+                <span>
+                  {multiRegisterReadyCount} of {meterDetail.registers.length} registers ready
+                </span>
+                <span>
+                  {multiRegisterReady ? "✓ ready to submit" : "every register must be read or skipped"}
+                </span>
+              </div>
+            </div>
+          )}
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
             <FormField label="Read Type" required>
@@ -569,24 +802,29 @@ export default function NewMeterReadPage() {
             >
               Cancel
             </button>
-            <button
-              type="submit"
-              disabled={submitting || !canRecord || !reading}
-              style={{
-                padding: "8px 20px",
-                borderRadius: "var(--radius)",
-                border: "none",
-                background: "var(--accent-primary)",
-                color: "#fff",
-                fontSize: "13px",
-                fontWeight: 500,
-                cursor: submitting ? "not-allowed" : "pointer",
-                opacity: submitting || !canRecord || !reading ? 0.5 : 1,
-                fontFamily: "inherit",
-              }}
-            >
-              {submitting ? "Recording..." : "Record Read"}
-            </button>
+            {(() => {
+              const blocked = submitting || !canRecord || (isMultiRegister ? !multiRegisterReady : !reading);
+              return (
+                <button
+                  type="submit"
+                  disabled={blocked}
+                  style={{
+                    padding: "8px 20px",
+                    borderRadius: "var(--radius)",
+                    border: "none",
+                    background: "var(--accent-primary)",
+                    color: "#fff",
+                    fontSize: "13px",
+                    fontWeight: 500,
+                    cursor: submitting ? "not-allowed" : "pointer",
+                    opacity: blocked ? 0.5 : 1,
+                    fontFamily: "inherit",
+                  }}
+                >
+                  {submitting ? "Recording..." : "Record Read"}
+                </button>
+              );
+            })()}
           </div>
         </div>
       </form>
