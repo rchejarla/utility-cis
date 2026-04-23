@@ -232,6 +232,9 @@ model Premise {
   createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz
   updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz
 
+  // Generated tsvector column — see FTS migration.
+  searchVector Unsupported("tsvector")? @map("search_vector")
+
   // Relations
   meters            Meter[]
   serviceAgreements ServiceAgreement[]
@@ -262,6 +265,9 @@ model Meter {
   customFields Json       @default("{}") @map("custom_fields")
   createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz
   updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Generated tsvector column — see FTS migration.
+  searchVector Unsupported("tsvector")? @map("search_vector")
 
   // Relations
   premise                Premise                 @relation(fields: [premiseId], references: [id], onDelete: Restrict)
@@ -302,6 +308,9 @@ model Account {
   customFields        Json          @default("{}") @map("custom_fields")
   createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz
   closedAt            DateTime?     @map("closed_at") @db.Timestamptz
+
+  // Generated tsvector column — see FTS migration.
+  searchVector Unsupported("tsvector")? @map("search_vector")
 
   // Relations
   customer           Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
@@ -528,6 +537,11 @@ model Customer {
   customFields     Json           @default("{}") @map("custom_fields")
   createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz
   updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Generated tsvector column maintained by Postgres (see the FTS
+  // migration). Declared as Unsupported so `prisma migrate dev` knows
+  // the column exists and doesn't propose dropping it.
+  searchVector Unsupported("tsvector")? @map("search_vector")
 
   // Relations
   accounts      Account[]
