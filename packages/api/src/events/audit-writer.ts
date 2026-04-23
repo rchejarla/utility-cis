@@ -1,5 +1,5 @@
 import type { DomainEvent } from "@utility-cis/shared";
-import { prisma, setTenantContext } from "../lib/prisma.js";
+import { prisma } from "../lib/prisma.js";
 import { domainEvents } from "./emitter.js";
 
 // Prisma's Json column rejects `undefined`; use `null` to mean "no value".
@@ -19,10 +19,23 @@ function mapEventTypeToAction(
   return "UPDATE";
 }
 
-async function handleDomainEvent(event: DomainEvent): Promise<void> {
-  try {
-    await setTenantContext(event.utilityId);
-    await prisma.auditLog.create({
+// Serial queue — a single in-flight writer at a time. A burst of events
+// from one workflow (e.g., moveIn emits customer.created + account.created
+// + agreement.created + meter_read.created together) used to spawn N
+// concurrent fire-and-forget handlers, each demanding two connections
+// from the shared Prisma pool. Serializing here bounds audit-writer's
+// footprint on the pool to one connection at a time.
+const queue: DomainEvent[] = [];
+let draining = false;
+
+async function writeAuditRow(event: DomainEvent): Promise<void> {
+  // Interactive transaction scopes set_config to the transaction (third
+  // arg `true`), so the tenant context does not leak onto the pooled
+  // connection after release. It also keeps the SET and the INSERT on
+  // one connection — half the pool demand of the previous two-call path.
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT set_config('app.current_utility_id', ${event.utilityId}, true)`;
+    await tx.auditLog.create({
       data: {
         utilityId: event.utilityId,
         entityType: event.entityType,
@@ -34,13 +47,29 @@ async function handleDomainEvent(event: DomainEvent): Promise<void> {
         afterState: toJsonInput(event.afterState),
       },
     });
-  } catch (err) {
-    console.error("[audit-writer] Failed to write audit log:", err);
+  });
+}
+
+async function drain(): Promise<void> {
+  if (draining) return;
+  draining = true;
+  try {
+    while (queue.length > 0) {
+      const event = queue.shift()!;
+      try {
+        await writeAuditRow(event);
+      } catch (err) {
+        console.error("[audit-writer] Failed to write audit log:", err);
+      }
+    }
+  } finally {
+    draining = false;
   }
 }
 
 export function startAuditWriter(): void {
   domainEvents.on("domain-event", (event: DomainEvent) => {
-    void handleDomainEvent(event);
+    queue.push(event);
+    void drain();
   });
 }

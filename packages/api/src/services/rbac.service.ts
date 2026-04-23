@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma.js";
-import { redis } from "../lib/redis.js";
+import { cacheDel, cacheGet, cacheSet } from "../lib/redis.js";
 import type { PermissionMap } from "@utility-cis/shared";
 
 interface UserRoleResult {
@@ -22,7 +22,7 @@ export async function getUserRole(
 ): Promise<UserRoleResult | null> {
   const cacheKey = userRoleCacheKey(utilityId, userId);
 
-  const cached = await redis.get(cacheKey);
+  const cached = await cacheGet(cacheKey);
   if (cached) {
     return JSON.parse(cached) as UserRoleResult;
   }
@@ -49,7 +49,7 @@ export async function getUserRole(
     customerId: cisUser.customerId ?? null,
   };
 
-  await redis.setex(cacheKey, 300, JSON.stringify(result));
+  await cacheSet(cacheKey, 300, JSON.stringify(result));
 
   return result;
 }
@@ -57,7 +57,7 @@ export async function getUserRole(
 export async function getTenantModules(utilityId: string): Promise<string[]> {
   const cacheKey = `tenant-modules:${utilityId}`;
 
-  const cached = await redis.get(cacheKey);
+  const cached = await cacheGet(cacheKey);
   if (cached) {
     return JSON.parse(cached) as string[];
   }
@@ -69,7 +69,7 @@ export async function getTenantModules(utilityId: string): Promise<string[]> {
 
   const moduleKeys = modules.map((m) => m.moduleKey);
 
-  await redis.setex(cacheKey, 600, JSON.stringify(moduleKeys));
+  await cacheSet(cacheKey, 600, JSON.stringify(moduleKeys));
 
   return moduleKeys;
 }
@@ -78,11 +78,11 @@ export async function invalidateUserRoleCache(
   userId: string,
   utilityId: string
 ): Promise<void> {
-  await redis.del(userRoleCacheKey(utilityId, userId));
+  await cacheDel(userRoleCacheKey(utilityId, userId));
 }
 
 export async function invalidateTenantModulesCache(utilityId: string): Promise<void> {
-  await redis.del(`tenant-modules:${utilityId}`);
+  await cacheDel(`tenant-modules:${utilityId}`);
 }
 
 export async function getAuthMe(

@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma.js";
-import { redis } from "../lib/redis.js";
+import { cacheDel } from "../lib/redis.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
 import type { CreateRateScheduleInput, RateScheduleQuery } from "@utility-cis/shared";
 import { paginatedTenantList } from "../lib/pagination.js";
@@ -57,7 +57,7 @@ export async function createRateSchedule(
         },
         include: fullInclude,
       });
-      await redis.del(`rate-schedule:${utilityId}:${data.code}`);
+      await cacheDel(`rate-schedule:${utilityId}:${data.code}`);
       return schedule;
     }
   );
@@ -99,7 +99,7 @@ export async function reviseRateSchedule(
           include: fullInclude,
         }),
       ]);
-      await redis.del(`rate-schedule:${utilityId}:${predecessor.code}`);
+      await cacheDel(`rate-schedule:${utilityId}:${predecessor.code}`);
       return newSchedule;
     }
   );

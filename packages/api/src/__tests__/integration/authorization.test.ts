@@ -8,6 +8,9 @@ vi.mock("../../lib/redis.js", () => ({
     setex: vi.fn().mockResolvedValue("OK"),
     del: vi.fn().mockResolvedValue(1),
   },
+  cacheGet: vi.fn().mockResolvedValue(null),
+  cacheSet: vi.fn().mockResolvedValue(undefined),
+  cacheDel: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock prisma with RBAC-specific methods added on top of the global vitest.setup.ts mock.

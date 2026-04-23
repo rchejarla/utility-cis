@@ -341,13 +341,23 @@ async function processPendingNotifications(): Promise<void> {
   }
 }
 
+let sendJobRunning = false;
+
 export function startNotificationSendJob(logger: { info: (msg: string) => void }): void {
   const intervalMs = 10_000;
   logger.info(`notification-send-job: starting (every ${intervalMs / 1000}s)`);
 
   setInterval(() => {
-    processPendingNotifications().catch((err) => {
-      console.error("[notification-send-job] error:", err);
-    });
+    // Skip tick if a prior run is still in flight. Prevents overlapping
+    // ticks from piling on during DB contention and starving the pool.
+    if (sendJobRunning) return;
+    sendJobRunning = true;
+    processPendingNotifications()
+      .catch((err) => {
+        console.error("[notification-send-job] error:", err);
+      })
+      .finally(() => {
+        sendJobRunning = false;
+      });
   }, intervalMs);
 }

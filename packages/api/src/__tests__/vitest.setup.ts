@@ -8,6 +8,9 @@ vi.mock("../lib/redis.js", () => ({
     setex: vi.fn().mockResolvedValue("OK"),
     del: vi.fn().mockResolvedValue(1),
   },
+  cacheGet: vi.fn().mockResolvedValue(null),
+  cacheSet: vi.fn().mockResolvedValue(undefined),
+  cacheDel: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock the prisma module before any tests run.
