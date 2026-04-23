@@ -391,9 +391,9 @@ export function RolesTab({ showAddForm, onAddFormClose }: RolesTabProps) {
                                       style={{
                                         ...btnStyle,
                                         padding: "4px 10px",
-                                        background: "rgba(239,68,68,0.15)",
-                                        color: "#f87171",
-                                        border: "1px solid rgba(239,68,68,0.3)",
+                                        background: "var(--danger-subtle)",
+                                        color: "var(--danger)",
+                                        border: "1px solid var(--danger)",
                                         opacity: deletingId === role.id ? 0.7 : 1,
                                       }}
                                     >
@@ -428,8 +428,8 @@ export function RolesTab({ showAddForm, onAddFormClose }: RolesTabProps) {
                                     }}
                                     onMouseEnter={(e) => {
                                       if (userCount === 0) {
-                                        (e.currentTarget as HTMLButtonElement).style.color = "#f87171";
-                                        (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(239,68,68,0.4)";
+                                        (e.currentTarget as HTMLButtonElement).style.color = "var(--danger)";
+                                        (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--danger)";
                                       }
                                     }}
                                     onMouseLeave={(e) => {

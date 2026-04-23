@@ -156,7 +156,7 @@ export function ConfirmDialog({
               minHeight: "36px",
               padding: "6px 14px",
               fontSize: "13px",
-              background: destructive ? "#dc2626" : "var(--accent-primary)",
+              background: destructive ? "var(--danger)" : "var(--accent-primary)",
               color: "#fff",
               border: "none",
               borderRadius: "var(--radius)",

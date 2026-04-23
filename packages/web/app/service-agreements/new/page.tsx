@@ -377,9 +377,9 @@ export default function NewServiceAgreementPage() {
                     style={{
                       padding: "4px 10px",
                       borderRadius: "var(--radius)",
-                      border: "1px solid rgba(239,68,68,0.4)",
-                      background: "rgba(239,68,68,0.1)",
-                      color: "#f87171",
+                      border: "1px solid var(--danger)",
+                      background: "var(--danger-subtle)",
+                      color: "var(--danger)",
                       fontSize: "12px",
                       cursor: "pointer",
                       fontFamily: "inherit",
@@ -414,9 +414,9 @@ export default function NewServiceAgreementPage() {
               style={{
                 padding: "10px 14px",
                 borderRadius: "var(--radius)",
-                background: "rgba(239,68,68,0.1)",
-                border: "1px solid rgba(239,68,68,0.3)",
-                color: "#f87171",
+                background: "var(--danger-subtle)",
+                border: "1px solid var(--danger)",
+                color: "var(--danger)",
                 fontSize: "13px",
               }}
             >

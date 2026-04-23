@@ -29,7 +29,7 @@ const roleBadgeStyle = (role: string): React.CSSProperties => {
     PRIMARY: { bg: "rgba(59,130,246,0.15)", color: "#60a5fa" },
     BILLING: { bg: "rgba(245,158,11,0.15)", color: "#fbbf24" },
     AUTHORIZED: { bg: "rgba(139,92,246,0.15)", color: "#a78bfa" },
-    EMERGENCY: { bg: "rgba(239,68,68,0.15)", color: "#f87171" },
+    EMERGENCY: { bg: "var(--danger-subtle)", color: "var(--danger)" },
   };
   const c = colors[role] ?? { bg: "rgba(100,100,100,0.15)", color: "var(--text-muted)" };
   return {
@@ -445,7 +445,7 @@ export function ContactsTab({
                           </button>
                           <button
                             onClick={() => setDeleteId(contact.id)}
-                            style={{ ...btnStyle, background: "transparent", color: "#f87171", border: "1px solid rgba(239,68,68,0.3)", padding: "4px 10px" }}
+                            style={{ ...btnStyle, background: "transparent", color: "var(--danger)", border: "1px solid var(--danger)", padding: "4px 10px" }}
                           >
                             Delete
                           </button>
@@ -478,7 +478,7 @@ export function ContactsTab({
               <button
                 onClick={handleDelete}
                 disabled={deleting}
-                style={{ ...btnStyle, background: "#ef4444", color: "#fff", opacity: deleting ? 0.7 : 1 }}
+                style={{ ...btnStyle, background: "var(--danger)", color: "#fff", opacity: deleting ? 0.7 : 1 }}
               >
                 {deleting ? "Deleting..." : "Delete"}
               </button>

@@ -34,11 +34,11 @@ export default function Error({
           width: "56px",
           height: "56px",
           borderRadius: "50%",
-          background: "rgba(239,68,68,0.12)",
+          background: "var(--danger-subtle)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          color: "#dc2626",
+          color: "var(--danger)",
           fontSize: "28px",
           fontWeight: 700,
         }}

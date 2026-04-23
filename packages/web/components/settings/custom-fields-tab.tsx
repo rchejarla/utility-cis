@@ -459,7 +459,7 @@ function FieldRow({
               onClick={onDelete}
               style={{
                 background: "transparent",
-                border: "1px solid rgba(239,68,68,0.4)",
+                border: "1px solid var(--danger)",
                 color: "var(--danger)",
                 padding: "4px 10px",
                 fontSize: 10,

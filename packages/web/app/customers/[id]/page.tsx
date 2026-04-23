@@ -464,7 +464,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
                   <button
                     onClick={() => setShowDeactivateConfirm(true)}
                     title="BR-CU-004: Customer can only be deactivated if all accounts are closed or inactive."
-                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid rgba(239,68,68,0.4)", borderRadius: "var(--radius)", color: "#f87171", cursor: "pointer", fontFamily: "inherit" }}
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--danger)", borderRadius: "var(--radius)", color: "var(--danger)", cursor: "pointer", fontFamily: "inherit" }}
                   >
                     Deactivate Customer
                   </button>

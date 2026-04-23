@@ -24,10 +24,10 @@ const toastStyles: Record<ToastType, { bg: string; border: string; icon: string;
     color: "#4ade80",
   },
   error: {
-    bg: "rgba(239,68,68,0.12)",
-    border: "rgba(239,68,68,0.3)",
+    bg: "var(--danger-subtle)",
+    border: "var(--danger)",
     icon: "✕",
-    color: "#f87171",
+    color: "var(--danger)",
   },
   info: {
     bg: "rgba(59,130,246,0.12)",

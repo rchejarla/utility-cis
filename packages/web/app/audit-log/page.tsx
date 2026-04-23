@@ -120,7 +120,7 @@ export default function AuditLogPage() {
         const colors: Record<string, string> = {
           CREATED: "#4ade80",
           UPDATED: "#60a5fa",
-          DELETED: "#f87171",
+          DELETED: "var(--danger)",
           STATUS_CHANGED: "#fbbf24",
         };
         return (

@@ -152,7 +152,7 @@ export function AttachmentsTab({ entityType, entityId, showForm: showFormProp, o
           <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
             <div>
               <label style={{ display: "block", fontSize: "12px", color: "var(--text-muted)", marginBottom: "4px" }}>
-                File <span style={{ color: "#f87171" }}>*</span>
+                File <span style={{ color: "var(--danger)" }}>*</span>
               </label>
               <input
                 ref={fileInputRef}
@@ -314,8 +314,8 @@ export function AttachmentsTab({ entityType, entityId, showForm: showFormProp, o
                         ...btnBase,
                         padding: "4px 10px",
                         background: "transparent",
-                        border: "1px solid rgba(239,68,68,0.4)",
-                        color: "#f87171",
+                        border: "1px solid var(--danger)",
+                        color: "var(--danger)",
                         fontSize: "11px",
                       }}
                     >
@@ -370,7 +370,7 @@ export function AttachmentsTab({ entityType, entityId, showForm: showFormProp, o
                 disabled={deleting}
                 style={{
                   ...btnBase,
-                  background: "#ef4444",
+                  background: "var(--danger)",
                   color: "#fff",
                   opacity: deleting ? 0.7 : 1,
                   cursor: deleting ? "not-allowed" : "pointer",

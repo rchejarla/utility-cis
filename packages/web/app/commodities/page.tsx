@@ -292,7 +292,7 @@ export default function CommoditiesPage() {
                           ) : (
                             <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
                               {canEdit && <button onClick={() => { setEditingUom(u.id); setEditUomForm({ name: u.name, conversionFactor: String(u.conversionFactor), isBaseUnit: u.isBaseUnit }); }} style={{ ...btnStyle, background: "transparent", color: "var(--text-secondary)", padding: "3px 10px", border: "1px solid var(--border)" }}>Edit</button>}
-                              {canDelete && <button onClick={() => setDeleteUomId(u.id)} style={{ ...btnStyle, background: "transparent", color: "#f87171", padding: "3px 10px", border: "1px solid rgba(239,68,68,0.3)" }}>Delete</button>}
+                              {canDelete && <button onClick={() => setDeleteUomId(u.id)} style={{ ...btnStyle, background: "transparent", color: "var(--danger)", padding: "3px 10px", border: "1px solid var(--danger)" }}>Delete</button>}
                             </div>
                           )}
                         </td>
@@ -356,7 +356,7 @@ export default function CommoditiesPage() {
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
               <button onClick={() => setDeleteUomId(null)} style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
-              <button onClick={handleDeleteUom} disabled={deletingUom} style={{ padding: "6px 14px", fontSize: "12px", background: "#ef4444", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: deletingUom ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: deletingUom ? 0.7 : 1 }}>
+              <button onClick={handleDeleteUom} disabled={deletingUom} style={{ padding: "6px 14px", fontSize: "12px", background: "var(--danger)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: deletingUom ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: deletingUom ? 0.7 : 1 }}>
                 {deletingUom ? "Deleting..." : "Delete"}
               </button>
             </div>

@@ -348,7 +348,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
                   <button
                     onClick={() => setShowCloseConfirm(true)}
                     title="BR-AC-004: Account cannot be closed while it has active service agreements."
-                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid rgba(239,68,68,0.4)", borderRadius: "var(--radius)", color: "#f87171", cursor: "pointer", fontFamily: "inherit" }}
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--danger)", borderRadius: "var(--radius)", color: "var(--danger)", cursor: "pointer", fontFamily: "inherit" }}
                   >
                     Close Account
                   </button>
@@ -651,7 +651,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
               </div>
               <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
                 <button onClick={() => setShowCloseConfirm(false)} style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
-                <button onClick={handleClose} disabled={closing} style={{ padding: "6px 14px", fontSize: "12px", background: "#ef4444", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: closing ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: closing ? 0.7 : 1 }}>
+                <button onClick={handleClose} disabled={closing} style={{ padding: "6px 14px", fontSize: "12px", background: "var(--danger)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: closing ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: closing ? 0.7 : 1 }}>
                   {closing ? "Processing..." : "Confirm"}
                 </button>
               </div>

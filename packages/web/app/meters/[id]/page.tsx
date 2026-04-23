@@ -257,7 +257,7 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
                   <button
                     onClick={() => setShowRemoveConfirm(true)}
                     title="BR-MT-005: Meters cannot be deleted, only removed. History is retained."
-                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid rgba(239,68,68,0.4)", borderRadius: "var(--radius)", color: "#f87171", cursor: "pointer", fontFamily: "inherit" }}
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--danger)", borderRadius: "var(--radius)", color: "var(--danger)", cursor: "pointer", fontFamily: "inherit" }}
                   >
                     Remove Meter
                   </button>
@@ -508,7 +508,7 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
               </div>
               <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
                 <button onClick={() => setShowRemoveConfirm(false)} style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
-                <button onClick={handleRemove} disabled={removing} style={{ padding: "6px 14px", fontSize: "12px", background: "#ef4444", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: removing ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: removing ? 0.7 : 1 }}>
+                <button onClick={handleRemove} disabled={removing} style={{ padding: "6px 14px", fontSize: "12px", background: "var(--danger)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: removing ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: removing ? 0.7 : 1 }}>
                   {removing ? "Processing..." : "Confirm"}
                 </button>
               </div>

@@ -61,7 +61,7 @@ export function FormField({
       >
         {label}
         {required && (
-          <span aria-hidden="true" style={{ color: "#ef4444", fontSize: "14px", lineHeight: 1 }}>
+          <span aria-hidden="true" style={{ color: "var(--danger)", fontSize: "14px", lineHeight: 1 }}>
             *
           </span>
         )}
@@ -83,7 +83,7 @@ export function FormField({
           role="alert"
           style={{
             fontSize: "12px",
-            color: "#dc2626",
+            color: "var(--danger)",
             display: "flex",
             alignItems: "center",
             gap: "4px",

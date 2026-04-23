@@ -392,7 +392,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
                   <button
                     onClick={() => setShowDeactivateConfirm(true)}
                     title="BR-PR-004: Premises cannot be deleted, only deactivated."
-                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid rgba(239,68,68,0.4)", borderRadius: "var(--radius)", color: "#f87171", cursor: "pointer", fontFamily: "inherit" }}
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--danger)", borderRadius: "var(--radius)", color: "var(--danger)", cursor: "pointer", fontFamily: "inherit" }}
                   >
                     Deactivate Premise
                   </button>
@@ -610,7 +610,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
                     );
                   })}
                   {editCommodityIds.length === 0 && (
-                    <span style={{ fontSize: "11px", color: "#f87171" }}>At least one commodity required (BR-PR-003)</span>
+                    <span style={{ fontSize: "11px", color: "var(--danger)" }}>At least one commodity required (BR-PR-003)</span>
                   )}
                 </div>
               ) : (
@@ -728,7 +728,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
               </div>
               <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
                 <button onClick={() => setShowDeactivateConfirm(false)} style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
-                <button onClick={handleDeactivate} disabled={deactivating} style={{ padding: "6px 14px", fontSize: "12px", background: "#ef4444", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: deactivating ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: deactivating ? 0.7 : 1 }}>
+                <button onClick={handleDeactivate} disabled={deactivating} style={{ padding: "6px 14px", fontSize: "12px", background: "var(--danger)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: deactivating ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: deactivating ? 0.7 : 1 }}>
                   {deactivating ? "Processing..." : "Confirm"}
                 </button>
               </div>
