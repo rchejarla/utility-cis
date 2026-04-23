@@ -2,37 +2,24 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { ColorPickerField } from "@/components/theme/color-picker-field";
-import { PresetGrid, NamedTheme, THEMES } from "@/components/theme/preset-grid";
-import { LivePreview, PreviewTheme } from "@/components/theme/live-preview";
+import { PresetGrid, NamedTheme } from "@/components/theme/preset-grid";
+import { LivePreview } from "@/components/theme/live-preview";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { useTheme } from "@/lib/theme-provider";
+import {
+  ColorKey,
+  ColorSet,
+  Mode,
+  DEFAULT_THEME_NAME,
+  defaultsFor,
+  mergeSavedWithDefaults,
+  workingToPreview,
+} from "./theme-tab-helpers";
 
 // ──────────────────────────────────────────────────────────────
 // Types
 // ──────────────────────────────────────────────────────────────
-
-type ColorKey =
-  | "--accent-primary"
-  | "--accent-secondary"
-  | "--success"
-  | "--danger"
-  | "--warning"
-  | "--bg-deep"
-  | "--bg-surface"
-  | "--sidebar-bg"
-  | "--header-bg"
-  | "--bg-card"
-  | "--bg-elevated"
-  | "--bg-hover"
-  | "--border"
-  | "--border-subtle"
-  | "--text-primary"
-  | "--text-secondary"
-  | "--text-muted";
-
-type ColorSet = Record<ColorKey, string>;
-type Mode = "dark" | "light";
 
 interface WorkingTheme {
   themeName: string;
@@ -41,14 +28,6 @@ interface WorkingTheme {
   bodyFont: string;
   displayFont: string;
   borderRadius: number;
-}
-
-// "Indigo Wash" is the current shipping default — matches globals.css.
-const DEFAULT_THEME_NAME = "Indigo Wash";
-
-function defaultsFor(themeName: string): { dark: ColorSet; light: ColorSet } {
-  const theme = THEMES.find((t) => t.name === themeName) ?? THEMES[0];
-  return { dark: { ...theme.dark } as ColorSet, light: { ...theme.light } as ColorSet };
 }
 
 const DEFAULT_THEME: WorkingTheme = {
@@ -69,33 +48,9 @@ const FONT_OPTIONS = [
 ];
 
 // ──────────────────────────────────────────────────────────────
-// Helpers
+// Helpers — pure logic lives in ./theme-tab-helpers.ts and is
+// imported at the top. Only UI-local helpers below.
 // ──────────────────────────────────────────────────────────────
-
-function workingToPreview(t: WorkingTheme, mode: Mode): PreviewTheme {
-  const c = t[mode];
-  return {
-    bgDeep: c["--bg-deep"],
-    bgCard: c["--bg-card"],
-    bgElevated: c["--bg-elevated"],
-    border: c["--border"],
-    sidebarBg: c["--sidebar-bg"],
-    headerBg: c["--header-bg"],
-    // Text tokens now come from the edited palette so the preview
-    // reflects custom colors the user picked, not a mode-fixed default.
-    textPrimary: c["--text-primary"],
-    textSecondary: c["--text-secondary"],
-    textMuted: c["--text-muted"],
-    accentPrimary: c["--accent-primary"],
-    accentSecondary: c["--accent-secondary"],
-    success: c["--success"],
-    danger: c["--danger"],
-    warning: c["--warning"],
-    borderRadius: t.borderRadius,
-    bodyFont: t.bodyFont,
-    displayFont: t.displayFont,
-  };
-}
 
 function SubSection({ children }: { children: React.ReactNode }) {
   return (
@@ -140,21 +95,14 @@ export function ThemeTab() {
           colors?: { dark?: Partial<ColorSet>; light?: Partial<ColorSet> };
         }>("/api/v1/theme");
         if (!data) return;
-        const savedName = typeof data.preset === "string" ? data.preset : DEFAULT_THEME_NAME;
-        const base = defaultsFor(savedName);
-        const darkPalette = { ...base.dark, ...(data.colors?.dark ?? {}) } as ColorSet;
-        const lightPalette = { ...base.light, ...(data.colors?.light ?? {}) } as ColorSet;
+        const merged = mergeSavedWithDefaults(data.preset, data.colors);
         setTheme((prev) => ({
           ...prev,
-          themeName: savedName,
-          dark: darkPalette,
-          light: lightPalette,
+          themeName: merged.themeName,
+          dark: merged.dark,
+          light: merged.light,
         }));
-        const baseDark = JSON.stringify(base.dark);
-        const baseLight = JSON.stringify(base.light);
-        const currentDark = JSON.stringify(darkPalette);
-        const currentLight = JSON.stringify(lightPalette);
-        setIsEdited(baseDark !== currentDark || baseLight !== currentLight);
+        setIsEdited(merged.isEdited);
       } catch {
         // defaults apply
       }
