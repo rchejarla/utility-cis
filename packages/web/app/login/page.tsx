@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { API_URL, setAuthToken } from "@/lib/api-client";
 
 const inputStyle = {
@@ -18,7 +18,6 @@ const inputStyle = {
 };
 
 export default function LoginPage() {
-  const router = useRouter();
   const params = useSearchParams();
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
@@ -57,7 +56,12 @@ export default function LoginPage() {
         localStorage.setItem("portal_user", JSON.stringify(data.user));
       }
 
-      router.push(data.redirectTo ?? "/premises");
+      // Full page navigation (not router.push) so AuthPermissionProvider
+      // remounts from scratch with the token now in localStorage.
+      // Client-side navigation preserves the provider instance whose
+      // useEffect([]) already ran with no token, leaving user=null and
+      // every useAuth()-dependent page stuck on skeleton states.
+      window.location.href = data.redirectTo ?? "/premises";
     } catch {
       setError("Network error — is the API server running?");
       setLoading(false);

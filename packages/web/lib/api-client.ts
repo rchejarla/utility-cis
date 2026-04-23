@@ -90,9 +90,14 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     if (response.status === 401 && typeof window !== "undefined") {
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(USER_KEY);
+      // Only treat 401 as "session expired" when we're NOT already on
+      // /login. The login page's AuthPermissionProvider fires auth/me on
+      // mount without a token and gets a 401 — clearing localStorage
+      // from that response races against a quick-login click that may
+      // have just written a fresh token.
       if (!window.location.pathname.startsWith("/login")) {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_KEY);
         window.location.href = "/login";
       }
       throw new Error("Session expired — redirecting to login");
