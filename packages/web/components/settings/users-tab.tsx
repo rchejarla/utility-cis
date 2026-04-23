@@ -546,10 +546,8 @@ function RoleBadge({ name, isSystem }: { name: string; isSystem?: boolean }) {
         fontSize: "11px",
         fontWeight: 500,
         whiteSpace: "nowrap",
-        background: isSystem
-          ? "rgba(245,158,11,0.12)"
-          : "rgba(59,130,246,0.12)",
-        color: isSystem ? "#fbbf24" : "#60a5fa",
+        background: isSystem ? "var(--warning-subtle)" : "var(--info-subtle)",
+        color: isSystem ? "var(--warning)" : "var(--info)",
       }}
     >
       {name}

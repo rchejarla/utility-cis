@@ -118,10 +118,10 @@ export default function AuditLogPage() {
       header: "Action",
       render: (row: AuditEntry) => {
         const colors: Record<string, string> = {
-          CREATED: "#4ade80",
-          UPDATED: "#60a5fa",
+          CREATED: "var(--success)",
+          UPDATED: "var(--info)",
           DELETED: "var(--danger)",
-          STATUS_CHANGED: "#fbbf24",
+          STATUS_CHANGED: "var(--warning)",
         };
         return (
           <span

@@ -123,6 +123,15 @@ body {
   font-family: 'DM Sans', sans-serif;
 }
 
+/* Pin native placeholder text to the theme's muted token. Without this
+   browsers default to their own slate-gray, which reads off against
+   the indigo-washed light theme. */
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
 /* Modern thin scrollbars */
 * {
   scrollbar-width: thin;

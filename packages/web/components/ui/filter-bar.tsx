@@ -39,7 +39,7 @@ function FilterPill({ filter }: { filter: FilterConfig }) {
           border: isActive
             ? "1px solid var(--accent-primary)"
             : "1px solid var(--border)",
-          background: isActive ? "rgba(59,130,246,0.12)" : "var(--bg-card)",
+          background: isActive ? "var(--accent-primary-subtle)" : "var(--bg-card)",
           color: isActive ? "var(--accent-primary)" : "var(--text-secondary)",
           fontSize: "12px",
           fontWeight: "500",

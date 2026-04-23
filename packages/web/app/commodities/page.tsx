@@ -278,7 +278,7 @@ export default function CommoditiesPage() {
                               Base
                             </label>
                           ) : u.isBaseUnit ? (
-                            <span style={{ fontSize: 10, fontWeight: 500, color: "#4ade80", background: "rgba(74,222,128,0.1)", padding: "2px 8px", borderRadius: 10 }}>Base</span>
+                            <span style={{ fontSize: 10, fontWeight: 500, color: "var(--success)", background: "var(--success-subtle)", padding: "2px 8px", borderRadius: 10 }}>Base</span>
                           ) : (
                             <span style={{ fontSize: 10, color: "var(--text-muted)" }}>—</span>
                           )}

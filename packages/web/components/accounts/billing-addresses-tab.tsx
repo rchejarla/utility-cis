@@ -407,7 +407,7 @@ export function BillingAddressesTab({
                         />
                       ) : (
                         addr.isPrimary ? (
-                          <span style={{ color: "#4ade80", fontWeight: 600 }}>✓</span>
+                          <span style={{ color: "var(--success)", fontWeight: 600 }}>✓</span>
                         ) : (
                           <span style={{ color: "var(--text-muted)" }}>—</span>
                         )

@@ -36,10 +36,13 @@ export function LivePreview({ theme }: LivePreviewProps) {
     { id: "ACC-003", name: "Parking Lot A", commodity: "GAS", status: "Active" },
   ];
 
+  // Matches CommodityBadge's mapping so the preview reads the same
+  // tokens a real badge would. Using var() so the preview tracks the
+  // currently-active theme rather than baking the dark-theme values in.
   const commodityColors: Record<string, { bg: string; text: string; border: string }> = {
-    WATER: { bg: "rgba(59,130,246,0.15)", text: "#60a5fa", border: "rgba(59,130,246,0.3)" },
-    ELECTRIC: { bg: "rgba(245,158,11,0.15)", text: "#fbbf24", border: "rgba(245,158,11,0.3)" },
-    GAS: { bg: "rgba(139,92,246,0.15)", text: "#a78bfa", border: "rgba(139,92,246,0.3)" },
+    WATER: { bg: "var(--info-subtle)", text: "var(--info)", border: "var(--info)" },
+    ELECTRIC: { bg: "var(--warning-subtle)", text: "var(--warning)", border: "var(--warning)" },
+    GAS: { bg: "var(--accent-tertiary-subtle)", text: "var(--accent-tertiary)", border: "var(--accent-tertiary)" },
   };
 
   return (

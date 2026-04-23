@@ -596,7 +596,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
                           padding: "4px 12px",
                           borderRadius: "16px",
                           border: selected ? "1px solid var(--accent-primary)" : "1px solid var(--border)",
-                          background: selected ? "rgba(59,130,246,0.15)" : "transparent",
+                          background: selected ? "var(--accent-primary-subtle)" : "transparent",
                           color: selected ? "var(--accent-primary)" : "var(--text-secondary)",
                           fontSize: "12px",
                           fontWeight: selected ? 600 : 400,

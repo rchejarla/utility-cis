@@ -26,12 +26,12 @@ const CONTACT_ROLES = ["PRIMARY", "BILLING", "AUTHORIZED", "EMERGENCY"] as const
 
 const roleBadgeStyle = (role: string): React.CSSProperties => {
   const colors: Record<string, { bg: string; color: string }> = {
-    PRIMARY: { bg: "rgba(59,130,246,0.15)", color: "#60a5fa" },
-    BILLING: { bg: "rgba(245,158,11,0.15)", color: "#fbbf24" },
-    AUTHORIZED: { bg: "rgba(139,92,246,0.15)", color: "#a78bfa" },
+    PRIMARY: { bg: "var(--info-subtle)", color: "var(--info)" },
+    BILLING: { bg: "var(--warning-subtle)", color: "var(--warning)" },
+    AUTHORIZED: { bg: "var(--accent-tertiary-subtle)", color: "var(--accent-tertiary)" },
     EMERGENCY: { bg: "var(--danger-subtle)", color: "var(--danger)" },
   };
-  const c = colors[role] ?? { bg: "rgba(100,100,100,0.15)", color: "var(--text-muted)" };
+  const c = colors[role] ?? { bg: "var(--bg-elevated)", color: "var(--text-muted)" };
   return {
     display: "inline-block",
     padding: "2px 8px",
@@ -412,7 +412,7 @@ export function ContactsTab({
                         />
                       ) : (
                         contact.isPrimary ? (
-                          <span style={{ color: "#4ade80", fontWeight: 600 }}>✓</span>
+                          <span style={{ color: "var(--success)", fontWeight: 600 }}>✓</span>
                         ) : (
                           <span style={{ color: "var(--text-muted)" }}>—</span>
                         )
