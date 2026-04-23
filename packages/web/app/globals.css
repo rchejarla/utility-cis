@@ -62,8 +62,12 @@
   --border: #c7d2fe;         /* indigo-200 — replaces slate borders */
   --border-subtle: #dbe4ff;
   --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #64748b;
+  /* Secondary / muted text shift into the indigo family so the
+     remaining gray feeling (slate-600/500 labels everywhere on an
+     indigo-washed surface) goes away. Contrast ratios are still AA+
+     on page bg (~10:1 and ~4.8:1 respectively) and on white cards. */
+  --text-secondary: #3730a3; /* indigo-800 — replaces slate-600 */
+  --text-muted: #6366f1;     /* indigo-500 — replaces slate-500 */
 
   /* Light-mode chrome defaults to the indigo-washed surface. Editable
      independently via the theme editor. */
