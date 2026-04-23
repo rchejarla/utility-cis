@@ -18,10 +18,10 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 
 const toastStyles: Record<ToastType, { bg: string; border: string; icon: string; color: string }> = {
   success: {
-    bg: "rgba(34,197,94,0.12)",
-    border: "rgba(34,197,94,0.3)",
+    bg: "var(--success-subtle)",
+    border: "var(--success)",
     icon: "✓",
-    color: "#4ade80",
+    color: "var(--success)",
   },
   error: {
     bg: "var(--danger-subtle)",
@@ -30,10 +30,10 @@ const toastStyles: Record<ToastType, { bg: string; border: string; icon: string;
     color: "var(--danger)",
   },
   info: {
-    bg: "rgba(59,130,246,0.12)",
-    border: "rgba(59,130,246,0.3)",
+    bg: "var(--info-subtle)",
+    border: "var(--info)",
     icon: "ℹ",
-    color: "#60a5fa",
+    color: "var(--info)",
   },
 };
 
