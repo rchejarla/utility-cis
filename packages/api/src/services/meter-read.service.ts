@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
 import type {
   CreateMeterReadInput,
+  CreateMeterReadEventInput,
   CorrectMeterReadInput,
   MeterReadQuery,
   ResolveExceptionInput,
@@ -72,6 +74,7 @@ export async function listMeterReads(utilityId: string, query: MeterReadQuery) {
 
   if (query.meterId) where.meterId = query.meterId;
   if (query.serviceAgreementId) where.serviceAgreementId = query.serviceAgreementId;
+  if (query.readEventId) where.readEventId = query.readEventId;
   if (query.readType) where.readType = query.readType;
   if (query.readSource) where.readSource = query.readSource;
   if (query.exceptionCode) where.exceptionCode = query.exceptionCode;
@@ -119,14 +122,53 @@ export async function getMeterRead(id: string, utilityId: string) {
 export async function readsForMeter(
   utilityId: string,
   meterId: string,
-  limit = 100,
+  options: { limit?: number; group?: "event" | "flat" } = {},
 ) {
-  return prisma.meterRead.findMany({
+  const limit = options.limit ?? 100;
+  const rows = await prisma.meterRead.findMany({
     where: { utilityId, meterId },
     orderBy: { readDatetime: "desc" },
     take: limit,
     include: fullInclude,
   });
+
+  if (options.group !== "event") return rows;
+
+  // Group sibling reads by readEventId. Rows with a null readEventId
+  // (legacy single-register reads) remain individual entries so the
+  // consumer sees a uniform "one event = one group" shape regardless
+  // of whether the underlying meter is multi-register.
+  const eventBuckets = new Map<string, typeof rows>();
+  const singletons: typeof rows = [];
+  for (const r of rows) {
+    if (!r.readEventId) {
+      singletons.push(r);
+      continue;
+    }
+    const bucket = eventBuckets.get(r.readEventId);
+    if (bucket) bucket.push(r);
+    else eventBuckets.set(r.readEventId, [r]);
+  }
+  const events = [
+    ...Array.from(eventBuckets.entries()).map(([readEventId, siblings]) => ({
+      readEventId,
+      readDatetime: siblings[0].readDatetime,
+      readDate: siblings[0].readDate,
+      readType: siblings[0].readType,
+      readSource: siblings[0].readSource,
+      readings: siblings,
+    })),
+    ...singletons.map((r) => ({
+      readEventId: null,
+      readDatetime: r.readDatetime,
+      readDate: r.readDate,
+      readType: r.readType,
+      readSource: r.readSource,
+      readings: [r],
+    })),
+  ];
+  events.sort((a, b) => b.readDatetime.getTime() - a.readDatetime.getTime());
+  return events;
 }
 
 export async function listExceptions(
@@ -248,6 +290,22 @@ export async function createMeterRead(
   const readDatetime = new Date(data.readDatetime);
   const readDate = new Date(data.readDate);
 
+  // Guard: if the meter has 2+ active registers, the single-reading
+  // payload silently drops every register past the first. Reject with
+  // a clear hint so callers adopt the multi-register payload shape.
+  const activeRegisters = await prisma.meterRegister.findMany({
+    where: { utilityId, meterId: data.meterId, isActive: true },
+    select: { id: true, registerNumber: true },
+  });
+  if (activeRegisters.length >= 2 && !data.registerId) {
+    throw Object.assign(
+      new Error(
+        "Meter has multiple active registers. Send a multi-register payload with `readings[]` (and optional `skips[]`) covering every active register.",
+      ),
+      { statusCode: 400, code: "REGISTERS_INCOMPLETE" },
+    );
+  }
+
   // Resolve the owning agreement from the junction table if the caller
   // didn't supply one explicitly. Supplied values still win so bulk
   // imports with authoritative agreement data don't incur an extra lookup.
@@ -270,6 +328,24 @@ export async function createMeterRead(
       }),
     ]);
 
+  // When the caller targets a specific register on a multi-register
+  // meter, prefer that register's uomId (which may differ from the
+  // meter's default uomId — e.g., kW demand vs. kWh usage).
+  let uomId = meter.uomId;
+  if (data.registerId) {
+    const reg = await prisma.meterRegister.findFirst({
+      where: { id: data.registerId, utilityId, meterId: data.meterId },
+      select: { uomId: true },
+    });
+    if (!reg) {
+      throw Object.assign(
+        new Error("Register not found for this meter"),
+        { statusCode: 400, code: "REGISTER_NOT_FOUND" },
+      );
+    }
+    uomId = reg.uomId;
+  }
+
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "MeterRead" },
     EVENT_TYPES.METER_CREATED,
@@ -280,7 +356,7 @@ export async function createMeterRead(
           meterId: data.meterId,
           serviceAgreementId,
           registerId: data.registerId ?? null,
-          uomId: meter.uomId,
+          uomId,
           readDate,
           readDatetime,
           reading: data.reading,
@@ -295,6 +371,172 @@ export async function createMeterRead(
         include: fullInclude,
       }),
   );
+}
+
+/**
+ * Multi-register read event. A field visit on a meter with N active
+ * registers produces N `MeterRead` rows (one per register) sharing a
+ * generated `readEventId`, one `readDatetime`, one reader, and one
+ * serviceAgreementId. Registers the operator explicitly skips (broken,
+ * inaccessible, out of service) get a `MeterEvent` row instead of a
+ * `MeterRead`. All writes happen in one transaction; partial success is
+ * not allowed.
+ *
+ * Validation rule: the union of `readings[].registerId` and
+ * `skips[].registerId` must cover EVERY active register on the meter.
+ * Missing any register errors with REGISTERS_INCOMPLETE so billing can
+ * never run against a half-read event.
+ */
+export async function createMeterReadEvent(
+  utilityId: string,
+  actorId: string,
+  actorName: string,
+  data: CreateMeterReadEventInput,
+) {
+  const readDatetime = new Date(data.readDatetime);
+  const readDate = new Date(data.readDate);
+
+  const activeRegisters = await prisma.meterRegister.findMany({
+    where: { utilityId, meterId: data.meterId, isActive: true },
+    select: { id: true, registerNumber: true, uomId: true },
+  });
+  if (activeRegisters.length === 0) {
+    throw Object.assign(
+      new Error("Meter has no active registers — use the single-reading payload."),
+      { statusCode: 400, code: "NO_ACTIVE_REGISTERS" },
+    );
+  }
+
+  const providedIds = new Set([
+    ...data.readings.map((r) => r.registerId),
+    ...data.skips.map((s) => s.registerId),
+  ]);
+  const activeIds = new Set(activeRegisters.map((r) => r.id));
+  const missing = activeRegisters.filter((r) => !providedIds.has(r.id));
+  if (missing.length > 0) {
+    throw Object.assign(
+      new Error(
+        `Readings or skips are missing for register number(s): ${missing.map((r) => r.registerNumber).join(", ")}. Every active register must be either read or explicitly skipped.`,
+      ),
+      {
+        statusCode: 400,
+        code: "REGISTERS_INCOMPLETE",
+        missingRegisterIds: missing.map((r) => r.id),
+      },
+    );
+  }
+  for (const id of providedIds) {
+    if (!activeIds.has(id)) {
+      throw Object.assign(
+        new Error("One or more provided registerIds don't belong to this meter or aren't active."),
+        { statusCode: 400, code: "REGISTER_NOT_FOUND" },
+      );
+    }
+  }
+
+  const serviceAgreementId =
+    data.serviceAgreementId ??
+    (await resolveServiceAgreementId(utilityId, data.meterId, readDate));
+
+  const readEventId = randomUUID();
+
+  // Compute consumption per register BEFORE opening the write transaction
+  // so the transaction body only touches the write path.
+  const regByIdMap = new Map(activeRegisters.map((r) => [r.id, r]));
+  const perReading = await Promise.all(
+    data.readings.map(async (r) => {
+      const reg = regByIdMap.get(r.registerId)!;
+      const calc = await computeConsumption(
+        utilityId,
+        data.meterId,
+        r.registerId,
+        r.reading,
+        readDatetime,
+      );
+      return {
+        input: r,
+        register: reg,
+        priorReading: calc.priorReading,
+        consumption: calc.consumption,
+        exceptionCode: calc.exceptionCode,
+      };
+    }),
+  );
+
+  const created = await prisma.$transaction(async (tx) => {
+    const rows = await Promise.all(
+      perReading.map((p) =>
+        tx.meterRead.create({
+          data: {
+            utilityId,
+            meterId: data.meterId,
+            serviceAgreementId,
+            registerId: p.register.id,
+            readEventId,
+            uomId: p.register.uomId,
+            readDate,
+            readDatetime,
+            reading: p.input.reading,
+            priorReading: p.priorReading,
+            consumption: p.consumption,
+            readType: data.readType ?? "ACTUAL",
+            readSource: data.readSource ?? "MANUAL",
+            exceptionCode: p.exceptionCode,
+            exceptionNotes: p.input.exceptionNotes ?? null,
+            readerId: actorId,
+          },
+          include: fullInclude,
+        }),
+      ),
+    );
+
+    // Skip path: one MeterEvent per skipped register. The enum doesn't
+    // have a bespoke "register skipped" type today; OTHER + a descriptive
+    // payload keeps the record useful without bloating the enum.
+    if (data.skips.length > 0) {
+      await Promise.all(
+        data.skips.map((s) => {
+          const reg = regByIdMap.get(s.registerId)!;
+          return tx.meterEvent.create({
+            data: {
+              utilityId,
+              meterId: data.meterId,
+              eventType: "OTHER",
+              source: "MANUAL",
+              eventDatetime: readDatetime,
+              description:
+                `Register ${reg.registerNumber} skipped during read event ${readEventId}: ${s.skipReason}` +
+                (s.notes ? ` — ${s.notes}` : ""),
+            },
+          });
+        }),
+      );
+    }
+
+    return rows;
+  });
+
+  for (const row of created) {
+    domainEvents.emitDomainEvent({
+      type: EVENT_TYPES.METER_CREATED,
+      entityType: "MeterRead",
+      entityId: row.id,
+      utilityId,
+      actorId,
+      actorName,
+      beforeState: null,
+      afterState: row as unknown as Record<string, unknown>,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  return {
+    readEventId,
+    readDatetime,
+    readDate,
+    readings: created,
+    skippedRegisterIds: data.skips.map((s) => s.registerId),
+  };
 }
 
 /**

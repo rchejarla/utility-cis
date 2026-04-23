@@ -437,6 +437,7 @@ model MeterRead {
   meterId            String     @map("meter_id") @db.Uuid
   serviceAgreementId String     @map("service_agreement_id") @db.Uuid
   registerId         String?    @map("register_id") @db.Uuid
+  readEventId        String?    @map("read_event_id") @db.Uuid
   uomId              String     @map("uom_id") @db.Uuid
   readDate           DateTime   @map("read_date") @db.Date
   readDatetime       DateTime   @map("read_datetime") @db.Timestamptz
@@ -471,6 +472,7 @@ model MeterRead {
   @@index([serviceAgreementId, readDatetime])
   @@index([registerId])
   @@index([utilityId, importBatchId])
+  @@index([utilityId, readEventId])
   @@map("meter_read")
 }
 

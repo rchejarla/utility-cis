@@ -29,7 +29,7 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 | 11 | ServiceAgreementMeter | `service_agreement_meter` | Agreement | Phase 1 | Junction: ServiceAgreement ↔ Meter |
 | 12 | RateSchedule | `rate_schedule` | Configuration | Phase 1 | Belongs to Commodity; referenced by ServiceAgreement; self-references for versioning |
 | 13 | BillingCycle | `billing_cycle` | Configuration | Phase 1 | Referenced by ServiceAgreement |
-| 14 | MeterRead | `meter_read` | Operations | Phase 1 | Belongs to Meter + ServiceAgreement + UnitOfMeasure; optionally linked to MeterRegister. `uom_id` frozen at write time from the meter's UOM. |
+| 14 | MeterRead | `meter_read` | Operations | Phase 1 | Belongs to Meter + ServiceAgreement + UnitOfMeasure; optionally linked to MeterRegister. `uom_id` frozen at write time from the meter's UOM. Phase 2.5: gains nullable `read_event_id` UUID that groups sibling rows from the same multi-register read event (one row per active register per event). |
 | 15 | AuditLog | `audit_log` | System | Phase 1 | Records all entity state changes; references actor by user UUID |
 | 16 | TenantTheme | `tenant_theme` | System | Phase 1 | One per utility (unique on utility_id) |
 | 17 | UserPreference | `user_preference` | System | Phase 1 | One per user per utility (unique on utility_id + user_id) |

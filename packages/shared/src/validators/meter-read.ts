@@ -65,6 +65,50 @@ export const createMeterReadSchema = z.object({
 }).strict();
 
 /**
+ * Multi-register read event. A single meter visit captures readings for
+ * every active register on the meter at one `read_datetime`. The service
+ * writes one `MeterRead` row per register sharing one generated
+ * `read_event_id`, and records a `MeterEvent` for any register the
+ * operator explicitly skipped (broken demand register, inaccessible sub-
+ * meter, etc.). See `docs/specs/08-meter-reading.md` § Multi-Register
+ * Reads for the full rules.
+ */
+export const registerSkipReasonEnum = z.enum([
+  "OUT_OF_SERVICE",
+  "INACCESSIBLE",
+  "DEFECTIVE",
+]);
+
+export const registerReadingSchema = z.object({
+  registerId: z.string().uuid(),
+  reading: z.number().nonnegative(),
+  exceptionNotes: z.string().max(2000).optional(),
+}).strict();
+
+export const registerSkipSchema = z.object({
+  registerId: z.string().uuid(),
+  skipReason: registerSkipReasonEnum,
+  notes: z.string().max(2000).optional(),
+}).strict();
+
+export const createMeterReadEventSchema = z.object({
+  meterId: z.string().uuid(),
+  serviceAgreementId: z.string().uuid().optional(),
+  readDate: z.string().date(),
+  readDatetime: z.string().datetime(),
+  readings: z.array(registerReadingSchema).min(1),
+  skips: z.array(registerSkipSchema).default([]),
+  readType: readTypeEnum.default("ACTUAL"),
+  readSource: readSourceEnum.default("MANUAL"),
+}).strict().refine(
+  (v) => {
+    const ids = [...v.readings.map((r) => r.registerId), ...v.skips.map((s) => s.registerId)];
+    return new Set(ids).size === ids.length;
+  },
+  { message: "A register cannot appear in both readings and skips, or twice in either list" },
+);
+
+/**
  * Correcting an existing read produces a NEW read with read_type=CORRECTED
  * and corrects_read_id pointing at the original. This schema covers the
  * correction request payload.
@@ -90,6 +134,7 @@ export const meterReadQuerySchema = z.object({
   order: z.enum(["asc", "desc"]).default("desc"),
   meterId: z.string().uuid().optional(),
   serviceAgreementId: z.string().uuid().optional(),
+  readEventId: z.string().uuid().optional(),
   readType: readTypeEnum.optional(),
   readSource: readSourceEnum.optional(),
   exceptionCode: exceptionCodeEnum.optional(),
@@ -122,6 +167,8 @@ export type ReadType = z.infer<typeof readTypeEnum>;
 export type ReadSource = z.infer<typeof readSourceEnum>;
 export type ExceptionCode = z.infer<typeof exceptionCodeEnum>;
 export type CreateMeterReadInput = z.infer<typeof createMeterReadSchema>;
+export type CreateMeterReadEventInput = z.infer<typeof createMeterReadEventSchema>;
+export type RegisterSkipReason = z.infer<typeof registerSkipReasonEnum>;
 export type CorrectMeterReadInput = z.infer<typeof correctMeterReadSchema>;
 export type ResolveExceptionInput = z.infer<typeof resolveExceptionSchema>;
 export type MeterReadQuery = z.infer<typeof meterReadQuerySchema>;

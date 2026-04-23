@@ -33,6 +33,11 @@ export async function getMeter(id: string, utilityId: string) {
           serviceAgreement: true,
         },
       },
+      registers: {
+        where: { isActive: true },
+        orderBy: { registerNumber: "asc" },
+        include: { uom: true },
+      },
     },
   });
 }

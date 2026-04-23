@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
   createMeterReadSchema,
+  createMeterReadEventSchema,
   correctMeterReadSchema,
   meterReadQuerySchema,
   resolveExceptionSchema,
@@ -11,6 +12,7 @@ import {
   readsForMeter,
   listExceptions,
   createMeterRead,
+  createMeterReadEvent,
   correctMeterRead,
   resolveException,
   deleteMeterRead,
@@ -68,7 +70,17 @@ export async function meterReadRoutes(app: FastifyInstance) {
     { config: { module: "meter_reads", permission: "CREATE" } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
-      const data = createMeterReadSchema.parse(request.body);
+      // Two accepted shapes. The multi-register shape carries a `readings`
+      // array; the single-reading shape carries a top-level `reading`
+      // number. Detect on the presence of `readings` so callers don't
+      // have to set a mode flag.
+      const body = request.body as Record<string, unknown> | null;
+      if (body && Array.isArray(body.readings)) {
+        const data = createMeterReadEventSchema.parse(body);
+        const event = await createMeterReadEvent(utilityId, actorId, actorName, data);
+        return reply.status(201).send(event);
+      }
+      const data = createMeterReadSchema.parse(body);
       const read = await createMeterRead(utilityId, actorId, actorName, data);
       return reply.status(201).send(read);
     },
@@ -117,16 +129,25 @@ export async function meterReadRoutes(app: FastifyInstance) {
   );
 
   // Per-meter read history for the meter detail page chart/timeline.
+  // `group=event` returns one entry per read_event_id with sibling reads
+  // nested under a `readings` array (for multi-register meters). Default
+  // is the flat list for backwards compatibility.
   app.get(
     "/api/v1/meters/:meterId/reads",
     { config: { module: "meters", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { meterId } = meterIdParamSchema.parse(request.params);
-      const limitParam = z
-        .object({ limit: z.coerce.number().int().positive().max(500).default(100) })
+      const queryParam = z
+        .object({
+          limit: z.coerce.number().int().positive().max(500).default(100),
+          group: z.enum(["event", "flat"]).default("flat"),
+        })
         .parse(request.query);
-      const reads = await readsForMeter(utilityId, meterId, limitParam.limit);
+      const reads = await readsForMeter(utilityId, meterId, {
+        limit: queryParam.limit,
+        group: queryParam.group,
+      });
       return reply.send({ data: reads });
     },
   );

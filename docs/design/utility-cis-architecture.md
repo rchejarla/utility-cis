@@ -413,6 +413,7 @@ Every reading from a meter. TimescaleDB hypertable for interval data at scale.
 | utility_id | UUID | Tenant scope |
 | meter_id | UUID | FK → Meter |
 | register_id | UUID | Nullable FK → MeterRegister |
+| read_event_id | UUID | Nullable: groups sibling reads from one multi-register read event (Phase 2.5) |
 | service_agreement_id | UUID | FK → ServiceAgreement |
 | read_date | DATE | |
 | read_datetime | TIMESTAMPTZ | Hypertable partition key |
@@ -424,6 +425,8 @@ Every reading from a meter. TimescaleDB hypertable for interval data at scale.
 | exception_code | VARCHAR(50) | HIGH_USAGE, ZERO_USAGE, METER_DEFECT |
 | reader_id | UUID | |
 | created_at | TIMESTAMPTZ | |
+
+**Multi-register reads (Phase 2.5).** Meters with multiple registers (e.g., a demand+usage commercial meter) produce **one `MeterRead` row per active register per read event**, all sharing one `read_event_id`, one `read_datetime`, and one reader, but distinct `register_id`, `uom_id`, and consumption values. Single-register meters keep writing a single row with `read_event_id = NULL` — no backfill. See `docs/specs/08-meter-reading.md` for the full data-model, API, UI, import, and billing rules.
 
 ### 4.17 AuditLog
 

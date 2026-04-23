@@ -57,6 +57,7 @@ async function main() {
 
   const gal = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "GAL", name: "Gallons", commodityId: water.id, conversionFactor: 1, isBaseUnit: true, isActive: true } });
   const kwh = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "KWH", name: "Kilowatt Hours", commodityId: electric.id, conversionFactor: 1, isBaseUnit: true, isActive: true } });
+  const kw = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "KW", name: "Kilowatts (Demand)", commodityId: electric.id, conversionFactor: 1, isBaseUnit: false, isActive: true } });
   const mcf = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "MCF", name: "Thousand Cubic Feet", commodityId: gas.id, conversionFactor: 1, isBaseUnit: true, isActive: true } });
   const sgal = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "GAL", name: "Gallons", commodityId: sewer.id, conversionFactor: 1, isBaseUnit: true, isActive: true } });
   console.log("  4 UOMs");
@@ -130,6 +131,16 @@ async function main() {
     mArr.push(await p.meter.create({ data: { utilityId: UID, ...mt } }));
   }
   console.log("  " + mArr.length + " meters");
+
+  // EM-003 at 350 Fifth Avenue (industrial) is the multi-register test
+  // fixture. Commercial/industrial electric meters typically expose two
+  // registers — one for energy consumption (kWh) and one for peak demand
+  // (kW) — captured together on each field visit. This is what the
+  // Phase 2.5 read-event grouping is built around.
+  const em003 = mArr[8];
+  await p.meterRegister.create({ data: { utilityId: UID, meterId: em003.id, registerNumber: 1, description: "Energy usage", uomId: kwh.id, multiplier: 1.0, isActive: true } });
+  await p.meterRegister.create({ data: { utilityId: UID, meterId: em003.id, registerNumber: 2, description: "Peak demand", uomId: kw.id, multiplier: 1.0, isActive: true } });
+  console.log("  2 registers on EM-003 (multi-register demo)");
 
   const saData = [
     { agreementNumber: "SA-0001", accountId: aArr[0].id, premiseId: pArr[0].id, commodityId: water.id, rateScheduleId: rsW.id, billingCycleId: c1.id, mIdx: [0] },
