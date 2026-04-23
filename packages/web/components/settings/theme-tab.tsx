@@ -26,7 +26,10 @@ type ColorKey =
   | "--bg-elevated"
   | "--bg-hover"
   | "--border"
-  | "--border-subtle";
+  | "--border-subtle"
+  | "--text-primary"
+  | "--text-secondary"
+  | "--text-muted";
 
 type ColorSet = Record<ColorKey, string>;
 type Mode = "dark" | "light";
@@ -71,15 +74,16 @@ const FONT_OPTIONS = [
 
 function workingToPreview(t: WorkingTheme, mode: Mode): PreviewTheme {
   const c = t[mode];
-  const isDark = mode === "dark";
   return {
     bgDeep: c["--bg-deep"],
     bgCard: c["--bg-card"],
     bgElevated: c["--bg-elevated"],
     border: c["--border"],
-    textPrimary: isDark ? "#e8edf5" : "#0f172a",
-    textSecondary: isDark ? "#8494ad" : "#475569",
-    textMuted: isDark ? "#4a5a73" : "#64748b",
+    // Text tokens now come from the edited palette so the preview
+    // reflects custom colors the user picked, not a mode-fixed default.
+    textPrimary: c["--text-primary"],
+    textSecondary: c["--text-secondary"],
+    textMuted: c["--text-muted"],
     accentPrimary: c["--accent-primary"],
     accentSecondary: c["--accent-secondary"],
     success: c["--success"],
@@ -382,6 +386,27 @@ export function ThemeTab() {
               <ColorPickerField label="Success" value={current["--success"]} onChange={(v) => setColor("--success", v)} />
               <ColorPickerField label="Danger" value={current["--danger"]} onChange={(v) => setColor("--danger", v)} />
               <ColorPickerField label="Warning" value={current["--warning"]} onChange={(v) => setColor("--warning", v)} />
+            </div>
+          </div>
+
+          <div>
+            <SubSection>Text Colors</SubSection>
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              <ColorPickerField
+                label="Primary Text"
+                value={current["--text-primary"]}
+                onChange={(v) => setColor("--text-primary", v)}
+              />
+              <ColorPickerField
+                label="Secondary Text"
+                value={current["--text-secondary"]}
+                onChange={(v) => setColor("--text-secondary", v)}
+              />
+              <ColorPickerField
+                label="Muted Text"
+                value={current["--text-muted"]}
+                onChange={(v) => setColor("--text-muted", v)}
+              />
             </div>
           </div>
 

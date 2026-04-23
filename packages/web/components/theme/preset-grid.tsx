@@ -21,7 +21,10 @@ export type PaletteKey =
   | "--bg-elevated"
   | "--bg-hover"
   | "--border"
-  | "--border-subtle";
+  | "--border-subtle"
+  | "--text-primary"
+  | "--text-secondary"
+  | "--text-muted";
 
 export type Palette = Record<PaletteKey, string>;
 
@@ -51,6 +54,9 @@ export const THEMES: NamedTheme[] = [
       "--bg-hover": "#1c2640",
       "--border": "#1e293b",
       "--border-subtle": "#162033",
+      "--text-primary": "#e8edf5",
+      "--text-secondary": "#8494ad",
+      "--text-muted": "#4a5a73",
     },
     light: {
       "--accent-primary": "#4f46e5",
@@ -67,6 +73,9 @@ export const THEMES: NamedTheme[] = [
       "--bg-hover": "#e2e8f4",
       "--border": "#dbe1ec",
       "--border-subtle": "#edf0f7",
+      "--text-primary": "#0f172a",
+      "--text-secondary": "#475569",
+      "--text-muted": "#64748b",
     },
   },
   {
@@ -87,6 +96,9 @@ export const THEMES: NamedTheme[] = [
       "--bg-hover": "#1c2640",
       "--border": "#1e293b",
       "--border-subtle": "#162033",
+      "--text-primary": "#e8edf5",
+      "--text-secondary": "#8494ad",
+      "--text-muted": "#4a5a73",
     },
     light: {
       "--accent-primary": "#4f46e5",
@@ -103,6 +115,9 @@ export const THEMES: NamedTheme[] = [
       "--bg-hover": "#d2dcff",
       "--border": "#c7d2fe",
       "--border-subtle": "#dbe4ff",
+      "--text-primary": "#0f172a",
+      "--text-secondary": "#3730a3",
+      "--text-muted": "#6366f1",
     },
   },
   {
@@ -123,6 +138,9 @@ export const THEMES: NamedTheme[] = [
       "--bg-hover": "#1f1f1f",
       "--border": "#262626",
       "--border-subtle": "#1a1a1a",
+      "--text-primary": "#fafafa",
+      "--text-secondary": "#a1a1aa",
+      "--text-muted": "#71717a",
     },
     light: {
       "--accent-primary": "#2563eb",
@@ -139,6 +157,9 @@ export const THEMES: NamedTheme[] = [
       "--bg-hover": "#e5e7eb",
       "--border": "#e5e7eb",
       "--border-subtle": "#f3f4f6",
+      "--text-primary": "#09090b",
+      "--text-secondary": "#52525b",
+      "--text-muted": "#71717a",
     },
   },
   {
@@ -159,6 +180,9 @@ export const THEMES: NamedTheme[] = [
       "--bg-hover": "#1a3a2a",
       "--border": "#1f3d2c",
       "--border-subtle": "#152c20",
+      "--text-primary": "#e8f5ec",
+      "--text-secondary": "#8a9a91",
+      "--text-muted": "#5a6b60",
     },
     light: {
       "--accent-primary": "#047857",
@@ -175,6 +199,9 @@ export const THEMES: NamedTheme[] = [
       "--bg-hover": "#cfdcd3",
       "--border": "#c6d5ca",
       "--border-subtle": "#dfe9e2",
+      "--text-primary": "#0a1a12",
+      "--text-secondary": "#4a5d52",
+      "--text-muted": "#7d8f83",
     },
   },
 ];
