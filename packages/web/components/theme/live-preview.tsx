@@ -5,6 +5,8 @@ export interface PreviewTheme {
   bgCard: string;
   bgElevated: string;
   border: string;
+  sidebarBg: string;
+  headerBg: string;
   textPrimary: string;
   textSecondary: string;
   textMuted: string;
@@ -45,6 +47,14 @@ export function LivePreview({ theme }: LivePreviewProps) {
     GAS: { bg: "var(--accent-tertiary-subtle)", text: "var(--accent-tertiary)", border: "var(--accent-tertiary)" },
   };
 
+  const navItems = [
+    { label: "Customers", active: true },
+    { label: "Premises", active: false },
+    { label: "Meters", active: false },
+    { label: "Accounts", active: false },
+    { label: "Settings", active: false },
+  ];
+
   return (
     <div
       style={{
@@ -52,24 +62,106 @@ export function LivePreview({ theme }: LivePreviewProps) {
         background: theme.bgDeep,
         borderRadius: radius,
         border: `1px solid ${theme.border}`,
-        overflow: "auto",
+        overflow: "hidden",
         fontFamily,
         display: "flex",
-        flexDirection: "column",
-        gap: "16px",
-        padding: "24px",
+        flexDirection: "row",
       }}
     >
+      {/* Mini sidebar — mirrors the real app's sidebar structure so
+          tuning --sidebar-bg, --text-secondary, and --accent-primary
+          previews accurately. */}
+      <aside
+        style={{
+          width: "108px",
+          flexShrink: 0,
+          background: theme.sidebarBg,
+          borderRight: `1px solid ${theme.border}`,
+          padding: "10px 6px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "2px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            padding: "6px 8px",
+            marginBottom: "6px",
+          }}
+        >
+          <div
+            style={{
+              width: 22,
+              height: 22,
+              borderRadius: 6,
+              background: theme.accentPrimary,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#fff",
+              fontSize: 11,
+              fontWeight: "bold",
+              flexShrink: 0,
+            }}
+          >
+            U
+          </div>
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: theme.textPrimary,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            CIS
+          </span>
+        </div>
+        {navItems.map((item) => (
+          <div
+            key={item.label}
+            style={{
+              padding: "5px 8px",
+              borderRadius: radius,
+              background: item.active ? theme.accentPrimary : "transparent",
+              color: item.active ? "#fff" : theme.textSecondary,
+              fontSize: 11,
+              fontWeight: item.active ? 600 : 400,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {item.label}
+          </div>
+        ))}
+      </aside>
+
+      {/* Main pane — topbar + page content */}
+      <main
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "auto",
+        }}
+      >
       {/* Mini topbar */}
       <div
         style={{
-          background: cardBg,
-          borderRadius: radius,
-          border: `1px solid ${theme.border}`,
+          background: theme.headerBg,
+          borderBottom: `1px solid ${theme.border}`,
           padding: "10px 16px",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
+          flexShrink: 0,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -113,6 +205,16 @@ export function LivePreview({ theme }: LivePreviewProps) {
         </div>
       </div>
 
+      {/* Page content — sits on the --bg-deep surface below the header */}
+      <div
+        style={{
+          flex: 1,
+          padding: "16px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "16px",
+        }}
+      >
       {/* Page title row */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
@@ -441,6 +543,8 @@ export function LivePreview({ theme }: LivePreviewProps) {
           ))}
         </div>
       </div>
+      </div>
+      </main>
     </div>
   );
 }

@@ -79,6 +79,8 @@ function workingToPreview(t: WorkingTheme, mode: Mode): PreviewTheme {
     bgCard: c["--bg-card"],
     bgElevated: c["--bg-elevated"],
     border: c["--border"],
+    sidebarBg: c["--sidebar-bg"],
+    headerBg: c["--header-bg"],
     // Text tokens now come from the edited palette so the preview
     // reflects custom colors the user picked, not a mode-fixed default.
     textPrimary: c["--text-primary"],
