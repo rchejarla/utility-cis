@@ -224,19 +224,13 @@ export async function buildCustomerGraph(
         validTo: ag.endDate ? ag.endDate.toISOString() : null,
       });
 
-      // Primary: premise_has_agreement (spanning tree edge).
-      if (agPremiseNodeId) {
-        edges.push({
-          id: `edge:premise-agreement:${ag.id}`,
-          from: agPremiseNodeId,
-          to: agNodeId,
-          kind: "premise_has_agreement",
-          validFrom: ag.startDate.toISOString(),
-          validTo: ag.endDate ? ag.endDate.toISOString() : null,
-        });
-      }
-
-      // Secondary cross-link: agreement_billed_by_account.
+      // Primary: the agreement sits under its account in the billing
+      // column (row 2 col 3 under col 4). We do NOT emit a separate
+      // premise → agreement edge — the premise↔agreement relationship
+      // is already expressed transitively through the meter cross-link
+      // (premise has meter, meter is used by agreement), and drawing
+      // it explicitly would add a long line across the row that adds
+      // no information.
       edges.push({
         id: `edge:agreement-account:${ag.id}`,
         from: agNodeId,

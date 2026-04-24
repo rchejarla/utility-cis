@@ -16,20 +16,25 @@ export type GraphNodeType =
   | "service_request";
 
 export type GraphEdgeKind =
-  // Primary spanning-tree edges (parent → child in the dominant
-  // hierarchy Customer → Premise/Account → Agreement/Meter/SR).
+  // Primary spanning-tree edges in the three-row layout:
+  //   row 1 Customer
+  //   row 2 Premises | Meters | Agreements | Accounts
+  //   row 3 Service Requests
+  // Customer reaches down to premises (col 1) and accounts (col 4);
+  // each premise owns its meters (col 2); each account owns its
+  // agreements (col 3); service requests connect up to their
+  // premise and account.
   | "owns_account"
   | "owns_premise"
-  | "premise_has_agreement"
   | "premise_has_meter"
   | "premise_has_service_request"
-  // Secondary cross-link edges — the same entity is also related to
-  // another part of the tree (billing / measurement). Rendered in a
-  // dashed secondary style so they read as "also relates to" rather
-  // than a parent-child link.
   | "agreement_billed_by_account"
-  | "agreement_uses_meter"
-  | "service_request_on_account";
+  | "service_request_on_account"
+  // Cross-link (dashed): the agreement ↔ meter binding — an
+  // agreement (col 3) uses a meter (col 2) to measure service.
+  // This is the physical ↔ billing bridge that makes the graph
+  // meaningful.
+  | "agreement_uses_meter";
 
 export interface GraphNode {
   id: string;

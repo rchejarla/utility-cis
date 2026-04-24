@@ -316,37 +316,32 @@ export function edgeStyleFor(
 ): { stroke: string; strokeWidth: number; strokeDasharray?: string } {
   switch (kind) {
     // ─── Primary spanning-tree edges (solid) ───
-    // Customer → Premise / Account
+    // Customer → Premise / Account (drawn via TrunkEdge).
     case "owns_account":
     case "owns_premise":
       return { stroke: "var(--accent-primary)", strokeWidth: 1.5 };
-    // Premise → Agreement / Meter / Service Request
-    case "premise_has_agreement":
-      return { stroke: "var(--info)", strokeWidth: 1.5 };
+    // Premise column (row 2 col 1 → col 2 / col 3).
     case "premise_has_meter":
       return { stroke: "var(--success)", strokeWidth: 1.5 };
     case "premise_has_service_request":
       return { stroke: "var(--warning)", strokeWidth: 1.5 };
-
-    // ─── Secondary cross-links (dashed) ───
-    // Agreement is billed by an account / uses a meter; SR is
-    // filed under an account. These are "also relates to" edges —
-    // they shouldn't compete visually with the spanning tree.
+    // Accounts column (row 2 col 4 → col 3). Account is the
+    // agreement's billing parent — solid, primary weight, uses the
+    // secondary-accent colour to distinguish the billing axis from
+    // the physical-world green/orange on the left.
     case "agreement_billed_by_account":
-      return {
-        stroke: "var(--accent-secondary)",
-        strokeWidth: 1,
-        strokeDasharray: "4 4",
-      };
+      return { stroke: "var(--accent-secondary)", strokeWidth: 1.5 };
+    // SR on account — the SR's billing-side parent. Solid.
+    case "service_request_on_account":
+      return { stroke: "var(--warning)", strokeWidth: 1.5 };
+
+    // ─── Cross-link (dashed) ───
+    // The bridge that makes a utility run: an agreement (billing)
+    // uses a meter (physical) to measure consumption. Dashed so it
+    // reads as "binds to" rather than parent-child.
     case "agreement_uses_meter":
       return {
         stroke: "var(--success)",
-        strokeWidth: 1,
-        strokeDasharray: "4 4",
-      };
-    case "service_request_on_account":
-      return {
-        stroke: "var(--warning)",
         strokeWidth: 1,
         strokeDasharray: "4 4",
       };
