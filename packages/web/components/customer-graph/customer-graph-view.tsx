@@ -13,6 +13,7 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import dagre from "@dagrejs/dagre";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type {
   CustomerGraphDTO,
@@ -37,159 +38,55 @@ interface CustomerGraphViewProps {
   customerId: string;
 }
 
-/** Deterministic hash of a string to a float in [0, 1). Used to give
- *  nodes without an explicit edge-back-to-customer a stable angle. */
-function hashToUnit(s: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  // Unsigned 32-bit → [0, 1)
-  return ((h >>> 0) % 10000) / 10000;
-}
+// Rough node footprint used by dagre to reserve space. Our node
+// cards are ~180×72 — a little padding keeps edges from hugging
+// other cards.
+const NODE_W = 200;
+const NODE_H = 90;
 
 /**
- * Seeded radial layout. Customer fixed at origin. Direct neighbors
- * (first hop) positioned at radius 300 around it; second-hop nodes
- * (meters via agreement, SRs via account) at radius 520 aligned with
- * their parent's angle.
+ * Top-down hierarchical layout via dagre.
  *
- * Groups by type into half-plane clusters so categories stay visually
- * distinct without running a force pass: accounts top half, premises
- * bottom half, agreements middle band.
+ * Customer sits at the top; accounts + any customer-owned premises
+ * fan out below it; agreements below their account; meters + service
+ * requests + the agreement's premise sit at the bottom. Dagre
+ * minimises edge crossings between layers, which is the thing the
+ * previous hand-rolled radial layout couldn't do.
  *
- * Pure function of the graph shape — same input → same positions, so
- * refreshing doesn't reshuffle.
+ * Pure function of nodes + edges — same input shape produces the
+ * same positions, so refresh doesn't reshuffle the graph.
  */
-function seedPositions(
+function layoutWithDagre(
   nodes: GraphNode[],
   edges: GraphEdge[],
-  customerId: string,
 ): Map<string, { x: number; y: number }> {
+  const g = new dagre.graphlib.Graph();
+  g.setGraph({
+    rankdir: "TB",        // top → bottom
+    ranksep: 80,          // vertical gap between layers
+    nodesep: 40,          // horizontal gap between siblings
+    edgesep: 20,          // gap between parallel edges
+    marginx: 40,
+    marginy: 40,
+  });
+  g.setDefaultEdgeLabel(() => ({}));
+
+  for (const n of nodes) {
+    g.setNode(n.id, { width: NODE_W, height: NODE_H });
+  }
+  for (const e of edges) {
+    g.setEdge(e.from, e.to);
+  }
+  dagre.layout(g);
+
   const positions = new Map<string, { x: number; y: number }>();
-  positions.set(customerId, { x: 0, y: 0 });
-
-  // Group direct neighbors by type so angle assignment is stable per
-  // category. Half-plane hints: accounts go upper (angles in [-π, 0]
-  // i.e. top half in screen space with y growing down), premises go
-  // lower, agreements span the sides.
-  const directNeighbors: GraphNode[] = nodes.filter((n) =>
-    edges.some(
-      (e) =>
-        (e.from === customerId && e.to === n.id) ||
-        (e.to === customerId && e.from === n.id),
-    ),
-  );
-
-  const byType: Record<GraphNodeType, GraphNode[]> = {
-    customer: [],
-    account: [],
-    premise: [],
-    agreement: [],
-    meter: [],
-    service_request: [],
-  };
-  for (const n of directNeighbors) byType[n.type].push(n);
-
-  // Deterministic ordering inside each bucket — sort by id so layout
-  // doesn't depend on the server's row order.
-  const sortById = (a: GraphNode, b: GraphNode) => a.id.localeCompare(b.id);
-  Object.values(byType).forEach((arr) => arr.sort(sortById));
-
-  // Angle ranges in radians (canvas convention: 0 = +x, grows CCW with
-  // screen y flipped). Screen-space top half = negative y = angles in
-  // (π, 2π) aka negative sines. We pick explicit ranges per cluster.
-  //
-  // Accounts: upper half, spread from ~200° to ~340°
-  // Premises: lower half, from ~20° to ~160°
-  // Agreements: side band, 350°…10° plus 170°…190°
-  // Service requests: scattered in the upper-right quadrant
-  // Meters: typically 2-hop, handled below, but direct meters go right.
-  const clusters: Record<
-    GraphNodeType,
-    { startDeg: number; endDeg: number } | null
-  > = {
-    customer: null,
-    account: { startDeg: 200, endDeg: 340 },
-    premise: { startDeg: 20, endDeg: 160 },
-    agreement: { startDeg: 170, endDeg: 190 },
-    service_request: { startDeg: 340, endDeg: 380 },
-    meter: { startDeg: 350, endDeg: 370 },
-  };
-
-  const directRadius = 300;
-  const secondRadius = 520;
-
-  for (const type of Object.keys(byType) as GraphNodeType[]) {
-    const bucket = byType[type];
-    const cluster = clusters[type];
-    if (!cluster || bucket.length === 0) continue;
-    const span = cluster.endDeg - cluster.startDeg;
-    bucket.forEach((node, i) => {
-      // Evenly spaced, but offset by 0.5 so a single node sits in the
-      // middle of its cluster's arc.
-      const t = bucket.length === 1 ? 0.5 : i / (bucket.length - 1);
-      const deg = cluster.startDeg + t * span;
-      const rad = (deg * Math.PI) / 180;
-      positions.set(node.id, {
-        x: Math.cos(rad) * directRadius,
-        y: Math.sin(rad) * directRadius,
-      });
-    });
+  for (const n of nodes) {
+    const p = g.node(n.id);
+    if (!p) continue;
+    // dagre gives the node's centre; React Flow wants the top-left,
+    // so shift by half the footprint.
+    positions.set(n.id, { x: p.x - NODE_W / 2, y: p.y - NODE_H / 2 });
   }
-
-  // Second-hop nodes: anything not yet positioned. Anchor each to its
-  // first parent that already has a position; if none, fall back to
-  // a deterministic angle from the node id hash.
-  const remaining = nodes.filter(
-    (n) => !positions.has(n.id) && n.id !== customerId,
-  );
-  // Iterate until stable — simple fixed-point so a chain of 3+ hops
-  // eventually resolves. Bounded at nodes.length iterations to avoid
-  // any pathological case (shouldn't happen with v1's 2-hop graph).
-  for (let iter = 0; iter < nodes.length && remaining.length > 0; iter++) {
-    for (let i = remaining.length - 1; i >= 0; i--) {
-      const n = remaining[i];
-      const parentEdge = edges.find(
-        (e) =>
-          (e.to === n.id && positions.has(e.from) && e.from !== customerId) ||
-          (e.from === n.id && positions.has(e.to) && e.to !== customerId),
-      );
-      const parentId = parentEdge
-        ? parentEdge.from === n.id
-          ? parentEdge.to
-          : parentEdge.from
-        : null;
-
-      if (parentId && positions.has(parentId)) {
-        const p = positions.get(parentId)!;
-        const parentAngle = Math.atan2(p.y, p.x);
-        // Nudge each child off the parent's exact radial with a hash-
-        // based angular offset in ±15°, so siblings don't stack.
-        const offsetDeg = (hashToUnit(n.id) - 0.5) * 30;
-        const angle = parentAngle + (offsetDeg * Math.PI) / 180;
-        positions.set(n.id, {
-          x: Math.cos(angle) * secondRadius,
-          y: Math.sin(angle) * secondRadius,
-        });
-        remaining.splice(i, 1);
-      }
-    }
-    if (remaining.every((n) => !edges.some((e) => e.from === n.id || e.to === n.id))) {
-      break;
-    }
-  }
-
-  // Orphans — no path back to a positioned node. Scatter deterministically.
-  for (const n of remaining) {
-    const angle = hashToUnit(n.id) * 2 * Math.PI;
-    positions.set(n.id, {
-      x: Math.cos(angle) * secondRadius,
-      y: Math.sin(angle) * secondRadius,
-    });
-  }
-
   return positions;
 }
 
@@ -305,12 +202,12 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
     };
   }, [customerId]);
 
-  // Seeded positions — recomputed only when the raw node/edge list
-  // changes. Filter toggles don't re-seed; they hide via the flow
-  // nodes/edges props below.
+  // Positions from dagre — recomputed only when the raw node/edge
+  // list changes. Filter toggles don't re-layout; they hide via the
+  // flow nodes/edges props below.
   const positions = useMemo(() => {
     if (!graph) return new Map<string, { x: number; y: number }>();
-    return seedPositions(graph.nodes, graph.edges, graph.customerId);
+    return layoutWithDagre(graph.nodes, graph.edges);
   }, [graph]);
 
   const counts = useMemo(() => {

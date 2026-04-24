@@ -86,8 +86,25 @@ export async function buildCustomerGraph(
     relatedNodeIds: [`customer:${customer.id}`],
   });
 
-  // Premises owned directly by the customer.
+  // Compute the set of premise IDs that will be reached through
+  // an agreement (at_premise). For those, we skip the redundant
+  // customer -> premise (owns_premise) edge: residential customers
+  // typically own the premise they have service at, and rendering
+  // both as parallel lines to the same node is visual noise. The
+  // owns_premise edge is only meaningful when the customer owns a
+  // premise with NO agreement (e.g. a landlord's rental property).
+  const agreementLinkedPremiseIds = new Set<string>();
+  for (const acc of customer.accounts) {
+    for (const ag of acc.serviceAgreements) {
+      if (ag.premise) agreementLinkedPremiseIds.add(ag.premise.id);
+    }
+  }
+
+  // Premises owned directly by the customer but not reached through
+  // an agreement (the "pure landlord" case). Premises that agreements
+  // point at are added later, when we process the agreement.
   for (const p of customer.ownedPremises) {
+    if (agreementLinkedPremiseIds.has(p.id)) continue;
     const nid = `premise:${p.id}`;
     if (premiseNodeIds.has(nid)) continue;
     premiseNodeIds.add(nid);

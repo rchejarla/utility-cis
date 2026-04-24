@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^3.0.0",
     "@fortawesome/fontawesome-svg-core": "^7.2.0",
     "@fortawesome/pro-light-svg-icons": "^7.2.0",
     "@fortawesome/pro-regular-svg-icons": "^7.2.0",
