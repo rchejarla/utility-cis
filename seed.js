@@ -20,6 +20,9 @@ async function main() {
   if (p.meterEvent) await p.meterEvent.deleteMany({});
   if (p.container) await p.container.deleteMany({});
   if (p.importBatch) await p.importBatch.deleteMany({});
+  if (p.serviceRequest) await p.serviceRequest.deleteMany({});
+  if (p.serviceRequestCounter) await p.serviceRequestCounter.deleteMany({});
+  if (p.sla) await p.sla.deleteMany({});
   await p.meterRead.deleteMany({});
   if (p.attachment) await p.attachment.deleteMany({});
 
@@ -44,6 +47,10 @@ async function main() {
   // (utility_id IS NULL) rows because re-seeding re-inserts them below.
   if (p.suspensionTypeDef) {
     await p.suspensionTypeDef.deleteMany({ where: { utilityId: { not: null } } });
+  }
+  // Re-seed globals from scratch so the list stays canonical.
+  if (p.serviceRequestTypeDef) {
+    await p.serviceRequestTypeDef.deleteMany({});
   }
   console.log("  Cleared.");
 
@@ -285,6 +292,7 @@ async function main() {
     "containers","service_suspensions","service_events",
     "workflows","search",
     "audit_log","attachments","theme","settings","notifications","delinquency",
+    "service_requests","service_request_slas",
     "portal_accounts","portal_billing","portal_usage","portal_profile"
   ];
   const allPerms = ["VIEW","CREATE","EDIT","DELETE"];
@@ -320,6 +328,7 @@ async function main() {
         rate_schedules: ["VIEW"], billing_cycles: ["VIEW"],
         containers: ["VIEW","CREATE","EDIT"],
         service_suspensions: ["VIEW","CREATE","EDIT"],
+        service_requests: ["VIEW","CREATE","EDIT"],
         workflows: ["VIEW","CREATE"],
         search: ["VIEW"],
         audit_log: ["VIEW"], attachments: ["VIEW","CREATE","EDIT"],
@@ -337,6 +346,8 @@ async function main() {
         accounts: ["VIEW"],
         agreements: ["VIEW"], commodities: ["VIEW"],
         containers: ["VIEW","EDIT"],
+        service_requests: ["VIEW","EDIT"],
+        workflows: ["VIEW"],
         search: ["VIEW"],
         audit_log: ["VIEW"], attachments: ["VIEW","CREATE","EDIT"],
       },
@@ -636,6 +647,107 @@ async function main() {
     });
   }
   console.log("  " + portalUsers.length + " portal customer users");
+
+  // --- Service Request Type Definitions (globals — utility_id null) ---
+  const srTypes = [
+    { code: "LEAK_REPORT",      label: "Leak report",        sortOrder: 10 },
+    { code: "DISCONNECT",       label: "Service disconnect", sortOrder: 20 },
+    { code: "RECONNECT",        label: "Service reconnect",  sortOrder: 30 },
+    { code: "START_SERVICE",    label: "Start service",      sortOrder: 40 },
+    { code: "STOP_SERVICE",     label: "Stop service",       sortOrder: 50 },
+    { code: "BILLING_DISPUTE",  label: "Billing dispute",    sortOrder: 60 },
+    { code: "METER_ISSUE",      label: "Meter issue",        sortOrder: 70 },
+    { code: "OTHER",            label: "Other",              sortOrder: 900 },
+  ];
+  for (const t of srTypes) {
+    await p.serviceRequestTypeDef.create({ data: { utilityId: null, ...t } });
+  }
+  console.log("  " + srTypes.length + " service request type-defs (global)");
+
+  // --- SLAs for the dev tenant ---
+  const slaRows = [
+    { requestType: "LEAK_REPORT",     priority: "EMERGENCY", responseHours: 0.5, resolutionHours: 6 },
+    { requestType: "LEAK_REPORT",     priority: "HIGH",      responseHours: 2,   resolutionHours: 12 },
+    { requestType: "LEAK_REPORT",     priority: "NORMAL",    responseHours: 4,   resolutionHours: 24 },
+    { requestType: "LEAK_REPORT",     priority: "LOW",       responseHours: 24,  resolutionHours: 72 },
+    { requestType: "DISCONNECT",      priority: "HIGH",      responseHours: 2,   resolutionHours: 8 },
+    { requestType: "DISCONNECT",      priority: "NORMAL",    responseHours: 4,   resolutionHours: 24 },
+    { requestType: "DISCONNECT",      priority: "LOW",       responseHours: 24,  resolutionHours: 48 },
+    { requestType: "BILLING_DISPUTE", priority: "NORMAL",    responseHours: 8,   resolutionHours: 72 },
+  ];
+  for (const s of slaRows) {
+    await p.sla.create({ data: { utilityId: UID, ...s } });
+  }
+  console.log("  " + slaRows.length + " SLAs");
+
+  // --- Demo Service Requests (3 rows across different statuses) ---
+  // Use the first two accounts we already created. Pull premiseId via
+  // the account's first service agreement so the detail page has a
+  // premise context to render.
+  const [acc1, acc2] = aArr.slice(0, 2);
+  const sr1Premise = await p.serviceAgreement.findFirst({ where: { accountId: acc1.id }, select: { premiseId: true } });
+  const sr2Premise = await p.serviceAgreement.findFirst({ where: { accountId: acc2.id }, select: { premiseId: true } });
+  const now = new Date();
+  const hoursAgo = (h) => new Date(now.getTime() - h * 60 * 60 * 1000);
+
+  const sla1 = await p.sla.findFirst({ where: { utilityId: UID, requestType: "LEAK_REPORT", priority: "EMERGENCY" } });
+  await p.serviceRequest.create({
+    data: {
+      utilityId: UID,
+      requestNumber: "SR-2026-000001",
+      accountId: acc1.id,
+      premiseId: sr1Premise?.premiseId ?? null,
+      requestType: "LEAK_REPORT",
+      priority: "EMERGENCY",
+      status: "IN_PROGRESS",
+      source: "CSR",
+      description: "Water pooling near sidewalk, suspected main line.",
+      slaId: sla1?.id ?? null,
+      slaDueAt: sla1 ? new Date(hoursAgo(10).getTime() + Number(sla1.resolutionHours) * 60 * 60 * 1000) : null,
+      createdAt: hoursAgo(10),
+    },
+  });
+
+  const sla2 = await p.sla.findFirst({ where: { utilityId: UID, requestType: "DISCONNECT", priority: "NORMAL" } });
+  await p.serviceRequest.create({
+    data: {
+      utilityId: UID,
+      requestNumber: "SR-2026-000002",
+      accountId: acc2.id,
+      premiseId: sr2Premise?.premiseId ?? null,
+      requestType: "DISCONNECT",
+      priority: "NORMAL",
+      status: "NEW",
+      source: "CSR",
+      description: "Customer requested disconnect after move-out.",
+      slaId: sla2?.id ?? null,
+      slaDueAt: sla2 ? new Date(now.getTime() + Number(sla2.resolutionHours) * 60 * 60 * 1000) : null,
+    },
+  });
+
+  await p.serviceRequest.create({
+    data: {
+      utilityId: UID,
+      requestNumber: "SR-2026-000003",
+      accountId: acc1.id,
+      requestType: "METER_ISSUE",
+      priority: "LOW",
+      status: "COMPLETED",
+      source: "CSR",
+      description: "Reported stuck register; tested and cleared.",
+      resolutionNotes: "Register reseated, reads normal.",
+      completedAt: hoursAgo(48),
+      createdAt: hoursAgo(72),
+    },
+  });
+  console.log("  3 demo service requests");
+
+  // Counter picks up at 4 so new CSR-created SRs continue the sequence.
+  await p.serviceRequestCounter.upsert({
+    where: { utilityId_year: { utilityId: UID, year: 2026 } },
+    create: { utilityId: UID, year: 2026, nextValue: 4n },
+    update: { nextValue: 4n },
+  });
 
   console.log("\nDone! 10 premises, 8 accounts, 15 meters, 10 agreements, 3 customers, 4 contacts, 3 billing addresses, 2 portal users");
 }
