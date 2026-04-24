@@ -241,6 +241,7 @@ model Premise {
   owner             Customer?          @relation("PremiseOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   containers        Container[]
   serviceEvents     ServiceEvent[]
+  serviceRequests   ServiceRequest[]
 
   @@index([utilityId, status])
   @@index([ownerId])
@@ -249,22 +250,22 @@ model Premise {
 }
 
 model Meter {
-  id          String      @id @default(uuid()) @db.Uuid
-  utilityId   String      @map("utility_id") @db.Uuid
-  premiseId   String      @map("premise_id") @db.Uuid
-  meterNumber String      @map("meter_number") @db.VarChar(100)
-  commodityId String      @map("commodity_id") @db.Uuid
-  meterType   MeterType   @map("meter_type")
-  uomId       String      @map("uom_id") @db.Uuid
-  dialCount   Int?        @map("dial_count")
-  multiplier  Decimal     @default(1.0) @map("multiplier") @db.Decimal(10, 4)
-  installDate DateTime    @map("install_date") @db.Date
-  removalDate DateTime?   @map("removal_date") @db.Date
-  status      MeterStatus @map("status")
-  notes       String?     @map("notes") @db.Text
-  customFields Json       @default("{}") @map("custom_fields")
-  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+  id           String      @id @default(uuid()) @db.Uuid
+  utilityId    String      @map("utility_id") @db.Uuid
+  premiseId    String      @map("premise_id") @db.Uuid
+  meterNumber  String      @map("meter_number") @db.VarChar(100)
+  commodityId  String      @map("commodity_id") @db.Uuid
+  meterType    MeterType   @map("meter_type")
+  uomId        String      @map("uom_id") @db.Uuid
+  dialCount    Int?        @map("dial_count")
+  multiplier   Decimal     @default(1.0) @map("multiplier") @db.Decimal(10, 4)
+  installDate  DateTime    @map("install_date") @db.Date
+  removalDate  DateTime?   @map("removal_date") @db.Date
+  status       MeterStatus @map("status")
+  notes        String?     @map("notes") @db.Text
+  customFields Json        @default("{}") @map("custom_fields")
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz
 
   // Generated tsvector column — see FTS migration.
   searchVector Unsupported("tsvector")? @map("search_vector")
@@ -313,11 +314,12 @@ model Account {
   searchVector Unsupported("tsvector")? @map("search_vector")
 
   // Relations
-  customer           Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customer           Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
   serviceAgreements  ServiceAgreement[]
   contacts           Contact[]
   billingAddresses   BillingAddress[]
   delinquencyActions DelinquencyAction[]
+  serviceRequests    ServiceRequest[]
 
   @@unique([utilityId, accountNumber])
   @@index([customerId])
@@ -344,16 +346,17 @@ model ServiceAgreement {
   updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz
 
   // Relations
-  account       Account                 @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  premise       Premise                 @relation(fields: [premiseId], references: [id], onDelete: Restrict)
-  commodity     Commodity               @relation(fields: [commodityId], references: [id], onDelete: Restrict)
-  rateSchedule  RateSchedule            @relation(fields: [rateScheduleId], references: [id], onDelete: Restrict)
-  billingCycle  BillingCycle            @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
-  meters        ServiceAgreementMeter[]
-  meterReads    MeterRead[]
-  containers    Container[]
-  suspensions   ServiceSuspension[]
-  serviceEvents ServiceEvent[]
+  account         Account                 @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  premise         Premise                 @relation(fields: [premiseId], references: [id], onDelete: Restrict)
+  commodity       Commodity               @relation(fields: [commodityId], references: [id], onDelete: Restrict)
+  rateSchedule    RateSchedule            @relation(fields: [rateScheduleId], references: [id], onDelete: Restrict)
+  billingCycle    BillingCycle            @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
+  meters          ServiceAgreementMeter[]
+  meterReads      MeterRead[]
+  containers      Container[]
+  suspensions     ServiceSuspension[]
+  serviceEvents   ServiceEvent[]
+  serviceRequests ServiceRequest[]
 
   @@unique([utilityId, agreementNumber])
   @@index([accountId])
@@ -674,8 +677,11 @@ model CisUser {
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz
 
   // Relations
-  role     Role      @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  role                    Role             @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  customer                Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  assignedServiceRequests ServiceRequest[] @relation("ServiceRequestAssignee")
+  createdServiceRequests  ServiceRequest[] @relation("ServiceRequestCreator")
+  slaEscalations          Sla[]            @relation("SlaEscalationUser")
 
   @@unique([utilityId, email])
   @@unique([utilityId, externalId])
@@ -836,12 +842,12 @@ model CustomFieldSchema {
 // TenantTheme/TenantModule. A row is created lazily the first time a flag
 // is set; absence of a row means "all defaults".
 model TenantConfig {
-  id                   String   @id @default(uuid()) @db.Uuid
-  utilityId            String   @unique @map("utility_id") @db.Uuid
-  requireHoldApproval  Boolean  @default(false) @map("require_hold_approval")
-  settings             Json     @default("{}") @map("settings")
-  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  id                  String   @id @default(uuid()) @db.Uuid
+  utilityId           String   @unique @map("utility_id") @db.Uuid
+  requireHoldApproval Boolean  @default(false) @map("require_hold_approval")
+  settings            Json     @default("{}") @map("settings")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   @@map("tenant_config")
 }
@@ -852,17 +858,17 @@ model TenantConfig {
 // unique constraint lets both coexist — a tenant can override a global
 // label by inserting a row with the same code.
 model SuspensionTypeDef {
-  id                       String   @id @default(uuid()) @db.Uuid
-  utilityId                String?  @map("utility_id") @db.Uuid
-  code                     String   @db.VarChar(50)
-  label                    String   @db.VarChar(100)
-  description              String?  @db.Text
-  category                 String?  @db.VarChar(50)
-  sortOrder                Int      @default(100) @map("sort_order")
-  isActive                 Boolean  @default(true) @map("is_active")
-  defaultBillingSuspended  Boolean  @default(true) @map("default_billing_suspended")
-  createdAt                DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt                DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  id                      String   @id @default(uuid()) @db.Uuid
+  utilityId               String?  @map("utility_id") @db.Uuid
+  code                    String   @db.VarChar(50)
+  label                   String   @db.VarChar(100)
+  description             String?  @db.Text
+  category                String?  @db.VarChar(50)
+  sortOrder               Int      @default(100) @map("sort_order")
+  isActive                Boolean  @default(true) @map("is_active")
+  defaultBillingSuspended Boolean  @default(true) @map("default_billing_suspended")
+  createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt               DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   @@unique([utilityId, code])
   @@index([isActive, sortOrder])
@@ -1087,7 +1093,7 @@ model DelinquencyRule {
   createdAt             DateTime     @default(now()) @map("created_at") @db.Timestamptz
   updatedAt             DateTime     @updatedAt @map("updated_at") @db.Timestamptz
 
-  commodity Commodity? @relation(fields: [commodityId], references: [id], onDelete: SetNull)
+  commodity Commodity?          @relation(fields: [commodityId], references: [id], onDelete: SetNull)
   actions   DelinquencyAction[]
 
   @@unique([utilityId, accountType, tier])
@@ -1114,11 +1120,156 @@ model DelinquencyAction {
   createdAt           DateTime                @default(now()) @map("created_at") @db.Timestamptz
   updatedAt           DateTime                @updatedAt @map("updated_at") @db.Timestamptz
 
-  account Account          @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  rule    DelinquencyRule   @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  account         Account          @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  rule            DelinquencyRule  @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  serviceRequests ServiceRequest[]
 
   @@index([accountId, status])
   @@index([utilityId, status, tier])
   @@index([ruleId])
   @@map("delinquency_action")
+}
+
+// ─── Service Requests (Module 14) ───────────────────────────────
+
+enum ServiceRequestStatus {
+  NEW
+  ASSIGNED
+  IN_PROGRESS
+  PENDING_FIELD
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
+enum ServiceRequestPriority {
+  EMERGENCY
+  HIGH
+  NORMAL
+  LOW
+}
+
+enum ServiceRequestSource {
+  CSR
+  PORTAL
+  API
+  SYSTEM
+  DELINQUENCY_WORKFLOW
+}
+
+enum ServiceRequestExternalSystem {
+  RAMS
+  WORK_MANAGEMENT
+  APPTORFLOW
+}
+
+enum ServiceRequestBillingAction {
+  FEE_APPLIED
+  CREDIT_APPLIED
+  NO_ACTION
+}
+
+// Reference table for service-request type codes. Same pattern as
+// SuspensionTypeDef: utilityId NULL = global (seeded), utilityId set =
+// tenant-local shadow. Admin UI to manage tenant-local rows is a later
+// slice; this slice ships the globals only.
+model ServiceRequestTypeDef {
+  id          String   @id @default(uuid()) @db.Uuid
+  utilityId   String?  @map("utility_id") @db.Uuid
+  code        String   @db.VarChar(100)
+  label       String   @db.VarChar(150)
+  description String?  @db.Text
+  category    String?  @db.VarChar(50)
+  sortOrder   Int      @default(100) @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([utilityId, code])
+  @@index([isActive, sortOrder])
+  @@map("service_request_type_def")
+}
+
+// SLA policy per (request_type, priority). request_type is a VARCHAR key
+// into ServiceRequestTypeDef.code — deliberately not a FK so code changes
+// don't cascade. The service layer validates the code at write time.
+model Sla {
+  id               String                 @id @default(uuid()) @db.Uuid
+  utilityId        String                 @map("utility_id") @db.Uuid
+  requestType      String                 @map("request_type") @db.VarChar(100)
+  priority         ServiceRequestPriority @map("priority")
+  responseHours    Decimal                @map("response_hours") @db.Decimal(5, 2)
+  resolutionHours  Decimal                @map("resolution_hours") @db.Decimal(5, 2)
+  escalationHours  Decimal?               @map("escalation_hours") @db.Decimal(5, 2)
+  escalationUserId String?                @map("escalation_user_id") @db.Uuid
+  isActive         Boolean                @default(true) @map("is_active")
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime               @updatedAt @map("updated_at") @db.Timestamptz
+
+  escalationUser  CisUser?         @relation("SlaEscalationUser", fields: [escalationUserId], references: [id], onDelete: SetNull)
+  serviceRequests ServiceRequest[]
+
+  @@unique([utilityId, requestType, priority])
+  @@index([utilityId, isActive])
+  @@map("sla")
+}
+
+// Per-tenant per-year counter row used by createServiceRequest to mint
+// SR-YYYY-NNNNNN numbers. Separate table so we can lock a single row via
+// SELECT ... FOR UPDATE inside the creation transaction without
+// contending on the service_request table itself.
+model ServiceRequestCounter {
+  utilityId String @map("utility_id") @db.Uuid
+  year      Int
+  nextValue BigInt @default(1) @map("next_value")
+
+  @@id([utilityId, year])
+  @@map("service_request_counter")
+}
+
+model ServiceRequest {
+  id                  String                        @id @default(uuid()) @db.Uuid
+  utilityId           String                        @map("utility_id") @db.Uuid
+  requestNumber       String                        @map("request_number") @db.VarChar(50)
+  accountId           String?                       @map("account_id") @db.Uuid
+  premiseId           String?                       @map("premise_id") @db.Uuid
+  serviceAgreementId  String?                       @map("service_agreement_id") @db.Uuid
+  requestType         String                        @map("request_type") @db.VarChar(100)
+  requestSubtype      String?                       @map("request_subtype") @db.VarChar(100)
+  priority            ServiceRequestPriority        @map("priority")
+  status              ServiceRequestStatus          @default(NEW) @map("status")
+  source              ServiceRequestSource          @default(CSR) @map("source")
+  description         String                        @map("description") @db.Text
+  resolutionNotes     String?                       @map("resolution_notes") @db.Text
+  slaId               String?                       @map("sla_id") @db.Uuid
+  slaDueAt            DateTime?                     @map("sla_due_at") @db.Timestamptz
+  slaBreached         Boolean                       @default(false) @map("sla_breached")
+  assignedTo          String?                       @map("assigned_to") @db.Uuid
+  assignedTeam        String?                       @map("assigned_team") @db.VarChar(100)
+  externalSystem      ServiceRequestExternalSystem? @map("external_system")
+  externalRequestId   String?                       @map("external_request_id") @db.VarChar(200)
+  externalStatus      String?                       @map("external_status") @db.VarChar(100)
+  delinquencyActionId String?                       @map("delinquency_action_id") @db.Uuid
+  billingAction       ServiceRequestBillingAction?  @map("billing_action")
+  adhocChargeId       String?                       @map("adhoc_charge_id") @db.Uuid
+  attachments         Json                          @default("[]") @map("attachments")
+  createdBy           String?                       @map("created_by") @db.Uuid
+  createdAt           DateTime                      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime                      @updatedAt @map("updated_at") @db.Timestamptz
+  completedAt         DateTime?                     @map("completed_at") @db.Timestamptz
+  cancelledAt         DateTime?                     @map("cancelled_at") @db.Timestamptz
+
+  account           Account?           @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  premise           Premise?           @relation(fields: [premiseId], references: [id], onDelete: SetNull)
+  serviceAgreement  ServiceAgreement?  @relation(fields: [serviceAgreementId], references: [id], onDelete: SetNull)
+  sla               Sla?               @relation(fields: [slaId], references: [id], onDelete: SetNull)
+  assignee          CisUser?           @relation("ServiceRequestAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
+  creator           CisUser?           @relation("ServiceRequestCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  delinquencyAction DelinquencyAction? @relation(fields: [delinquencyActionId], references: [id], onDelete: SetNull)
+
+  @@unique([utilityId, requestNumber])
+  @@index([utilityId, accountId, status])
+  @@index([utilityId, requestType, status])
+  @@index([utilityId, assignedTo, status])
+  @@map("service_request")
 }
