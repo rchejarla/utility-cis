@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiClient } from "@/lib/api-client";
-import { SettingsSection } from "@/components/settings/settings-shell";
+import {
+  SettingsAccordion,
+  SettingsSection,
+  type SettingsAccordionItem,
+} from "@/components/settings/settings-shell";
 import { useToast } from "@/components/ui/toast";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
@@ -24,23 +28,6 @@ interface TypeDef {
 }
 
 const PRIORITIES = ["EMERGENCY", "HIGH", "NORMAL", "LOW"] as const;
-
-const cardStyle = {
-  background: "var(--bg-card)",
-  border: "1px solid var(--border)",
-  borderRadius: 10,
-  marginBottom: 14,
-  overflow: "hidden",
-};
-
-const cardHeaderStyle = {
-  padding: "12px 16px",
-  borderBottom: "1px solid var(--border)",
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  fontSize: 13,
-};
 
 const thStyle = {
   textAlign: "left" as const,
@@ -189,157 +176,154 @@ export default function SlaSettingsPage() {
       title="Service Level Agreements"
       description="Define response and resolution targets per request type and priority. Requests without a matching SLA skip the countdown entirely."
     >
-      {types.map((t) => {
-        const rows = byType[t.code] ?? [];
-        const covered = rows.map((r) => r.priority);
-        const missing = PRIORITIES.filter((p) => !covered.includes(p));
-        return (
-          <div key={t.code} style={cardStyle}>
-            <div style={cardHeaderStyle}>
-              <div>
-                <b style={{ color: "var(--text-primary)" }}>{t.code}</b>
-                <span style={{ color: "var(--text-muted)", marginLeft: 8 }}>
-                  {t.label}
-                </span>
-              </div>
-              <span style={{ color: "var(--text-muted)", fontSize: 12 }}>
-                {rows.length} / 4 priorities
-              </span>
-            </div>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th style={thStyle}>Priority</th>
-                  <th style={thStyle}>Response (hrs)</th>
-                  <th style={thStyle}>Resolution (hrs)</th>
-                  <th style={thStyle}>Escalate after (hrs)</th>
-                  <th style={{ ...thStyle, textAlign: "right" as const }} />
-                </tr>
-              </thead>
-              <tbody>
-                {rows.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={5}
-                      style={{
-                        ...tdStyle,
-                        textAlign: "center",
-                        color: "var(--text-muted)",
-                      }}
-                    >
-                      No SLAs configured for this type yet.
-                    </td>
-                  </tr>
-                ) : (
-                  rows.map((r) => (
-                    <tr key={r.id}>
-                      <td style={tdStyle}>{r.priority}</td>
-                      <td style={tdStyle}>
-                        <input
-                          type="number"
-                          min={0.01}
-                          step={0.25}
-                          defaultValue={r.responseHours}
-                          disabled={!canEdit}
-                          onBlur={(e) => {
-                            const n = Number(e.target.value);
-                            if (Number.isFinite(n) && n !== r.responseHours) {
-                              updateField(r.id, { responseHours: n });
-                            }
-                          }}
-                          style={hoursInputStyle}
-                        />
-                      </td>
-                      <td style={tdStyle}>
-                        <input
-                          type="number"
-                          min={0.01}
-                          step={0.25}
-                          defaultValue={r.resolutionHours}
-                          disabled={!canEdit}
-                          onBlur={(e) => {
-                            const n = Number(e.target.value);
-                            if (Number.isFinite(n) && n !== r.resolutionHours) {
-                              updateField(r.id, { resolutionHours: n });
-                            }
-                          }}
-                          style={hoursInputStyle}
-                        />
-                      </td>
-                      <td style={tdStyle}>
-                        <input
-                          type="number"
-                          min={0}
-                          step={0.25}
-                          placeholder="none"
-                          title="Empty or 0 = no escalation"
-                          defaultValue={r.escalationHours ?? ""}
-                          disabled={!canEdit}
-                          onBlur={(e) => {
-                            // Treat empty or 0 as "no escalation" — the API
-                            // rejects non-positive numbers, and 0-hour
-                            // escalation isn't meaningful anyway.
-                            const raw = e.target.value.trim();
-                            const parsed = raw === "" ? null : Number(raw);
-                            const next =
-                              parsed === null || !Number.isFinite(parsed) || parsed <= 0
-                                ? null
-                                : parsed;
-                            if (next === r.escalationHours) return;
-                            if (next === null) {
-                              e.target.value = "";
-                            }
-                            updateField(r.id, { escalationHours: next });
-                          }}
-                          style={hoursInputStyle}
-                        />
-                      </td>
-                      <td style={{ ...tdStyle, textAlign: "right" as const }}>
-                        {canEdit && (
-                          <button
-                            type="button"
-                            onClick={() => remove(r.id)}
-                            aria-label={`Deactivate ${r.priority}`}
-                            style={removeBtn}
-                          >
-                            Remove
-                          </button>
-                        )}
-                      </td>
+      <SettingsAccordion
+        items={types.map((t): SettingsAccordionItem => {
+          const rows = byType[t.code] ?? [];
+          const covered = rows.map((r) => r.priority);
+          const missing = PRIORITIES.filter((p) => !covered.includes(p));
+          return {
+            id: t.code,
+            title: t.code,
+            subtitle: t.label,
+            summary: `${rows.length} / 4 priorities`,
+            content: (
+              <>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={thStyle}>Priority</th>
+                      <th style={thStyle}>Response (hrs)</th>
+                      <th style={thStyle}>Resolution (hrs)</th>
+                      <th style={thStyle}>Escalate after (hrs)</th>
+                      <th style={{ ...thStyle, textAlign: "right" as const }} />
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-            {missing.length > 0 && canEdit && (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "10px 16px",
-                  borderTop: "1px solid var(--border-subtle)",
-                  flexWrap: "wrap",
-                }}
-              >
-                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                  Add priority:
-                </span>
-                {missing.map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    onClick={() => addRow(t.code, p)}
-                    style={addBtn}
+                  </thead>
+                  <tbody>
+                    {rows.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={5}
+                          style={{
+                            ...tdStyle,
+                            textAlign: "center",
+                            color: "var(--text-muted)",
+                          }}
+                        >
+                          No SLAs configured for this type yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      rows.map((r) => (
+                        <tr key={r.id}>
+                          <td style={tdStyle}>{r.priority}</td>
+                          <td style={tdStyle}>
+                            <input
+                              type="number"
+                              min={0.01}
+                              step={0.25}
+                              defaultValue={r.responseHours}
+                              disabled={!canEdit}
+                              onBlur={(e) => {
+                                const n = Number(e.target.value);
+                                if (Number.isFinite(n) && n !== r.responseHours) {
+                                  updateField(r.id, { responseHours: n });
+                                }
+                              }}
+                              style={hoursInputStyle}
+                            />
+                          </td>
+                          <td style={tdStyle}>
+                            <input
+                              type="number"
+                              min={0.01}
+                              step={0.25}
+                              defaultValue={r.resolutionHours}
+                              disabled={!canEdit}
+                              onBlur={(e) => {
+                                const n = Number(e.target.value);
+                                if (Number.isFinite(n) && n !== r.resolutionHours) {
+                                  updateField(r.id, { resolutionHours: n });
+                                }
+                              }}
+                              style={hoursInputStyle}
+                            />
+                          </td>
+                          <td style={tdStyle}>
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.25}
+                              placeholder="none"
+                              title="Empty or 0 = no escalation"
+                              defaultValue={r.escalationHours ?? ""}
+                              disabled={!canEdit}
+                              onBlur={(e) => {
+                                // Treat empty or 0 as "no escalation" — the API
+                                // rejects non-positive numbers, and 0-hour
+                                // escalation isn't meaningful anyway.
+                                const raw = e.target.value.trim();
+                                const parsed = raw === "" ? null : Number(raw);
+                                const next =
+                                  parsed === null || !Number.isFinite(parsed) || parsed <= 0
+                                    ? null
+                                    : parsed;
+                                if (next === r.escalationHours) return;
+                                if (next === null) {
+                                  e.target.value = "";
+                                }
+                                updateField(r.id, { escalationHours: next });
+                              }}
+                              style={hoursInputStyle}
+                            />
+                          </td>
+                          <td style={{ ...tdStyle, textAlign: "right" as const }}>
+                            {canEdit && (
+                              <button
+                                type="button"
+                                onClick={() => remove(r.id)}
+                                aria-label={`Deactivate ${r.priority}`}
+                                style={removeBtn}
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+                {missing.length > 0 && canEdit && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "10px 16px",
+                      borderTop: "1px solid var(--border-subtle)",
+                      flexWrap: "wrap",
+                    }}
                   >
-                    + {p}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
+                    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                      Add priority:
+                    </span>
+                    {missing.map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => addRow(t.code, p)}
+                        style={addBtn}
+                      >
+                        + {p}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            ),
+          };
+        })}
+      />
 
       <p
         style={{
