@@ -31,6 +31,16 @@ import {
   faEnvelope,
   faScaleUnbalanced,
   faPlugCircleXmark,
+  faPalette,
+  faPaintbrush,
+  faHashtag,
+  faListCheck,
+  faCreditCard,
+  faBell,
+  faStopwatch,
+  faBoxArchive,
+  faKey,
+  faBomb,
 } from "@fortawesome/pro-solid-svg-icons";
 
 interface NavItem {
@@ -43,6 +53,13 @@ interface NavItem {
 interface NavSection {
   title: string;
   items: NavItem[];
+  /**
+   * Collapse this section on first visit. Daily-use sections default
+   * to open; rarely-visited groups (Settings) default to closed so
+   * the sidebar stays calm. Applied only when the user hasn't
+   * explicitly toggled the section — their choice persists after.
+   */
+  defaultCollapsed?: boolean;
 }
 
 const navSections: NavSection[] = [
@@ -86,16 +103,22 @@ const navSections: NavSection[] = [
     ],
   },
   {
-    title: "System",
+    title: "Settings",
+    defaultCollapsed: true,
     items: [
-      { href: "/audit-log", label: "Audit Log", icon: faClipboardList, module: "audit_log" },
-    ],
-  },
-  {
-    title: "Administration",
-    items: [
+      { href: "/settings/general", label: "General", icon: faGear, module: "settings" },
+      { href: "/settings/branding", label: "Branding", icon: faPalette, module: "settings" },
+      { href: "/settings/theme", label: "Theme", icon: faPaintbrush, module: "settings" },
+      { href: "/settings/numbering", label: "Numbering", icon: faHashtag, module: "settings" },
+      { href: "/settings/custom-fields", label: "Custom Fields", icon: faListCheck, module: "settings" },
+      { href: "/settings/billing", label: "Billing Integration", icon: faCreditCard, module: "settings" },
+      { href: "/settings/notifications", label: "Notifications", icon: faBell, module: "settings" },
+      { href: "/settings/slas", label: "Service Request SLAs", icon: faStopwatch, module: "service_request_slas" },
+      { href: "/settings/retention", label: "Retention & Audit", icon: faBoxArchive, module: "settings" },
+      { href: "/settings/api-keys", label: "API Keys & Webhooks", icon: faKey, module: "settings" },
       { href: "/users-roles", label: "Users & Roles", icon: faUserShield, module: "settings" },
-      { href: "/settings", label: "Settings", icon: faGear, module: "settings" },
+      { href: "/audit-log", label: "Audit Log", icon: faClipboardList, module: "audit_log" },
+      { href: "/settings/danger-zone", label: "Danger Zone", icon: faBomb, module: "settings" },
     ],
   },
 ];
@@ -178,7 +201,18 @@ function CollapsibleSection({
   const [sectionOpen, setSectionOpen] = useState(true);
 
   useEffect(() => {
-    if (!hasActiveItem && getCollapsedSections().has(section.title)) {
+    const collapsed = getCollapsedSections();
+    const userHasToggled =
+      collapsed.has(section.title) || collapsed.has(`__open:${section.title}`);
+    // Rarely-visited sections (defaultCollapsed) start closed unless
+    // the user has explicitly opened them or we're on a route inside
+    // them. For sections the user has toggled either direction, honor
+    // the persisted choice.
+    if (hasActiveItem) {
+      setSectionOpen(true);
+    } else if (section.defaultCollapsed && !userHasToggled) {
+      setSectionOpen(false);
+    } else if (collapsed.has(section.title)) {
       setSectionOpen(false);
     }
     // Mount-only: user toggles go through toggleSection() directly.
@@ -193,8 +227,15 @@ function CollapsibleSection({
     const next = !sectionOpen;
     setSectionOpen(next);
     const set = getCollapsedSections();
-    if (next) set.delete(section.title);
-    else set.add(section.title);
+    if (next) {
+      set.delete(section.title);
+      // Mark that the user has explicitly opened a default-collapsed
+      // section so we don't re-close it on subsequent mounts.
+      if (section.defaultCollapsed) set.add(`__open:${section.title}`);
+    } else {
+      set.add(section.title);
+      set.delete(`__open:${section.title}`);
+    }
     saveCollapsedSections(set);
   };
 

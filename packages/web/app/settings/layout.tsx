@@ -1,35 +1,16 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { PageHeader } from "@/components/ui/page-header";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
-import { SettingsRail } from "@/components/settings/settings-shell";
 
+// Navigation between settings sub-pages now lives in the main sidebar
+// under the collapsible "Settings" section. No side rail is rendered
+// here — pages own their own PageHeader so each one reads as a
+// first-class destination rather than a sub-tab.
 export default function SettingsLayout({ children }: { children: ReactNode }) {
   const { canView } = usePermission("settings");
   if (!canView) return <AccessDenied />;
 
-  return (
-    <div>
-      <PageHeader
-        title="Settings"
-        subtitle="Tenant-level configuration, integrations, and administration"
-      />
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "220px 1fr",
-          gap: "40px",
-          alignItems: "start",
-        }}
-      >
-        <aside>
-          <SettingsRail />
-        </aside>
-        <div style={{ minWidth: 0 }}>{children}</div>
-      </div>
-    </div>
-  );
+  return <div>{children}</div>;
 }
