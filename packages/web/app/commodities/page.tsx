@@ -284,6 +284,7 @@ export default function CommoditiesPage() {
               <input
                 style={{ ...inputStyle, width: 60 }}
                 type="number"
+                title="Sort order"
                 value={editForm.displayOrder}
                 onChange={(e) => setEditForm({ ...editForm, displayOrder: Number(e.target.value) })}
               />
@@ -298,7 +299,7 @@ export default function CommoditiesPage() {
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <StatusBadge status={c.isActive ? "ACTIVE" : "INACTIVE"} />
-                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Order: {c.displayOrder}</span>
+                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Sort Order: {c.displayOrder}</span>
               </div>
               {canEdit && (
                 <button
@@ -601,7 +602,7 @@ export default function CommoditiesPage() {
             />
           </div>
           <div>
-            <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Order</div>
+            <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Sort Order</div>
             <input
               style={{ ...inputStyle, width: 60 }}
               type="number"
