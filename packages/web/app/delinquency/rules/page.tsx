@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
+import { PageDescription } from "@/components/ui/page-description";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { usePermission } from "@/lib/use-permission";
@@ -54,6 +55,14 @@ export default function DelinquencyRulesPage() {
   return (
     <div>
       <PageHeader title="Delinquency Rules" subtitle="Configure the escalation chain — each tier defines when and how to act on past-due accounts" />
+      <PageDescription storageKey="delinquency-rules">
+        A <b>rule</b> fires when an account's <b>days past due</b> and
+        <b> balance</b> both cross its tier's thresholds. Tiers <b>chain</b>:
+        tier 2 can't fire until tier 1 has resolved on the same account, so the
+        escalation is sequential rather than parallel. The nightly scheduler
+        evaluates active rules and files <b>DelinquencyActions</b> — notices,
+        door hangers, shut-off eligibility — against matching accounts.
+      </PageDescription>
       {canCreate && (
         <div style={{ marginBottom: 16 }}>
           <button

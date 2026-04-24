@@ -1,6 +1,7 @@
 "use client";
 
 import { EntityListPage } from "@/components/ui/entity-list-page";
+import { PageDescription } from "@/components/ui/page-description";
 import type { Column } from "@/components/ui/data-table";
 
 interface ServiceEvent {
@@ -112,6 +113,15 @@ export default function ServiceEventsPage() {
       endpoint="/api/v1/service-events"
       getDetailHref={(row) => `/service-events/${row.id}`}
       columns={columns}
+      headerSlot={
+        <PageDescription storageKey="service-events">
+          <b>Service events</b> are operational occurrences received from the
+          RAMS field system — missed pickups, contamination flags, cart swaps,
+          bulky-item requests. Some are informational and close after review;
+          others trigger <b>billing credits or charges</b> on the related
+          account once reviewed and resolved.
+        </PageDescription>
+      }
       filters={[
         { key: "status", label: "Status", options: STATUS_OPTIONS },
         { key: "eventType", label: "Type", options: TYPE_OPTIONS },

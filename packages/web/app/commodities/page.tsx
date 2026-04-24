@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { PageHeader } from "@/components/ui/page-header";
+import { PageDescription } from "@/components/ui/page-description";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Accordion, type AccordionItem } from "@/components/ui/accordion";
 import { apiClient } from "@/lib/api-client";
@@ -567,6 +568,14 @@ export default function CommoditiesPage() {
         subtitle={`${commodities.length} commodities · ${uoms.length} units`}
         action={canCreate ? { label: "+ Add Commodity", onClick: () => setShowNewForm(true) } : undefined}
       />
+
+      <PageDescription storageKey="commodities">
+        A <b>commodity</b> is something you meter and bill — water, gas,
+        electricity. Each commodity has its own catalog of <b>units of measure</b>,
+        grouped by <b>measure type</b> (usage, demand, etc.) because conversions
+        only make sense within a group — kWh converts to MWh, but not to kW.
+        Manage the measure-type catalog at <b>/measure-types</b>.
+      </PageDescription>
 
       {/* New Commodity Form — page-level so it sits above the accordion,
           mirroring the existing create flow. */}

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
+import { PageDescription } from "@/components/ui/page-description";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { usePermission } from "@/lib/use-permission";
@@ -174,6 +175,14 @@ export default function MeasureTypesPage() {
             : undefined
         }
       />
+
+      <PageDescription storageKey="measure-types">
+        A <b>measure type</b> is the semantic category a reading represents —
+        usage totalizer, demand peak, TOU window, reactive power — so a meter
+        register or UOM can be tagged with what it actually means rather than
+        just what unit it reports. <b>Global</b> types are seeded and read-only;
+        tenants can add local codes for anything the shared catalog doesn't cover.
+      </PageDescription>
 
       {showNewForm && (
         <div

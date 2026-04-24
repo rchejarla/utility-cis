@@ -2,6 +2,7 @@
 
 import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { EntityListPage } from "@/components/ui/entity-list-page";
+import { PageDescription } from "@/components/ui/page-description";
 import type { Column } from "@/components/ui/data-table";
 
 interface RateSchedule {
@@ -88,19 +89,7 @@ export default function RateSchedulesPage() {
       columns={columns}
       newAction={{ label: "Add Rate Schedule", href: "/rate-schedules/new" }}
       headerSlot={
-        <div
-          style={{
-            padding: "12px 16px",
-            marginBottom: "16px",
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius)",
-            fontSize: 13,
-            color: "var(--text-secondary)",
-            lineHeight: 1.55,
-            maxWidth: 820,
-          }}
-        >
+        <PageDescription storageKey="rate-schedules">
           A <b>rate schedule</b> defines how a commodity is priced — base charges,
           tiered or time-of-use brackets, demand components — for a given
           effective date range. Schedules are <b>versioned</b>: published rates
@@ -108,7 +97,7 @@ export default function RateSchedulesPage() {
           pricing, open a schedule and click <b>Revise</b> — that creates a new
           version whose effective date is the day the old one expires, preserving
           the audit trail back to the original.
-        </div>
+        </PageDescription>
       }
       filters={[
         {

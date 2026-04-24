@@ -1,6 +1,7 @@
 "use client";
 
 import { EntityListPage } from "@/components/ui/entity-list-page";
+import { PageDescription } from "@/components/ui/page-description";
 import type { Column } from "@/components/ui/data-table";
 
 interface ServiceSuspension {
@@ -120,6 +121,16 @@ export default function SuspensionsPage() {
       getDetailHref={(row) => `/service-suspensions/${row.id}`}
       columns={columns}
       newAction={{ label: "+ New Hold", href: "/service-suspensions/new" }}
+      headerSlot={
+        <PageDescription storageKey="service-suspensions">
+          A <b>service hold</b> is a temporary pause on billing for a service
+          agreement — vacation, construction shutdowns, seasonal closures.
+          Billing is suspended for the covered period and the agreement rejoins
+          the regular cycle when the hold ends or is cancelled. Hold
+          <b> types</b> are configured in Settings so each utility can label
+          them to match its own policy.
+        </PageDescription>
+      }
       filters={[
         { key: "status", label: "Status", options: STATUS_OPTIONS },
         {
