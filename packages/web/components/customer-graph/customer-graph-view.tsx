@@ -32,6 +32,12 @@ import {
 } from "./graph-nodes";
 import { TimelineStrip } from "./timeline-strip";
 import { NodeDrawer, detailHrefFor } from "./node-drawer";
+import { TrunkEdge } from "./trunk-edge";
+
+// Custom edge types. `trunk` draws the customer → premise / customer
+// → account edges along a shared vertical spine behind each outer
+// column; everything else uses React Flow's built-in smoothstep.
+const edgeTypes = { trunk: TrunkEdge };
 
 interface CustomerGraphViewProps {
   customerId: string;
@@ -43,6 +49,15 @@ const NODE_W = 200;
 const NODE_H = 90;
 const ROW_H = NODE_H + 20;      // vertical space per "row slot"
 const COL_X = [0, 300, 600, 900] as const; // premises / meters / agreements / accounts
+
+// Shared vertical trunk lines for the customer→premise and
+// customer→account edges. Positioned just outside each outer column
+// so every edge of the same kind shares one visible spine.
+const PREMISE_TRUNK_X = COL_X[0] - 30;
+const ACCOUNT_TRUNK_X = COL_X[3] + NODE_W + 30;
+// How far the edge descends below the customer before turning onto
+// the trunk — keeps the "T" top short but clear of the customer card.
+const TRUNK_DESCEND = 60;
 
 /**
  * Three-row grid layout.
@@ -155,10 +170,14 @@ function handlesFor(kind: GraphEdge["kind"]): {
   targetHandle: string;
 } {
   switch (kind) {
-    // Customer (row 1) reaches down to premises + accounts in row 2.
+    // Customer (row 1) reaches down and then along a shared trunk
+    // into each premise from its LEFT side, and into each account
+    // from its RIGHT side — draws an org-chart spine behind the
+    // outer columns.
     case "owns_premise":
+      return { sourceHandle: "b-source", targetHandle: "l-target" };
     case "owns_account":
-      return { sourceHandle: "b-source", targetHandle: "t-target" };
+      return { sourceHandle: "b-source", targetHandle: "r-target" };
     // Row 2 left half: premise → meter (rightward).
     case "premise_has_meter":
       return { sourceHandle: "r-source", targetHandle: "l-target" };
@@ -353,20 +372,28 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
       .filter((e) => visibleNodeIds.has(e.from) && visibleNodeIds.has(e.to))
       .map((e) => {
         const { sourceHandle, targetHandle } = handlesFor(e.kind);
+        const isTrunk = e.kind === "owns_premise" || e.kind === "owns_account";
+        const trunkX =
+          e.kind === "owns_premise"
+            ? PREMISE_TRUNK_X
+            : e.kind === "owns_account"
+              ? ACCOUNT_TRUNK_X
+              : undefined;
         return {
           id: e.id,
           source: e.from,
           target: e.to,
           sourceHandle,
           targetHandle,
-          type: "smoothstep",
+          type: isTrunk ? "trunk" : "smoothstep",
           style: edgeStyleFor(e.kind),
-          // Hover tooltip on the edge path. React Flow spreads this to
-          // the edge's container element, which includes a <title>-able
-          // <path>.
-          data: {
-            title: `${e.kind} since ${e.validFrom.slice(0, 10)}`,
-          },
+          data: isTrunk
+            ? {
+                trunkX,
+                descend: TRUNK_DESCEND,
+                title: `${e.kind} since ${e.validFrom.slice(0, 10)}`,
+              }
+            : { title: `${e.kind} since ${e.validFrom.slice(0, 10)}` },
         };
       });
   }, [graph, hiddenTypes]);
@@ -556,6 +583,7 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
               nodes={flowNodes}
               edges={flowEdges}
               nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               onInit={(instance) => {
                 rfInstance.current = instance;
               }}
