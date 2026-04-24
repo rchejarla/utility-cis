@@ -24,3 +24,4 @@ export * from "./notification";
 export * from "./delinquency";
 export * from "./service-request-type-def";
 export * from "./sla";
+export * from "./service-request";
