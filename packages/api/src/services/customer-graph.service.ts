@@ -3,7 +3,6 @@ import type {
   CustomerGraphDTO,
   GraphEdge,
   GraphNode,
-  TimelineEvent,
 } from "@utility-cis/shared";
 
 const NODE_CAP = 200;
@@ -65,7 +64,6 @@ export async function buildCustomerGraph(
 
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
-  const events: TimelineEvent[] = [];
 
   const customerName =
     customer.customerType === "ORGANIZATION"
@@ -88,13 +86,6 @@ export async function buildCustomerGraph(
     },
     validFrom: customer.createdAt.toISOString(),
     validTo: null,
-  });
-  events.push({
-    id: `evt:customer-created:${customer.id}`,
-    occurredAt: customer.createdAt.toISOString(),
-    kind: "customer.created",
-    label: `Customer record created`,
-    relatedNodeIds: [customerNodeId],
   });
 
   // ─── Gather every premise that will appear ───
@@ -184,27 +175,10 @@ export async function buildCustomerGraph(
       validFrom: acc.createdAt.toISOString(),
       validTo: acc.closedAt ? acc.closedAt.toISOString() : null,
     });
-    events.push({
-      id: `evt:account-opened:${acc.id}`,
-      occurredAt: acc.createdAt.toISOString(),
-      kind: "account.opened",
-      label: `Account ${acc.accountNumber} opened`,
-      relatedNodeIds: [accNodeId],
-    });
-    if (acc.closedAt) {
-      events.push({
-        id: `evt:account-closed:${acc.id}`,
-        occurredAt: acc.closedAt.toISOString(),
-        kind: "account.closed",
-        label: `Account ${acc.accountNumber} closed`,
-        relatedNodeIds: [accNodeId],
-      });
-    }
 
     // ─── Agreements (child of their premise; cross-linked to account) ───
     for (const ag of acc.serviceAgreements) {
       const agNodeId = `agreement:${ag.id}`;
-      const agPremiseNodeId = ag.premise ? `premise:${ag.premise.id}` : null;
 
       nodes.push({
         id: agNodeId,
@@ -245,23 +219,6 @@ export async function buildCustomerGraph(
         validFrom: ag.startDate.toISOString(),
         validTo: ag.endDate ? ag.endDate.toISOString() : null,
       });
-
-      events.push({
-        id: `evt:agreement-signed:${ag.id}`,
-        occurredAt: ag.startDate.toISOString(),
-        kind: "agreement.signed",
-        label: `Agreement ${ag.agreementNumber} (${ag.commodity?.name ?? ""}) signed`,
-        relatedNodeIds: [agNodeId, accNodeId, ...(agPremiseNodeId ? [agPremiseNodeId] : [])],
-      });
-      if (ag.endDate) {
-        events.push({
-          id: `evt:agreement-ended:${ag.id}`,
-          occurredAt: ag.endDate.toISOString(),
-          kind: "agreement.ended",
-          label: `Agreement ${ag.agreementNumber} ended`,
-          relatedNodeIds: [agNodeId],
-        });
-      }
 
       // Meters for this agreement — route each meter under its
       // agreement's premise so the meter becomes a child of the
@@ -332,23 +289,6 @@ export async function buildCustomerGraph(
             ? sr.cancelledAt.toISOString()
             : null,
       });
-
-      events.push({
-        id: `evt:sr-filed:${sr.id}`,
-        occurredAt: sr.createdAt.toISOString(),
-        kind: "service_request.filed",
-        label: `Service request ${sr.requestNumber} (${sr.requestType}) filed`,
-        relatedNodeIds: [srNodeId, accNodeId, ...(srPremiseNodeId ? [srPremiseNodeId] : [])],
-      });
-      if (sr.completedAt) {
-        events.push({
-          id: `evt:sr-completed:${sr.id}`,
-          occurredAt: sr.completedAt.toISOString(),
-          kind: "service_request.completed",
-          label: `Service request ${sr.requestNumber} completed`,
-          relatedNodeIds: [srNodeId],
-        });
-      }
     }
   }
 
@@ -391,23 +331,6 @@ export async function buildCustomerGraph(
               validTo: m.removalDate ? m.removalDate.toISOString() : null,
             });
           }
-
-          events.push({
-            id: `evt:meter-installed:${m.id}`,
-            occurredAt: m.installDate.toISOString(),
-            kind: "meter.installed",
-            label: `Meter ${m.meterNumber} installed`,
-            relatedNodeIds: [mNodeId],
-          });
-          if (m.removalDate) {
-            events.push({
-              id: `evt:meter-removed:${m.id}`,
-              occurredAt: m.removalDate.toISOString(),
-              kind: "meter.removed",
-              label: `Meter ${m.meterNumber} removed`,
-              relatedNodeIds: [mNodeId],
-            });
-          }
         }
 
         // Secondary cross-link: agreement uses meter. Emitted once per
@@ -424,9 +347,6 @@ export async function buildCustomerGraph(
     }
   }
 
-  // Chronological timeline — oldest first.
-  events.sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
-
   // Truncate if the graph grew past the node cap (industrial
   // customers). Dropped from the tail; primary-tree nodes are
   // emitted first so they survive truncation preferentially.
@@ -439,7 +359,6 @@ export async function buildCustomerGraph(
     customerId: customer.id,
     nodes: finalNodes,
     edges: finalEdges,
-    events,
     truncated,
   };
 }

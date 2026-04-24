@@ -28,7 +28,6 @@ import {
   nodeTypes,
   type CustomerGraphFlowNode,
 } from "./graph-nodes";
-import { TimelineStrip } from "./timeline-strip";
 import { NodeDrawer, detailHrefFor } from "./node-drawer";
 import { TrunkEdge } from "./trunk-edge";
 
@@ -247,7 +246,6 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [highlightedIds, setHighlightedIds] = useState<Set<string>>(new Set());
   const rfInstance = useRef<ReactFlowInstance<CustomerGraphFlowNode, Edge> | null>(null);
 
   useEffect(() => {
@@ -296,11 +294,8 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
         data: n.data,
         validTo: n.validTo,
       },
-      className: highlightedIds.has(n.id)
-        ? "customer-graph-node-highlighted"
-        : undefined,
     }));
-  }, [graph, positions, selectedNodeId, highlightedIds]);
+  }, [graph, positions, selectedNodeId]);
 
   const flowEdges: Edge[] = useMemo(() => {
     if (!graph) return [];
@@ -357,25 +352,6 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
     [graph, router],
   );
 
-  const handleTimelineHover = useCallback(
-    (ids: string[] | null) => {
-      setHighlightedIds(ids ? new Set(ids) : new Set());
-    },
-    [],
-  );
-
-  const handleTimelineClick = useCallback(
-    (ids: string[]) => {
-      if (ids.length === 0 || !rfInstance.current) return;
-      const first = ids[0];
-      const pos = positions.get(first);
-      if (!pos) return;
-      rfInstance.current.setCenter(pos.x, pos.y, { zoom: 1.3, duration: 400 });
-      setSelectedNodeId(first);
-    },
-    [positions],
-  );
-
   // ─── Fullscreen toggle ──────────────────────────────────────────
   // Use the browser Fullscreen API on the canvas container so the
   // graph can take over the whole viewport. Works on all modern
@@ -430,16 +406,6 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
           global-ish CSS the graph view needs and the inline/styled
           convention runs throughout the rest of the app. */}
       <style jsx global>{`
-        .customer-graph-node-highlighted {
-          outline: 2px solid var(--accent-primary);
-          outline-offset: 2px;
-          border-radius: var(--radius);
-          animation: cg-pulse 1.2s ease-in-out infinite;
-        }
-        @keyframes cg-pulse {
-          0%, 100% { outline-color: var(--accent-primary); }
-          50% { outline-color: var(--accent-secondary); }
-        }
         /* React Flow zoom controls — paint them onto the CIS surface
            so the default white buttons don't clash with the dark
            canvas. Only +/− buttons remain after dropping FitView. */
@@ -701,15 +667,6 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
         )}
       </div>
 
-      {/* Timeline strip */}
-      {graph && (
-        <TimelineStrip
-          events={graph.events}
-          nodes={graph.nodes}
-          onEventHover={handleTimelineHover}
-          onEventClick={handleTimelineClick}
-        />
-      )}
     </div>
   );
 }

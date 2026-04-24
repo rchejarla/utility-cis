@@ -59,23 +59,10 @@ export interface GraphEdge {
   validTo: string | null;
 }
 
-export interface TimelineEvent {
-  id: string;
-  occurredAt: string;
-  kind: string;
-  label: string;
-  /**
-   * Node IDs this event affects. Hovering the event highlights these
-   * nodes; clicking centers the graph on the first one.
-   */
-  relatedNodeIds: string[];
-}
-
 export interface CustomerGraphDTO {
   customerId: string;
   nodes: GraphNode[];
   edges: GraphEdge[];
-  events: TimelineEvent[];
   /**
    * True when the graph exceeded the server-side node cap (200 in v1)
    * and some nodes were dropped. Client can surface a banner.
