@@ -6,6 +6,7 @@ import {
   createCustomer,
   updateCustomer,
 } from "../services/customer.service.js";
+import { buildCustomerGraph } from "../services/customer-graph.service.js";
 import { idParamSchema } from "../lib/route-schemas.js";
 
 export async function customerRoutes(app: FastifyInstance) {
@@ -22,6 +23,21 @@ export async function customerRoutes(app: FastifyInstance) {
     const customer = await getCustomer(id, utilityId);
     return reply.send(customer);
   });
+
+  // CustomerGraph DTO for /customers/:id/graph — a single read that
+  // pulls the customer with all downstream relationships (accounts,
+  // agreements, meters, service requests, premises) and flattens
+  // them into nodes/edges/events for the graph view.
+  app.get(
+    "/api/v1/customers/:id/graph",
+    { config: { module: "customers", permission: "VIEW" } },
+    async (request, reply) => {
+      const { utilityId } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      const graph = await buildCustomerGraph(utilityId, id);
+      return reply.send(graph);
+    },
+  );
 
   app.post("/api/v1/customers", { config: { module: "customers", permission: "CREATE" } }, async (request, reply) => {
     const { utilityId, id: actorId, name: actorName } = request.user;
