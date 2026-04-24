@@ -1,18 +1,18 @@
 # Data Model Overview
 
 **Module:** 00 — Data Model Overview
-**Status:** Built (Phase 1 complete, Phase 2 in progress, Phase 3 partial)
-**Entities:** All 28
+**Status:** Built (Phase 1 complete, Phase 2 in progress, Phase 3 partial, Phase 4 Service Requests slice B in progress)
+**Entities:** All 31
 
 ## Overview
 
-This document is the master entity reference for the Utility CIS data model. It describes all 28 entities, their database tables, categories, the phase in which they were built, and their key relationships. Use this as the index when navigating module-level specs.
+This document is the master entity reference for the Utility CIS data model. It describes all 31 entities, their database tables, categories, the phase in which they were built, and their key relationships. Use this as the index when navigating module-level specs.
 
 The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isolation is enforced at the database level via PostgreSQL Row-Level Security (RLS) policies, with the `utility_id` claim from the JWT applied per-request.
 
 ## Entity Summary
 
-**28 entities** across 8 categories (RBAC category added in Phase 2; TenantConfig and SuspensionTypeDef added alongside Service Holds v1; CustomFieldSchema added in Custom Fields Phase 1; Notifications and Delinquency categories added in Phase 3):
+**31 entities** across 9 categories (RBAC category added in Phase 2; TenantConfig and SuspensionTypeDef added alongside Service Holds v1; CustomFieldSchema added in Custom Fields Phase 1; Notifications and Delinquency categories added in Phase 3; Service Requests category added in Phase 4 slice B):
 
 | # | Entity | Table | Category | Phase Built | Key Relationships |
 |---|--------|-------|----------|-------------|-------------------|
@@ -44,6 +44,9 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 | 26 | Notification | `notification` | Notifications | Phase 3 | Individual notification instance sent from a template; tracks recipient, channel, status (PENDING/SENT/FAILED), and send timestamp. See spec 13. |
 | 27 | DelinquencyRule | `delinquency_rule` | Delinquency | Phase 3 | Per-tenant rule with configurable thresholds (days past due, minimum balance), escalation tier, and linked notification template. See spec 11. |
 | 28 | DelinquencyAction | `delinquency_action` | Delinquency | Phase 3 | Log of delinquency rule firings per account; records rule, account, action taken, and timestamp. See spec 11. |
+| 29 | ServiceRequestTypeDef | `service_request_type_def` | Service Requests | Phase 4 slice B | Per-tenant (or global, with `utility_id IS NULL`) reference table for service-request type codes. Mirrors SuspensionTypeDef — RLS allows globals to be visible across all tenants. 8 globals seeded (LEAK_REPORT, DISCONNECT, RECONNECT, START_SERVICE, STOP_SERVICE, BILLING_DISPUTE, METER_ISSUE, OTHER). See spec 14. |
+| 30 | Sla | `sla` | Service Requests | Phase 4 slice B | Per-tenant SLA policy keyed on `(request_type, priority)`; drives `sla_due_at` at SR creation and breach computation at completion. See spec 14. |
+| 31 | ServiceRequest | `service_request` | Service Requests | Phase 4 slice B | Core work item. Lifecycle NEW → ASSIGNED → IN_PROGRESS → PENDING_FIELD → COMPLETED / CANCELLED / FAILED. Per-tenant/year `SR-YYYY-NNNNNN` numbering via `service_request_counter` plumbing table. External-system, billing-action, delinquency, and attachments columns reserved but unused this slice. See spec 14. |
 
 ## ER Diagram
 

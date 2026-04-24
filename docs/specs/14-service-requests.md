@@ -1,8 +1,33 @@
 # Service Requests
 
 **Module:** 14 — Service Requests
-**Status:** Stub (Phase 4)
-**Entities:** ServiceRequest (planned), SLA (planned)
+**Status:** Slice B in progress (Phase 4)
+**Entities:** ServiceRequest ✓, Sla ✓, ServiceRequestTypeDef ✓ (slice B); ServiceRequestCounter (internal plumbing for SR-YYYY-NNNNNN numbering)
+
+## Slice B scope (2026-04-23)
+
+Slice B ships **CSR-created service requests end-to-end** — intake, assign, progress, complete/cancel — plus SLA tracking, admin-side SLA configuration, and an account-detail tab. What's in and what's deferred:
+
+**Live in slice B:**
+- ✓ `ServiceRequest`, `Sla`, `ServiceRequestTypeDef` (globals + tenant-shadow pattern like `SuspensionTypeDef`) data model
+- ✓ Full CSR-created lifecycle (NEW → ASSIGNED → IN_PROGRESS → PENDING_FIELD → COMPLETED | FAILED | CANCELLED) with the state machine enforced in the service layer
+- ✓ SLA resolution at creation + recomputation on priority change + breach computation at completion (synchronous only — no background sweep yet)
+- ✓ Per-tenant/year `SR-YYYY-NNNNNN` request-number generation via the `ServiceRequestCounter` table
+- ✓ 8 seeded global type codes: `LEAK_REPORT`, `DISCONNECT`, `RECONNECT`, `START_SERVICE`, `STOP_SERVICE`, `BILLING_DISPUTE`, `METER_ISSUE`, `OTHER`
+- ✓ Admin UI: `/service-requests` queue, `/service-requests/new` creation form with live SLA preview, `/service-requests/:id` detail with timeline, `/settings/slas` configuration page
+- ✓ `/accounts/:id` "Service Requests" tab + sidebar nav entry
+- ✓ RBAC: `service_requests` + `service_request_slas` modules seeded across preset roles (System Admin, Utility Admin, CSR, Field Technician, Read-Only)
+- ✓ Row-Level Security policies for all four new tables
+
+**Deferred (see §9 of the slice design doc):**
+- Portal submission (Module 15, Phase 4.3)
+- External-system routing (RAMS / Work Management / ApptorFlow) — columns reserved
+- Delinquency-source SRs (Module 11 integration) — `delinquency_action_id` FK reserved
+- Attachments upload UI (JSONB column reserved)
+- Billing action on completion (`billing_action` + `adhoc_charge_id` reserved, Module 10)
+- Background SLA breach-sweep + escalation notifications
+- Repeat-detection warnings
+- Fee-waiver workflow
 
 ## Overview
 
@@ -80,37 +105,38 @@ Service level agreement definitions by request type and priority. Used to calcul
 
 ## API Endpoints
 
-All endpoints are planned for Phase 4.
-
 ### Service Requests
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/service-requests` | List SRs (filterable by type, status, priority, account, assignee, date) |
-| POST | `/api/v1/service-requests` | Create a service request |
-| GET | `/api/v1/service-requests/:id` | Get SR detail |
-| PATCH | `/api/v1/service-requests/:id` | Update SR (status, assignee, notes) |
-| POST | `/api/v1/service-requests/:id/assign` | Assign to user or team |
-| POST | `/api/v1/service-requests/:id/complete` | Mark completed with resolution notes |
-| POST | `/api/v1/service-requests/:id/cancel` | Cancel SR with reason |
-| GET | `/api/v1/accounts/:id/service-requests` | All SRs for an account |
-| GET | `/api/v1/premises/:id/service-requests` | All SRs for a premise |
+| Method | Path | Description | Status |
+|--------|------|-------------|--------|
+| GET | `/api/v1/service-requests` | Cursor-paginated list. Filters: type, status, priority, accountId, premiseId, assignedTo, slaStatus (on_time / at_risk / breached), dateFrom, dateTo, q | ✓ slice B |
+| POST | `/api/v1/service-requests` | Create — server mints `request_number`, sets `source=CSR`, resolves SLA | ✓ slice B |
+| GET | `/api/v1/service-requests/:id` | Detail with relations (account, premise, agreement, assignee, sla, creator) | ✓ slice B |
+| PATCH | `/api/v1/service-requests/:id` | Update description / priority / subtype; priority change recomputes `sla_due_at` | ✓ slice B |
+| POST | `/api/v1/service-requests/:id/assign` | Body `{ assignedTo?, assignedTeam? }`; auto-transitions NEW → ASSIGNED | ✓ slice B |
+| POST | `/api/v1/service-requests/:id/transition` | Body `{ toStatus, notes? }` for non-terminal transitions + FAILED | ✓ slice B |
+| POST | `/api/v1/service-requests/:id/complete` | Body `{ resolutionNotes }`; sets completedAt + slaBreached | ✓ slice B |
+| POST | `/api/v1/service-requests/:id/cancel` | Body `{ reason }`; terminal | ✓ slice B |
+| GET | `/api/v1/accounts/:id/service-requests` | Scoped list for account detail tab | ✓ slice B |
+| GET | `/api/v1/premises/:id/service-requests` | Scoped list | ✓ slice B |
+| GET | `/api/v1/service-request-types` | Active type-defs (globals + tenant, shadow-resolved) | ✓ slice B |
 
 ### SLA Management
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/slas` | List SLA definitions |
-| POST | `/api/v1/slas` | Create SLA |
-| PATCH | `/api/v1/slas/:id` | Update SLA |
-| GET | `/api/v1/service-requests/sla-breaches` | SRs that have breached or are at risk |
+| Method | Path | Description | Status |
+|--------|------|-------------|--------|
+| GET | `/api/v1/slas` | List SLAs, optional `requestType` filter | ✓ slice B |
+| POST | `/api/v1/slas` | Create; unique on `[utility_id, request_type, priority]` | ✓ slice B |
+| PATCH | `/api/v1/slas/:id` | Update hours / escalation fields | ✓ slice B |
+| DELETE | `/api/v1/slas/:id` | Soft-delete (`is_active=false`) | ✓ slice B |
+| GET | `/api/v1/service-requests/sla-breaches` | SRs that have breached or are at risk | deferred (use `?slaStatus=breached` on the list endpoint for slice B) |
 
 ### External System Webhooks
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/webhooks/rams/sr-update` | RAMS status update for a routed SR |
-| POST | `/api/v1/webhooks/apptorflow/sr-update` | ApptorFlow workflow step completion |
+| Method | Path | Description | Status |
+|--------|------|-------------|--------|
+| POST | `/api/v1/webhooks/rams/sr-update` | RAMS status update for a routed SR | deferred |
+| POST | `/api/v1/webhooks/apptorflow/sr-update` | ApptorFlow workflow step completion | deferred |
 
 ## Business Rules
 
