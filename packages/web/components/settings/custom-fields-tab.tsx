@@ -47,7 +47,7 @@ const ENTITY_LABELS: Record<CustomFieldEntityType, string> = {
 
 
 export function CustomFieldsTab() {
-  const { canEdit } = usePermission("settings");
+  const { canEdit } = usePermission("tenant_profile");
   const { toast } = useToast();
 
   const [entity, setEntity] = useState<CustomFieldEntityType>("customer");

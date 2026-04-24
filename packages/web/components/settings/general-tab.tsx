@@ -29,7 +29,7 @@ interface TenantConfigResponse {
 }
 
 export function GeneralTab() {
-  const { canEdit } = usePermission("settings");
+  const { canEdit } = usePermission("tenant_profile");
   const { toast } = useToast();
 
   const [loading, setLoading] = useState(true);

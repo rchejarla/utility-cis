@@ -291,7 +291,9 @@ async function main() {
     "accounts","agreements","commodities","rate_schedules","billing_cycles",
     "containers","service_suspensions","service_events",
     "workflows","search",
-    "audit_log","attachments","theme","settings","notifications","delinquency",
+    "audit_log","attachments","theme","settings",
+    "tenant_profile","tenant_users",
+    "notifications","delinquency",
     "service_requests","service_request_slas",
     "portal_accounts","portal_billing","portal_usage","portal_profile"
   ];

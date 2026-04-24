@@ -53,7 +53,7 @@ const emptyForm = { name: "", description: "", permissions: {} as Record<string,
 
 export function RolesTab({ showAddForm, onAddFormClose }: RolesTabProps) {
   const { toast } = useToast();
-  const { canCreate, canEdit, canDelete } = usePermission("settings");
+  const { canCreate, canEdit, canDelete } = usePermission("tenant_users");
 
   const [roles, setRoles] = useState<Role[]>([]);
   const [loading, setLoading] = useState(true);

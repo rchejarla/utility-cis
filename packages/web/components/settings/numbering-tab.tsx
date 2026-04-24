@@ -50,7 +50,7 @@ const TOKEN_HELP: Array<{ token: string; meaning: string; example: string }> = [
 ];
 
 export function NumberingTab() {
-  const { canEdit } = usePermission("settings");
+  const { canEdit } = usePermission("tenant_profile");
   const { toast } = useToast();
 
   const [loading, setLoading] = useState(true);

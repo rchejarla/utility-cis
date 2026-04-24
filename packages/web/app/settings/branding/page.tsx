@@ -19,7 +19,7 @@ type Shape = Required<Pick<BrandingSettings, "logoUrl" | "loginSplashUrl">>;
 const DEFAULTS: Shape = { logoUrl: "", loginSplashUrl: "" };
 
 export default function BrandingSettingsPage() {
-  const { canEdit } = usePermission("settings");
+  const { canEdit } = usePermission("tenant_profile");
   const defaults = useMemo(() => DEFAULTS, []);
   const { loading, saving, draft, setDraft, isDirty, save, reset } =
     useTenantSettingsNamespace<"branding", Shape>("branding", defaults);

@@ -73,7 +73,7 @@ function formatDate(dateStr: string | null): string {
 
 export function UsersTab({ showAddForm, onAddFormClose }: UsersTabProps) {
   const { toast } = useToast();
-  const { canCreate, canEdit } = usePermission("settings");
+  const { canCreate, canEdit } = usePermission("tenant_users");
 
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);

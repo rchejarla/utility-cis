@@ -14,7 +14,7 @@ const TABS = [
 ];
 
 export default function UsersRolesPage() {
-  const { canView, canCreate } = usePermission("settings");
+  const { canView, canCreate } = usePermission("tenant_users");
   const [activeTab, setActiveTab] = useState("users");
   const [showAddUser, setShowAddUser] = useState(false);
   const [showAddRole, setShowAddRole] = useState(false);

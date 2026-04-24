@@ -19,7 +19,7 @@ type Shape = Required<Pick<NotificationSettings, "senderEmail" | "dailyDigestEna
 const DEFAULTS: Shape = { senderEmail: "", dailyDigestEnabled: false };
 
 export default function NotificationsSettingsPage() {
-  const { canEdit } = usePermission("settings");
+  const { canEdit } = usePermission("tenant_profile");
   const defaults = useMemo(() => DEFAULTS, []);
   const { loading, saving, draft, setDraft, isDirty, save, reset } =
     useTenantSettingsNamespace<"notifications", Shape>("notifications", defaults);
