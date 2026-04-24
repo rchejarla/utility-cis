@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
+import { PageDescription } from "@/components/ui/page-description";
 
 /**
  * Workflows hub — the landing page for multi-entity operational flows
@@ -63,22 +64,21 @@ export default function WorkflowsHubPage() {
           fontSize: "28px",
           fontWeight: 700,
           letterSpacing: "-0.02em",
-          margin: "0 0 8px 0",
+          margin: "0 0 16px 0",
           color: "var(--text-primary)",
         }}
       >
         WORKFLOWS
       </h1>
-      <p
-        style={{
-          fontSize: "14px",
-          color: "var(--text-secondary)",
-          margin: "0 0 32px 0",
-          maxWidth: "680px",
-        }}
-      >
-        Multi-entity operations that touch customer, account, and service-agreement records atomically. Each flow commits in a single database transaction — partial state is never possible.
-      </p>
+      <div style={{ marginBottom: 24 }}>
+        <PageDescription storageKey="workflows">
+          <b>Workflows</b> are multi-entity operations that touch customer,
+          account, and service-agreement records together. Each flow commits
+          in a single database transaction — partial state is never possible,
+          so a move-in that can't create an agreement rolls back the customer
+          and account it just created rather than leaving orphans.
+        </PageDescription>
+      </div>
 
       <div
         style={{
