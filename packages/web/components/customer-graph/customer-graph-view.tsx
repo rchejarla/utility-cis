@@ -13,7 +13,6 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import dagre from "@dagrejs/dagre";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type {
   CustomerGraphDTO,
@@ -38,56 +37,154 @@ interface CustomerGraphViewProps {
   customerId: string;
 }
 
-// Rough node footprint used by dagre to reserve space. Our node
-// cards are ~180×72 — a little padding keeps edges from hugging
-// other cards.
+// Node footprint — our cards are ~180×72; extra padding leaves room
+// between columns and rows.
 const NODE_W = 200;
 const NODE_H = 90;
+const ROW_H = NODE_H + 20;      // vertical space per "row slot"
+const COL_X = [0, 300, 600, 900] as const; // premises / meters / agreements / accounts
 
 /**
- * Top-down hierarchical layout via dagre.
+ * Three-row grid layout.
  *
- * Customer sits at the top; accounts + any customer-owned premises
- * fan out below it; agreements below their account; meters + service
- * requests + the agreement's premise sit at the bottom. Dagre
- * minimises edge crossings between layers, which is the thing the
- * previous hand-rolled radial layout couldn't do.
+ *  Row 1                  Customer (horizontally centered)
+ *  Row 2   Premises │ Meters  │ Agreements │ Accounts
+ *  Row 3                  Service Requests (spread)
  *
- * Pure function of nodes + edges — same input shape produces the
- * same positions, so refresh doesn't reshuffle the graph.
+ * Meters fan symmetrically around their premise's y (the premise y
+ * is the midpoint of its meters' y spread). Same rule for
+ * agreements around their account. Customer is centered across the
+ * canvas width; service requests spread along the bottom, each
+ * connecting up to its premise (left) and account (right).
  */
-function layoutWithDagre(
+function threeRowLayout(
   nodes: GraphNode[],
   edges: GraphEdge[],
 ): Map<string, { x: number; y: number }> {
-  const g = new dagre.graphlib.Graph();
-  g.setGraph({
-    rankdir: "TB",        // top → bottom
-    ranksep: 80,          // vertical gap between layers
-    nodesep: 40,          // horizontal gap between siblings
-    edgesep: 20,          // gap between parallel edges
-    marginx: 40,
-    marginy: 40,
-  });
-  g.setDefaultEdgeLabel(() => ({}));
-
-  for (const n of nodes) {
-    g.setNode(n.id, { width: NODE_W, height: NODE_H });
-  }
-  for (const e of edges) {
-    g.setEdge(e.from, e.to);
-  }
-  dagre.layout(g);
-
   const positions = new Map<string, { x: number; y: number }>();
-  for (const n of nodes) {
-    const p = g.node(n.id);
-    if (!p) continue;
-    // dagre gives the node's centre; React Flow wants the top-left,
-    // so shift by half the footprint.
-    positions.set(n.id, { x: p.x - NODE_W / 2, y: p.y - NODE_H / 2 });
+
+  // Index children by their primary parent.
+  const metersByPremise = new Map<string, string[]>();
+  const agreementsByAccount = new Map<string, string[]>();
+  for (const e of edges) {
+    if (e.kind === "premise_has_meter") {
+      const arr = metersByPremise.get(e.from) ?? [];
+      arr.push(e.to);
+      metersByPremise.set(e.from, arr);
+    }
+    if (e.kind === "agreement_billed_by_account") {
+      const arr = agreementsByAccount.get(e.to) ?? [];
+      arr.push(e.from);
+      agreementsByAccount.set(e.to, arr);
+    }
   }
+
+  const byType = (t: GraphNodeType) =>
+    nodes
+      .filter((n) => n.type === t)
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+  const customer = nodes.find((n) => n.type === "customer");
+  const premises = byType("premise");
+  const accounts = byType("account");
+  const srs = byType("service_request");
+
+  const row2TopY = 200;
+  const blockGap = 40;
+
+  // Left side — stack each premise with its meters fanned around
+  // it. First meter's y ≤ premise's y (equal only when n == 1).
+  let y = row2TopY;
+  for (const p of premises) {
+    const meters = metersByPremise.get(p.id) ?? [];
+    const n = Math.max(1, meters.length);
+    const blockTop = y;
+    const premiseY = blockTop + ((n - 1) / 2) * ROW_H;
+    positions.set(p.id, { x: COL_X[0], y: premiseY });
+    meters.forEach((mId, i) => {
+      positions.set(mId, { x: COL_X[1], y: blockTop + i * ROW_H });
+    });
+    y = blockTop + n * ROW_H + blockGap;
+  }
+  const leftBottomY = y;
+
+  // Right side — same shape for accounts and their agreements.
+  y = row2TopY;
+  for (const acc of accounts) {
+    const ags = agreementsByAccount.get(acc.id) ?? [];
+    const n = Math.max(1, ags.length);
+    const blockTop = y;
+    const accountY = blockTop + ((n - 1) / 2) * ROW_H;
+    positions.set(acc.id, { x: COL_X[3], y: accountY });
+    ags.forEach((aId, i) => {
+      positions.set(aId, { x: COL_X[2], y: blockTop + i * ROW_H });
+    });
+    y = blockTop + n * ROW_H + blockGap;
+  }
+  const rightBottomY = y;
+
+  // Row 1 — customer horizontally centered across the whole canvas
+  // width (includes node footprint so visual centering holds).
+  const leftEdge = COL_X[0];
+  const rightEdge = COL_X[3] + NODE_W;
+  const customerX = (leftEdge + rightEdge) / 2 - NODE_W / 2;
+  if (customer) positions.set(customer.id, { x: customerX, y: 0 });
+
+  // Row 3 — service requests spread horizontally along the bottom.
+  const row3Y = Math.max(leftBottomY, rightBottomY, row2TopY) + 40;
+  if (srs.length > 0) {
+    const totalWidth = rightEdge - leftEdge;
+    const spacing = (totalWidth - srs.length * NODE_W) / (srs.length + 1);
+    srs.forEach((sr, i) => {
+      const x = leftEdge + (i + 1) * spacing + i * NODE_W;
+      positions.set(sr.id, { x, y: row3Y });
+    });
+  }
+
   return positions;
+}
+
+/**
+ * Pick the correct source / target handle IDs for an edge based on
+ * its semantic direction in the three-row layout. Without these
+ * hints React Flow would connect handles on default sides and
+ * produce awkwardly-routed lines.
+ */
+function handlesFor(kind: GraphEdge["kind"]): {
+  sourceHandle: string;
+  targetHandle: string;
+} {
+  switch (kind) {
+    // Customer (row 1) reaches down to premises + accounts in row 2.
+    case "owns_premise":
+    case "owns_account":
+      return { sourceHandle: "b-source", targetHandle: "t-target" };
+    // Row 2 left half: premise → meter (rightward).
+    case "premise_has_meter":
+      return { sourceHandle: "r-source", targetHandle: "l-target" };
+    // Row 2 right half: account → agreement (leftward from account's
+    // perspective — source is on the account's left side).
+    case "agreement_billed_by_account":
+      // edge is from=agreement → to=account; we want it rendered as
+      // a horizontal line agreement.right ↔ account.left.
+      return { sourceHandle: "r-source", targetHandle: "l-target" };
+    // Cross-link: agreement (row 2 col 3) ← meter (row 2 col 2).
+    // edge from=agreement → to=meter. Agreement's left side sends to
+    // meter's right side. Both on the inner edge of their cards.
+    case "agreement_uses_meter":
+      return { sourceHandle: "l-source", targetHandle: "r-target" };
+    // Service requests (row 3) reach up to their premise / account.
+    case "premise_has_service_request":
+      // edge from=premise → to=service_request; render vertical
+      // from premise's bottom to SR's top.
+      return { sourceHandle: "b-source", targetHandle: "t-target" };
+    case "service_request_on_account":
+      // edge from=service_request → to=account; SR's top → account's
+      // bottom.
+      return { sourceHandle: "t-source", targetHandle: "b-target" };
+    default:
+      return { sourceHandle: "b-source", targetHandle: "t-target" };
+  }
 }
 
 const ENTITY_TYPES: GraphNodeType[] = [
@@ -202,12 +299,12 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
     };
   }, [customerId]);
 
-  // Positions from dagre — recomputed only when the raw node/edge
-  // list changes. Filter toggles don't re-layout; they hide via the
-  // flow nodes/edges props below.
+  // Positions from the three-row grid layout — recomputed only when
+  // the raw node/edge list changes. Filter toggles don't re-layout;
+  // they hide via the flow nodes/edges props below.
   const positions = useMemo(() => {
     if (!graph) return new Map<string, { x: number; y: number }>();
-    return layoutWithDagre(graph.nodes, graph.edges);
+    return threeRowLayout(graph.nodes, graph.edges);
   }, [graph]);
 
   const counts = useMemo(() => {
@@ -254,19 +351,24 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
     );
     return graph.edges
       .filter((e) => visibleNodeIds.has(e.from) && visibleNodeIds.has(e.to))
-      .map((e) => ({
-        id: e.id,
-        source: e.from,
-        target: e.to,
-        type: "smoothstep",
-        style: edgeStyleFor(e.kind),
-        // Hover tooltip on the edge path. React Flow spreads this to
-        // the edge's container element, which includes a <title>-able
-        // <path>.
-        data: {
-          title: `${e.kind} since ${e.validFrom.slice(0, 10)}`,
-        },
-      }));
+      .map((e) => {
+        const { sourceHandle, targetHandle } = handlesFor(e.kind);
+        return {
+          id: e.id,
+          source: e.from,
+          target: e.to,
+          sourceHandle,
+          targetHandle,
+          type: "smoothstep",
+          style: edgeStyleFor(e.kind),
+          // Hover tooltip on the edge path. React Flow spreads this to
+          // the edge's container element, which includes a <title>-able
+          // <path>.
+          data: {
+            title: `${e.kind} since ${e.validFrom.slice(0, 10)}`,
+          },
+        };
+      });
   }, [graph, hiddenTypes]);
 
   const selectedNode = useMemo(() => {

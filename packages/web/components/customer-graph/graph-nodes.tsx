@@ -112,6 +112,42 @@ function closedSuffix(type: GraphNodeType): string {
   return "closed";
 }
 
+/**
+ * Invisible source + target handles stacked on one side. Each side
+ * of a node therefore carries two handles sharing an id prefix so
+ * edges can specify which side to attach with `sourceHandle` /
+ * `targetHandle` like `"r-source"` / `"l-target"`.
+ */
+function HandlePair({ side }: { side: "top" | "right" | "bottom" | "left" }) {
+  const position =
+    side === "top"
+      ? Position.Top
+      : side === "right"
+        ? Position.Right
+        : side === "bottom"
+          ? Position.Bottom
+          : Position.Left;
+  const baseStyle = { opacity: 0, pointerEvents: "none" as const };
+  return (
+    <>
+      <Handle
+        type="source"
+        position={position}
+        id={`${side[0]}-source`}
+        style={baseStyle}
+        isConnectable={false}
+      />
+      <Handle
+        type="target"
+        position={position}
+        id={`${side[0]}-target`}
+        style={baseStyle}
+        isConnectable={false}
+      />
+    </>
+  );
+}
+
 function NodeCard({
   data,
   selected,
@@ -155,20 +191,16 @@ function NodeCard({
         }}
       />
 
-      {/* Invisible React Flow handles — needed for smoothstep edge
-          routing, but we don't want user-draggable connection dots. */}
-      <Handle
-        type="target"
-        position={Position.Top}
-        style={{ opacity: 0, pointerEvents: "none" }}
-        isConnectable={false}
-      />
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        style={{ opacity: 0, pointerEvents: "none" }}
-        isConnectable={false}
-      />
+      {/* Invisible React Flow handles on all four sides — the
+          three-row layout routes edges in several directions
+          (customer→premise downward, premise→meter rightward,
+          meter↔agreement horizontal cross-link, SR upward to
+          premise/account). Each side has both source + target so
+          the view layer just picks a handle id per edge instead of
+          worrying about node-type-specific setups. */}
+      {(["top", "right", "bottom", "left"] as const).map((side) => (
+        <HandlePair key={side} side={side} />
+      ))}
 
       <div
         style={{
