@@ -1,6 +1,7 @@
 "use client";
 
 import { EntityListPage } from "@/components/ui/entity-list-page";
+import { PageDescription } from "@/components/ui/page-description";
 import type { Column } from "@/components/ui/data-table";
 
 interface Container {
@@ -147,6 +148,16 @@ export default function ContainersPage() {
         description:
           "Containers (carts, dumpsters, rolloffs) are the physical waste receptacles at each premise. RAMS field events are recorded against them.",
       }}
+      headerSlot={
+        <PageDescription storageKey="containers">
+          A <b>container</b> is a physical solid-waste receptacle assigned to a
+          premise — garbage / recycling / yard-waste carts, dumpsters,
+          rolloffs. Each one has a size, type, and service-day schedule that
+          drives the collection route in <b>RAMS</b>. Operational events
+          (missed pickups, contamination, cart swaps) flow back from RAMS as
+          Service Events against the specific container.
+        </PageDescription>
+      }
       search={{
         paramKey: "search",
         placeholder: "Search by serial, RFID, or RAMS id...",
