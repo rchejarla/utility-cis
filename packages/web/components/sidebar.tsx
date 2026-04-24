@@ -2,9 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useRef, useEffect } from "react";
-import { useSession } from "next-auth/react";
-import { logout } from "@/lib/api-client";
+import { useState, useEffect } from "react";
 import { usePermission } from "@/lib/use-permission";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
@@ -320,7 +318,6 @@ interface SidebarProps {
 
 export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
   const pathname = usePathname();
-  const { data: session } = useSession();
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
   const width = collapsed ? 64 : 240;
@@ -427,116 +424,6 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
         ))}
       </nav>
 
-      {/* User avatar with dropdown menu */}
-      <AdminAvatarMenu collapsed={collapsed} session={session} />
     </aside>
-  );
-}
-
-function AdminAvatarMenu({ collapsed, session }: { collapsed: boolean; session: ReturnType<typeof useSession>["data"] }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const name = session?.user?.name ?? "Admin User";
-  const email = session?.user?.email ?? "admin@utility.com";
-  const initial = name[0]?.toUpperCase() ?? "A";
-
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    if (open) document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [open]);
-
-  return (
-    <div ref={ref} style={{ borderTop: "1px solid var(--border)", position: "relative" }}>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        style={{
-          width: "100%",
-          padding: collapsed ? "10px 0" : "10px 16px",
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          overflow: "hidden",
-          justifyContent: collapsed ? "center" : "flex-start",
-          background: "none",
-          border: "none",
-          cursor: "pointer",
-          fontFamily: "inherit",
-          textAlign: "left",
-        }}
-      >
-        <div
-          style={{
-            width: 32, height: 32, borderRadius: "50%",
-            background: "var(--bg-elevated)", border: "1px solid var(--border)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            flexShrink: 0, color: "var(--text-secondary)", fontSize: 13, fontWeight: 600,
-          }}
-        >
-          {initial}
-        </div>
-        {!collapsed && (
-          <div style={{ overflow: "hidden", flex: 1 }}>
-            <div style={{ color: "var(--text-primary)", fontSize: 13, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {name}
-            </div>
-            <div style={{ color: "var(--text-muted)", fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {email}
-            </div>
-          </div>
-        )}
-      </button>
-
-      {open && (
-        <div
-          style={{
-            position: "absolute",
-            bottom: "calc(100% + 4px)",
-            left: collapsed ? 4 : 8,
-            right: collapsed ? 4 : 8,
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius)",
-            boxShadow: "0 -4px 16px rgba(0,0,0,0.4)",
-            zIndex: 200,
-            overflow: "hidden",
-            minWidth: collapsed ? 180 : undefined,
-          }}
-        >
-          <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border-subtle)" }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{name}</div>
-            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 1 }}>{email}</div>
-          </div>
-          <div style={{ padding: "4px 0" }}>
-            <Link
-              href="/settings/general"
-              onClick={() => setOpen(false)}
-              style={{
-                display: "block", padding: "8px 14px", fontSize: 13,
-                color: "var(--text-secondary)", textDecoration: "none",
-              }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-            >
-              Settings
-            </Link>
-            <button
-              onClick={logout}
-              style={{
-                display: "block", width: "100%", padding: "8px 14px", fontSize: 13,
-                color: "var(--danger)", background: "none", border: "none",
-                textAlign: "left", cursor: "pointer", fontFamily: "inherit",
-              }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-            >
-              Sign out
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
   );
 }

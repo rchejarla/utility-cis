@@ -1,8 +1,12 @@
 "use client";
 
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { useTheme } from "@/lib/theme-provider";
 import { GlobalSearch } from "./ui/global-search";
+import { logout } from "@/lib/api-client";
 
 function getBreadcrumbs(pathname: string): string[] {
   const segments = pathname.split("/").filter(Boolean);
@@ -203,27 +207,164 @@ export function Topbar({ compact = false }: TopbarProps) {
         {effectiveMode === "dark" ? <SunIcon /> : <MoonIcon />}
       </button>
 
-      {/* User menu placeholder */}
+      <UserMenu />
+    </header>
+  );
+}
+
+/**
+ * Top-right user chip: session user's name to the left of a circular
+ * avatar initial. Clicking either opens a dropdown with the account's
+ * email (for confirmation), a Settings link, and Sign out. Replaces
+ * the old placeholder avatar in the topbar and the full user panel
+ * that used to live at the bottom of the sidebar — consolidating the
+ * account controls in one place.
+ */
+function UserMenu() {
+  const { data: session } = useSession();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const name = session?.user?.name ?? "Admin User";
+  const email = session?.user?.email ?? "admin@utility.com";
+  const initial = name[0]?.toUpperCase() ?? "A";
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    if (open) document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position: "relative", flexShrink: 0 }}>
       <button
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={`${name} — account menu`}
         style={{
-          width: "32px",
-          height: "32px",
-          borderRadius: "50%",
-          background: "var(--bg-elevated)",
-          border: "1px solid var(--border)",
-          cursor: "pointer",
           display: "flex",
           alignItems: "center",
-          justifyContent: "center",
-          color: "var(--text-secondary)",
-          fontSize: "13px",
-          fontWeight: "600",
-          flexShrink: 0,
+          gap: 10,
+          padding: "4px 6px 4px 10px",
+          background: "transparent",
+          border: "1px solid transparent",
+          borderRadius: "999px",
+          cursor: "pointer",
+          fontFamily: "inherit",
         }}
-        title="User menu"
+        onMouseEnter={(e) => {
+          (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)";
+          (e.currentTarget as HTMLElement).style.borderColor = "var(--border)";
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLElement).style.background = "transparent";
+          (e.currentTarget as HTMLElement).style.borderColor = "transparent";
+        }}
       >
-        A
+        <span
+          style={{
+            color: "var(--text-primary)",
+            fontSize: 13,
+            fontWeight: 500,
+            whiteSpace: "nowrap",
+            maxWidth: 180,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {name}
+        </span>
+        <span
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: "50%",
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--border)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "var(--text-secondary)",
+            fontSize: 13,
+            fontWeight: 600,
+            flexShrink: 0,
+          }}
+        >
+          {initial}
+        </span>
       </button>
-    </header>
+
+      {open && (
+        <div
+          role="menu"
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            right: 0,
+            minWidth: 220,
+            background: "var(--bg-card)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+            zIndex: 200,
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border-subtle)" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{name}</div>
+            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>{email}</div>
+          </div>
+          <div style={{ padding: "4px 0" }}>
+            <Link
+              href="/settings/general"
+              onClick={() => setOpen(false)}
+              role="menuitem"
+              style={{
+                display: "block",
+                padding: "8px 14px",
+                fontSize: 13,
+                color: "var(--text-secondary)",
+                textDecoration: "none",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "transparent";
+              }}
+            >
+              Settings
+            </Link>
+            <button
+              onClick={logout}
+              role="menuitem"
+              style={{
+                display: "block",
+                width: "100%",
+                padding: "8px 14px",
+                fontSize: 13,
+                color: "var(--danger)",
+                background: "none",
+                border: "none",
+                textAlign: "left",
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "transparent";
+              }}
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
