@@ -177,43 +177,25 @@ function NewServiceRequestForm() {
   const activeAgreements =
     account?.serviceAgreements?.filter((a) => a.status === "ACTIVE") ?? [];
 
-  // Distinct premises across the account's active agreements. SRs
-  // can optionally target a premise without an agreement, so the
-  // premise dropdown is driven from this set.
-  const premiseOptions = (() => {
-    const seen = new Map<string, { id: string; label: string }>();
-    for (const ag of activeAgreements) {
-      const pid = ag.premise?.id ?? ag.premiseId;
-      if (!pid || seen.has(pid)) continue;
-      const p = ag.premise;
-      const label = p?.addressLine1
-        ? [p.addressLine1, p.city, p.state].filter(Boolean).join(", ")
-        : pid;
-      seen.set(pid, { id: pid, label });
-    }
-    return Array.from(seen.values());
-  })();
+  // In this CIS, one account serves one premise — multiple agreements
+  // on the same account are different commodities (water, sewer, gas,
+  // etc.) at the same site. Take the premise off any active agreement.
+  const accountPremise = activeAgreements.find((a) => a.premise)?.premise ?? null;
+  const accountPremiseLabel = accountPremise
+    ? [accountPremise.addressLine1, accountPremise.city, accountPremise.state]
+        .filter(Boolean)
+        .join(", ")
+    : null;
 
-  // When the account changes, auto-select the only active agreement if
-  // there is exactly one; clear otherwise (user picks manually). Same
-  // rule for premise — auto-select if exactly one distinct premise.
+  // When the account changes: the premise is fully derived from the
+  // account, so sync `premiseId` to it; auto-select the only active
+  // agreement if there's exactly one, else clear for the user to pick.
   useEffect(() => {
+    setPremiseId(accountPremise?.id ?? "");
     if (activeAgreements.length === 1) setServiceAgreementId(activeAgreements[0].id);
     else setServiceAgreementId("");
-    if (premiseOptions.length === 1) setPremiseId(premiseOptions[0].id);
-    else setPremiseId("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account?.id]);
-
-  // If the user picks an agreement, slide the premise selection to that
-  // agreement's premise — it's almost always the site of the work.
-  useEffect(() => {
-    if (!serviceAgreementId) return;
-    const ag = activeAgreements.find((a) => a.id === serviceAgreementId);
-    const pid = ag?.premise?.id ?? ag?.premiseId;
-    if (pid) setPremiseId(pid);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serviceAgreementId]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -280,24 +262,18 @@ function NewServiceRequestForm() {
             {account && (
               <>
                 <label style={labelStyle}>Premise</label>
-                {premiseOptions.length > 0 ? (
-                  <select
-                    value={premiseId}
-                    onChange={(e) => setPremiseId(e.target.value)}
-                    style={inputStyle}
-                  >
-                    <option value="">— none —</option>
-                    {premiseOptions.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.label}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <div style={{ fontSize: 12, color: "var(--text-muted)", padding: "7px 0" }}>
-                    No premises on this account's active agreements.
-                  </div>
-                )}
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: accountPremiseLabel ? "var(--text-primary)" : "var(--text-muted)",
+                    padding: "8px 10px",
+                    background: "var(--bg-deep)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 8,
+                  }}
+                >
+                  {accountPremiseLabel ?? "— no premise on file —"}
+                </div>
 
                 <label style={labelStyle}>Service agreement</label>
                 {activeAgreements.length > 0 ? (
