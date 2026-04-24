@@ -1,21 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faTableList, faMap } from "@fortawesome/pro-solid-svg-icons";
+import { faTableList, faMap, faMagnifyingGlass } from "@fortawesome/pro-solid-svg-icons";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
-import { EntityListPage, type EntityListFilter } from "@/components/ui/entity-list-page";
 import { FilterBar } from "@/components/ui/filter-bar";
+import { DataTable, type Column } from "@/components/ui/data-table";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { ListEmptyCta } from "@/components/ui/list-empty-cta";
+import { AccessDenied } from "@/components/ui/access-denied";
 import { MapView } from "@/components/premises/map-view";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
-import { AccessDenied } from "@/components/ui/access-denied";
-import type { Column } from "@/components/ui/data-table";
+import { usePaginatedList } from "@/lib/use-paginated-list";
 
 interface Customer {
   id: string;
@@ -115,31 +116,40 @@ const columns: Column<Premise>[] = [
 ];
 
 interface PremisesStats {
-  total: number;
   active: number;
   inactive: number;
   condemned: number;
 }
 
 /**
- * Premises landing — thin wrapper around EntityListPage for table
- * mode; keeps the custom map view selectable via a Table/Map toggle
- * on the filter row. Filter state lives at the page level so it
- * persists across view switches and both modes render the same
- * filter row.
+ * Premises landing. This page has too many bespoke concerns to live
+ * inside EntityListPage cleanly — Table/Map view toggle, stat cards,
+ * and filter state that persists across view switches. Instead it
+ * composes the lower-level primitives directly: PageHeader, StatCard,
+ * FilterBar, SearchableSelect, DataTable, ListEmptyCta, MapView.
  */
 export default function PremisesPage() {
   const router = useRouter();
   const { canView, canCreate } = usePermission("premises");
-  const [view, setView] = useState<"table" | "map">("table");
-  const [filterValues, setFilterValues] = useState<Record<string, string | undefined>>({});
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [stats, setStats] = useState<PremisesStats>({ total: 0, active: 0, inactive: 0, condemned: 0 });
 
-  // Owner option list — fetched once per mount and shared between the
-  // table mode (via EntityListPage's dynamic filter) and the map mode
-  // (via a local copy of the filter controls). Kept here so the two
-  // modes show the same option set.
+  const [view, setView] = useState<"table" | "map">("table");
+  const [premiseType, setPremiseType] = useState<string | undefined>();
+  const [status, setStatus] = useState<string | undefined>();
+  const [ownerId, setOwnerId] = useState<string | undefined>();
+  const [searchInput, setSearchInput] = useState("");
+  const [searchValue, setSearchValue] = useState("");
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [stats, setStats] = useState<PremisesStats>({ active: 0, inactive: 0, condemned: 0 });
+
+  // Debounce the search input so we don't thrash the API as the user types.
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onSearchChange = useCallback((value: string) => {
+    setSearchInput(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setSearchValue(value), 300);
+  }, []);
+
+  // Owner option list — fetched once and reused for both view modes.
   useEffect(() => {
     apiClient
       .get<Customer[] | { data: Customer[] }>("/api/v1/customers", { limit: "500" })
@@ -147,67 +157,61 @@ export default function PremisesPage() {
       .catch(() => {});
   }, []);
 
-  // Stats come from the list endpoint's aggregate payload; fetch a
-  // tiny page once on mount rather than relying on the paginated
-  // hook's meta (which only surfaces the total count).
-  const fetchStats = useCallback(async () => {
-    try {
-      const res = await apiClient.get<{
-        meta: { total: number };
-        stats?: { active: number; inactive: number; condemned: number };
-      }>("/api/v1/premises", { page: "1", limit: "1" });
-      setStats({
-        total: res.meta.total,
-        active: res.stats?.active ?? 0,
-        inactive: res.stats?.inactive ?? 0,
-        condemned: res.stats?.condemned ?? 0,
-      });
-    } catch {
-      // Stats are best-effort — the list itself still renders.
-    }
-  }, []);
+  const params = useMemo(
+    () => ({
+      premiseType,
+      status,
+      ownerId,
+      ...(searchValue ? { search: searchValue } : {}),
+    }),
+    [premiseType, status, ownerId, searchValue],
+  );
 
+  const { data, meta, loading, setPage } = usePaginatedList<Premise>({
+    endpoint: "/api/v1/premises",
+    params,
+    enabled: canView && view === "table",
+  });
+
+  // Pull aggregate stats from the same endpoint. Fetched independently
+  // so a stat refresh doesn't wait on the list render.
   useEffect(() => {
-    fetchStats();
-  }, [fetchStats]);
+    if (!canView) return;
+    apiClient
+      .get<{ stats?: { active: number; inactive: number; condemned: number } }>(
+        "/api/v1/premises",
+        { page: "1", limit: "1" },
+      )
+      .then((res) => {
+        if (res.stats) {
+          setStats({
+            active: res.stats.active,
+            inactive: res.stats.inactive,
+            condemned: res.stats.condemned,
+          });
+        }
+      })
+      .catch(() => {});
+  }, [canView]);
 
-  const ownerOptions = useMemo(
-    () =>
-      customers.map((c) => ({
-        value: String(c.id),
-        label:
-          c.customerType === "ORGANIZATION"
-            ? String(c.organizationName ?? "")
-            : `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim(),
-      })),
-    [customers],
-  );
+  // Reset pagination to page 1 on any filter / search change.
+  useEffect(() => {
+    setPage(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [premiseType, status, ownerId, searchValue]);
 
-  const filtersConfig: EntityListFilter[] = useMemo(
-    () => [
-      { key: "premiseType", label: "Type", options: PREMISE_TYPE_OPTIONS },
-      { key: "status", label: "Status", options: STATUS_OPTIONS },
-      {
-        key: "ownerId",
-        label: "Owner",
-        optionsEndpoint: "/api/v1/customers",
-        optionsParams: { limit: "500" },
-        mapOption: (c) => ({
-          value: String(c.id),
-          label:
-            c.customerType === "ORGANIZATION"
-              ? String(c.organizationName ?? "")
-              : `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim(),
-        }),
-        searchable: true,
-        searchablePlaceholder: "Filter by owner...",
-        searchableClearLabel: "All owners",
-      },
-    ],
-    [],
-  );
+  const hasActiveFilter = Boolean(premiseType || status || ownerId || searchValue);
+  const showEmptyCta = view === "table" && !loading && data.length === 0 && !hasActiveFilter;
 
   if (!canView) return <AccessDenied />;
+
+  const ownerOptions = customers.map((c) => ({
+    value: String(c.id),
+    label:
+      c.customerType === "ORGANIZATION"
+        ? String(c.organizationName ?? "")
+        : `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim(),
+  }));
 
   const statTiles = (
     <div
@@ -218,10 +222,46 @@ export default function PremisesPage() {
         flexWrap: "wrap",
       }}
     >
-      <StatCard label="Total" value={stats.total} icon="🏠" />
+      <StatCard label="Total" value={meta.total} icon="🏠" />
       <StatCard label="Active" value={stats.active} icon="✅" accent="success" />
       <StatCard label="Inactive" value={stats.inactive} icon="⏸" accent="warning" />
       <StatCard label="Condemned" value={stats.condemned} icon="⛔" accent="danger" />
+    </div>
+  );
+
+  const searchBar = (
+    <div style={{ position: "relative", marginBottom: 12 }}>
+      <div
+        style={{
+          position: "absolute",
+          left: 16,
+          top: "50%",
+          transform: "translateY(-50%)",
+          color: "var(--text-muted)",
+          pointerEvents: "none",
+          display: "flex",
+          alignItems: "center",
+        }}
+      >
+        <FontAwesomeIcon icon={faMagnifyingGlass} style={{ width: 16, height: 16 }} />
+      </div>
+      <input
+        style={{
+          width: "100%",
+          padding: "12px 16px 12px 44px",
+          borderRadius: "var(--radius)",
+          border: "1px solid var(--border)",
+          background: "var(--bg-elevated)",
+          color: "var(--text-primary)",
+          fontSize: 14,
+          fontFamily: "inherit",
+          outline: "none",
+          boxSizing: "border-box",
+        }}
+        placeholder="Search by address, city, or zip..."
+        value={searchInput}
+        onChange={(e) => onSearchChange(e.target.value)}
+      />
     </div>
   );
 
@@ -263,90 +303,90 @@ export default function PremisesPage() {
     </div>
   );
 
-  if (view === "map") {
-    // Map mode: render the same filter row + view toggle so users can
-    // switch views without losing filter context, then drop in the
-    // map body. MapView currently honors premiseType via its own
-    // overlay controls; other filters here are shared UI awaiting
-    // end-to-end map wiring.
-    return (
-      <div>
-        <PageHeader
-          title="Premises"
-          subtitle={`${stats.total.toLocaleString()} total premises`}
-          action={canCreate ? { label: "Add Premise", href: "/premises/new" } : undefined}
+  const filterRow = (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "12px",
+        marginBottom: "16px",
+        flexWrap: "wrap",
+      }}
+    >
+      <FilterBar
+        filters={[
+          {
+            key: "premiseType",
+            label: "Type",
+            options: PREMISE_TYPE_OPTIONS,
+            value: premiseType,
+            onChange: setPremiseType,
+          },
+          {
+            key: "status",
+            label: "Status",
+            options: STATUS_OPTIONS,
+            value: status,
+            onChange: setStatus,
+          },
+        ]}
+      />
+      <div style={{ width: 220 }}>
+        <SearchableSelect
+          options={ownerOptions}
+          value={ownerId}
+          onChange={setOwnerId}
+          placeholder="Filter by owner..."
+          clearLabel="All owners"
+          compact
         />
-        {statTiles}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "12px",
-            marginBottom: "16px",
-            flexWrap: "wrap",
-          }}
-        >
-          <FilterBar
-            filters={[
-              {
-                key: "premiseType",
-                label: "Type",
-                options: PREMISE_TYPE_OPTIONS,
-                value: filterValues.premiseType,
-                onChange: (v) => setFilterValues((prev) => ({ ...prev, premiseType: v })),
-              },
-              {
-                key: "status",
-                label: "Status",
-                options: STATUS_OPTIONS,
-                value: filterValues.status,
-                onChange: (v) => setFilterValues((prev) => ({ ...prev, status: v })),
-              },
-            ]}
-          />
-          <div style={{ width: 220 }}>
-            <SearchableSelect
-              options={ownerOptions}
-              value={filterValues.ownerId}
-              onChange={(v) => setFilterValues((prev) => ({ ...prev, ownerId: v }))}
-              placeholder="Filter by owner..."
-              clearLabel="All owners"
-              compact
-            />
-          </div>
-          <div style={{ marginLeft: "auto", flexShrink: 0 }}>{viewToggle}</div>
-        </div>
-        <div style={{ display: "flex", flex: 1, minHeight: "560px" }}>
-          <MapView onPremiseClick={(id) => router.push(`/premises/${id}`)} />
-        </div>
       </div>
-    );
-  }
+      <div style={{ marginLeft: "auto", flexShrink: 0 }}>{viewToggle}</div>
+    </div>
+  );
 
   return (
-    <EntityListPage<Premise>
-      title="Premises"
-      subject="premises"
-      module="premises"
-      endpoint="/api/v1/premises"
-      getDetailHref={(row) => `/premises/${row.id}`}
-      columns={columns}
-      newAction={{ label: "Add Premise", href: "/premises/new" }}
-      emptyState={{
-        headline: "No premises yet",
-        description:
-          "A premise is the physical location where service is delivered. Every account is tied to exactly one.",
-      }}
-      headerSlot={statTiles}
-      filtersRightSlot={viewToggle}
-      filterValues={filterValues}
-      onFilterValuesChange={setFilterValues}
-      search={{
-        paramKey: "search",
-        placeholder: "Search by address, city, or zip...",
-        variant: "prominent",
-      }}
-      filters={filtersConfig}
-    />
+    <div>
+      <PageHeader
+        title="Premises"
+        subtitle={`${meta.total.toLocaleString()} total premises`}
+        action={
+          canCreate && !showEmptyCta
+            ? { label: "Add Premise", href: "/premises/new" }
+            : undefined
+        }
+      />
+      {statTiles}
+
+      {showEmptyCta ? (
+        <ListEmptyCta
+          subject="premise"
+          headline="No premises yet"
+          description="A premise is the physical location where service is delivered. Every account is tied to exactly one."
+          action={
+            canCreate ? { label: "Add Premise", href: "/premises/new" } : undefined
+          }
+        />
+      ) : (
+        <>
+          {searchBar}
+          {filterRow}
+          {view === "table" ? (
+            <DataTable
+              columns={columns as unknown as Column<Record<string, unknown>>[]}
+              data={data as unknown as Record<string, unknown>[]}
+              meta={meta}
+              loading={loading}
+              onPageChange={setPage}
+              onRowClick={(row) => router.push(`/premises/${(row as unknown as Premise).id}`)}
+            />
+          ) : (
+            <div style={{ display: "flex", flex: 1, minHeight: "560px" }}>
+              <MapView onPremiseClick={(id) => router.push(`/premises/${id}`)} />
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }

@@ -113,15 +113,6 @@ export interface EntityListPageProps<T extends { id: string }> {
    */
   filtersRightSlot?: React.ReactNode;
   /**
-   * Optional controlled filter state. When provided together with
-   * `onFilterValuesChange`, the parent owns the filter values —
-   * useful for pages (like /premises) that share a filter row
-   * across multiple view modes. Omit both to let EntityListPage
-   * manage its own state internally.
-   */
-  filterValues?: Record<string, string | undefined>;
-  onFilterValuesChange?: (values: Record<string, string | undefined>) => void;
-  /**
    * Set to false when the endpoint returns a plain array (e.g. billing-cycles).
    * Default true.
    */
@@ -180,8 +171,6 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
     filters,
     headerSlot,
     filtersRightSlot,
-    filterValues: externalFilterValues,
-    onFilterValuesChange,
     paginated = true,
   } = props;
 
@@ -190,20 +179,7 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
 
   // Filter state — one entry per filter key. Uses a single record so
   // we can hand the whole thing to usePaginatedList as `params`.
-  // When the parent provides `filterValues` + `onFilterValuesChange`
-  // the state is fully controlled; otherwise we manage locally.
-  const [internalFilterValues, setInternalFilterValues] = useState<Record<string, string | undefined>>({});
-  const isControlled = externalFilterValues !== undefined && onFilterValuesChange !== undefined;
-  const filterValues = isControlled ? externalFilterValues : internalFilterValues;
-  const setFilterValues = (
-    updater:
-      | Record<string, string | undefined>
-      | ((prev: Record<string, string | undefined>) => Record<string, string | undefined>),
-  ) => {
-    const next = typeof updater === "function" ? updater(filterValues) : updater;
-    if (isControlled) onFilterValuesChange!(next);
-    else setInternalFilterValues(next);
-  };
+  const [filterValues, setFilterValues] = useState<Record<string, string | undefined>>({});
 
   // Search state with optional debounce.
   const [searchInput, setSearchInput] = useState("");
