@@ -62,12 +62,21 @@ async function main() {
   const sewer = await p.commodity.create({ data: { utilityId: UID, code: "SEWER", name: "Sewer", displayOrder: 4 } });
   console.log("  4 commodities");
 
-  const gal = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "GAL", name: "Gallons", commodityId: water.id, conversionFactor: 1, isBaseUnit: true, isActive: true } });
-  const kwh = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "KWH", name: "Kilowatt Hours", commodityId: electric.id, conversionFactor: 1, isBaseUnit: true, isActive: true } });
-  const kw = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "KW", name: "Kilowatts (Demand)", commodityId: electric.id, conversionFactor: 1, isBaseUnit: false, isActive: true } });
-  const mcf = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "MCF", name: "Thousand Cubic Feet", commodityId: gas.id, conversionFactor: 1, isBaseUnit: true, isActive: true } });
-  const sgal = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "GAL", name: "Gallons", commodityId: sewer.id, conversionFactor: 1, isBaseUnit: true, isActive: true } });
-  console.log("  4 UOMs");
+  // Global measure types are seeded by migration
+  // 20260424161251_add_measure_type_def; look them up by code.
+  const measureUsage = await p.measureTypeDef.findFirstOrThrow({ where: { code: "USAGE", utilityId: null } });
+  const measureDemand = await p.measureTypeDef.findFirstOrThrow({ where: { code: "DEMAND", utilityId: null } });
+
+  // Each UOM carries its measure type (USAGE / DEMAND / TOU / ...).
+  // Conversions + base-unit flags are now scoped per (commodity,
+  // measure_type), so KW is its own base for electric DEMAND while
+  // KWH stays the base for electric USAGE.
+  const gal = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "GAL", name: "Gallons", commodityId: water.id, measureTypeId: measureUsage.id, conversionFactor: 1, isBaseUnit: true, isActive: true } });
+  const kwh = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "KWH", name: "Kilowatt Hours", commodityId: electric.id, measureTypeId: measureUsage.id, conversionFactor: 1, isBaseUnit: true, isActive: true } });
+  const kw = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "KW", name: "Kilowatts (Demand)", commodityId: electric.id, measureTypeId: measureDemand.id, conversionFactor: 1, isBaseUnit: true, isActive: true } });
+  const mcf = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "MCF", name: "Thousand Cubic Feet", commodityId: gas.id, measureTypeId: measureUsage.id, conversionFactor: 1, isBaseUnit: true, isActive: true } });
+  const sgal = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "GAL", name: "Gallons", commodityId: sewer.id, measureTypeId: measureUsage.id, conversionFactor: 1, isBaseUnit: true, isActive: true } });
+  console.log("  5 UOMs");
 
   const c1 = await p.billingCycle.create({ data: { utilityId: UID, name: "Route 1 - North District", cycleCode: "R01", readDayOfMonth: 5, billDayOfMonth: 10, frequency: "MONTHLY" } });
   const c2 = await p.billingCycle.create({ data: { utilityId: UID, name: "Route 2 - South District", cycleCode: "R02", readDayOfMonth: 12, billDayOfMonth: 17, frequency: "MONTHLY" } });
@@ -145,8 +154,8 @@ async function main() {
   // (kW) — captured together on each field visit. This is what the
   // Phase 2.5 read-event grouping is built around.
   const em003 = mArr[8];
-  await p.meterRegister.create({ data: { utilityId: UID, meterId: em003.id, registerNumber: 1, description: "Energy usage", uomId: kwh.id, multiplier: 1.0, isActive: true } });
-  await p.meterRegister.create({ data: { utilityId: UID, meterId: em003.id, registerNumber: 2, description: "Peak demand", uomId: kw.id, multiplier: 1.0, isActive: true } });
+  await p.meterRegister.create({ data: { utilityId: UID, meterId: em003.id, registerNumber: 1, description: "Energy usage", uomId: kwh.id, measureTypeId: measureUsage.id, multiplier: 1.0, isActive: true } });
+  await p.meterRegister.create({ data: { utilityId: UID, meterId: em003.id, registerNumber: 2, description: "Peak demand", uomId: kw.id, measureTypeId: measureDemand.id, multiplier: 1.0, isActive: true } });
   console.log("  2 registers on EM-003 (multi-register demo)");
 
   const saData = [

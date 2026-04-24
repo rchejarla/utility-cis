@@ -195,6 +195,7 @@ model UnitOfMeasure {
   code             String   @map("code") @db.VarChar(20)
   name             String   @map("name") @db.VarChar(100)
   commodityId      String   @map("commodity_id") @db.Uuid
+  measureTypeId    String   @map("measure_type_id") @db.Uuid
   conversionFactor Decimal  @map("conversion_factor") @db.Decimal(15, 8)
   isBaseUnit       Boolean  @map("is_base_unit")
   isActive         Boolean  @map("is_active")
@@ -202,6 +203,7 @@ model UnitOfMeasure {
 
   // Relations
   commodity        Commodity       @relation("CommodityUoms", fields: [commodityId], references: [id], onDelete: Restrict)
+  measureType      MeasureTypeDef  @relation(fields: [measureTypeId], references: [id], onDelete: Restrict)
   commodityDefault Commodity[]     @relation("DefaultUom")
   meters           Meter[]
   meterRegisters   MeterRegister[]
@@ -209,7 +211,32 @@ model UnitOfMeasure {
 
   @@unique([utilityId, commodityId, code])
   @@index([commodityId])
+  @@index([measureTypeId])
   @@map("unit_of_measure")
+}
+
+// Reference catalog for measurement types (usage, demand, TOU peak, etc.).
+// Same global + tenant-shadow pattern as SuspensionTypeDef: rows with
+// utilityId NULL are global and visible to every tenant, while rows
+// with a utility_id are tenant-local. Drives UOM grouping on commodities
+// and register-type classification on meter registers.
+model MeasureTypeDef {
+  id          String   @id @default(uuid()) @db.Uuid
+  utilityId   String?  @map("utility_id") @db.Uuid
+  code        String   @db.VarChar(50)
+  label       String   @db.VarChar(100)
+  description String?  @db.Text
+  sortOrder   Int      @default(100) @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  unitsOfMeasure UnitOfMeasure[]
+  meterRegisters MeterRegister[]
+
+  @@unique([utilityId, code])
+  @@index([isActive, sortOrder])
+  @@map("measure_type_def")
 }
 
 model Premise {
@@ -613,18 +640,21 @@ model MeterRegister {
   registerNumber Int      @map("register_number")
   description    String?  @db.VarChar(100)
   uomId          String   @map("uom_id") @db.Uuid
+  measureTypeId  String   @map("measure_type_id") @db.Uuid
   multiplier     Decimal  @default(1.0) @db.Decimal(10, 4)
   isActive       Boolean  @default(true) @map("is_active")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   // Relations
-  meter      Meter         @relation(fields: [meterId], references: [id], onDelete: Cascade)
-  uom        UnitOfMeasure @relation(fields: [uomId], references: [id], onDelete: Restrict)
-  meterReads MeterRead[]
+  meter       Meter          @relation(fields: [meterId], references: [id], onDelete: Cascade)
+  uom         UnitOfMeasure  @relation(fields: [uomId], references: [id], onDelete: Restrict)
+  measureType MeasureTypeDef @relation(fields: [measureTypeId], references: [id], onDelete: Restrict)
+  meterReads  MeterRead[]
 
   @@unique([meterId, registerNumber])
   @@index([meterId])
   @@index([uomId])
+  @@index([measureTypeId])
   @@map("meter_register")
 }
 
