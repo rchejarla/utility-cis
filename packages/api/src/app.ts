@@ -40,6 +40,7 @@ import { notificationRoutes } from "./routes/notifications.js";
 import { delinquencyRoutes } from "./routes/delinquency.js";
 import { serviceRequestTypeRoutes } from "./routes/service-request-types.js";
 import { slaRoutes } from "./routes/slas.js";
+import { serviceRequestRoutes } from "./routes/service-requests.js";
 import { portalAuthRoutes } from "./routes/portal-auth.js";
 import { portalApiRoutes } from "./routes/portal-api.js";
 import { buildOpenApiDocument } from "./lib/openapi.js";
@@ -108,6 +109,7 @@ export async function buildApp() {
   await app.register(delinquencyRoutes);
   await app.register(serviceRequestTypeRoutes);
   await app.register(slaRoutes);
+  await app.register(serviceRequestRoutes);
   await app.register(portalAuthRoutes);
   await app.register(portalApiRoutes);
 
