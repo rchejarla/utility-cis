@@ -22,7 +22,7 @@ interface AgreementSummary {
   agreementNumber: string;
   status: string;
   commodity?: { name: string } | null;
-  premise?: { addressLine1: string } | null;
+  premise?: { id: string; addressLine1: string; city?: string; state?: string } | null;
   premiseId?: string | null;
 }
 
@@ -109,6 +109,7 @@ function NewServiceRequestForm() {
   const [accountId, setAccountId] = useState<string | undefined>(undefined);
   const [account, setAccount] = useState<AccountDetail | null>(null);
   const [serviceAgreementId, setServiceAgreementId] = useState<string>("");
+  const [premiseId, setPremiseId] = useState<string>("");
   const [requestType, setRequestType] = useState<string>("");
   const [priority, setPriority] = useState<Priority>("NORMAL");
   const [subtype, setSubtype] = useState<string>("");
@@ -176,30 +177,54 @@ function NewServiceRequestForm() {
   const activeAgreements =
     account?.serviceAgreements?.filter((a) => a.status === "ACTIVE") ?? [];
 
+  // Distinct premises across the account's active agreements. SRs
+  // can optionally target a premise without an agreement, so the
+  // premise dropdown is driven from this set.
+  const premiseOptions = (() => {
+    const seen = new Map<string, { id: string; label: string }>();
+    for (const ag of activeAgreements) {
+      const pid = ag.premise?.id ?? ag.premiseId;
+      if (!pid || seen.has(pid)) continue;
+      const p = ag.premise;
+      const label = p?.addressLine1
+        ? [p.addressLine1, p.city, p.state].filter(Boolean).join(", ")
+        : pid;
+      seen.set(pid, { id: pid, label });
+    }
+    return Array.from(seen.values());
+  })();
+
   // When the account changes, auto-select the only active agreement if
-  // there is exactly one; clear otherwise (user picks manually).
+  // there is exactly one; clear otherwise (user picks manually). Same
+  // rule for premise — auto-select if exactly one distinct premise.
   useEffect(() => {
     if (activeAgreements.length === 1) setServiceAgreementId(activeAgreements[0].id);
     else setServiceAgreementId("");
+    if (premiseOptions.length === 1) setPremiseId(premiseOptions[0].id);
+    else setPremiseId("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account?.id]);
+
+  // If the user picks an agreement, slide the premise selection to that
+  // agreement's premise — it's almost always the site of the work.
+  useEffect(() => {
+    if (!serviceAgreementId) return;
+    const ag = activeAgreements.find((a) => a.id === serviceAgreementId);
+    const pid = ag?.premise?.id ?? ag?.premiseId;
+    if (pid) setPremiseId(pid);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serviceAgreementId]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!account || !requestType || !description.trim()) return;
     setSubmitting(true);
     try {
-      // If the account row carried a premiseId, thread it through; if
-      // an agreement was picked, prefer the agreement's premise since
-      // that's more likely the site of the work.
-      const agreement = activeAgreements.find((a) => a.id === serviceAgreementId);
-      const premiseId = agreement?.premiseId ?? account.premiseId ?? null;
-
       const created = await apiClient.post<{ id: string }>(
         "/api/v1/service-requests",
         {
           accountId: account.id,
-          premiseId,
+          premiseId: premiseId || null,
           serviceAgreementId: serviceAgreementId || null,
           requestType,
           requestSubtype: subtype.trim() ? subtype.trim() : null,
@@ -252,32 +277,48 @@ function NewServiceRequestForm() {
               label="Account"
             />
 
-            {activeAgreements.length >= 2 && (
+            {account && (
               <>
+                <label style={labelStyle}>Premise</label>
+                {premiseOptions.length > 0 ? (
+                  <select
+                    value={premiseId}
+                    onChange={(e) => setPremiseId(e.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="">— none —</option>
+                    {premiseOptions.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", padding: "7px 0" }}>
+                    No premises on this account's active agreements.
+                  </div>
+                )}
+
                 <label style={labelStyle}>Service agreement</label>
-                <select
-                  value={serviceAgreementId}
-                  onChange={(e) => setServiceAgreementId(e.target.value)}
-                  style={inputStyle}
-                >
-                  <option value="">— none —</option>
-                  {activeAgreements.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {formatAgreementLabel(a)}
-                    </option>
-                  ))}
-                </select>
+                {activeAgreements.length > 0 ? (
+                  <select
+                    value={serviceAgreementId}
+                    onChange={(e) => setServiceAgreementId(e.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="">— none —</option>
+                    {activeAgreements.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {formatAgreementLabel(a)}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", padding: "7px 0" }}>
+                    No active agreements on this account.
+                  </div>
+                )}
               </>
-            )}
-            {activeAgreements.length === 1 && (
-              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>
-                Auto-selected: {formatAgreementLabel(activeAgreements[0])}
-              </div>
-            )}
-            {account && activeAgreements.length === 0 && (
-              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>
-                No active agreements on this account.
-              </div>
             )}
           </section>
 
