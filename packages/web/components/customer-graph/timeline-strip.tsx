@@ -7,7 +7,6 @@ import { accentForType } from "./graph-nodes";
 interface TimelineStripProps {
   events: TimelineEvent[];
   nodes: GraphNode[];
-  hiddenTypes: Set<GraphNodeType>;
   onEventHover: (relatedNodeIds: string[] | null) => void;
   onEventClick: (relatedNodeIds: string[]) => void;
 }
@@ -48,7 +47,6 @@ function typeForEvent(
 export function TimelineStrip({
   events,
   nodes,
-  hiddenTypes,
   onEventHover,
   onEventClick,
 }: TimelineStripProps) {
@@ -110,16 +108,6 @@ export function TimelineStrip({
           {sorted.map((event) => {
             const type = typeForEvent(event, nodesById);
             const accent = accentForType(type);
-            // An event is "dimmed" when every one of its related nodes
-            // is in a hidden category — the user has opted out of
-            // seeing this type. Don't hide the pill entirely; just fade
-            // it so the chronology remains intact.
-            const allHidden =
-              event.relatedNodeIds.length > 0 &&
-              event.relatedNodeIds.every((id) => {
-                const n = nodesById.get(id);
-                return n ? hiddenTypes.has(n.type) : false;
-              });
 
             return (
               <button
@@ -141,10 +129,9 @@ export function TimelineStrip({
                   fontSize: 12,
                   fontFamily: "inherit",
                   cursor: "pointer",
-                  opacity: allHidden ? 0.4 : 1,
                   flexShrink: 0,
                   whiteSpace: "nowrap",
-                  transition: "background 0.12s ease, opacity 0.12s ease",
+                  transition: "background 0.12s ease",
                 }}
                 onMouseOver={(e) =>
                   ((e.currentTarget as HTMLButtonElement).style.background =

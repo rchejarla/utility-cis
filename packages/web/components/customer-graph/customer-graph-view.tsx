@@ -18,14 +18,12 @@ import type {
   CustomerGraphDTO,
   GraphEdge,
   GraphNode,
-  GraphNodeType,
 } from "@utility-cis/shared";
 import Link from "next/link";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import {
-  accentForType,
   edgeStyleFor,
   nodeTypes,
   type CustomerGraphFlowNode,
@@ -242,82 +240,6 @@ function handlesFor(kind: GraphEdge["kind"]): {
   }
 }
 
-const ENTITY_TYPES: GraphNodeType[] = [
-  "customer",
-  "account",
-  "premise",
-  "agreement",
-  "meter",
-  "service_request",
-];
-
-function EntityFilterChips({
-  counts,
-  hiddenTypes,
-  onToggle,
-}: {
-  counts: Record<GraphNodeType, number>;
-  hiddenTypes: Set<GraphNodeType>;
-  onToggle: (type: GraphNodeType) => void;
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        gap: 6,
-        flexWrap: "wrap",
-        alignItems: "center",
-      }}
-    >
-      <span
-        style={{
-          fontSize: 12,
-          color: "var(--text-muted)",
-          fontWeight: 500,
-          marginRight: 4,
-        }}
-      >
-        Show:
-      </span>
-      {ENTITY_TYPES.map((type) => {
-        const accent = accentForType(type);
-        const hidden = hiddenTypes.has(type);
-        const count = counts[type] ?? 0;
-        return (
-          <button
-            key={type}
-            type="button"
-            onClick={() => onToggle(type)}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "5px 12px",
-              borderRadius: 999,
-              border: hidden
-                ? "1px solid var(--border)"
-                : `1px solid ${accent.color}`,
-              background: hidden ? "var(--bg-card)" : "var(--bg-elevated)",
-              color: hidden ? "var(--text-muted)" : accent.color,
-              fontSize: 12,
-              fontWeight: 500,
-              cursor: "pointer",
-              fontFamily: "inherit",
-              transition: "all 0.12s ease",
-            }}
-          >
-            <FontAwesomeIcon
-              icon={accent.icon}
-              style={{ width: 11, height: 11 }}
-            />
-            {accent.label} ({count})
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
   const router = useRouter();
   const { canView } = usePermission("customers");
@@ -325,7 +247,6 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [hiddenTypes, setHiddenTypes] = useState<Set<GraphNodeType>>(new Set());
   const [highlightedIds, setHighlightedIds] = useState<Set<string>>(new Set());
   const rfInstance = useRef<ReactFlowInstance<CustomerGraphFlowNode, Edge> | null>(null);
 
@@ -355,89 +276,70 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
   }, [customerId]);
 
   // Positions from the three-row grid layout — recomputed only when
-  // the raw node/edge list changes. Filter toggles don't re-layout;
-  // they hide via the flow nodes/edges props below.
+  // the raw node/edge list changes.
   const positions = useMemo(() => {
     if (!graph) return new Map<string, { x: number; y: number }>();
     return threeRowLayout(graph.nodes, graph.edges);
   }, [graph]);
 
-  const counts = useMemo(() => {
-    const c: Record<GraphNodeType, number> = {
-      customer: 0,
-      account: 0,
-      premise: 0,
-      agreement: 0,
-      meter: 0,
-      service_request: 0,
-    };
-    if (graph) {
-      for (const n of graph.nodes) c[n.type]++;
-    }
-    return c;
-  }, [graph]);
-
   const flowNodes: CustomerGraphFlowNode[] = useMemo(() => {
     if (!graph) return [];
-    return graph.nodes
-      .filter((n) => !hiddenTypes.has(n.type))
-      .map<CustomerGraphFlowNode>((n) => ({
-        id: n.id,
+    return graph.nodes.map<CustomerGraphFlowNode>((n) => ({
+      id: n.id,
+      type: n.type,
+      position: positions.get(n.id) ?? { x: 0, y: 0 },
+      selected: n.id === selectedNodeId,
+      data: {
         type: n.type,
-        position: positions.get(n.id) ?? { x: 0, y: 0 },
-        selected: n.id === selectedNodeId,
-        data: {
-          type: n.type,
-          label: n.label,
-          subtext: n.subtext,
-          data: n.data,
-          validTo: n.validTo,
-        },
-        className: highlightedIds.has(n.id)
-          ? "customer-graph-node-highlighted"
-          : undefined,
-      }));
-  }, [graph, hiddenTypes, positions, selectedNodeId, highlightedIds]);
+        label: n.label,
+        subtext: n.subtext,
+        data: n.data,
+        validTo: n.validTo,
+      },
+      className: highlightedIds.has(n.id)
+        ? "customer-graph-node-highlighted"
+        : undefined,
+    }));
+  }, [graph, positions, selectedNodeId, highlightedIds]);
 
   const flowEdges: Edge[] = useMemo(() => {
     if (!graph) return [];
-    const visibleNodeIds = new Set(
-      graph.nodes.filter((n) => !hiddenTypes.has(n.type)).map((n) => n.id),
-    );
-    return graph.edges
-      .filter((e) => visibleNodeIds.has(e.from) && visibleNodeIds.has(e.to))
-      .map((e) => {
-        const { sourceHandle, targetHandle } = handlesFor(e.kind);
-        const isTrunk = e.kind === "owns_premise" || e.kind === "owns_account";
-        const trunkX =
-          e.kind === "owns_premise"
-            ? PREMISE_TRUNK_X
-            : e.kind === "owns_account"
-              ? ACCOUNT_TRUNK_X
-              : undefined;
-        return {
-          id: e.id,
-          source: e.from,
-          target: e.to,
-          sourceHandle,
-          targetHandle,
-          type: isTrunk ? "trunk" : "smoothstep",
-          style: edgeStyleFor(e.kind),
-          data: isTrunk
-            ? {
-                trunkX,
-                descend: TRUNK_DESCEND,
-                title: `${e.kind} since ${e.validFrom.slice(0, 10)}`,
-              }
-            : { title: `${e.kind} since ${e.validFrom.slice(0, 10)}` },
-        };
-      });
-  }, [graph, hiddenTypes]);
+    return graph.edges.map((e) => {
+      const { sourceHandle, targetHandle } = handlesFor(e.kind);
+      const isTrunk = e.kind === "owns_premise" || e.kind === "owns_account";
+      const trunkX =
+        e.kind === "owns_premise"
+          ? PREMISE_TRUNK_X
+          : e.kind === "owns_account"
+            ? ACCOUNT_TRUNK_X
+            : undefined;
+      return {
+        id: e.id,
+        source: e.from,
+        target: e.to,
+        sourceHandle,
+        targetHandle,
+        type: isTrunk ? "trunk" : "smoothstep",
+        style: edgeStyleFor(e.kind),
+        data: isTrunk
+          ? {
+              trunkX,
+              descend: TRUNK_DESCEND,
+              title: `${e.kind} since ${e.validFrom.slice(0, 10)}`,
+            }
+          : { title: `${e.kind} since ${e.validFrom.slice(0, 10)}` },
+      };
+    });
+  }, [graph]);
 
   const selectedNode = useMemo(() => {
     if (!graph || !selectedNodeId) return null;
     return graph.nodes.find((n) => n.id === selectedNodeId) ?? null;
   }, [graph, selectedNodeId]);
+
+  const customerName = useMemo(() => {
+    return graph?.nodes.find((n) => n.type === "customer")?.label ?? null;
+  }, [graph]);
 
   const handleNodeClick = useCallback(
     (_: unknown, node: CustomerGraphFlowNode) => {
@@ -473,15 +375,6 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
     },
     [positions],
   );
-
-  const toggleType = useCallback((type: GraphNodeType) => {
-    setHiddenTypes((prev) => {
-      const next = new Set(prev);
-      if (next.has(type)) next.delete(type);
-      else next.add(type);
-      return next;
-    });
-  }, []);
 
   // ─── Fullscreen toggle ──────────────────────────────────────────
   // Use the browser Fullscreen API on the canvas container so the
@@ -571,9 +464,11 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
         }
       `}</style>
 
-      {/* Filter chips row — with the Back-to-detail link pinned to
-          the right so it sits inline and doesn't consume a whole
-          header row above the graph. */}
+      {/* Top row — customer name on the left, Back-to-detail link on
+          the right. The row exists to anchor the back link and to tell
+          users which customer they're looking at; category filter chips
+          were dropped because hiding types only clutters a graph that
+          already fits on one screen. */}
       <div
         style={{
           display: "flex",
@@ -582,14 +477,42 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
           flexWrap: "wrap",
         }}
       >
-        <div style={{ flex: 1, minWidth: 0 }}>
-          {graph && (
-            <EntityFilterChips
-              counts={counts}
-              hiddenTypes={hiddenTypes}
-              onToggle={toggleType}
-            />
-          )}
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: "flex",
+            alignItems: "baseline",
+            gap: 8,
+            overflow: "hidden",
+          }}
+        >
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              color: "var(--text-muted)",
+              flexShrink: 0,
+            }}
+          >
+            Customer
+          </span>
+          <span
+            title={customerName ?? undefined}
+            style={{
+              fontSize: 15,
+              fontWeight: 600,
+              color: "var(--text-primary)",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              minWidth: 0,
+            }}
+          >
+            {customerName ?? " "}
+          </span>
         </div>
         <Link
           href={`/customers/${customerId}`}
@@ -783,7 +706,6 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
         <TimelineStrip
           events={graph.events}
           nodes={graph.nodes}
-          hiddenTypes={hiddenTypes}
           onEventHover={handleTimelineHover}
           onEventClick={handleTimelineClick}
         />
