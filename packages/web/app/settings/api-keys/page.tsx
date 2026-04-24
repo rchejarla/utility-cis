@@ -21,7 +21,7 @@ export default function ApiKeysSettingsPage() {
   return (
     <SettingsSection
       title="API Keys & Webhooks"
-      description="Credentials for external integrations that push data into CIS (AMI vendors, RAMS, meter imports) and for pull-based consumers that read CIS data."
+      description="Credentials for external integrations that push data into CIS (AMI vendors, RAMS — Route and Asset Management System, meter imports) and for pull-based consumers that read CIS data."
     >
       <SettingsCard>
         <SettingRow
@@ -40,7 +40,7 @@ export default function ApiKeysSettingsPage() {
           control={<button style={btn} disabled>Open call log</button>}
         />
         <SettingRow
-          label="RAMS integration"
+          label="RAMS integration (Route & Asset Management)"
           description="Event receiver for solid-waste collection trucks. Maps RAMS event IDs onto CIS service events idempotently."
           control={<button style={btn} disabled>Configure</button>}
         />

@@ -102,7 +102,7 @@ export default function NewContainerPage() {
         {
           row: [
             { key: "deliveryDate", label: "Delivery Date", type: "date", required: true },
-            { key: "ramsContainerId", label: "RAMS ID", type: "text", placeholder: "optional" },
+            { key: "ramsContainerId", label: "RAMS ID (Route & Asset Management)", type: "text", placeholder: "optional" },
           ],
         },
         {

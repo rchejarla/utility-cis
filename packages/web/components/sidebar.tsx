@@ -49,6 +49,13 @@ interface NavItem {
   label: string;
   icon: IconDefinition;
   module: string;
+  /**
+   * Optional hover tooltip shown when sidebar is expanded. Useful for
+   * expanding acronyms or adding clarifying context without lengthening
+   * the visible label (e.g. "RAMS Events" tooltipped as "Route and
+   * Asset Management System — solid-waste field events").
+   */
+  tooltip?: string;
 }
 
 interface NavSection {
@@ -84,7 +91,7 @@ const navSections: NavSection[] = [
     items: [
       { href: "/containers", label: "Containers", icon: faDumpster, module: "containers" },
       { href: "/service-suspensions", label: "Service Holds", icon: faPauseCircle, module: "service_suspensions" },
-      { href: "/service-events", label: "RAMS Events", icon: faTruck, module: "service_events" },
+      { href: "/service-events", label: "RAMS Events", icon: faTruck, module: "service_events", tooltip: "Route and Asset Management System — field events from solid-waste collection crews" },
     ],
   },
   {
@@ -132,7 +139,7 @@ function NavItemWithPermission({ item, collapsed, isActive }: { item: NavItem; c
   return (
     <Link
       href={item.href}
-      title={collapsed ? item.label : undefined}
+      title={collapsed ? item.label : item.tooltip}
       style={{
         display: "flex",
         alignItems: "center",

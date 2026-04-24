@@ -92,7 +92,7 @@ const columns: Column<Container>[] = [
   },
   {
     key: "serial",
-    header: "Serial / RAMS",
+    header: "Serial / Route ID",
     render: (row) => (
       <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "11px", color: "var(--text-muted)" }}>
         {row.serialNumber ?? row.ramsContainerId ?? "—"}
@@ -146,21 +146,22 @@ export default function ContainersPage() {
       emptyState={{
         headline: "No solid-waste containers",
         description:
-          "Containers (carts, dumpsters, rolloffs) are the physical waste receptacles at each premise. RAMS field events are recorded against them.",
+          "Containers (carts, dumpsters, rolloffs) are the physical waste receptacles at each premise. Field events from RAMS (Route and Asset Management System) are recorded against them.",
       }}
       headerSlot={
         <PageDescription storageKey="containers">
           A <b>container</b> is a physical solid-waste receptacle assigned to a
           premise — garbage / recycling / yard-waste carts, dumpsters,
           rolloffs. Each one has a size, type, and service-day schedule that
-          drives the collection route in <b>RAMS</b>. Operational events
-          (missed pickups, contamination, cart swaps) flow back from RAMS as
-          Service Events against the specific container.
+          drives the collection route in <b>RAMS</b> (Route and Asset
+          Management System). Operational events (missed pickups,
+          contamination, cart swaps) flow back from RAMS as Service Events
+          against the specific container.
         </PageDescription>
       }
       search={{
         paramKey: "search",
-        placeholder: "Search by serial, RFID, or RAMS id...",
+        placeholder: "Search by serial, RFID, or route ID...",
         variant: "compact",
       }}
       filters={[

@@ -116,12 +116,13 @@ export default function ServiceEventsPage() {
       emptyState={{
         headline: "No service events yet",
         description:
-          "Service events are operational occurrences received from the RAMS field system — missed pickups, contamination, cart swaps. They'll stream in as RAMS reports them.",
+          "Service events are operational occurrences received from RAMS — the Route and Asset Management System your solid-waste crews run in the field. Missed pickups, contamination, and cart swaps will stream in as RAMS reports them.",
       }}
       headerSlot={
         <PageDescription storageKey="service-events">
-          <b>Service events</b> are operational occurrences received from the
-          RAMS field system — missed pickups, contamination flags, cart swaps,
+          <b>Service events</b> are operational occurrences received from
+          <b> RAMS</b> (Route and Asset Management System, the solid-waste
+          field platform) — missed pickups, contamination flags, cart swaps,
           bulky-item requests. Some are informational and close after review;
           others trigger <b>billing credits or charges</b> on the related
           account once reviewed and resolved.

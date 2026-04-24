@@ -72,9 +72,10 @@ const columns: Column<ServiceSuspension>[] = [
   },
   {
     key: "ramsNotified",
-    header: "RAMS",
+    header: "Route Sync",
     render: (row) => (
       <span
+        title="Synced to RAMS (Route and Asset Management System)"
         style={{
           fontSize: "10px",
           color: row.ramsNotified ? "var(--success)" : "var(--danger)",
