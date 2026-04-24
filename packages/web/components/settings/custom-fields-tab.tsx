@@ -217,7 +217,7 @@ export function CustomFieldsTab() {
           Custom Fields
         </h2>
         <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0, marginBottom: 16 }}>
-          Add tenant-specific fields to core entities. Fields you add here appear in the entity's create/edit forms below the built-in fields. Values are stored in each entity's <code>custom_fields</code> JSONB column and validated on write against the schema.
+          Add your own fields to core entities. Fields you define here appear in the entity's create/edit forms below the built-in fields. Values are stored in each entity's <code>custom_fields</code> JSONB column and validated on write against the schema.
         </p>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>

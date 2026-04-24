@@ -44,7 +44,7 @@ export function GeneralTab() {
         setRequireHoldApproval(cfg.requireHoldApproval);
         setInitial({ requireHoldApproval: cfg.requireHoldApproval });
       } catch (err) {
-        toast(err instanceof Error ? err.message : "Failed to load tenant config", "error");
+        toast(err instanceof Error ? err.message : "Failed to load settings", "error");
       } finally {
         setLoading(false);
       }
@@ -87,7 +87,7 @@ export function GeneralTab() {
         </h2>
         <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: 0, marginBottom: 16 }}>
           Lifecycle behavior for service holds (also called suspensions). These apply
-          to every hold your tenant creates.
+          to every hold you create.
         </p>
 
         <Row>

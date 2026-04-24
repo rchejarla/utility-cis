@@ -23,7 +23,7 @@ export default function DangerZoneSettingsPage() {
   return (
     <SettingsSection
       title="Danger Zone"
-      description="Irreversible actions that affect the entire tenant. Read twice, click once. Gated on super-admin permissions."
+      description="Irreversible actions that affect your entire utility. Read twice, click once. Gated on super-admin permissions."
       danger
     >
       <SettingsCard danger>
@@ -34,18 +34,18 @@ export default function DangerZoneSettingsPage() {
         />
         <SettingRow
           label="Wipe test data"
-          description="Delete every seed-generated customer, premise, meter, and related row. Only available in non-production tenants."
+          description="Delete every seed-generated customer, premise, meter, and related row. Available only in non-production environments."
           control={<button style={dangerBtn} disabled>Wipe test data…</button>}
         />
         <SettingRow
-          label="Transfer tenant ownership"
-          description="Hand ownership of this utility tenant to another super-admin. You will be demoted to Read-Only."
+          label="Transfer ownership"
+          description="Hand ownership of this utility to another super-admin. You will be demoted to Read-Only."
           control={<button style={dangerBtn} disabled>Transfer…</button>}
         />
         <SettingRow
-          label="Delete tenant"
+          label="Delete all utility data"
           description="Permanently erase this utility and every row inside it — customers, meters, reads, invoices, attachments. Cannot be undone. Blocked if any audit records are under legal hold."
-          control={<button style={dangerBtn} disabled>Delete tenant…</button>}
+          control={<button style={dangerBtn} disabled>Delete everything…</button>}
         />
       </SettingsCard>
 

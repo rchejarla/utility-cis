@@ -161,14 +161,14 @@ export default function MeasureTypesPage() {
     return <div style={{ color: "var(--text-muted)", padding: "40px 0" }}>Loading...</div>;
   }
 
-  const globalCount = rows.filter((r) => r.isGlobal).length;
-  const tenantCount = rows.length - globalCount;
+  const standardCount = rows.filter((r) => r.isGlobal).length;
+  const customCount = rows.length - standardCount;
 
   return (
     <div>
       <PageHeader
         title="Measure Types"
-        subtitle={`Semantic categories for meter readings — usage, demand, TOU, etc. Globals are shared across all tenants and can't be edited here. (${globalCount} global · ${tenantCount} tenant)`}
+        subtitle={`Semantic categories for meter readings — usage, demand, TOU, etc. Standard types are built in and read-only. (${standardCount} standard · ${customCount} custom)`}
         action={
           canCreate
             ? { label: "+ Add Measure Type", onClick: () => setShowNewForm(true) }
@@ -180,8 +180,8 @@ export default function MeasureTypesPage() {
         A <b>measure type</b> is the semantic category a reading represents —
         usage totalizer, demand peak, TOU window, reactive power — so a meter
         register or UOM can be tagged with what it actually means rather than
-        just what unit it reports. <b>Global</b> types are seeded and read-only;
-        tenants can add local codes for anything the shared catalog doesn't cover.
+        just what unit it reports. The <b>standard</b> types are built in and
+        read-only; you can add your own codes for anything not already covered.
       </PageDescription>
 
       {showNewForm && (
@@ -417,7 +417,7 @@ export default function MeasureTypesPage() {
                           letterSpacing: "0.04em",
                         }}
                       >
-                        Global
+                        Standard
                       </span>
                     ) : (
                       <span
@@ -433,14 +433,14 @@ export default function MeasureTypesPage() {
                           letterSpacing: "0.04em",
                         }}
                       >
-                        Tenant
+                        Custom
                       </span>
                     )}
                   </td>
                   <td style={{ ...tdCell, textAlign: "right" }}>
                     {r.isGlobal ? (
                       <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                        Global — read-only
+                        Standard — read-only
                       </span>
                     ) : isEditing ? (
                       <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>

@@ -147,6 +147,13 @@ export interface ServiceRequestListProps {
   showFilters?: boolean;
   /** Optional "+ New Request" button href; hidden when omitted. */
   createHref?: string;
+  /**
+   * Optional slot rendered between the page header and the filter bar.
+   * Used by the global queue page to surface its PageDescription
+   * underneath the title — same placement the other list pages use.
+   * Forwarded straight through to EntityListPage.
+   */
+  headerSlot?: React.ReactNode;
 }
 
 /**
@@ -163,6 +170,7 @@ export function ServiceRequestList({
   accountScope,
   showFilters = true,
   createHref,
+  headerSlot,
 }: ServiceRequestListProps) {
   const filters: EntityListFilter[] = showFilters
     ? [
@@ -193,6 +201,7 @@ export function ServiceRequestList({
       filters={filters}
       newAction={createHref ? { label: "+ New Request", href: createHref } : undefined}
       paginated={false}
+      headerSlot={headerSlot}
     />
   );
 }

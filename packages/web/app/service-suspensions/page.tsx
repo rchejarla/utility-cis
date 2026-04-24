@@ -127,8 +127,8 @@ export default function SuspensionsPage() {
           agreement — vacation, construction shutdowns, seasonal closures.
           Billing is suspended for the covered period and the agreement rejoins
           the regular cycle when the hold ends or is cancelled. Hold
-          <b> types</b> are configured in Settings so each utility can label
-          them to match its own policy.
+          <b> types</b> are configured in Settings so you can label them to
+          match your own policy.
         </PageDescription>
       }
       filters={[

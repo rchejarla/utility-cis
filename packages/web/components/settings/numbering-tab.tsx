@@ -66,7 +66,7 @@ export function NumberingTab() {
         if (formats.agreement) setAgreement(formats.agreement);
         if (formats.account) setAccount(formats.account);
       } catch (err) {
-        toast(err instanceof Error ? err.message : "Failed to load tenant config", "error");
+        toast(err instanceof Error ? err.message : "Failed to load settings", "error");
       } finally {
         setLoading(false);
       }

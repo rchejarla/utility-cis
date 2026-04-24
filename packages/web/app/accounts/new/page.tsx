@@ -78,7 +78,7 @@ export default function NewAccountPage() {
           label: "Account Number (optional)",
           type: "text",
           placeholder: "Auto-generate",
-          tooltip: "Leave blank to auto-generate using the tenant numbering template. Cannot be changed after creation.",
+          tooltip: "Leave blank to auto-generate using the numbering template in Settings. Cannot be changed after creation.",
           tooltipRuleId: "BR-AC-005",
         },
         {
