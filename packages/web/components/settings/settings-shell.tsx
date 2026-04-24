@@ -17,6 +17,7 @@ export const SETTINGS_SECTIONS: SettingsSectionLink[] = [
   { slug: "custom-fields", label: "Custom Fields" },
   { slug: "billing", label: "Billing Integration" },
   { slug: "notifications", label: "Notifications" },
+  { slug: "slas", label: "Service Request SLAs" },
   { slug: "retention", label: "Retention & Audit" },
   { slug: "api-keys", label: "API Keys & Webhooks" },
   { slug: "danger-zone", label: "Danger Zone" },
