@@ -142,6 +142,11 @@ export default function ContainersPage() {
       getDetailHref={(row) => `/containers/${row.id}`}
       columns={columns}
       newAction={{ label: "+ Assign Container", href: "/containers/new" }}
+      emptyState={{
+        headline: "No solid-waste containers",
+        description:
+          "Containers (carts, dumpsters, rolloffs) are the physical waste receptacles at each premise. RAMS field events are recorded against them.",
+      }}
       search={{
         paramKey: "search",
         placeholder: "Search by serial, RFID, or RAMS id...",

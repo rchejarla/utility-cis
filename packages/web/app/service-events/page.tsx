@@ -113,6 +113,11 @@ export default function ServiceEventsPage() {
       endpoint="/api/v1/service-events"
       getDetailHref={(row) => `/service-events/${row.id}`}
       columns={columns}
+      emptyState={{
+        headline: "No service events yet",
+        description:
+          "Service events are operational occurrences received from the RAMS field system — missed pickups, contamination, cart swaps. They'll stream in as RAMS reports them.",
+      }}
       headerSlot={
         <PageDescription storageKey="service-events">
           <b>Service events</b> are operational occurrences received from the

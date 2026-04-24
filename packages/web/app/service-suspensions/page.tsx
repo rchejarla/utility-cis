@@ -121,6 +121,11 @@ export default function SuspensionsPage() {
       getDetailHref={(row) => `/service-suspensions/${row.id}`}
       columns={columns}
       newAction={{ label: "+ New Hold", href: "/service-suspensions/new" }}
+      emptyState={{
+        headline: "No service holds in place",
+        description:
+          "Place a hold to temporarily pause billing on a service agreement — vacations, construction shutdowns, seasonal closures.",
+      }}
       headerSlot={
         <PageDescription storageKey="service-suspensions">
           A <b>service hold</b> is a temporary pause on billing for a service

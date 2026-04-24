@@ -75,6 +75,11 @@ export default function AccountsPage() {
       getDetailHref={(row) => `/accounts/${row.id}`}
       columns={columns}
       newAction={{ label: "Add Account", href: "/accounts/new" }}
+      emptyState={{
+        headline: "No accounts yet",
+        description:
+          "An account is the billing relationship for one premise — it holds the balance, service agreements, and contact info. Create a customer first if you haven't.",
+      }}
       search={{
         paramKey: "accountNumber",
         placeholder: "Search by account number...",

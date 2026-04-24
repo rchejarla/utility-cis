@@ -71,6 +71,11 @@ export default function MetersPage() {
       getDetailHref={(row) => `/meters/${row.id}`}
       columns={columns}
       newAction={{ label: "Add Meter", href: "/meters/new" }}
+      emptyState={{
+        headline: "No meters installed",
+        description:
+          "Meters are the devices at premises that record consumption. Each one belongs to a commodity (water, gas, electric) and reports reads in a specific unit.",
+      }}
       filters={[
         {
           key: "commodityId",

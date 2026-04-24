@@ -228,6 +228,11 @@ export default function MeterReadsPage() {
       getDetailHref={(row) => `/meter-reads/${row.id}`}
       columns={columns}
       newAction={{ label: "+ New Read", href: "/meter-reads/new" }}
+      emptyState={{
+        headline: "No meter reads recorded",
+        description:
+          "Reads are the timestamped consumption values that drive billing. Capture them manually, import a CSV, or wait for an AMI feed to populate the log.",
+      }}
       headerSlot={<HeaderActions />}
       filters={[
         { key: "readType", label: "Type", options: READ_TYPE_OPTIONS },

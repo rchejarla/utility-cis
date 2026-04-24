@@ -80,6 +80,11 @@ export default function ServiceAgreementsPage() {
       getDetailHref={(row) => `/service-agreements/${row.id}`}
       columns={columns}
       newAction={{ label: "Add Agreement", href: "/service-agreements/new" }}
+      emptyState={{
+        headline: "No service agreements yet",
+        description:
+          "A service agreement ties an account to a premise and a commodity on a specific rate schedule. Sign one up to start metering and billing a service at a location.",
+      }}
       filters={[
         { key: "status", label: "Status", options: STATUS_OPTIONS },
         {

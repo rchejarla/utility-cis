@@ -712,6 +712,11 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
             accountScope={id}
             showFilters={false}
             createHref={`/service-requests/new?accountId=${id}`}
+            emptyState={{
+              headline: "No service requests on this account",
+              description:
+                "Service requests filed for this account will appear here with their status and SLA countdown.",
+            }}
           />
         )}
 

@@ -70,6 +70,11 @@ export default function BillingCyclesPage() {
       getDetailHref={(row) => `/billing-cycles/${row.id}`}
       columns={columns}
       newAction={{ label: "Add Billing Cycle", href: "/billing-cycles/new" }}
+      emptyState={{
+        headline: "No billing cycles configured",
+        description:
+          "Billing cycles group accounts that share a read-and-bill calendar — monthly, bimonthly, quarterly — so the billing run processes them as a batch.",
+      }}
       paginated={false}
     />
   );

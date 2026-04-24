@@ -88,6 +88,11 @@ export default function RateSchedulesPage() {
       getDetailHref={(row) => `/rate-schedules/${row.id}`}
       columns={columns}
       newAction={{ label: "Add Rate Schedule", href: "/rate-schedules/new" }}
+      emptyState={{
+        headline: "No rate schedules yet",
+        description:
+          "Rate schedules define how a commodity is priced. Add one per commodity before signing up service agreements that will bill against it.",
+      }}
       headerSlot={
         <PageDescription storageKey="rate-schedules">
           A <b>rate schedule</b> defines how a commodity is priced — base charges,

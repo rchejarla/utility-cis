@@ -141,6 +141,11 @@ export default function CustomersPage() {
       getDetailHref={(row) => `/customers/${row.id}`}
       columns={columns}
       newAction={{ label: "Add Customer", href: "/customers/new" }}
+      emptyState={{
+        headline: "No customers yet",
+        description:
+          "Customers are the people and organizations you bill — each one can own multiple accounts across different services.",
+      }}
       headerSlot={<CustomerStats />}
       search={{
         paramKey: "search",

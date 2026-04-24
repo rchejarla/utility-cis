@@ -150,6 +150,11 @@ export default function MeterEventsPage() {
       getDetailHref={(row) => `/meter-events/${row.id}`}
       columns={columns}
       newAction={{ label: "+ Log Event", href: "/meter-events/new" }}
+      emptyState={{
+        headline: "No meter events reported",
+        description:
+          "Events are anomalies flagged against a meter — tampering, leak detection, register rollover, communication faults — usually raised by the meter itself or during validation.",
+      }}
       filters={[
         { key: "status", label: "Status", options: STATUS_OPTIONS },
         { key: "eventType", label: "Event Type", options: EVENT_TYPE_OPTIONS },

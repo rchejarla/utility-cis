@@ -154,6 +154,13 @@ export interface ServiceRequestListProps {
    * Forwarded straight through to EntityListPage.
    */
   headerSlot?: React.ReactNode;
+  /**
+   * Optional empty-state copy forwarded to EntityListPage. The queue page
+   * passes queue-tone copy; the account-detail tab passes tab-scoped copy
+   * (since an empty queue and an account with no requests deserve
+   * different first-run messages).
+   */
+  emptyState?: { headline?: string; description?: string };
 }
 
 /**
@@ -171,6 +178,7 @@ export function ServiceRequestList({
   showFilters = true,
   createHref,
   headerSlot,
+  emptyState,
 }: ServiceRequestListProps) {
   const filters: EntityListFilter[] = showFilters
     ? [
@@ -202,6 +210,7 @@ export function ServiceRequestList({
       newAction={createHref ? { label: "+ New Request", href: createHref } : undefined}
       paginated={false}
       headerSlot={headerSlot}
+      emptyState={emptyState}
     />
   );
 }
