@@ -147,6 +147,9 @@ export default function SlaSettingsPage() {
   async function updateField(id: string, patch: Partial<SlaRow>) {
     try {
       await apiClient.patch(`/api/v1/slas/${id}`, patch);
+      // Confirm the save — on-blur edits are silent otherwise and
+      // users couldn't tell whether their change persisted.
+      toast("SLA updated", "success");
       reload();
     } catch (err) {
       toast(err instanceof Error ? err.message : "Failed to update SLA", "error");
@@ -268,18 +271,25 @@ export default function SlaSettingsPage() {
                           type="number"
                           min={0}
                           step={0.25}
+                          placeholder="none"
+                          title="Empty or 0 = no escalation"
                           defaultValue={r.escalationHours ?? ""}
                           disabled={!canEdit}
                           onBlur={(e) => {
+                            // Treat empty or 0 as "no escalation" — the API
+                            // rejects non-positive numbers, and 0-hour
+                            // escalation isn't meaningful anyway.
                             const raw = e.target.value.trim();
-                            const next = raw === "" ? null : Number(raw);
+                            const parsed = raw === "" ? null : Number(raw);
+                            const next =
+                              parsed === null || !Number.isFinite(parsed) || parsed <= 0
+                                ? null
+                                : parsed;
+                            if (next === r.escalationHours) return;
                             if (next === null) {
-                              if (r.escalationHours !== null) {
-                                updateField(r.id, { escalationHours: null });
-                              }
-                            } else if (Number.isFinite(next) && next !== r.escalationHours) {
-                              updateField(r.id, { escalationHours: next });
+                              e.target.value = "";
                             }
+                            updateField(r.id, { escalationHours: next });
                           }}
                           style={hoursInputStyle}
                         />
