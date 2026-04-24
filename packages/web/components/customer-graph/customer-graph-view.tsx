@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   Background,
   BackgroundVariant,
+  Controls,
   ReactFlow,
   ReactFlowProvider,
   type Edge,
@@ -555,6 +556,24 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
           0%, 100% { outline-color: var(--accent-primary); }
           50% { outline-color: var(--accent-secondary); }
         }
+        /* React Flow zoom controls — paint them onto the CIS surface
+           so the default white buttons don't clash with the dark
+           canvas. Only +/− buttons remain after dropping FitView. */
+        .react-flow__controls {
+          background: var(--bg-card);
+          border: 1px solid var(--border);
+          border-radius: var(--radius);
+          overflow: hidden;
+        }
+        .react-flow__controls-button {
+          background: var(--bg-card) !important;
+          border-bottom: 1px solid var(--border-subtle) !important;
+          color: var(--text-secondary) !important;
+          fill: var(--text-secondary) !important;
+        }
+        .react-flow__controls-button:hover {
+          background: var(--bg-hover) !important;
+        }
         .react-flow__attribution {
           background: transparent !important;
           color: var(--text-muted) !important;
@@ -693,12 +712,16 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
                 size={1}
                 color="var(--border)"
               />
-              {/* No built-in Controls or MiniMap — the canvas
-                  supports scroll-to-zoom and drag-to-pan natively,
-                  and the top-right button above handles full-screen.
-                  The default fit-view button's "4-corner" icon looked
-                  too much like "fullscreen" and the minimap was
-                  redundant noise. */}
+              {/* Zoom +/- only — the fit-view button's 4-corner
+                  icon was getting confused with the top-right
+                  fullscreen toggle, so it's off. The lock button
+                  (interactive toggle) is off too since nodes are
+                  already non-draggable. MiniMap removed. */}
+              <Controls
+                position="bottom-left"
+                showFitView={false}
+                showInteractive={false}
+              />
             </ReactFlow>
           ) : (
             <div
