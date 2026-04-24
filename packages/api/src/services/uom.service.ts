@@ -7,7 +7,7 @@ export async function listUom(utilityId: string, commodityId?: string) {
   return prisma.unitOfMeasure.findMany({
     where: { utilityId, ...(commodityId ? { commodityId } : {}) },
     orderBy: { code: "asc" },
-    include: { commodity: true },
+    include: { commodity: true, measureType: true },
   });
 }
 
@@ -21,16 +21,27 @@ export async function createUom(
     { utilityId, actorId, actorName, entityType: "UnitOfMeasure" },
     EVENT_TYPES.UOM_CREATED,
     async () => {
-      // BR-UO-003: Only one base unit per commodity — unmark existing if setting new one
+      // BR-UO-003: One base unit per (commodity, measure_type) group —
+      // base-unit is the conversion anchor, and conversions only make
+      // sense within a measure-type group (you can't convert kWh to
+      // kW). Unmark any existing base in the same group before we
+      // set a new one. Enforced at the DB layer as well via a
+      // partial unique index; this keeps the UX "set base here"
+      // instead of forcing the admin to un-base the other first.
       if (data.isBaseUnit) {
         await prisma.unitOfMeasure.updateMany({
-          where: { utilityId, commodityId: data.commodityId, isBaseUnit: true },
+          where: {
+            utilityId,
+            commodityId: data.commodityId,
+            measureTypeId: data.measureTypeId,
+            isBaseUnit: true,
+          },
           data: { isBaseUnit: false },
         });
       }
       return prisma.unitOfMeasure.create({
         data: { ...data, utilityId },
-        include: { commodity: true },
+        include: { commodity: true, measureType: true },
       });
     }
   );
@@ -49,17 +60,27 @@ export async function updateUom(
     EVENT_TYPES.UOM_UPDATED,
     before,
     async () => {
-      // BR-UO-003: Only one base unit per commodity — unmark existing if setting new one
+      // BR-UO-003 (scoped) — if flipping this row to base, unmark any
+      // existing base in the target (commodity, measure_type) group.
+      // Use the incoming measureTypeId if the admin is moving the UOM
+      // between groups, else fall back to the existing one.
       if (data.isBaseUnit) {
+        const targetMeasureTypeId = data.measureTypeId ?? before.measureTypeId;
         await prisma.unitOfMeasure.updateMany({
-          where: { utilityId, commodityId: before.commodityId, isBaseUnit: true, id: { not: id } },
+          where: {
+            utilityId,
+            commodityId: before.commodityId,
+            measureTypeId: targetMeasureTypeId,
+            isBaseUnit: true,
+            id: { not: id },
+          },
           data: { isBaseUnit: false },
         });
       }
       return prisma.unitOfMeasure.update({
         where: { id, utilityId },
         data,
-        include: { commodity: true },
+        include: { commodity: true, measureType: true },
       });
     }
   );
