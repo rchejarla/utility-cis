@@ -14,6 +14,12 @@ interface SearchableSelectProps {
   placeholder?: string;
   clearLabel?: string;
   label?: string;
+  /**
+   * Compact height to align with filter pills in EntityListPage's
+   * filter row. Drops the trigger to ~30px so it sits flush next to
+   * FilterBar pills. Default (false) keeps the form-friendly 36px.
+   */
+  compact?: boolean;
 }
 
 /**
@@ -33,6 +39,7 @@ export function SearchableSelect({
   placeholder = "Select...",
   clearLabel = "Clear",
   label,
+  compact = false,
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -191,12 +198,12 @@ export function SearchableSelect({
           alignItems: "center",
           justifyContent: "space-between",
           width: "100%",
-          minHeight: "36px",
-          padding: "7px 12px",
-          fontSize: "13px",
+          minHeight: compact ? "30px" : "36px",
+          padding: compact ? "4px 12px" : "7px 12px",
+          fontSize: compact ? "12px" : "13px",
           background: "var(--bg-card)",
           border: value ? "1px solid var(--accent-primary)" : "1px solid var(--border)",
-          borderRadius: "var(--radius)",
+          borderRadius: compact ? "999px" : "var(--radius)",
           color: value ? "var(--text-primary)" : "var(--text-muted)",
           cursor: "pointer",
           fontFamily: "inherit",

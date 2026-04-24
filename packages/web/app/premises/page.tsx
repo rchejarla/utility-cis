@@ -1,12 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faTableList, faMap } from "@fortawesome/pro-solid-svg-icons";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
-import { EntityListPage } from "@/components/ui/entity-list-page";
+import { EntityListPage, type EntityListFilter } from "@/components/ui/entity-list-page";
+import { FilterBar } from "@/components/ui/filter-bar";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { MapView } from "@/components/premises/map-view";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
@@ -120,20 +124,32 @@ interface PremisesStats {
 /**
  * Premises landing — thin wrapper around EntityListPage for table
  * mode; keeps the custom map view selectable via a Table/Map toggle
- * that lives on the filter row. Stats are fetched once on mount and
- * shown in both modes. Pagination, filtering, and permission gating
- * all flow through EntityListPage so /premises inherits the
- * fresh-empty-state CTA and other list-page patterns.
+ * on the filter row. Filter state lives at the page level so it
+ * persists across view switches and both modes render the same
+ * filter row.
  */
 export default function PremisesPage() {
   const router = useRouter();
-  const { canView } = usePermission("premises");
+  const { canView, canCreate } = usePermission("premises");
   const [view, setView] = useState<"table" | "map">("table");
+  const [filterValues, setFilterValues] = useState<Record<string, string | undefined>>({});
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [stats, setStats] = useState<PremisesStats>({ total: 0, active: 0, inactive: 0, condemned: 0 });
+
+  // Owner option list — fetched once per mount and shared between the
+  // table mode (via EntityListPage's dynamic filter) and the map mode
+  // (via a local copy of the filter controls). Kept here so the two
+  // modes show the same option set.
+  useEffect(() => {
+    apiClient
+      .get<Customer[] | { data: Customer[] }>("/api/v1/customers", { limit: "500" })
+      .then((res) => setCustomers(Array.isArray(res) ? res : res.data ?? []))
+      .catch(() => {});
+  }, []);
 
   // Stats come from the list endpoint's aggregate payload; fetch a
   // tiny page once on mount rather than relying on the paginated
-  // hook's meta, which only surfaces the total count.
+  // hook's meta (which only surfaces the total count).
   const fetchStats = useCallback(async () => {
     try {
       const res = await apiClient.get<{
@@ -155,6 +171,42 @@ export default function PremisesPage() {
     fetchStats();
   }, [fetchStats]);
 
+  const ownerOptions = useMemo(
+    () =>
+      customers.map((c) => ({
+        value: String(c.id),
+        label:
+          c.customerType === "ORGANIZATION"
+            ? String(c.organizationName ?? "")
+            : `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim(),
+      })),
+    [customers],
+  );
+
+  const filtersConfig: EntityListFilter[] = useMemo(
+    () => [
+      { key: "premiseType", label: "Type", options: PREMISE_TYPE_OPTIONS },
+      { key: "status", label: "Status", options: STATUS_OPTIONS },
+      {
+        key: "ownerId",
+        label: "Owner",
+        optionsEndpoint: "/api/v1/customers",
+        optionsParams: { limit: "500" },
+        mapOption: (c) => ({
+          value: String(c.id),
+          label:
+            c.customerType === "ORGANIZATION"
+              ? String(c.organizationName ?? "")
+              : `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim(),
+        }),
+        searchable: true,
+        searchablePlaceholder: "Filter by owner...",
+        searchableClearLabel: "All owners",
+      },
+    ],
+    [],
+  );
+
   if (!canView) return <AccessDenied />;
 
   const statTiles = (
@@ -173,6 +225,30 @@ export default function PremisesPage() {
     </div>
   );
 
+  const viewToggleButton = (v: "table" | "map", icon: typeof faTableList, label: string) => (
+    <button
+      key={v}
+      onClick={() => setView(v)}
+      title={label}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "5px 12px",
+        fontSize: "12px",
+        fontWeight: 500,
+        background: view === v ? "var(--accent-primary)" : "transparent",
+        color: view === v ? "#fff" : "var(--text-secondary)",
+        border: "none",
+        cursor: "pointer",
+        fontFamily: "inherit",
+      }}
+    >
+      <FontAwesomeIcon icon={icon} style={{ width: 12, height: 12 }} />
+      {label}
+    </button>
+  );
+
   const viewToggle = (
     <div
       style={{
@@ -182,48 +258,63 @@ export default function PremisesPage() {
         overflow: "hidden",
       }}
     >
-      {(["table", "map"] as const).map((v) => (
-        <button
-          key={v}
-          onClick={() => setView(v)}
-          style={{
-            padding: "5px 14px",
-            fontSize: "12px",
-            fontWeight: 500,
-            background: view === v ? "var(--accent-primary)" : "transparent",
-            color: view === v ? "#fff" : "var(--text-secondary)",
-            border: "none",
-            cursor: "pointer",
-            fontFamily: "inherit",
-            textTransform: "capitalize",
-          }}
-        >
-          {v === "table" ? "⊞ Table" : "🗺 Map"}
-        </button>
-      ))}
+      {viewToggleButton("table", faTableList, "Table")}
+      {viewToggleButton("map", faMap, "Map")}
     </div>
   );
 
   if (view === "map") {
-    // Map view renders a minimal shell with the same chrome
-    // EntityListPage would render — header, stats, view toggle — but
-    // swaps the table + filters out for the full-bleed MapView. No
-    // filter bar in map mode; panning/zoom is the filter.
+    // Map mode: render the same filter row + view toggle so users can
+    // switch views without losing filter context, then drop in the
+    // map body. MapView currently honors premiseType via its own
+    // overlay controls; other filters here are shared UI awaiting
+    // end-to-end map wiring.
     return (
       <div>
         <PageHeader
           title="Premises"
           subtitle={`${stats.total.toLocaleString()} total premises`}
+          action={canCreate ? { label: "Add Premise", href: "/premises/new" } : undefined}
         />
         {statTiles}
         <div
           style={{
             display: "flex",
-            justifyContent: "flex-end",
+            alignItems: "center",
+            gap: "12px",
             marginBottom: "16px",
+            flexWrap: "wrap",
           }}
         >
-          {viewToggle}
+          <FilterBar
+            filters={[
+              {
+                key: "premiseType",
+                label: "Type",
+                options: PREMISE_TYPE_OPTIONS,
+                value: filterValues.premiseType,
+                onChange: (v) => setFilterValues((prev) => ({ ...prev, premiseType: v })),
+              },
+              {
+                key: "status",
+                label: "Status",
+                options: STATUS_OPTIONS,
+                value: filterValues.status,
+                onChange: (v) => setFilterValues((prev) => ({ ...prev, status: v })),
+              },
+            ]}
+          />
+          <div style={{ width: 220 }}>
+            <SearchableSelect
+              options={ownerOptions}
+              value={filterValues.ownerId}
+              onChange={(v) => setFilterValues((prev) => ({ ...prev, ownerId: v }))}
+              placeholder="Filter by owner..."
+              clearLabel="All owners"
+              compact
+            />
+          </div>
+          <div style={{ marginLeft: "auto", flexShrink: 0 }}>{viewToggle}</div>
         </div>
         <div style={{ display: "flex", flex: 1, minHeight: "560px" }}>
           <MapView onPremiseClick={(id) => router.push(`/premises/${id}`)} />
@@ -248,31 +339,14 @@ export default function PremisesPage() {
       }}
       headerSlot={statTiles}
       filtersRightSlot={viewToggle}
+      filterValues={filterValues}
+      onFilterValuesChange={setFilterValues}
       search={{
         paramKey: "search",
         placeholder: "Search by address, city, or zip...",
         variant: "prominent",
       }}
-      filters={[
-        { key: "premiseType", label: "Type", options: PREMISE_TYPE_OPTIONS },
-        { key: "status", label: "Status", options: STATUS_OPTIONS },
-        {
-          key: "ownerId",
-          label: "Owner",
-          optionsEndpoint: "/api/v1/customers",
-          optionsParams: { limit: "500" },
-          mapOption: (c) => ({
-            value: String(c.id),
-            label:
-              c.customerType === "ORGANIZATION"
-                ? String(c.organizationName ?? "")
-                : `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim(),
-          }),
-          searchable: true,
-          searchablePlaceholder: "Filter by owner...",
-          searchableClearLabel: "All owners",
-        },
-      ]}
+      filters={filtersConfig}
     />
   );
 }
