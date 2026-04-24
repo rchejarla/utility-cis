@@ -20,7 +20,7 @@ import type {
   GraphNode,
   GraphNodeType,
 } from "@utility-cis/shared";
-import { PageHeader } from "@/components/ui/page-header";
+import Link from "next/link";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
@@ -510,9 +510,6 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
 
   if (!canView) return <AccessDenied />;
 
-  const customerLabel =
-    graph?.nodes.find((n) => n.type === "customer")?.label ?? "Customer";
-
   return (
     <div
       ref={fullscreenRef}
@@ -534,14 +531,6 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
           : {}),
       }}
     >
-      <PageHeader
-        title={loading ? "Loading graph..." : `${customerLabel} — Graph`}
-        action={{
-          label: "Back to detail",
-          href: `/customers/${customerId}`,
-        }}
-      />
-
       {/* Module-scoped styling. Kept inline because it's the only
           global-ish CSS the graph view needs and the inline/styled
           convention runs throughout the rest of the app. */}
@@ -580,14 +569,44 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
         }
       `}</style>
 
-      {/* Filter chips row */}
-      {graph && (
-        <EntityFilterChips
-          counts={counts}
-          hiddenTypes={hiddenTypes}
-          onToggle={toggleType}
-        />
-      )}
+      {/* Filter chips row — with the Back-to-detail link pinned to
+          the right so it sits inline and doesn't consume a whole
+          header row above the graph. */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {graph && (
+            <EntityFilterChips
+              counts={counts}
+              hiddenTypes={hiddenTypes}
+              onToggle={toggleType}
+            />
+          )}
+        </div>
+        <Link
+          href={`/customers/${customerId}`}
+          style={{
+            flexShrink: 0,
+            padding: "6px 12px",
+            fontSize: 12,
+            fontWeight: 500,
+            background: "transparent",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+            color: "var(--text-secondary)",
+            textDecoration: "none",
+            fontFamily: "inherit",
+          }}
+        >
+          ← Back to detail
+        </Link>
+      </div>
 
       {graph?.truncated && (
         <div
@@ -625,14 +644,14 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
           display: "flex",
           gap: 14,
           alignItems: "stretch",
-          minHeight: "70vh",
+          minHeight: "80vh",
         }}
       >
         <div
           style={{
             flex: 1,
             minWidth: 0,
-            height: isFullscreen ? "calc(100vh - 160px)" : "70vh",
+            height: isFullscreen ? "calc(100vh - 160px)" : "80vh",
             background: "var(--bg-deep)",
             border: "1px solid var(--border)",
             borderRadius: "var(--radius)",
@@ -697,7 +716,11 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
               onNodeDoubleClick={handleNodeDoubleClick}
               onPaneClick={() => setSelectedNodeId(null)}
               fitView
-              fitViewOptions={{ padding: 0.2, maxZoom: 1.2 }}
+              // Tighter padding + higher fit-view cap so small /
+              // medium customers land at a readable zoom on load.
+              // Big industrial customers still fit-to-screen because
+              // fit-view uses whichever zoom fits their bounding box.
+              fitViewOptions={{ padding: 0.08, maxZoom: 1.6 }}
               minZoom={0.3}
               maxZoom={2}
               proOptions={{ hideAttribution: true }}
