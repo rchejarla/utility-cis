@@ -188,6 +188,7 @@ export default function AuditLogPage() {
         )}
       </div>
 
+      <div style={{ marginBottom: 16 }}>
       <FilterBar
         filters={[
           {
@@ -206,6 +207,7 @@ export default function AuditLogPage() {
           },
         ]}
       />
+      </div>
 
       <DataTable
         columns={columns as any}

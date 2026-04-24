@@ -155,6 +155,10 @@ function DropdownItem({
 }
 
 export function FilterBar({ filters }: FilterBarProps) {
+  // Layout concern — external margins are the consumer's job. Embedding
+  // FilterBar alongside other controls (EntityListPage's filter row,
+  // /premises' view toggle) required cancelling out an internal margin-
+  // bottom that used to live here; dropping it avoids that workaround.
   return (
     <div
       style={{
@@ -162,7 +166,6 @@ export function FilterBar({ filters }: FilterBarProps) {
         alignItems: "center",
         gap: "8px",
         flexWrap: "wrap",
-        marginBottom: "16px",
       }}
     >
       <span

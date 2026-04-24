@@ -198,10 +198,16 @@ export function SearchableSelect({
           alignItems: "center",
           justifyContent: "space-between",
           width: "100%",
-          minHeight: compact ? "26px" : "36px",
+          // Match FilterBar's pill dimensions exactly when compact so
+          // the owner filter lines up with Type / Status pills in the
+          // /premises filter row. Line-height pin prevents the flex
+          // button from stretching past the intrinsic text height.
+          minHeight: compact ? undefined : "36px",
           padding: compact ? "5px 12px" : "7px 12px",
+          lineHeight: compact ? 1.2 : undefined,
           fontSize: compact ? "12px" : "13px",
-          background: "var(--bg-card)",
+          fontWeight: compact ? 500 : undefined,
+          background: compact ? "var(--bg-card)" : "var(--bg-card)",
           border: value ? "1px solid var(--accent-primary)" : "1px solid var(--border)",
           borderRadius: compact ? "999px" : "var(--radius)",
           color: value ? "var(--text-primary)" : "var(--text-muted)",
