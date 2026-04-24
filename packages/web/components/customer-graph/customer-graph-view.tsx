@@ -14,6 +14,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faExpand, faCompress } from "@fortawesome/pro-solid-svg-icons";
 import type {
   CustomerGraphDTO,
   GraphEdge,
@@ -483,13 +484,57 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
     });
   }, []);
 
+  // ─── Fullscreen toggle ──────────────────────────────────────────
+  // Use the browser Fullscreen API on the canvas container so the
+  // graph can take over the whole viewport. Works on all modern
+  // browsers and exits cleanly on Escape.
+  const fullscreenRef = useRef<HTMLDivElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const toggleFullscreen = useCallback(() => {
+    const el = fullscreenRef.current;
+    if (!el) return;
+    if (document.fullscreenElement === el) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      el.requestFullscreen().catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    function onFsChange() {
+      setIsFullscreen(document.fullscreenElement === fullscreenRef.current);
+    }
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, []);
+
   if (!canView) return <AccessDenied />;
 
   const customerLabel =
     graph?.nodes.find((n) => n.type === "customer")?.label ?? "Customer";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div
+      ref={fullscreenRef}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
+        // When the container enters fullscreen, the browser paints
+        // its default black background behind us. Give it the CIS
+        // surface colour so the graph looks intentional and add
+        // padding the app shell normally provides.
+        ...(isFullscreen
+          ? {
+              padding: 20,
+              background: "var(--bg-deep)",
+              height: "100vh",
+              overflow: "auto",
+            }
+          : {}),
+      }}
+    >
       <PageHeader
         title={loading ? "Loading graph..." : `${customerLabel} — Graph`}
         action={{
@@ -593,7 +638,7 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
           style={{
             flex: 1,
             minWidth: 0,
-            height: "70vh",
+            height: isFullscreen ? "calc(100vh - 160px)" : "70vh",
             background: "var(--bg-deep)",
             border: "1px solid var(--border)",
             borderRadius: "var(--radius)",
@@ -601,6 +646,37 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
             position: "relative",
           }}
         >
+          {/* Floating fullscreen toggle — always in the top-right of
+              the canvas. Uses the browser Fullscreen API so the graph
+              container (including filter chips + drawer + timeline)
+              takes over the whole viewport. Escape exits. */}
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            title={isFullscreen ? "Exit full screen" : "Full screen"}
+            style={{
+              position: "absolute",
+              top: 12,
+              right: 12,
+              zIndex: 5,
+              width: 34,
+              height: 34,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "var(--bg-card)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            <FontAwesomeIcon
+              icon={isFullscreen ? faCompress : faExpand}
+              style={{ width: 14, height: 14 }}
+            />
+          </button>
           {loading ? (
             <div
               style={{
