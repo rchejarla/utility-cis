@@ -22,3 +22,4 @@ export * from "./workflows";
 export * from "./tenant-settings";
 export * from "./notification";
 export * from "./delinquency";
+export * from "./service-request-type-def";
