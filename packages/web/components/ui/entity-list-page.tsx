@@ -8,6 +8,7 @@ import { PageHeader } from "./page-header";
 import { FilterBar } from "./filter-bar";
 import { DataTable, type Column } from "./data-table";
 import { AccessDenied } from "./access-denied";
+import { ListEmptyCta } from "./list-empty-cta";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { usePaginatedList } from "@/lib/use-paginated-list";
@@ -78,6 +79,16 @@ export interface EntityListPageProps<T extends { id: string }> {
     label: string;
     href: string;
   };
+  /**
+   * Optional copy shown inside the fresh-empty-state CTA. Only
+   * consulted when the list has zero rows AND no filters/search are
+   * applied. `headline` defaults to "No {subject}s yet"; set
+   * `description` to add 1–2 teaching sentences for a new operator.
+   */
+  emptyState?: {
+    headline?: string;
+    description?: string;
+  };
   /** Optional search input. */
   search?: EntityListSearch;
   /** Optional filter pills. Static or dynamic. */
@@ -138,6 +149,7 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
     getDetailHref,
     columns,
     newAction,
+    emptyState,
     search,
     filters,
     headerSlot,
@@ -211,6 +223,18 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
 
   const subtitle = `${meta.total.toLocaleString()} total ${subject}`;
 
+  // Fresh-empty = page loaded, zero rows, and the user hasn't narrowed
+  // the set via filters or search. In that case skip the filter bar +
+  // empty table and render a focused CTA instead — teaches new
+  // operators what the page is for and how to start. When filters or
+  // search are active, the zero-row case falls through to DataTable's
+  // "No records found" message so the user can tell their filter
+  // produced the emptiness, not the underlying data.
+  const hasActiveFilter = Object.values(filterValues).some((v) => v !== undefined && v !== "");
+  const hasActiveSearch = searchValue !== "";
+  const showEmptyCta =
+    !loading && data.length === 0 && !hasActiveFilter && !hasActiveSearch;
+
   return (
     <div>
       <PageHeader
@@ -221,7 +245,7 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
 
       {headerSlot}
 
-      {search && search.variant !== "compact" && (
+      {!showEmptyCta && search && search.variant !== "compact" && (
         <div style={{ position: "relative", marginBottom: "12px" }}>
           <div
             style={{
@@ -266,7 +290,7 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
         </div>
       )}
 
-      {search && search.variant === "compact" && (
+      {!showEmptyCta && search && search.variant === "compact" && (
         <div style={{ marginBottom: "8px" }}>
           <input
             style={{
@@ -287,16 +311,27 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
         </div>
       )}
 
-      {filterConfigs.length > 0 && <FilterBar filters={filterConfigs} />}
+      {showEmptyCta ? (
+        <ListEmptyCta
+          subject={subject}
+          headline={emptyState?.headline}
+          description={emptyState?.description}
+          action={canCreate && newAction ? newAction : undefined}
+        />
+      ) : (
+        <>
+          {filterConfigs.length > 0 && <FilterBar filters={filterConfigs} />}
 
-      <DataTable
-        columns={columns as Column<Record<string, unknown>>[]}
-        data={data as unknown as Record<string, unknown>[]}
-        meta={meta}
-        loading={loading}
-        onPageChange={setPage}
-        onRowClick={(row) => router.push(getDetailHref(row as unknown as T))}
-      />
+          <DataTable
+            columns={columns as Column<Record<string, unknown>>[]}
+            data={data as unknown as Record<string, unknown>[]}
+            meta={meta}
+            loading={loading}
+            onPageChange={setPage}
+            onRowClick={(row) => router.push(getDetailHref(row as unknown as T))}
+          />
+        </>
+      )}
     </div>
   );
 }
