@@ -5,8 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   Background,
   BackgroundVariant,
-  Controls,
-  MiniMap,
   ReactFlow,
   ReactFlowProvider,
   type Edge,
@@ -557,29 +555,6 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
           0%, 100% { outline-color: var(--accent-primary); }
           50% { outline-color: var(--accent-secondary); }
         }
-        /* React Flow control panel: match the CIS surface treatment
-           so the default white controls don't clash with the dark
-           canvas background. */
-        .react-flow__controls {
-          background: var(--bg-card);
-          border: 1px solid var(--border);
-          border-radius: var(--radius);
-          overflow: hidden;
-        }
-        .react-flow__controls-button {
-          background: var(--bg-card) !important;
-          border-bottom: 1px solid var(--border-subtle) !important;
-          color: var(--text-secondary) !important;
-          fill: var(--text-secondary) !important;
-        }
-        .react-flow__controls-button:hover {
-          background: var(--bg-hover) !important;
-        }
-        .react-flow__minimap {
-          background: var(--bg-surface) !important;
-          border: 1px solid var(--border);
-          border-radius: var(--radius);
-        }
         .react-flow__attribution {
           background: transparent !important;
           color: var(--text-muted) !important;
@@ -718,35 +693,12 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
                 size={1}
                 color="var(--border)"
               />
-              <Controls showInteractive={false} position="bottom-left" />
-              <MiniMap
-                position="bottom-right"
-                pannable
-                zoomable
-                nodeColor={(n) => {
-                  const nodeType = (n.type ?? "customer") as GraphNodeType;
-                  // MiniMap renders into an SVG — the React Flow
-                  // library strips CSS variables, so resolve to a
-                  // neutral fill and let our border carry accent.
-                  switch (nodeType) {
-                    case "customer":
-                      return "#6366f1";
-                    case "account":
-                      return "#22d3ee";
-                    case "premise":
-                      return "#c084fc";
-                    case "agreement":
-                      return "#60a5fa";
-                    case "meter":
-                      return "#4ade80";
-                    case "service_request":
-                      return "#fbbf24";
-                    default:
-                      return "#4a5a73";
-                  }
-                }}
-                maskColor="rgba(6, 8, 13, 0.7)"
-              />
+              {/* No built-in Controls or MiniMap — the canvas
+                  supports scroll-to-zoom and drag-to-pan natively,
+                  and the top-right button above handles full-screen.
+                  The default fit-view button's "4-corner" icon looked
+                  too much like "fullscreen" and the minimap was
+                  redundant noise. */}
             </ReactFlow>
           ) : (
             <div
