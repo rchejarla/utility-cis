@@ -97,7 +97,7 @@ export function PageDescription({ storageKey, children }: PageDescriptionProps) 
         display: "flex",
         alignItems: "flex-start",
         gap: 12,
-        maxWidth: 720,
+        width: "100%",
         padding: "10px 14px",
         margin: "0 0 16px",
         borderLeft: "3px solid var(--accent-primary)",
