@@ -13,6 +13,7 @@ import { ContactsTab } from "@/components/accounts/contacts-tab";
 import { BillingAddressesTab } from "@/components/accounts/billing-addresses-tab";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
 import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
+import { ServiceRequestList } from "@/components/service-requests/request-list";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
 
@@ -266,6 +267,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
           { key: "agreements", label: `Agreements (${account.serviceAgreements?.length ?? 0})` },
           { key: "contacts", label: `Contacts (${account.contacts?.length ?? 0})` },
           { key: "billing-addresses", label: `Billing Addresses (${account.billingAddresses?.length ?? 0})` },
+          { key: "service-requests", label: "Service Requests" },
           { key: "attachments", label: "Attachments" },
           { key: "audit", label: "Audit" },
         ]}
@@ -702,6 +704,14 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
             onAddressesChanged={loadAccount}
             showForm={showAddAddress}
             onShowFormChange={setShowAddAddress}
+          />
+        )}
+
+        {activeTab === "service-requests" && (
+          <ServiceRequestList
+            accountScope={id}
+            showFilters={false}
+            createHref={`/service-requests/new?accountId=${id}`}
           />
         )}
 
