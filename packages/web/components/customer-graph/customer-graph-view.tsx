@@ -94,15 +94,51 @@ function threeRowLayout(
     }
   }
 
-  const byType = (t: GraphNodeType) =>
-    nodes
-      .filter((n) => n.type === t)
-      .sort((a, b) => a.id.localeCompare(b.id));
+  // Premises come first, sorted by meter count DESC so the busiest
+  // physical site floats to the top. Tie-break by id so the order
+  // stays stable across renders.
+  const premises = nodes
+    .filter((n) => n.type === "premise")
+    .sort((a, b) => {
+      const ma = metersByPremise.get(a.id)?.length ?? 0;
+      const mb = metersByPremise.get(b.id)?.length ?? 0;
+      if (mb !== ma) return mb - ma;
+      return a.id.localeCompare(b.id);
+    });
+
+  // Build ordinal map so we can sort accounts to line up with the
+  // premise their agreements serve.
+  const premiseOrdinal = new Map<string, number>();
+  premises.forEach((p, i) => premiseOrdinal.set(p.id, i));
+
+  // For each account, find the premise(s) its agreements serve,
+  // then sort by the topmost (lowest-ordinal) of those premises
+  // so accounts line up with their primary premise on the left.
+  // Accounts without any agreement-linked premise fall to the end.
+  const accountPremiseIndex = (accountId: string): number => {
+    const agIds = agreementsByAccount.get(accountId) ?? [];
+    const premiseIdxs = agIds
+      .map((agId) => nodes.find((n) => n.id === agId)?.data?.premiseId as string | null | undefined)
+      .filter((pid): pid is string => typeof pid === "string")
+      .map((pid) => premiseOrdinal.get(pid))
+      .filter((o): o is number => typeof o === "number");
+    return premiseIdxs.length > 0 ? Math.min(...premiseIdxs) : Number.POSITIVE_INFINITY;
+  };
+
+  const accounts = nodes
+    .filter((n) => n.type === "account")
+    .sort((a, b) => {
+      const ia = accountPremiseIndex(a.id);
+      const ib = accountPremiseIndex(b.id);
+      if (ia !== ib) return ia - ib;
+      return a.id.localeCompare(b.id);
+    });
+
+  const srs = nodes
+    .filter((n) => n.type === "service_request")
+    .sort((a, b) => a.id.localeCompare(b.id));
 
   const customer = nodes.find((n) => n.type === "customer");
-  const premises = byType("premise");
-  const accounts = byType("account");
-  const srs = byType("service_request");
 
   const row2TopY = 200;
   const blockGap = 40;

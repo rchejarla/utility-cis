@@ -217,6 +217,12 @@ export async function buildCustomerGraph(
           status: ag.status,
           commodity: ag.commodity,
           rateSchedule: ag.rateSchedule,
+          // Keep the premise reference on the agreement node data even
+          // though we don't draw a premise→agreement edge any more.
+          // The web layout sorts accounts by the premise their
+          // agreements serve; without this, accounts with flat-rate
+          // (meterless) agreements would have nowhere to look.
+          premiseId: ag.premise?.id ?? null,
           startDate: ag.startDate.toISOString(),
           endDate: ag.endDate ? ag.endDate.toISOString() : null,
         },
