@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiClient } from "@/lib/api-client";
 import { PageHeader } from "@/components/ui/page-header";
@@ -87,7 +87,19 @@ const labelStyle = {
   marginTop: 10,
 };
 
+// The form reads `?accountId=` via `useSearchParams`, which Next.js 15
+// requires to be rendered inside a <Suspense> boundary during
+// server-side prerender. Wrapping it here lets the build succeed
+// without turning off static optimization for the whole route.
 export default function NewServiceRequestPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24, color: "var(--text-muted)" }}>Loading…</div>}>
+      <NewServiceRequestForm />
+    </Suspense>
+  );
+}
+
+function NewServiceRequestForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
