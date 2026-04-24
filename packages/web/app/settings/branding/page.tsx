@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import Link from "next/link";
 import type { BrandingSettings } from "@utility-cis/shared";
 import {
   SettingsSection,
@@ -9,7 +10,6 @@ import {
   SettingsSaveBar,
   SettingPlaceholder,
   settingInputStyle,
-  settingMutedBtnStyle,
 } from "@/components/settings/settings-shell";
 import { useTenantSettingsNamespace } from "@/lib/use-tenant-settings-namespace";
 import { usePermission } from "@/lib/use-permission";
@@ -71,8 +71,26 @@ export default function BrandingSettingsPage() {
         />
         <SettingRow
           label="Accent color"
-          description="Primary accent used on portal buttons, links, and highlights. Lives in the Theme Editor under System → Theme Editor."
-          control={<button style={settingMutedBtnStyle} disabled>See Theme Editor</button>}
+          description="Primary accent used on portal buttons, links, and highlights. Edit under Settings → Theme."
+          control={
+            <Link
+              href="/settings/theme"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                padding: "6px 12px",
+                fontSize: 12,
+                background: "var(--bg-elevated)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+                color: "var(--text-primary)",
+                textDecoration: "none",
+                fontFamily: "inherit",
+              }}
+            >
+              Open Theme Editor
+            </Link>
+          }
         />
       </SettingsCard>
 
