@@ -1,6 +1,7 @@
 "use client";
 
 import { EntityListPage } from "@/components/ui/entity-list-page";
+import { PageDescription } from "@/components/ui/page-description";
 import type { Column } from "@/components/ui/data-table";
 
 interface MeterEvent {
@@ -155,6 +156,16 @@ export default function MeterEventsPage() {
         description:
           "Events are anomalies flagged against a meter — tampering, leak detection, register rollover, communication faults — usually raised by the meter itself or during validation.",
       }}
+      headerSlot={
+        <PageDescription storageKey="meter-events">
+          A <b>meter event</b> is an anomaly recorded on a specific meter —
+          tamper detection, leak alarm, register rollover, communication loss,
+          magnetic interference. Events are raised by the meter itself, by AMI
+          head-end validation, or by field staff during inspections. Each one
+          has a <b>status</b> (OPEN → ACKNOWLEDGED → RESOLVED) and may block
+          billing for the affected agreement until it's cleared.
+        </PageDescription>
+      }
       filters={[
         { key: "status", label: "Status", options: STATUS_OPTIONS },
         { key: "eventType", label: "Event Type", options: EVENT_TYPE_OPTIONS },

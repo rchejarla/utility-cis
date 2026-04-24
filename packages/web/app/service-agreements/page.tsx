@@ -3,6 +3,7 @@
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { EntityListPage } from "@/components/ui/entity-list-page";
+import { PageDescription } from "@/components/ui/page-description";
 import type { Column } from "@/components/ui/data-table";
 
 interface ServiceAgreement {
@@ -85,6 +86,17 @@ export default function ServiceAgreementsPage() {
         description:
           "A service agreement ties an account to a premise and a commodity on a specific rate schedule. Sign one up to start metering and billing a service at a location.",
       }}
+      headerSlot={
+        <PageDescription storageKey="service-agreements">
+          A <b>service agreement</b> is the billable relationship for one
+          commodity at one premise — it binds an account to a rate schedule
+          and a billing cycle, and points at the meters that measure
+          consumption. An account typically has multiple agreements (one per
+          commodity: water, sewer, electric) all at the same location. The
+          <b> status</b> (PENDING → ACTIVE → CLOSED) controls whether reads
+          on its meters are billed.
+        </PageDescription>
+      }
       filters={[
         { key: "status", label: "Status", options: STATUS_OPTIONS },
         {
