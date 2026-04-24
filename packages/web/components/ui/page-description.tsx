@@ -41,13 +41,52 @@ export function PageDescription({ storageKey, children }: PageDescriptionProps) 
     }
   }, [storageKey]);
 
-  if (!visible) return null;
-
   function hide() {
     if (typeof window !== "undefined") {
       localStorage.setItem(`cis_intro_hidden:${storageKey}`, "1");
     }
     setVisible(false);
+  }
+
+  function show() {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(`cis_intro_hidden:${storageKey}`);
+    }
+    setVisible(true);
+  }
+
+  if (!visible) {
+    // Collapsed affordance — leaves a small "Show help" link in the
+    // same slot so dismissal is reversible. Matches the muted-link
+    // styling used elsewhere.
+    return (
+      <div style={{ margin: "0 0 16px" }}>
+        <button
+          type="button"
+          onClick={show}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "4px 8px",
+            fontSize: 11,
+            background: "transparent",
+            border: "1px dashed var(--border)",
+            borderRadius: "var(--radius)",
+            color: "var(--text-muted)",
+            cursor: "pointer",
+            fontFamily: "inherit",
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+          }}
+          title="Show page help"
+          aria-label="Show page help"
+        >
+          <span aria-hidden style={{ fontSize: 12, lineHeight: 1 }}>ⓘ</span>
+          Show page help
+        </button>
+      </div>
+    );
   }
 
   return (
