@@ -240,7 +240,12 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
       <PageHeader
         title={title}
         subtitle={subtitle}
-        action={canCreate && newAction ? newAction : undefined}
+        // When the empty-state CTA is rendered, suppress the header's
+        // Add button — the centered CTA already owns the primary
+        // action and two "Add" buttons in the same viewport reads as
+        // redundant. Once data exists, the header button returns as
+        // the quick-add shortcut next to the title.
+        action={canCreate && newAction && !showEmptyCta ? newAction : undefined}
       />
 
       {headerSlot}
