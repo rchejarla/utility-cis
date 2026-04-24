@@ -11,13 +11,25 @@ const NODE_CAP = 200;
 /**
  * Build a CustomerGraphDTO for the /customers/:id/graph view.
  *
- * One tenant-scoped read pulls the customer with all downstream
- * relationships: owned premises, accounts (with contacts, agreements,
- * service requests) and the meters those agreements touch through
- * the service_agreement_meter junction. The shape is then flattened
- * into nodes + edges + a chronological event list. See
- * docs/superpowers/specs/2026-04-24-customer-graph-view.md for the
- * UX this drives.
+ * The graph models the customer-service domain as a tree-with-cross-
+ * links, NOT a flat tree. The dominant spanning tree is:
+ *
+ *   Customer
+ *   ├── Premise(s)                   (primary child — where service happens)
+ *   │     ├── Agreement(s)           (service contracted here)
+ *   │     ├── Meter(s)               (devices installed here)
+ *   │     └── Service Request(s)     (issues filed about this location)
+ *   └── Account(s)                   (peer of Premise — billing envelope)
+ *
+ * Plus secondary cross-link edges that record the billing +
+ * measurement relationships without duplicating nodes:
+ *   Agreement --billed_by-->  Account
+ *   Agreement --uses-->       Meter
+ *   Service Request --on-->   Account
+ *
+ * The UI renders primary edges solid and secondary edges dashed so
+ * the spanning tree stays visible while the cross-cutting
+ * relationships are legible.
  */
 export async function buildCustomerGraph(
   utilityId: string,
@@ -54,17 +66,16 @@ export async function buildCustomerGraph(
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
   const events: TimelineEvent[] = [];
-  const meterNodeIds = new Set<string>();
-  const premiseNodeIds = new Set<string>();
 
   const customerName =
     customer.customerType === "ORGANIZATION"
       ? customer.organizationName ?? "Organization"
       : `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer";
+  const customerNodeId = `customer:${customer.id}`;
 
-  // Customer node — always the center.
+  // ─── Customer node ───
   nodes.push({
-    id: `customer:${customer.id}`,
+    id: customerNodeId,
     type: "customer",
     label: customerName,
     subtext: customer.customerType,
@@ -83,31 +94,38 @@ export async function buildCustomerGraph(
     occurredAt: customer.createdAt.toISOString(),
     kind: "customer.created",
     label: `Customer record created`,
-    relatedNodeIds: [`customer:${customer.id}`],
+    relatedNodeIds: [customerNodeId],
   });
 
-  // Compute the set of premise IDs that will be reached through
-  // an agreement (at_premise). For those, we skip the redundant
-  // customer -> premise (owns_premise) edge: residential customers
-  // typically own the premise they have service at, and rendering
-  // both as parallel lines to the same node is visual noise. The
-  // owns_premise edge is only meaningful when the customer owns a
-  // premise with NO agreement (e.g. a landlord's rental property).
-  const agreementLinkedPremiseIds = new Set<string>();
+  // ─── Gather every premise that will appear ───
+  // The graph shows every premise the customer touches — both premises
+  // the customer owns AND premises where the customer has service
+  // agreements, even if the customer doesn't own them.
+  const premiseById = new Map<
+    string,
+    {
+      id: string;
+      addressLine1: string;
+      city: string;
+      state: string;
+      zip: string;
+      premiseType: string;
+      status: string;
+      createdAt: Date;
+    }
+  >();
+  for (const p of customer.ownedPremises) premiseById.set(p.id, p);
   for (const acc of customer.accounts) {
     for (const ag of acc.serviceAgreements) {
-      if (ag.premise) agreementLinkedPremiseIds.add(ag.premise.id);
+      if (ag.premise && !premiseById.has(ag.premise.id)) {
+        premiseById.set(ag.premise.id, ag.premise);
+      }
     }
   }
 
-  // Premises owned directly by the customer but not reached through
-  // an agreement (the "pure landlord" case). Premises that agreements
-  // point at are added later, when we process the agreement.
-  for (const p of customer.ownedPremises) {
-    if (agreementLinkedPremiseIds.has(p.id)) continue;
+  // Emit premise nodes + Customer → Premise edges (owns_premise).
+  for (const p of premiseById.values()) {
     const nid = `premise:${p.id}`;
-    if (premiseNodeIds.has(nid)) continue;
-    premiseNodeIds.add(nid);
     nodes.push({
       id: nid,
       type: "premise",
@@ -126,8 +144,8 @@ export async function buildCustomerGraph(
       validTo: null,
     });
     edges.push({
-      id: `edge:${customer.id}->${p.id}`,
-      from: `customer:${customer.id}`,
+      id: `edge:customer-owns:${p.id}`,
+      from: customerNodeId,
       to: nid,
       kind: "owns_premise",
       validFrom: p.createdAt.toISOString(),
@@ -135,7 +153,12 @@ export async function buildCustomerGraph(
     });
   }
 
-  // Accounts → Agreements → Meters, Accounts → Service Requests.
+  // Which premise does each meter live at? Meters are attached to
+  // agreements via the junction, and each agreement has a premise —
+  // use that to route meters under the correct premise in the tree.
+  const meterPremiseIdByMeterId = new Map<string, string>();
+
+  // ─── Accounts (peer of premise under customer) ───
   for (const acc of customer.accounts) {
     const accNodeId = `account:${acc.id}`;
     nodes.push({
@@ -154,8 +177,8 @@ export async function buildCustomerGraph(
       validTo: acc.closedAt ? acc.closedAt.toISOString() : null,
     });
     edges.push({
-      id: `edge:${customer.id}->${acc.id}`,
-      from: `customer:${customer.id}`,
+      id: `edge:customer-owns-account:${acc.id}`,
+      from: customerNodeId,
       to: accNodeId,
       kind: "owns_account",
       validFrom: acc.createdAt.toISOString(),
@@ -178,8 +201,11 @@ export async function buildCustomerGraph(
       });
     }
 
+    // ─── Agreements (child of their premise; cross-linked to account) ───
     for (const ag of acc.serviceAgreements) {
       const agNodeId = `agreement:${ag.id}`;
+      const agPremiseNodeId = ag.premise ? `premise:${ag.premise.id}` : null;
+
       nodes.push({
         id: agNodeId,
         type: "agreement",
@@ -197,20 +223,35 @@ export async function buildCustomerGraph(
         validFrom: ag.startDate.toISOString(),
         validTo: ag.endDate ? ag.endDate.toISOString() : null,
       });
+
+      // Primary: premise_has_agreement (spanning tree edge).
+      if (agPremiseNodeId) {
+        edges.push({
+          id: `edge:premise-agreement:${ag.id}`,
+          from: agPremiseNodeId,
+          to: agNodeId,
+          kind: "premise_has_agreement",
+          validFrom: ag.startDate.toISOString(),
+          validTo: ag.endDate ? ag.endDate.toISOString() : null,
+        });
+      }
+
+      // Secondary cross-link: agreement_billed_by_account.
       edges.push({
-        id: `edge:${acc.id}->${ag.id}`,
-        from: accNodeId,
-        to: agNodeId,
-        kind: "has_agreement",
+        id: `edge:agreement-account:${ag.id}`,
+        from: agNodeId,
+        to: accNodeId,
+        kind: "agreement_billed_by_account",
         validFrom: ag.startDate.toISOString(),
         validTo: ag.endDate ? ag.endDate.toISOString() : null,
       });
+
       events.push({
         id: `evt:agreement-signed:${ag.id}`,
         occurredAt: ag.startDate.toISOString(),
         kind: "agreement.signed",
         label: `Agreement ${ag.agreementNumber} (${ag.commodity?.name ?? ""}) signed`,
-        relatedNodeIds: [agNodeId, accNodeId],
+        relatedNodeIds: [agNodeId, accNodeId, ...(agPremiseNodeId ? [agPremiseNodeId] : [])],
       });
       if (ag.endDate) {
         events.push({
@@ -222,90 +263,19 @@ export async function buildCustomerGraph(
         });
       }
 
-      // Premise referenced by the agreement — dedupe with the owned
-      // premises set and add an at_premise edge from the agreement.
-      if (ag.premise) {
-        const pNodeId = `premise:${ag.premise.id}`;
-        if (!premiseNodeIds.has(pNodeId)) {
-          premiseNodeIds.add(pNodeId);
-          nodes.push({
-            id: pNodeId,
-            type: "premise",
-            label: ag.premise.addressLine1,
-            subtext: `${ag.premise.city}, ${ag.premise.state} ${ag.premise.zip}`,
-            data: {
-              id: ag.premise.id,
-              addressLine1: ag.premise.addressLine1,
-              city: ag.premise.city,
-              state: ag.premise.state,
-              zip: ag.premise.zip,
-              premiseType: ag.premise.premiseType,
-              status: ag.premise.status,
-            },
-            validFrom: ag.premise.createdAt.toISOString(),
-            validTo: null,
-          });
-        }
-        edges.push({
-          id: `edge:${ag.id}->${ag.premise.id}`,
-          from: agNodeId,
-          to: pNodeId,
-          kind: "at_premise",
-          validFrom: ag.startDate.toISOString(),
-          validTo: ag.endDate ? ag.endDate.toISOString() : null,
-        });
-      }
-
-      // Meters attached through the service_agreement_meter junction.
+      // Meters for this agreement — route each meter under its
+      // agreement's premise so the meter becomes a child of the
+      // premise in the spanning tree. The agreement-uses-meter edge
+      // is emitted as a secondary cross-link.
       for (const agm of ag.meters) {
         const m = agm.meter;
-        const mNodeId = `meter:${m.id}`;
-        if (!meterNodeIds.has(mNodeId)) {
-          meterNodeIds.add(mNodeId);
-          nodes.push({
-            id: mNodeId,
-            type: "meter",
-            label: m.meterNumber,
-            subtext: m.meterType,
-            data: {
-              id: m.id,
-              meterNumber: m.meterNumber,
-              meterType: m.meterType,
-              status: m.status,
-              installDate: m.installDate.toISOString(),
-            },
-            validFrom: m.installDate.toISOString(),
-            validTo: m.removalDate ? m.removalDate.toISOString() : null,
-          });
-          events.push({
-            id: `evt:meter-installed:${m.id}`,
-            occurredAt: m.installDate.toISOString(),
-            kind: "meter.installed",
-            label: `Meter ${m.meterNumber} installed`,
-            relatedNodeIds: [mNodeId],
-          });
-          if (m.removalDate) {
-            events.push({
-              id: `evt:meter-removed:${m.id}`,
-              occurredAt: m.removalDate.toISOString(),
-              kind: "meter.removed",
-              label: `Meter ${m.meterNumber} removed`,
-              relatedNodeIds: [mNodeId],
-            });
-          }
+        if (ag.premise && !meterPremiseIdByMeterId.has(m.id)) {
+          meterPremiseIdByMeterId.set(m.id, ag.premise.id);
         }
-        edges.push({
-          id: `edge:${ag.id}->${m.id}`,
-          from: agNodeId,
-          to: mNodeId,
-          kind: "measured_by",
-          validFrom: ag.startDate.toISOString(),
-          validTo: ag.endDate ? ag.endDate.toISOString() : null,
-        });
       }
     }
 
-    // Service requests on this account.
+    // ─── Service Requests (child of their premise; cross-link to account) ───
     for (const sr of acc.serviceRequests) {
       const srNodeId = `service_request:${sr.id}`;
       nodes.push({
@@ -330,11 +300,31 @@ export async function buildCustomerGraph(
             ? sr.cancelledAt.toISOString()
             : null,
       });
+
+      // Primary: the SR lives under its premise when one is set.
+      // Fallback: if no premise, hang it off the account as a child.
+      const srPremiseNodeId = sr.premiseId ? `premise:${sr.premiseId}` : null;
+      if (srPremiseNodeId && premiseById.has(sr.premiseId!)) {
+        edges.push({
+          id: `edge:premise-sr:${sr.id}`,
+          from: srPremiseNodeId,
+          to: srNodeId,
+          kind: "premise_has_service_request",
+          validFrom: sr.createdAt.toISOString(),
+          validTo: sr.completedAt
+            ? sr.completedAt.toISOString()
+            : sr.cancelledAt
+              ? sr.cancelledAt.toISOString()
+              : null,
+        });
+      }
+
+      // Secondary cross-link: the SR's billing-side account.
       edges.push({
-        id: `edge:${acc.id}->${sr.id}`,
-        from: accNodeId,
-        to: srNodeId,
-        kind: "filed_against",
+        id: `edge:account-sr:${sr.id}`,
+        from: srNodeId,
+        to: accNodeId,
+        kind: "service_request_on_account",
         validFrom: sr.createdAt.toISOString(),
         validTo: sr.completedAt
           ? sr.completedAt.toISOString()
@@ -342,25 +332,13 @@ export async function buildCustomerGraph(
             ? sr.cancelledAt.toISOString()
             : null,
       });
-      if (sr.premiseId) {
-        const pNodeId = `premise:${sr.premiseId}`;
-        if (premiseNodeIds.has(pNodeId)) {
-          edges.push({
-            id: `edge:${sr.id}->${sr.premiseId}`,
-            from: srNodeId,
-            to: pNodeId,
-            kind: "filed_at_premise",
-            validFrom: sr.createdAt.toISOString(),
-            validTo: null,
-          });
-        }
-      }
+
       events.push({
         id: `evt:sr-filed:${sr.id}`,
         occurredAt: sr.createdAt.toISOString(),
         kind: "service_request.filed",
         label: `Service request ${sr.requestNumber} (${sr.requestType}) filed`,
-        relatedNodeIds: [srNodeId, accNodeId],
+        relatedNodeIds: [srNodeId, accNodeId, ...(srPremiseNodeId ? [srPremiseNodeId] : [])],
       });
       if (sr.completedAt) {
         events.push({
@@ -374,11 +352,84 @@ export async function buildCustomerGraph(
     }
   }
 
-  // Stable chronological timeline — oldest first.
+  // ─── Meter nodes (child of their premise; cross-link to agreement) ───
+  // Emit once per meter regardless of how many agreements share it.
+  const meterNodesEmitted = new Set<string>();
+  for (const acc of customer.accounts) {
+    for (const ag of acc.serviceAgreements) {
+      const agNodeId = `agreement:${ag.id}`;
+      for (const agm of ag.meters) {
+        const m = agm.meter;
+        const mNodeId = `meter:${m.id}`;
+        if (!meterNodesEmitted.has(mNodeId)) {
+          meterNodesEmitted.add(mNodeId);
+          nodes.push({
+            id: mNodeId,
+            type: "meter",
+            label: m.meterNumber,
+            subtext: m.meterType,
+            data: {
+              id: m.id,
+              meterNumber: m.meterNumber,
+              meterType: m.meterType,
+              status: m.status,
+              installDate: m.installDate.toISOString(),
+            },
+            validFrom: m.installDate.toISOString(),
+            validTo: m.removalDate ? m.removalDate.toISOString() : null,
+          });
+
+          // Primary: meter lives under its premise.
+          const meterPremiseId = meterPremiseIdByMeterId.get(m.id);
+          if (meterPremiseId && premiseById.has(meterPremiseId)) {
+            edges.push({
+              id: `edge:premise-meter:${m.id}`,
+              from: `premise:${meterPremiseId}`,
+              to: mNodeId,
+              kind: "premise_has_meter",
+              validFrom: m.installDate.toISOString(),
+              validTo: m.removalDate ? m.removalDate.toISOString() : null,
+            });
+          }
+
+          events.push({
+            id: `evt:meter-installed:${m.id}`,
+            occurredAt: m.installDate.toISOString(),
+            kind: "meter.installed",
+            label: `Meter ${m.meterNumber} installed`,
+            relatedNodeIds: [mNodeId],
+          });
+          if (m.removalDate) {
+            events.push({
+              id: `evt:meter-removed:${m.id}`,
+              occurredAt: m.removalDate.toISOString(),
+              kind: "meter.removed",
+              label: `Meter ${m.meterNumber} removed`,
+              relatedNodeIds: [mNodeId],
+            });
+          }
+        }
+
+        // Secondary cross-link: agreement uses meter. Emitted once per
+        // (agreement, meter) pair.
+        edges.push({
+          id: `edge:agreement-uses-meter:${ag.id}:${m.id}`,
+          from: agNodeId,
+          to: mNodeId,
+          kind: "agreement_uses_meter",
+          validFrom: ag.startDate.toISOString(),
+          validTo: ag.endDate ? ag.endDate.toISOString() : null,
+        });
+      }
+    }
+  }
+
+  // Chronological timeline — oldest first.
   events.sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
 
-  // Cap total nodes (keep customer + closest ones). Drop from the tail
-  // end which, with our traversal order, contains the least-recent SRs.
+  // Truncate if the graph grew past the node cap (industrial
+  // customers). Dropped from the tail; primary-tree nodes are
+  // emitted first so they survive truncation preferentially.
   const truncated = nodes.length > NODE_CAP;
   const finalNodes = truncated ? nodes.slice(0, NODE_CAP) : nodes;
   const keptIds = new Set(finalNodes.map((n) => n.id));

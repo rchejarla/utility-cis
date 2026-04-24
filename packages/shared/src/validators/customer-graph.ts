@@ -16,13 +16,20 @@ export type GraphNodeType =
   | "service_request";
 
 export type GraphEdgeKind =
+  // Primary spanning-tree edges (parent → child in the dominant
+  // hierarchy Customer → Premise/Account → Agreement/Meter/SR).
   | "owns_account"
   | "owns_premise"
-  | "has_agreement"
-  | "at_premise"
-  | "measured_by"
-  | "filed_against"
-  | "filed_at_premise";
+  | "premise_has_agreement"
+  | "premise_has_meter"
+  | "premise_has_service_request"
+  // Secondary cross-link edges — the same entity is also related to
+  // another part of the tree (billing / measurement). Rendered in a
+  // dashed secondary style so they read as "also relates to" rather
+  // than a parent-child link.
+  | "agreement_billed_by_account"
+  | "agreement_uses_meter"
+  | "service_request_on_account";
 
 export interface GraphNode {
   id: string;

@@ -283,26 +283,42 @@ export function edgeStyleFor(
   kind: string,
 ): { stroke: string; strokeWidth: number; strokeDasharray?: string } {
   switch (kind) {
+    // ─── Primary spanning-tree edges (solid) ───
+    // Customer → Premise / Account
     case "owns_account":
     case "owns_premise":
       return { stroke: "var(--accent-primary)", strokeWidth: 1.5 };
-    case "has_agreement":
+    // Premise → Agreement / Meter / Service Request
+    case "premise_has_agreement":
       return { stroke: "var(--info)", strokeWidth: 1.5 };
-    case "at_premise":
+    case "premise_has_meter":
+      return { stroke: "var(--success)", strokeWidth: 1.5 };
+    case "premise_has_service_request":
+      return { stroke: "var(--warning)", strokeWidth: 1.5 };
+
+    // ─── Secondary cross-links (dashed) ───
+    // Agreement is billed by an account / uses a meter; SR is
+    // filed under an account. These are "also relates to" edges —
+    // they shouldn't compete visually with the spanning tree.
+    case "agreement_billed_by_account":
       return {
-        stroke: "var(--text-muted)",
+        stroke: "var(--accent-secondary)",
         strokeWidth: 1,
         strokeDasharray: "4 4",
       };
-    case "measured_by":
-      return { stroke: "var(--success)", strokeWidth: 1.5 };
-    case "filed_against":
-    case "filed_at_premise":
+    case "agreement_uses_meter":
+      return {
+        stroke: "var(--success)",
+        strokeWidth: 1,
+        strokeDasharray: "4 4",
+      };
+    case "service_request_on_account":
       return {
         stroke: "var(--warning)",
         strokeWidth: 1,
         strokeDasharray: "4 4",
       };
+
     default:
       return { stroke: "var(--border)", strokeWidth: 1 };
   }
