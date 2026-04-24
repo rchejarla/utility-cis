@@ -29,6 +29,7 @@ import { meterEventRoutes } from "./routes/meter-events.js";
 import { containerRoutes } from "./routes/containers.js";
 import { serviceSuspensionRoutes } from "./routes/service-suspensions.js";
 import { suspensionTypeDefRoutes } from "./routes/suspension-type-defs.js";
+import { measureTypeDefRoutes } from "./routes/measure-type-defs.js";
 import { tenantConfigRoutes } from "./routes/tenant-config.js";
 import { customFieldSchemaRoutes } from "./routes/custom-field-schemas.js";
 import { serviceEventRoutes } from "./routes/service-events.js";
@@ -101,6 +102,7 @@ export async function buildApp() {
   await app.register(containerRoutes);
   await app.register(serviceSuspensionRoutes);
   await app.register(suspensionTypeDefRoutes);
+  await app.register(measureTypeDefRoutes);
   await app.register(tenantConfigRoutes);
   await app.register(customFieldSchemaRoutes);
   await app.register(serviceEventRoutes);
