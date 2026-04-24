@@ -1,18 +1,17 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
-import { FilterBar } from "@/components/ui/filter-bar";
-import { DataTable } from "@/components/ui/data-table";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
-import { apiClient } from "@/lib/api-client";
+import { EntityListPage } from "@/components/ui/entity-list-page";
 import { MapView } from "@/components/premises/map-view";
-import { SearchableSelect } from "@/components/ui/searchable-select";
+import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
+import type { Column } from "@/components/ui/data-table";
 
 interface Customer {
   id: string;
@@ -36,11 +35,6 @@ interface Premise {
   meters?: Array<unknown>;
 }
 
-interface PremisesResponse {
-  data: Premise[];
-  meta: { total: number; page: number; limit: number; pages: number };
-}
-
 const PREMISE_TYPE_OPTIONS = [
   { label: "Residential", value: "RESIDENTIAL" },
   { label: "Commercial", value: "COMMERCIAL" },
@@ -54,250 +48,231 @@ const STATUS_OPTIONS = [
   { label: "Condemned", value: "CONDEMNED" },
 ];
 
+const columns: Column<Premise>[] = [
+  {
+    key: "address",
+    header: "Address",
+    render: (row) => (
+      <div>
+        <div style={{ fontWeight: 500, color: "var(--text-primary)" }}>{row.addressLine1}</div>
+        <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+          {row.city}, {row.state} {row.zip}
+        </div>
+      </div>
+    ),
+  },
+  {
+    key: "premiseType",
+    header: "Type",
+    render: (row) => (
+      <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>{row.premiseType}</span>
+    ),
+  },
+  {
+    key: "commodities",
+    header: "Commodities",
+    render: (row) => (
+      <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+        {row.commodities && row.commodities.length > 0 ? (
+          row.commodities.map((c, i) => (
+            <CommodityBadge key={i} commodity={c.commodity?.name ?? ""} />
+          ))
+        ) : (
+          <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>—</span>
+        )}
+      </div>
+    ),
+  },
+  {
+    key: "owner",
+    header: "Owner",
+    render: (row) => (
+      <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+        {row.owner
+          ? row.owner.customerType === "ORGANIZATION"
+            ? row.owner.organizationName
+            : `${row.owner.firstName} ${row.owner.lastName}`
+          : "—"}
+      </span>
+    ),
+  },
+  {
+    key: "meters",
+    header: "Meters",
+    render: (row) => (
+      <span style={{ fontFamily: "monospace", fontSize: "12px" }}>{row.meters?.length ?? 0}</span>
+    ),
+  },
+  {
+    key: "status",
+    header: "Status",
+    render: (row) => <StatusBadge status={row.status} />,
+  },
+];
+
+interface PremisesStats {
+  total: number;
+  active: number;
+  inactive: number;
+  condemned: number;
+}
+
+/**
+ * Premises landing — thin wrapper around EntityListPage for table
+ * mode; keeps the custom map view selectable via a Table/Map toggle
+ * that lives on the filter row. Stats are fetched once on mount and
+ * shown in both modes. Pagination, filtering, and permission gating
+ * all flow through EntityListPage so /premises inherits the
+ * fresh-empty-state CTA and other list-page patterns.
+ */
 export default function PremisesPage() {
   const router = useRouter();
-  const { canView, canCreate } = usePermission("premises");
-
-  const [data, setData] = useState<Premise[]>([]);
-  const [meta, setMeta] = useState({ total: 0, page: 1, limit: 20, pages: 0 });
-  const [loading, setLoading] = useState(true);
+  const { canView } = usePermission("premises");
   const [view, setView] = useState<"table" | "map">("table");
-  const [premiseType, setPremiseType] = useState<string | undefined>(undefined);
-  const [status, setStatus] = useState<string | undefined>(undefined);
-  const [ownerId, setOwnerId] = useState<string | undefined>(undefined);
-  const [search, setSearch] = useState("");
-  const [searchDebounced, setSearchDebounced] = useState("");
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [page, setPage] = useState(1);
-  const [stats, setStats] = useState({ total: 0, active: 0, inactive: 0, condemned: 0 });
+  const [stats, setStats] = useState<PremisesStats>({ total: 0, active: 0, inactive: 0, condemned: 0 });
 
-  // Debounce search
-  useEffect(() => {
-    const t = setTimeout(() => setSearchDebounced(search), 300);
-    return () => clearTimeout(t);
-  }, [search]);
-
-  // Fetch customers for filter dropdown
-  useEffect(() => {
-    apiClient
-      .get<Customer[] | { data: Customer[] }>("/api/v1/customers", { limit: "500" })
-      .then((res) => setCustomers(Array.isArray(res) ? res : res.data ?? []))
-      .catch(console.error);
+  // Stats come from the list endpoint's aggregate payload; fetch a
+  // tiny page once on mount rather than relying on the paginated
+  // hook's meta, which only surfaces the total count.
+  const fetchStats = useCallback(async () => {
+    try {
+      const res = await apiClient.get<{
+        meta: { total: number };
+        stats?: { active: number; inactive: number; condemned: number };
+      }>("/api/v1/premises", { page: "1", limit: "1" });
+      setStats({
+        total: res.meta.total,
+        active: res.stats?.active ?? 0,
+        inactive: res.stats?.inactive ?? 0,
+        condemned: res.stats?.condemned ?? 0,
+      });
+    } catch {
+      // Stats are best-effort — the list itself still renders.
+    }
   }, []);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params: Record<string, string> = { page: String(page), limit: "20" };
-      if (premiseType) params.premiseType = premiseType;
-      if (status) params.status = status;
-      if (ownerId) params.ownerId = ownerId;
-      if (searchDebounced) params.search = searchDebounced;
-
-      const res = await apiClient.get<PremisesResponse & { stats?: { active: number; inactive: number; condemned: number } }>("/api/v1/premises", params);
-      setData(res.data);
-      setMeta(res.meta);
-      if (res.stats) {
-        setStats({ total: res.meta.total, active: res.stats.active, inactive: res.stats.inactive, condemned: res.stats.condemned });
-      }
-    } catch (err) {
-      console.error("Failed to fetch premises", err);
-    } finally {
-      setLoading(false);
-    }
-  }, [page, premiseType, status, ownerId, searchDebounced]);
-
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    fetchStats();
+  }, [fetchStats]);
 
   if (!canView) return <AccessDenied />;
 
-  const columns = [
-    {
-      key: "address",
-      header: "Address",
-      render: (row: Premise) => (
-        <div>
-          <div style={{ fontWeight: 500, color: "var(--text-primary)" }}>{row.addressLine1}</div>
-          <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-            {row.city}, {row.state} {row.zip}
-          </div>
-        </div>
-      ),
-    },
-    {
-      key: "premiseType",
-      header: "Type",
-      render: (row: Premise) => (
-        <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>{row.premiseType}</span>
-      ),
-    },
-    {
-      key: "commodities",
-      header: "Commodities",
-      render: (row: Premise) => (
-        <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
-          {row.commodities && row.commodities.length > 0 ? (
-            row.commodities.map((c, i) => (
-              <CommodityBadge key={i} commodity={c.commodity?.name ?? ""} />
-            ))
-          ) : (
-            <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>—</span>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: "owner",
-      header: "Owner",
-      render: (row: Premise) => (
-        <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-          {row.owner
-            ? row.owner.customerType === "ORGANIZATION"
-              ? row.owner.organizationName
-              : `${row.owner.firstName} ${row.owner.lastName}`
-            : "—"}
-        </span>
-      ),
-    },
-    {
-      key: "meters",
-      header: "Meters",
-      render: (row: Premise) => (
-        <span style={{ fontFamily: "monospace", fontSize: "12px" }}>{row.meters?.length ?? 0}</span>
-      ),
-    },
-    {
-      key: "status",
-      header: "Status",
-      render: (row: Premise) => <StatusBadge status={row.status} />,
-    },
-  ];
+  const statTiles = (
+    <div
+      style={{
+        display: "flex",
+        gap: "12px",
+        marginBottom: "20px",
+        flexWrap: "wrap",
+      }}
+    >
+      <StatCard label="Total" value={stats.total} icon="🏠" />
+      <StatCard label="Active" value={stats.active} icon="✅" accent="success" />
+      <StatCard label="Inactive" value={stats.inactive} icon="⏸" accent="warning" />
+      <StatCard label="Condemned" value={stats.condemned} icon="⛔" accent="danger" />
+    </div>
+  );
 
-  return (
-    <div>
-      <PageHeader
-        title="Premises"
-        subtitle={`${meta.total.toLocaleString()} total premises`}
-        action={canCreate ? { label: "Add Premise", href: "/premises/new" } : undefined}
-      />
+  const viewToggle = (
+    <div
+      style={{
+        display: "flex",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        overflow: "hidden",
+      }}
+    >
+      {(["table", "map"] as const).map((v) => (
+        <button
+          key={v}
+          onClick={() => setView(v)}
+          style={{
+            padding: "5px 14px",
+            fontSize: "12px",
+            fontWeight: 500,
+            background: view === v ? "var(--accent-primary)" : "transparent",
+            color: view === v ? "#fff" : "var(--text-secondary)",
+            border: "none",
+            cursor: "pointer",
+            fontFamily: "inherit",
+            textTransform: "capitalize",
+          }}
+        >
+          {v === "table" ? "⊞ Table" : "🗺 Map"}
+        </button>
+      ))}
+    </div>
+  );
 
-      <div style={{ display: "flex", gap: "12px", marginBottom: "20px", flexWrap: "wrap" }}>
-        <StatCard label="Total" value={stats.total} icon="🏠" />
-        <StatCard label="Active" value={stats.active} icon="✅" />
-        <StatCard label="Inactive" value={stats.inactive} icon="⏸" />
-        <StatCard label="Condemned" value={stats.condemned} icon="⛔" />
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "8px" }}>
+  if (view === "map") {
+    // Map view renders a minimal shell with the same chrome
+    // EntityListPage would render — header, stats, view toggle — but
+    // swaps the table + filters out for the full-bleed MapView. No
+    // filter bar in map mode; panning/zoom is the filter.
+    return (
+      <div>
+        <PageHeader
+          title="Premises"
+          subtitle={`${stats.total.toLocaleString()} total premises`}
+        />
+        {statTiles}
         <div
           style={{
             display: "flex",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius)",
-            overflow: "hidden",
+            justifyContent: "flex-end",
+            marginBottom: "16px",
           }}
         >
-          {(["table", "map"] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              style={{
-                padding: "5px 14px",
-                fontSize: "12px",
-                fontWeight: "500",
-                background: view === v ? "var(--accent-primary)" : "transparent",
-                color: view === v ? "#fff" : "var(--text-secondary)",
-                border: "none",
-                cursor: "pointer",
-                transition: "all 0.15s ease",
-                fontFamily: "inherit",
-                textTransform: "capitalize",
-              }}
-            >
-              {v === "table" ? "⊞ Table" : "🗺 Map"}
-            </button>
-          ))}
+          {viewToggle}
         </div>
-      </div>
-
-      {/* Search bar */}
-      <div style={{ marginBottom: "12px" }}>
-        <input
-          type="text"
-          placeholder="Search by address, city, or zip..."
-          value={search}
-          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-          style={{
-            width: "100%",
-            padding: "10px 14px",
-            fontSize: "14px",
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius)",
-            color: "var(--text-primary)",
-            fontFamily: "inherit",
-            outline: "none",
-          }}
-        />
-      </div>
-
-      <div style={{ display: "flex", alignItems: "flex-start", gap: "12px", marginBottom: "16px", flexWrap: "wrap" }}>
-        <FilterBar
-          filters={[
-            {
-              key: "premiseType",
-              label: "Type",
-              options: PREMISE_TYPE_OPTIONS,
-              value: premiseType,
-              onChange: (v) => {
-                setPremiseType(v);
-                setPage(1);
-              },
-            },
-            {
-              key: "status",
-              label: "Status",
-              options: STATUS_OPTIONS,
-              value: status,
-              onChange: (v) => {
-                setStatus(v);
-                setPage(1);
-              },
-            },
-          ]}
-        />
-        <div style={{ width: "240px" }}>
-          <SearchableSelect
-            options={customers.map((c) => ({
-              label: c.customerType === "ORGANIZATION"
-                ? c.organizationName ?? ""
-                : `${c.firstName} ${c.lastName}`,
-              value: c.id,
-            }))}
-            value={ownerId}
-            onChange={(v) => { setOwnerId(v); setPage(1); }}
-            placeholder="Filter by owner..."
-            clearLabel="All owners"
-          />
-        </div>
-      </div>
-
-      {view === "map" ? (
         <div style={{ display: "flex", flex: 1, minHeight: "560px" }}>
           <MapView onPremiseClick={(id) => router.push(`/premises/${id}`)} />
         </div>
-      ) : (
-        <DataTable
-          columns={columns as any}
-          data={data as any}
-          meta={meta}
-          loading={loading}
-          onPageChange={setPage}
-          onRowClick={(row: any) => router.push(`/premises/${row.id}`)}
-        />
-      )}
-    </div>
+      </div>
+    );
+  }
+
+  return (
+    <EntityListPage<Premise>
+      title="Premises"
+      subject="premises"
+      module="premises"
+      endpoint="/api/v1/premises"
+      getDetailHref={(row) => `/premises/${row.id}`}
+      columns={columns}
+      newAction={{ label: "Add Premise", href: "/premises/new" }}
+      emptyState={{
+        headline: "No premises yet",
+        description:
+          "A premise is the physical location where service is delivered. Every account is tied to exactly one.",
+      }}
+      headerSlot={statTiles}
+      filtersRightSlot={viewToggle}
+      search={{
+        paramKey: "search",
+        placeholder: "Search by address, city, or zip...",
+        variant: "prominent",
+      }}
+      filters={[
+        { key: "premiseType", label: "Type", options: PREMISE_TYPE_OPTIONS },
+        { key: "status", label: "Status", options: STATUS_OPTIONS },
+        {
+          key: "ownerId",
+          label: "Owner",
+          optionsEndpoint: "/api/v1/customers",
+          optionsParams: { limit: "500" },
+          mapOption: (c) => ({
+            value: String(c.id),
+            label:
+              c.customerType === "ORGANIZATION"
+                ? String(c.organizationName ?? "")
+                : `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim(),
+          }),
+          searchable: true,
+          searchablePlaceholder: "Filter by owner...",
+          searchableClearLabel: "All owners",
+        },
+      ]}
+    />
   );
 }

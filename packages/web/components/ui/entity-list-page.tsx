@@ -9,6 +9,7 @@ import { FilterBar } from "./filter-bar";
 import { DataTable, type Column } from "./data-table";
 import { AccessDenied } from "./access-denied";
 import { ListEmptyCta } from "./list-empty-cta";
+import { SearchableSelect } from "./searchable-select";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { usePaginatedList } from "@/lib/use-paginated-list";
@@ -45,6 +46,16 @@ interface DynamicFilter {
   mapOption: (row: Record<string, unknown>) => FilterOption;
   /** Optional extra query params for the options fetch. */
   optionsParams?: Record<string, string>;
+  /**
+   * Render as a typeahead SearchableSelect instead of a pill dropdown.
+   * Use when the option list is long enough that the pill's scrolled
+   * menu becomes unusable (e.g. owner filter over 100+ customers).
+   */
+  searchable?: boolean;
+  /** Placeholder text for searchable variant. Default: "Filter by {label}...". */
+  searchablePlaceholder?: string;
+  /** Clear-label text for searchable variant. Default: "All {label}". */
+  searchableClearLabel?: string;
 }
 
 export type EntityListFilter = StaticFilter | DynamicFilter;
@@ -95,6 +106,12 @@ export interface EntityListPageProps<T extends { id: string }> {
   filters?: EntityListFilter[];
   /** Optional React node rendered between header and search (e.g. stat cards). */
   headerSlot?: React.ReactNode;
+  /**
+   * Optional node pinned to the right end of the filter row. Used for
+   * page-level controls that belong visually alongside filters (e.g. a
+   * Table ↔ Map view toggle) without consuming a separate row.
+   */
+  filtersRightSlot?: React.ReactNode;
   /**
    * Set to false when the endpoint returns a plain array (e.g. billing-cycles).
    * Default true.
@@ -153,6 +170,7 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
     search,
     filters,
     headerSlot,
+    filtersRightSlot,
     paginated = true,
   } = props;
 
@@ -210,7 +228,18 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
     setFilterValues((prev) => ({ ...prev, [key]: value }));
   };
 
-  const filterConfigs = (filters ?? []).map((f) => {
+  // Split filters into two render buckets: pill-based (short static or
+  // dynamic lists) and searchable (long dynamic lists). Pills live in
+  // FilterBar; searchable ones render inline next to the bar as a
+  // SearchableSelect so the user can type to narrow long option lists
+  // (e.g. the owner filter on /premises over 500 customers).
+  const pillFilters = (filters ?? []).filter(
+    (f) => !(isDynamic(f) && f.searchable),
+  );
+  const searchableFilters = (filters ?? []).filter(
+    (f): f is DynamicFilter => isDynamic(f) && !!f.searchable,
+  );
+  const filterConfigs = pillFilters.map((f) => {
     const options = isDynamic(f) ? dynamicOptions[f.key] ?? [] : f.options;
     return {
       key: f.key,
@@ -325,7 +354,35 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
         />
       ) : (
         <>
-          {filterConfigs.length > 0 && <FilterBar filters={filterConfigs} />}
+          {(filterConfigs.length > 0 || searchableFilters.length > 0 || filtersRightSlot) && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+                marginBottom: "16px",
+                flexWrap: "wrap",
+              }}
+            >
+              {filterConfigs.length > 0 && <FilterBar filters={filterConfigs} />}
+              {searchableFilters.map((f) => (
+                <div key={f.key} style={{ width: 240 }}>
+                  <SearchableSelect
+                    options={dynamicOptions[f.key] ?? []}
+                    value={filterValues[f.key]}
+                    onChange={handleFilterChange(f.key)}
+                    placeholder={
+                      f.searchablePlaceholder ?? `Filter by ${f.label.toLowerCase()}...`
+                    }
+                    clearLabel={f.searchableClearLabel ?? `All ${f.label.toLowerCase()}`}
+                  />
+                </div>
+              ))}
+              {filtersRightSlot && (
+                <div style={{ marginLeft: "auto", flexShrink: 0 }}>{filtersRightSlot}</div>
+              )}
+            </div>
+          )}
 
           <DataTable
             columns={columns as Column<Record<string, unknown>>[]}
