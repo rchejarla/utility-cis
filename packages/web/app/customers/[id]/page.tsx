@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, use } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faEnvelope, faPhone } from "@fortawesome/pro-solid-svg-icons";
@@ -355,6 +356,29 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
           <div style={{ display: "flex", gap: "8px", alignItems: "center", flexShrink: 0, paddingTop: "4px" }}>
             <TypeBadge type={customer.customerType} variant="detail" />
             <StatusBadge status={customer.status} />
+            {/* Muted secondary action — opens the visual relationship
+                graph for this customer. Kept next to the badges (not
+                a prominent CTA) because it's a navigation affordance,
+                not an edit action. */}
+            <Link
+              href={`/customers/${customer.id}/graph`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "4px",
+                padding: "3px 10px",
+                borderRadius: "var(--radius)",
+                background: "transparent",
+                border: "1px solid var(--border)",
+                color: "var(--text-secondary)",
+                fontSize: "12px",
+                fontWeight: 500,
+                textDecoration: "none",
+                whiteSpace: "nowrap",
+              }}
+            >
+              View as graph &rarr;
+            </Link>
           </div>
         </div>
 
