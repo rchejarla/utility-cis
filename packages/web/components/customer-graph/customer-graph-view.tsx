@@ -517,16 +517,18 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
         display: "flex",
         flexDirection: "column",
         gap: 14,
-        // When the container enters fullscreen, the browser paints
-        // its default black background behind us. Give it the CIS
-        // surface colour so the graph looks intentional and add
-        // padding the app shell normally provides.
+        // Fill the app's main content area exactly — no page-level
+        // scroll. Pills + back link sit at the top, timeline at the
+        // bottom, canvas flexes to whatever's left between. In
+        // fullscreen the container paints the CIS surface colour
+        // behind us (otherwise the browser's default black would
+        // bleed through) and explicitly uses the whole viewport.
+        height: isFullscreen ? "100vh" : "100%",
+        overflow: "hidden",
         ...(isFullscreen
           ? {
               padding: 20,
               background: "var(--bg-deep)",
-              height: "100vh",
-              overflow: "auto",
             }
           : {}),
       }}
@@ -641,17 +643,23 @@ function CustomerGraphViewInner({ customerId }: CustomerGraphViewProps) {
       {/* Canvas + drawer row */}
       <div
         style={{
+          // Canvas row fills whatever vertical space is left after
+          // the top pills row and bottom timeline strip. minHeight:0
+          // is required so this flex child can shrink — without it
+          // React Flow's intrinsic sizing would force the whole
+          // column to overflow and show a page-level scrollbar.
+          flex: 1,
+          minHeight: 0,
           display: "flex",
           gap: 14,
           alignItems: "stretch",
-          minHeight: "80vh",
         }}
       >
         <div
           style={{
             flex: 1,
             minWidth: 0,
-            height: isFullscreen ? "calc(100vh - 160px)" : "80vh",
+            height: "100%",
             background: "var(--bg-deep)",
             border: "1px solid var(--border)",
             borderRadius: "var(--radius)",
