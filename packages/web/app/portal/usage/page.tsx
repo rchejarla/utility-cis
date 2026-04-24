@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { apiClient } from "@/lib/api-client";
 import { MonthPicker } from "@/components/ui/month-picker";
@@ -32,7 +32,19 @@ interface ReadRow {
 
 type Granularity = "monthly" | "daily" | "hourly";
 
+// Reads `?agreementId=` + `?month=` via useSearchParams (for deep-
+// linking from the account detail). Next.js 15's static-prerender
+// pass requires any component calling useSearchParams to sit inside
+// a <Suspense> boundary.
 export default function PortalUsagePage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24, color: "var(--text-muted)" }}>Loading…</div>}>
+      <PortalUsagePageInner />
+    </Suspense>
+  );
+}
+
+function PortalUsagePageInner() {
   const searchParams = useSearchParams();
   const presetAgreement = searchParams.get("agreement");
   const [accounts, setAccounts] = useState<AccountWithAgreements[]>([]);

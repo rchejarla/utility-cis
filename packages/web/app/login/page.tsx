@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { API_URL, setAuthToken } from "@/lib/api-client";
 
@@ -17,7 +17,20 @@ const inputStyle = {
   boxSizing: "border-box" as const,
 };
 
+// The form reads `?email=` via useSearchParams (for the /dev
+// quick-login flow). Next.js 15's static-prerender pass requires any
+// component calling useSearchParams to sit inside a <Suspense>
+// boundary; wrapping it here lets the build succeed without turning
+// off static optimization for the whole route.
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24, color: "var(--text-muted)" }}>Loading…</div>}>
+      <LoginPageInner />
+    </Suspense>
+  );
+}
+
+function LoginPageInner() {
   const params = useSearchParams();
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
