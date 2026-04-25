@@ -5,24 +5,32 @@
   "scripts": {
     "build": "tsc --build",
     "dev": "tsx watch --env-file=.env src/server.ts",
+    "dev:worker": "tsx watch --env-file=.env src/worker.ts",
     "start": "node --env-file=.env dist/server.js",
-    "test": "vitest run"
+    "start:worker": "node --env-file=.env dist/worker.js",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",
     "@fastify/helmet": "^13.0.2",
     "@fastify/jwt": "^9.0.3",
     "@fastify/multipart": "^10.0.0",
+    "@opentelemetry/api": "^1",
     "@utility-cis/shared": "workspace:*",
+    "@vvo/tzdb": "^6",
+    "bullmq": "^5",
     "fastify": "^5.2.1",
-    "ioredis": "^5.4.2",
+    "ioredis": "^5.10.1",
     "jose": "^6.2.2",
     "pino": "^10",
+    "prom-client": "^15",
     "zod": "^3.24.1",
     "zod-to-json-schema": "^3.24"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "testcontainers": "^10",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

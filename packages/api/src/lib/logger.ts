@@ -1,4 +1,5 @@
 import { pino, type LoggerOptions } from "pino";
+import { config } from "../config.js";
 
 /**
  * Shared pino configuration used by both API and worker processes.
@@ -13,16 +14,12 @@ import { pino, type LoggerOptions } from "pino";
  * Both processes have separate pino instances but emit through identical
  * configuration, so log output looks the same across services.
  *
- * `LOG_LEVEL` defaults to `info`. Set to `debug` for noisy local dev,
- * `warn`/`error` for quiet test runs. Re-wired to `config.LOG_LEVEL` in
- * Task 1 once `config.ts` exists.
- *
  * `redact` strips Authorization / Cookie headers from request logs so
  * tokens don't end up in log aggregators. Pino's redact runs at write
  * time and is cheap.
  */
 export const loggerOptions: LoggerOptions = {
-  level: process.env.LOG_LEVEL ?? "info",
+  level: config.LOG_LEVEL,
   redact: {
     paths: ["req.headers.authorization", "req.headers.cookie"],
     censor: "[REDACTED]",
