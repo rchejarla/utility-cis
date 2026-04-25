@@ -1,5 +1,29 @@
 # Utility CIS — Project Guidelines
 
+## Architectural decision discipline
+
+Before recommending OR implementing any pattern with a recognizable name (outbox, event bus, CQRS, saga, queue, abstraction layer, indirection, hexagonal, BFF, "decoupling X from Y", "adding a layer for future flexibility"), apply this checklist. **Skipping it has produced real over-engineering in this codebase before** (the EventEmitter audit pipeline is one example — solves nothing it claims to solve, costs an extra transaction per audit, breaks atomicity).
+
+1. **State the simpler alternative first.** Write down what the direct, synchronous, in-process, in-transaction version would do. If you can't articulate the simple version, you don't understand the problem yet.
+
+2. **Name the concrete cost the pattern pays.** "Decoupling" and "flexibility" are not costs — they're vague benefits with no measurable outcome. State the specific consequence: "closes atomicity gap on crash between mutation and audit," "isolates request latency from third-party API failure," "lets schedulers and API write to the same table without two code paths." If you can't name a concrete cost, the pattern isn't earning its keep.
+
+3. **Verify the conditions that justify the pattern hold.** Patterns from textbooks assume specific conditions (multiple consumers, slow/flaky external dispatch, high concurrent load, async-tolerant timing). If those conditions aren't present in this codebase right now, the pattern is speculative scaffolding.
+
+4. **Default to direct.** Reach for the complex pattern only when the simple one demonstrably fails — not when it might fail later, not when a textbook says it could fail at scale, but when you can name the specific scenario that breaks the simple version today.
+
+5. **"Future flexibility" is not a justification.** YAGNI. Add the indirection when the second consumer arrives, not before.
+
+6. **Steelman existing code before replacing it.** If existing code is "non-idiomatic," check whether it's solving a real constraint first. Cleaner-looking code that loses correctness or performance is worse than ugly correct code.
+
+**Trigger phrases that should make you STOP and apply this checklist:**
+- "Best practice is..."
+- "The textbook pattern is..."
+- "We should decouple X from Y"
+- "Let's add an event bus / outbox / queue / abstraction"
+- "This gives us flexibility for the future"
+- "It's the canonical way to..."
+
 ## Documentation Maintenance
 
 **IMPORTANT:** When making changes to the data model, API, or UI, you MUST update the corresponding functional spec and design document.
