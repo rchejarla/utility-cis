@@ -270,6 +270,36 @@ Retention applies to `audit_log` only; BullMQ job history retention in Redis is 
 - API enqueue: wrapped in a helper that catches enqueue failures, logs at `error` level, and **does not** return an error to the HTTP caller. Scheduled work is eventually-consistent; an enqueue failure is no worse than a job running late. Exception: enqueues that are part of a user-visible synchronous flow (none currently exist in this migration, but worth documenting).
 - Worker: if Redis disconnection exceeds 5 minutes, the worker calls `process.exit(1)`. The orchestrator restarts the pod; on restart, Redis reconnect is the normal path.
 - Missed cron ticks during Redis outage: repeatable jobs are backed by Redis state. If Redis is out for > `cron interval`, that tick is lost. Missed-tick recovery in the delinquency dispatcher (§3.3) handles the only case where that matters — the other queues are idempotent sweeps that catch up on the next tick naturally.
+- Two distinct Redis clients in the codebase, with different config:
+  - `lib/cache-redis.ts` — best-effort cache (RBAC, rate schedules). Tolerates offline; 500ms timeouts; `enableOfflineQueue: true`.
+  - `lib/queue-redis.ts` — BullMQ. Fail-fast; `maxRetriesPerRequest: null`, `enableOfflineQueue: false`. Required by BullMQ's blocking commands.
+
+### 3.8 Schedule lifecycle
+
+Cron schedules are **persistent state in Redis**, not in-memory state in the worker process. Important consequences:
+
+- **Worker restart is a no-op for the schedule.** When a worker restarts, the scheduler config is already in Redis — calling `upsertJobScheduler` with the same id is idempotent. Workers re-establish polling against the existing delayed jobs immediately.
+- **Schedules survive code deletion.** If we remove a queue from code without explicit cleanup, its scheduler entry stays in Redis and continues to fire jobs that no consumer drains. The dlq-monitor would catch them, but it's churn.
+- **Solution: stale-scheduler reconciliation on every worker boot.** On startup, the worker enumerates all registered schedulers via `queue.getJobSchedulers()` and deletes any whose ID isn't in the code-defined `SCHEDULER_REGISTRY`. Idempotent, runs in milliseconds, prevents Redis-resident orphans.
+- **Schedule changes (cron pattern, timezone) propagate via `upsertJobScheduler`.** Same scheduler ID with different config = updated schedule. During rolling deploys, the new pod's startup writes the new config; old pods keep using the old config in their cached scheduler instance until they're rotated out — but since cron computation is centralized in Redis, both pods see the same next-fire time. No flapping.
+- **No work catches up after extended downtime.** If a 5-minute cron was missed for 30 minutes, on worker restart you get **one** sweep, not six. BullMQ tracks "next scheduled time," not "every individual missed tick." This is correct for our idempotent sweeps and incorrect for delinquency, which is why the delinquency dispatcher has explicit `delinquencyLastRunAt` missed-tick recovery (§3.3).
+- **Inspection / management.** Bull Board (gated, internal-VPC only) lists all schedulers as a first-class concept with their next-fire times. Operators can pause / delete from the UI for incident response.
+
+### 3.9 Containerization
+
+The plan deploys API and worker as **two services from one image**, with different `CMD` overrides. Same Dockerfile, same build, same TypeScript artifacts. This is standard for monorepo apps with a worker — see §3.1 for topology.
+
+- **Base image:** `node:22-bookworm-slim`. Required for full ICU (timezone data); Alpine ships stripped ICU and silently returns wrong local times.
+- **Build stage:** `node:22-bookworm` (full Node + pnpm + dev deps + tsc). Compiles all packages.
+- **Runtime stage:** `node:22-bookworm-slim` (minimal Node + production deps + `dist/` + `prisma/` schema). Smaller, fewer attack vectors.
+- **`CMD` overrides** at deploy time, not in the Dockerfile. The Dockerfile leaves `CMD` empty; deployment manifests specify `node dist/index.js` (API) or `node dist/worker.js` (worker).
+- **Migrations as a one-shot Job/initContainer**: same image, `CMD ["node", "dist/scripts/migrate.js"]` (or `pnpm prisma migrate deploy`). Runs before either Deployment rolls out new code, then exits. Keeps schema changes out of the API/worker startup paths.
+- **Image tag invariant:** API and worker Deployments always reference the same image tag per deploy. Atomic rollouts; never let them drift.
+- **Resource sizing (initial guess, refine via observation):**
+  - API: `requests: 250m / 512Mi`, `limits: 1cpu / 1Gi`
+  - Worker: `requests: 100m / 256Mi`, `limits: 500m / 512Mi`
+  - Migration init: `requests: 100m / 256Mi`, `limits: 500m / 512Mi`
+- **Replicas:** API `replicas=3`, Worker `replicas=2`. The `WORKER_QUEUES` env var enables future per-queue worker Deployments without code changes — set it to `"all"` (default) on the single worker Deployment, or to specific queue names if a particular queue justifies its own pool.
 
 ---
 
@@ -279,7 +309,8 @@ Each step ships independently behind per-job `USE_LEGACY_SCHEDULERS_<NAME>` env 
 
 | # | Ship | Rollback |
 |---|---|---|
-| 1 | Worker infra (Redis module, queue module, worker entry, config module, health server, metrics, telemetry wrapper, Bull Board gated) | Delete worker.ts, stop deploying the worker service |
+| 0 | Logging foundation: extract shared `pino` logger, rename `lib/redis.ts` → `lib/cache-redis.ts`, replace ~23 stray `console.*` calls with structured logger calls | Pure refactor; revert commit |
+| 1 | Worker infra (queue-redis client, queue module, worker entry, config module, health server, metrics, telemetry wrapper, stale-scheduler cleanup, Bull Board gated) | Delete worker.ts, stop deploying the worker service |
 | 2 | Suspension migration + testcontainers + retry + DLQ | `USE_LEGACY_SCHEDULERS_SUSPENSION=true`, redeploy API |
 | 3 | `TenantConfig` schema migration + `getAutomationConfig` + IANA validation helpers | Additive migration; old code ignores new columns |
 | 4 | `/settings/automation` UI + API routes | Hide nav entry |
@@ -290,7 +321,7 @@ Each step ships independently behind per-job `USE_LEGACY_SCHEDULERS_<NAME>` env 
 | 9 | Remove legacy paths + `USE_LEGACY_*` flags (post-soak, final step) | Final; only after weeks of prod stability |
 | 10 | Docs | N/A |
 
-Ship 1 = steps 1-8. Ship 2 hardening = OTel collector integration, HA Redis migration, Grafana dashboards, load/chaos testing. Steps 9-10 bundle with the ship 1 final cleanup PR after soak.
+Ship 1 = steps 0-8. Ship 2 hardening = OTel collector integration, HA Redis migration, Grafana dashboards, load/chaos testing, plus the API audit-pipeline refactor (in-transaction direct writes; delete the EventEmitter/audit-writer machinery). Steps 9-10 bundle with the ship 1 final cleanup PR after soak.
 
 ---
 
@@ -331,4 +362,5 @@ These extend ship 1 without changing its functional behavior:
 2. **Grafana dashboards.** Pre-built dashboards for `job_duration_seconds`, `queue_depth`, `dlq_depth`, `job_lag_seconds`. Alerts on DLQ > 0 for 15 min, queue depth > 1000, job lag > 5 min.
 3. **HA Redis.** Move to Sentinel (self-hosted) or ElastiCache with automatic failover (AWS). Update `REDIS_URL` to the Sentinel / cluster endpoint; BullMQ handles the rest.
 4. **Load and chaos testing.** k6 load test for queue throughput under synthetic 100k-tenant fan-out. Kill-Redis, kill-worker, kill-DB chaos tests validate recovery matches the documented behavior.
-5. **Optional: priority quotas.** If fairness priorities (§3.3) aren't sufficient, add per-tenant rate limits on `delinquency-tenant` so one tenant can't enqueue enough work to starve others even at its assigned priority.
+5. **API audit pipeline refactor.** Replace the `events/audit-writer.ts` EventEmitter + serial drain with in-transaction `tx.auditLog.create(...)` calls inside service mutations — same atomicity guarantee as the scheduler's audit writes from ship 1. Delete the EventEmitter machinery. Net code reduction; closes the existing fire-and-forget atomicity gap on the API side. This is **not** an outbox-pattern introduction — there's no external dispatch to isolate; direct in-transaction writes are sufficient. Outbox arrives only when external dispatch (SIEM, webhooks, RAMS) actually lands.
+6. **Optional: priority quotas.** If fairness priorities (§3.3) aren't sufficient, add per-tenant rate limits on `delinquency-tenant` so one tenant can't enqueue enough work to starve others even at its assigned priority.

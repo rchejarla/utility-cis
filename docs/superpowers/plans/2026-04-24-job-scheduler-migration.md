@@ -6,7 +6,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-04-24-job-scheduler-migration-design.md` — read first. The pattern split (#1 single-query-in-transaction vs #2 dispatcher-fanout) and the retention policy are load-bearing.
 
-**Ship 1 covers tasks 1-8** (functional migration + telemetry hooks + retention). **Ship 2 (deferred):** OTel collector integration, HA Redis, Grafana dashboards, load/chaos testing. **Tasks 9-10** (legacy removal + docs) ship after a production soak period.
+**Ship 1 covers tasks 0-9** (logging cleanup + functional migration + telemetry hooks + retention). **Ship 2 (deferred):** OTel collector integration, HA Redis, Grafana dashboards, load/chaos testing, in-transaction refactor of API audit emits (replace EventEmitter pipeline). **Tasks 10-11** (legacy removal + docs) ship after a production soak period.
 
 **Tech stack additions:** `bullmq@^5`, `ioredis@^5`, `@bull-board/fastify@^5`, `prom-client@^15`, `@opentelemetry/api@^1`, `@vvo/tzdb@^6`, `testcontainers@^10`. Base image pinned to `node:22-bookworm-slim`.
 
@@ -18,8 +18,9 @@
 
 | Path | Responsibility |
 |---|---|
-| `packages/api/src/config.ts` | Zod-validated env-var loader, imported at process start by both `index.ts` and `worker.ts`. |
-| `packages/api/src/lib/redis.ts` | Shared `redisConnection` with production ioredis settings (`maxRetriesPerRequest: null`, `enableOfflineQueue: false`). |
+| `packages/api/src/config.ts` | Zod-validated env-var loader, imported at process start by both `index.ts` and `worker.ts`. Includes `LOG_LEVEL`, `WORKER_QUEUES` (selective registration for ship 2 split-out), `REDIS_URL`, `WORKER_HTTP_PORT`, `BULL_BOARD_ENABLED`, `USE_LEGACY_SCHEDULERS_*` flags, `DISABLE_SCHEDULERS`. |
+| `packages/api/src/lib/logger.ts` | Single `pino` instance shared between API and worker processes. API passes it to `Fastify({ logger })`; worker imports it directly. Honors `LOG_LEVEL` from `config.ts`. |
+| `packages/api/src/lib/queue-redis.ts` | BullMQ-specific `queueRedisConnection` with production ioredis settings (`maxRetriesPerRequest: null`, `enableOfflineQueue: false`). Separate from the existing cache client. |
 | `packages/api/src/lib/queues.ts` | Queue names (`QUEUE_NAMES` const), per-queue retry/backoff/priority defaults, `getQueue(name)` memoized factory, `enqueueSafely` helper that catches Redis-down enqueue errors. |
 | `packages/api/src/lib/telemetry.ts` | Prometheus `Registry`, metric definitions, `withTelemetry(queueName, fn)` wrapper, `tracer` from `@opentelemetry/api`. |
 | `packages/api/src/lib/health-server.ts` | Tiny HTTP server (port 3002) exposing `/health/live`, `/health/ready`, `/metrics`. |
@@ -50,6 +51,8 @@
 
 | Path | Change |
 |---|---|
+| `packages/api/src/lib/redis.ts` | **Rename to `lib/cache-redis.ts`** and update all imports. Existing cache-only client; keep its current settings (offline queue allowed, 500ms timeouts). The new BullMQ connection lives in a separate file. |
+| `packages/api/src/{services,events,routes,middleware}/**` | Replace ~23 stray `console.log/warn/error` calls with structured `logger.info/warn/error({ ...fields }, "msg")` using the new shared `logger`. Also update `app.ts` to pass the shared logger into Fastify (`Fastify({ logger })`) instead of `Fastify({ logger: true })`. |
 | `packages/shared/prisma/schema.prisma` | Add 10 columns to `TenantConfig`: `timezone`, `suspensionEnabled`, `notificationSendEnabled`, `slaBreachSweepEnabled`, `delinquencyEnabled`, `delinquencyRunHourLocal`, `delinquencyLastRunAt`, `notificationQuietStart`, `notificationQuietEnd`, `schedulerAuditRetentionDays`. |
 | `packages/shared/prisma/migrations/<TS>_tenant_automation_config/migration.sql` | Generated migration with defaults. |
 | `packages/api/src/app.ts` | Gate existing `startSuspensionScheduler` / `startNotificationSendJob` / `startDelinquencyScheduler` behind per-job `USE_LEGACY_SCHEDULERS_*` env flags. Register `automation-config` routes. Expose `/metrics` from the API process too. |
@@ -68,6 +71,43 @@
 
 ---
 
+## Task 0: Logging foundation + Redis filename split
+
+**Goal:** Stand up a shared `pino` logger, replace stray `console.*` calls, and split the existing `lib/redis.ts` into `lib/cache-redis.ts` so the queue connection in Task 1 can have its own file. Foundational cleanup the worker depends on; pure refactor, no behavior change.
+
+**Files:**
+- Create: `packages/api/src/lib/logger.ts`
+- Rename: `packages/api/src/lib/redis.ts` → `packages/api/src/lib/cache-redis.ts`
+- Modify: every importer of `lib/redis.ts` (auth, RBAC cache, rate-schedule cache, etc.) — update import path
+- Modify: `packages/api/src/app.ts` — pass shared logger to `Fastify({ logger })`
+- Modify: ~12 files containing 23 `console.*` calls — see grep below
+
+- [ ] **0.1** Create `lib/logger.ts`. Export a single `pino` instance configured from `config.ts` (which doesn't exist yet — for now hard-code defaults: `level: process.env.LOG_LEVEL ?? "info"`, `redact: ['req.headers.authorization', 'req.headers.cookie']`, ISO timestamps, `pid`/`hostname` automatically). Will be re-wired to `config.ts` in Task 1.
+
+- [ ] **0.2** Rename `lib/redis.ts` to `lib/cache-redis.ts`. Update every importer (`grep -r 'lib/redis'` from `packages/api/src/` should return zero matches afterwards). Keep all existing exports (`redis`, `cacheGet`, `cacheSet`, `cacheDel`) and behavior unchanged.
+
+- [ ] **0.3** In `app.ts`, change `Fastify({ logger: true })` to `Fastify({ logger })` importing from `lib/logger.js`. Verify request log output still looks structured.
+
+- [ ] **0.4** Replace stray `console.*` calls. Grep target list:
+    - `services/notification.service.ts` — 6 calls (template lookups, send job error)
+    - `lib/cache-redis.ts` — 3 calls (connection lifecycle)
+    - `events/audit-writer.ts` — 1 call (drain failure)
+    - `lib/prisma.ts` — 1 call (connect failure)
+    - `services/delinquency.service.ts` — 1 call (scheduler error)
+    - `server.ts` — 1 call (`Server listening` line)
+    - `routes/auth.ts` (if any leak through — verify; existing `app.log.info` is fine)
+  Each becomes `logger.info({ ...fields }, "msg")` / `logger.warn({...}, "msg")` / `logger.error({ err }, "msg")`. Keep `request.log.*` and `app.log.*` calls unchanged — those are correctly using Fastify's per-request logger.
+
+- [ ] **0.5** Skip test files (`__tests__/contracts/*`) — those `console.error` calls help debug failing contract tests; not production logging. Annotate them with `// eslint-disable-next-line no-console` if the lint config complains.
+
+- [ ] **Verification:**
+    - `pnpm --filter api exec tsc --noEmit` clean.
+    - `pnpm --filter api test` green.
+    - `grep -r "console\\." packages/api/src/ | grep -v __tests__` returns zero matches.
+    - `grep -r "from \"./redis\"\\|from \"../redis\"\\|from \"@/lib/redis\"" packages/api/src/` returns zero matches.
+
+---
+
 ## Task 1: Worker infrastructure
 
 **Goal:** Deployable worker process with health endpoints, metrics, config validation, Redis, queue scaffolding, DLQ monitor, graceful shutdown. No business logic yet.
@@ -78,9 +118,9 @@
 
 - [ ] **1.1** Add deps to `packages/api/package.json`: `bullmq`, `ioredis`, `@bull-board/fastify`, `prom-client`, `@opentelemetry/api`, `@vvo/tzdb`. Dev deps: `testcontainers`. Add scripts: `dev:worker: tsx watch src/worker.ts`, `start:worker: node dist/worker.js`, `test:integration: vitest run --config vitest.integration.config.ts`. Run `pnpm install`.
 
-- [ ] **1.2** Create `config.ts`. Define Zod schema for: `NODE_ENV`, `DATABASE_URL`, `REDIS_URL`, `DISABLE_SCHEDULERS`, `USE_LEGACY_SCHEDULERS_SUSPENSION`, `USE_LEGACY_SCHEDULERS_NOTIFICATION`, `USE_LEGACY_SCHEDULERS_DELINQUENCY`, `BULL_BOARD_ENABLED`, `WORKER_HTTP_PORT` (default 3002). Export typed `config` object. Parse at module load; throw on invalid.
+- [ ] **1.2** Create `config.ts`. Define Zod schema for: `NODE_ENV`, `DATABASE_URL`, `REDIS_URL`, `LOG_LEVEL` (default `info`), `WORKER_QUEUES` (default `"all"` — comma-separated queue names or `"all"`; enables future per-queue replica split-out without code changes), `DISABLE_SCHEDULERS`, `USE_LEGACY_SCHEDULERS_SUSPENSION`, `USE_LEGACY_SCHEDULERS_NOTIFICATION`, `USE_LEGACY_SCHEDULERS_DELINQUENCY`, `BULL_BOARD_ENABLED`, `WORKER_HTTP_PORT` (default 3002). Export typed `config` object. Parse at module load; throw on invalid. Re-wire `lib/logger.ts` to read `config.LOG_LEVEL` instead of `process.env.LOG_LEVEL`.
 
-- [ ] **1.3** Create `lib/redis.ts`. Export `redisConnection` with `maxRetriesPerRequest: null`, `enableOfflineQueue: false` in production, `reconnectOnError: () => true`. Log connect / ready / error / end events at appropriate levels.
+- [ ] **1.3** Create `lib/queue-redis.ts`. Export `queueRedisConnection` with `maxRetriesPerRequest: null`, `enableOfflineQueue: false` in production (allowed in tests via env override so testcontainers don't fail-fast during boot), `reconnectOnError: () => true`. Log connect / ready / error / end events through the shared `logger` at appropriate levels. Distinct from `lib/cache-redis.ts` — different config requirements; sharing the same `ioredis` instance would force one set of choices for both use cases.
 
 - [ ] **1.4** Create `lib/telemetry.ts`. Define metrics: `jobDurationHistogram`, `jobAttemptsCounter`, `jobLagGauge`, `queueDepthGauge`, `dlqDepthGauge`, `tenantAutomationGauge`. Export `withTelemetry(queueName, fn)` wrapper that creates span + records histogram + counter on success/failure. Export `registry` for `/metrics` endpoint.
 
@@ -92,11 +132,13 @@
 
 - [ ] **1.8** Create `workers/dlq-monitor.ts`. One BullMQ `QueueEvents` listener per primary queue. On `failed` with `attemptsMade >= maxAttempts`, move the job payload to `dlq-<queue>` queue and increment `dlqDepthGauge`. Log at error level with job id + error.
 
-- [ ] **1.9** Create `worker.ts`. Load config. Open Redis. Start health server. Register DLQ monitors. Set up SIGTERM handler: close each worker with 60s drain timeout, quit Redis, exit 0. Register Bull Board **only if** `config.BULL_BOARD_ENABLED` — serve at `/admin/queues`. If `config.DISABLE_SCHEDULERS`, skip queue registration (used by tests that import the worker module).
+- [ ] **1.9** Create `worker.ts`. Load config. Open Redis. Start health server. Register DLQ monitors. Resolve which queues this replica should run from `config.WORKER_QUEUES` — `"all"` means all queues in `QUEUE_NAMES`; otherwise a comma-separated subset. The `Worker` registry in code stays one-per-queue; selection is whether to instantiate the matching `Worker` for this replica. Set up SIGTERM handler: close each worker with 60s drain timeout, quit Redis, exit 0. Register Bull Board **only if** `config.BULL_BOARD_ENABLED` — serve at `/admin/queues`. If `config.DISABLE_SCHEDULERS`, skip queue registration (used by tests that import the worker module).
 
-- [ ] **1.10** Create `Dockerfile.worker` (if not present). `FROM node:22-bookworm-slim`. Install deps. Build. CMD `["node", "dist/worker.js"]`.
+- [ ] **1.10** Stale scheduler cleanup on boot. Before registering crons, list all currently-stored job schedulers via `queue.getJobSchedulers()` and delete any whose ID isn't in the code-defined `SCHEDULER_REGISTRY` const. Prevents Redis-resident orphan crons from old deploys (e.g., a removed queue still firing into a queue nobody consumes). Log the deletions at `info` level.
 
-- [ ] **1.11** Integration test: start worker via `pnpm --filter api dev:worker` in one terminal; verify `/health/live`, `/health/ready`, `/metrics` respond; SIGTERM shuts down within 2s.
+- [ ] **1.11** Create `Dockerfile.worker` (if not present). `FROM node:22-bookworm-slim`. Install deps. Build. CMD `["node", "dist/worker.js"]`.
+
+- [ ] **1.12** Integration test: start worker via `pnpm --filter api dev:worker` in one terminal; verify `/health/live`, `/health/ready`, `/metrics` respond; SIGTERM shuts down within 2s.
 
 - [ ] **Verification:** `pnpm --filter api exec tsc --noEmit` clean. Worker starts, health endpoints respond, metrics endpoint lists `job_duration_seconds` etc. (no samples yet), SIGTERM exit code 0.
 
