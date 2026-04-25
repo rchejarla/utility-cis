@@ -77,14 +77,16 @@
 
 One queue per logical job family. Per-queue retry and priority policies. Per-queue `removeOnComplete`/`removeOnFail` age-based retention so Redis memory stays bounded.
 
-| Queue | Jobs | Concurrency | Cadence | Retries | Backoff | DLQ |
+The "Job name" column is the BullMQ job label (the first argument to `queue.add(name, data, opts)`). It's queue-scoped metadata — Bull Board lists it, logs include it, and worker handlers can branch on it. Each queue here carries a single job kind, so the name is mostly a readability label rather than a discriminator.
+
+| Queue | Job name | Concurrency | Cadence | Retries | Backoff | DLQ |
 |---|---|---|---|---|---|---|
-| `suspension-transitions` | `run-sweep` | 1 | `0 * * * *` | 3 | exponential, 30s base | `dlq-suspension` |
-| `notification-send` | `process-batch` | 1 | `*/10 * * * * *` | 5 | exponential, 5s base | `dlq-notification-send` |
-| `sla-breach-sweep` | `run-sweep` | 1 | `*/5 * * * *` | 3 | exponential, 60s base | `dlq-sla-breach` |
-| `delinquency-dispatch` | `dispatch` | 1 | `0 * * * *` | 2 | fixed, 60s | `dlq-delinquency-dispatch` |
+| `suspension-transitions` | `transition-suspensions` | 1 | `0 * * * *` | 3 | exponential, 30s base | `dlq-suspension` |
+| `notification-send` | `process-notification-batch` | 1 | `*/10 * * * * *` | 5 | exponential, 5s base | `dlq-notification-send` |
+| `sla-breach-sweep` | `sweep-for-sla-breaches` | 1 | `*/5 * * * *` | 3 | exponential, 60s base | `dlq-sla-breach` |
+| `delinquency-dispatch` | `dispatch-delinquency` | 1 | `0 * * * *` | 2 | fixed, 60s | `dlq-delinquency-dispatch` |
 | `delinquency-tenant` | `evaluate` | 5 | on demand | 3 | exponential, 30s base | `dlq-delinquency-tenant` |
-| `audit-retention` | `sweep` | 1 | `0 4 * * *` | 2 | fixed, 5m | `dlq-audit-retention` |
+| `audit-retention` | `sweep-expired-audits` | 1 | `0 4 * * *` | 2 | fixed, 5m | `dlq-audit-retention` |
 
 BullMQ's `failed` event moves exhausted jobs into the matching `dlq-*` queue. A separate `dlq-monitor` handler emits a Prometheus `dlq_depth{queue}` gauge and logs at `error` level. Operators replay DLQ jobs from Bull Board.
 

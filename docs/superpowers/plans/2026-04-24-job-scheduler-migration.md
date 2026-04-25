@@ -117,11 +117,11 @@
 
 - [ ] **2.3** Create `workers/suspension-worker.ts`. BullMQ `Worker` on `suspension-transitions`. Handler wraps `sweepSuspensionsAllTenants(new Date())` in `withTelemetry`. Log `{ activated, completed }` when nonzero (not on empty ticks).
 
-- [ ] **2.4** In `worker.ts`, register the suspension worker and the repeatable job: `queue.add("run-sweep", {}, { repeat: { pattern: "0 * * * *" }, jobId: "suspension-cron" })`.
+- [ ] **2.4** In `worker.ts`, register the suspension worker and the repeatable job via `queue.upsertJobScheduler("suspension-cron", { pattern: "0 * * * *", tz: "UTC" }, { name: "transition-suspensions" })`.
 
 - [ ] **2.5** In `app.ts`, wrap the existing `startSuspensionScheduler(app.log)` call in `if (config.USE_LEGACY_SCHEDULERS_SUSPENSION) { ... }`. Legacy starter also logs `"LEGACY scheduler active — USE_LEGACY_SCHEDULERS_SUSPENSION=true"` at warn level on start.
 
-- [ ] **2.6** Create `__tests__/integration/worker-suspension.test.ts` using Testcontainers. Start ephemeral Redis + Postgres; run Prisma migrate; seed two tenants; enqueue one `run-sweep` job; await completion; assert DB state and audit rows match. Also test: disabled tenant is skipped; empty sweep is a no-op; audit metadata includes `now` timestamp.
+- [ ] **2.6** Create `__tests__/integration/worker-suspension.test.ts` using Testcontainers. Start ephemeral Redis + Postgres; run Prisma migrate; seed two tenants; enqueue one `transition-suspensions` job; await completion; assert DB state and audit rows match. Also test: disabled tenant is skipped; empty sweep is a no-op; audit metadata includes `now` timestamp.
 
 - [ ] **Verification:** Legacy path still works with flag on (manual toggle test). New path is the default. `pnpm --filter api test:integration` passes on CI.
 
@@ -202,7 +202,7 @@
 
 - [ ] **6.2** Create `workers/notification-worker.ts`. BullMQ `Worker`, concurrency 1 (BullMQ replaces the old `sendJobRunning` boolean guard). Wraps handler in `withTelemetry`.
 
-- [ ] **6.3** Register in `worker.ts` with `{ repeat: { pattern: "*/10 * * * * *" }, jobId: "notification-send-cron" }`.
+- [ ] **6.3** Register in `worker.ts` via `queue.upsertJobScheduler("notification-send-cron", { pattern: "*/10 * * * * *", tz: "UTC" }, { name: "process-notification-batch" })`.
 
 - [ ] **6.4** Gate legacy `startNotificationSendJob` behind `USE_LEGACY_SCHEDULERS_NOTIFICATION`.
 
@@ -224,7 +224,7 @@
 
 - [ ] **7.3** Create `workers/delinquency-worker.ts`. BullMQ `Worker` on `delinquency-tenant`, concurrency 5. Handler wraps `evaluateDelinquencyForTenant(data.utilityId, new Date())` in `withTelemetry`.
 
-- [ ] **7.4** Register both in `worker.ts`: dispatcher cron `{ pattern: "0 * * * *", jobId: "delinquency-dispatch-cron" }` + consumer worker.
+- [ ] **7.4** Register both in `worker.ts`: dispatcher cron via `queue.upsertJobScheduler("delinquency-dispatch-cron", { pattern: "0 * * * *", tz: "UTC" }, { name: "dispatch-delinquency" })` plus the consumer worker on `delinquency-tenant`.
 
 - [ ] **7.5** Gate legacy `startDelinquencyScheduler` behind `USE_LEGACY_SCHEDULERS_DELINQUENCY`.
 
@@ -250,7 +250,7 @@
 
 - [ ] **8.3** Create `workers/sla-breach-worker.ts`. Cron every 5 minutes.
 
-- [ ] **8.4** Register in `worker.ts` with `{ pattern: "*/5 * * * *", jobId: "sla-breach-cron" }`.
+- [ ] **8.4** Register in `worker.ts` via `queue.upsertJobScheduler("sla-breach-cron", { pattern: "*/5 * * * *", tz: "UTC" }, { name: "sweep-for-sla-breaches" })`.
 
 - [ ] **8.5** Integration test: seed open SR with past `sla_due_at`, enqueue sweep, assert flipped + audit. Detail page timeline (via existing queries) shows the new event.
 
@@ -268,7 +268,7 @@
 
 - [ ] **9.2** Create `workers/audit-retention-worker.ts`. Daily cron at 04:00 UTC.
 
-- [ ] **9.3** Register in `worker.ts` with `{ pattern: "0 4 * * *", jobId: "audit-retention-cron" }`.
+- [ ] **9.3** Register in `worker.ts` via `queue.upsertJobScheduler("audit-retention-cron", { pattern: "0 4 * * *", tz: "UTC" }, { name: "sweep-expired-audits" })`.
 
 - [ ] **9.4** Integration test:
     - Seed tenant with `schedulerAuditRetentionDays=90`; seed scheduler audits dated 60, 100, 200 days ago + user audit dated 500 days ago; run sweep; assert only the 100- and 200-day scheduler audits are deleted.
