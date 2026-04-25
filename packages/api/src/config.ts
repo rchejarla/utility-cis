@@ -12,7 +12,12 @@ import { z } from "zod";
  * the rule is added.
  */
 
-const truthyString = z
+/**
+ * Loose-string boolean coercion for env vars. Accepts the boolean
+ * variants people actually type (`"true"`, `"TRUE"`, `"1"`) and treats
+ * everything else (including missing) as false. Exported for tests.
+ */
+export const truthyString = z
   .union([z.string(), z.boolean(), z.undefined()])
   .transform((v) => {
     if (typeof v === "boolean") return v;
@@ -20,7 +25,7 @@ const truthyString = z
     return v.toLowerCase() === "true" || v === "1";
   });
 
-const schema = z.object({
+export const configSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 
   // Core dependencies — fail-fast if missing.
@@ -46,10 +51,10 @@ const schema = z.object({
   BULL_BOARD_ENABLED: truthyString,
 });
 
-export type AppConfig = z.infer<typeof schema>;
+export type AppConfig = z.infer<typeof configSchema>;
 
 function loadConfig(): AppConfig {
-  const parsed = schema.safeParse(process.env);
+  const parsed = configSchema.safeParse(process.env);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
@@ -68,16 +73,27 @@ function loadConfig(): AppConfig {
 export const config = loadConfig();
 
 /**
- * Resolve which queues this process should subscribe to from
- * `WORKER_QUEUES`. Returns `null` for "all" — caller treats null as
- * "subscribe to every queue in QUEUE_NAMES".
+ * Pure parser for the `WORKER_QUEUES` env var. Returns `null` for the
+ * "all" sentinel (or empty) — caller treats null as "subscribe to
+ * every queue in QUEUE_NAMES". Otherwise returns the trimmed,
+ * non-empty queue names.
  *
- * Selective subscription enables future per-queue replica split-out
- * without code changes: deploy a second worker Deployment with
- * `WORKER_QUEUES=delinquency-tenant,delinquency-dispatch`.
+ * Exported so tests can assert parsing behavior without mocking the
+ * full config singleton.
+ */
+export function parseWorkerQueues(raw: string): string[] | null {
+  const trimmed = raw.trim();
+  if (trimmed === "" || trimmed.toLowerCase() === "all") return null;
+  const parts = trimmed.split(",").map((s) => s.trim()).filter(Boolean);
+  return parts.length === 0 ? null : parts;
+}
+
+/**
+ * Resolve which queues this process should subscribe to from the
+ * loaded `config.WORKER_QUEUES`. Selective subscription enables future
+ * per-queue replica split-out without code changes: deploy a second
+ * worker Deployment with `WORKER_QUEUES=delinquency-tenant,delinquency-dispatch`.
  */
 export function resolveWorkerQueues(): string[] | null {
-  const raw = config.WORKER_QUEUES.trim();
-  if (raw === "" || raw.toLowerCase() === "all") return null;
-  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+  return parseWorkerQueues(config.WORKER_QUEUES);
 }
