@@ -1,5 +1,6 @@
 import type { DomainEvent } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
+import { logger } from "../lib/logger.js";
 import { domainEvents } from "./emitter.js";
 
 // Prisma's Json column rejects `undefined`; use `null` to mean "no value".
@@ -59,7 +60,10 @@ async function drain(): Promise<void> {
       try {
         await writeAuditRow(event);
       } catch (err) {
-        console.error("[audit-writer] Failed to write audit log:", err);
+        logger.error(
+          { err, component: "audit-writer", eventType: event.type, entityId: event.entityId },
+          "Failed to write audit log",
+        );
       }
     }
   } finally {

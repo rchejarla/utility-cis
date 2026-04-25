@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createTestApp, createTestToken } from "../setup.js";
 
 // Mock Redis so RBAC service doesn't need a real Redis connection
-vi.mock("../../lib/redis.js", () => ({
+vi.mock("../../lib/cache-redis.js", () => ({
   redis: {
     get: vi.fn().mockResolvedValue(null),
     setex: vi.fn().mockResolvedValue("OK"),

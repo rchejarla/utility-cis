@@ -1,9 +1,10 @@
 import { PrismaClient } from "@utility-cis/shared/src/generated/prisma";
+import { logger } from "./logger.js";
 
 export const prisma = new PrismaClient();
 
 // Warm up connection pool on import
-prisma.$connect().catch((err) => console.error("[prisma] Failed to connect:", err));
+prisma.$connect().catch((err) => logger.error({ err, component: "prisma" }, "Failed to connect"));
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

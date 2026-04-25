@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma.js";
-import { cacheDel } from "../lib/redis.js";
+import { cacheDel } from "../lib/cache-redis.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
 import type { CreateRateScheduleInput, RateScheduleQuery } from "@utility-cis/shared";
 import { paginatedTenantList } from "../lib/pagination.js";

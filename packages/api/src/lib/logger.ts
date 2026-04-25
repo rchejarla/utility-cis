@@ -1,0 +1,33 @@
+import { pino, type LoggerOptions } from "pino";
+
+/**
+ * Shared pino configuration used by both API and worker processes.
+ *
+ * The API process passes `loggerOptions` to `Fastify({ logger })` — Fastify
+ * internally constructs its own pino instance from this config so request
+ * logging integrates with route handlers and middleware.
+ *
+ * The worker process imports the `logger` instance directly — it has no
+ * Fastify and needs structured logging from process start.
+ *
+ * Both processes have separate pino instances but emit through identical
+ * configuration, so log output looks the same across services.
+ *
+ * `LOG_LEVEL` defaults to `info`. Set to `debug` for noisy local dev,
+ * `warn`/`error` for quiet test runs. Re-wired to `config.LOG_LEVEL` in
+ * Task 1 once `config.ts` exists.
+ *
+ * `redact` strips Authorization / Cookie headers from request logs so
+ * tokens don't end up in log aggregators. Pino's redact runs at write
+ * time and is cheap.
+ */
+export const loggerOptions: LoggerOptions = {
+  level: process.env.LOG_LEVEL ?? "info",
+  redact: {
+    paths: ["req.headers.authorization", "req.headers.cookie"],
+    censor: "[REDACTED]",
+  },
+  timestamp: pino.stdTimeFunctions.isoTime,
+};
+
+export const logger = pino(loggerOptions);

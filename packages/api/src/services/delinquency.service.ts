@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma.js";
+import { logger } from "../lib/logger.js";
 import { sendNotification } from "./notification.service.js";
 
 /**
@@ -217,9 +218,9 @@ export async function escalateAccount(
   return { action };
 }
 
-export function startDelinquencyScheduler(logger: { info: (msg: string) => void }): void {
+export function startDelinquencyScheduler(log: { info: (msg: string) => void }): void {
   const intervalMs = 60 * 60 * 1000; // hourly
-  logger.info("delinquency-scheduler: starting (hourly)");
+  log.info("delinquency-scheduler: starting (hourly)");
 
   setInterval(async () => {
     try {
@@ -229,13 +230,13 @@ export function startDelinquencyScheduler(logger: { info: (msg: string) => void 
       for (const t of tenants) {
         const result = await evaluateAll(t.utilityId);
         if (result.actionsCreated > 0) {
-          logger.info(
+          log.info(
             `delinquency-scheduler: tenant ${t.utilityId} — ${result.accountsEvaluated} accounts, ${result.actionsCreated} new actions`,
           );
         }
       }
     } catch (err) {
-      console.error("[delinquency-scheduler] error:", err);
+      logger.error({ err, component: "delinquency-scheduler" }, "Tick failed");
     }
   }, intervalMs);
 }

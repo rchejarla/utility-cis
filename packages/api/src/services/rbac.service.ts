@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma.js";
-import { cacheDel, cacheGet, cacheSet } from "../lib/redis.js";
+import { cacheDel, cacheGet, cacheSet } from "../lib/cache-redis.js";
 import type { PermissionMap } from "@utility-cis/shared";
 
 interface UserRoleResult {

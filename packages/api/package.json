@@ -17,6 +17,7 @@
     "fastify": "^5.2.1",
     "ioredis": "^5.4.2",
     "jose": "^6.2.2",
+    "pino": "^10",
     "zod": "^3.24.1",
     "zod-to-json-schema": "^3.24"
   },

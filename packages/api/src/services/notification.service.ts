@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma.js";
+import { logger } from "../lib/logger.js";
 
 /**
  * Notification engine — resolves templates, renders variables, queues
@@ -172,7 +173,16 @@ class ConsoleProvider implements NotificationProvider {
     body: string,
   ): Promise<{ messageId: string }> {
     const id = `console-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    console.log(`[notification] TO: ${to} | SUBJECT: ${subject ?? "(none)"} | BODY: ${body.slice(0, 200)}${body.length > 200 ? "..." : ""}`);
+    logger.info(
+      {
+        component: "notification",
+        provider: "console",
+        to,
+        subject: subject ?? null,
+        bodyPreview: body.slice(0, 200) + (body.length > 200 ? "..." : ""),
+      },
+      "Delivered notification",
+    );
     return { messageId: id };
   }
 }
@@ -192,7 +202,10 @@ export async function sendNotification(
   });
 
   if (!template || !template.isActive) {
-    console.warn(`[notification] No active template for event "${input.eventType}" in tenant ${utilityId}`);
+    logger.warn(
+      { component: "notification", utilityId, eventType: input.eventType },
+      "No active template for event",
+    );
     return null;
   }
 
@@ -201,7 +214,10 @@ export async function sendNotification(
   const content = channels[channelKey];
 
   if (!content?.body) {
-    console.warn(`[notification] Template "${input.eventType}" has no ${input.channel} channel content`);
+    logger.warn(
+      { component: "notification", eventType: input.eventType, channel: input.channel },
+      "Template has no channel content",
+    );
     return null;
   }
 
@@ -221,11 +237,17 @@ export async function sendNotification(
   }
 
   if (input.channel === "EMAIL" && !recipientEmail) {
-    console.warn(`[notification] No email address for recipient ${input.recipientId}`);
+    logger.warn(
+      { component: "notification", recipientId: input.recipientId },
+      "No email address for recipient",
+    );
     return null;
   }
   if (input.channel === "SMS" && !recipientPhone) {
-    console.warn(`[notification] No phone number for recipient ${input.recipientId}`);
+    logger.warn(
+      { component: "notification", recipientId: input.recipientId },
+      "No phone number for recipient",
+    );
     return null;
   }
 
@@ -343,9 +365,9 @@ async function processPendingNotifications(): Promise<void> {
 
 let sendJobRunning = false;
 
-export function startNotificationSendJob(logger: { info: (msg: string) => void }): void {
+export function startNotificationSendJob(log: { info: (msg: string) => void }): void {
   const intervalMs = 10_000;
-  logger.info(`notification-send-job: starting (every ${intervalMs / 1000}s)`);
+  log.info(`notification-send-job: starting (every ${intervalMs / 1000}s)`);
 
   setInterval(() => {
     // Skip tick if a prior run is still in flight. Prevents overlapping
@@ -354,7 +376,7 @@ export function startNotificationSendJob(logger: { info: (msg: string) => void }
     sendJobRunning = true;
     processPendingNotifications()
       .catch((err) => {
-        console.error("[notification-send-job] error:", err);
+        logger.error({ err, component: "notification-send-job" }, "Tick failed");
       })
       .finally(() => {
         sendJobRunning = false;

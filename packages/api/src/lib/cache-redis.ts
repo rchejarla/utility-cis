@@ -1,17 +1,23 @@
 import Redis from "ioredis";
+import { logger } from "./logger.js";
 
 /**
- * Redis is used purely as a best-effort cache (RBAC lookups, rate schedule
- * lookups). Treat it as optional: callers use the cacheGet/cacheSet/cacheDel
+ * Cache-only Redis client for best-effort lookups (RBAC permissions,
+ * rate schedules). Treat as optional: callers use the cacheGet/Set/Del
  * helpers below, which swallow per-command errors so a Redis outage
  * degrades to a DB-only path rather than failing requests.
+ *
+ * For BullMQ queue connections, see `lib/queue-redis.ts` (created in
+ * Task 1). That client uses different ioredis settings
+ * (`maxRetriesPerRequest: null`, `enableOfflineQueue: false`) required
+ * by BullMQ's blocking commands; sharing the connection would force
+ * one set of choices for both use cases.
  *
  * ioredis auto-reconnects on its own. The lifecycle listeners below log
  * once per state transition (connect, close, reconnect) instead of once
  * per failed command — a single network blip used to emit ECONNRESET on
  * every in-flight command and flood the logs.
  */
-
 export const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {
   // Cap reconnect backoff at 5s. Default is min(times * 50, 2000) which is
   // also fine; this just makes the intent explicit and tolerates longer
@@ -26,7 +32,7 @@ let loggedErrorSinceClose = false;
 
 redis.on("ready", () => {
   if (!healthy) {
-    console.log("[redis] ready");
+    logger.info({ component: "cache-redis" }, "ready");
     healthy = true;
     loggedErrorSinceClose = false;
   }
@@ -34,7 +40,7 @@ redis.on("ready", () => {
 
 redis.on("close", () => {
   if (healthy) {
-    console.warn("[redis] connection closed, reconnecting…");
+    logger.warn({ component: "cache-redis" }, "connection closed, reconnecting");
     healthy = false;
   }
 });
@@ -44,7 +50,10 @@ redis.on("error", (err: Error & { code?: string }) => {
   // in-flight command into one line per disconnection. Keep a handler
   // attached so an unhandled 'error' event can't crash the process.
   if (!loggedErrorSinceClose) {
-    console.warn(`[redis] connection error (${err.code ?? err.message})`);
+    logger.warn(
+      { component: "cache-redis", code: err.code, message: err.message },
+      "connection error",
+    );
     loggedErrorSinceClose = true;
   }
 });

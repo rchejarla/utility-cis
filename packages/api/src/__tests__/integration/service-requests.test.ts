@@ -19,7 +19,7 @@ vi.mock("../../lib/prisma.js", async () => {
 // Keep the global redis mock; RBAC reads from cacheGet which will miss
 // and fall through to the DB. Reset the cache helpers to explicit misses
 // for this suite so stale cached roles from prior suites don't leak in.
-vi.mock("../../lib/redis.js", () => ({
+vi.mock("../../lib/cache-redis.js", () => ({
   redis: {
     get: vi.fn().mockResolvedValue(null),
     setex: vi.fn().mockResolvedValue("OK"),

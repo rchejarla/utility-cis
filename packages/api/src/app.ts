@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import multipart from "@fastify/multipart";
+import { loggerOptions } from "./lib/logger.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { tenantMiddleware } from "./middleware/tenant.js";
 import { authorizationMiddleware } from "./middleware/authorization.js";
@@ -47,7 +48,10 @@ import { portalApiRoutes } from "./routes/portal-api.js";
 import { buildOpenApiDocument } from "./lib/openapi.js";
 
 export async function buildApp() {
-  const app = Fastify({ logger: true });
+  // Pass a config object — Fastify constructs its own pino instance from
+  // it. The standalone `logger` export from lib/logger.ts is for the worker
+  // process and any non-Fastify call site that needs the same configuration.
+  const app = Fastify({ logger: loggerOptions });
 
   // Security headers (CSP, X-Frame-Options, X-Content-Type-Options, etc.).
   // We disable CSP here because this is a JSON API; the web app owns its own CSP.

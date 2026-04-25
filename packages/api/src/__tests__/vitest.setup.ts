@@ -2,7 +2,7 @@ import { vi } from "vitest";
 
 // Mock ioredis so RBAC cache has no real connection. Individual tests can
 // re-mock redis if they need to assert specific cache behavior.
-vi.mock("../lib/redis.js", () => ({
+vi.mock("../lib/cache-redis.js", () => ({
   redis: {
     get: vi.fn().mockResolvedValue(null),
     setex: vi.fn().mockResolvedValue("OK"),
