@@ -1,8 +1,8 @@
 # 10 — Draft Status & Posting
 
-**RFP commitment owner:** SaaSLogic Utilities — split between `packages/shared/prisma/schema.prisma` (per-entity draft tables + draft-collaborator junction), `packages/api/src/services/draft/*` (channel-agnostic draft engine), `packages/api/src/lib/draft-aware.ts` (query helpers that exclude drafts from production reads), and `packages/web/components/draft/*` (autosave UI, draft-list views, post-confirmation dialogs). Cross-cuts with [01-audit-and-tamper-evidence.md](./01-audit-and-tamper-evidence.md) (post events emit audit rows; **drafts themselves are not full audit-trailed** — see §3.6), [09-bulk-upload-and-data-ingestion.md](./09-bulk-upload-and-data-ingestion.md) (the staged-but-uncommitted phase of an import IS a kind of draft and uses the same primitives), and [01-audit-and-tamper-evidence.md](./01-audit-and-tamper-evidence.md) §3.5 / [08-data-retention-archival-purge.md](./08-data-retention-archival-purge.md) §3.4.3 (the `pending_administrative_change` table — distinct from drafts; see §2.4).
+**RFP commitment owner:** SaaSLogic Utilities — split between `packages/shared/prisma/schema.prisma` (`DRAFT` status added to each adopted entity's existing status enum + shared draft-metadata columns + `draft_collaborator` junction), `packages/api/src/services/draft/*` (channel-agnostic draft engine), `packages/api/src/lib/draft-aware.ts` (query helpers that exclude drafts from production reads), and `packages/web/components/draft/*` (autosave UI, draft-list views, post-confirmation dialogs). Cross-cuts with [01-audit-and-tamper-evidence.md](./01-audit-and-tamper-evidence.md) (post events emit audit rows; **drafts themselves are not full audit-trailed** — see §3.6), [09-bulk-upload-and-data-ingestion.md](./09-bulk-upload-and-data-ingestion.md) (the staged-but-uncommitted phase of an import is a row-level kind of draft, but uses different primitives — see §3.4), and [01-audit-and-tamper-evidence.md](./01-audit-and-tamper-evidence.md) §3.5 / [08-data-retention-archival-purge.md](./08-data-retention-archival-purge.md) §3.4.3 (the `pending_administrative_change` table — distinct from drafts; see §2.4).
 **Status:** Drafted — minimal implementation. **No entity in the schema has an explicit `DRAFT` status.** Two pre-active states exist (`ServiceAgreement.PENDING`, `ServiceSuspension.PENDING`) but they are operational lifecycle states, not user work-in-progress. There is no client-side autosave anywhere in `packages/web/`. `createdBy` columns exist on several entities but are never filtered for visibility scoping. No optimistic locking, version tracking, or co-edit conflict detection. The Adjustment entity (which the RFP names explicitly) **does not exist in the schema** — Module 10 (Payments & Collections) is a Phase 3 stub.
-**Effort estimate:** L (~10-12 weeks engineering). Implementing drafts well is harder than it looks. The largest cost is **getting the visibility model right** — drafts must be scoped to the originator + named collaborators, must integrate with RLS without weakening tenant isolation, and must NOT leak into production listings, reports, schedulers, or dependent calculations. Second-largest cost is **autosave with conflict resolution** for collaborative editing. Third is **per-entity post pipelines** that promote a draft into a real entity row with all the side effects (audit, notifications, dependent inserts) the post would normally trigger.
+**Effort estimate:** M-L (~7-9 weeks engineering). Drafts are modeled as a status (`DRAFT`) on each adopted entity's existing table — not a parallel set of tables — which keeps the post pipeline trivial (one `UPDATE status`). The largest cost is **getting the visibility model right** — drafts must be scoped to the originator + named collaborators, must integrate with RLS without weakening tenant isolation, and must NOT leak into production listings, reports, schedulers, or dependent calculations. Second-largest cost is **autosave with conflict resolution** for collaborative editing. Third is per-entity adoption: extending each entity's status enum, relaxing NOT-NULL columns to allow incomplete drafts, and gating list/search endpoints to exclude `DRAFT` rows.
 
 ---
 
@@ -143,52 +143,55 @@ The two patterns coexist: a draft adjustment, when posted, MAY trigger a `pendin
 
 ## 3. Functional requirements
 
-### 3.1 Draft engine — channel-agnostic substrate
+### 3.1 Draft engine — single-table model
 
-The system MUST converge per-entity draft support onto a single engine. Each entity that adopts draft support registers an `EntityDraftSpec` once; the engine handles persistence, visibility, autosave, locking, and the post pipeline.
+The system MUST treat **draft as a status on the production entity**, not as a separate table. Each entity that adopts draft support extends its existing status enum with `DRAFT` (and `PENDING_APPROVAL` for the dual-approval post path), adds a small set of shared draft-metadata columns, and relaxes its NOT-NULL constraints to allow incomplete WIP rows. The post pipeline becomes a single `UPDATE status` instead of a saga that copies a draft row into production.
 
-#### 3.1.1 Storage model
+**Why single-table** (vs. parallel `<entity>_draft` tables): The same row carries through its full lifecycle. Same id, same FKs, same audit trail. Posting is `UPDATE`, not `INSERT-then-DELETE`, so there is no transactional saga, no `posted_as_id` redirection, no risk of draft and production diverging mid-post. Half the schema, half the RLS policies, no risk of the two shapes drifting over time. The trade-off — that a production row's NOT-NULL columns must be relaxed and re-enforced via CHECK on `status != 'DRAFT'` — is mechanical.
 
-- **FR-DRAFT-001** — Every entity that adopts draft support gets a paired `<entity>_draft` table that mirrors the production entity's columns plus draft-specific metadata. The draft table is **separate** from the production table — drafts and posted entities never share rows. Reasoning:
-  - Drafts often have nullable fields that are NOT NULL in production (a half-filled draft is normal; a half-filled production row is a bug).
-  - Drafts skip foreign-key constraints to entities that may not exist yet (e.g., an adjustment draft can reference a customer who's also a draft).
-  - Drafts must not appear in production list/search/report queries even by accident — physical separation is the strongest guarantee.
-  - Draft columns can evolve (add new helper fields like `lastSavedAt`, `lastSavedField`, `inProgressBy`) without polluting the production schema.
-  - **Acceptance:** `ServiceRequestDraft`, `AdjustmentDraft`, `BillingCycleDraft`, `RateScheduleDraft` etc. exist as separate tables. `ServiceRequest` (production) has no `isDraft` boolean.
+#### 3.1.1 Storage model — extending each entity
 
-- **FR-DRAFT-002** — Draft tables share a common base set of columns enforced via a Prisma mixin (or per-table convention with linter check):
+- **FR-DRAFT-001** — Each adopted entity's existing status enum MUST be extended with two new states:
 
   ```prisma
-  model XxxDraft {
-    id              String          @id @default(uuid()) @db.Uuid
-    utilityId       String          @map("utility_id") @db.Uuid
-    originatorId    String          @map("originator_id") @db.Uuid       // who created the draft
-    title           String?         // user-given label, e.g., "Q3 rate revision"
-    payload         Json            // the entity's editable fields
-    payloadVersion  Int             @default(1) @map("payload_version")  // optimistic-lock counter
-    lastSavedAt     DateTime        @default(now()) @map("last_saved_at") @db.Timestamptz
-    lastSavedBy     String          @map("last_saved_by") @db.Uuid
-    autosaveSeq     BigInt          @default(0) @map("autosave_seq")     // monotonic per-draft counter for autosave events
-    status          DraftStatus     @default(DRAFT)
-    visibility      DraftVisibility @default(ORIGINATOR_ONLY)
-    postedAt        DateTime?       @map("posted_at") @db.Timestamptz
-    postedBy        String?         @map("posted_by") @db.Uuid
-    postedAsId      String?         @map("posted_as_id") @db.Uuid       // FK to the posted production entity
-    discardedAt     DateTime?       @map("discarded_at") @db.Timestamptz
-    discardedBy     String?         @map("discarded_by") @db.Uuid
-    expiresAt       DateTime?       @map("expires_at") @db.Timestamptz   // auto-discard at this date if not posted
-    @@index([utilityId, originatorId, status])
-    @@index([utilityId, status, lastSavedAt])
+  enum ServiceRequestStatus {
+    DRAFT              // NEW in this doc — user WIP, not yet visible to dispatcher
+    PENDING_APPROVAL   // NEW — post-attempted, waiting on pending_administrative_change for high-stakes entities
+    NEW                // existing
+    ASSIGNED
+    IN_PROGRESS
+    PENDING_FIELD
+    COMPLETED
+    FAILED
+    CANCELLED
   }
+  ```
 
-  enum DraftStatus {
-    DRAFT
-    POSTING
-    POSTED
-    DISCARDED
-    EXPIRED
-  }
+  `DRAFT` is the entry state when a user opts into draft mode (otherwise the existing first-active state — `NEW` for SR, `ACTIVE`/`PENDING` for SA, etc. — is still the entry). `PENDING_APPROVAL` is the post-time state for entities whose post triggers a dual-approval gate (FR-DRAFT-040 step 4); see §3.2.
 
+  Per-entity, the existing first-active state (`NEW`, `ACTIVE`, etc.) is preserved as the post target. The state machine pre-pends `DRAFT → (PENDING_APPROVAL?) → <existing first state>` to whatever transitions the entity already has.
+
+- **FR-DRAFT-002** — Each adopted entity's production table MUST add the following shared draft-metadata columns. They are **nullable on posted rows** (the production lifecycle doesn't need them) and **populated on `DRAFT`/`PENDING_APPROVAL` rows**:
+
+  ```prisma
+  // Added to each adopted entity's production table:
+  originatorId    String?         @map("originator_id") @db.Uuid       // who created the draft
+  draftTitle      String?         @map("draft_title")                  // optional user-given label, e.g., "Q3 rate revision"
+  payloadVersion  Int             @default(1) @map("payload_version")  // optimistic-lock counter (also used for posted rows on subsequent edits)
+  lastSavedAt     DateTime?       @map("last_saved_at") @db.Timestamptz
+  lastSavedBy     String?         @map("last_saved_by") @db.Uuid
+  autosaveSeq     BigInt          @default(0) @map("autosave_seq")     // monotonic per-row counter for autosave events
+  visibility      DraftVisibility @default(ORIGINATOR_ONLY)             // only consulted when status IN ('DRAFT', 'PENDING_APPROVAL')
+  postedAt        DateTime?       @map("posted_at") @db.Timestamptz
+  postedBy        String?         @map("posted_by") @db.Uuid
+  discardedAt     DateTime?       @map("discarded_at") @db.Timestamptz
+  discardedBy     String?         @map("discarded_by") @db.Uuid
+  draftExpiresAt  DateTime?       @map("draft_expires_at") @db.Timestamptz  // auto-discard at this date if not posted
+  ```
+
+  Plus the shared enum:
+
+  ```prisma
   enum DraftVisibility {
     ORIGINATOR_ONLY
     SHARED_WITH_NAMED_USERS
@@ -197,25 +200,58 @@ The system MUST converge per-entity draft support onto a single engine. Each ent
   }
   ```
 
-  The `payload` JSON column is the structured editable state. Per-entity, a Zod schema validates `payload`. The validation runs at autosave time (warnings only — drafts can be invalid) and at post time (errors block — invalid drafts can't post).
+  Note: there is no `DraftStatus` enum. The "draftness" of a row is encoded in the entity's own `status` column — `DRAFT` and `PENDING_APPROVAL`. The `POSTING` / `POSTED` / `DISCARDED` / `EXPIRED` states from the prior design collapse: posting transitions the row's `status` to its existing first-active state and sets `postedAt`; discarding transitions to a new universal `DISCARDED` state (added to each entity's enum); expiring is an automated discard with `discardReason: "EXPIRED"`.
 
-- **FR-DRAFT-003** — A common `draft_collaborator` junction table covers cross-entity collaboration:
+  Indexes added to each adopted entity:
+  ```prisma
+  @@index([utilityId, status, originatorId])           // fast "my drafts" query (predicate covers status IN ('DRAFT', 'PENDING_APPROVAL'))
+  @@index([utilityId, status, lastSavedAt(sort: Desc)]) // fast "recent drafts" admin view
+  @@index([utilityId, status, draftExpiresAt])         // fast expiry sweeper
+  ```
+
+  The first index is highly selective: most rows in any tenant are not in `DRAFT`/`PENDING_APPROVAL` status, so the index footprint is small.
+
+- **FR-DRAFT-003** — Existing NOT-NULL columns that are required for a posted entity but not necessarily known when drafting MUST be relaxed to nullable, with a CHECK constraint that re-enforces NOT-NULL once the row leaves draft state. Example (`service_request`):
+
+  ```sql
+  -- Existing column is now nullable:
+  ALTER TABLE service_request ALTER COLUMN account_id DROP NOT NULL;
+
+  -- CHECK constraint reinstates the requirement post-draft:
+  ALTER TABLE service_request ADD CONSTRAINT chk_sr_required_when_posted
+    CHECK (
+      status IN ('DRAFT', 'PENDING_APPROVAL', 'DISCARDED')
+      OR (account_id IS NOT NULL AND priority IS NOT NULL AND request_type IS NOT NULL)
+    );
+  ```
+
+  Per-entity, the `EntityDraftSpec` enumerates which columns to relax. The CHECK constraint is generated from the same spec to keep the relaxation list and the re-enforcement list in sync.
+
+- **FR-DRAFT-004** — Foreign keys from production rows MUST NOT reference draft rows. Two-layer enforcement:
+  1. **Application layer** (primary): the entity's `validateRow` rejects FKs that resolve to a `DRAFT`/`PENDING_APPROVAL`-status row. The validation runs at autosave for relaxed warning ("you're referencing a draft customer; this will need to be posted before you can post this SR") and at post time as a hard error.
+  2. **Database trigger** (defense in depth): on entities where this matters most (e.g., `ServiceAgreement.customerId`, `ServiceAgreement.premiseId`), a trigger raises an exception if a row tries to reference a `DRAFT`-status parent. CHECK constraints in standard Postgres can't reference other tables, so a `BEFORE INSERT/UPDATE` trigger does the job.
+
+  The trigger is per-relationship and only added where needed. Most entity relationships don't need it because the application-layer check is sufficient.
+
+- **FR-DRAFT-005** — A common `draft_collaborator` junction table covers cross-entity collaboration. It is polymorphic (one table for all entity types) because collaborators are a cross-cutting concern and the polymorphism keeps the schema small:
 
   ```prisma
   model DraftCollaborator {
     id          String   @id @default(uuid()) @db.Uuid
     utilityId   String   @map("utility_id") @db.Uuid
-    draftType   String   @map("draft_type") @db.VarChar(64)  // "service_request_draft" | "adjustment_draft" | ...
-    draftId     String   @map("draft_id") @db.Uuid
+    entityType  String   @map("entity_type") @db.VarChar(64)  // "service_request" | "rate_schedule" | "billing_cycle" | ...
+    entityId    String   @map("entity_id") @db.Uuid
     userId      String   @map("user_id") @db.Uuid
     role        String   @db.VarChar(32)  // "viewer" | "editor"
     addedBy     String   @map("added_by") @db.Uuid
     addedAt     DateTime @default(now()) @map("added_at") @db.Timestamptz
-    @@unique([utilityId, draftType, draftId, userId])
-    @@index([utilityId, userId, draftType])
+    @@unique([utilityId, entityType, entityId, userId])
+    @@index([utilityId, userId, entityType])
     @@map("draft_collaborator")
   }
   ```
+
+  Polymorphism in Postgres without proper FK enforcement is a known weak spot. Mitigations: a daily reconciliation job verifies every `(entityType, entityId)` resolves to a real row; orphaned collaborator rows (parent entity hard-deleted, which should be rare) are logged and removed. The collaborator entries auto-clear when the row's status leaves `DRAFT`/`PENDING_APPROVAL` (post or discard) — collaborators on a posted entity have no meaning. Cleanup happens in the same transaction as the status transition.
 
 #### 3.1.2 Visibility model
 
@@ -225,10 +261,11 @@ The system MUST converge per-entity draft support onto a single engine. Each ent
   - `SHARED_WITH_ROLE` — visible to all users in the tenant who hold a configured role (e.g., "rate-management-team-lead"). The role itself is set per draft.
   - `TENANT_WIDE` — visible to all users with the relevant module read permission. (Rare; used for organization-wide proposals.)
 
-- **FR-DRAFT-011** — Visibility enforcement happens at the query layer in two complementary ways:
-  1. **Postgres RLS policy** (defense in depth): a per-table policy that filters draft tables by `(utility_id = current_setting('app.current_utility_id') AND ...)` where the rest of the predicate covers the visibility cases above. The application sets a session local `app.current_user_id` per request. RLS uses both. **Reasoning:** RLS is the strongest guarantee — even a buggy service-layer query cannot leak drafts.
-  2. **Service-layer helpers** (`packages/api/src/lib/draft-visibility.ts`): a `withDraftVisibility(query, ctx)` helper that injects the visibility predicate into application queries. Used everywhere drafts are queried. Service-layer enforcement gives clearer errors and skips the RLS roundtrip in some cases (e.g., when the originator is querying their own drafts, which is the dominant case).
-  - **Acceptance:** Direct psql query as `app_user` role with `app.current_utility_id` and `app.current_user_id` set returns zero draft rows when the user is neither originator nor collaborator nor role-member nor tenant-admin (when visibility is TENANT_WIDE). Test passes against every draft table.
+- **FR-DRAFT-011** — Visibility enforcement happens at three layers:
+  1. **Postgres RLS policy** (strongest guarantee): the existing per-tenant RLS policy on each adopted entity is extended with a draft-visibility predicate. The full policy reads: *"this row is visible if `utility_id` matches the session's current tenant AND (the row is not in DRAFT/PENDING_APPROVAL state OR the row's draft visibility allows the current user)."* The application sets `app.current_user_id` (in addition to the existing `app.current_utility_id`) per request from the JWT. **Reasoning:** RLS is the strongest guarantee — even a buggy service-layer query cannot leak drafts.
+  2. **Service-layer scoping helper** (`packages/api/src/lib/draft-aware.ts`): two helpers — `withProductionScope(query)` injects `WHERE status NOT IN ('DRAFT', 'PENDING_APPROVAL', 'DISCARDED')` for production-only reads, and `withDraftVisibility(query, ctx)` injects the visibility predicate for draft-aware reads. Service code uses one or the other explicitly.
+  3. **Per-entity production view** (defense in depth): every adopted entity gets a `<entity>_v` view defined as `SELECT * FROM <entity> WHERE status NOT IN ('DRAFT', 'PENDING_APPROVAL', 'DISCARDED')`. Reports, dashboards, and any read-replica analytics queries use the view, not the table.
+  - **Acceptance:** Direct psql query as `app_user` role with `app.current_utility_id` and `app.current_user_id` set returns zero `DRAFT`-status rows when the user is neither originator nor collaborator nor role-member nor tenant-admin. Test passes against every adopted entity. A separate test confirms posted rows ARE visible to all users with the entity's read permission (the visibility predicate gates DRAFT only, not posted state).
 
 - **FR-DRAFT-012** — Visibility changes (e.g., originator opens up a draft from ORIGINATOR_ONLY to SHARED_WITH_NAMED_USERS) emit a single audit row of class `AUDIT_OPERATIONAL` with `before_state` + `after_state` + the new collaborator list. Per-edit autosaves do NOT emit audit rows (would explode volume — see §3.6).
 
@@ -241,15 +278,16 @@ The system MUST converge per-entity draft support onto a single engine. Each ent
 
 - **FR-DRAFT-020** — All draft-supporting forms in the web app implement **debounced autosave** with the following contract:
   - Trigger: any field change OR every 30 seconds (whichever first), with a 2-second debounce window after the last keystroke.
-  - Endpoint: `PATCH /api/v1/drafts/<draftType>/<draftId>` with `{ payload, payloadVersion }`. The endpoint is idempotent — same `payloadVersion` is a no-op.
-  - Conflict response: HTTP 409 Conflict with the current server-side `payload` if the client's `payloadVersion` is older than the server's. The UI presents a merge dialog (FR-DRAFT-022).
-  - Local fallback: if the network is unavailable, autosave writes to `IndexedDB` keyed by `(draftType, draftId, autosaveSeq)`. On reconnect, queued autosaves are flushed in order. (Same primitive as PWA offline queueing per [03-progressive-web-app.md](./03-progressive-web-app.md).)
+  - Endpoint: the existing entity's PATCH endpoint (e.g., `PATCH /api/v1/service-requests/<id>`) is reused for autosave. Body includes `{ ...partialPayload, payloadVersion }`. The endpoint is idempotent — same `payloadVersion` is a no-op.
+  - Authorization: PATCH on a `DRAFT`-status row checks the draft visibility (originator + editor collaborators); PATCH on a posted row checks the existing entity edit permission. Same endpoint, status-aware authorization.
+  - Conflict response: HTTP 409 Conflict with the current server-side row if the client's `payloadVersion` is older than the server's. The UI presents a merge dialog (FR-DRAFT-022).
+  - Local fallback: if the network is unavailable, autosave writes to `IndexedDB` keyed by `(entityType, entityId, autosaveSeq)`. On reconnect, queued autosaves are flushed in order. (Same primitive as PWA offline queueing per [03-progressive-web-app.md](./03-progressive-web-app.md).)
 
-- **FR-DRAFT-021** — Drafts persist server-side **indefinitely by default**, with a per-tenant `draft_max_age_days` (default 90). On `expiresAt` reached, the draft transitions to `EXPIRED` (not hard-deleted) and is hidden from default views. A weekly sweep prompts the originator: "Your draft 'Q3 rate revision' is 90 days old. Discard, extend, or post?"
-  - Reasoning: an unbounded draft table is a quiet memory leak; users abandon drafts and forget about them. A reminder + soft-expire balances persistence with hygiene.
-  - **Acceptance:** A draft `created_at` 90 days ago receives no further autosaves and shows up as EXPIRED. Originator sees "Restore" / "Discard" actions in the drafts list.
+- **FR-DRAFT-021** — Drafts persist server-side **indefinitely by default**, with a per-tenant `draft_max_age_days` (default 90). On `draftExpiresAt` reached, a sweeper transitions the row to `DISCARDED` with `discardedAt = now()` and a reason of `"EXPIRED"` (rather than hard-deleting). One week before expiry, the originator receives a notification: *"Your draft service request 'Smith family — meter relocation' is 7 days from auto-discard. Open to extend or post."*
+  - Reasoning: an unbounded set of `DRAFT`-status rows is a quiet memory leak; users abandon drafts and forget about them. A reminder + soft-discard balances persistence with hygiene. Discarded rows are themselves cleaned up per the entity's retention policy ([08-data-retention-archival-purge.md](./08-data-retention-archival-purge.md)) — typically `OPERATIONAL_LOG` (2-year archive).
+  - **Acceptance:** A row with `lastSavedAt` 90 days ago shows as `DISCARDED` with `discardedAt = now()` and `discardReason = "EXPIRED"`. The originator's drafts page shows it under a "Recently expired" tab with a "Restore" action that flips status back to `DRAFT` and clears `discardedAt`.
 
-- **FR-DRAFT-022** — Co-edit conflict resolution: when two editors save concurrently, the second save returns `409 Conflict` with the current server payload. The UI shows a three-way merge:
+- **FR-DRAFT-022** — Co-edit conflict resolution: when two editors save concurrently, the second save returns `409 Conflict` with the current server row. The UI shows a three-way merge:
   - Left pane: my version (the editor's local state)
   - Middle: the common ancestor (the version both editors started from — `payloadVersion` at the time the editor opened the draft)
   - Right: their version (server-side current state)
@@ -261,8 +299,9 @@ The system MUST converge per-entity draft support onto a single engine. Each ent
   - Lock expires automatically after 5 minutes of inactivity (autosave heartbeat).
   - Lock can be force-released by tenant admins or by the lock holder.
   - This is a UX convenience, not a requirement — drafts work fine without locking via the conflict-resolution path (FR-DRAFT-022).
+  - Implementation: a `draft_lock` table keyed by `(entityType, entityId)` with `lockedBy`, `lockedAt`, `expiresAt`. Polled by the editor's UI every 30s.
 
-- **FR-DRAFT-024** — The web app provides a unified `/drafts` page listing every draft visible to the current user across all entity types. Filterable by entity type, status, originator, last-saved date. Each draft links to its entity-specific edit form. This is the operator's "open work" inbox.
+- **FR-DRAFT-024** — The web app provides a unified `/drafts` page listing every draft (rows with `status IN ('DRAFT', 'PENDING_APPROVAL')`) visible to the current user across all entity types. Filterable by entity type, originator, last-saved date. Each draft links to its entity-specific edit form. This is the operator's "open work" inbox. Implementation queries each adopted entity table via the `withDraftVisibility` helper and unions the results.
 
 #### 3.1.4 Draft validation
 
@@ -275,67 +314,68 @@ The system MUST converge per-entity draft support onto a single engine. Each ent
 
 ### 3.2 Posting pipeline
 
-- **FR-DRAFT-040** — The "post" verb is a single endpoint per draft type: `POST /api/v1/drafts/<draftType>/<draftId>/post`. The endpoint runs:
-  1. Optimistic-lock check — `payloadVersion` from the request matches server-side current.
-  2. Full validation (FR-DRAFT-030 step 2 + 3).
-  3. Authorization: only originator OR a collaborator with `editor` role + `<entity>.post` permission may post. (Posting is a stronger right than editing.)
-  4. Optional `pending_administrative_change` gate: if the entity's policy requires dual approval (e.g., adjustment > $1,000, rate schedule revision, billing-cycle parameter change), creates a row in `pending_administrative_change` with `operationType = "post_<draftType>"`. The post does NOT execute until two approvers approve. Draft transitions to `PENDING_APPROVAL` (a sub-state of `DRAFT` for this scenario).
-  5. Transactional execution:
-     - Insert the production row with the same `id` as the draft (so external references that grabbed the draft ID still resolve after post — see FR-DRAFT-042 caveat).
-     - Update the draft to `POSTED` with `postedAt`, `postedBy`, `postedAsId = <production_id>`.
-     - Emit per-entity audit row(s) for the production row (CREATE class).
-     - Emit a `DRAFT_POSTED` audit row of class `AUDIT_OPERATIONAL` referencing both the draft and the production row.
-     - Trigger entity-specific side effects (e.g., notification on SR post, recalc on rate-schedule post).
+- **FR-DRAFT-040** — The "post" verb is a single endpoint per entity: `POST /api/v1/<entity>/<id>/post` (e.g., `POST /api/v1/service-requests/<id>/post`). The endpoint runs in a single database transaction:
+  1. Optimistic-lock check — `payloadVersion` from the request matches the server-side current value.
+  2. Full validation — runs the entity's complete schema (no `.partial()`) plus all four tiers from [07-data-validation.md](./07-data-validation.md). The CHECK constraint added in FR-DRAFT-003 is a final safety net that rejects the `UPDATE` if any required field is null.
+  3. Authorization — only the originator OR a collaborator with `editor` role + `<entity>.post` permission may post (posting is a stronger right than editing).
+  4. Optional `pending_administrative_change` gate — if the entity's policy requires dual approval (e.g., adjustment > $1,000, rate schedule revision, billing-cycle parameter change), the `UPDATE` sets `status = 'PENDING_APPROVAL'` instead of the entity's first-active state, and creates a `pending_administrative_change` row with `operationType = "post_<entity>"`. The actual transition to the first-active state happens when the second approver approves — see FR-DRAFT-042.
+  5. The UPDATE: `UPDATE <entity> SET status = '<first_active_state>', postedAt = now(), postedBy = <user_id>, payloadVersion = payloadVersion + 1 WHERE id = <id> AND payloadVersion = <claimed_version>`. The same row carries through; `id`, FKs, and any external references are preserved by definition.
+  6. Side effects — per-entity audit row of `CREATE` class for the entity's natural retention class (`FINANCIAL` for adjustments, `OPERATIONAL` for SRs, etc.) with `metadata: { postedFromDraft: true }`. Notification triggers, downstream recalculations, etc., fire as they would for any new entity.
+  7. Cleanup — collaborator rows for this entity are removed (per FR-DRAFT-005). The draft-metadata columns (`originatorId`, `lastSavedAt`, `visibility`, etc.) stay populated on the row indefinitely — they cost nothing once the row is posted and they support traceability ("who originated this?").
 
-- **FR-DRAFT-041** — The post pipeline is **all-or-nothing transactionally**. A worker crash mid-post leaves the draft in `POSTING` state with `postingStartedAt` set; a separate sweeper resumes by checking whether the production row exists (idempotent forward-progress). If no production row, the draft is rolled back to `DRAFT`. If production row exists, the draft is moved to `POSTED`.
+- **FR-DRAFT-041** — Because the post is a single `UPDATE` in a single transaction, there is no saga, no `POSTING` intermediate state, and no recovery code for mid-post crashes. Postgres's MVCC makes the transition atomic. Either the row is `DRAFT` (transaction rolled back) or it's the entity's first-active state (transaction committed) — never both, never neither.
 
-- **FR-DRAFT-042** — Posted drafts are NOT immediately deleted. They stay in their `<entity>_draft` table with `status = POSTED` for a configurable period (default 30 days) so operators can audit "what did I post yesterday?" After the retention period, they're moved to the archive (per [08-data-retention-archival-purge.md](./08-data-retention-archival-purge.md) `OPERATIONAL_LOG` retention class). The draft's `id` is preserved through the archive — looking up an old `id` returns either the production row (if `posted_as_id` matches) or the archive entry.
+- **FR-DRAFT-042** — Approval-gated post: when step 4 above sets the row to `PENDING_APPROVAL`, the row is no longer editable as a draft (the visibility model still hides it from non-collaborators, but autosave is blocked). On second approval, a worker that consumes the `pending_administrative_change` queue runs a final `UPDATE` to transition `PENDING_APPROVAL → <first_active_state>` plus `postedAt`/`postedBy`. On rejection, the row reverts to `DRAFT`. On expiration of the `pending_administrative_change` row (30-day TTL per [08-data-retention-archival-purge.md](./08-data-retention-archival-purge.md) FR-RET-051), the row reverts to `DRAFT` and the originator is notified.
 
-- **FR-DRAFT-043** — Post-cascade for dependent drafts (FR-DRAFT-031): when the operator opts to "Post all", the engine performs a topological sort of the dependency graph among visible drafts and posts in dependency order, all in a single outer transaction. If any post fails, the whole cascade rolls back.
+- **FR-DRAFT-043** — Post-cascade for dependent drafts (FR-DRAFT-031): when the operator opts to "Post all", the engine performs a topological sort of the dependency graph and posts in dependency order, all in a single outer transaction. Each constituent post is itself a single `UPDATE` (FR-DRAFT-040 step 5). If any post fails, the whole cascade rolls back via Postgres transaction abort — no compensating actions needed.
 
-- **FR-DRAFT-044** — A discard verb: `POST /api/v1/drafts/<draftType>/<draftId>/discard`. Marks the draft as `DISCARDED` with a reason. Discarded drafts are visible in the originator's "Discarded" tab for 30 days then archived. Discard does NOT trigger notifications or production-side effects.
+- **FR-DRAFT-044** — A discard verb: `POST /api/v1/<entity>/<id>/discard` with `{ reason }` body. The endpoint runs `UPDATE <entity> SET status = 'DISCARDED', discardedAt = now(), discardedBy = <user_id>, discardReason = <reason>`. Discard does NOT trigger production-side effects — discarded rows have never been posted, so notifications, recalculations, and downstream side effects don't apply. Collaborator rows are cleared in the same transaction. Discarded rows stay queryable in the originator's "Discarded" tab for 30 days, after which they're archived per the entity's retention class ([08-data-retention-archival-purge.md](./08-data-retention-archival-purge.md) `OPERATIONAL_LOG` default).
 
 ### 3.3 Exclusion from production-impacting operations
 
-- **FR-DRAFT-050** — Drafts MUST NEVER be returned by:
-  - Production list/search endpoints. e.g., `GET /api/v1/service-requests` returns only `ServiceRequest` rows, never `ServiceRequestDraft` rows. Operators see drafts via dedicated `/drafts` endpoints.
-  - Reports — any report query MUST hit production tables only.
-  - Schedulers — the audit retention sweep, suspension scheduler, delinquency dispatcher, etc., never touch draft tables.
-  - Notification triggers — drafting a service request does NOT notify the customer. Posting it does.
-  - Billing calculations — a draft rate schedule does not affect any consumption calculation.
-  - Custom-fields engine ([06-custom-fields.md](./06-custom-fields.md)) — draft entities do not appear in CSV exports, query-builder results, or the per-tenant OpenAPI variant.
-  - Relationship integrity — production foreign keys point only to production rows. A `ServiceAgreement.customerId` cannot reference a `CustomerDraft.id`.
+- **FR-DRAFT-050** — `DRAFT`/`PENDING_APPROVAL`/`DISCARDED`-status rows MUST NEVER be returned by:
+  - Production list/search endpoints. `GET /api/v1/service-requests` returns only rows whose status is in the entity's set of active+terminal post-draft states. Operators see drafts via the unified `/drafts` page (FR-DRAFT-024) or by drilling into a specific entity's draft tab.
+  - Reports — every report query MUST go through the per-entity `<entity>_v` view (FR-DRAFT-011 layer 3) which excludes draft/pending-approval/discarded states by definition.
+  - Schedulers — the audit retention sweep, suspension scheduler, delinquency dispatcher, etc., MUST add `WHERE status NOT IN ('DRAFT', 'PENDING_APPROVAL', 'DISCARDED')` to their per-entity reads. This is enforced by `withProductionScope()` in service code and by the linter rule (FR-DRAFT-051).
+  - Notification triggers — drafting a service request does NOT notify the customer. Posting it does. Triggers fire on the `status` transition out of `DRAFT`/`PENDING_APPROVAL`, not on row creation.
+  - Billing calculations — a draft rate schedule does not affect any consumption calculation. The rate-resolution query already filters by `effectiveDate`/`expirationDate`; it now also filters by `status NOT IN ('DRAFT', 'PENDING_APPROVAL', 'DISCARDED')`.
+  - Custom-fields engine ([06-custom-fields.md](./06-custom-fields.md)) — draft rows do not appear in CSV exports, query-builder results, or the per-tenant OpenAPI variant. The CSV export query reads from `<entity>_v` (the production view).
+  - Relationship integrity — production rows that reference other entities MUST validate that the referenced row is not in `DRAFT`/`PENDING_APPROVAL` status (per FR-DRAFT-004). A trigger on FK-sensitive relationships (`ServiceAgreement.customerId`, `ServiceAgreement.premiseId`, `ServiceAgreement.meterId`) catches violations at the database layer.
 
-- **FR-DRAFT-051** — The `draft-aware.ts` helper has the inverse operation: `withProductionScope(query)` that explicitly opts into production-only data. Most service code uses this implicitly via the production table, but reports and schedulers MUST call it explicitly to make the intent visible. The linter rule `no-implicit-cross-table-query` flags any cross-entity join that doesn't go through `withProductionScope` or `withDraftVisibility`.
+- **FR-DRAFT-051** — The `draft-aware.ts` helper has two scoping verbs: `withProductionScope(query)` for production-only reads (excludes draft/pending/discarded) and `withDraftVisibility(query, ctx)` for draft-aware reads (originator/collaborator/role visibility). Service code calls one or the other explicitly. A linter rule `no-raw-entity-query` flags any `prisma.<entity>.findMany()` or `findFirst()` that doesn't go through one of the helpers, forcing every query author to make a deliberate choice.
 
-- **FR-DRAFT-052** — Counting and analytics: a tenant dashboard widget showing "Open service requests" MUST count production SRs only. A separate "Open work" widget shows draft counts visible to the current user. These are two different metrics.
+- **FR-DRAFT-052** — Counting and analytics: a tenant dashboard widget showing "Open service requests" MUST count rows in active states only (excluding draft/pending/discarded). A separate "Open work" widget shows draft counts visible to the current user. These are two different metrics queried via the two different helpers.
+
+- **FR-DRAFT-053** — Foreign-key targeting: by default, FKs in this schema reference rows by id without checking status. Most relationships don't need a status check (an audit row referencing a posted entity carries on referencing it through any future status changes; a service request referencing an account doesn't care if the account later transitions to CLOSED). For relationships where status matters (e.g., a service agreement referencing a customer should not be created against a draft customer), per-entity application validation in `validateRow` rejects with a clear error message at autosave time and at post time. The trigger from FR-DRAFT-004 layer 2 is the database-level safety net for the most safety-critical relationships only.
 
 ### 3.4 Relationship to existing primitives
 
 - **FR-DRAFT-060** — The bulk-import staging area from [09-bulk-upload-and-data-ingestion.md](./09-bulk-upload-and-data-ingestion.md) FR-ING-003 is conceptually a kind of draft (validated rows held until commit) but is **not unified** with this engine. Reasoning: bulk-import drafts are row-level (thousands per batch), short-lived (minutes-to-hours), and never edited; user-WIP drafts are entity-level, long-lived, and continuously edited. Different volume, different lifecycle, different UI. Sharing the engine would force one set of trade-offs onto both — better to have two purpose-built designs that share concepts (audit, RLS, retention class) but not tables.
 
-- **FR-DRAFT-061** — The `pending_administrative_change` table from [01-audit-and-tamper-evidence.md](./01-audit-and-tamper-evidence.md) §3.5 / [08-data-retention-archival-purge.md](./08-data-retention-archival-purge.md) §3.4.3 is **distinct from drafts** (per §2.9 of this doc). The post pipeline (FR-DRAFT-040 step 4) creates `pending_administrative_change` rows when the entity's policy demands dual approval. The two tables coexist:
-  - Draft: editable WIP, originator + collaborators
-  - PendingAdministrativeChange: snapshot post-attempt, awaiting independent approval
-  - A single post can flow through both: edit draft → submit → frozen as PendingAdministrativeChange → approve → executes the post → draft becomes POSTED.
+- **FR-DRAFT-061** — The `pending_administrative_change` table from [01-audit-and-tamper-evidence.md](./01-audit-and-tamper-evidence.md) §3.5 / [08-data-retention-archival-purge.md](./08-data-retention-archival-purge.md) §3.4.3 is **distinct from drafts** (per §2.9 of this doc). The post pipeline (FR-DRAFT-040 step 4) creates `pending_administrative_change` rows when the entity's policy demands dual approval, and the row's status moves to `PENDING_APPROVAL`. The two coexist:
+  - Draft (`status = DRAFT`): editable WIP, originator + collaborators
+  - PendingAdministrativeChange row: a snapshot of the proposed post-attempt, awaiting independent approval; the entity row has `status = PENDING_APPROVAL` during this window and is read-only as a draft
+  - A single post flows: edit draft → submit → row moves to `PENDING_APPROVAL` + `pending_administrative_change` row created → approve → row transitions to first-active state → `pending_administrative_change` marked EXECUTED.
 
 - **FR-DRAFT-062** — The `legal_hold` table from [08-data-retention-archival-purge.md](./08-data-retention-archival-purge.md) §3.5 applies to drafts as well. A draft under hold cannot be discarded or archived until the hold is released. Drafts CAN be edited under hold (legal hold doesn't prevent edits, just deletion).
 
 ### 3.5 Audit handling — drafts are NOT full audit-trailed
 
-- **FR-DRAFT-070** — Per-keystroke autosaves do **NOT** emit audit rows. Reasoning: a 30-minute drafting session would emit 100s of audit rows per draft per user. The audit log is for production-affecting events; drafts have not affected production yet.
+- **FR-DRAFT-070** — Per-keystroke autosaves do **NOT** emit audit rows. Reasoning: a 30-minute drafting session would emit hundreds of audit rows per draft per user. The audit log is for production-affecting events; drafts have not affected production yet.
 
 - **FR-DRAFT-071** — The following draft lifecycle events DO emit audit rows (class `AUDIT_OPERATIONAL` unless noted):
-  - `DRAFT_CREATED` — originator + entity type
+  - `DRAFT_CREATED` — originator + entity type + entity id
   - `DRAFT_VISIBILITY_CHANGED` — before/after visibility + collaborator delta
   - `DRAFT_COLLABORATOR_ADDED` / `DRAFT_COLLABORATOR_REMOVED`
-  - `DRAFT_POSTED` — references the production row
-  - `DRAFT_DISCARDED` — with reason
+  - `DRAFT_POSTED` — same row id, status transition `DRAFT → <first_active>`
+  - `DRAFT_DISCARDED` — with reason; status transition `DRAFT → DISCARDED`
   - `DRAFT_EXPIRED` — system action; auto-discard at expiry
 
-- **FR-DRAFT-072** — When a draft posts, the production row's CREATE audit row carries `metadata: { sourceDraftId: "..." }` so the audit trail can be traversed: production row → its draft → all draft lifecycle events → originator + collaborators.
+- **FR-DRAFT-072** — Because draft and posted rows share the same row id, the audit trail naturally carries through: every audit row for the entity references the same id from `DRAFT_CREATED` through whatever future operations happen on the posted entity. No `sourceDraftId` redirection is needed. An auditor querying `audit_log WHERE entity_id = X` sees the full lifecycle in chronological order.
 
-- **FR-DRAFT-073** — High-stakes drafts (rate schedules, billing-cycle parameters, financial adjustments above a threshold) emit a richer trail: every save snapshots the full payload to a `<entity>_draft_history` table for forensic review. Configurable per entity in `EntityDraftSpec.snapshotEverySave: boolean` — default false; true for rate schedules, billing cycle, adjustment over threshold.
+- **FR-DRAFT-073** — For high-stakes entities (rate schedules, billing-cycle parameters, large adjustments, retention policies) where forensic reconstruction of the editing history matters, the autosave endpoint MAY snapshot the row's full payload into the audit log on each save. Configured per entity via `EntityDraftSpec.snapshotEverySave: boolean` — default `false`. When `true`, each autosave emits one additional audit row of class `AUDIT_OPERATIONAL` (`AUDIT_FINANCIAL` for adjustments) with `action: "DRAFT_SAVED"` and `before_state`/`after_state` as the diff. Volume note: a 30-minute drafting session of a rate schedule with `snapshotEverySave: true` emits ~30-90 audit rows; bounded by the autosave debounce (FR-DRAFT-020). The retention engine (doc 08) tiers these per the entity's retention class.
+
+  No separate `<entity>_draft_history` table — the audit log IS the history. Reusing the existing audit infrastructure means snapshots are automatically tamper-evident (per [01-audit-and-tamper-evidence.md](./01-audit-and-tamper-evidence.md)), retention-class-managed (per [08-data-retention-archival-purge.md](./08-data-retention-archival-purge.md)), and queryable through the same forensic tools.
 
 ### 3.6 Permissions
 
@@ -387,11 +427,11 @@ The system MUST converge per-entity draft support onto a single engine. Each ent
 
 - **NFR-DRAFT-001** — Autosave round-trip: ≤500ms p99 from keystroke to server-confirmed save. Critical for UX — slow autosave silently corrupts user trust ("did my changes save?").
 
-- **NFR-DRAFT-002** — A user with 100 drafts loads the `/drafts` page in ≤1s p99. This requires composite indexes on `(utility_id, originator_id, status, last_saved_at DESC)`.
+- **NFR-DRAFT-002** — A user with 100 drafts loads the `/drafts` page in ≤1s p99. The composite index `(utility_id, status, originator_id)` per FR-DRAFT-002 makes this trivial — `DRAFT`/`PENDING_APPROVAL` rows are a small slice of any entity table, and the index is highly selective.
 
-- **NFR-DRAFT-003** — Drafts table should not exceed 5% of the production-table row count for any entity, as a sanity check. If a tenant's `service_request_draft` table grows to 100K rows while `service_request` has 200K, something is wrong (probably abandoned drafts not expiring). Operations dashboard tracks the ratio.
+- **NFR-DRAFT-003** — Per-entity, the count of `DRAFT`/`PENDING_APPROVAL` rows should not exceed 5% of the entity's active rows, as a sanity check. If a tenant has 10K draft service requests against 200K active SRs, something is wrong (probably abandoned drafts not expiring). Operations dashboard tracks the ratio per entity per tenant.
 
-- **NFR-DRAFT-004** — RLS on draft tables MUST be tested with adversarial input: a user deliberately constructing a query to find another user's draft must return zero rows. Integration tests cover the visibility matrix exhaustively.
+- **NFR-DRAFT-004** — RLS on every adopted entity MUST be tested with adversarial input: a user deliberately constructing a query to find another user's draft must return zero rows. Integration tests cover the visibility matrix exhaustively against every adopted entity.
 
 - **NFR-DRAFT-005** — Conflict-resolution merge UI must complete a save in ≤2s after operator hits "Save merged version" — this is the moment of frustration after an unexpected conflict; speed matters disproportionately.
 
@@ -403,41 +443,32 @@ The system MUST converge per-entity draft support onto a single engine. Each ent
 
 ## 4. Data model changes
 
-### 4.1 New tables (per draft-supporting entity)
+### 4.1 Modified tables (per adopted entity)
 
-| Entity | Draft table | History table (optional) |
+For each entity in FR-DRAFT-090, the existing production table is modified — there are **no parallel `<entity>_draft` tables**. Modifications:
+
+1. **Status enum extended** with three new states:
+   - `DRAFT` — user WIP
+   - `PENDING_APPROVAL` — post-attempted, awaiting `pending_administrative_change` for high-stakes entities
+   - `DISCARDED` — explicitly or auto-discarded (replaces the prior `EXPIRED` state — discarded-with-reason-EXPIRED is a soft expiry per FR-DRAFT-021)
+2. **Shared draft-metadata columns added** (per FR-DRAFT-002): `originatorId`, `draftTitle`, `payloadVersion`, `lastSavedAt`, `lastSavedBy`, `autosaveSeq`, `visibility`, `postedAt`, `postedBy`, `discardedAt`, `discardedBy`, `discardReason`, `draftExpiresAt`. All nullable on posted rows; populated on draft/pending/discarded rows.
+3. **Existing NOT-NULL columns relaxed** to nullable (per FR-DRAFT-003), with a per-entity CHECK constraint reinstating NOT-NULL for posted rows.
+4. **New indexes** (per FR-DRAFT-002): `(utilityId, status, originatorId)`, `(utilityId, status, lastSavedAt DESC)`, `(utilityId, status, draftExpiresAt)`.
+5. **Per-entity production view** (per FR-DRAFT-011 layer 3): `CREATE VIEW <entity>_v AS SELECT * FROM <entity> WHERE status NOT IN ('DRAFT', 'PENDING_APPROVAL', 'DISCARDED')`. Reports and analytics read from the view.
+
+### 4.2 New tables (shared, not per-entity)
+
+| Table | Purpose | Section |
 |---|---|---|
-| Adjustment | `adjustment_draft` | `adjustment_draft_history` |
-| ServiceRequest | `service_request_draft` | (none — not high-stakes) |
-| BillingCycle | `billing_cycle_draft` | `billing_cycle_draft_history` |
-| RateSchedule | `rate_schedule_draft` | `rate_schedule_draft_history` |
-| Customer | `customer_draft` | (none) |
-| Premise | `premise_draft` | (none) |
-| Meter | `meter_draft` | (none) |
-| ServiceAgreement | `service_agreement_draft` | (none) |
-| NotificationTemplate | `notification_template_draft` | `notification_template_draft_history` |
-| RetentionPolicy | `retention_policy_draft` | `retention_policy_draft_history` |
-| CustomFieldDefinition | `custom_field_definition_draft` | `custom_field_definition_draft_history` |
+| `draft_collaborator` | Polymorphic — who can see / edit drafts of any entity type | 3.1.1 (FR-DRAFT-005) |
+| `draft_role_grant` | Polymorphic — which roles see drafts at `SHARED_WITH_ROLE` visibility for which entity row | 3.1.2 |
+| `draft_lock` | Polymorphic — optional exclusive-edit lock | 3.1.3 (FR-DRAFT-023) |
 
-Plus shared:
+That's it. No per-entity draft tables. The total schema additions are: 3 small polymorphic tables + a handful of columns and one CHECK + one view per adopted entity.
 
-| Table | Purpose |
-|---|---|
-| `draft_collaborator` | Who can see / edit each draft |
-| `draft_lock` | Optional exclusive-edit lock (FR-DRAFT-023) |
-
-### 4.2 New enums
+### 4.3 New enums
 
 ```prisma
-enum DraftStatus {
-  DRAFT
-  PENDING_APPROVAL
-  POSTING
-  POSTED
-  DISCARDED
-  EXPIRED
-}
-
 enum DraftVisibility {
   ORIGINATOR_ONLY
   SHARED_WITH_NAMED_USERS
@@ -446,9 +477,7 @@ enum DraftVisibility {
 }
 ```
 
-### 4.3 New columns on existing tables (only as `metadata` references)
-
-The post pipeline records `sourceDraftId` in the production audit row's metadata JSON; no schema change required there.
+The previously-proposed `DraftStatus` enum is **dropped** — draftness is encoded in each entity's existing status enum (extended with `DRAFT`, `PENDING_APPROVAL`, `DISCARDED`). This avoids the awkward situation of two status fields on the same row.
 
 ### 4.4 Tenant config additions
 
@@ -460,80 +489,88 @@ draftMaxPerUser    Int     @default(50)  @map("draft_max_per_user")  // soft cap
 
 ### 4.5 RLS updates
 
-Each draft table gets a per-table RLS policy:
+Each adopted entity's existing RLS policy is **extended** (not replaced). The new policy reads: *"this row is visible if the existing tenant predicate passes, AND (the row is in a non-draft state OR the row's draft visibility allows the current user)."* Sketch for `service_request`:
 
 ```sql
-ALTER TABLE service_request_draft ENABLE ROW LEVEL SECURITY;
+DROP POLICY tenant_isolation ON service_request;
 
-CREATE POLICY draft_visibility ON service_request_draft
+CREATE POLICY tenant_isolation_with_draft_visibility ON service_request
   USING (
     utility_id = current_setting('app.current_utility_id')::uuid
     AND (
-      originator_id = current_setting('app.current_user_id')::uuid
+      -- Posted, terminal, or admin-bypass rows: visible to anyone with tenant access
+      status NOT IN ('DRAFT', 'PENDING_APPROVAL')
+      OR current_setting('app.has_drafts_admin', TRUE)::boolean = TRUE
+      -- Draft rows: visible only per the visibility model
+      OR originator_id = current_setting('app.current_user_id')::uuid
       OR EXISTS (
         SELECT 1 FROM draft_collaborator c
-        WHERE c.draft_type = 'service_request_draft'
-          AND c.draft_id = service_request_draft.id
+        WHERE c.entity_type = 'service_request'
+          AND c.entity_id = service_request.id
           AND c.user_id = current_setting('app.current_user_id')::uuid
       )
       OR (
         visibility = 'SHARED_WITH_ROLE'
         AND EXISTS (
           SELECT 1 FROM cis_user_role ur
-          INNER JOIN draft_role_grant drg
-            ON drg.role_id = ur.role_id
+          INNER JOIN draft_role_grant drg ON drg.role_id = ur.role_id
           WHERE ur.user_id = current_setting('app.current_user_id')::uuid
-            AND drg.draft_type = 'service_request_draft'
-            AND drg.draft_id = service_request_draft.id
+            AND drg.entity_type = 'service_request'
+            AND drg.entity_id = service_request.id
         )
       )
       OR visibility = 'TENANT_WIDE'
-      OR current_setting('app.has_drafts_admin', TRUE)::boolean = TRUE
     )
   );
 ```
 
-(Pseudocode; concrete policy uses helper functions to keep the policy short. Identical pattern repeated per draft table — this could in principle be a generic policy on a single `drafts` table, but per FR-DRAFT-001 separate tables is the chosen design.)
+(Pseudocode; the concrete policy is generated from a SQL helper function `is_draft_visible(entity_type, entity_id, originator_id, visibility)` to keep each per-entity policy short. The same predicate shape applies to every adopted entity — the only difference is the entity-type literal.)
 
-### 4.6 Indexes
+The `WITH CHECK` clause uses the same predicate so a buggy service can't INSERT a draft visible to the wrong users.
 
-Each draft table gets:
+### 4.6 Triggers
 
-```prisma
-@@index([utilityId, originatorId, status])              // fast "my drafts" query
-@@index([utilityId, status, lastSavedAt(sort: Desc)])    // fast "recent drafts" admin view
-@@index([utilityId, expiresAt])                          // fast expiry sweeper
-```
+For relationships where production rows must not reference a draft parent (per FR-DRAFT-004 layer 2 — limited set), a `BEFORE INSERT OR UPDATE` trigger on the child table raises if the parent is in `DRAFT`/`PENDING_APPROVAL` status. Initial set:
+
+| Child entity / column | Parent | Reason |
+|---|---|---|
+| `service_agreement.customer_id` | `customer` | An SA against a draft customer would reference an incomplete row |
+| `service_agreement.premise_id` | `premise` | Same |
+| `service_agreement.meter_id` | `meter` | Same |
+| `meter_assignment.meter_id` | `meter` | Same |
+| `meter_assignment.service_agreement_id` | `service_agreement` | Cascade |
+
+For other relationships (e.g., `service_request.account_id` → `account`), application-layer validation in `validateRow` is sufficient.
 
 ---
 
 ## 5. Implementation sequence
 
-### Phase 1 — Engine + first two entities (~5 weeks)
+### Phase 1 — Engine + first two entities (~3.5 weeks)
 
-1. **Engine schema, RLS, helpers, audit** (~1.5 weeks). `EntityDraftSpec` interface, generic `<entity>_draft` migration template, RLS policy template, `draft-visibility.ts` helper, `draft-aware.ts` linter rule, audit-row emit at lifecycle events.
-2. **Autosave endpoint + conflict resolution** (~1 week). Debounced PATCH with optimistic-lock check, 409 handling, three-way merge UI primitive.
-3. **`/drafts` unified inbox UI** (~3 days). Table view, filters, drill-into-entity edit form.
-4. **`ServiceRequestDraft` adoption** (~1 week). First production rollout. Includes refactoring `service-request.service.ts` to recognize the dual-table model and the post pipeline.
-5. **`RateScheduleDraft` adoption** (~1 week). Higher-stakes — includes `pending_administrative_change` integration on post + snapshot history + customer-impact preview.
+1. **Shared schema, RLS helper, scoping helpers, audit emit, linter rule** (~1 week). Polymorphic tables (`draft_collaborator`, `draft_role_grant`, `draft_lock`), the `is_draft_visible(...)` SQL helper function, `withProductionScope` / `withDraftVisibility` TypeScript helpers in `packages/api/src/lib/draft-aware.ts`, the `no-raw-entity-query` linter rule, audit emission glue. No per-entity work yet.
+2. **Autosave endpoint behavior + conflict resolution** (~1 week). Debounced PATCH with optimistic-lock check (the existing per-entity PATCH endpoints are extended; no new endpoints). 409 handling, three-way merge UI primitive.
+3. **`/drafts` unified inbox UI** (~3 days). Table view that queries each adopted entity via `withDraftVisibility` and unions; filters, drill-into-entity edit form.
+4. **`ServiceRequest` adoption** (~3 days). Add status states + columns + CHECK + view + RLS update + post endpoint. First production rollout.
+5. **`RateSchedule` adoption** (~3 days). Add status states + columns + CHECK + view + RLS update + post endpoint with `pending_administrative_change` integration. Includes `snapshotEverySave: true`.
 
-### Phase 2 — Other named entities (~4 weeks)
+### Phase 2 — Remaining named entities (~3 weeks)
 
-6. **`AdjustmentDraft` (depends on Adjustment entity from Module 10)** — likely will not be deliverable until Module 10 is built; doc design captures the contract for when that happens.
-7. **`BillingCycleDraft`** (~1 week). Critical entity for ops; high-stakes; requires `pending_administrative_change` always.
-8. **`NotificationTemplateDraft`** (~3 days). Customer-impacting on post; requires `pending_administrative_change`.
-9. **`RetentionPolicyDraft` adoption (per doc 08)** (~3 days). Already specced as dual-approval in doc 08; just adds the draft engine on top.
-10. **`CustomFieldDefinitionDraft` (per doc 06)** (~3 days). Allows tenant admins to draft a new field, share with stakeholders for review, post.
-11. **`CustomerDraft`, `PremiseDraft`, `MeterDraft`, `ServiceAgreementDraft`** (~1 week). Routine adoptions; no high-stakes policy gates.
+6. **`Adjustment` adoption (depends on Adjustment entity from Module 10)** — captures the draft contract for when Module 10 ships. Not deliverable in this engagement unless Module 10 lands first.
+7. **`BillingCycle` adoption** (~3 days). Critical entity for ops; `pending_administrative_change` always.
+8. **`NotificationTemplate` adoption** (~2 days). `pending_administrative_change` always.
+9. **`RetentionPolicy` adoption (per doc 08)** (~2 days). Already specced as dual-approval in doc 08; just adds the draft engine on top.
+10. **`CustomFieldDefinition` adoption (per doc 06)** (~2 days). Allows tenant admins to draft a new field, share with stakeholders for review, post.
+11. **`Customer`, `Premise`, `Meter`, `ServiceAgreement` adoptions** (~3 days). Routine; no high-stakes policy gates. Includes the FK-status triggers (FR-DRAFT-004 layer 2) for the SA→Customer/Premise/Meter relationships.
 
-### Phase 3 — Polish (~2 weeks)
+### Phase 3 — Polish (~1.5 weeks)
 
-12. **Three-way merge UI primitive — full version** (~3 days). The Phase 1 version is minimal; this is the polished operator-facing tool.
-13. **Draft expiry sweeper + nudge notifications** (~2 days). Weekly job that emails originators about aging drafts.
-14. **Permissions audit + role refactor** (~3 days). Confirm every draft-supporting entity has the four new permissions and that they are NOT auto-granted from production permissions.
-15. **Operational dashboard widget** (~2 days). Tenant-admin view of draft volume per entity per user.
+12. **Three-way merge UI — full version** (~3 days). The Phase 1 version is minimal; this is the polished operator-facing tool.
+13. **Draft expiry sweeper + nudge notifications** (~2 days). Daily job that scans rows with `status IN ('DRAFT', 'PENDING_APPROVAL')` past `draftExpiresAt` and transitions to `DISCARDED`. Weekly nudge emails 7 days before expiry.
+14. **Permissions audit** (~2 days). Confirm every adopted entity has the five new permissions and that they are NOT auto-granted from production permissions.
+15. **Operational dashboard widget** (~1 day). Tenant-admin view of draft volume per entity per user.
 
-**Total: ~11 weeks** with one engineer; ~7 weeks with two parallel tracks (Phase 2 entity rollouts can parallelize).
+**Total: ~8 weeks** with one engineer; ~5 weeks with two parallel tracks (Phase 2 adoptions can parallelize once the engine lands). The single-table model cuts roughly 3 weeks vs. the prior parallel-tables design — most of the saving is in not building per-entity draft tables, per-entity post sagas, or `<entity>_draft_history` tables.
 
 ---
 
@@ -557,37 +594,44 @@ Each draft table gets:
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| Drafts leak into production reports / lists | **Critical** | Two-layer enforcement: RLS policy + service-layer helper. Linter rule flags any cross-table query that doesn't go through `withProductionScope` or `withDraftVisibility`. Integration tests cover adversarial visibility input. |
-| Originator's private draft visible to other tenant users | **Critical** | RLS uses `app.current_user_id` (set per request from JWT). Tested with adversarial role escalation in test suite. Default visibility is ORIGINATOR_ONLY — leaking visibility is opt-in, never opt-out. |
+| Drafts leak into production reports / lists | **Critical** | Three-layer enforcement: extended RLS policy on each entity, `withProductionScope` / `withDraftVisibility` helpers, per-entity `<entity>_v` view. Linter rule `no-raw-entity-query` flags any direct table query that doesn't go through one of the helpers. Integration tests cover adversarial visibility input across every adopted entity. |
+| Originator's private draft visible to other tenant users | **Critical** | RLS uses `app.current_user_id` (set per request from JWT). Tested with adversarial role escalation in test suite. Default visibility is `ORIGINATOR_ONLY` — leaking visibility is opt-in, never opt-out. |
+| Production row referencing a draft parent | **High** | Application-layer validation in every entity's `validateRow` rejects FKs that resolve to a `DRAFT`/`PENDING_APPROVAL` parent (FR-DRAFT-004 layer 1). Triggers on the most safety-critical relationships (SA→Customer/Premise/Meter) catch at the database layer (FR-DRAFT-004 layer 2). |
+| Existing service code paths bypass the new status filter | **High** | Linter rule `no-raw-entity-query` rejects any `prisma.<entity>.findMany()` / `findFirst()` that doesn't go through `withProductionScope` or `withDraftVisibility`. CI fails on violations. The `<entity>_v` view provides a final safety net for any code path that slips past the linter. |
 | Optimistic locking turns into pessimistic frustration | Medium | Three-way merge UI, not raw 409 errors. Most fields are independent (rate config + name + effective date — three editors editing three fields don't conflict). Locking (FR-DRAFT-023) is opt-in, not default. |
 | Per-keystroke autosave overwhelms server | Medium | Debounce 2s + 30s timer (FR-DRAFT-020). Idempotency on payloadVersion (no-op repeats are free). NFR-DRAFT-001 budget gives ample headroom for 100 concurrent users. |
-| Drafts table grows unbounded as users abandon WIP | Medium | 90-day soft expiry (FR-DRAFT-021); 50-draft per-user soft cap with UI nudge; weekly originator nudge email. Operations dashboard tracks ratio per NFR-DRAFT-003. |
-| Posted draft + production divergence (transactional bug leaves both rows in inconsistent state) | High | Transactional all-or-nothing post (FR-DRAFT-041); resumable saga with `posting_started_at`; idempotent forward progress check. Worker crash mid-post recovers without manual intervention. |
+| Draft rows accumulate unbounded as users abandon WIP | Medium | 90-day soft expiry (FR-DRAFT-021); 50-draft per-user soft cap with UI nudge; nudge email 7 days before expiry. Operations dashboard tracks the ratio of `DRAFT`-status to active-status rows per NFR-DRAFT-003. |
+| CHECK constraint reinstating NOT-NULL is bypassed by direct SQL | Low | The CHECK lives in the schema; even raw SQL inserts must satisfy it. The application-layer post pipeline validates first; the CHECK is the database safety net. Ad-hoc SQL inserts fail loudly. |
 | Two editors merge through three-way UI but produce a logically invalid record | Medium | Server-side full validation runs after merge save (per FR-DRAFT-022 final step). Invalid merge is rejected; UI surfaces the validation errors. |
 | Posting a draft auto-cascades unintended dependent posts | Medium | Cascade requires explicit "Post all dependent drafts too" checkbox in UI. Default is reject-with-error if dependent drafts are referenced (FR-DRAFT-031). |
-| RLS policies leak through SECURITY DEFINER functions | High | Audit all SECURITY DEFINER functions for draft-table access. Default to SECURITY INVOKER. Tests cover policy enforcement under each function context. |
-| Visibility changes (originator opens draft up) creates audit-trail confusion | Low | Each visibility change emits a single audit row with full before/after collaborator list (FR-DRAFT-012). Auditor can reconstruct history. |
-| Draft expiry deletes data the user wanted to keep | Medium | Expiry is SOFT (status=EXPIRED, not hard delete). 30-day window for "Restore" before archive. Per-user `draftMaxAgeDays` configurable per tenant. |
-| Drafts conflict with `pending_administrative_change` semantics for same entity | Low | Documented relationship in FR-DRAFT-061: post pipeline creates `pending_administrative_change` row when policy demands; draft transitions to `PENDING_APPROVAL`. Approver sees the snapshot, not the live draft. |
-| Snapshot history (`<entity>_draft_history`) explodes for high-volume entities | Low | Snapshots only on save (debounced) and only on entities flagged `snapshotEverySave: true`. Service Request drafts (high volume, low stakes) do not snapshot. Rate schedule drafts (low volume, high stakes) do. |
+| RLS policies leak through SECURITY DEFINER functions | High | Audit all SECURITY DEFINER functions for entity-table access. Default to SECURITY INVOKER. Tests cover policy enforcement under each function context. |
+| Visibility changes (originator opens draft up) create audit-trail confusion | Low | Each visibility change emits a single audit row with full before/after collaborator list (FR-DRAFT-012). Auditor can reconstruct history. |
+| Draft expiry discards data the user wanted to keep | Medium | Expiry transitions to `DISCARDED` with `discardReason = "EXPIRED"`, not hard delete. 30-day window in the Recently-expired tab for "Restore" (status flips back to `DRAFT`, `discardedAt` cleared). Per-tenant `draftMaxAgeDays` configurable. |
+| Drafts conflict with `pending_administrative_change` semantics for same entity | Low | Documented relationship in FR-DRAFT-061 + FR-DRAFT-042: post pipeline transitions to `PENDING_APPROVAL` and creates `pending_administrative_change`; row stays read-only as draft until second approval transitions it to active. |
+| `snapshotEverySave: true` audit volume explodes for high-volume entities | Low | Only enabled on low-volume high-stakes entities (rate schedules, billing-cycle parameters, retention policies, large adjustments). Service Request drafts and Customer drafts (high volume, low stakes) do not snapshot. Audit retention engine (doc 08) tiers per class. |
+| Polymorphic `draft_collaborator` lacks FK enforcement | Low | Daily reconciliation job verifies every `(entity_type, entity_id)` resolves; orphans logged + removed. Collaborator rows auto-clear when row leaves draft state (FR-DRAFT-005). |
 
 ---
 
 ## 8. Acceptance criteria (consolidated)
 
 ### Engine
-- [ ] Each draft-supporting entity has its own `<entity>_draft` table with RLS enabled.
-- [ ] `draft_collaborator` and `draft_lock` tables exist with RLS.
-- [ ] `DraftStatus` and `DraftVisibility` enums exist; default visibility is `ORIGINATOR_ONLY`.
-- [ ] `draft-visibility.ts` and `draft-aware.ts` helpers exist; linter rule `no-implicit-cross-table-query` enforces their use.
+- [ ] Each adopted entity's status enum is extended with `DRAFT`, `PENDING_APPROVAL`, `DISCARDED`.
+- [ ] Each adopted entity's table carries the shared draft-metadata columns (FR-DRAFT-002).
+- [ ] Each adopted entity's existing NOT-NULL columns are relaxed with a CHECK constraint reinstating NOT-NULL when `status NOT IN ('DRAFT', 'PENDING_APPROVAL', 'DISCARDED')`.
+- [ ] Each adopted entity has a `<entity>_v` view that excludes draft/pending/discarded states.
+- [ ] `draft_collaborator`, `draft_role_grant`, `draft_lock` polymorphic tables exist with RLS.
+- [ ] `DraftVisibility` enum exists; default visibility is `ORIGINATOR_ONLY`.
+- [ ] `withProductionScope` and `withDraftVisibility` helpers exist in `packages/api/src/lib/draft-aware.ts`; linter rule `no-raw-entity-query` enforces their use.
 
 ### Visibility
-- [ ] User A's `ORIGINATOR_ONLY` draft is invisible to User B in the same tenant.
+- [ ] User A's `ORIGINATOR_ONLY` draft (status `DRAFT`) is invisible to User B in the same tenant.
 - [ ] Adding User B as `editor` collaborator makes the draft visible and editable for B.
 - [ ] `SHARED_WITH_ROLE` draft is visible to all role members and no one else.
 - [ ] `TENANT_WIDE` draft is visible to all users with the entity's read permission.
 - [ ] Tenant admin with `drafts.admin` permission can see all drafts.
-- [ ] Production list/search endpoints return zero draft rows under any visibility scenario.
+- [ ] Production list/search endpoints return zero `DRAFT`/`PENDING_APPROVAL` rows under any visibility scenario.
+- [ ] Posted rows ARE visible to all users with the entity's read permission (the visibility predicate gates DRAFT only, not active states).
 
 ### Autosave
 - [ ] Field change → server save in ≤500ms p99 (NFR-DRAFT-001).
@@ -596,22 +640,23 @@ Each draft table gets:
 - [ ] 30-second timer triggers save even without keystroke.
 
 ### Posting
-- [ ] `POST /drafts/<type>/<id>/post` creates the production row, marks the draft `POSTED`, audits both events.
+- [ ] `POST /api/v1/<entity>/<id>/post` runs a single transactional `UPDATE` setting status to the entity's first-active state plus `postedAt`/`postedBy`.
 - [ ] Draft with validation errors cannot post; UI lists errors with field navigation.
-- [ ] High-stakes entity (rate schedule) posting creates `pending_administrative_change`; draft transitions to `PENDING_APPROVAL`.
-- [ ] Cascade post handles dependent drafts in topological order; failure rolls back all.
-- [ ] Worker crash mid-post resumes via saga-safe forward progress.
+- [ ] CHECK constraint catches any attempt to post a row with required fields still null.
+- [ ] High-stakes entity (rate schedule) posting transitions to `PENDING_APPROVAL` and creates `pending_administrative_change`. Second approval transitions to active.
+- [ ] Cascade post handles dependent drafts in topological order; failure rolls back all (Postgres transaction abort).
+- [ ] Worker crash mid-post leaves the row either fully draft or fully posted — never both, never neither.
 
 ### Exclusion
-- [ ] No scheduler reads from any `<entity>_draft` table (verified by code grep + integration test).
-- [ ] Reports and dashboards show only production rows.
+- [ ] No scheduler reads `DRAFT`/`PENDING_APPROVAL`/`DISCARDED` rows (verified by code grep + integration test against the linter rule).
+- [ ] Reports and dashboards read from `<entity>_v` views; verify with EXPLAIN.
 - [ ] Custom-fields engine (doc 06) excludes drafts from CSV exports and OpenAPI variant.
-- [ ] Foreign-key violations: production `account_id` cannot reference `customer_draft.id`.
+- [ ] FK validation: creating a `ServiceAgreement` with a `customerId` referencing a `DRAFT`-status customer is rejected at application layer; trigger catches at DB layer.
 
 ### Audit
 - [ ] Per-keystroke saves emit no audit rows.
 - [ ] Lifecycle events (CREATE, VISIBILITY_CHANGE, POST, DISCARD, EXPIRE) emit audit rows of class `AUDIT_OPERATIONAL`.
-- [ ] High-stakes draft snapshots persist in `<entity>_draft_history` per save.
+- [ ] High-stakes entities with `snapshotEverySave: true` emit one `DRAFT_SAVED` audit row per save with before/after diff.
 
 ### Permissions
 - [ ] Four new permissions per draft-supporting entity exist.
