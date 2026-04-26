@@ -20,6 +20,11 @@ import {
   DELINQUENCY_DISPATCH_SCHEDULER_ID,
 } from "./workers/delinquency-dispatcher.js";
 import { buildDelinquencyWorker } from "./workers/delinquency-worker.js";
+import {
+  buildSlaBreachWorker,
+  registerSlaBreachScheduler,
+  SLA_BREACH_SCHEDULER_ID,
+} from "./workers/sla-breach-worker.js";
 
 /**
  * Worker process entry point.
@@ -62,7 +67,8 @@ export const SCHEDULER_REGISTRY: ReadonlySet<string> = new Set<string>([
   SUSPENSION_SCHEDULER_ID,
   NOTIFICATION_SCHEDULER_ID,
   DELINQUENCY_DISPATCH_SCHEDULER_ID,
-  // future: sla-breach-cron, audit-retention-cron
+  SLA_BREACH_SCHEDULER_ID,
+  // future: audit-retention-cron
 ]);
 
 async function reconcileSchedulers(activeQueues: readonly QueueName[]): Promise<void> {
@@ -177,8 +183,12 @@ async function main(): Promise<void> {
     activeWorkers.push(buildDelinquencyWorker());
   }
 
-  // Tasks 8-9 register additional workers here:
-  //   sla-breach-sweep, audit-retention.
+  if (activeQueues.includes(QUEUE_NAMES.slaBreachSweep)) {
+    activeWorkers.push(buildSlaBreachWorker());
+    await registerSlaBreachScheduler();
+  }
+
+  // Task 9 registers the audit-retention worker here.
 
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));

@@ -319,3 +319,78 @@ export async function listByPremise(utilityId: string, premiseId: string) {
     take: 100,
   });
 }
+
+interface BreachedSrRow {
+  id: string;
+  utility_id: string;
+  request_number: string;
+  sla_due_at: Date;
+}
+
+/**
+ * BullMQ-worker entry point for the SLA breach sweep. Single
+ * cross-tenant pass over open service requests whose SLA due time
+ * has elapsed. Atomic — UPDATE ... RETURNING and auditLog.createMany
+ * are inside one prisma.$transaction so the breached flag and the
+ * audit row land together or neither does.
+ *
+ * Tenant gating: tenants with `sla_breach_sweep_enabled = false`
+ * have their requests skipped (the join filter excludes them).
+ *
+ * Per-row audit (one row per flipped SR rather than a single
+ * "sweep ran" entry) so the SR detail page timeline shows the
+ * breach event in its native chronology. Audit volume is bounded
+ * by the breach rate, not the sweep rate — once a row is breached
+ * (slaBreached = true) the sweep no longer touches it.
+ *
+ * Idempotent: re-running with the same `now` flips zero additional
+ * rows. Safe under at-least-once delivery.
+ *
+ * Open status filter: `status NOT IN (COMPLETED, CANCELLED)` so
+ * terminal SRs are never re-flagged. Future task 14 may expand
+ * this to also exclude certain in-progress states.
+ */
+export async function sweepBreachedSRs(
+  now: Date = new Date(),
+): Promise<{ flipped: number }> {
+  return prisma.$transaction(
+    async (tx) => {
+      const flipped = await tx.$queryRaw<BreachedSrRow[]>`
+        UPDATE service_request AS sr
+        SET sla_breached = true, updated_at = now()
+        FROM tenant_config AS tc
+        WHERE tc.utility_id = sr.utility_id
+          AND tc.sla_breach_sweep_enabled = true
+          AND sr.status NOT IN ('COMPLETED', 'CANCELLED')
+          AND sr.sla_due_at IS NOT NULL
+          AND sr.sla_due_at <= ${now}
+          AND sr.sla_breached = false
+        RETURNING sr.id, sr.utility_id, sr.request_number, sr.sla_due_at
+      `;
+
+      if (flipped.length > 0) {
+        await tx.auditLog.createMany({
+          data: flipped.map((row) => ({
+            utilityId: row.utility_id,
+            entityType: "service_request",
+            entityId: row.id,
+            action: "UPDATE" as const,
+            actorId: null,
+            actorName: "SLA breach sweeper",
+            source: "scheduler:sla-breach-sweep",
+            beforeState: { slaBreached: false },
+            afterState: {
+              slaBreached: true,
+              breachedAt: now.toISOString(),
+              slaDueAt: row.sla_due_at.toISOString(),
+              requestNumber: row.request_number,
+            },
+          })),
+        });
+      }
+
+      return { flipped: flipped.length };
+    },
+    { timeout: 30_000, isolationLevel: "ReadCommitted" },
+  );
+}

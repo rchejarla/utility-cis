@@ -123,13 +123,21 @@ async function seedTenant(utilityId: string, opts: SeedTenantOpts = {}): Promise
   }
 }
 
-async function getEnqueuedJobs(): Promise<Array<{ id: string; data: Record<string, unknown>; opts: Record<string, unknown> }>> {
+interface InspectedJob {
+  id: string;
+  data: Record<string, unknown>;
+  priority?: number;
+  jobId?: string;
+}
+
+async function getEnqueuedJobs(): Promise<InspectedJob[]> {
   const queue = queueImports.getQueue(queueImports.QUEUE_NAMES.delinquencyTenant);
   const jobs = await queue.getJobs(["waiting", "active", "delayed", "prioritized"]);
   return jobs.map((j) => ({
     id: j.id ?? "",
-    data: j.data,
-    opts: j.opts,
+    data: j.data as Record<string, unknown>,
+    priority: j.opts.priority,
+    jobId: j.opts.jobId,
   }));
 }
 
@@ -223,7 +231,7 @@ describe("dispatchDelinquency", () => {
     await dispatcherImports.dispatchDelinquency(new Date("2026-04-25T03:00:00Z"));
 
     const jobs = await getEnqueuedJobs();
-    const byTenant = new Map(jobs.map((j) => [j.data.utilityId as string, j.opts.priority as number]));
+    const byTenant = new Map(jobs.map((j) => [j.data.utilityId as string, j.priority as number]));
     expect(byTenant.get(TENANT_A)).toBe(1);
     expect(byTenant.get(TENANT_B)).toBe(2);
     expect(byTenant.get(TENANT_C)).toBe(3);
