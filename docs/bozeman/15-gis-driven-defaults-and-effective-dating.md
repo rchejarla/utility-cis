@@ -129,6 +129,15 @@ Doc 14 FR-SA-045 commits an override flow with `gisSyncStatus = MANUAL_OVERRIDE`
 
 ## 3. Functional requirements
 
+**Design framing — "GIS-derived values are defaults; every layer has an audited override path."** Every requirement in §3.4–§3.7 follows the same shape:
+
+1. GIS sync (per [14-special-assessments.md](./14-special-assessments.md) FR-SA-040..045) populates parcel-level fact data — territory membership, square footage, frontage, etc.
+2. A deterministic resolver (`selectDefaultRateSchedule`, `checkServiceAvailability`, the parcel-attribute fields themselves) returns the *suggested* answer for the typical case.
+3. Operators can override at the point of use — at SA creation for rate, via the override workflow for availability and for parcel attributes — with appropriate permission, required reason text, and an audit row of class `AUDIT_FINANCIAL` or `AUDIT_SECURITY`.
+4. Existing entities are *never* retroactively mutated when a default changes. New SAs get the new default; existing SAs keep their original rate. Parcel-attribute drift creates a Task; it doesn't auto-recalculate posted levies.
+
+Reading the rest of this section through that lens makes the design choices easier to follow: this doc is intentionally a **lookup + override** system, not a rules engine. (See FR-EFF-046 for how attribute-driven rules layer on top once doc 13's workflow engine ships.)
+
 ### 3.1 Effective-dating — ServiceAgreement layer
 
 - **FR-EFF-001** — A `tstzrange`-based **exclusion constraint** prevents overlapping active SAs for the same `(account_id, premise_id, commodity_id)`. Concretely:
@@ -249,6 +258,8 @@ Doc 14 FR-SA-045 commits an override flow with `gisSyncStatus = MANUAL_OVERRIDE`
 
 ### 3.4 ServiceTerritory — real entity
 
+**Concept and naming.** "Service territory" is the standard utility-industry term for the geographic zone that determines whether the utility provides service at a parcel and what rate applies — examples: "in-city limits" vs. "outside city limits", "north zone" vs. "south zone", "multi-family rate zone". The schema today has `Premise.serviceTerritoryId String? @db.VarChar(64)` as a placeholder column that's never been used by code beyond list filtering; this section promotes it to a real entity. Distinct from the `AssessmentDistrict` introduced by [14-special-assessments.md](./14-special-assessments.md): an `AssessmentDistrict` is a finite, project-funded boundary with an amortization schedule (sidewalk SID, lighting LD); a `ServiceTerritory` is a perpetual zone defining ongoing service rate and availability. A single parcel can belong to both — e.g., in the in-city water territory (paying water rates monthly forever) AND in a sidewalk SID-21-12 assessment district (paying installments for 10 years).
+
 - **FR-EFF-030** — A new `ServiceTerritory` entity replaces the freeform `Premise.serviceTerritoryId` string with a real FK:
 
   ```prisma
@@ -321,6 +332,21 @@ Doc 14 FR-SA-045 commits an override flow with `gisSyncStatus = MANUAL_OVERRIDE`
 - **FR-EFF-043** — Default-rate updates over time: tenants editing a `ServiceTerritoryRate` create a new version with `effectiveFrom = future date`; the previous version's `effectiveTo` is set automatically (same pattern as `RateSchedule.reviseRateSchedule`). Existing SAs already created don't change rate (their `rateScheduleId` is fixed at creation); only new SAs created after the new effective date pick up the new default.
 
 - **FR-EFF-044** — Reporting view: for each `ServiceTerritoryRate`, show how many active SAs use the resolved rate vs. an override. Helps tenants spot drift.
+
+#### 3.5.1 Attribute-driven rate rules — extension point (deferred)
+
+- **FR-EFF-046** — Some tenants will eventually need conditional rate selection beyond the `(territory, commodity, premiseType)` lookup — e.g., *"residential parcels with `frontageFeet > 100` get the large-lot rate"*, *"commercial parcels with `imperviousAreaSqFt > 50%` of `squareFootage` get the high-runoff stormwater tier"*. These rules can't be expressed as combinatorial lookup rows without an enum explosion (`RESIDENTIAL_LARGE_LOT`, `RESIDENTIAL_SMALL_LOT_HIGH_RUNOFF`, …) that requires a code change for every threshold.
+
+  **Approach when the need lands:** layer a small rule evaluator on top of the lookup, **reusing [13-workflow-approvals-action-queue.md](./13-workflow-approvals-action-queue.md)'s already-specced workflow engine** rather than building a parallel rules system. Concretely:
+  - Add a new workflow trigger type `rate_resolution` (alongside the existing `entity_created`, `status_changed`, etc., per doc 13 FR-WF-002).
+  - Conditions reuse doc 13's `field_compare` / `value_threshold` / AND/OR primitives — operators already learn these for other workflow rules.
+  - Action: `set_rate_schedule { rateScheduleId }` — refines the lookup's default.
+  - Evaluation: lookup runs first (FR-EFF-041); rule evaluator runs second; if any rule matches, its rate replaces the lookup's default. The audit trail records both the lookup pick and the rule that overrode it, so "why did this rate apply?" is always answerable.
+  - Conflicting rules (multiple rules match) → the one with the most specific conditions wins (longest matching path); ties resolved by explicit priority on the workflow definition.
+
+  **Why deferred:** committing this in the initial scope would be speculative scaffolding per the architectural-discipline checklist — we don't yet know that Bozeman's rate ordinance has attribute-threshold rules that the lookup can't cover. Most municipal water/sewer rate structures are clean (class × zone) and the lookup + manual-override path covers them adequately. **This requirement lights up when:** (a) doc 13's workflow engine ships AND (b) the City surfaces a rate rule that would require >5 manual overrides per month or >2 new `premiseType` enum values to express via the lookup. Until both conditions are met, the lookup + manual-override path is the system of record.
+
+  **Acceptance:** none until the trigger conditions are met. When implementation begins, the acceptance is a workflow rule of type `rate_resolution` overrides the lookup's pick, the override is audited with both the lookup's rate and the rule's rate, and a counter-example confirms a non-matching rule does not override the lookup.
 
 ### 3.6 Service availability
 
@@ -429,20 +455,31 @@ All new tables get tenant RLS by `utility_id` per the existing pattern. `Service
 
 ## 5. Implementation sequence
 
-### Phase 1 — Effective-dating constraints + helpers (~2 weeks)
+The 4 phases below correspond to **independently shippable slices**, each closing a real capability without waiting for the others. Slices 1-4 are sequential; Slice 5 (GIS override controls) lands when its substrate ships; Slice 6 (attribute-driven rate rules per FR-EFF-046) is deferred and lights up only on demand.
+
+| Slice | Scope | Hard dependencies | Weeks |
+|---|---|---|---|
+| 1 | Effective-dating constraints + cascade close + point-in-time helpers + history timelines | none | ~2 |
+| 2 | `ServiceTerritory` entity + migration + admin UI | Slice 1 | ~1.5 |
+| 3 | `ServiceTerritoryRate` + `selectDefaultRateSchedule` + SA-creation pre-fill + override-with-reason | Slice 2 | ~1.5 |
+| 4 | `ServiceTerritoryAvailability` + SA-creation gate + override endpoint | Slice 2 (Slice 4 can ship in parallel with Slice 3) | ~1 |
+| 5 | GIS override controls (`gis.override_attributes` permission, dedicated endpoint, threshold-based dual approval) | doc 14 GIS sync, doc 01 `event_class`, doc 13 `pending_administrative_change` | ~1.5 |
+| 6 (deferred) | Attribute-driven rate rules (per FR-EFF-046) | doc 13 workflow engine; demand from City | TBD |
+
+### Slice 1 — Effective-dating constraints + helpers (~2 weeks)
 
 1. **`btree_gist` extension + exclusion constraints + CHECK constraints + lifecycle triggers** (~3 days). Tested against concurrent-write integration tests (multiple workers racing to create overlapping SAs).
 2. **`closeServiceAgreement` cascade helper + refactor `transferService` / `moveOut` to use it** (~3 days).
 3. **Tighten generic PATCH to reject lifecycle field edits; add deprecation warnings** (~2 days).
 4. **`responsible_account_at` + `meter_assignment_at` SQL helpers + REST endpoints + UI history-timeline component** (~4 days).
 
-### Phase 2 — ServiceTerritory entity + migrations (~1.5 weeks)
+### Slice 2 — ServiceTerritory entity + migrations (~1.5 weeks)
 
 5. **`ServiceTerritory` schema + RLS + CRUD service + admin UI** (~3 days).
 6. **Backfill migration converting `Premise.serviceTerritoryId` from string to FK** (~2 days). Includes one-time script to dedupe and prompt operator review for any orphaned territory codes.
 7. **GIS sync worker extension to sync territory membership per parcel** (~2 days; depends on doc 14's GIS sync being landed).
 
-### Phase 3 — Default rates + availability (~2 weeks)
+### Slice 3 + Slice 4 — Default rates + availability (~2 weeks combined)
 
 8. **`ServiceTerritoryRate` schema + admin UI + version chain** (~3 days).
 9. **`selectDefaultRateSchedule` resolver + integration into SA creation form + API** (~3 days).
@@ -450,7 +487,7 @@ All new tables get tenant RLS by `utility_id` per the existing pattern. `Service
 11. **`checkServiceAvailability` resolver + SA-creation gating + override endpoint with dual approval** (~3 days).
 12. **Reporting widgets (override drift, unavailable-zone SAs)** (~2 days).
 
-### Phase 4 — GIS override controls (~1.5 weeks)
+### Slice 5 — GIS override controls (~1.5 weeks)
 
 13. **`gis.override_attributes` permission + override endpoint + reason capture** (~3 days).
 14. **Generic-PATCH guard rejecting GIS field edits** (~1 day).
