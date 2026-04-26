@@ -321,6 +321,149 @@ export async function previewTemplate(
 const BATCH_SIZE = 50;
 const MAX_ATTEMPTS = 3;
 
+interface PendingWithTenantCfg {
+  id: string;
+  utility_id: string;
+  channel: "EMAIL" | "SMS";
+  recipient_email: string | null;
+  recipient_phone: string | null;
+  resolved_subject: string | null;
+  resolved_body: string;
+  attempts: number;
+  created_at: Date;
+  notification_send_enabled: boolean;
+  timezone: string;
+  notification_quiet_start: string;
+  notification_quiet_end: string;
+}
+
+/**
+ * BullMQ-worker entry point for notification-send. Replaces the
+ * legacy in-process drain loop. Two added behaviors over the legacy:
+ *
+ *   1. Tenant gating: tenants with `notification_send_enabled = false`
+ *      have their notifications skipped (status stays PENDING). When
+ *      they re-enable the toggle, the next tick picks the rows up.
+ *   2. Quiet hours: for SMS rows only, if the tenant's local time
+ *      falls within [quietStart, quietEnd), the row is skipped this
+ *      tick. Email is always eligible.
+ *
+ * Implementation:
+ *   - One query joins notification + tenant_config so per-row config
+ *     is in hand without N+1 lookups.
+ *   - Quiet-hours math runs in Node (Postgres timezone math is gnarly
+ *     and involves DST handling we'd have to verify per-deploy).
+ *   - Disabled tenants are filtered in SQL so we don't drag their
+ *     rows into Node only to skip them.
+ *
+ * Returns counts so the worker can log meaningful per-tick output.
+ */
+export async function processPendingNotificationsWithQuietHours(
+  now: Date = new Date(),
+): Promise<{ attempted: number; sent: number; failed: number; skippedQuietHours: number }> {
+  const candidates = await prisma.$queryRaw<PendingWithTenantCfg[]>`
+    SELECT
+      n.id, n.utility_id, n.channel, n.recipient_email, n.recipient_phone,
+      n.resolved_subject, n.resolved_body, n.attempts, n.created_at,
+      tc.notification_send_enabled,
+      tc.timezone,
+      tc.notification_quiet_start,
+      tc.notification_quiet_end
+    FROM notification n
+    INNER JOIN tenant_config tc ON tc.utility_id = n.utility_id
+    WHERE n.status = 'PENDING'
+      AND tc.notification_send_enabled = true
+    ORDER BY n.created_at ASC
+    LIMIT ${BATCH_SIZE}
+  `;
+
+  let sent = 0;
+  let failed = 0;
+  let skippedQuietHours = 0;
+
+  for (const row of candidates) {
+    if (row.channel === "SMS" && isInSmsQuietHours(now, row)) {
+      skippedQuietHours++;
+      continue;
+    }
+    const attempted = await trySendOne(row);
+    if (attempted === "sent") sent++;
+    else if (attempted === "failed") failed++;
+  }
+
+  return {
+    attempted: sent + failed,
+    sent,
+    failed,
+    skippedQuietHours,
+  };
+}
+
+function isInSmsQuietHours(utcNow: Date, row: PendingWithTenantCfg): boolean {
+  if (row.notification_quiet_start === row.notification_quiet_end) return false;
+  const startMin = parseHHMM(row.notification_quiet_start);
+  const endMin = parseHHMM(row.notification_quiet_end);
+  const nowMin = localMinutes(utcNow, row.timezone);
+  if (startMin < endMin) return nowMin >= startMin && nowMin < endMin;
+  return nowMin >= startMin || nowMin < endMin;
+}
+
+function parseHHMM(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map((s) => Number.parseInt(s, 10));
+  return h * 60 + m;
+}
+
+function localMinutes(utc: Date, tz: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(utc);
+  const lookup: Record<string, string> = {};
+  for (const p of parts) lookup[p.type] = p.value;
+  let h = parseInt(lookup.hour ?? "0", 10);
+  if (h === 24) h = 0;
+  const m = parseInt(lookup.minute ?? "0", 10);
+  return h * 60 + m;
+}
+
+async function trySendOne(row: PendingWithTenantCfg): Promise<"sent" | "failed" | "skipped"> {
+  try {
+    await prisma.notification.update({
+      where: { id: row.id },
+      data: { status: "SENDING" },
+    });
+
+    const provider = getProvider(row.channel);
+    const to = row.channel === "EMAIL" ? row.recipient_email! : row.recipient_phone!;
+    const { messageId } = await provider.send(to, row.resolved_subject, row.resolved_body);
+
+    await prisma.notification.update({
+      where: { id: row.id },
+      data: {
+        status: "SENT",
+        provider: "console",
+        providerMessageId: messageId,
+        sentAt: new Date(),
+        attempts: row.attempts + 1,
+      },
+    });
+    return "sent";
+  } catch (err) {
+    const attempts = row.attempts + 1;
+    await prisma.notification.update({
+      where: { id: row.id },
+      data: {
+        status: attempts >= MAX_ATTEMPTS ? "FAILED" : "PENDING",
+        error: err instanceof Error ? err.message : String(err),
+        attempts,
+      },
+    });
+    return "failed";
+  }
+}
+
 async function processPendingNotifications(): Promise<void> {
   const pending = await prisma.notification.findMany({
     where: { status: "PENDING" },

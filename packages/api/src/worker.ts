@@ -9,6 +9,11 @@ import {
   registerSuspensionScheduler,
   SUSPENSION_SCHEDULER_ID,
 } from "./workers/suspension-worker.js";
+import {
+  buildNotificationWorker,
+  registerNotificationScheduler,
+  NOTIFICATION_SCHEDULER_ID,
+} from "./workers/notification-worker.js";
 
 /**
  * Worker process entry point.
@@ -49,7 +54,8 @@ const activeWorkers: WorkerLike[] = [];
  */
 export const SCHEDULER_REGISTRY: ReadonlySet<string> = new Set<string>([
   SUSPENSION_SCHEDULER_ID,
-  // future: notification-send-cron, sla-breach-cron, delinquency-dispatch-cron, audit-retention-cron
+  NOTIFICATION_SCHEDULER_ID,
+  // future: sla-breach-cron, delinquency-dispatch-cron, audit-retention-cron
 ]);
 
 async function reconcileSchedulers(activeQueues: readonly QueueName[]): Promise<void> {
@@ -151,9 +157,14 @@ async function main(): Promise<void> {
     await registerSuspensionScheduler();
   }
 
-  // Tasks 6-9 register additional workers here:
-  //   notification-send, sla-breach-sweep, delinquency-dispatch +
-  //   delinquency-tenant, audit-retention.
+  if (activeQueues.includes(QUEUE_NAMES.notificationSend)) {
+    activeWorkers.push(buildNotificationWorker());
+    await registerNotificationScheduler();
+  }
+
+  // Tasks 7-9 register additional workers here:
+  //   sla-breach-sweep, delinquency-dispatch + delinquency-tenant,
+  //   audit-retention.
 
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
