@@ -130,6 +130,9 @@ importers:
       '@utility-cis/shared':
         specifier: workspace:*
         version: link:../shared
+      '@vvo/tzdb':
+        specifier: ^6
+        version: 6.198.0
       '@xyflow/react':
         specifier: ^12.10.2
         version: 12.10.2(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)

@@ -39,6 +39,7 @@ import {
   faBoxArchive,
   faKey,
   faBomb,
+  faRobot,
   faRulerHorizontal,
 } from "@fortawesome/pro-solid-svg-icons";
 
@@ -122,6 +123,7 @@ const navSections: NavSection[] = [
       { href: "/settings/notifications", label: "Notifications", icon: faBell, module: "tenant_profile" },
       { href: "/settings/slas", label: "Service Request SLAs", icon: faStopwatch, module: "service_request_slas" },
       { href: "/settings/retention", label: "Retention & Audit", icon: faBoxArchive, module: "settings" },
+      { href: "/settings/automation", label: "Automation", icon: faRobot, module: "tenant_profile" },
       { href: "/settings/api-keys", label: "API Keys & Webhooks", icon: faKey, module: "settings" },
       { href: "/users-roles", label: "Users & Roles", icon: faUserShield, module: "tenant_users" },
       { href: "/audit-log", label: "Audit Log", icon: faClipboardList, module: "audit_log" },
