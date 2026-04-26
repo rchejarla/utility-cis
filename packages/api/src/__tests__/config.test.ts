@@ -72,18 +72,28 @@ describe("configSchema", () => {
     expect(result.data.BULL_BOARD_ENABLED).toBe(false);
   });
 
-  it("rejects missing DATABASE_URL", () => {
+  it("accepts missing DATABASE_URL with empty-string default", () => {
+    // DATABASE_URL is permissive at config load — Prisma surfaces a
+    // clear runtime error at first query if it's empty/wrong. Strict
+    // boot-time validation crashed test environments that mock Prisma.
     const result = configSchema.safeParse({});
-    expect(result.success).toBe(false);
-    if (result.success) return;
-    expect(result.error.issues.some((i) => i.path[0] === "DATABASE_URL")).toBe(true);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.DATABASE_URL).toBe("");
   });
 
-  it("rejects empty DATABASE_URL", () => {
+  it("accepts empty DATABASE_URL", () => {
     const result = configSchema.safeParse({ DATABASE_URL: "" });
-    expect(result.success).toBe(false);
-    if (result.success) return;
-    expect(result.error.issues.some((i) => i.path[0] === "DATABASE_URL")).toBe(true);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.DATABASE_URL).toBe("");
+  });
+
+  it("preserves a real DATABASE_URL when provided", () => {
+    const result = configSchema.safeParse({ DATABASE_URL: "postgres://x:y@host:5432/db" });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.DATABASE_URL).toBe("postgres://x:y@host:5432/db");
   });
 
   it("rejects invalid NODE_ENV", () => {

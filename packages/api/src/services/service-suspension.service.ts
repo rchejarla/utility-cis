@@ -410,3 +410,110 @@ export async function listTenantsWithActiveHolds(): Promise<string[]> {
   });
   return rows.map((r) => r.utilityId);
 }
+
+interface AffectedSuspension {
+  id: string;
+  utility_id: string;
+  service_agreement_id: string;
+}
+
+/**
+ * BullMQ-worker entry point for the suspension scheduler. Single
+ * cross-tenant pass — no Node-side per-tenant loop. Two `UPDATE ...
+ * RETURNING` queries (one PENDING→ACTIVE, one ACTIVE→COMPLETED) plus
+ * one batched `auditLog.createMany` per affected set, all in one
+ * `$transaction` with `ReadCommitted` isolation. Atomicity guarantee:
+ * audit rows land iff suspension rows flip — closing the gap the old
+ * fire-and-forget `transitionSuspensions` left open.
+ *
+ * Tenant gating:
+ *   - `tenant_config.suspension_enabled = true` — opted-in tenants
+ *     only. Defaults to true so existing tenants keep their
+ *     pre-migration behavior.
+ *   - For activation: tenants with `require_hold_approval = true`
+ *     only roll forward holds where `approved_by IS NOT NULL`.
+ *
+ * Open-ended holds (endDate IS NULL) are intentionally skipped on
+ * the completion side — they require explicit operator action via
+ * the detail page.
+ *
+ * Idempotent: re-running the same sweep with the same `now` flips
+ * zero additional rows. Re-runs are safe under at-least-once
+ * delivery.
+ */
+export async function sweepSuspensionsAllTenants(
+  now: Date = new Date(),
+): Promise<{ activated: number; completed: number }> {
+  return prisma.$transaction(
+    async (tx) => {
+      // PENDING → ACTIVE. Two-clause approval gate handled in SQL so
+      // we don't have to fan out per tenant: if `require_hold_approval`
+      // is true on the tenant, require `approved_by IS NOT NULL`.
+      const activated = await tx.$queryRaw<AffectedSuspension[]>`
+        UPDATE service_suspension AS ss
+        SET status = 'ACTIVE'
+        FROM tenant_config AS tc
+        WHERE tc.utility_id = ss.utility_id
+          AND tc.suspension_enabled = true
+          AND ss.status = 'PENDING'
+          AND ss.start_date <= ${now}
+          AND (tc.require_hold_approval = false OR ss.approved_by IS NOT NULL)
+        RETURNING ss.id, ss.utility_id, ss.service_agreement_id
+      `;
+
+      // ACTIVE → COMPLETED. Open-ended holds (end_date IS NULL) skipped.
+      const completed = await tx.$queryRaw<AffectedSuspension[]>`
+        UPDATE service_suspension AS ss
+        SET status = 'COMPLETED'
+        FROM tenant_config AS tc
+        WHERE tc.utility_id = ss.utility_id
+          AND tc.suspension_enabled = true
+          AND ss.status = 'ACTIVE'
+          AND ss.end_date IS NOT NULL
+          AND ss.end_date <= ${now}
+        RETURNING ss.id, ss.utility_id, ss.service_agreement_id
+      `;
+
+      const SCHEDULER_SOURCE = "scheduler:suspension-transitions";
+      const auditRows = [
+        ...activated.map((row) => ({
+          utilityId: row.utility_id,
+          entityType: "service_suspension",
+          entityId: row.id,
+          action: "UPDATE" as const,
+          actorId: null, // scheduler-emitted; no user principal
+          actorName: "Suspension scheduler",
+          source: SCHEDULER_SOURCE,
+          beforeState: { status: "PENDING" },
+          afterState: {
+            status: "ACTIVE",
+            transitionAt: now.toISOString(),
+            serviceAgreementId: row.service_agreement_id,
+          },
+        })),
+        ...completed.map((row) => ({
+          utilityId: row.utility_id,
+          entityType: "service_suspension",
+          entityId: row.id,
+          action: "UPDATE" as const,
+          actorId: null,
+          actorName: "Suspension scheduler",
+          source: SCHEDULER_SOURCE,
+          beforeState: { status: "ACTIVE" },
+          afterState: {
+            status: "COMPLETED",
+            transitionAt: now.toISOString(),
+            serviceAgreementId: row.service_agreement_id,
+          },
+        })),
+      ];
+
+      if (auditRows.length > 0) {
+        await tx.auditLog.createMany({ data: auditRows });
+      }
+
+      return { activated: activated.length, completed: completed.length };
+    },
+    { timeout: 30_000, isolationLevel: "ReadCommitted" },
+  );
+}

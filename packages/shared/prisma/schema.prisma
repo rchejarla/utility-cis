@@ -512,8 +512,14 @@ model AuditLog {
   entityType  String      @map("entity_type") @db.VarChar(100)
   entityId    String      @map("entity_id") @db.Uuid
   action      AuditAction @map("action")
-  actorId     String      @map("actor_id") @db.Uuid
+  actorId     String?     @map("actor_id") @db.Uuid
   actorName   String?     @map("actor_name") @db.VarChar(255)
+  // Distinguishes audit origin. User-action audits get the literal
+  // "user:<cisUserId>"; scheduler-emitted audits get "scheduler:<queue-name>"
+  // (e.g., "scheduler:suspension-transitions"). The audit-retention
+  // sweep filters on source LIKE 'scheduler:%' so user audits stay
+  // outside its scope.
+  source      String?     @map("source") @db.VarChar(100)
   beforeState Json?       @map("before_state")
   afterState  Json?       @map("after_state")
   metadata    Json?       @map("metadata")
@@ -522,6 +528,7 @@ model AuditLog {
   @@index([utilityId, entityType, entityId])
   @@index([utilityId, createdAt])
   @@index([utilityId, actorId, createdAt])
+  @@index([utilityId, source, createdAt])
   @@map("audit_log")
 }
 
@@ -876,6 +883,22 @@ model TenantConfig {
   utilityId           String   @unique @map("utility_id") @db.Uuid
   requireHoldApproval Boolean  @default(false) @map("require_hold_approval")
   settings            Json     @default("{}") @map("settings")
+
+  // ─── Automation / scheduler config (per spec §3.4) ────────────────
+  // Per-tenant control of background-job behavior. Each scheduler
+  // gets its own boolean toggle; tenant-local timing inputs drive
+  // missed-tick recovery and DST-correct dispatch.
+  timezone                    String    @default("UTC") @map("timezone") @db.VarChar(64)
+  suspensionEnabled           Boolean   @default(true) @map("suspension_enabled")
+  notificationSendEnabled     Boolean   @default(true) @map("notification_send_enabled")
+  slaBreachSweepEnabled       Boolean   @default(true) @map("sla_breach_sweep_enabled")
+  delinquencyEnabled          Boolean   @default(true) @map("delinquency_enabled")
+  delinquencyRunHourLocal     Int       @default(3) @map("delinquency_run_hour_local") @db.SmallInt
+  delinquencyLastRunAt        DateTime? @map("delinquency_last_run_at") @db.Timestamptz
+  notificationQuietStart      String    @default("22:00") @map("notification_quiet_start") @db.VarChar(5)
+  notificationQuietEnd        String    @default("07:00") @map("notification_quiet_end") @db.VarChar(5)
+  schedulerAuditRetentionDays Int       @default(365) @map("scheduler_audit_retention_days")
+
   createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz
 

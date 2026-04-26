@@ -29,6 +29,7 @@
     "zod-to-json-schema": "^3.24"
   },
   "devDependencies": {
+    "@testcontainers/postgresql": "^10",
     "@types/node": "^22.10.5",
     "testcontainers": "^10",
     "tsx": "^4.19.2",

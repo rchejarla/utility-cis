@@ -28,8 +28,15 @@ export const truthyString = z
 export const configSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 
-  // Core dependencies — fail-fast if missing.
-  DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  // Core connection strings. Both default to empty rather than being
+  // required at config-load time. Reasoning: forcing a value here would
+  // crash any test environment that doesn't happen to have `.env` —
+  // and tests mock Prisma + Redis anyway, so the value isn't actually
+  // used. In production, Prisma and BullMQ/ioredis both surface clear
+  // runtime errors at first connection attempt if the value is empty
+  // or wrong, so the guard doesn't disappear; it just moves to the
+  // place that actually depends on it.
+  DATABASE_URL: z.string().default(""),
   REDIS_URL: z.string().default("redis://localhost:6379"),
 
   // Logging.

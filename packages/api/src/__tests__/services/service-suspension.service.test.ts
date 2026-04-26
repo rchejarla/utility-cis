@@ -29,6 +29,7 @@ import {
   cancelSuspension,
   completeSuspension,
   transitionSuspensions,
+  sweepSuspensionsAllTenants,
 } from "../../services/service-suspension.service.js";
 import { prisma } from "../../lib/prisma.js";
 
@@ -329,6 +330,141 @@ describe("service-suspension lifecycle", () => {
       const completeCall = (prisma.serviceSuspension.updateMany as ReturnType<typeof vi.fn>).mock.calls[1][0];
       expect(activateCall.where.utilityId).toBe(UID);
       expect(completeCall.where.utilityId).toBe(UID);
+    });
+  });
+
+  describe("sweepSuspensionsAllTenants", () => {
+    /**
+     * The sweep is one transaction containing two `$queryRaw UPDATE
+     * RETURNING` calls and one `auditLog.createMany`. Each unit test
+     * here verifies the *shape* of those calls — atomicity (audit
+     * iff rows changed), payload contents (correct actor/state),
+     * and counts. The cross-tenant + tenant_config-join behavior
+     * (suspension_enabled flag, require_hold_approval gate) is
+     * verified end-to-end by the testcontainers integration test.
+     */
+
+    interface RawCall {
+      0: TemplateStringsArray | string[];
+      // additional template-literal substitution args
+      [k: number]: unknown;
+    }
+
+    function txMock(opts: {
+      activatedRows: { id: string; utility_id: string; service_agreement_id: string }[];
+      completedRows: { id: string; utility_id: string; service_agreement_id: string }[];
+    }) {
+      const queryRaw = vi
+        .fn()
+        // First call: PENDING -> ACTIVE
+        .mockResolvedValueOnce(opts.activatedRows)
+        // Second call: ACTIVE -> COMPLETED
+        .mockResolvedValueOnce(opts.completedRows);
+      const createMany = vi.fn().mockResolvedValue({ count: 0 });
+      const tx = {
+        $queryRaw: queryRaw,
+        auditLog: { createMany },
+      };
+      // Make $transaction invoke the inner fn with our tx and
+      // forward its return value through.
+      (prisma.$transaction as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        async (fn: (t: typeof tx) => unknown) => fn(tx),
+      );
+      return { tx, queryRaw, createMany };
+    }
+
+    it("returns zeros and writes no audits on an empty sweep", async () => {
+      const { queryRaw, createMany } = txMock({ activatedRows: [], completedRows: [] });
+
+      const now = new Date("2026-04-25T12:00:00Z");
+      const result = await sweepSuspensionsAllTenants(now);
+
+      expect(result).toEqual({ activated: 0, completed: 0 });
+      expect(queryRaw).toHaveBeenCalledTimes(2);
+      expect(createMany).not.toHaveBeenCalled();
+    });
+
+    it("writes one audit per activated hold with PENDING→ACTIVE state", async () => {
+      const tenantA = "00000000-0000-4000-8000-0000000000aa";
+      const { createMany } = txMock({
+        activatedRows: [
+          { id: "h-1", utility_id: tenantA, service_agreement_id: "sa-1" },
+          { id: "h-2", utility_id: tenantA, service_agreement_id: "sa-2" },
+        ],
+        completedRows: [],
+      });
+
+      const now = new Date("2026-04-25T12:00:00Z");
+      const result = await sweepSuspensionsAllTenants(now);
+
+      expect(result).toEqual({ activated: 2, completed: 0 });
+      expect(createMany).toHaveBeenCalledTimes(1);
+      const data = createMany.mock.calls[0][0].data;
+      expect(data).toHaveLength(2);
+      for (const row of data) {
+        expect(row.actorId).toBeNull();
+        expect(row.actorName).toBe("Suspension scheduler");
+        expect(row.source).toBe("scheduler:suspension-transitions");
+        expect(row.entityType).toBe("service_suspension");
+        expect(row.action).toBe("UPDATE");
+        expect(row.utilityId).toBe(tenantA);
+        expect(row.beforeState).toEqual({ status: "PENDING" });
+        expect(row.afterState.status).toBe("ACTIVE");
+        expect(row.afterState.transitionAt).toBe(now.toISOString());
+      }
+    });
+
+    it("writes one audit per completed hold with ACTIVE→COMPLETED state", async () => {
+      const tenantB = "00000000-0000-4000-8000-0000000000bb";
+      const { createMany } = txMock({
+        activatedRows: [],
+        completedRows: [
+          { id: "h-3", utility_id: tenantB, service_agreement_id: "sa-3" },
+        ],
+      });
+
+      const now = new Date("2026-04-25T12:00:00Z");
+      const result = await sweepSuspensionsAllTenants(now);
+
+      expect(result).toEqual({ activated: 0, completed: 1 });
+      const data = createMany.mock.calls[0][0].data;
+      expect(data).toHaveLength(1);
+      expect(data[0].beforeState).toEqual({ status: "ACTIVE" });
+      expect(data[0].afterState.status).toBe("COMPLETED");
+      expect(data[0].entityId).toBe("h-3");
+    });
+
+    it("batches activations and completions into a single createMany call", async () => {
+      const tenantA = "00000000-0000-4000-8000-0000000000aa";
+      const tenantB = "00000000-0000-4000-8000-0000000000bb";
+      const { createMany } = txMock({
+        activatedRows: [
+          { id: "h-1", utility_id: tenantA, service_agreement_id: "sa-1" },
+        ],
+        completedRows: [
+          { id: "h-2", utility_id: tenantB, service_agreement_id: "sa-2" },
+        ],
+      });
+
+      const result = await sweepSuspensionsAllTenants(new Date("2026-04-25T12:00:00Z"));
+
+      expect(result).toEqual({ activated: 1, completed: 1 });
+      // Single createMany — atomic write, not two round-trips.
+      expect(createMany).toHaveBeenCalledTimes(1);
+      const data = createMany.mock.calls[0][0].data;
+      expect(data).toHaveLength(2);
+      expect(data.find((r: { entityId: string }) => r.entityId === "h-1").afterState.status).toBe("ACTIVE");
+      expect(data.find((r: { entityId: string }) => r.entityId === "h-2").afterState.status).toBe("COMPLETED");
+    });
+
+    it("uses ReadCommitted isolation and a 30s transaction timeout", async () => {
+      txMock({ activatedRows: [], completedRows: [] });
+      await sweepSuspensionsAllTenants(new Date("2026-04-25T12:00:00Z"));
+
+      const txCall = (prisma.$transaction as ReturnType<typeof vi.fn>).mock.calls[0];
+      const opts = txCall[1];
+      expect(opts.isolationLevel).toBe("ReadCommitted");
+      expect(opts.timeout).toBe(30_000);
     });
   });
 });

@@ -2,8 +2,13 @@ import { config, resolveWorkerQueues } from "./config.js";
 import { logger } from "./lib/logger.js";
 import { queueRedisConnection } from "./lib/queue-redis.js";
 import { startHealthServer } from "./lib/health-server.js";
-import { ALL_QUEUE_NAMES, closeAllQueues, getQueue, type QueueName } from "./lib/queues.js";
+import { ALL_QUEUE_NAMES, closeAllQueues, getQueue, QUEUE_NAMES, type QueueName } from "./lib/queues.js";
 import { startDlqMonitor, stopDlqMonitor } from "./workers/dlq-monitor.js";
+import {
+  buildSuspensionWorker,
+  registerSuspensionScheduler,
+  SUSPENSION_SCHEDULER_ID,
+} from "./workers/suspension-worker.js";
 
 /**
  * Worker process entry point.
@@ -43,7 +48,8 @@ const activeWorkers: WorkerLike[] = [];
  * sla-breach-cron, delinquency-dispatch-cron, audit-retention-cron.
  */
 export const SCHEDULER_REGISTRY: ReadonlySet<string> = new Set<string>([
-  // populated by future tasks
+  SUSPENSION_SCHEDULER_ID,
+  // future: notification-send-cron, sla-breach-cron, delinquency-dispatch-cron, audit-retention-cron
 ]);
 
 async function reconcileSchedulers(activeQueues: readonly QueueName[]): Promise<void> {
@@ -140,12 +146,14 @@ async function main(): Promise<void> {
   await reconcileSchedulers(activeQueues);
   await startDlqMonitor(activeQueues);
 
-  // Tasks 2-8 register Worker instances here. The pattern:
-  //
-  //   if (activeQueues.includes(QUEUE_NAMES.suspensionTransitions)) {
-  //     activeWorkers.push(buildSuspensionWorker());
-  //     await registerSuspensionCron();
-  //   }
+  if (activeQueues.includes(QUEUE_NAMES.suspensionTransitions)) {
+    activeWorkers.push(buildSuspensionWorker());
+    await registerSuspensionScheduler();
+  }
+
+  // Tasks 6-9 register additional workers here:
+  //   notification-send, sla-breach-sweep, delinquency-dispatch +
+  //   delinquency-tenant, audit-retention.
 
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));

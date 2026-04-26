@@ -63,6 +63,9 @@ importers:
         specifier: ^3.24
         version: 3.25.2(zod@3.25.76)
     devDependencies:
+      '@testcontainers/postgresql':
+        specifier: ^10
+        version: 10.28.0
       '@types/node':
         specifier: ^22.10.5
         version: 22.19.17
@@ -1214,6 +1217,9 @@ packages:
   '@tanstack/table-core@8.21.3':
     resolution: {integrity: sha512-ldZXEhOBb8Is7xLs01fR3YEc3DERiz5silj8tnGkFZytt1abEvl/GhUmCE0PMLaMPTa3Jk4HbKmRlHmu+gCftg==}
     engines: {node: '>=12'}
+
+  '@testcontainers/postgresql@10.28.0':
+    resolution: {integrity: sha512-NN25rruG5D4Q7pCNIJuHwB+G85OSeJ3xHZ2fWx0O6sPoPEfCYwvpj8mq99cyn68nxFkFYZeyrZJtSFO+FnydiA==}
 
   '@testing-library/dom@10.4.1':
     resolution: {integrity: sha512-o4PXJQidqJl82ckFaXUeoAW+XysPLauYI43Abki5hABd853iMhitooc6znOnczgbTYmEP6U6/y1ZyKAIsvMKGg==}
@@ -4130,6 +4136,15 @@ snapshots:
       react-dom: 19.2.5(react@19.2.5)
 
   '@tanstack/table-core@8.21.3': {}
+
+  '@testcontainers/postgresql@10.28.0':
+    dependencies:
+      testcontainers: 10.28.0
+    transitivePeerDependencies:
+      - bare-abort-controller
+      - bare-buffer
+      - react-native-b4a
+      - supports-color
 
   '@testing-library/dom@10.4.1':
     dependencies:
