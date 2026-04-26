@@ -15,6 +15,7 @@ The point: every claim we make to the City should map to a requirements doc here
 |---|---|---|---|
 | 01 | [Audit & Tamper-Evidence](./01-audit-and-tamper-evidence.md) | Append-only audit log, S3 replication with object-lock, daily Merkle hash chains, security-event coverage, two-person approval for sensitive changes | **Drafted — implementation pending** |
 | 02 | [Mobile & Responsive UI](./02-mobile-and-responsive-ui.md) | Three-tier mobile strategy: CSR workflows fully mobile (Tier 1), power-user workflows desktop-optimized + tablet-usable (Tier 2), field-technician workflows mobile-first with offline + photo + GPS + barcode (Tier 3) | **Drafted — implementation pending** |
+| 03 | [Progressive Web App (PWA)](./03-progressive-web-app.md) | Manifest + installability across admin/portal/field surfaces, service worker with per-resource cache strategies, offline shell, IndexedDB queue + background sync for field surface, update lifecycle with force-reload for security patches, iOS Safari constraints. Push notifications explicitly out of scope. | **Drafted — implementation pending** |
 
 ## Conventions
 
