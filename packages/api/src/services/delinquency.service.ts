@@ -120,6 +120,29 @@ export async function evaluateAll(utilityId: string): Promise<{
   return { accountsEvaluated: accounts.length, actionsCreated };
 }
 
+/**
+ * Wrapper around `evaluateAll` for the BullMQ-worker entry point. On
+ * success, updates `tenant_config.delinquencyLastRunAt` so the
+ * dispatcher's missed-tick recovery can detect when this tenant
+ * hasn't been evaluated in over 23 hours.
+ *
+ * Kept as a separate function (rather than folding the timestamp
+ * write into `evaluateAll`) so the legacy in-process path continues
+ * to behave exactly as it did pre-migration during the gated rollout.
+ * Removing this distinction is part of plan task 9 (legacy cleanup).
+ */
+export async function evaluateDelinquencyForTenant(
+  utilityId: string,
+  now: Date = new Date(),
+): Promise<{ accountsEvaluated: number; actionsCreated: number }> {
+  const result = await evaluateAll(utilityId);
+  await prisma.tenantConfig.update({
+    where: { utilityId },
+    data: { delinquencyLastRunAt: now },
+  });
+  return result;
+}
+
 export async function resolveAccount(
   utilityId: string,
   accountId: string,
