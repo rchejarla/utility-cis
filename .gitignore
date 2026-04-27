@@ -10,3 +10,5 @@ dist
 tsconfig.tsbuildinfo
 .npmrc
 uploads/
+.expeed_reqs.json
+.expeed_reqs.xlsx
