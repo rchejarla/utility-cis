@@ -18,11 +18,17 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    // Only the new testcontainers-backed worker integration tests.
-    // Existing src/__tests__/integration/*.test.ts files are in-memory
-    // suites that depend on the unit-test setup file's prisma mocks
-    // and are excluded here to avoid spinning up containers for them.
-    include: ["src/__tests__/integration/worker-*.test.ts"],
+    // Testcontainers-backed integration tests. The other
+    // src/__tests__/integration/*.test.ts files are in-memory suites
+    // that depend on the unit-test setup file's prisma mocks; they're
+    // excluded here so we don't spin up containers for them. Globs
+    // match the testcontainers files by naming convention:
+    //   - worker-*.test.ts — BullMQ worker integrations
+    //   - audit-wrap.integration.test.ts — atomicity verification
+    include: [
+      "src/__tests__/integration/worker-*.test.ts",
+      "src/__tests__/integration/audit-wrap.integration.test.ts",
+    ],
     // No setupFiles — integration tests handle their own container
     // lifecycle via beforeAll/afterAll.
     testTimeout: 60_000,
