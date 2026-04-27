@@ -70,6 +70,18 @@ export const closeServiceAgreementSchema = z.object({
   reason: z.string().max(500).optional(),
 }).strict();
 
+export const removeMeterFromAgreementSchema = z.object({
+  removedDate: z.string().date(),
+  reason: z.string().max(500).optional(),
+}).strict();
+
+export const swapMeterSchema = z.object({
+  oldMeterId: z.string().uuid(),
+  newMeterId: z.string().uuid(),
+  swapDate: z.string().date(),
+  reason: z.string().max(500).optional(),
+}).strict();
+
 export const addMeterToAgreementSchema = z.object({
   meterId: z.string().uuid(),
   isPrimary: z.boolean().default(false),
@@ -96,6 +108,8 @@ export type MeterAssignment = z.infer<typeof meterAssignmentSchema>;
 export type CreateServiceAgreementInput = z.infer<typeof createServiceAgreementSchema>;
 export type UpdateServiceAgreementInput = z.infer<typeof updateServiceAgreementSchema>;
 export type CloseServiceAgreementInput = z.infer<typeof closeServiceAgreementSchema>;
+export type RemoveMeterFromAgreementInput = z.infer<typeof removeMeterFromAgreementSchema>;
+export type SwapMeterInput = z.infer<typeof swapMeterSchema>;
 export type AddMeterToAgreementInput = z.infer<typeof addMeterToAgreementSchema>;
 export type UpdateAgreementMeterInput = z.infer<typeof updateAgreementMeterSchema>;
 export type ServiceAgreementQuery = z.infer<typeof serviceAgreementQuerySchema>;

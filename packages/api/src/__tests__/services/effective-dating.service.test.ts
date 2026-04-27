@@ -7,7 +7,11 @@ vi.mock("../../lib/audit-wrap.js", () => ({
   writeAuditRow: vi.fn(async () => undefined),
 }));
 
-import { closeServiceAgreement } from "../../services/effective-dating.service.js";
+import {
+  closeServiceAgreement,
+  removeMeterFromAgreement,
+  swapMeter,
+} from "../../services/effective-dating.service.js";
 import { prisma } from "../../lib/prisma.js";
 import { writeAuditRow } from "../../lib/audit-wrap.js";
 
@@ -224,5 +228,122 @@ describe("closeServiceAgreement", () => {
     );
 
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("removeMeterFromAgreement", () => {
+  it("closes a single SAM and emits one audit row", async () => {
+    const removedDate = new Date("2026-05-01");
+    (prisma.serviceAgreementMeter.findFirstOrThrow as ReturnType<typeof vi.fn>).mockResolvedValue(
+      sam({ id: "sam-1", removedDate: null }),
+    );
+    (prisma.serviceAgreementMeter.update as ReturnType<typeof vi.fn>).mockResolvedValue(
+      sam({ id: "sam-1", removedDate }),
+    );
+
+    const result = await removeMeterFromAgreement(UID, ACTOR, "Tester", {
+      saId: SA_ID,
+      meterId: "meter-1",
+      removedDate,
+      reason: "Failed meter",
+    });
+
+    expect(result.removedDate).toEqual(removedDate);
+    expect((prisma.serviceAgreementMeter.update as ReturnType<typeof vi.fn>).mock.calls[0][0].data)
+      .toEqual({ removedDate });
+    expect(writeAuditRow).toHaveBeenCalledTimes(1);
+    expect((writeAuditRow as ReturnType<typeof vi.fn>).mock.calls[0][2]).toBe(
+      "service_agreement_meter.updated",
+    );
+  });
+
+  it("throws not-found when no open SAM exists for (saId, meterId)", async () => {
+    (prisma.serviceAgreementMeter.findFirstOrThrow as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("Not found"),
+    );
+
+    await expect(
+      removeMeterFromAgreement(UID, ACTOR, "Tester", {
+        saId: SA_ID,
+        meterId: "meter-1",
+        removedDate: new Date("2026-05-01"),
+      }),
+    ).rejects.toThrow("Not found");
+  });
+});
+
+describe("swapMeter", () => {
+  it("closes the old SAM, creates the new one, emits two audit rows", async () => {
+    const swapDate = new Date("2026-05-01");
+    const oldSam = sam({ id: "sam-old", meterId: "meter-old", removedDate: null });
+    (prisma.serviceAgreementMeter.findFirst as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(oldSam) // old assignment lookup
+      .mockResolvedValueOnce(null); // new meter conflict lookup -- none
+    (prisma.serviceAgreementMeter.update as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...oldSam,
+      removedDate: swapDate,
+    });
+    const newSam = sam({ id: "sam-new", meterId: "meter-new", removedDate: null });
+    (prisma.serviceAgreementMeter.create as ReturnType<typeof vi.fn>).mockResolvedValue(newSam);
+
+    const result = await swapMeter(UID, ACTOR, "Tester", {
+      saId: SA_ID,
+      oldMeterId: "meter-old",
+      newMeterId: "meter-new",
+      swapDate,
+      reason: "Routine replacement",
+    });
+
+    expect(result.closedOld.removedDate).toEqual(swapDate);
+    expect(result.newSam.id).toBe("sam-new");
+    expect((prisma.serviceAgreementMeter.create as ReturnType<typeof vi.fn>).mock.calls[0][0].data)
+      .toMatchObject({
+        utilityId: UID,
+        serviceAgreementId: SA_ID,
+        meterId: "meter-new",
+        addedDate: swapDate,
+        isPrimary: true, // inherits from oldSam
+      });
+    expect(writeAuditRow).toHaveBeenCalledTimes(2);
+    const calls = (writeAuditRow as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0][2]).toBe("service_agreement_meter.updated"); // old close
+    expect(calls[1][2]).toBe("service_agreement_meter.created"); // new open
+  });
+
+  it("rejects when oldMeterId is not currently assigned", async () => {
+    (prisma.serviceAgreementMeter.findFirst as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(null);
+
+    await expect(
+      swapMeter(UID, ACTOR, "Tester", {
+        saId: SA_ID,
+        oldMeterId: "meter-old",
+        newMeterId: "meter-new",
+        swapDate: new Date("2026-05-01"),
+      }),
+    ).rejects.toMatchObject({ statusCode: 400, code: "OLD_METER_NOT_ASSIGNED" });
+
+    expect(prisma.serviceAgreementMeter.update).not.toHaveBeenCalled();
+    expect(prisma.serviceAgreementMeter.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects when newMeterId is already on another open assignment (friendly pre-check)", async () => {
+    const oldSam = sam({ id: "sam-old", meterId: "meter-old", removedDate: null });
+    const conflicting = sam({ id: "sam-other", meterId: "meter-new", removedDate: null });
+    (prisma.serviceAgreementMeter.findFirst as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(oldSam)
+      .mockResolvedValueOnce(conflicting);
+
+    await expect(
+      swapMeter(UID, ACTOR, "Tester", {
+        saId: SA_ID,
+        oldMeterId: "meter-old",
+        newMeterId: "meter-new",
+        swapDate: new Date("2026-05-01"),
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: "NEW_METER_ALREADY_ASSIGNED" });
+
+    expect(prisma.serviceAgreementMeter.update).not.toHaveBeenCalled();
+    expect(prisma.serviceAgreementMeter.create).not.toHaveBeenCalled();
   });
 });

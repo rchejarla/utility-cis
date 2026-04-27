@@ -182,13 +182,6 @@ export async function addMeterToAgreement(
   });
 }
 
-export async function removeMeterFromAgreement(utilityId: string, samId: string) {
-  return prisma.serviceAgreementMeter.update({
-    where: { id: samId, utilityId },
-    data: { removedDate: new Date() },
-  });
-}
-
 export async function updateServiceAgreement(
   utilityId: string,
   actorId: string,

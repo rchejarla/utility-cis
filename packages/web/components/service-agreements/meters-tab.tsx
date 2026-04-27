@@ -135,7 +135,11 @@ export function MeterManagementTab({
     if (!confirm(`Remove meter ${sam.meter.meterNumber} from this agreement?`)) return;
     setRemovingId(sam.id);
     try {
-      await apiClient.patch(`/api/v1/service-agreements/${agreementId}/meters/${sam.id}`, {});
+      const today = new Date().toISOString().slice(0, 10);
+      await apiClient.post(
+        `/api/v1/service-agreements/${agreementId}/meters/${sam.meterId}/remove`,
+        { removedDate: today },
+      );
       toast("Meter removed from agreement", "success");
       onMetersChanged();
     } catch (err: any) {
