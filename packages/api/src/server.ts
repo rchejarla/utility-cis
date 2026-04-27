@@ -1,7 +1,8 @@
 import { buildApp } from "./app.js";
 import { logger } from "./lib/logger.js";
+import { config } from "./config.js";
 
-const PORT = Number(process.env.PORT) || 3001;
+const PORT = config.PORT;
 
 async function main() {
   const app = await buildApp();

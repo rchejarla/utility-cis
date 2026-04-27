@@ -63,7 +63,7 @@ export async function buildApp() {
   });
 
   await app.register(cors, {
-    origin: process.env.WEB_URL || "http://localhost:3000",
+    origin: config.WEB_URL,
     credentials: true,
   });
 
@@ -121,6 +121,48 @@ export async function buildApp() {
   await app.register(serviceRequestRoutes);
   await app.register(portalAuthRoutes);
   await app.register(portalApiRoutes);
+
+  // Bull Board admin UI for queue inspection. Off by default; flipping
+  // BULL_BOARD_ENABLED=true mounts it at /admin/queues. Auth middleware
+  // (already global) ensures the user is logged in; the preHandler hook
+  // below additionally requires tenant_profile/EDIT — same gate used by
+  // automation-config since both expose tenant-wide operational controls.
+  //
+  // Imports are deferred to runtime so the test suite (which never sets
+  // BULL_BOARD_ENABLED) doesn't pay the bull-board CJS module-graph cost
+  // and the vitest ioredis transform stays stable.
+  if (config.BULL_BOARD_ENABLED) {
+    const [{ createBullBoard }, { BullMQAdapter }, { FastifyAdapter: BullBoardFastifyAdapter }, queuesModule, rbacModule] = await Promise.all([
+      import("@bull-board/api"),
+      import("@bull-board/api/bullMQAdapter"),
+      import("@bull-board/fastify"),
+      import("./lib/queues.js"),
+      import("./services/rbac.service.js"),
+    ]);
+    const serverAdapter = new BullBoardFastifyAdapter();
+    serverAdapter.setBasePath("/admin/queues");
+    createBullBoard({
+      queues: queuesModule.ALL_QUEUE_NAMES.map((name) => new BullMQAdapter(queuesModule.getQueue(name))),
+      serverAdapter,
+    });
+    await app.register(async (instance) => {
+      instance.addHook("preHandler", async (request, reply) => {
+        const userRole = await rbacModule.getUserRole(request.user.id, request.user.utilityId);
+        const perms = userRole?.permissions ?? {};
+        const tenantProfilePerms = (perms as Record<string, string[]>).tenant_profile ?? [];
+        if (!tenantProfilePerms.includes("EDIT")) {
+          reply.status(403).send({
+            error: { code: "FORBIDDEN", message: "Bull Board access requires tenant_profile:EDIT permission" },
+          });
+          return;
+        }
+      });
+      await instance.register(serverAdapter.registerPlugin(), {
+        prefix: "/admin/queues",
+      });
+    });
+    app.log.info({ component: "bull-board" }, "Bull Board mounted at /admin/queues");
+  }
 
   startAuditWriter();
 

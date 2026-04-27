@@ -1,5 +1,6 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { jwtVerify } from "jose";
+import { config } from "../config.js";
 
 export interface AuthUser {
   id: string;
@@ -16,8 +17,8 @@ declare module "fastify" {
   }
 }
 
-const NEXTAUTH_SECRET = process.env.NEXTAUTH_SECRET;
-const IS_PROD = process.env.NODE_ENV === "production";
+const NEXTAUTH_SECRET = config.NEXTAUTH_SECRET;
+const IS_PROD = config.NODE_ENV === "production";
 
 /**
  * Decode a JWT or a JSON blob without verifying the signature. Used for

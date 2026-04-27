@@ -42,9 +42,21 @@ export const configSchema = z.object({
   // Logging.
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
 
-  // Worker process configuration.
+  // API + worker process configuration. PORT is the API listen port
+  // (matches the cloud-platform convention of $PORT).
+  PORT: z.coerce.number().int().min(1).max(65535).default(3001),
   WORKER_HTTP_PORT: z.coerce.number().int().min(1).max(65535).default(3002),
   WORKER_QUEUES: z.string().default("all"),
+
+  // Auth configuration. NEXTAUTH_SECRET is optional in dev (falls back
+  // to unsigned JWT decode for the dev test pills) but required in
+  // production — runtime check in middleware/auth.ts enforces this.
+  NEXTAUTH_SECRET: z.string().optional(),
+  ENABLE_DEV_AUTH_ENDPOINTS: truthyString,
+
+  // Web app URL — used for CORS origin and password-reset / portal
+  // links in outbound notifications.
+  WEB_URL: z.string().default("http://localhost:3000"),
 
   // Test / dev opt-outs.
   DISABLE_SCHEDULERS: truthyString,

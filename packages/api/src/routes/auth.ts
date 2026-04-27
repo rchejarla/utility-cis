@@ -2,10 +2,10 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getAuthMe, invalidateUserRoleCache } from "../services/rbac.service.js";
 import { prisma } from "../lib/prisma.js";
+import { config } from "../config.js";
 
-const IS_PROD = process.env.NODE_ENV === "production";
-const DEV_AUTH_ENDPOINTS_ENABLED =
-  !IS_PROD && process.env.ENABLE_DEV_AUTH_ENDPOINTS === "true";
+const IS_PROD = config.NODE_ENV === "production";
+const DEV_AUTH_ENDPOINTS_ENABLED = !IS_PROD && config.ENABLE_DEV_AUTH_ENDPOINTS;
 
 const switchRoleSchema = z.object({
   roleId: z.string().uuid(),

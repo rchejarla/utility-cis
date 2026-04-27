@@ -1,22 +1,23 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { getUserRole, getTenantModules } from "../services/rbac.service.js";
+import { config as appConfig } from "../config.js";
 
 export async function authorizationMiddleware(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> {
-  const config = request.routeOptions?.config as { module?: string; permission?: string } | undefined;
+  const routeConfig = request.routeOptions?.config as { module?: string; permission?: string } | undefined;
 
   // No module declared = unprotected route
-  if (!config?.module) {
+  if (!routeConfig?.module) {
     // Log warning in dev for unprotected /api/v1/* routes (except /auth/me)
-    if (process.env.NODE_ENV !== "production" && request.url.startsWith("/api/v1/") && !request.url.startsWith("/api/v1/auth/")) {
+    if (appConfig.NODE_ENV !== "production" && request.url.startsWith("/api/v1/") && !request.url.startsWith("/api/v1/auth/")) {
       request.log.warn(`Unprotected route: ${request.method} ${request.url}`);
     }
     return;
   }
 
-  const { module, permission } = config;
+  const { module, permission } = routeConfig;
   const user = request.user;
   if (!user) return; // auth middleware already handled this
 

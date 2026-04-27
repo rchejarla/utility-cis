@@ -1,5 +1,6 @@
 import Redis from "ioredis";
 import { logger } from "./logger.js";
+import { config } from "../config.js";
 
 /**
  * Cache-only Redis client for best-effort lookups (RBAC permissions,
@@ -18,7 +19,7 @@ import { logger } from "./logger.js";
  * per failed command — a single network blip used to emit ECONNRESET on
  * every in-flight command and flood the logs.
  */
-export const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {
+export const redis = new Redis(config.REDIS_URL, {
   // Cap reconnect backoff at 5s. Default is min(times * 50, 2000) which is
   // also fine; this just makes the intent explicit and tolerates longer
   // transient outages (e.g., Docker Desktop network adapter restart).

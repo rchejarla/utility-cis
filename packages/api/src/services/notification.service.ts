@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
+import { config } from "../config.js";
 
 /**
  * Notification engine — resolves templates, renders variables, queues
@@ -138,7 +139,7 @@ async function resolveVariables(
   if (context.delinquencyActionType) vars["delinquency.actionType"] = context.delinquencyActionType;
 
   // Portal URLs
-  const baseUrl = process.env.WEB_URL || "http://localhost:3000";
+  const baseUrl = config.WEB_URL;
   vars["portal.loginUrl"] = `${baseUrl}/portal/login`;
   vars["portal.paymentUrl"] = `${baseUrl}/portal/bills`;
   vars["portal.usageUrl"] = `${baseUrl}/portal/usage`;
