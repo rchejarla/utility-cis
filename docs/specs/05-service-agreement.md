@@ -84,9 +84,15 @@ All endpoints require JWT authentication with `utility_id` claim.
 | GET | `/api/v1/service-agreements` | List service agreements (paginated, filterable) |
 | POST | `/api/v1/service-agreements` | Create a new service agreement (with meter assignments) |
 | GET | `/api/v1/service-agreements/:id` | Get agreement by ID (includes meters, premise, account) |
-| PATCH | `/api/v1/service-agreements/:id` | Update agreement fields (status, rate, cycle, end date) |
+| PATCH | `/api/v1/service-agreements/:id` | Update editable fields (rate, cycle, read sequence, custom fields). **Lifecycle fields (`startDate`, `endDate`, `status`) are not allowed here** — see the transitional endpoints below |
+| POST | `/api/v1/service-agreements/:id/close` | Cascading close: terminal-status the SA AND set `removed_date` on every still-open meter assignment in one transaction. Body: `{ endDate, status: FINAL\|CLOSED, reason? }` |
 | POST | `/api/v1/service-agreements/:id/meters` | Add a meter to an existing agreement |
-| PATCH | `/api/v1/service-agreements/:id/meters/:samId` | Remove a meter from an agreement (sets `removed_date`) |
+| POST | `/api/v1/service-agreements/:id/meters/:meterId/remove` | Close a single meter assignment. Body: `{ removedDate, reason? }`. Emits an audit row |
+| POST | `/api/v1/service-agreements/:id/meters/swap` | Atomic swap: closes the old SAM and opens a new one in the same transaction. Body: `{ oldMeterId, newMeterId, swapDate, reason? }` |
+| GET | `/api/v1/premises/:id/responsible-account?commodity=&as_of=` | Point-in-time query backed by `responsible_account_at()` SQL helper |
+| GET | `/api/v1/meters/:id/assignment?as_of=` | Point-in-time query backed by `meter_assignment_at()` SQL helper |
+| GET | `/api/v1/premises/:id/agreement-history` | Full SA history (incl. FINAL/CLOSED) for the premise |
+| GET | `/api/v1/meters/:id/assignment-history` | Full SAM history for the meter |
 
 **Query parameters for `GET /service-agreements`:**
 
@@ -129,11 +135,10 @@ All endpoints require JWT authentication with `utility_id` claim.
 |-------|---------|
 | rateScheduleId | Yes |
 | billingCycleId | Yes |
-| endDate | Yes |
-| status | Yes (subject to transition rules) |
 | readSequence | Yes |
+| customFields | Yes |
 
-Fields that cannot be changed after creation: `agreementNumber`, `accountId`, `premiseId`, `commodityId`. These are structural and changing them would represent a fundamentally different agreement.
+The PATCH input schema is `.strict()` — passing any field not in the table above returns 422 with a Zod error. Lifecycle fields (`startDate`, `endDate`, `status`) are intentionally rejected: they go through the dedicated `POST /:id/close` endpoint, which cascades onto meter assignments atomically. Generic UPDATE setting `status=FINAL` without `endDate` (or vice versa) is also rejected at the database layer by the `enforce_sa_lifecycle_invariants` trigger (migration `20260427144400`). Fields that cannot be changed after creation under any path: `agreementNumber`, `accountId`, `premiseId`, `commodityId`.
 
 ## Business Rules
 
@@ -161,6 +166,27 @@ Attempting an invalid transition (e.g., `PENDING → FINAL`, `ACTIVE → CLOSED`
 ### Meter Assignment Uniqueness
 
 When creating a ServiceAgreement, the provided meters are validated to ensure none are already active on another agreement for the same commodity. This check runs inside a `$transaction`. If a conflict is detected, the entire agreement creation rolls back with an error naming the conflicting meter.
+
+The check is **belt + suspenders**: a partial GIST exclusion constraint `no_double_assigned_meter` (migration `20260427143900`) on `service_agreement_meter` is the source of truth — it prevents the same physical meter from being on two open assignments concurrently regardless of which code path is doing the write. The application-layer pre-check survives because it produces a friendlier error than the raw `exclusion_violation` from Postgres at COMMIT time.
+
+### Effective-Range Overlap Prevention
+
+A partial GIST exclusion constraint `no_overlapping_active_sa` (migration `20260427143408`) prevents two `PENDING`/`ACTIVE` SAs from overlapping in time on the same `(utility_id, account_id, premise_id, commodity_id)`. The constraint is built on a generated `effective_range tsrange` column derived from `start_date` and `end_date`. Closed/Final SAs are exempt — historical ranges are immutable facts, and a successor SA may validly cover the same window.
+
+A `chk_sa_end_ge_start` CHECK constraint enforces date ordering at the row level.
+
+### Cascade-Close on Lifecycle Transition
+
+The `closeServiceAgreement` helper (in `effective-dating.service.ts`) is the only path to terminal status for an SA. It atomically:
+1. Marks the SA `FINAL` or `CLOSED` with the supplied `endDate`.
+2. Sets `removed_date = endDate` on every still-open child `service_agreement_meter`.
+3. Emits one audit row for the SA + one per cascaded SAM.
+
+The cascade is intentionally **not optional** — the prior code paths (`transferService`, `moveOut`) silently left meter assignments dangling when the parent SA closed. Callers who need different `removed_date` values per meter call `removeMeterFromAgreement` for each one BEFORE the close; the cascade then becomes a no-op on those pre-closed rows (idempotent).
+
+The DB-layer `enforce_sa_lifecycle_invariants` trigger (migration `20260427144400`) is the second line of defense. It rejects:
+- `INSERT/UPDATE` setting `status IN (FINAL, CLOSED)` without `end_date`.
+- `UPDATE` setting `end_date` while keeping `status` in `PENDING/ACTIVE`. Use the close endpoint, which bundles the two writes.
 
 ### Meter-Premise Commodity Match
 
@@ -217,7 +243,7 @@ The GET list endpoint supports filtering by `accountId` and `premiseId` to suppo
 
 Note: There is no transition to or from INACTIVE. The INACTIVE status is not valid for ServiceAgreement.
 
-**Meters tab:** Displays all current and historical ServiceAgreementMeter records with `added_date` and `removed_date`. Add Meter button opens inline form to add a new meter assignment (validates commodity match and uniqueness). Remove button on active assignments sets `removed_date` via PATCH `/api/v1/service-agreements/:id/meters/:samId`.
+**Meters tab:** Displays all current and historical ServiceAgreementMeter records with `added_date` and `removed_date`. Add Meter button opens inline form to add a new meter assignment (validates commodity match and uniqueness). Remove button calls `POST /api/v1/service-agreements/:id/meters/:meterId/remove` (audit-emitting; today's date as `removedDate`).
 
 **Audit tab:** Pulls from AuditLog filtered by `entity_type = 'ServiceAgreement'` and `entity_id`. Shows each change with actor, timestamp, and before/after state diff.
 
@@ -247,3 +273,21 @@ Note: There is no transition to or from INACTIVE. The INACTIVE status is not val
 | 111 | Effective-dated meter/property/account associations | Covered — ServiceAgreementMeter dates |
 | 116 | Install/removal/change-out events with read continuity | Covered — Meter status + ServiceAgreementMeter dates |
 | 135 | Multiple concurrent billing cycles | Covered — BillingCycle entity referenced per agreement |
+
+## Migration Notes
+
+### Effective-Dating Constraints (Slice 1, 2026-04-27)
+
+Migrations applied in this slice:
+
+| Migration | Adds |
+|---|---|
+| `20260427143217_btree_gist_extension` | `CREATE EXTENSION btree_gist` (prerequisite for the GIST exclusions below) |
+| `20260427143408_sa_effective_range_exclusion` | Generated `effective_range tsrange` column on `service_agreement` + `no_overlapping_active_sa` partial GIST exclusion + `chk_sa_end_ge_start` CHECK |
+| `20260427143900_sam_effective_range_exclusion` | Same pattern on `service_agreement_meter` + `no_double_assigned_meter` exclusion + `chk_sam_removed_ge_added` CHECK |
+| `20260427144400_sa_lifecycle_invariants` | `enforce_sa_lifecycle_invariants` BEFORE INSERT/UPDATE trigger on `service_agreement` |
+| `20260427162359_point_in_time_helpers` | `responsible_account_at()` and `meter_assignment_at()` SQL functions |
+
+**Pre-existing data:** the new constraints don't reject existing rows — they only block new violations. However, pre-existing orphaned `service_agreement_meter` rows (parent SA is FINAL/CLOSED but the SAM has `removed_date IS NULL`) will continue to exist until a separate cleanup is run. This is the bug `closeServiceAgreement` fixes prospectively, but historical orphans need a one-time `UPDATE service_agreement_meter SET removed_date = sa.end_date FROM service_agreement sa WHERE service_agreement_id = sa.id AND removed_date IS NULL AND sa.status IN ('FINAL', 'CLOSED')` script. **Tracked as a follow-up task; not in Slice 1.**
+
+**`tsrange` vs. `tstzrange`:** Postgres requires generation expressions to be `IMMUTABLE`. `date::timestamptz` is `STABLE` (timezone-dependent), which Postgres rejects. `date::timestamp` (without time zone) IS immutable. Since `start_date`/`end_date` are `DATE` columns with no time-of-day semantics, `tsrange` is the correct type — calendar-date overlap, no timezone reasoning needed.

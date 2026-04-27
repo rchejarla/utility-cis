@@ -85,8 +85,10 @@ All endpoints require JWT authentication with `utility_id` claim.
 |--------|------|-------------|
 | GET | `/api/v1/meters` | List meters (paginated, filterable) |
 | POST | `/api/v1/meters` | Create (commission) a new meter |
-| GET | `/api/v1/meters/:id` | Get meter by ID (includes registers and agreements) |
+| GET | `/api/v1/meters/:id` | Get meter by ID (includes registers and currently-open agreements) |
 | PATCH | `/api/v1/meters/:id` | Update meter fields |
+| GET | `/api/v1/meters/:id/assignment?as_of=` | Point-in-time: which SA + account + premise was the meter on at the given date (backed by `meter_assignment_at()` SQL helper) |
+| GET | `/api/v1/meters/:id/assignment-history` | Full SAM history (every assignment ever, ordered by `added_date` desc). Powers the History tab on meter detail |
 
 **Query parameters for `GET /meters`:**
 
@@ -130,7 +132,11 @@ When a meter is assigned to a ServiceAgreement via ServiceAgreementMeter, the me
 
 ### Meter Assignment Uniqueness
 
-A meter can only be in one active ServiceAgreement per commodity at a time. This is enforced inside a `$transaction` at agreement creation: if the proposed meter is already linked to an active agreement for the same commodity, the transaction rolls back with a conflict error.
+A meter can only be in one open ServiceAgreementMeter assignment at a time, regardless of commodity. This is enforced at the database layer by the partial GIST exclusion constraint `no_double_assigned_meter` (migration `20260427143900_sam_effective_range_exclusion`) on `service_agreement_meter`, scoped to `(utility_id, meter_id)` where `removed_date IS NULL`. The constraint catches races at COMMIT time, structurally preventing two concurrent creators from succeeding.
+
+The application layer keeps an in-`$transaction` pre-check at agreement creation to produce a friendlier error message before the constraint fires — but the pre-check is best-effort, not authoritative. The exclusion constraint is the source of truth.
+
+A `chk_sam_removed_ge_added` CHECK rejects backwards date ranges at the row level. Closed assignments (`removed_date IS NOT NULL`) are exempt from the exclusion: a meter that was on SA-A 2023→2024 can validly be on SA-B 2024→onward.
 
 ### Status Lifecycle
 
