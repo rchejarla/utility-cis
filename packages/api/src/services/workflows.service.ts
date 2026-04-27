@@ -7,6 +7,7 @@ import type {
 } from "@utility-cis/shared";
 import { writeAuditRow } from "../lib/audit-wrap.js";
 import { generateNumber } from "../lib/number-generator.js";
+import { closeServiceAgreement } from "./effective-dating.service.js";
 
 /**
  * Cross-entity workflows. Each function wraps a multi-step business
@@ -82,11 +83,22 @@ export async function transferService(
       }
     }
 
-    // Close source
-    const closedSource = await tx.serviceAgreement.update({
-      where: { id: sourceAgreementId },
-      data: { status: "FINAL", endDate: transferDate },
-    });
+    // Close source via the cascade helper. This atomically marks the
+    // source SA as FINAL and sets `removed_date = transferDate` on every
+    // still-open SAM child — closing the silent-orphan gap where the
+    // old direct-update path left meter assignments dangling.
+    const { agreement: closedSource } = await closeServiceAgreement(
+      utilityId,
+      actorId,
+      actorName,
+      {
+        saId: sourceAgreementId,
+        endDate: transferDate,
+        status: "FINAL",
+        reason: `Transferred to account ${data.targetAccountId}`,
+      },
+      tx,
+    );
 
     // Create new agreement on target account, cloning the core fields.
     // If no explicit number was provided, generate from the tenant
@@ -349,7 +361,9 @@ export async function moveOut(
       );
     }
 
-    // Record final meter reads first
+    // Record final meter reads first, then cascade-close the SA. The
+    // cascade helper sets `removed_date` on every open SAM child in the
+    // same tx, replacing the per-SAM update loop the old code did inline.
     const readingsByMeter = new Map(
       data.finalMeterReadings.map((r) => [r.meterId, r.reading]),
     );
@@ -378,16 +392,20 @@ export async function moveOut(
             },
           });
         }
-        await tx.serviceAgreementMeter.update({
-          where: { id: am.id },
-          data: { removedDate: moveOutDate },
-        });
       }
 
-      await tx.serviceAgreement.update({
-        where: { id: sa.id },
-        data: { status: "FINAL", endDate: moveOutDate },
-      });
+      await closeServiceAgreement(
+        utilityId,
+        actorId,
+        actorName,
+        {
+          saId: sa.id,
+          endDate: moveOutDate,
+          status: "FINAL",
+          reason: `Move-out from premise ${data.premiseId}`,
+        },
+        tx,
+      );
     }
 
     // Optionally close the account
