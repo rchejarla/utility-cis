@@ -13,6 +13,7 @@ import { useToast } from "@/components/ui/toast";
 import { MetersTab } from "@/components/premises/meters-tab";
 import { AgreementsTab } from "@/components/premises/agreements-tab";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
+import { HistoryTimeline, type HistoryEvent } from "@/components/effective-dating/history-timeline";
 import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
@@ -54,6 +55,8 @@ interface Premise {
     agreementNumber: string;
     status: string;
     startDate: string;
+    endDate?: string | null;
+    commodity?: { id: string; name: string };
     account?: { accountNumber: string };
   }>;
 }
@@ -127,6 +130,15 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
+  const [history, setHistory] = useState<Array<{
+    id: string;
+    agreementNumber: string;
+    status: string;
+    startDate: string;
+    endDate: string | null;
+    commodity?: { id: string; name: string } | null;
+    account?: { id: string; accountNumber: string } | null;
+  }>>([]);
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
   const [editCustomFields, setEditCustomFields] = useState<Record<string, unknown>>({});
@@ -185,6 +197,12 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
           entityId: id,
         })
         .then((res) => setAudit(res.data ?? []))
+        .catch(console.error);
+    }
+    if (activeTab === "history") {
+      apiClient
+        .get<typeof history>(`/api/v1/premises/${id}/agreement-history`)
+        .then((res) => setHistory(res ?? []))
         .catch(console.error);
     }
   }, [activeTab, id]);
@@ -313,6 +331,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
           { key: "overview", label: "Overview" },
           { key: "meters", label: `Meters (${premise.meters?.length ?? 0})` },
           { key: "agreements", label: `Agreements (${premise.serviceAgreements?.length ?? 0})` },
+          { key: "history", label: "History" },
           { key: "attachments", label: "Attachments" },
           { key: "audit", label: "Audit" },
         ]}
@@ -754,6 +773,43 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
             showForm={showAddAgreement}
             onShowFormChange={setShowAddAgreement}
           />
+        )}
+
+        {activeTab === "history" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+            {(() => {
+              const byCommodity = new Map<string, { name: string; events: HistoryEvent[] }>();
+              for (const sa of history) {
+                const commodityKey = sa.commodity?.id ?? "_uncategorized";
+                const commodityName = sa.commodity?.name ?? "Other";
+                if (!byCommodity.has(commodityKey)) {
+                  byCommodity.set(commodityKey, { name: commodityName, events: [] });
+                }
+                byCommodity.get(commodityKey)!.events.push({
+                  id: sa.id,
+                  label: sa.agreementNumber,
+                  sublabel: sa.account?.accountNumber
+                    ? `Account ${sa.account.accountNumber}`
+                    : undefined,
+                  startDate: sa.startDate.slice(0, 10),
+                  endDate: sa.endDate ? sa.endDate.slice(0, 10) : null,
+                  status: sa.status,
+                  href: `/service-agreements/${sa.id}`,
+                });
+              }
+              const groups = [...byCommodity.values()];
+              if (groups.length === 0) {
+                return (
+                  <div style={{ color: "var(--text-muted)", fontSize: "13px", padding: "12px 0" }}>
+                    No service agreements have covered this premise yet.
+                  </div>
+                );
+              }
+              return groups.map((g) => (
+                <HistoryTimeline key={g.name} title={g.name} events={g.events} />
+              ));
+            })()}
+          </div>
         )}
 
         {activeTab === "attachments" && (

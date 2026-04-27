@@ -15,6 +15,7 @@ import { AttachmentsTab } from "@/components/ui/attachments-tab";
 import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
+import { HistoryTimeline, type HistoryEvent } from "@/components/effective-dating/history-timeline";
 
 interface Meter {
   id: string;
@@ -84,6 +85,19 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
+  const [history, setHistory] = useState<Array<{
+    id: string;
+    isPrimary: boolean;
+    addedDate: string;
+    removedDate: string | null;
+    serviceAgreement: {
+      id: string;
+      agreementNumber: string;
+      status: string;
+      account?: { id: string; accountNumber: string } | null;
+      premise?: { id: string; addressLine1: string } | null;
+    };
+  }>>([]);
 
   const loadMeter = async () => {
     try {
@@ -115,6 +129,15 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (activeTab === "history") {
+      apiClient
+        .get<typeof history>(`/api/v1/meters/${id}/assignment-history`)
+        .then((res) => setHistory(res ?? []))
+        .catch(console.error);
+    }
+  }, [activeTab, id]);
 
   const handleEdit = async () => {
     if (!meter) return;
@@ -215,6 +238,7 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
         tabs={[
           { key: "overview", label: "Overview" },
           { key: "agreements", label: `Agreements (${meter.serviceAgreementMeters?.length ?? 0})` },
+          { key: "history", label: "History" },
           { key: "attachments", label: "Attachments" },
         ]}
         activeTab={activeTab}
@@ -526,6 +550,29 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
             ]}
             data={(meter.serviceAgreementMeters ?? []) as any}
             onRowClick={(row: any) => router.push(`/service-agreements/${row.serviceAgreement.id}`)}
+          />
+        )}
+
+        {activeTab === "history" && (
+          <HistoryTimeline
+            events={history.map<HistoryEvent>((row) => ({
+              id: row.id,
+              label: row.serviceAgreement.agreementNumber,
+              sublabel: [
+                row.serviceAgreement.premise?.addressLine1,
+                row.serviceAgreement.account?.accountNumber
+                  ? `Account ${row.serviceAgreement.account.accountNumber}`
+                  : null,
+                row.isPrimary ? "Primary" : null,
+              ]
+                .filter(Boolean)
+                .join(" · "),
+              startDate: row.addedDate.slice(0, 10),
+              endDate: row.removedDate ? row.removedDate.slice(0, 10) : null,
+              status: row.serviceAgreement.status,
+              href: `/service-agreements/${row.serviceAgreement.id}`,
+            }))}
+            emptyMessage="This meter has not been assigned to any service agreement yet."
           />
         )}
 
