@@ -1,0 +1,432 @@
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import {
+  bootPostgres,
+  resetDb,
+  makeTenantFixture,
+  TENANT_A,
+  type TenantFixture,
+} from "./_effective-dating-fixtures.js";
+
+/**
+ * Real-database verification of the Slice 1 DB constraints:
+ *
+ *   1. `no_overlapping_active_sa` — partial GIST exclusion preventing
+ *      two PENDING/ACTIVE SAs from sharing time on the same
+ *      (utility, account, premise, commodity).
+ *   2. `no_double_assigned_meter` — same pattern on
+ *      service_agreement_meter, scoped (utility, meter).
+ *   3. `chk_sa_end_ge_start` / `chk_sam_removed_ge_added` — backwards
+ *      ranges rejected at the row level.
+ *   4. `enforce_sa_lifecycle_invariants` trigger — terminal status
+ *      requires endDate; setting endDate alone while still ACTIVE is
+ *      rejected; bundling endDate + terminal-status succeeds.
+ *
+ * Mocked Prisma cannot exercise these — the constraints live in
+ * Postgres. Each test fires a real INSERT/UPDATE through Prisma and
+ * asserts the right SQLSTATE / message bubbles up.
+ */
+
+let pgContainer: StartedPostgreSqlContainer;
+let prismaImports: typeof import("../../lib/prisma.js");
+let fixA: TenantFixture;
+
+beforeAll(async () => {
+  const booted = await bootPostgres();
+  pgContainer = booted.container;
+  prismaImports = await import("../../lib/prisma.js");
+}, 180_000);
+
+afterAll(async () => {
+  await prismaImports?.prisma.$disconnect().catch(() => {});
+  await pgContainer?.stop().catch(() => {});
+});
+
+beforeEach(async () => {
+  const { prisma } = prismaImports;
+  await resetDb(prisma);
+  fixA = await makeTenantFixture(prisma, TENANT_A);
+});
+
+describe("no_overlapping_active_sa exclusion constraint", () => {
+  it("rejects a second ACTIVE SA whose date range overlaps an existing one for the same (utility, account, premise, commodity)", async () => {
+    const { prisma } = prismaImports;
+
+    await prisma.serviceAgreement.create({
+      data: {
+        utilityId: fixA.utilityId,
+        agreementNumber: "SA-OVERLAP-1",
+        accountId: fixA.accountId,
+        premiseId: fixA.premiseId,
+        commodityId: fixA.commodityId,
+        rateScheduleId: fixA.rateScheduleId,
+        billingCycleId: fixA.billingCycleId,
+        startDate: new Date("2024-01-01"),
+        endDate: new Date("2024-12-31"),
+        status: "ACTIVE",
+      },
+    });
+
+    await expect(
+      prisma.serviceAgreement.create({
+        data: {
+          utilityId: fixA.utilityId,
+          agreementNumber: "SA-OVERLAP-2",
+          accountId: fixA.accountId,
+          premiseId: fixA.premiseId,
+          commodityId: fixA.commodityId,
+          rateScheduleId: fixA.rateScheduleId,
+          billingCycleId: fixA.billingCycleId,
+          startDate: new Date("2024-06-01"), // overlaps mid-range
+          endDate: new Date("2025-06-01"),
+          status: "ACTIVE",
+        },
+      }),
+    ).rejects.toThrow(/no_overlapping_active_sa|exclusion/);
+  });
+
+  it("allows a successor SA that starts the day the predecessor ends (half-open [) range)", async () => {
+    const { prisma } = prismaImports;
+
+    await prisma.serviceAgreement.create({
+      data: {
+        utilityId: fixA.utilityId,
+        agreementNumber: "SA-SEQ-1",
+        accountId: fixA.accountId,
+        premiseId: fixA.premiseId,
+        commodityId: fixA.commodityId,
+        rateScheduleId: fixA.rateScheduleId,
+        billingCycleId: fixA.billingCycleId,
+        startDate: new Date("2024-01-01"),
+        endDate: new Date("2024-12-31"),
+        status: "ACTIVE",
+      },
+    });
+
+    // Successor starts on 2024-12-31 — same day as predecessor's
+    // endDate, but the half-open `[)` range means the predecessor
+    // doesn't include 2024-12-31. They abut, don't overlap.
+    await expect(
+      prisma.serviceAgreement.create({
+        data: {
+          utilityId: fixA.utilityId,
+          agreementNumber: "SA-SEQ-2",
+          accountId: fixA.accountId,
+          premiseId: fixA.premiseId,
+          commodityId: fixA.commodityId,
+          rateScheduleId: fixA.rateScheduleId,
+          billingCycleId: fixA.billingCycleId,
+          startDate: new Date("2024-12-31"),
+          status: "ACTIVE",
+        },
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("does NOT block a closed (FINAL/CLOSED) SA from coexisting with a new ACTIVE SA in the same window", async () => {
+    const { prisma } = prismaImports;
+
+    // First SA: closed, historical.
+    await prisma.serviceAgreement.create({
+      data: {
+        utilityId: fixA.utilityId,
+        agreementNumber: "SA-HIST-1",
+        accountId: fixA.accountId,
+        premiseId: fixA.premiseId,
+        commodityId: fixA.commodityId,
+        rateScheduleId: fixA.rateScheduleId,
+        billingCycleId: fixA.billingCycleId,
+        startDate: new Date("2024-01-01"),
+        endDate: new Date("2024-06-30"),
+        status: "FINAL",
+      },
+    });
+
+    // Second SA: ACTIVE, overlapping the closed one's date range.
+    // The exclusion is partial WHERE status IN ('PENDING','ACTIVE'),
+    // so the FINAL row is invisible to the predicate.
+    await expect(
+      prisma.serviceAgreement.create({
+        data: {
+          utilityId: fixA.utilityId,
+          agreementNumber: "SA-HIST-2",
+          accountId: fixA.accountId,
+          premiseId: fixA.premiseId,
+          commodityId: fixA.commodityId,
+          rateScheduleId: fixA.rateScheduleId,
+          billingCycleId: fixA.billingCycleId,
+          startDate: new Date("2024-03-01"),
+          status: "ACTIVE",
+        },
+      }),
+    ).resolves.toBeDefined();
+  });
+});
+
+describe("no_double_assigned_meter exclusion constraint", () => {
+  it("rejects creating a second open SAM for a meter already on an open SAM", async () => {
+    const { prisma } = prismaImports;
+
+    const sa1 = await prisma.serviceAgreement.create({
+      data: {
+        utilityId: fixA.utilityId,
+        agreementNumber: "SA-MTR-1",
+        accountId: fixA.accountId,
+        premiseId: fixA.premiseId,
+        commodityId: fixA.commodityId,
+        rateScheduleId: fixA.rateScheduleId,
+        billingCycleId: fixA.billingCycleId,
+        startDate: new Date("2024-01-01"),
+        status: "ACTIVE",
+      },
+    });
+
+    await prisma.serviceAgreementMeter.create({
+      data: {
+        utilityId: fixA.utilityId,
+        serviceAgreementId: sa1.id,
+        meterId: fixA.meterId,
+        addedDate: new Date("2024-01-01"),
+        isPrimary: true,
+      },
+    });
+
+    // Different SA, same meter, still open — must be rejected.
+    const sa2 = await prisma.serviceAgreement.create({
+      data: {
+        utilityId: fixA.utilityId,
+        agreementNumber: "SA-MTR-2",
+        accountId: fixA.accountId,
+        premiseId: fixA.premiseId,
+        commodityId: fixA.commodityId,
+        rateScheduleId: fixA.rateScheduleId,
+        billingCycleId: fixA.billingCycleId,
+        startDate: new Date("2024-01-01"),
+        endDate: new Date("2024-12-31"),
+        status: "FINAL", // doesn't trigger SA exclusion
+      },
+    });
+
+    await expect(
+      prisma.serviceAgreementMeter.create({
+        data: {
+          utilityId: fixA.utilityId,
+          serviceAgreementId: sa2.id,
+          meterId: fixA.meterId, // same meter — conflict
+          addedDate: new Date("2024-06-01"),
+          isPrimary: true,
+        },
+      }),
+    ).rejects.toThrow(/no_double_assigned_meter|exclusion/);
+  });
+
+  it("allows reassigning a meter after the prior assignment has a removed_date", async () => {
+    const { prisma } = prismaImports;
+
+    const sa1 = await prisma.serviceAgreement.create({
+      data: {
+        utilityId: fixA.utilityId,
+        agreementNumber: "SA-REASSIGN-1",
+        accountId: fixA.accountId,
+        premiseId: fixA.premiseId,
+        commodityId: fixA.commodityId,
+        rateScheduleId: fixA.rateScheduleId,
+        billingCycleId: fixA.billingCycleId,
+        startDate: new Date("2024-01-01"),
+        endDate: new Date("2024-06-30"),
+        status: "FINAL",
+      },
+    });
+
+    await prisma.serviceAgreementMeter.create({
+      data: {
+        utilityId: fixA.utilityId,
+        serviceAgreementId: sa1.id,
+        meterId: fixA.meterId,
+        addedDate: new Date("2024-01-01"),
+        removedDate: new Date("2024-06-30"), // closed assignment
+        isPrimary: true,
+      },
+    });
+
+    const sa2 = await prisma.serviceAgreement.create({
+      data: {
+        utilityId: fixA.utilityId,
+        agreementNumber: "SA-REASSIGN-2",
+        accountId: fixA.accountId,
+        premiseId: fixA.premiseId,
+        commodityId: fixA.commodityId,
+        rateScheduleId: fixA.rateScheduleId,
+        billingCycleId: fixA.billingCycleId,
+        startDate: new Date("2024-07-01"),
+        status: "ACTIVE",
+      },
+    });
+
+    await expect(
+      prisma.serviceAgreementMeter.create({
+        data: {
+          utilityId: fixA.utilityId,
+          serviceAgreementId: sa2.id,
+          meterId: fixA.meterId,
+          addedDate: new Date("2024-07-01"),
+          isPrimary: true,
+        },
+      }),
+    ).resolves.toBeDefined();
+  });
+});
+
+describe("CHECK constraints reject backwards date ranges", () => {
+  // Backwards date ranges are rejected by TWO mechanisms — whichever
+  // fires first is fine. The `effective_range` generated tsrange column
+  // raises "range lower bound must be less than or equal to range
+  // upper bound" (SQLSTATE 22000) before the CHECK constraint gets a
+  // turn. Both prove the DB structurally rejects the row.
+  it("rejects an SA with endDate < startDate (CHECK or tsrange constructor)", async () => {
+    const { prisma } = prismaImports;
+
+    await expect(
+      prisma.serviceAgreement.create({
+        data: {
+          utilityId: fixA.utilityId,
+          agreementNumber: "SA-BACKWARDS",
+          accountId: fixA.accountId,
+          premiseId: fixA.premiseId,
+          commodityId: fixA.commodityId,
+          rateScheduleId: fixA.rateScheduleId,
+          billingCycleId: fixA.billingCycleId,
+          startDate: new Date("2024-12-31"),
+          endDate: new Date("2024-01-01"),
+          status: "FINAL",
+        },
+      }),
+    ).rejects.toThrow(/chk_sa_end_ge_start|check|range lower bound/i);
+  });
+
+  it("rejects a SAM with removedDate < addedDate (CHECK or tsrange constructor)", async () => {
+    const { prisma } = prismaImports;
+
+    const sa = await prisma.serviceAgreement.create({
+      data: {
+        utilityId: fixA.utilityId,
+        agreementNumber: "SA-OK",
+        accountId: fixA.accountId,
+        premiseId: fixA.premiseId,
+        commodityId: fixA.commodityId,
+        rateScheduleId: fixA.rateScheduleId,
+        billingCycleId: fixA.billingCycleId,
+        startDate: new Date("2024-01-01"),
+        status: "ACTIVE",
+      },
+    });
+
+    await expect(
+      prisma.serviceAgreementMeter.create({
+        data: {
+          utilityId: fixA.utilityId,
+          serviceAgreementId: sa.id,
+          meterId: fixA.meterId,
+          addedDate: new Date("2024-12-31"),
+          removedDate: new Date("2024-01-01"),
+        },
+      }),
+    ).rejects.toThrow(/chk_sam_removed_ge_added|check|range lower bound/i);
+  });
+});
+
+describe("enforce_sa_lifecycle_invariants trigger", () => {
+  it("rejects INSERT setting status FINAL with endDate IS NULL", async () => {
+    const { prisma } = prismaImports;
+
+    await expect(
+      prisma.serviceAgreement.create({
+        data: {
+          utilityId: fixA.utilityId,
+          agreementNumber: "SA-FINAL-NO-END",
+          accountId: fixA.accountId,
+          premiseId: fixA.premiseId,
+          commodityId: fixA.commodityId,
+          rateScheduleId: fixA.rateScheduleId,
+          billingCycleId: fixA.billingCycleId,
+          startDate: new Date("2024-01-01"),
+          status: "FINAL", // no endDate
+        },
+      }),
+    ).rejects.toThrow(/SA_LIFECYCLE_INVARIANT_VIOLATION|requires end_date/);
+  });
+
+  it("rejects UPDATE setting endDate while status remains ACTIVE", async () => {
+    const { prisma } = prismaImports;
+
+    const sa = await prisma.serviceAgreement.create({
+      data: {
+        utilityId: fixA.utilityId,
+        agreementNumber: "SA-OPEN",
+        accountId: fixA.accountId,
+        premiseId: fixA.premiseId,
+        commodityId: fixA.commodityId,
+        rateScheduleId: fixA.rateScheduleId,
+        billingCycleId: fixA.billingCycleId,
+        startDate: new Date("2024-01-01"),
+        status: "ACTIVE",
+      },
+    });
+
+    // Set endDate without moving status to terminal — must throw.
+    await expect(
+      prisma.serviceAgreement.update({
+        where: { id: sa.id },
+        data: { endDate: new Date("2024-12-31") },
+      }),
+    ).rejects.toThrow(/SA_LIFECYCLE_INVARIANT_VIOLATION|cannot set end_date/);
+  });
+
+  it("accepts UPDATE bundling endDate + status=FINAL together", async () => {
+    const { prisma } = prismaImports;
+
+    const sa = await prisma.serviceAgreement.create({
+      data: {
+        utilityId: fixA.utilityId,
+        agreementNumber: "SA-BUNDLE",
+        accountId: fixA.accountId,
+        premiseId: fixA.premiseId,
+        commodityId: fixA.commodityId,
+        rateScheduleId: fixA.rateScheduleId,
+        billingCycleId: fixA.billingCycleId,
+        startDate: new Date("2024-01-01"),
+        status: "ACTIVE",
+      },
+    });
+
+    await expect(
+      prisma.serviceAgreement.update({
+        where: { id: sa.id },
+        data: { endDate: new Date("2024-12-31"), status: "FINAL" },
+      }),
+    ).resolves.toMatchObject({ status: "FINAL" });
+  });
+
+  it("accepts INSERT with PENDING/ACTIVE status and a populated endDate (e.g., short-term construction water)", async () => {
+    const { prisma } = prismaImports;
+
+    // The trigger's UPDATE rule doesn't fire on INSERT — short-term
+    // SAs created with a known end exist legitimately.
+    await expect(
+      prisma.serviceAgreement.create({
+        data: {
+          utilityId: fixA.utilityId,
+          agreementNumber: "SA-SHORT-TERM",
+          accountId: fixA.accountId,
+          premiseId: fixA.premiseId,
+          commodityId: fixA.commodityId,
+          rateScheduleId: fixA.rateScheduleId,
+          billingCycleId: fixA.billingCycleId,
+          startDate: new Date("2024-06-01"),
+          endDate: new Date("2024-09-30"),
+          status: "ACTIVE",
+        },
+      }),
+    ).resolves.toMatchObject({ status: "ACTIVE", endDate: new Date("2024-09-30") });
+  });
+});

@@ -27,7 +27,7 @@ export default defineConfig({
     //   - audit-wrap.integration.test.ts — atomicity verification
     include: [
       "src/__tests__/integration/worker-*.test.ts",
-      "src/__tests__/integration/audit-wrap.integration.test.ts",
+      "src/__tests__/integration/*.integration.test.ts",
     ],
     // No setupFiles — integration tests handle their own container
     // lifecycle via beforeAll/afterAll.
