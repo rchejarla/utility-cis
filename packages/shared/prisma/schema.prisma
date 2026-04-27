@@ -371,6 +371,10 @@ model ServiceAgreement {
   customFields    Json                   @default("{}") @map("custom_fields")
   createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz
   updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz
+  /// Generated tsrange [start_date, end_date) — DB-managed, read-only at the
+  /// application layer. Source of truth for the no_overlapping_active_sa
+  /// exclusion constraint. Service code uses start_date/end_date directly.
+  effectiveRange  Unsupported("tsrange")? @map("effective_range")
 
   // Relations
   account         Account                 @relation(fields: [accountId], references: [id], onDelete: Restrict)
@@ -404,6 +408,10 @@ model ServiceAgreementMeter {
   addedDate          DateTime  @map("added_date") @db.Date
   removedDate        DateTime? @map("removed_date") @db.Date
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  /// Generated tsrange [added_date, removed_date) — DB-managed, read-only.
+  /// Source of truth for the no_double_assigned_meter exclusion. Service
+  /// code uses added_date/removed_date directly.
+  effectiveRange     Unsupported("tsrange")? @map("effective_range")
 
   // Relations
   serviceAgreement ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Cascade)
