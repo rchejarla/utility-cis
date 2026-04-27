@@ -48,15 +48,27 @@ export const createServiceAgreementSchema = z.object({
   customFields: z.record(z.unknown()).optional(),
 }).strict();
 
-// Update schemas intentionally strip unknown keys (forgiving PATCH semantics).
+// Generic PATCH cannot drift the SA into a different lifecycle state.
+// `startDate`, `endDate`, `status` are intentionally absent — closing
+// an SA goes through `POST /api/v1/service-agreements/:id/close`,
+// which calls `closeServiceAgreement` and cascades the close onto
+// child meter assignments atomically. Keeping these fields out of the
+// PATCH schema is the first line of defense; the DB-level lifecycle
+// invariant trigger (`enforce_sa_lifecycle_invariants`) is the second.
+// `.strict()` so passing a removed field returns 422 instead of being
+// silently stripped — the deprecation needs to be visible.
 export const updateServiceAgreementSchema = z.object({
   rateScheduleId: z.string().uuid().optional(),
   billingCycleId: z.string().uuid().optional(),
-  endDate: z.string().date().optional(),
-  status: agreementStatusEnum.optional(),
   readSequence: z.number().int().optional(),
   customFields: z.record(z.unknown()).optional(),
-});
+}).strict();
+
+export const closeServiceAgreementSchema = z.object({
+  endDate: z.string().date(),
+  status: z.enum(["FINAL", "CLOSED"]),
+  reason: z.string().max(500).optional(),
+}).strict();
 
 export const addMeterToAgreementSchema = z.object({
   meterId: z.string().uuid(),
@@ -83,6 +95,7 @@ export const serviceAgreementQuerySchema = z.object({
 export type MeterAssignment = z.infer<typeof meterAssignmentSchema>;
 export type CreateServiceAgreementInput = z.infer<typeof createServiceAgreementSchema>;
 export type UpdateServiceAgreementInput = z.infer<typeof updateServiceAgreementSchema>;
+export type CloseServiceAgreementInput = z.infer<typeof closeServiceAgreementSchema>;
 export type AddMeterToAgreementInput = z.infer<typeof addMeterToAgreementSchema>;
 export type UpdateAgreementMeterInput = z.infer<typeof updateAgreementMeterSchema>;
 export type ServiceAgreementQuery = z.infer<typeof serviceAgreementQuerySchema>;

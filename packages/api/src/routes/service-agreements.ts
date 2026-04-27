@@ -4,6 +4,7 @@ import {
   updateServiceAgreementSchema,
   serviceAgreementQuerySchema,
   addMeterToAgreementSchema,
+  closeServiceAgreementSchema,
 } from "@utility-cis/shared";
 import { z } from "zod";
 import { idParamSchema } from "../lib/route-schemas.js";
@@ -20,6 +21,7 @@ import {
   addMeterToAgreement,
   removeMeterFromAgreement,
 } from "../services/service-agreement.service.js";
+import { closeServiceAgreement } from "../services/effective-dating.service.js";
 
 export async function serviceAgreementRoutes(app: FastifyInstance) {
   app.get("/api/v1/service-agreements", { config: { module: "agreements", permission: "VIEW" } }, async (request, reply) => {
@@ -50,6 +52,26 @@ export async function serviceAgreementRoutes(app: FastifyInstance) {
     const agreement = await updateServiceAgreement(utilityId, actorId, actorName, id, data);
     return reply.send(agreement);
   });
+
+  // Cascading close: terminal-status the SA AND set removed_date on
+  // every still-open meter assignment, in one transaction. Replaces
+  // the now-rejected lifecycle fields on PATCH.
+  app.post(
+    "/api/v1/service-agreements/:id/close",
+    { config: { module: "agreements", permission: "EDIT" } },
+    async (request, reply) => {
+      const { utilityId, id: actorId, name: actorName } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      const data = closeServiceAgreementSchema.parse(request.body);
+      const result = await closeServiceAgreement(utilityId, actorId, actorName, {
+        saId: id,
+        endDate: new Date(data.endDate),
+        status: data.status,
+        reason: data.reason,
+      });
+      return reply.send(result);
+    },
+  );
 
   // Add meter to agreement
   app.post("/api/v1/service-agreements/:id/meters", { config: { module: "agreements", permission: "EDIT" } }, async (request, reply) => {

@@ -236,6 +236,61 @@ describe("Request validation", () => {
       const body = JSON.parse(response.body);
       expect(body.error.code).toBe("VALIDATION_ERROR");
     });
+
+    // Lifecycle fields are NOT settable via PATCH — closing/transitioning
+    // an SA goes through `POST /:id/close` (or future transitional
+    // endpoints). These tests assert the strict-schema rejection.
+    it("rejects PATCH that tries to set endDate", async () => {
+      const app = await createTestApp();
+      const response = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/service-agreements/550e8400-e29b-41d4-a716-446655440000",
+        headers,
+        payload: { endDate: "2026-05-01" },
+      });
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("rejects PATCH that tries to set status", async () => {
+      const app = await createTestApp();
+      const response = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/service-agreements/550e8400-e29b-41d4-a716-446655440000",
+        headers,
+        payload: { status: "FINAL" },
+      });
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("rejects POST /:id/close without endDate", async () => {
+      const app = await createTestApp();
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/service-agreements/550e8400-e29b-41d4-a716-446655440000/close",
+        headers,
+        payload: { status: "FINAL" },
+      });
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("rejects POST /:id/close with non-terminal status", async () => {
+      const app = await createTestApp();
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/service-agreements/550e8400-e29b-41d4-a716-446655440000/close",
+        headers,
+        payload: { endDate: "2026-05-01", status: "ACTIVE" },
+      });
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe("VALIDATION_ERROR");
+    });
   });
 
   describe("Rate Schedules", () => {

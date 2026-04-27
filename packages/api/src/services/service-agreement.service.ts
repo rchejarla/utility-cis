@@ -1,7 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { generateNumber } from "../lib/number-generator.js";
 import { validateCustomFields } from "./custom-field-schema.service.js";
-import { EVENT_TYPES, isValidStatusTransition } from "@utility-cis/shared";
+import { EVENT_TYPES } from "@utility-cis/shared";
 import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
 import type {
   CreateServiceAgreementInput,
@@ -200,22 +200,15 @@ export async function updateServiceAgreement(
     where: { id, utilityId },
   });
 
-  // Validate status transition if status is changing
-  if (data.status !== undefined && data.status !== before.status) {
-    if (!isValidStatusTransition(before.status as Parameters<typeof isValidStatusTransition>[0], data.status)) {
-      throw Object.assign(
-        new Error(`Invalid status transition from ${before.status} to ${data.status}`),
-        { statusCode: 400, code: "INVALID_STATUS_TRANSITION" }
-      );
-    }
-  }
-
-  // Build update data from non-undefined fields
+  // Lifecycle fields (startDate, endDate, status) are NOT settable via
+  // generic PATCH. The Zod schema rejects them at the route layer; this
+  // service builds its update payload only from non-lifecycle fields.
+  // Closing an SA goes through `closeServiceAgreement` (in
+  // effective-dating.service.ts) which cascades onto child meter
+  // assignments — see FR-EFF-006.
   const updateData: Record<string, unknown> = {};
   if (data.rateScheduleId !== undefined) updateData.rateScheduleId = data.rateScheduleId;
   if (data.billingCycleId !== undefined) updateData.billingCycleId = data.billingCycleId;
-  if (data.endDate !== undefined) updateData.endDate = new Date(data.endDate);
-  if (data.status !== undefined) updateData.status = data.status;
   if (data.readSequence !== undefined) updateData.readSequence = data.readSequence;
 
   // Custom fields: validate against tenant schema and merge with
