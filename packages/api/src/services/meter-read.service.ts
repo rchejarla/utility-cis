@@ -9,8 +9,7 @@ import type {
   ResolveExceptionInput,
 } from "@utility-cis/shared";
 import { paginatedTenantList } from "../lib/pagination.js";
-import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
-import { domainEvents } from "../events/emitter.js";
+import { auditCreate, auditUpdate, writeAuditRow } from "../lib/audit-wrap.js";
 
 /**
  * Meter-read business logic. The service layer owns the rules the spec
@@ -46,28 +45,6 @@ const fullInclude = {
   },
   register: true,
 } as const;
-
-function emitMeterReadEvent(
-  type: "meter_read.created" | "meter_read.updated" | "meter_read.corrected",
-  utilityId: string,
-  actorId: string,
-  actorName: string | undefined,
-  entityId: string,
-  before: unknown,
-  after: unknown,
-): void {
-  domainEvents.emitDomainEvent({
-    type,
-    entityType: "MeterRead",
-    entityId,
-    utilityId,
-    actorId,
-    actorName,
-    beforeState: (before as Record<string, unknown> | null) ?? null,
-    afterState: (after as Record<string, unknown>) ?? null,
-    timestamp: new Date().toISOString(),
-  });
-}
 
 export async function listMeterReads(utilityId: string, query: MeterReadQuery) {
   const where: Record<string, unknown> = { utilityId };
@@ -349,8 +326,8 @@ export async function createMeterRead(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "MeterRead" },
     EVENT_TYPES.METER_CREATED,
-    () =>
-      prisma.meterRead.create({
+    (tx) =>
+      tx.meterRead.create({
         data: {
           utilityId,
           meterId: data.meterId,
@@ -513,22 +490,21 @@ export async function createMeterReadEvent(
       );
     }
 
+    // Emit one audit row per created MeterRead in the same transaction
+    // so the rows and their audit entries commit atomically.
+    for (const row of rows) {
+      await writeAuditRow(
+        tx,
+        { utilityId, actorId, actorName, entityType: "MeterRead" },
+        EVENT_TYPES.METER_CREATED,
+        row.id,
+        null,
+        row,
+      );
+    }
+
     return rows;
   });
-
-  for (const row of created) {
-    domainEvents.emitDomainEvent({
-      type: EVENT_TYPES.METER_CREATED,
-      entityType: "MeterRead",
-      entityId: row.id,
-      utilityId,
-      actorId,
-      actorName,
-      beforeState: null,
-      afterState: row as unknown as Record<string, unknown>,
-      timestamp: new Date().toISOString(),
-    });
-  }
 
   return {
     readEventId,
@@ -581,37 +557,38 @@ export async function correctMeterRead(
     select: { uomId: true },
   });
 
-  const corrected = await prisma.meterRead.create({
-    data: {
-      utilityId,
-      meterId: original.meterId,
-      serviceAgreementId: original.serviceAgreementId,
-      registerId: original.registerId,
-      uomId: meter.uomId,
-      readDate,
-      readDatetime,
-      reading: data.reading,
-      priorReading,
-      consumption,
-      readType: "CORRECTED",
-      readSource: original.readSource,
-      exceptionCode: autoException,
-      exceptionNotes: data.exceptionNotes,
-      readerId: actorId,
-      correctsReadId: original.id,
-    },
-    include: fullInclude,
+  const corrected = await prisma.$transaction(async (tx) => {
+    const row = await tx.meterRead.create({
+      data: {
+        utilityId,
+        meterId: original.meterId,
+        serviceAgreementId: original.serviceAgreementId,
+        registerId: original.registerId,
+        uomId: meter.uomId,
+        readDate,
+        readDatetime,
+        reading: data.reading,
+        priorReading,
+        consumption,
+        readType: "CORRECTED",
+        readSource: original.readSource,
+        exceptionCode: autoException,
+        exceptionNotes: data.exceptionNotes,
+        readerId: actorId,
+        correctsReadId: original.id,
+      },
+      include: fullInclude,
+    });
+    await writeAuditRow(
+      tx,
+      { utilityId, actorId, actorName, entityType: "MeterRead" },
+      "meter_read.corrected",
+      row.id,
+      original,
+      row,
+    );
+    return row;
   });
-
-  emitMeterReadEvent(
-    "meter_read.corrected",
-    utilityId,
-    actorId,
-    actorName,
-    corrected.id,
-    original,
-    corrected,
-  );
 
   return corrected;
 }
@@ -660,19 +637,19 @@ export async function deleteMeterRead(
     );
   }
 
-  await prisma.meterRead.deleteMany({
-    where: { id, utilityId, readDatetime: before.readDatetime },
+  await prisma.$transaction(async (tx) => {
+    await tx.meterRead.deleteMany({
+      where: { id, utilityId, readDatetime: before.readDatetime },
+    });
+    await writeAuditRow(
+      tx,
+      { utilityId, actorId, actorName, entityType: "MeterRead" },
+      "meter_read.updated",
+      before.id,
+      before,
+      null,
+    );
   });
-
-  emitMeterReadEvent(
-    "meter_read.updated",
-    utilityId,
-    actorId,
-    actorName,
-    before.id,
-    before,
-    null,
-  );
 }
 
 /**
@@ -707,8 +684,8 @@ export async function resolveException(
     { utilityId, actorId, actorName, entityType: "MeterRead" },
     EVENT_TYPES.METER_UPDATED,
     before,
-    () =>
-      prisma.meterRead.updateMany({
+    async (tx) => {
+      await tx.meterRead.updateMany({
         where: { id, utilityId, readDatetime: before.readDatetime },
         data: {
           exceptionCode: shouldClearCode ? null : before.exceptionCode,
@@ -716,14 +693,13 @@ export async function resolveException(
             ? `[${data.resolution}] ${data.notes}`
             : before.exceptionNotes,
         },
-      }).then(async () =>
-        prisma.meterRead.findFirst({
-          where: { id, utilityId },
-          include: fullInclude,
-        }).then((r) => {
-          if (!r) throw new Error("Meter read vanished after update");
-          return r;
-        }),
-      ),
+      });
+      const r = await tx.meterRead.findFirst({
+        where: { id, utilityId },
+        include: fullInclude,
+      });
+      if (!r) throw new Error("Meter read vanished after update");
+      return r;
+    },
   );
 }

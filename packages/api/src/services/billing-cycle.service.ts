@@ -25,7 +25,7 @@ export async function createBillingCycle(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "BillingCycle" },
     EVENT_TYPES.BILLING_CYCLE_CREATED,
-    () => prisma.billingCycle.create({ data: { ...data, utilityId } })
+    (tx) => tx.billingCycle.create({ data: { ...data, utilityId } })
   );
 }
 
@@ -41,6 +41,6 @@ export async function updateBillingCycle(
     { utilityId, actorId, actorName, entityType: "BillingCycle" },
     EVENT_TYPES.BILLING_CYCLE_UPDATED,
     before,
-    () => prisma.billingCycle.update({ where: { id, utilityId }, data })
+    (tx) => tx.billingCycle.update({ where: { id, utilityId }, data })
   );
 }

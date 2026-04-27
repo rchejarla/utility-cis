@@ -65,8 +65,8 @@ export async function createCustomer(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "Customer" },
     EVENT_TYPES.CUSTOMER_CREATED,
-    () =>
-      prisma.customer.create({
+    (tx) =>
+      tx.customer.create({
         data: {
           ...core,
           utilityId,
@@ -103,8 +103,8 @@ export async function updateCustomer(
     { utilityId, actorId, actorName, entityType: "Customer" },
     EVENT_TYPES.CUSTOMER_UPDATED,
     before,
-    () =>
-      prisma.customer.update({
+    (tx) =>
+      tx.customer.update({
         where: { id, utilityId },
         data: { ...core, customFields: mergedCustom as object },
       }),

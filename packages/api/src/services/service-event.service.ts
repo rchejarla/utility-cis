@@ -107,8 +107,8 @@ export async function createServiceEvent(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "ServiceEvent" },
     EVENT_TYPES.SERVICE_AGREEMENT_CREATED,
-    () =>
-      prisma.serviceEvent.create({
+    (tx) =>
+      tx.serviceEvent.create({
         data: {
           utilityId,
           premiseId: data.premiseId,
@@ -142,8 +142,8 @@ export async function resolveServiceEvent(
     { utilityId, actorId, actorName, entityType: "ServiceEvent" },
     EVENT_TYPES.SERVICE_AGREEMENT_UPDATED,
     before,
-    () =>
-      prisma.serviceEvent.update({
+    (tx) =>
+      tx.serviceEvent.update({
         where: { id },
         data: {
           status: "RESOLVED",

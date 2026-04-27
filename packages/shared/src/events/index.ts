@@ -1,15 +1,16 @@
-export interface DomainEvent {
-  type: string;
-  entityType: string;
-  entityId: string;
-  utilityId: string;
-  actorId: string;
-  actorName?: string;
-  beforeState: Record<string, unknown> | null;
-  afterState: Record<string, unknown> | null;
-  timestamp: string;
-}
-
+/**
+ * Canonical event-type strings used by the audit-wrap helpers in the
+ * API package. The audit_log row's `metadata.eventType` stores one of
+ * these values per row. The `<entity>.created` / `<entity>.updated` /
+ * `<entity>.deleted` shape is parsed into the audit `action` column
+ * (CREATE/UPDATE/DELETE) by the wrapper.
+ *
+ * The `DomainEvent` interface that previously rode alongside these
+ * constants was removed when the EventEmitter audit pipeline was
+ * deleted (commit refactor(audit): replace EventEmitter pipeline with
+ * in-transaction audit writes). The constants stay because every
+ * service still passes one to auditCreate/auditUpdate.
+ */
 export const EVENT_TYPES = {
   COMMODITY_CREATED: "commodity.created",
   COMMODITY_UPDATED: "commodity.updated",

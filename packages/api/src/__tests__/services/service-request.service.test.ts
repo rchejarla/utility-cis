@@ -1,9 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("../../lib/audit-wrap.js", () => ({
-  auditCreate: vi.fn(async (_c, _e, fn) => fn()),
-  auditUpdate: vi.fn(async (_c, _e, _b, fn) => fn()),
-}));
+// Pass-through audit mock — invokes the lambda with the prisma mock as
+// the `tx` argument so callers using `tx.foo.method(...)` resolve
+// against the same mock surface as before. The dynamic import inside
+// the factory is required because vi.mock is hoisted above the static
+// `import { prisma }` below.
+vi.mock("../../lib/audit-wrap.js", async () => {
+  const { prisma } = await import("../../lib/prisma.js");
+  return {
+    auditCreate: vi.fn(async (_c: unknown, _e: unknown, fn: (tx: unknown) => unknown) => fn(prisma)),
+    auditUpdate: vi.fn(async (_c: unknown, _e: unknown, _b: unknown, fn: (tx: unknown) => unknown) => fn(prisma)),
+    writeAuditRow: vi.fn(async () => undefined),
+  };
+});
 
 const assertTypeMock = vi.fn();
 vi.mock("../../services/service-request-type-def.service.js", () => ({

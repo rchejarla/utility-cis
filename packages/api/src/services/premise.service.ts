@@ -142,8 +142,8 @@ export async function createPremise(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "Premise" },
     EVENT_TYPES.PREMISE_CREATED,
-    () =>
-      prisma.premise.create({
+    (tx) =>
+      tx.premise.create({
         data: { ...core, utilityId, customFields: validatedCustom as object },
       }),
   );
@@ -170,8 +170,8 @@ export async function updatePremise(
     { utilityId, actorId, actorName, entityType: "Premise" },
     EVENT_TYPES.PREMISE_UPDATED,
     before,
-    () =>
-      prisma.premise.update({
+    (tx) =>
+      tx.premise.update({
         where: { id, utilityId },
         data: { ...core, customFields: mergedCustom as object },
       }),

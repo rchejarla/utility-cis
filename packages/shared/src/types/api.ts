@@ -18,4 +18,3 @@ export interface ApiError {
   };
 }
 
-// DomainEvent is defined in events/index.ts and re-exported from the package root

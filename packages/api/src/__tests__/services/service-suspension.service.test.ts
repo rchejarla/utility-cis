@@ -2,11 +2,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock audit-wrap to pass-through so we don't need the domain event
 // emitter to be configured for these unit tests. The actual audit
-// behaviour is covered by audit-wrap.test.ts.
-vi.mock("../../lib/audit-wrap.js", () => ({
-  auditCreate: vi.fn(async (_ctx: unknown, _evt: unknown, fn: () => unknown) => fn()),
-  auditUpdate: vi.fn(async (_ctx: unknown, _evt: unknown, _before: unknown, fn: () => unknown) => fn()),
-}));
+// behaviour is covered by audit-wrap.test.ts. The lambda is invoked
+// with the mocked prisma as `tx` so service code calling
+// `tx.foo.method(...)` resolves against the same mock surface.
+vi.mock("../../lib/audit-wrap.js", async () => {
+  const { prisma } = await import("../../lib/prisma.js");
+  return {
+    auditCreate: vi.fn(async (_ctx: unknown, _evt: unknown, fn: (tx: unknown) => unknown) => fn(prisma)),
+    auditUpdate: vi.fn(async (_ctx: unknown, _evt: unknown, _before: unknown, fn: (tx: unknown) => unknown) => fn(prisma)),
+    writeAuditRow: vi.fn(async () => undefined),
+  };
+});
 
 // Mock the tenant-config service so we can toggle requireHoldApproval
 // per-test without touching a real DB.

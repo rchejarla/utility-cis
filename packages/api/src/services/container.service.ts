@@ -111,8 +111,8 @@ export async function createContainer(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "Container" },
     EVENT_TYPES.METER_CREATED,
-    () =>
-      prisma.container.create({
+    (tx) =>
+      tx.container.create({
         data: {
           utilityId,
           premiseId: data.premiseId,
@@ -162,8 +162,8 @@ export async function updateContainer(
     { utilityId, actorId, actorName, entityType: "Container" },
     EVENT_TYPES.METER_UPDATED,
     before,
-    () =>
-      prisma.container.update({
+    (tx) =>
+      tx.container.update({
         where: { id },
         data: updateData,
         include: fullInclude,
@@ -219,6 +219,6 @@ export async function swapContainer(
     { utilityId, actorId, actorName, entityType: "Container" },
     EVENT_TYPES.METER_UPDATED,
     original,
-    async () => newContainer,
+    async (_tx) => newContainer,
   );
 }

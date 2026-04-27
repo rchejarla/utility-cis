@@ -1,12 +1,11 @@
 import { prisma } from "../lib/prisma.js";
-import { EVENT_TYPES } from "@utility-cis/shared";
 import type {
   TransferServiceInput,
   MoveInInput,
   MoveOutInput,
   SearchQuery,
 } from "@utility-cis/shared";
-import { domainEvents } from "../events/emitter.js";
+import { writeAuditRow } from "../lib/audit-wrap.js";
 import { generateNumber } from "../lib/number-generator.js";
 
 /**
@@ -16,28 +15,6 @@ import { generateNumber } from "../lib/number-generator.js";
  * event (so it shows up in the audit log as one logical action rather
  * than a fan-out of per-entity updates).
  */
-
-function emit(
-  type: string,
-  utilityId: string,
-  actorId: string,
-  actorName: string | undefined,
-  entityId: string,
-  before: unknown,
-  after: unknown,
-): void {
-  domainEvents.emitDomainEvent({
-    type,
-    entityType: "Workflow",
-    entityId,
-    utilityId,
-    actorId,
-    actorName,
-    beforeState: (before as Record<string, unknown> | null) ?? null,
-    afterState: (after as Record<string, unknown>) ?? null,
-    timestamp: new Date().toISOString(),
-  });
-}
 
 /**
  * Transfer of service: reassigns an active service agreement from one
@@ -172,23 +149,22 @@ export async function transferService(
       }
     }
 
+    await writeAuditRow(
+      tx,
+      { utilityId, actorId, actorName, entityType: "Workflow" },
+      "workflow.transfer_service",
+      newAgreement.id,
+      { sourceAgreementId },
+      {
+        sourceAgreementId: closedSource.id,
+        targetAgreementId: newAgreement.id,
+        targetAccountId: data.targetAccountId,
+        transferDate: data.transferDate,
+      },
+    );
+
     return { source: closedSource, target: newAgreement };
   });
-
-  emit(
-    "workflow.transfer_service",
-    utilityId,
-    actorId,
-    actorName,
-    result.target.id,
-    { sourceAgreementId },
-    {
-      sourceAgreementId: result.source.id,
-      targetAgreementId: result.target.id,
-      targetAccountId: data.targetAccountId,
-      transferDate: data.transferDate,
-    },
-  );
 
   return result;
 }
@@ -321,24 +297,23 @@ export async function moveIn(
       agreements.push(sa);
     }
 
+    await writeAuditRow(
+      tx,
+      { utilityId, actorId, actorName, entityType: "Workflow" },
+      "workflow.move_in",
+      account.id,
+      null,
+      {
+        accountId: account.id,
+        customerId,
+        premiseId: data.premiseId,
+        agreementIds: agreements.map((a) => a.id),
+        moveInDate: data.moveInDate,
+      },
+    );
+
     return { customerId, account, agreements };
   });
-
-  emit(
-    "workflow.move_in",
-    utilityId,
-    actorId,
-    actorName,
-    result.account.id,
-    null,
-    {
-      accountId: result.account.id,
-      customerId: result.customerId,
-      premiseId: data.premiseId,
-      agreementIds: result.agreements.map((a) => a.id),
-      moveInDate: data.moveInDate,
-    },
-  );
 
   return result;
 }
@@ -441,24 +416,23 @@ export async function moveOut(
       });
     }
 
+    await writeAuditRow(
+      tx,
+      { utilityId, actorId, actorName, entityType: "Workflow" },
+      "workflow.move_out",
+      data.accountId,
+      null,
+      {
+        accountId: data.accountId,
+        premiseId: data.premiseId,
+        moveOutDate: data.moveOutDate,
+        closedAgreementIds: activeAgreements.map((a) => a.id),
+        accountClosed: Boolean(account),
+      },
+    );
+
     return { accountId: data.accountId, finalizedAgreements: activeAgreements, account };
   });
-
-  emit(
-    "workflow.move_out",
-    utilityId,
-    actorId,
-    actorName,
-    data.accountId,
-    null,
-    {
-      accountId: data.accountId,
-      premiseId: data.premiseId,
-      moveOutDate: data.moveOutDate,
-      closedAgreementIds: result.finalizedAgreements.map((a) => a.id),
-      accountClosed: Boolean(result.account),
-    },
-  );
 
   return result;
 }

@@ -1,77 +1,174 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
-import { domainEvents } from "../events/emitter.js";
-import type { DomainEvent } from "@utility-cis/shared";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
-describe("auditWrap", () => {
-  let captured: DomainEvent[];
-  const handler = (e: DomainEvent) => {
-    captured.push(e);
+/**
+ * Tests for the in-transaction audit-wrap. The wrapper runs `op(tx)`
+ * and `tx.auditLog.create(...)` inside a single `prisma.$transaction`,
+ * closing the atomicity gap the prior EventEmitter pipeline had.
+ *
+ * Mock approach: stub `prisma.$transaction` so it invokes the run-fn
+ * with a controllable `tx` mock. Assert against `tx.auditLog.create`
+ * call args directly. No DB, no testcontainers — full path of the
+ * wrapper is exercised in process.
+ */
+
+// Build the tx + prisma mocks inside vi.hoisted so vi.mock's factory
+// can close over them. Top-level variables aren't allowed inside
+// vi.mock factories because the call is hoisted above all imports.
+const { txMock, prismaMock } = vi.hoisted(() => {
+  const tx = {
+    $executeRaw: vi.fn(async () => 0),
+    auditLog: {
+      create: vi.fn(async () => ({ id: "audit-1" })),
+    },
   };
+  type TxShape = typeof tx;
+  const p = {
+    $transaction: vi.fn(async (run: (txArg: TxShape) => unknown) => run(tx)),
+  };
+  return { txMock: tx, prismaMock: p };
+});
 
+vi.mock("../lib/prisma.js", () => ({
+  prisma: prismaMock,
+}));
+
+import { auditCreate, auditUpdate, writeAuditRow } from "../lib/audit-wrap.js";
+
+const ctx = {
+  utilityId: "u-1",
+  actorId: "a-1",
+  actorName: "Alice",
+  entityType: "Customer",
+};
+
+describe("audit-wrap", () => {
   beforeEach(() => {
-    captured = [];
-    domainEvents.on("domain-event", handler);
+    txMock.$executeRaw.mockClear();
+    txMock.auditLog.create.mockClear();
+    prismaMock.$transaction.mockClear();
   });
 
-  afterEach(() => {
-    domainEvents.off("domain-event", handler);
-  });
+  describe("auditCreate", () => {
+    it("opens a $transaction, runs op(tx), then writes audit with beforeState=null", async () => {
+      const created = { id: "new-1", name: "Acme" };
+      const opMock = vi.fn(async () => created);
 
-  const ctx = {
-    utilityId: "u-1",
-    actorId: "a-1",
-    actorName: "Alice",
-    entityType: "Customer",
-  };
+      const result = await auditCreate(ctx, "customer.created", opMock);
 
-  it("auditCreate emits a create event with beforeState=null and the created entity", async () => {
-    const entity = { id: "new-1", name: "Acme" };
-    const result = await auditCreate(ctx, "customer.created", async () => entity);
+      expect(result).toBe(created);
+      expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
+      // op was invoked with the tx (not the global prisma).
+      expect(opMock).toHaveBeenCalledWith(txMock);
+      // RLS context set transactionally before the audit insert.
+      expect(txMock.$executeRaw).toHaveBeenCalledTimes(1);
+      // Audit row landed with beforeState=null and afterState=entity.
+      expect(txMock.auditLog.create).toHaveBeenCalledTimes(1);
+      const auditCall = (txMock.auditLog.create.mock.calls[0] as unknown as [{ data: Record<string, unknown> }])[0];
+      expect(auditCall.data.action).toBe("CREATE");
+      expect(auditCall.data.entityType).toBe("Customer");
+      expect(auditCall.data.entityId).toBe("new-1");
+      expect(auditCall.data.utilityId).toBe("u-1");
+      expect(auditCall.data.actorId).toBe("a-1");
+      expect(auditCall.data.actorName).toBe("Alice");
+      expect(auditCall.data.afterState).toEqual(created);
+      expect(auditCall.data.metadata).toEqual({ eventType: "customer.created" });
+    });
 
-    expect(result).toBe(entity);
-    expect(captured).toHaveLength(1);
-    const event = captured[0];
-    expect(event.type).toBe("customer.created");
-    expect(event.entityType).toBe("Customer");
-    expect(event.entityId).toBe("new-1");
-    expect(event.utilityId).toBe("u-1");
-    expect(event.actorId).toBe("a-1");
-    expect(event.actorName).toBe("Alice");
-    expect(event.beforeState).toBeNull();
-    expect(event.afterState).toEqual(entity);
-    expect(typeof event.timestamp).toBe("string");
-  });
+    it("uses existingTx when provided — does NOT open a new $transaction", async () => {
+      const created = { id: "new-2" };
+      const opMock = vi.fn(async () => created);
 
-  it("auditUpdate emits an update event carrying the provided before snapshot", async () => {
-    const before = { id: "x-1", name: "old" };
-    const after = { id: "x-1", name: "new" };
-    await auditUpdate(ctx, "customer.updated", before, async () => after);
+      // Caller supplies its own tx (e.g., from an outer prisma.$transaction).
+      const callerTx = {
+        $executeRaw: vi.fn(async () => 0),
+        auditLog: { create: vi.fn(async () => ({ id: "audit-2" })) },
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await auditCreate(ctx, "customer.created", opMock, callerTx as any);
 
-    expect(captured).toHaveLength(1);
-    const event = captured[0];
-    expect(event.type).toBe("customer.updated");
-    expect(event.beforeState).toEqual(before);
-    expect(event.afterState).toEqual(after);
-  });
+      expect(prismaMock.$transaction).not.toHaveBeenCalled();
+      expect(opMock).toHaveBeenCalledWith(callerTx);
+      expect(callerTx.auditLog.create).toHaveBeenCalledTimes(1);
+      // The internal prismaMock's tx wasn't used.
+      expect(txMock.auditLog.create).not.toHaveBeenCalled();
+    });
 
-  it("auditUpdate coerces undefined before-state to null to match DomainEvent contract", async () => {
-    await auditUpdate(
-      ctx,
-      "customer.updated",
-      undefined,
-      async () => ({ id: "x-2" })
-    );
-    expect(captured[0].beforeState).toBeNull();
-  });
-
-  it("propagates errors from the wrapped operation without emitting an event", async () => {
-    const boom = new Error("db down");
-    await expect(
-      auditCreate(ctx, "customer.created", async () => {
+    it("propagates errors from op without writing the audit row", async () => {
+      const boom = new Error("db down");
+      const opMock = vi.fn(async () => {
         throw boom;
-      })
-    ).rejects.toBe(boom);
-    expect(captured).toHaveLength(0);
+      });
+
+      await expect(auditCreate(ctx, "customer.created", opMock)).rejects.toBe(boom);
+      // The transaction was started, but auditLog.create was never called
+      // because op threw first. Atomicity: no audit row lands without the
+      // entity (and vice versa).
+      expect(txMock.auditLog.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("auditUpdate", () => {
+    it("writes audit with the supplied before snapshot and the entity returned by op", async () => {
+      const before = { id: "x-1", name: "old" };
+      const after = { id: "x-1", name: "new" };
+      const opMock = vi.fn(async () => after);
+
+      await auditUpdate(ctx, "customer.updated", before, opMock);
+
+      const auditCall = (txMock.auditLog.create.mock.calls[0] as unknown as [{ data: Record<string, unknown> }])[0];
+      expect(auditCall.data.action).toBe("UPDATE");
+      expect(auditCall.data.beforeState).toEqual(before);
+      expect(auditCall.data.afterState).toEqual(after);
+      expect(auditCall.data.metadata).toEqual({ eventType: "customer.updated" });
+    });
+
+    it("coerces undefined before-state to JsonNull", async () => {
+      const opMock = vi.fn(async () => ({ id: "x-2" }));
+      await auditUpdate(ctx, "customer.updated", undefined, opMock);
+
+      const auditCall = (txMock.auditLog.create.mock.calls[0] as unknown as [{ data: Record<string, unknown> }])[0];
+      // Prisma.JsonNull is an object, not literal null. Accept either —
+      // what matters is the value isn't `undefined` (Prisma rejects that).
+      expect(auditCall.data.beforeState).toBeDefined();
+    });
+  });
+
+  describe("writeAuditRow", () => {
+    it("writes a standalone audit row using the provided tx", async () => {
+      const callerTx = {
+        $executeRaw: vi.fn(async () => 0),
+        auditLog: { create: vi.fn(async () => ({ id: "audit-3" })) },
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await writeAuditRow(callerTx as any, ctx, "meter.created", "meter-1", null, { id: "meter-1" });
+
+      expect(callerTx.$executeRaw).toHaveBeenCalledTimes(1);
+      expect(callerTx.auditLog.create).toHaveBeenCalledTimes(1);
+      const auditCall = (callerTx.auditLog.create.mock.calls[0] as unknown as [{ data: Record<string, unknown> }])[0];
+      expect(auditCall.data.action).toBe("CREATE");
+      expect(auditCall.data.entityId).toBe("meter-1");
+    });
+
+    it("maps eventType suffix to action — .deleted -> DELETE", async () => {
+      const callerTx = {
+        $executeRaw: vi.fn(async () => 0),
+        auditLog: { create: vi.fn(async () => ({ id: "audit-4" })) },
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await writeAuditRow(callerTx as any, ctx, "meter.deleted", "meter-2", { id: "meter-2" }, null);
+      const auditCall1 = (callerTx.auditLog.create.mock.calls[0] as unknown as [{ data: Record<string, unknown> }])[0];
+      expect(auditCall1.data.action).toBe("DELETE");
+    });
+
+    it("maps eventType suffix to action — .revised -> UPDATE", async () => {
+      const callerTx = {
+        $executeRaw: vi.fn(async () => 0),
+        auditLog: { create: vi.fn(async () => ({ id: "audit-5" })) },
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await writeAuditRow(callerTx as any, ctx, "rate_schedule.revised", "r-1", null, null);
+      const auditCall2 = (callerTx.auditLog.create.mock.calls[0] as unknown as [{ data: Record<string, unknown> }])[0];
+      expect(auditCall2.data.action).toBe("UPDATE");
+    });
   });
 });

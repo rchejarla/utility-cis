@@ -120,8 +120,8 @@ export async function createServiceRequest(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "ServiceRequest" },
     "service_request.created",
-    async () =>
-      prisma.serviceRequest.create({
+    async (tx) =>
+      tx.serviceRequest.create({
         data: {
           utilityId,
           requestNumber,
@@ -155,7 +155,7 @@ export async function updateServiceRequest(
     { utilityId, actorId, actorName, entityType: "ServiceRequest" },
     "service_request.updated",
     before,
-    async () => {
+    async (tx) => {
       const priorityChanged = data.priority !== undefined && data.priority !== before.priority;
       let slaPatch: { slaId?: string | null; slaDueAt?: Date | null } = {};
       if (priorityChanged) {
@@ -165,7 +165,7 @@ export async function updateServiceRequest(
           slaDueAt: sla ? computeSlaDueAt(before.createdAt, sla.resolutionHours) : null,
         };
       }
-      return prisma.serviceRequest.update({
+      return tx.serviceRequest.update({
         where: { id },
         data: {
           ...(data.description !== undefined ? { description: data.description } : {}),
@@ -197,8 +197,8 @@ export async function assignServiceRequest(
     { utilityId, actorId, actorName, entityType: "ServiceRequest" },
     "service_request.assigned",
     before,
-    async () =>
-      prisma.serviceRequest.update({
+    async (tx) =>
+      tx.serviceRequest.update({
         where: { id },
         data: {
           ...(data.assignedTo !== undefined ? { assignedTo: data.assignedTo } : {}),
@@ -225,8 +225,8 @@ export async function transitionServiceRequest(
     { utilityId, actorId, actorName, entityType: "ServiceRequest" },
     "service_request.transitioned",
     before,
-    async () =>
-      prisma.serviceRequest.update({
+    async (tx) =>
+      tx.serviceRequest.update({
         where: { id },
         data: {
           status: data.toStatus,
@@ -258,8 +258,8 @@ export async function completeServiceRequest(
     { utilityId, actorId, actorName, entityType: "ServiceRequest" },
     "service_request.completed",
     before,
-    async () =>
-      prisma.serviceRequest.update({
+    async (tx) =>
+      tx.serviceRequest.update({
         where: { id },
         data: {
           status: "COMPLETED",
@@ -287,8 +287,8 @@ export async function cancelServiceRequest(
     { utilityId, actorId, actorName, entityType: "ServiceRequest" },
     "service_request.cancelled",
     before,
-    async () =>
-      prisma.serviceRequest.update({
+    async (tx) =>
+      tx.serviceRequest.update({
         where: { id },
         data: {
           status: "CANCELLED",

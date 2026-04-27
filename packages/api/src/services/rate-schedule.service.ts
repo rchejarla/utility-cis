@@ -40,8 +40,8 @@ export async function createRateSchedule(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "RateSchedule" },
     EVENT_TYPES.RATE_SCHEDULE_CREATED,
-    async () => {
-      const schedule = await prisma.rateSchedule.create({
+    async (tx) => {
+      const schedule = await tx.rateSchedule.create({
         data: {
           utilityId,
           name: data.name,
@@ -75,30 +75,28 @@ export async function reviseRateSchedule(
     { utilityId, actorId, actorName, entityType: "RateSchedule" },
     EVENT_TYPES.RATE_SCHEDULE_REVISED,
     predecessor,
-    async () => {
-      const [, newSchedule] = await prisma.$transaction([
-        prisma.rateSchedule.update({
-          where: { id },
-          data: { expirationDate: new Date(data.effectiveDate) },
-        }),
-        prisma.rateSchedule.create({
-          data: {
-            utilityId,
-            name: data.name,
-            code: predecessor.code,
-            commodityId: data.commodityId,
-            rateType: data.rateType,
-            effectiveDate: new Date(data.effectiveDate),
-            expirationDate: data.expirationDate ? new Date(data.expirationDate) : null,
-            description: data.description,
-            regulatoryRef: data.regulatoryRef,
-            rateConfig: data.rateConfig,
-            version: predecessor.version + 1,
-            supersedesId: id,
-          },
-          include: fullInclude,
-        }),
-      ]);
+    async (tx) => {
+      await tx.rateSchedule.update({
+        where: { id },
+        data: { expirationDate: new Date(data.effectiveDate) },
+      });
+      const newSchedule = await tx.rateSchedule.create({
+        data: {
+          utilityId,
+          name: data.name,
+          code: predecessor.code,
+          commodityId: data.commodityId,
+          rateType: data.rateType,
+          effectiveDate: new Date(data.effectiveDate),
+          expirationDate: data.expirationDate ? new Date(data.expirationDate) : null,
+          description: data.description,
+          regulatoryRef: data.regulatoryRef,
+          rateConfig: data.rateConfig,
+          version: predecessor.version + 1,
+          supersedesId: id,
+        },
+        include: fullInclude,
+      });
       await cacheDel(`rate-schedule:${utilityId}:${predecessor.code}`);
       return newSchedule;
     }

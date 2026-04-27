@@ -69,8 +69,8 @@ export async function createMeter(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "Meter" },
     EVENT_TYPES.METER_CREATED,
-    () =>
-      prisma.meter.create({
+    (tx) =>
+      tx.meter.create({
         data: {
           ...rest,
           utilityId,
@@ -103,8 +103,8 @@ export async function updateMeter(
     { utilityId, actorId, actorName, entityType: "Meter" },
     EVENT_TYPES.METER_UPDATED,
     before,
-    () =>
-      prisma.meter.update({
+    (tx) =>
+      tx.meter.update({
         where: { id, utilityId },
         data: { ...core, customFields: mergedCustom as object },
         include: { premise: true, commodity: true, uom: true },

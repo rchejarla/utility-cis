@@ -8,7 +8,6 @@ import { authMiddleware } from "./middleware/auth.js";
 import { tenantMiddleware } from "./middleware/tenant.js";
 import { authorizationMiddleware } from "./middleware/authorization.js";
 import { errorHandler } from "./middleware/error-handler.js";
-import { startAuditWriter } from "./events/audit-writer.js";
 import { commodityRoutes } from "./routes/commodities.js";
 import { uomRoutes } from "./routes/uom.js";
 import { premiseRoutes } from "./routes/premises.js";
@@ -160,8 +159,6 @@ export async function buildApp() {
     });
     app.log.info({ component: "bull-board" }, "Bull Board mounted at /admin/queues");
   }
-
-  startAuditWriter();
 
   return app;
 }

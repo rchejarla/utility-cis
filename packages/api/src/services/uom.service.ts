@@ -20,7 +20,7 @@ export async function createUom(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "UnitOfMeasure" },
     EVENT_TYPES.UOM_CREATED,
-    async () => {
+    async (tx) => {
       // BR-UO-003: One base unit per (commodity, measure_type) group —
       // base-unit is the conversion anchor, and conversions only make
       // sense within a measure-type group (you can't convert kWh to
@@ -29,7 +29,7 @@ export async function createUom(
       // partial unique index; this keeps the UX "set base here"
       // instead of forcing the admin to un-base the other first.
       if (data.isBaseUnit) {
-        await prisma.unitOfMeasure.updateMany({
+        await tx.unitOfMeasure.updateMany({
           where: {
             utilityId,
             commodityId: data.commodityId,
@@ -39,7 +39,7 @@ export async function createUom(
           data: { isBaseUnit: false },
         });
       }
-      return prisma.unitOfMeasure.create({
+      return tx.unitOfMeasure.create({
         data: { ...data, utilityId },
         include: { commodity: true, measureType: true },
       });
@@ -59,14 +59,14 @@ export async function updateUom(
     { utilityId, actorId, actorName, entityType: "UnitOfMeasure" },
     EVENT_TYPES.UOM_UPDATED,
     before,
-    async () => {
+    async (tx) => {
       // BR-UO-003 (scoped) — if flipping this row to base, unmark any
       // existing base in the target (commodity, measure_type) group.
       // Use the incoming measureTypeId if the admin is moving the UOM
       // between groups, else fall back to the existing one.
       if (data.isBaseUnit) {
         const targetMeasureTypeId = data.measureTypeId ?? before.measureTypeId;
-        await prisma.unitOfMeasure.updateMany({
+        await tx.unitOfMeasure.updateMany({
           where: {
             utilityId,
             commodityId: before.commodityId,
@@ -77,7 +77,7 @@ export async function updateUom(
           data: { isBaseUnit: false },
         });
       }
-      return prisma.unitOfMeasure.update({
+      return tx.unitOfMeasure.update({
         where: { id, utilityId },
         data,
         include: { commodity: true, measureType: true },

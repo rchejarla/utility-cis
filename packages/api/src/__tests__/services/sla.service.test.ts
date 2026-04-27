@@ -1,9 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("../../lib/audit-wrap.js", () => ({
-  auditCreate: vi.fn(async (_ctx, _evt, fn) => fn()),
-  auditUpdate: vi.fn(async (_ctx, _evt, _before, fn) => fn()),
-}));
+vi.mock("../../lib/audit-wrap.js", async () => {
+  const { prisma } = await import("../../lib/prisma.js");
+  return {
+    auditCreate: vi.fn(async (_ctx: unknown, _evt: unknown, fn: (tx: unknown) => unknown) => fn(prisma)),
+    auditUpdate: vi.fn(async (_ctx: unknown, _evt: unknown, _before: unknown, fn: (tx: unknown) => unknown) => fn(prisma)),
+    writeAuditRow: vi.fn(async () => undefined),
+  };
+});
 
 import { createSla, resolveSlaForRequest } from "../../services/sla.service.js";
 import { prisma } from "../../lib/prisma.js";

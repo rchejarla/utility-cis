@@ -59,7 +59,7 @@ export async function createAccount(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "Account" },
     EVENT_TYPES.ACCOUNT_CREATED,
-    () => prisma.$transaction(async (tx) => {
+    async (tx) => {
       // Auto-generate account number from tenant template when absent.
       const accountNumber =
         core.accountNumber ??
@@ -79,7 +79,7 @@ export async function createAccount(
           customFields: validatedCustom as object,
         },
       });
-    })
+    },
   );
 }
 
@@ -108,28 +108,27 @@ export async function updateAccount(
     { utilityId, actorId, actorName, entityType: "Account" },
     EVENT_TYPES.ACCOUNT_UPDATED,
     before,
-    () =>
-      prisma.$transaction(async (tx) => {
-        if (core.status === "CLOSED") {
-          const activeCount = await tx.serviceAgreement.count({
-            where: {
-              accountId: id,
-              status: { in: ["PENDING", "ACTIVE"] },
-            },
-          });
-
-          if (activeCount > 0) {
-            throw Object.assign(
-              new Error("Account has active or pending service agreements"),
-              { statusCode: 400, code: "ACTIVE_AGREEMENTS_EXIST" }
-            );
-          }
-        }
-
-        return tx.account.update({
-          where: { id, utilityId },
-          data: { ...core, customFields: mergedCustom as object },
+    async (tx) => {
+      if (core.status === "CLOSED") {
+        const activeCount = await tx.serviceAgreement.count({
+          where: {
+            accountId: id,
+            status: { in: ["PENDING", "ACTIVE"] },
+          },
         });
-      })
+
+        if (activeCount > 0) {
+          throw Object.assign(
+            new Error("Account has active or pending service agreements"),
+            { statusCode: 400, code: "ACTIVE_AGREEMENTS_EXIST" }
+          );
+        }
+      }
+
+      return tx.account.update({
+        where: { id, utilityId },
+        data: { ...core, customFields: mergedCustom as object },
+      });
+    },
   );
 }

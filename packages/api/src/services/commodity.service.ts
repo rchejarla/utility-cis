@@ -20,8 +20,8 @@ export async function createCommodity(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "Commodity" },
     EVENT_TYPES.COMMODITY_CREATED,
-    () =>
-      prisma.commodity.create({
+    (tx) =>
+      tx.commodity.create({
         data: { ...data, utilityId },
         include: { defaultUom: true },
       })
@@ -40,8 +40,8 @@ export async function updateCommodity(
     { utilityId, actorId, actorName, entityType: "Commodity" },
     EVENT_TYPES.COMMODITY_UPDATED,
     before,
-    () =>
-      prisma.commodity.update({
+    (tx) =>
+      tx.commodity.update({
         where: { id, utilityId },
         data,
         include: { defaultUom: true },

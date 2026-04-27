@@ -45,8 +45,8 @@ export async function createMeterEvent(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "MeterEvent" },
     EVENT_TYPES.METER_CREATED,
-    () =>
-      prisma.meterEvent.create({
+    (tx) =>
+      tx.meterEvent.create({
         data: {
           utilityId,
           meterId: data.meterId,
@@ -87,8 +87,8 @@ export async function updateMeterEvent(
     { utilityId, actorId, actorName, entityType: "MeterEvent" },
     EVENT_TYPES.METER_UPDATED,
     before,
-    () =>
-      prisma.meterEvent.update({
+    (tx) =>
+      tx.meterEvent.update({
         where: { id },
         data: updateData,
         include: fullInclude,

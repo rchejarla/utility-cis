@@ -118,8 +118,8 @@ export async function createSuspension(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "ServiceSuspension" },
     EVENT_TYPES.SERVICE_AGREEMENT_CREATED,
-    () =>
-      prisma.serviceSuspension.create({
+    (tx) =>
+      tx.serviceSuspension.create({
         data: {
           utilityId,
           serviceAgreementId: data.serviceAgreementId,
@@ -162,8 +162,8 @@ export async function updateSuspension(
     { utilityId, actorId, actorName, entityType: "ServiceSuspension" },
     EVENT_TYPES.SERVICE_AGREEMENT_UPDATED,
     before,
-    () =>
-      prisma.serviceSuspension.update({
+    (tx) =>
+      tx.serviceSuspension.update({
         where: { id },
         data: updateData,
         include: fullInclude,
@@ -203,8 +203,8 @@ export async function completeSuspension(
     { utilityId, actorId, actorName, entityType: "ServiceSuspension" },
     EVENT_TYPES.SERVICE_AGREEMENT_UPDATED,
     before,
-    () =>
-      prisma.serviceSuspension.update({
+    (tx) =>
+      tx.serviceSuspension.update({
         where: { id },
         data: {
           status: "COMPLETED",
@@ -248,8 +248,8 @@ export async function approveSuspension(
     { utilityId, actorId, actorName, entityType: "ServiceSuspension" },
     EVENT_TYPES.SERVICE_AGREEMENT_UPDATED,
     before,
-    () =>
-      prisma.serviceSuspension.update({
+    (tx) =>
+      tx.serviceSuspension.update({
         where: { id },
         data: { approvedBy: actorId },
         include: fullInclude,
@@ -298,8 +298,8 @@ export async function activateSuspension(
     { utilityId, actorId, actorName, entityType: "ServiceSuspension" },
     EVENT_TYPES.SERVICE_AGREEMENT_UPDATED,
     before,
-    () =>
-      prisma.serviceSuspension.update({
+    (tx) =>
+      tx.serviceSuspension.update({
         where: { id },
         data: { status: "ACTIVE" },
         include: fullInclude,
@@ -338,8 +338,8 @@ export async function cancelSuspension(
     { utilityId, actorId, actorName, entityType: "ServiceSuspension" },
     EVENT_TYPES.SERVICE_AGREEMENT_UPDATED,
     before,
-    () =>
-      prisma.serviceSuspension.update({
+    (tx) =>
+      tx.serviceSuspension.update({
         where: { id },
         data: { status: "CANCELLED" },
         include: fullInclude,

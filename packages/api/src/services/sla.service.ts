@@ -75,8 +75,8 @@ export async function createSla(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "Sla" },
     "sla.created",
-    async () => {
-      const row = await prisma.sla.create({
+    async (tx) => {
+      const row = await tx.sla.create({
         data: {
           utilityId,
           requestType: data.requestType,
@@ -105,8 +105,8 @@ export async function updateSla(
     { utilityId, actorId, actorName, entityType: "Sla" },
     "sla.updated",
     before,
-    async () => {
-      const row = await prisma.sla.update({
+    async (tx) => {
+      const row = await tx.sla.update({
         where: { id },
         data: {
           ...(data.responseHours !== undefined ? { responseHours: data.responseHours } : {}),

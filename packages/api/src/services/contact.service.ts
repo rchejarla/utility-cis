@@ -21,7 +21,7 @@ export async function createContact(
   return auditCreate(
     { utilityId, actorId, entityType: "Contact" },
     EVENT_TYPES.CONTACT_CREATED,
-    () => prisma.contact.create({ data: { ...data, utilityId } })
+    (tx) => tx.contact.create({ data: { ...data, utilityId } })
   );
 }
 
@@ -36,7 +36,7 @@ export async function updateContact(
     { utilityId, actorId, entityType: "Contact" },
     EVENT_TYPES.CONTACT_UPDATED,
     before,
-    () => prisma.contact.update({ where: { id, utilityId }, data })
+    (tx) => tx.contact.update({ where: { id, utilityId }, data })
   );
 }
 

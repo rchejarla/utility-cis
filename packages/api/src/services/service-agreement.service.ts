@@ -76,67 +76,67 @@ export async function createServiceAgreement(
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "ServiceAgreement" },
     EVENT_TYPES.SERVICE_AGREEMENT_CREATED,
-    () => prisma.$transaction(async (tx) => {
-    // Rule 1: Check meter uniqueness per commodity
-    for (const m of metersToCreate) {
-      const existing = await tx.serviceAgreementMeter.findFirst({
-        where: {
-          meterId: m.meterId,
-          removedDate: null,
-          serviceAgreement: {
-            commodityId: data.commodityId,
-            status: { in: ["PENDING", "ACTIVE"] },
+    async (tx) => {
+      // Rule 1: Check meter uniqueness per commodity
+      for (const m of metersToCreate) {
+        const existing = await tx.serviceAgreementMeter.findFirst({
+          where: {
+            meterId: m.meterId,
+            removedDate: null,
+            serviceAgreement: {
+              commodityId: data.commodityId,
+              status: { in: ["PENDING", "ACTIVE"] },
+            },
+          },
+        });
+        if (existing) {
+          throw Object.assign(
+            new Error("Meter is already assigned to an active agreement for this commodity"),
+            { statusCode: 400, code: "METER_ALREADY_ASSIGNED" }
+          );
+        }
+      }
+
+      // Rule 3: Create the agreement with nested meters. If the caller
+      // didn't supply an agreementNumber, generate one from the tenant
+      // template inside this same tx so the max-query sees any rows
+      // the caller has already inserted.
+      const agreementNumber =
+        data.agreementNumber ??
+        (await generateNumber({
+          utilityId,
+          entity: "agreement",
+          defaultTemplate: "SA-{seq:4}",
+          tableName: "service_agreement",
+          columnName: "agreement_number",
+          db: tx,
+        }));
+      return tx.serviceAgreement.create({
+        data: {
+          utilityId,
+          agreementNumber,
+          accountId: data.accountId,
+          premiseId: data.premiseId,
+          commodityId: data.commodityId,
+          rateScheduleId: data.rateScheduleId,
+          billingCycleId: data.billingCycleId,
+          startDate: new Date(data.startDate),
+          endDate: data.endDate ? new Date(data.endDate) : null,
+          status: data.status || "PENDING",
+          readSequence: data.readSequence,
+          customFields: validatedCustom as object,
+          meters: {
+            create: metersToCreate.map((m) => ({
+              utilityId,
+              meterId: m.meterId,
+              isPrimary: m.isPrimary,
+              addedDate: new Date(data.startDate),
+            })),
           },
         },
+        include: fullInclude,
       });
-      if (existing) {
-        throw Object.assign(
-          new Error("Meter is already assigned to an active agreement for this commodity"),
-          { statusCode: 400, code: "METER_ALREADY_ASSIGNED" }
-        );
-      }
-    }
-
-    // Rule 3: Create the agreement with nested meters. If the caller
-    // didn't supply an agreementNumber, generate one from the tenant
-    // template inside this same tx so the max-query sees any rows
-    // the caller has already inserted.
-    const agreementNumber =
-      data.agreementNumber ??
-      (await generateNumber({
-        utilityId,
-        entity: "agreement",
-        defaultTemplate: "SA-{seq:4}",
-        tableName: "service_agreement",
-        columnName: "agreement_number",
-        db: tx,
-      }));
-    return tx.serviceAgreement.create({
-      data: {
-        utilityId,
-        agreementNumber,
-        accountId: data.accountId,
-        premiseId: data.premiseId,
-        commodityId: data.commodityId,
-        rateScheduleId: data.rateScheduleId,
-        billingCycleId: data.billingCycleId,
-        startDate: new Date(data.startDate),
-        endDate: data.endDate ? new Date(data.endDate) : null,
-        status: data.status || "PENDING",
-        readSequence: data.readSequence,
-        customFields: validatedCustom as object,
-        meters: {
-          create: metersToCreate.map((m) => ({
-            utilityId,
-            meterId: m.meterId,
-            isPrimary: m.isPrimary,
-            addedDate: new Date(data.startDate),
-          })),
-        },
-      },
-      include: fullInclude,
-    });
-  })
+    },
   );
 }
 
@@ -235,8 +235,8 @@ export async function updateServiceAgreement(
     { utilityId, actorId, actorName, entityType: "ServiceAgreement" },
     EVENT_TYPES.SERVICE_AGREEMENT_UPDATED,
     before,
-    () =>
-      prisma.serviceAgreement.update({
+    (tx) =>
+      tx.serviceAgreement.update({
         where: { id, utilityId },
         data: updateData,
         include: fullInclude,
