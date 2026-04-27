@@ -8,7 +8,6 @@ import { processPendingNotificationsWithQuietHours } from "../services/notificat
 /**
  * BullMQ worker for the notification-send queue.
  *
- * Replaces the in-process startNotificationSendJob setInterval drain.
  * Cadence: every 10 seconds (the cron pattern in the spec is
  * "*\/10 * * * * *" — six-field cron, the leading "every-10-seconds"
  * shape).

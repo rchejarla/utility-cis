@@ -6,28 +6,9 @@
 
 **Spec:** [`docs/superpowers/specs/2026-04-24-job-scheduler-migration-design.md`](../specs/2026-04-24-job-scheduler-migration-design.md) — read §3.1 (architecture intent: worker process owns all schedulers) and §6 (legacy code marked for removal post-soak).
 
-**Status of dependencies (audit 2026-04-27):** Ship 1's Tasks 0-9 are merged. The new worker path is live. The three `USE_LEGACY_SCHEDULERS_*` flags currently default to false; legacy code only runs when explicitly opted in. Removing it is safe **after a soak window** confirms the worker path has been carrying production load reliably.
+**Status of dependencies (audit 2026-04-27):** Ship 1's Tasks 0-9 are merged. The new worker path is live. The three `USE_LEGACY_SCHEDULERS_*` flags currently default to false; legacy code only runs when explicitly opted in. Pre-production codebase — no soak window applies; tests are the safety net.
 
-**Why this is a separate plan from Ship 1:** the original plan deferred legacy removal until "after a production soak period" so we could roll back to the legacy path by flipping a flag if the worker process turned out to have a bug we missed. Once we trust the worker path, the flags are dead weight + an attack surface (somebody flipping `USE_LEGACY_SCHEDULERS_DELINQUENCY=true` would silently double-fire jobs). Removing them is hygiene, not feature work.
-
----
-
-## Pre-conditions
-
-Before starting Task 1, verify the worker path has been running cleanly:
-
-- [ ] **PC.1** New worker path has been running on the target environment for **at least 14 days** with the legacy flags off.
-- [ ] **PC.2** Inspect the metrics over the soak window:
-  - `dlq_depth` for each queue stayed at 0 (any non-zero value means a job exhausted retries; investigate before proceeding).
-  - `job_duration_seconds` p99 stayed within the spec's budget (≤30s for retention sweep, ≤5s for the others).
-  - `queue_depth` p99 ≤ 100 (sustained backlog signals the worker can't keep up).
-- [ ] **PC.3** Inspect the audit log for scheduler-emitted rows: per-tenant counts should match expected cadence (~1 row per hour per tenant for hourly schedulers, ~1 per day for daily). Gaps signal silent worker failures the metrics didn't catch.
-- [ ] **PC.4** The known-drift items from Task 10's audit (`docs/superpowers/plans/2026-04-24-job-scheduler-migration.md` §Known Drift) are either landed or explicitly accepted. The relevant ones for legacy removal:
-  - Notification + delinquency atomicity gaps — these belong to Ship 2's EventEmitter-audit refactor, not blocking Task 11.
-  - Missing shutdown / Redis-reconnect tests — not blocking.
-  - Bull Board mount + process.env stragglers — not blocking.
-
-If any pre-condition fails, **stop and escalate**. Do not start the deletions.
+**Why this is a separate plan from Ship 1:** the original plan deferred legacy removal until "after a production soak period." That gate doesn't apply pre-production. The flags are dead weight (and a footgun — flipping `USE_LEGACY_SCHEDULERS_DELINQUENCY=true` would silently double-fire jobs alongside the worker). Removing them is hygiene.
 
 ---
 
@@ -56,18 +37,6 @@ If any pre-condition fails, **stop and escalate**. Do not start the deletions.
 | `docs/specs/11-delinquency.md` | Same. |
 | `docs/specs/05-service-agreement.md` (the suspension scheduler is documented under service-agreement, not its own spec) | Same. |
 | `docs/superpowers/plans/2026-04-24-job-scheduler-migration.md` | Tick Task 11 in §Cross-cutting verification (post-soak removal complete). Update §Known Drift item #6 to note Task 11 is now closed. |
-
----
-
-## Task 0: Soak verification
-
-**Goal:** Tick the pre-conditions before touching code. Skip this only if you've personally inspected production metrics within the last 24h.
-
-**Steps:**
-- [ ] Verify pre-conditions PC.1–PC.4 above. Record findings in this plan as a comment if any are borderline.
-- [ ] Confirm with the operator who deployed Ship 1 that they're willing to lose the rollback path. (Once the legacy code is deleted, "flip a flag to roll back" is no longer an option — only `git revert` of this commit and a redeploy.)
-
-**Verification:** All pre-conditions ticked.
 
 ---
 

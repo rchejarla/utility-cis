@@ -347,70 +347,6 @@ export async function cancelSuspension(
   );
 }
 
-/**
- * Transition helper shared by the scheduler and (implicitly) manual
- * endpoints. Flips PENDING → ACTIVE for any hold whose startDate has
- * arrived and whose approval gate is satisfied, then flips ACTIVE →
- * COMPLETED for any hold whose endDate has arrived. Returns a summary
- * of what changed so the scheduler can log it.
- *
- * Scoped to a single utility so the scheduler can iterate tenants
- * cheaply without leaking rows across RLS boundaries.
- */
-export async function transitionSuspensions(
-  utilityId: string,
-  now: Date = new Date(),
-): Promise<{ activated: number; completed: number }> {
-  const config = await getTenantConfig(utilityId);
-
-  // PENDING → ACTIVE. Respect the approval gate: if the tenant requires
-  // approval, only approved holds roll forward automatically.
-  const activateWhere: Record<string, unknown> = {
-    utilityId,
-    status: "PENDING",
-    startDate: { lte: now },
-  };
-  if (config.requireHoldApproval) {
-    activateWhere.approvedBy = { not: null };
-  }
-  const activated = await prisma.serviceSuspension.updateMany({
-    where: activateWhere,
-    data: { status: "ACTIVE" },
-  });
-
-  // ACTIVE → COMPLETED when endDate has passed. Open-ended holds
-  // (endDate IS NULL) are intentionally skipped — they require manual
-  // completion via the detail page.
-  const completed = await prisma.serviceSuspension.updateMany({
-    where: {
-      utilityId,
-      status: "ACTIVE",
-      endDate: { not: null, lte: now },
-    },
-    data: { status: "COMPLETED" },
-  });
-
-  return {
-    activated: activated.count,
-    completed: completed.count,
-  };
-}
-
-/**
- * List distinct tenants that have holds the scheduler might need to
- * touch. Cheaper than iterating every tenant in the system — the
- * scheduler only does work for tenants with at least one active or
- * pending hold.
- */
-export async function listTenantsWithActiveHolds(): Promise<string[]> {
-  const rows = await prisma.serviceSuspension.findMany({
-    where: { status: { in: ["PENDING", "ACTIVE"] } },
-    select: { utilityId: true },
-    distinct: ["utilityId"],
-  });
-  return rows.map((r) => r.utilityId);
-}
-
 interface AffectedSuspension {
   id: string;
   utility_id: string;
@@ -423,8 +359,7 @@ interface AffectedSuspension {
  * RETURNING` queries (one PENDING→ACTIVE, one ACTIVE→COMPLETED) plus
  * one batched `auditLog.createMany` per affected set, all in one
  * `$transaction` with `ReadCommitted` isolation. Atomicity guarantee:
- * audit rows land iff suspension rows flip — closing the gap the old
- * fire-and-forget `transitionSuspensions` left open.
+ * audit rows land iff suspension rows flip.
  *
  * Tenant gating:
  *   - `tenant_config.suspension_enabled = true` — opted-in tenants

@@ -61,11 +61,6 @@ export const configSchema = z.object({
   // Test / dev opt-outs.
   DISABLE_SCHEDULERS: truthyString,
 
-  // Migration-window per-job legacy fallback flags. Removed in step 9.
-  USE_LEGACY_SCHEDULERS_SUSPENSION: truthyString,
-  USE_LEGACY_SCHEDULERS_NOTIFICATION: truthyString,
-  USE_LEGACY_SCHEDULERS_DELINQUENCY: truthyString,
-
   // Bull Board admin UI.
   BULL_BOARD_ENABLED: truthyString,
 });

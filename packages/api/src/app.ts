@@ -36,9 +36,6 @@ import { tenantConfigRoutes } from "./routes/tenant-config.js";
 import { automationConfigRoutes } from "./routes/automation-config.js";
 import { customFieldSchemaRoutes } from "./routes/custom-field-schemas.js";
 import { serviceEventRoutes } from "./routes/service-events.js";
-import { startSuspensionScheduler } from "./schedulers/suspension-scheduler.js";
-import { startNotificationSendJob } from "./services/notification.service.js";
-import { startDelinquencyScheduler } from "./services/delinquency.service.js";
 import { workflowRoutes } from "./routes/workflows.js";
 import { notificationRoutes } from "./routes/notifications.js";
 import { delinquencyRoutes } from "./routes/delinquency.js";
@@ -165,35 +162,6 @@ export async function buildApp() {
   }
 
   startAuditWriter();
-
-  // Legacy in-process schedulers — migration-window fallback only.
-  // The replacement is the BullMQ worker process (`packages/api/src/
-  // worker.ts`); these are kept callable behind per-job env flags so
-  // we can flip back without redeploying if the new path misbehaves.
-  // Final cleanup (removal of these branches and the start* exports)
-  // lands in plan task 9 after a production soak period.
-  //
-  // Note: the original block also gated on `DISABLE_SCHEDULERS`; that
-  // env var is now owned by the worker process, not the API. We simply
-  // don't start anything here unless the migration flag is on.
-  if (config.USE_LEGACY_SCHEDULERS_SUSPENSION) {
-    app.log.warn(
-      "LEGACY scheduler active — USE_LEGACY_SCHEDULERS_SUSPENSION=true. Worker-process suspension-transitions queue should be paused to avoid double-fire.",
-    );
-    startSuspensionScheduler(app.log);
-  }
-  if (config.USE_LEGACY_SCHEDULERS_NOTIFICATION) {
-    app.log.warn(
-      "LEGACY scheduler active — USE_LEGACY_SCHEDULERS_NOTIFICATION=true. Worker-process notification-send queue should be paused to avoid double-fire.",
-    );
-    startNotificationSendJob(app.log);
-  }
-  if (config.USE_LEGACY_SCHEDULERS_DELINQUENCY) {
-    app.log.warn(
-      "LEGACY scheduler active — USE_LEGACY_SCHEDULERS_DELINQUENCY=true. Worker-process delinquency-dispatch queue should be paused to avoid double-fire.",
-    );
-    startDelinquencyScheduler(app.log);
-  }
 
   return app;
 }

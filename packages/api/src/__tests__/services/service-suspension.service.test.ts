@@ -28,7 +28,6 @@ import {
   activateSuspension,
   cancelSuspension,
   completeSuspension,
-  transitionSuspensions,
   sweepSuspensionsAllTenants,
 } from "../../services/service-suspension.service.js";
 import { prisma } from "../../lib/prisma.js";
@@ -259,77 +258,6 @@ describe("service-suspension lifecycle", () => {
       const updateCall = (prisma.serviceSuspension.update as ReturnType<typeof vi.fn>).mock.calls[0][0];
       expect(updateCall.data.status).toBe("COMPLETED");
       expect(updateCall.data.endDate).toBeInstanceOf(Date);
-    });
-  });
-
-  describe("transitionSuspensions", () => {
-    const now = new Date("2026-06-15T12:00:00Z");
-
-    it("auto-activates PENDING holds whose start date has passed (no approval gate)", async () => {
-      getTenantConfigMock.mockResolvedValue({
-        utilityId: UID,
-        requireHoldApproval: false,
-        settings: {},
-      });
-      (prisma.serviceSuspension.updateMany as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({ count: 3 }) // PENDING → ACTIVE
-        .mockResolvedValueOnce({ count: 1 }); // ACTIVE → COMPLETED
-
-      const result = await transitionSuspensions(UID, now);
-
-      expect(result).toEqual({ activated: 3, completed: 1 });
-      // First call should be the PENDING→ACTIVE updateMany.
-      const firstCall = (prisma.serviceSuspension.updateMany as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(firstCall.where.status).toBe("PENDING");
-      expect(firstCall.where.startDate.lte).toEqual(now);
-      // No approval gate means the query doesn't filter by approvedBy.
-      expect(firstCall.where.approvedBy).toBeUndefined();
-      expect(firstCall.data).toEqual({ status: "ACTIVE" });
-    });
-
-    it("respects the approval gate when the tenant requires approval", async () => {
-      getTenantConfigMock.mockResolvedValue({
-        utilityId: UID,
-        requireHoldApproval: true,
-        settings: {},
-      });
-      (prisma.serviceSuspension.updateMany as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({ count: 2 })
-        .mockResolvedValueOnce({ count: 0 });
-
-      await transitionSuspensions(UID, now);
-
-      const firstCall = (prisma.serviceSuspension.updateMany as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      // Approval gate adds a filter: only approved holds roll forward.
-      expect(firstCall.where.approvedBy).toEqual({ not: null });
-    });
-
-    it("skips open-ended ACTIVE holds on completion", async () => {
-      (prisma.serviceSuspension.updateMany as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({ count: 0 })
-        .mockResolvedValueOnce({ count: 2 });
-
-      await transitionSuspensions(UID, now);
-
-      const completeCall = (prisma.serviceSuspension.updateMany as ReturnType<typeof vi.fn>).mock.calls[1][0];
-      expect(completeCall.where.status).toBe("ACTIVE");
-      // endDate must be non-null and ≤ now — that's how open-ended
-      // holds (endDate IS NULL) are preserved from auto-completion.
-      expect(completeCall.where.endDate).toEqual({ not: null, lte: now });
-      expect(completeCall.data).toEqual({ status: "COMPLETED" });
-    });
-
-    it("is scoped to a single utility", async () => {
-      (prisma.serviceSuspension.updateMany as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({ count: 0 })
-        .mockResolvedValueOnce({ count: 0 });
-
-      await transitionSuspensions(UID, now);
-
-      const activateCall = (prisma.serviceSuspension.updateMany as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      const completeCall = (prisma.serviceSuspension.updateMany as ReturnType<typeof vi.fn>).mock.calls[1][0];
-      expect(activateCall.where.utilityId).toBe(UID);
-      expect(completeCall.where.utilityId).toBe(UID);
     });
   });
 

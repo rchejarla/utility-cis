@@ -159,7 +159,7 @@ async function sendNotification(
 
 ### Send job (background)
 
-A background job (same `setInterval` pattern as the suspension scheduler) picks up `PENDING` notifications:
+A BullMQ worker (`packages/api/src/workers/notification-worker.ts`) ticks every 10 seconds and calls `processPendingNotificationsWithQuietHours(now)`. The function honors per-tenant `tenant_config.notificationSendEnabled` and SMS quiet hours. It picks up `PENDING` notifications:
 
 1. Query: `WHERE status = 'PENDING' ORDER BY created_at LIMIT 50`
 2. For each: set `status = SENDING`, call the provider adapter, update to `SENT` or `FAILED`.

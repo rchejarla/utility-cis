@@ -99,7 +99,7 @@ Accounts with `is_protected = true` are excluded from `SHUT_OFF_ELIGIBLE` and `D
 
 ## Nightly Evaluation Job
 
-Same `setInterval` pattern as the suspension scheduler and notification send job. Registered in `app.ts`, gated by `DISABLE_SCHEDULERS`.
+Runs hourly inside the BullMQ worker process (`packages/api/src/worker.ts`). The dispatcher (`workers/delinquency-dispatcher.ts`) reads tenant config and enqueues a per-tenant `delinquencyTenant` job; the consumer (`workers/delinquency-worker.ts`) calls `evaluateDelinquencyForTenant(utilityId, now)` and updates `tenantConfig.delinquencyLastRunAt`. See `docs/superpowers/specs/2026-04-24-job-scheduler-migration-design.md` for the BullMQ architecture.
 
 **Algorithm:**
 

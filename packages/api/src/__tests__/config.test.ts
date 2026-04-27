@@ -125,20 +125,18 @@ describe("configSchema", () => {
     expect(result.data.WORKER_HTTP_PORT).toBe(3050);
   });
 
-  it("propagates truthyString coercion to legacy-flag fields", () => {
+  it("propagates truthyString coercion to bool-style env flags", () => {
     const result = configSchema.safeParse({
       ...minValid(),
       DISABLE_SCHEDULERS: "true",
-      USE_LEGACY_SCHEDULERS_SUSPENSION: "1",
-      USE_LEGACY_SCHEDULERS_NOTIFICATION: "false",
       BULL_BOARD_ENABLED: "TRUE",
+      ENABLE_DEV_AUTH_ENDPOINTS: "1",
     });
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.data.DISABLE_SCHEDULERS).toBe(true);
-    expect(result.data.USE_LEGACY_SCHEDULERS_SUSPENSION).toBe(true);
-    expect(result.data.USE_LEGACY_SCHEDULERS_NOTIFICATION).toBe(false);
     expect(result.data.BULL_BOARD_ENABLED).toBe(true);
+    expect(result.data.ENABLE_DEV_AUTH_ENDPOINTS).toBe(true);
   });
 });
 
