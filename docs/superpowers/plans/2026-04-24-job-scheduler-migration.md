@@ -330,16 +330,39 @@
 
 ### Cross-cutting verification before declaring ship 1 done:
 
-- [ ] All `USE_LEGACY_SCHEDULERS_*` flags default off; legacy path triggers only when explicitly set.
-- [ ] Every worker handler passes through `withTelemetry` — metrics visible on `/metrics`.
-- [ ] Every DB mutation from a worker is inside a `$transaction` if it also writes audit rows.
-- [ ] Every idempotency key uses UTC-formatted timestamps.
-- [ ] Every cron `jobId` is deterministic (`<name>-cron`).
-- [ ] Testcontainers integration tests pass locally and on GitHub Actions.
-- [ ] Graceful shutdown test passes.
-- [ ] Redis reconnect test passes.
-- [ ] Bull Board loads only with `BULL_BOARD_ENABLED=true` and System Admin auth.
-- [ ] No untyped `process.env.X` reference outside `config.ts`.
+Verification audit run **2026-04-27** against current `main` (commit `f507422`). Status reflects actual code state, not plan-file authoring intent.
+
+- [x] All `USE_LEGACY_SCHEDULERS_*` flags default off; legacy path triggers only when explicitly set. — `config.ts:53-55` + `app.ts:137-154`.
+- [x] Every worker handler passes through `withTelemetry` — metrics visible on `/metrics`. — All six task-handlers wrap their bodies; `dlq-monitor.ts` is event-listener style and excluded by design.
+- [ ] Every DB mutation from a worker is inside a `$transaction` if it also writes audit rows. — **PARTIAL**. Suspension (✅) and SLA-breach (✅) are clean. Notification, delinquency, and audit-retention are NOT (see Known Drift item #1).
+- [x] Every idempotency key uses UTC-formatted timestamps. — `delinquency-dispatcher.ts:79` uses `formatInTimeZone(now, "UTC", "yyyyMMddHH")`.
+- [x] Every cron `jobId` is deterministic (`<name>-cron`). — All five scheduler IDs are string constants in `SCHEDULER_REGISTRY` (`worker.ts:71-77`).
+- [ ] Testcontainers integration tests pass locally and on GitHub Actions. — **PARTIAL**. Five integration tests exist (`worker-suspension`, `worker-sla-breach`, `worker-notification`, `worker-delinquency`, `worker-audit-retention`). CI runs them under the same job as unit tests rather than a separate `test:integration` job. Acceptable but not as specced.
+- [ ] Graceful shutdown test passes. — **MISSING**. `worker-shutdown.test.ts` does not exist (see Known Drift item #2).
+- [ ] Redis reconnect test passes. — **MISSING**. `worker-redis-reconnect.test.ts` does not exist (see Known Drift item #2).
+- [ ] Bull Board loads only with `BULL_BOARD_ENABLED=true` and System Admin auth. — **NOT IMPLEMENTED**. Config flag exists at `config.ts:58`; no Bull Board mount in `worker.ts` or `app.ts` (see Known Drift item #3).
+- [ ] No untyped `process.env.X` reference outside `config.ts`. — **NOT SATISFIED**. 9 stragglers found (see Known Drift item #4).
+
+### Known Drift — Ship 1 vs. plan intent
+
+The audit on 2026-04-27 surfaced six items where the shipped code doesn't match what Task 10 expected. None are correctness emergencies on the worker hot path; they're holes in completeness or test coverage. Decisions:
+
+1. **Notification + delinquency + audit-retention transactional gaps.** Notification's `processPendingNotificationsWithQuietHours` reads candidates and processes each with `trySendOne()` outside any wrapping `$transaction`; audit emits happen via the existing EventEmitter pipeline. Delinquency's `evaluateAll(utilityId)` + `tenantConfig.delinquencyLastRunAt` update are not atomic. Audit-retention's batched DELETE loop is per-batch atomic but not whole-sweep atomic.
+   - **Decision:** Notification and delinquency atomicity is the **same architectural concern** as Ship 2's EventEmitter-audit refactor (see [`docs/superpowers/specs/2026-04-27-event-emitter-audit-refactor-design.md`](../specs/2026-04-27-event-emitter-audit-refactor-design.md)). Roll the fix into that work rather than landing two passes. Audit-retention has no audit emit so the per-batch boundary is acceptable for delete-only sweeps; not changing.
+
+2. **Missing graceful-shutdown + Redis-reconnect integration tests.** These were specced (`worker-shutdown.test.ts`, `worker-redis-reconnect.test.ts`) but didn't ship.
+   - **Decision:** Worth landing during Ship 2 polish. The shutdown path itself was built and manually verified during Task 1; the Redis reconnect path uses `ioredis` with `reconnectOnError: () => true` which has been observed working in dev. Tests would lock in regression protection but are not blocking.
+
+3. **Bull Board not mounted.** Config flag `BULL_BOARD_ENABLED` exists; no actual route registration. Mid-priority — operators have no GUI for queue inspection, but `/metrics` + logs cover the operational need.
+   - **Decision:** Drop into Ship 2 polish. ~30 min of work to add `@bull-board/fastify` mount + System Admin auth gate in `worker.ts`.
+
+4. **9 `process.env.X` stragglers outside `config.ts`.** Found in `app.ts:66`, `lib/cache-redis.ts`, `middleware/auth.ts`, `middleware/authorization.ts`, `routes/auth.ts`, `server.ts`, `services/notification.service.ts`.
+   - **Decision:** Mostly pre-existed Ship 1 (auth middleware predates this work). Audit is honest that "outside config.ts" is the rule but enforcement was scoped to the worker process, not retrofitting the API. Move to Ship 2 cleanup task. Each is a one-line change; together ~1-2 hours.
+
+5. **Integration-test CI job not separated.** The five worker tests run inside the unit-test job. Spec called for a distinct `test:integration` step. Trade-off: a separate job would isolate testcontainers boot time but doubles the CI matrix. Current setup runs everything in one job; tests pass; coverage is preserved.
+   - **Decision:** Acceptable as-is. If CI runtime becomes a concern, split later.
+
+6. **Plan-file checkboxes were stale until 2026-04-27.** The 76 unchecked boxes inside Task sections (0-9) are now back-filled by inspection — every action they describe is implemented. Boxes are checked above where action+evidence aligned during the audit. (Boxes 0.1-9.x inside individual task sections still appear unchecked in the plan file body for historical reference; that's authoring drift, not engineering drift. Ship 2 polish includes ticking them or rewriting the plan as a closed-out implementation log.)
 
 ---
 
