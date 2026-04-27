@@ -39,8 +39,14 @@ export const configSchema = z.object({
   DATABASE_URL: z.string().default(""),
   REDIS_URL: z.string().default("redis://localhost:6379"),
 
-  // Logging.
-  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
+  // Logging. Accept either case from the env (DEBUG vs debug) — pino
+  // itself only takes lowercase, so we normalize before the enum check.
+  LOG_LEVEL: z
+    .preprocess(
+      (v) => (typeof v === "string" ? v.toLowerCase() : v),
+      z.enum(["fatal", "error", "warn", "info", "debug", "trace"]),
+    )
+    .default("info"),
 
   // API + worker process configuration. PORT is the API listen port
   // (matches the cloud-platform convention of $PORT).
