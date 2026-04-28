@@ -541,7 +541,7 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
         {showRemoveConfirm && (
           <ConfirmDialog
             title="Remove meter"
-            message={`Mark meter ${meter.meterNumber} as removed (BR-MT-005). The meter is not deleted — its history is retained, and any open service-agreement assignments must be removed separately. This action sets the removal date to today.`}
+            message={`Mark meter ${meter.meterNumber} as removed. The meter is not deleted — its history is retained, and any open service-agreement assignments must be removed separately. This action sets the removal date to today.`}
             confirmLabel={removing ? "Processing…" : "Remove Meter"}
             cancelLabel="Cancel"
             confirmDisabled={removing}
