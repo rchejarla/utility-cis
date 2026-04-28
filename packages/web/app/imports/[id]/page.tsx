@@ -9,6 +9,28 @@ import { PageHeader } from "@/components/ui/page-header";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Tabs } from "@/components/ui/tabs";
 import { DataTable } from "@/components/ui/data-table";
+import { useToast } from "@/components/ui/toast";
+
+/**
+ * Browser <a href download> sends the GET request without our
+ * Authorization header, so the API rejects with 401. Fetch the file
+ * with auth, materialise as a Blob URL, then trigger the download
+ * via a synthesised anchor click. Same pattern the AttachmentsTab
+ * uses; lifted into a helper here because we hit it from three
+ * places on this page (original file, errors CSV, summary CSV).
+ */
+async function authDownload(url: string, suggestedFileName: string): Promise<void> {
+  const headers = await apiClient.getAuthHeadersOnly();
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error(`Download failed (${res.status})`);
+  const blob = await res.blob();
+  const blobUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = blobUrl;
+  a.download = suggestedFileName;
+  a.click();
+  window.URL.revokeObjectURL(blobUrl);
+}
 
 interface ImportBatch {
   id: string;
@@ -59,6 +81,7 @@ export default function ImportDetailPage({
 }) {
   const { id } = use(params);
   const { canView } = usePermission("imports");
+  const { toast } = useToast();
   const [detail, setDetail] = useState<DetailResponse | null>(null);
   const [activeTab, setActiveTab] = useState("summary");
   const [rows, setRows] = useState<ImportRow[]>([]);
@@ -98,22 +121,31 @@ export default function ImportDetailPage({
         subtitle={`${batch.entityKind} · ${batch.source} · ${batch.fileName ?? "—"}`}
         actions={
           attachment ? (
-            <a
-              href={`${API_URL}/api/v1/attachments/${attachment.id}/download`}
-              download
+            <button
+              onClick={async () => {
+                try {
+                  await authDownload(
+                    `${API_URL}/api/v1/attachments/${attachment.id}/download`,
+                    attachment.fileName,
+                  );
+                } catch (err) {
+                  toast(err instanceof Error ? err.message : "Download failed", "error");
+                }
+              }}
               style={{
                 padding: "7px 16px",
                 background: "transparent",
                 border: "1px solid var(--accent-primary)",
                 borderRadius: "var(--radius)",
                 color: "var(--accent-primary)",
-                textDecoration: "none",
                 fontSize: "12px",
                 fontWeight: 500,
+                cursor: "pointer",
+                fontFamily: "inherit",
               }}
             >
               Download original file
-            </a>
+            </button>
           ) : undefined
         }
       />
@@ -168,19 +200,32 @@ export default function ImportDetailPage({
                     ))}
                   </tbody>
                 </table>
-                <a
-                  href={`${API_URL}/api/v1/imports/${id}/errors.csv`}
-                  download
+                <button
+                  onClick={async () => {
+                    try {
+                      await authDownload(
+                        `${API_URL}/api/v1/imports/${id}/errors.csv`,
+                        `import-${id}-errors.csv`,
+                      );
+                    } catch (err) {
+                      toast(err instanceof Error ? err.message : "Download failed", "error");
+                    }
+                  }}
                   style={{
                     display: "inline-block",
                     marginTop: "12px",
+                    padding: 0,
+                    background: "none",
+                    border: "none",
                     fontSize: "12px",
                     color: "var(--accent-primary)",
                     textDecoration: "underline",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
                   }}
                 >
                   Download errors CSV
-                </a>
+                </button>
               </Section>
             )}
 
@@ -296,19 +341,32 @@ export default function ImportDetailPage({
               data={rows as any}
             />
             {rows.length > 0 && (
-              <a
-                href={`${API_URL}/api/v1/imports/${id}/errors.csv`}
-                download
+              <button
+                onClick={async () => {
+                  try {
+                    await authDownload(
+                      `${API_URL}/api/v1/imports/${id}/errors.csv`,
+                      `import-${id}-errors.csv`,
+                    );
+                  } catch (err) {
+                    toast(err instanceof Error ? err.message : "Download failed", "error");
+                  }
+                }}
                 style={{
                   display: "inline-block",
                   marginTop: "12px",
+                  padding: 0,
+                  background: "none",
+                  border: "none",
                   fontSize: "12px",
                   color: "var(--accent-primary)",
                   textDecoration: "underline",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
                 }}
               >
                 Download all errors as CSV
-              </a>
+              </button>
             )}
           </div>
         )}
