@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { parseCsvText, type CanonicalFieldDef, type ParsedCsv } from "@utility-cis/shared";
-import { apiClient, API_URL } from "@/lib/api-client";
+import { apiClient, API_URL, getAuthToken } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 
 /**
@@ -251,11 +251,11 @@ export function ImportWizard({ kind }: ImportWizardProps) {
       formData.append("fileName", file.name);
       formData.append("mapping", JSON.stringify(mapping));
 
-      const token =
-        typeof window !== "undefined"
-          ? window.localStorage.getItem("token")
-          : null;
-
+      // Multipart upload bypasses the JSON apiClient wrapper, but we
+      // still need the same auth header it would send. `getAuthToken`
+      // handles localStorage + NextAuth fallback the same way the
+      // wrapper does.
+      const token = await getAuthToken();
       const response = await fetch(`${API_URL}/api/v1/imports`, {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,

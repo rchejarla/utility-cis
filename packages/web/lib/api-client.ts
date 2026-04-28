@@ -58,32 +58,32 @@ export function setDevUser(id: string, email: string, name: string) {
   setAuthToken(token, { id, email, name });
 }
 
+/**
+ * Resolve the bearer token for the current session. Tries
+ * localStorage first (login page / dev impersonation), then falls
+ * back to a NextAuth session for production SSO. Exposed publicly so
+ * non-JSON request paths (multipart uploads, manual fetch calls) can
+ * attach auth without going through the JSON wrapper.
+ */
+export async function getAuthToken(): Promise<string | null> {
+  if (typeof window !== "undefined") {
+    const stored = localStorage.getItem(TOKEN_KEY);
+    if (stored) return stored;
+  }
+  const session = await getSession();
+  const sessionToken = (session as { accessToken?: string } | null)?.accessToken;
+  if (typeof sessionToken === "string" && sessionToken.length > 0) {
+    return sessionToken;
+  }
+  return null;
+}
+
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-
-  // 1. Token from localStorage (login page or dev impersonation)
-  if (typeof window !== "undefined") {
-    const stored = localStorage.getItem(TOKEN_KEY);
-    if (stored) {
-      headers["Authorization"] = `Bearer ${stored}`;
-      return headers;
-    }
-  }
-
-  // 2. NextAuth session token (production SSO path)
-  const session = await getSession();
-  if (session) {
-    const token = (session as any).accessToken;
-    if (token && typeof token === "string") {
-      headers["Authorization"] = `Bearer ${token}`;
-      return headers;
-    }
-  }
-
-  // 3. No token — requests will get 401. The auth context fallback
-  //    handles this gracefully by granting all perms in dev mode.
+  const token = await getAuthToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   return headers;
 }
 
