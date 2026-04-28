@@ -21,6 +21,11 @@ export const createMeterSchema = z.object({
   dialCount: z.number().int().positive().optional(),
   multiplier: z.number().positive().default(1.0),
   installDate: z.string().date(),
+  // `removalDate` set when the Remove Meter action runs
+  // (status → REMOVED). Nullable so it can be cleared if a meter is
+  // un-removed; optional at create time since most meters are
+  // commissioned with no removal date.
+  removalDate: z.string().date().nullable().optional(),
   status: meterStatusEnum.default("ACTIVE"),
   notes: z.string().optional(),
   // Tenant-configurable custom fields. Validated server-side.

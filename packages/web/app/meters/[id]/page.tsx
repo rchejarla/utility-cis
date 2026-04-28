@@ -83,7 +83,7 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
   const [customFieldSchema, setCustomFieldSchema] = useState<FieldDefinition[]>([]);
   const [saving, setSaving] = useState(false);
   const [uoms, setUoms] = useState<Array<{ id: string; code: string; name: string; commodityId: string }>>([]);
-  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
+  const [removeDialog, setRemoveDialog] = useState<{ removalDate: string } | null>(null);
   const [removing, setRemoving] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [history, setHistory] = useState<Array<{
@@ -169,13 +169,15 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
   };
 
   const handleRemove = async () => {
-    if (!meter) return;
+    if (!meter || !removeDialog) return;
     setRemoving(true);
     try {
-      const today = new Date().toISOString().slice(0, 10);
-      await apiClient.patch(`/api/v1/meters/${id}`, { status: "REMOVED", removalDate: today });
+      await apiClient.patch(`/api/v1/meters/${id}`, {
+        status: "REMOVED",
+        removalDate: removeDialog.removalDate,
+      });
       await loadMeter();
-      setShowRemoveConfirm(false);
+      setRemoveDialog(null);
       toast("Meter removed successfully", "success");
     } catch (err: any) {
       toast(err.message || "Failed to remove meter", "error");
@@ -236,7 +238,7 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
         actions={
           canDelete && meter.status === "ACTIVE" ? (
             <button
-              onClick={() => setShowRemoveConfirm(true)}
+              onClick={() => setRemoveDialog({ removalDate: new Date().toISOString().slice(0, 10) })}
               disabled={removing}
               title="BR-MT-005: Meters cannot be deleted, only removed. History is retained."
               style={{
@@ -538,17 +540,33 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
           </div>
         )}
 
-        {showRemoveConfirm && (
+        {removeDialog && (
           <ConfirmDialog
             title="Remove meter"
-            message={`Mark meter ${meter.meterNumber} as removed. The meter is not deleted — its history is retained, and any open service-agreement assignments must be removed separately. This action sets the removal date to today.`}
+            message={`Mark meter ${meter.meterNumber} as removed effective the date below. The meter is not deleted — its history is retained, and any open service-agreement assignments must be removed separately.`}
             confirmLabel={removing ? "Processing…" : "Remove Meter"}
             cancelLabel="Cancel"
-            confirmDisabled={removing}
+            confirmDisabled={removing || !removeDialog.removalDate}
             destructive
             onConfirm={handleRemove}
-            onCancel={() => !removing && setShowRemoveConfirm(false)}
-          />
+            onCancel={() => !removing && setRemoveDialog(null)}
+          >
+            <label
+              style={{
+                display: "block",
+                fontSize: "12px",
+                color: "var(--text-muted)",
+                marginBottom: "6px",
+                fontWeight: 500,
+              }}
+            >
+              Removal date
+            </label>
+            <DatePicker
+              value={removeDialog.removalDate}
+              onChange={(v) => setRemoveDialog({ removalDate: v })}
+            />
+          </ConfirmDialog>
         )}
 
         {activeTab === "agreements" && (
