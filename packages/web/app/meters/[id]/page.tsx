@@ -16,6 +16,7 @@ import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { HistoryTimeline, type HistoryEvent } from "@/components/effective-dating/history-timeline";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 interface Meter {
   id: string;
@@ -232,6 +233,30 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
       <PageHeader
         title={meter.meterNumber}
         subtitle={meter.premise ? `${meter.premise.addressLine1}, ${meter.premise.city}` : "No premise"}
+        actions={
+          canDelete && meter.status === "ACTIVE" ? (
+            <button
+              onClick={() => setShowRemoveConfirm(true)}
+              disabled={removing}
+              title="BR-MT-005: Meters cannot be deleted, only removed. History is retained."
+              style={{
+                padding: "7px 16px",
+                fontSize: "12px",
+                fontWeight: 500,
+                background: "transparent",
+                border: "1px solid var(--danger)",
+                borderRadius: "var(--radius)",
+                color: "var(--danger)",
+                cursor: removing ? "not-allowed" : "pointer",
+                fontFamily: "inherit",
+                opacity: removing ? 0.6 : 1,
+                whiteSpace: "nowrap",
+              }}
+            >
+              Remove Meter
+            </button>
+          ) : undefined
+        }
       />
 
       <Tabs
@@ -274,45 +299,35 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
               padding: "20px 24px",
             }}
           >
-            {/* Edit / Save / Cancel buttons */}
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px", gap: "8px" }}>
-              <div>
-                {canDelete && !editing && meter.status === "ACTIVE" && (
+            {/* Edit / Save / Cancel buttons. Remove Meter is in the
+                page header so it's available regardless of which tab
+                is active and visually grouped with other entity-level
+                lifecycle actions. */}
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px", gap: "8px" }}>
+              {editing ? (
+                <>
                   <button
-                    onClick={() => setShowRemoveConfirm(true)}
-                    title="BR-MT-005: Meters cannot be deleted, only removed. History is retained."
-                    style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--danger)", borderRadius: "var(--radius)", color: "var(--danger)", cursor: "pointer", fontFamily: "inherit" }}
-                  >
-                    Remove Meter
-                  </button>
-                )}
-              </div>
-              <div style={{ display: "flex", gap: "8px" }}>
-                {editing ? (
-                  <>
-                    <button
-                      onClick={handleCancel}
-                      style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={handleSave}
-                      disabled={saving}
-                      style={{ padding: "6px 14px", fontSize: "12px", background: "var(--accent-primary)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
-                    >
-                      {saving ? "Saving..." : "Save"}
-                    </button>
-                  </>
-                ) : canEdit ? (
-                  <button
-                    onClick={handleEdit}
+                    onClick={handleCancel}
                     style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
                   >
-                    Edit
+                    Cancel
                   </button>
-                ) : null}
-              </div>
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    style={{ padding: "6px 14px", fontSize: "12px", background: "var(--accent-primary)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: saving ? 0.7 : 1 }}
+                  >
+                    {saving ? "Saving..." : "Save"}
+                  </button>
+                </>
+              ) : canEdit ? (
+                <button
+                  onClick={handleEdit}
+                  style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}
+                >
+                  Edit
+                </button>
+              ) : null}
             </div>
 
             <div style={fieldStyle}>
@@ -524,20 +539,16 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
         )}
 
         {showRemoveConfirm && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
-            <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "24px", maxWidth: "420px", width: "100%" }}>
-              <div style={{ fontSize: "16px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "8px" }}>Confirm Meter Removal</div>
-              <div style={{ fontSize: "13px", color: "var(--text-secondary)", marginBottom: "20px", lineHeight: 1.5 }}>
-                Are you sure you want to remove this meter? This marks it as removed.
-              </div>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
-                <button onClick={() => setShowRemoveConfirm(false)} style={{ padding: "6px 14px", fontSize: "12px", background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
-                <button onClick={handleRemove} disabled={removing} style={{ padding: "6px 14px", fontSize: "12px", background: "var(--danger)", color: "#fff", border: "none", borderRadius: "var(--radius)", cursor: removing ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: removing ? 0.7 : 1 }}>
-                  {removing ? "Processing..." : "Confirm"}
-                </button>
-              </div>
-            </div>
-          </div>
+          <ConfirmDialog
+            title="Remove meter"
+            message={`Mark meter ${meter.meterNumber} as removed (BR-MT-005). The meter is not deleted — its history is retained, and any open service-agreement assignments must be removed separately. This action sets the removal date to today.`}
+            confirmLabel={removing ? "Processing…" : "Remove Meter"}
+            cancelLabel="Cancel"
+            confirmDisabled={removing}
+            destructive
+            onConfirm={handleRemove}
+            onCancel={() => !removing && setShowRemoveConfirm(false)}
+          />
         )}
 
         {activeTab === "agreements" && (

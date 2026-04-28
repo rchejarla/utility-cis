@@ -1,14 +1,20 @@
 "use client";
 
 import Link from "next/link";
+import type { ReactNode } from "react";
 
 interface PageHeaderProps {
   title: string;
   subtitle?: string;
+  /** Single primary action — backwards-compatible shortcut. */
   action?: { label: string; href?: string; onClick?: () => void };
+  /** Free-form action slot for custom button groups (e.g. destructive
+   *  lifecycle buttons that don't fit the primary-action style). When
+   *  set, takes precedence over `action`. */
+  actions?: ReactNode;
 }
 
-export function PageHeader({ title, subtitle, action }: PageHeaderProps) {
+export function PageHeader({ title, subtitle, action, actions }: PageHeaderProps) {
   return (
     <div
       style={{
@@ -59,7 +65,9 @@ export function PageHeader({ title, subtitle, action }: PageHeaderProps) {
         )}
       </div>
 
-      {action && (
+      {actions ? (
+        <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>{actions}</div>
+      ) : action && (
         action.href ? (
           <Link
             href={action.href}
