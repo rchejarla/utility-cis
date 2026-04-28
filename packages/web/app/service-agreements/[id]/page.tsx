@@ -339,33 +339,48 @@ export default function ServiceAgreementDetailPage({
         </div>
         {canEdit && availableTransitions.length > 0 && (
           <div style={{ display: "flex", gap: "8px" }}>
-            {availableTransitions.map((nextStatus) => (
-              <button
-                key={nextStatus}
-                onClick={() => handleTransition(nextStatus)}
-                disabled={transitioning}
-                style={{
-                  padding: "7px 16px",
-                  borderRadius: "var(--radius)",
-                  border: "1px solid var(--accent-primary)",
-                  background: nextStatus === "ACTIVE" ? "var(--accent-primary)" : "transparent",
-                  color: nextStatus === "ACTIVE" ? "#fff" : "var(--accent-primary)",
-                  fontSize: "12px",
-                  fontWeight: "500",
-                  cursor: transitioning ? "not-allowed" : "pointer",
-                  fontFamily: "inherit",
-                  opacity: transitioning ? 0.6 : 1,
-                }}
-              >
-                {nextStatus === "ACTIVE"
-                  ? "Activate"
-                  : nextStatus === "FINAL"
-                    ? "Stop Service"
-                    : nextStatus === "CLOSED"
-                      ? "Issue Final Bill"
-                      : nextStatus}
-              </button>
-            ))}
+            {availableTransitions.map((nextStatus) => {
+              // Activate is a positive action (filled accent); Stop
+              // Service and Issue Final Bill are destructive
+              // (outlined red) to match Remove Meter on the meter
+              // detail page. Same colour, same prominence, same risk
+              // signal across entities.
+              const isDestructive = nextStatus === "FINAL" || nextStatus === "CLOSED";
+              return (
+                <button
+                  key={nextStatus}
+                  onClick={() => handleTransition(nextStatus)}
+                  disabled={transitioning}
+                  style={{
+                    padding: "7px 16px",
+                    borderRadius: "var(--radius)",
+                    border: isDestructive
+                      ? "1px solid var(--danger)"
+                      : "1px solid var(--accent-primary)",
+                    background: nextStatus === "ACTIVE" ? "var(--accent-primary)" : "transparent",
+                    color: isDestructive
+                      ? "var(--danger)"
+                      : nextStatus === "ACTIVE"
+                        ? "#fff"
+                        : "var(--accent-primary)",
+                    fontSize: "12px",
+                    fontWeight: 500,
+                    cursor: transitioning ? "not-allowed" : "pointer",
+                    fontFamily: "inherit",
+                    opacity: transitioning ? 0.6 : 1,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {nextStatus === "ACTIVE"
+                    ? "Activate"
+                    : nextStatus === "FINAL"
+                      ? "Stop Service"
+                      : nextStatus === "CLOSED"
+                        ? "Issue Final Bill"
+                        : nextStatus}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
