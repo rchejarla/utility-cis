@@ -1034,26 +1034,99 @@ enum ImportBatchStatus {
   PROCESSING
   COMPLETE
   FAILED
+  PARTIAL
+  CANCELLED
 }
 
 model ImportBatch {
-  id             String            @id @default(uuid()) @db.Uuid
-  utilityId      String            @map("utility_id") @db.Uuid
-  source         ImportBatchSource @map("source")
-  fileName       String?           @map("file_name") @db.VarChar(500)
-  recordCount    Int               @default(0) @map("record_count")
-  importedCount  Int               @default(0) @map("imported_count")
-  exceptionCount Int               @default(0) @map("exception_count")
-  errorCount     Int               @default(0) @map("error_count")
-  status         ImportBatchStatus @default(PENDING) @map("status")
-  errors         Json?             @map("errors")
-  createdBy      String            @map("created_by") @db.Uuid
-  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz
-  completedAt    DateTime?         @map("completed_at") @db.Timestamptz
+  id                    String            @id @default(uuid()) @db.Uuid
+  utilityId             String            @map("utility_id") @db.Uuid
+  /// Drives handler dispatch. e.g. "meter_read", "customer", "premise", ...
+  entityKind            String            @map("entity_kind") @db.VarChar(50)
+  source                ImportBatchSource @map("source")
+  fileName              String?           @map("file_name") @db.VarChar(500)
+  recordCount           Int               @default(0) @map("record_count")
+  importedCount         Int               @default(0) @map("imported_count")
+  exceptionCount        Int               @default(0) @map("exception_count")
+  errorCount            Int               @default(0) @map("error_count")
+  status                ImportBatchStatus @default(PENDING) @map("status")
+  /// {sourceHeader → canonicalField} map applied to this batch — recorded for replay/audit.
+  mapping               Json?             @map("mapping")
+  /// Slice 2 worker writes these on pickup / heartbeat / cancel; slice 1 leaves them null.
+  processingStartedAt   DateTime?         @map("processing_started_at") @db.Timestamptz
+  lastProgressAt        DateTime?         @map("last_progress_at") @db.Timestamptz
+  cancelRequested       Boolean           @default(false) @map("cancel_requested")
+  createdBy             String            @map("created_by") @db.Uuid
+  createdAt             DateTime          @default(now()) @map("created_at") @db.Timestamptz
+  completedAt           DateTime?         @map("completed_at") @db.Timestamptz
+
+  rows                  ImportRow[]
 
   @@index([utilityId, status])
   @@index([utilityId, createdAt])
+  @@index([utilityId, entityKind, createdAt(sort: Desc)])
   @@map("import_batch")
+}
+
+enum ImportRowStatus {
+  PENDING
+  IMPORTED
+  ERROR
+  SKIPPED
+}
+
+model ImportRow {
+  id              String          @id @default(uuid()) @db.Uuid
+  importBatchId   String          @map("import_batch_id") @db.Uuid
+  /// 1-based; matches what the operator sees in their CSV.
+  rowIndex        Int             @map("row_index")
+  /// Source row, post-mapping; canonical field names as keys.
+  rawData         Json            @map("raw_data")
+  status          ImportRowStatus @default(PENDING) @map("status")
+  /// FK to whatever the kind handler created (loose; nullable).
+  resultEntityId  String?         @map("result_entity_id") @db.Uuid
+  errorCode       String?         @map("error_code") @db.VarChar(64)
+  errorMessage    String?         @map("error_message") @db.Text
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  processedAt     DateTime?       @map("processed_at") @db.Timestamptz
+
+  importBatch     ImportBatch     @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+
+  @@index([importBatchId, status])
+  @@index([importBatchId, rowIndex])
+  @@map("import_row")
+}
+
+enum InAppNotificationKind {
+  IMPORT_COMPLETE
+  IMPORT_FAILED
+  IMPORT_CANCELLED
+  IMPORT_PARTIAL
+}
+
+enum NotificationSeverity {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+}
+
+model InAppNotification {
+  id          String                @id @default(uuid()) @db.Uuid
+  utilityId   String                @map("utility_id") @db.Uuid
+  userId      String                @map("user_id") @db.Uuid
+  kind        InAppNotificationKind
+  severity    NotificationSeverity
+  title       String                @db.VarChar(200)
+  body        String                @db.Text
+  link        String?               @db.VarChar(500)
+  metadata    Json?
+  isRead      Boolean               @default(false) @map("is_read")
+  readAt      DateTime?             @map("read_at") @db.Timestamptz
+  createdAt   DateTime              @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([utilityId, userId, isRead, createdAt(sort: Desc)])
+  @@map("in_app_notification")
 }
 
 // ─── Notifications (Module 13) ──────────────────────────────────

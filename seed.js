@@ -304,7 +304,8 @@ async function main() {
     "tenant_profile","tenant_users",
     "notifications","delinquency",
     "service_requests","service_request_slas",
-    "portal_accounts","portal_billing","portal_usage","portal_profile"
+    "portal_accounts","portal_billing","portal_usage","portal_profile",
+    "imports"
   ];
   const allPerms = ["VIEW","CREATE","EDIT","DELETE"];
 

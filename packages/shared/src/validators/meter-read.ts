@@ -144,24 +144,10 @@ export const meterReadQuerySchema = z.object({
   toDate: z.string().date().optional(),
 }).strict();
 
-/**
- * Bulk-import payload. Accepts either a file via multipart (handled by
- * the route layer) or an inline JSON array for smaller batches.
- */
-export const importMeterReadsSchema = z.object({
-  source: z.enum(["AMR", "AMI", "MANUAL_UPLOAD", "API"]).default("API"),
-  fileName: z.string().max(500).optional(),
-  reads: z.array(
-    z.object({
-      meterNumber: z.string().min(1).max(100),
-      registerNumber: z.string().optional(),
-      readDatetime: z.string().datetime(),
-      reading: z.number().nonnegative(),
-      readType: readTypeEnum.optional(),
-      readSource: readSourceEnum.optional(),
-    }).strict(),
-  ).min(1).max(10000),
-}).strict();
+// Bulk import has moved to the generic /api/v1/imports endpoint with
+// kind-aware handlers (see spec 22). The kind handler defines its own
+// per-row Zod-style validation in `parseRow`; there's no longer a
+// shared bulk-payload schema here.
 
 export type ReadType = z.infer<typeof readTypeEnum>;
 export type ReadSource = z.infer<typeof readSourceEnum>;
@@ -172,4 +158,3 @@ export type RegisterSkipReason = z.infer<typeof registerSkipReasonEnum>;
 export type CorrectMeterReadInput = z.infer<typeof correctMeterReadSchema>;
 export type ResolveExceptionInput = z.infer<typeof resolveExceptionSchema>;
 export type MeterReadQuery = z.infer<typeof meterReadQuerySchema>;
-export type ImportMeterReadsInput = z.infer<typeof importMeterReadsSchema>;

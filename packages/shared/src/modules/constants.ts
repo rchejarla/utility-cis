@@ -52,6 +52,7 @@ export const MODULES = [
   "portal_billing",
   "portal_usage",
   "portal_profile",
+  "imports",
 ] as const;
 
 export type ModuleKey = (typeof MODULES)[number];
@@ -98,6 +99,7 @@ export const MODULE_META: Record<ModuleKey, { label: string; icon: string }> = {
   portal_billing: { label: "Portal: Billing", icon: "faMoneyBill" },
   portal_usage: { label: "Portal: Usage", icon: "faBolt" },
   portal_profile: { label: "Portal: Profile", icon: "faUser" },
+  imports: { label: "Imports", icon: "faFileImport" },
 };
 
 // Preset role definitions

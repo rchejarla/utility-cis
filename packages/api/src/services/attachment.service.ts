@@ -13,6 +13,7 @@ const ALLOWED_MIME_TYPES = new Set([
   "image/webp",
   "text/plain",
   "text/csv",
+  "application/json",
   "application/vnd.ms-excel",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/msword",

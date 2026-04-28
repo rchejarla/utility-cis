@@ -5,7 +5,6 @@ import {
   correctMeterReadSchema,
   meterReadQuerySchema,
   resolveExceptionSchema,
-  importMeterReadsSchema,
 } from "@utility-cis/shared";
 import {
   listMeterReads,
@@ -17,7 +16,6 @@ import {
   correctMeterRead,
   resolveException,
   deleteMeterRead,
-  importMeterReads,
 } from "../services/meter-read.service.js";
 import { idParamSchema } from "../lib/route-schemas.js";
 import { z } from "zod";
@@ -154,43 +152,8 @@ export async function meterReadRoutes(app: FastifyInstance) {
     },
   );
 
-  // Bulk import. Accepts a JSON payload with up to 10k rows and returns
-  // an aggregate result (`imported`, `exceptions`, `errors[]`). Each row
-  // is processed independently so partial success is the norm — an
-  // unknown meter on row 17 doesn't roll back the 16 valid rows that
-  // came before it. The frontend wizard at /meter-reads/import drives
-  // this endpoint.
-  app.post(
-    "/api/v1/meter-reads/import",
-    { config: { module: "meter_reads", permission: "CREATE" } },
-    async (request, reply) => {
-      const { utilityId, id: actorId, name: actorName } = request.user;
-      const data = importMeterReadsSchema.parse(request.body);
-      const result = await importMeterReads(utilityId, actorId, actorName, data);
-      return reply.send(result);
-    },
-  );
-
-  // CSV template — operators download this from the import wizard so
-  // they don't have to remember the column names. Returns text/csv so
-  // browsers prompt to save instead of rendering it. Static content
-  // (column list + example rows) with no tenant data, so the route
-  // skips auth — a plain <a href download> in the browser doesn't
-  // attach the Authorization header, and we don't want to roll a
-  // blob-with-fetch dance just for a documentation artifact.
-  app.get(
-    "/api/v1/meter-reads/import/template.csv",
-    { config: { skipAuth: true } },
-    async (_request, reply) => {
-      const csv = [
-        "meter_number,read_datetime,reading,read_type,read_source",
-        "MTR-001,2026-04-15T09:00:00Z,12345.67,ACTUAL,MANUAL",
-        "MTR-002,2026-04-15T09:05:00Z,8901.23,ACTUAL,AMR",
-      ].join("\n") + "\n";
-      reply
-        .header("Content-Type", "text/csv; charset=utf-8")
-        .header("Content-Disposition", 'attachment; filename="meter-reads-template.csv"')
-        .send(csv);
-    },
-  );
+  // Bulk import has moved to the generic POST /api/v1/imports endpoint
+  // (see spec 22 + the meter-read kind handler). The page at
+  // /meter-reads/import mounts <ImportWizard kind="meter_read" /> and
+  // drives the new flow.
 }
