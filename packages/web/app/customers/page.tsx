@@ -141,6 +141,7 @@ export default function CustomersPage() {
       getDetailHref={(row) => `/customers/${row.id}`}
       columns={columns}
       newAction={{ label: "Add Customer", href: "/customers/new" }}
+      importHref="/customers/import"
       emptyState={{
         headline: "No customers yet",
         description:

@@ -195,25 +195,6 @@ function HeaderActions() {
       >
         ⚠ Exception Queue
       </Link>
-      <Link
-        href="/meter-reads/import"
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: "6px",
-          padding: "7px 14px",
-          borderRadius: "var(--radius)",
-          border: "1px solid var(--border)",
-          background: "var(--bg-card)",
-          color: "var(--text-primary)",
-          fontSize: "12px",
-          fontWeight: 500,
-          textDecoration: "none",
-          fontFamily: "inherit",
-        }}
-      >
-        ↑ Import Reads
-      </Link>
     </div>
   );
 }
@@ -228,6 +209,7 @@ export default function MeterReadsPage() {
       getDetailHref={(row) => `/meter-reads/${row.id}`}
       columns={columns}
       newAction={{ label: "+ New Read", href: "/meter-reads/new" }}
+      importHref="/meter-reads/import"
       emptyState={{
         headline: "No meter reads recorded",
         description:

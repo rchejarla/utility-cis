@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faMagnifyingGlass } from "@fortawesome/pro-solid-svg-icons";
@@ -91,6 +92,13 @@ export interface EntityListPageProps<T extends { id: string }> {
     href: string;
   };
   /**
+   * Optional href to a bulk-import page (e.g. "/customers/import").
+   * Renders a secondary "Import" button next to the primary Add
+   * button when the current user has CREATE permission. Use sparingly
+   * — only entities that have a real import handler in the framework.
+   */
+  importHref?: string;
+  /**
    * Optional copy shown inside the fresh-empty-state CTA. Only
    * consulted when the list has zero rows AND no filters/search are
    * applied. `headline` defaults to "No {subject}s yet"; set
@@ -166,6 +174,7 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
     getDetailHref,
     columns,
     newAction,
+    importHref,
     emptyState,
     search,
     filters,
@@ -274,7 +283,51 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
         // action and two "Add" buttons in the same viewport reads as
         // redundant. Once data exists, the header button returns as
         // the quick-add shortcut next to the title.
-        action={canCreate && newAction && !showEmptyCta ? newAction : undefined}
+        actions={
+          canCreate && !showEmptyCta && (newAction || importHref) ? (
+            <>
+              {importHref && (
+                <Link
+                  href={importHref}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    padding: "8px 16px",
+                    borderRadius: "var(--radius)",
+                    background: "transparent",
+                    color: "var(--accent-primary)",
+                    border: "1px solid var(--accent-primary)",
+                    fontSize: "13px",
+                    fontWeight: 500,
+                    textDecoration: "none",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Import
+                </Link>
+              )}
+              {newAction && (
+                <Link
+                  href={newAction.href}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    padding: "8px 16px",
+                    borderRadius: "var(--radius)",
+                    background: "var(--accent-primary)",
+                    color: "#fff",
+                    fontSize: "13px",
+                    fontWeight: 500,
+                    textDecoration: "none",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {newAction.label}
+                </Link>
+              )}
+            </>
+          ) : undefined
+        }
       />
 
       {headerSlot}
