@@ -235,24 +235,35 @@ export default function ImportCenterPage() {
       </div>
       <h1
         style={{
-          fontFamily: "'JetBrains Mono', monospace",
-          fontSize: "28px",
-          fontWeight: 700,
-          letterSpacing: "-0.02em",
-          margin: "0 0 6px 0",
+          fontSize: "22px",
+          fontWeight: 600,
+          letterSpacing: "-0.01em",
+          margin: "0 0 4px 0",
           color: "var(--text-primary)",
+          lineHeight: 1.3,
         }}
       >
-        IMPORT_CENTER
+        Import Meter Reads
       </h1>
+      <div
+        aria-hidden
+        style={{
+          height: "2px",
+          width: "32px",
+          borderRadius: "2px",
+          background: "var(--accent-gradient)",
+          margin: "0 0 6px",
+        }}
+      />
       <p
         style={{
-          fontSize: "13px",
+          fontSize: "14px",
           color: "var(--text-secondary)",
           margin: "0 0 28px 0",
+          lineHeight: 1.4,
         }}
       >
-        Bulk ingest meter reads from AMR, AMI, or manual CSV/JSON.
+        Bulk ingest meter reads from AMR, AMI, or manual CSV/JSON. Up to 10,000 rows per batch.
       </p>
 
       <div
@@ -407,6 +418,33 @@ export default function ImportCenterPage() {
                   onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
                   style={{ display: "none" }}
                 />
+              </div>
+
+              <div
+                style={{
+                  marginTop: "10px",
+                  fontSize: "12px",
+                  color: "var(--text-muted)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                }}
+              >
+                Need the column layout?
+                <a
+                  href="/api/v1/meter-reads/import/template.csv"
+                  download
+                  // Stop the click from bubbling up to the dropzone, which
+                  // would also fire the hidden file input.
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    color: "var(--accent-primary)",
+                    textDecoration: "underline",
+                    textUnderlineOffset: "2px",
+                  }}
+                >
+                  Download CSV template
+                </a>
               </div>
 
               <div

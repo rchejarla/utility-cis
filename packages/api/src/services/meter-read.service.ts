@@ -7,6 +7,7 @@ import type {
   CorrectMeterReadInput,
   MeterReadQuery,
   ResolveExceptionInput,
+  ImportMeterReadsInput,
 } from "@utility-cis/shared";
 import { paginatedTenantList } from "../lib/pagination.js";
 import { auditCreate, auditUpdate, writeAuditRow } from "../lib/audit-wrap.js";
@@ -702,4 +703,188 @@ export async function resolveException(
       return r;
     },
   );
+}
+
+/**
+ * Bulk import of meter reads. Accepts up to 10k rows in one call (the
+ * Zod max on `importMeterReadsSchema`). Each row is processed
+ * individually inside its own transaction so a single bad row doesn't
+ * abort the whole batch — partial success is the expected mode for
+ * AMR/AMI ingest where some meters in the field are routinely
+ * unassigned, REMOVED, or have unparseable readings.
+ *
+ * Pipeline per row:
+ *   1. Pre-validate via the bulk meterByNumber map (built once,
+ *      reused across rows so we don't issue N round-trips for
+ *      meter lookups).
+ *   2. Resolve owning service agreement at the read date via the
+ *      ServiceAgreementMeter junction. Failure raises METER_NOT_ASSIGNED.
+ *   3. Compute prior reading + consumption from prior history.
+ *   4. INSERT one MeterRead row tagged with the batch id.
+ *   5. Audit row emitted in the same transaction.
+ *
+ * Rows are sorted by (meterId, readDatetime ASC) so that when a batch
+ * contains multiple reads for the same meter, the consumption
+ * calculation for row N+1 sees row N's reading as its prior — preserving
+ * the chronological invariant `computeConsumption` relies on.
+ *
+ * The ImportBatch record gives operators a traceable handle for the
+ * import: status, counts, error list, source metadata. Reads carry
+ * `importBatchId` for downstream filtering ("show me everything from
+ * the 2026-04-28 AMI batch").
+ */
+export async function importMeterReads(
+  utilityId: string,
+  actorId: string,
+  actorName: string,
+  data: ImportMeterReadsInput,
+): Promise<{
+  batchId: string;
+  imported: number;
+  exceptions: number;
+  errors: Array<{ row: number; meterNumber: string; error: string }>;
+}> {
+  const batch = await prisma.importBatch.create({
+    data: {
+      utilityId,
+      source: data.source,
+      fileName: data.fileName ?? null,
+      recordCount: data.reads.length,
+      status: "PROCESSING",
+      createdBy: actorId,
+    },
+  });
+
+  // Resolve every meter referenced in the payload up-front so we can
+  // reject unknown numbers in O(1) per row instead of O(N) DB hits.
+  const meterNumbers = [...new Set(data.reads.map((r) => r.meterNumber))];
+  const meters = await prisma.meter.findMany({
+    where: { utilityId, meterNumber: { in: meterNumbers } },
+    select: { id: true, meterNumber: true, status: true, uomId: true },
+  });
+  const meterByNumber = new Map(meters.map((m) => [m.meterNumber, m]));
+
+  const errors: Array<{ row: number; meterNumber: string; error: string }> = [];
+  let imported = 0;
+  let exceptions = 0;
+
+  // Stable ordering: same meter, oldest reading first. Rows for
+  // different meters interleave in their original order.
+  const indexedRows = data.reads.map((row, originalIndex) => ({ row, originalIndex }));
+  indexedRows.sort((a, b) => {
+    if (a.row.meterNumber !== b.row.meterNumber) {
+      return a.row.meterNumber.localeCompare(b.row.meterNumber);
+    }
+    return a.row.readDatetime.localeCompare(b.row.readDatetime);
+  });
+
+  for (const { row, originalIndex } of indexedRows) {
+    const rowNum = originalIndex + 1; // 1-indexed for user-facing reporting
+    const meter = meterByNumber.get(row.meterNumber);
+
+    if (!meter) {
+      errors.push({
+        row: rowNum,
+        meterNumber: row.meterNumber,
+        error: `Meter "${row.meterNumber}" not found`,
+      });
+      continue;
+    }
+    if (meter.status === "REMOVED") {
+      errors.push({
+        row: rowNum,
+        meterNumber: row.meterNumber,
+        error: `Meter "${row.meterNumber}" is REMOVED — reads cannot be imported against it`,
+      });
+      continue;
+    }
+
+    try {
+      const readDatetime = new Date(row.readDatetime);
+      const readDate = new Date(readDatetime.toISOString().slice(0, 10));
+
+      const serviceAgreementId = await resolveServiceAgreementId(
+        utilityId,
+        meter.id,
+        readDate,
+      );
+      const { priorReading, consumption, exceptionCode } = await computeConsumption(
+        utilityId,
+        meter.id,
+        null,
+        row.reading,
+        readDatetime,
+      );
+
+      await auditCreate(
+        { utilityId, actorId, actorName, entityType: "MeterRead" },
+        EVENT_TYPES.METER_CREATED,
+        (tx) =>
+          tx.meterRead.create({
+            data: {
+              utilityId,
+              meterId: meter.id,
+              serviceAgreementId,
+              uomId: meter.uomId,
+              readDate,
+              readDatetime,
+              reading: row.reading,
+              priorReading,
+              consumption,
+              readType: row.readType ?? "ACTUAL",
+              readSource: row.readSource ?? mapBatchSourceToReadSource(data.source),
+              exceptionCode: exceptionCode ?? null,
+              readerId: actorId,
+              importBatchId: batch.id,
+            },
+            include: fullInclude,
+          }),
+      );
+      imported++;
+      if (exceptionCode) exceptions++;
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Unknown error processing row";
+      errors.push({ row: rowNum, meterNumber: row.meterNumber, error: message });
+    }
+  }
+
+  // Final batch state. FAILED only if every row errored — even a single
+  // successful insert means the operator has data to look at, which is
+  // a different workflow from "the import did nothing."
+  const allFailed = errors.length === data.reads.length;
+  await prisma.importBatch.update({
+    where: { id: batch.id },
+    data: {
+      status: allFailed ? "FAILED" : "COMPLETE",
+      importedCount: imported,
+      exceptionCount: exceptions,
+      errorCount: errors.length,
+      errors: errors.length > 0 ? (errors as unknown as object) : undefined,
+      completedAt: new Date(),
+    },
+  });
+
+  return { batchId: batch.id, imported, exceptions, errors };
+}
+
+/**
+ * Map ImportBatchSource → MeterRead.readSource when the row didn't
+ * specify its own. AMR/AMI/MANUAL_UPLOAD/API in the batch correspond
+ * to AMR/AMI/MANUAL/SYSTEM at the read level. Single-row imports via
+ * the API flow record reads as SYSTEM (vs. an operator typing them).
+ */
+function mapBatchSourceToReadSource(
+  batchSource: ImportMeterReadsInput["source"],
+): "MANUAL" | "AMR" | "AMI" | "SYSTEM" {
+  switch (batchSource) {
+    case "AMR":
+      return "AMR";
+    case "AMI":
+      return "AMI";
+    case "MANUAL_UPLOAD":
+      return "MANUAL";
+    case "API":
+      return "SYSTEM";
+  }
 }
