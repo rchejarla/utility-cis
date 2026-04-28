@@ -271,13 +271,27 @@ export function ImportWizard({ kind }: ImportWizardProps) {
       const data = (await response.json()) as CommitResult;
       setResult(data);
       setStage("commit");
-      const verb =
-        data.status === "COMPLETE"
-          ? "imported"
-          : data.status === "PARTIAL"
-            ? "partially imported"
-            : "failed to import";
-      toast(`${data.importedCount} of ${data.recordCount} rows ${verb}`, "success");
+      // Toast message + severity reflect the actual outcome. The
+      // earlier version always said "X of Y rows failed to import"
+      // using importedCount even when status was FAILED, which
+      // produced "0 of 2 rows failed to import" — wrong both
+      // numerically and tonally.
+      if (data.status === "COMPLETE") {
+        toast(
+          `${data.importedCount} of ${data.recordCount} rows imported`,
+          "success",
+        );
+      } else if (data.status === "PARTIAL") {
+        toast(
+          `${data.importedCount} of ${data.recordCount} rows imported, ${data.errorCount} errored`,
+          "info",
+        );
+      } else {
+        toast(
+          `Import failed — ${data.errorCount} of ${data.recordCount} rows errored`,
+          "error",
+        );
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Import failed";
       toast(msg, "error");
