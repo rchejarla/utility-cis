@@ -90,7 +90,7 @@ export async function updateMeter(
   data: UpdateMeterInput
 ) {
   const before = await prisma.meter.findUniqueOrThrow({ where: { id, utilityId } });
-  const { customFields: rawCustom, ...core } = data;
+  const { customFields: rawCustom, installDate, removalDate, ...core } = data;
   const existingStored = (before.customFields as Record<string, unknown>) ?? {};
   const mergedCustom =
     rawCustom === undefined
@@ -99,6 +99,18 @@ export async function updateMeter(
           mode: "update",
           existingStored,
         });
+  // Date columns: Zod hands us "YYYY-MM-DD" strings, Prisma's Date
+  // column wants a Date. Convert explicitly when present (skip when
+  // omitted so PATCH semantics stay intact). null is preserved for
+  // clearing removalDate.
+  const updateData: Record<string, unknown> = {
+    ...core,
+    customFields: mergedCustom as object,
+  };
+  if (installDate !== undefined) updateData.installDate = new Date(installDate);
+  if (removalDate !== undefined) {
+    updateData.removalDate = removalDate === null ? null : new Date(removalDate);
+  }
   return auditUpdate(
     { utilityId, actorId, actorName, entityType: "Meter" },
     EVENT_TYPES.METER_UPDATED,
@@ -106,7 +118,7 @@ export async function updateMeter(
     (tx) =>
       tx.meter.update({
         where: { id, utilityId },
-        data: { ...core, customFields: mergedCustom as object },
+        data: updateData,
         include: { premise: true, commodity: true, uom: true },
       })
   );

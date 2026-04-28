@@ -84,7 +84,12 @@ export function errorHandler(
     reply.status(400).send({
       error: {
         code: "PRISMA_VALIDATION",
-        message: "Invalid query parameters",
+        // Misleading legacy message ("Invalid query parameters") was
+        // confusing — these errors are about the data shape sent to
+        // Prisma (e.g. a string where a Date was expected), not the
+        // query string. Keep the message specific so the next
+        // operator who hits this knows where to look.
+        message: "Database client rejected the input shape",
       },
     });
     return;
