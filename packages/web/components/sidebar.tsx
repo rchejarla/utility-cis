@@ -41,6 +41,7 @@ import {
   faBomb,
   faRobot,
   faRulerHorizontal,
+  faFileImport,
 } from "@fortawesome/pro-solid-svg-icons";
 
 interface NavItem {
@@ -127,6 +128,7 @@ const navSections: NavSection[] = [
       { href: "/settings/api-keys", label: "API Keys & Webhooks", icon: faKey, module: "settings" },
       { href: "/users-roles", label: "Users & Roles", icon: faUserShield, module: "tenant_users" },
       { href: "/audit-log", label: "Audit Log", icon: faClipboardList, module: "audit_log" },
+      { href: "/imports", label: "Imports", icon: faFileImport, module: "imports" },
       { href: "/settings/danger-zone", label: "Danger Zone", icon: faBomb, module: "settings" },
     ],
   },
