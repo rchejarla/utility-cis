@@ -154,7 +154,8 @@ describe("closeServiceAgreement (real DB)", () => {
     expect(auditsAfterSecond).toBe(auditsAfterFirst);
   });
 
-  it("rejects re-close with a different terminal status (FINAL → CLOSED via close helper is not supported)", async () => {
+  it("supports FINAL → CLOSED as a status-only step (final bill issued; no further cascade)", async () => {
+    const { prisma } = prismaImports;
     const { closeServiceAgreement } = serviceImports;
 
     const sa = await makeSaWithThreeMeters();
@@ -162,6 +163,34 @@ describe("closeServiceAgreement (real DB)", () => {
 
     await closeServiceAgreement(fixA.utilityId, ACTOR, "Tester", {
       saId: sa.id, endDate, status: "FINAL",
+    });
+    const auditsAfterFinal = await prisma.auditLog.count({ where: { utilityId: fixA.utilityId } });
+
+    const result = await closeServiceAgreement(fixA.utilityId, ACTOR, "Tester", {
+      saId: sa.id, endDate, status: "CLOSED",
+    });
+    expect(result.metersClosed).toBe(0); // already cascaded at FINAL
+
+    const reloaded = await prisma.serviceAgreement.findUniqueOrThrow({ where: { id: sa.id } });
+    expect(reloaded.status).toBe("CLOSED");
+    expect(reloaded.endDate?.toISOString().slice(0, 10)).toBe("2024-12-31");
+
+    // Exactly one new audit row for the CLOSED transition.
+    const auditsAfterClosed = await prisma.auditLog.count({ where: { utilityId: fixA.utilityId } });
+    expect(auditsAfterClosed - auditsAfterFinal).toBe(1);
+  });
+
+  it("rejects re-closing an already-CLOSED SA", async () => {
+    const { closeServiceAgreement } = serviceImports;
+
+    const sa = await makeSaWithThreeMeters();
+    const endDate = new Date("2024-12-31");
+
+    await closeServiceAgreement(fixA.utilityId, ACTOR, "Tester", {
+      saId: sa.id, endDate, status: "FINAL",
+    });
+    await closeServiceAgreement(fixA.utilityId, ACTOR, "Tester", {
+      saId: sa.id, endDate, status: "CLOSED",
     });
 
     await expect(

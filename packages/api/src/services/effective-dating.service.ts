@@ -1,8 +1,45 @@
 import { prisma } from "../lib/prisma.js";
-import { writeAuditRow } from "../lib/audit-wrap.js";
+import { auditUpdate, writeAuditRow } from "../lib/audit-wrap.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
 
 type TxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+
+/**
+ * PENDING → ACTIVE transition. Status-only flip, no cascade. Lives
+ * here (not in service-agreement.service.ts) so all lifecycle
+ * transitions share one module + audit pattern.
+ *
+ * Per FR-EFF-006. Generic PATCH no longer accepts status, so this is
+ * the only path to ACTIVE.
+ */
+export async function activateServiceAgreement(
+  utilityId: string,
+  actorId: string,
+  actorName: string,
+  saId: string,
+) {
+  const before = await prisma.serviceAgreement.findUniqueOrThrow({
+    where: { id: saId, utilityId },
+  });
+  if (before.status !== "PENDING") {
+    throw Object.assign(
+      new Error(
+        `Cannot activate a service agreement in status ${before.status}; activate is only valid from PENDING`,
+      ),
+      { statusCode: 409, code: "INVALID_STATUS_TRANSITION" },
+    );
+  }
+  return auditUpdate(
+    { utilityId, actorId, actorName, entityType: "ServiceAgreement" },
+    EVENT_TYPES.SERVICE_AGREEMENT_UPDATED,
+    before,
+    (tx) =>
+      tx.serviceAgreement.update({
+        where: { id: saId, utilityId },
+        data: { status: "ACTIVE" },
+      }),
+  );
+}
 
 export interface CloseServiceAgreementInput {
   saId: string;
@@ -49,17 +86,47 @@ export async function closeServiceAgreement(
       where: { id: input.saId, utilityId },
     });
 
-    if (before.status === "FINAL" || before.status === "CLOSED") {
-      const sameClose =
-        before.status === input.status &&
+    if (before.status === "CLOSED") {
+      // CLOSED is the absolute terminal state; nothing further is
+      // allowed, even an idempotent re-application.
+      throw Object.assign(
+        new Error("Service agreement is already CLOSED"),
+        { statusCode: 409, code: "SA_ALREADY_TERMINAL" },
+      );
+    }
+
+    if (before.status === "FINAL") {
+      const sameEnd =
         before.endDate !== null &&
         before.endDate.getTime() === input.endDate.getTime();
-      if (sameClose) {
+      // Idempotent re-application of FINAL.
+      if (input.status === "FINAL" && sameEnd) {
         return { agreement: before, metersClosed: 0 };
+      }
+      // FINAL → CLOSED is a legitimate billing-lifecycle step (final
+      // bill issued). It's a status-only update — meter assignments
+      // were closed at the FINAL step, so the cascade is a no-op. The
+      // endDate must match what was set at FINAL: it represents the
+      // service-stop date and CLOSED doesn't change that.
+      if (input.status === "CLOSED" && sameEnd) {
+        const updated = await tx.serviceAgreement.update({
+          where: { id: input.saId, utilityId },
+          data: { status: "CLOSED" },
+        });
+        await writeAuditRow(
+          tx,
+          { utilityId, actorId, actorName, entityType: "ServiceAgreement" },
+          EVENT_TYPES.SERVICE_AGREEMENT_UPDATED,
+          updated.id,
+          before,
+          input.reason ? { ...updated, _reason: input.reason } : updated,
+        );
+        return { agreement: updated, metersClosed: 0 };
       }
       throw Object.assign(
         new Error(
-          `Service agreement is already ${before.status}; cannot re-close as ${input.status}`,
+          `Service agreement is FINAL with endDate=${before.endDate?.toISOString().slice(0, 10)}; ` +
+            `cannot apply close with status=${input.status} endDate=${input.endDate.toISOString().slice(0, 10)}`,
         ),
         { statusCode: 409, code: "SA_ALREADY_TERMINAL" },
       );

@@ -174,10 +174,44 @@ export default function ServiceAgreementDetailPage({
     if (!sa) return;
     setTransitioning(true);
     try {
-      await apiClient.patch(`/api/v1/service-agreements/${id}`, { status: newStatus });
+      if (newStatus === "ACTIVE") {
+        // PENDING → ACTIVE: dedicated activate endpoint.
+        await apiClient.post(`/api/v1/service-agreements/${id}/activate`, {});
+      } else if (newStatus === "FINAL") {
+        // ACTIVE → FINAL: prompt for end date and route through the
+        // cascading close endpoint, which also closes child meter
+        // assignments atomically.
+        const today = new Date().toISOString().slice(0, 10);
+        const endDate = window.prompt(
+          "End date for service stop (YYYY-MM-DD):",
+          today,
+        );
+        if (!endDate) {
+          setTransitioning(false);
+          return;
+        }
+        await apiClient.post(`/api/v1/service-agreements/${id}/close`, {
+          endDate,
+          status: "FINAL",
+        });
+      } else if (newStatus === "CLOSED") {
+        // FINAL → CLOSED: final bill issued. Re-uses /close with the
+        // SA's existing endDate; the helper detects the FINAL→CLOSED
+        // case and just flips the status (no further cascade).
+        if (!sa.endDate) {
+          throw new Error("Cannot close: end date is missing");
+        }
+        await apiClient.post(`/api/v1/service-agreements/${id}/close`, {
+          endDate: sa.endDate.slice(0, 10),
+          status: "CLOSED",
+        });
+      } else {
+        throw new Error(`Unsupported transition target: ${newStatus}`);
+      }
       await loadSA();
-    } catch (err) {
-      console.error("Transition failed", err);
+      toast(`Status updated to ${newStatus}`, "success");
+    } catch (err: any) {
+      toast(err?.message ?? "Transition failed", "error");
     } finally {
       setTransitioning(false);
     }
@@ -188,7 +222,6 @@ export default function ServiceAgreementDetailPage({
     setEditForm({
       rateScheduleId: sa.rateScheduleId ?? sa.rateSchedule?.id ?? "",
       billingCycleId: sa.billingCycleId ?? sa.billingCycle?.id ?? "",
-      endDate: sa.endDate ? sa.endDate.slice(0, 10) : "",
       readSequence: sa.readSequence != null ? String(sa.readSequence) : "",
     });
     // Fetch dropdowns
@@ -221,9 +254,8 @@ export default function ServiceAgreementDetailPage({
       const currentBcId = sa.billingCycleId ?? sa.billingCycle?.id ?? "";
       if (editForm.rateScheduleId !== currentRsId) changes.rateScheduleId = editForm.rateScheduleId || null;
       if (editForm.billingCycleId !== currentBcId) changes.billingCycleId = editForm.billingCycleId || null;
-      const endVal = editForm.endDate || null;
-      const currentEnd = sa.endDate ? sa.endDate.slice(0, 10) : null;
-      if (endVal !== currentEnd) changes.endDate = endVal;
+      // endDate is no longer settable via PATCH — it's set via the
+      // close endpoint, which also cascades onto meter assignments.
       const readSeqVal = editForm.readSequence !== "" ? parseInt(editForm.readSequence, 10) : null;
       if (readSeqVal !== (sa.readSequence ?? null)) changes.readSequence = readSeqVal;
 
@@ -491,14 +523,14 @@ export default function ServiceAgreementDetailPage({
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>End Date</span>
-              {editing ? (
-                <DatePicker
-                  value={editForm.endDate}
-                  onChange={(v) => setEditForm((f) => ({ ...f, endDate: v }))}
-                />
-              ) : (
-                <span style={valueStyle}>{sa.endDate?.slice(0, 10) ?? "Open-ended"}</span>
-              )}
+              <span style={valueStyle}>
+                {sa.endDate?.slice(0, 10) ?? "Open-ended"}
+                {editing && (
+                  <span style={{ marginLeft: "8px", fontSize: "11px", color: "var(--text-muted)" }}>
+                    (set via Close action)
+                  </span>
+                )}
+              </span>
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Read Sequence</span>

@@ -23,6 +23,7 @@ import {
   addMeterToAgreement,
 } from "../services/service-agreement.service.js";
 import {
+  activateServiceAgreement,
   closeServiceAgreement,
   removeMeterFromAgreement,
   swapMeter,
@@ -57,6 +58,21 @@ export async function serviceAgreementRoutes(app: FastifyInstance) {
     const agreement = await updateServiceAgreement(utilityId, actorId, actorName, id, data);
     return reply.send(agreement);
   });
+
+  // PENDING → ACTIVE transition. Status-only flip with no cascade
+  // implications — split into its own endpoint rather than going
+  // through PATCH so all lifecycle changes share one consistent
+  // path (audit-emitting, validated against the transition table).
+  app.post(
+    "/api/v1/service-agreements/:id/activate",
+    { config: { module: "agreements", permission: "EDIT" } },
+    async (request, reply) => {
+      const { utilityId, id: actorId, name: actorName } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      const sa = await activateServiceAgreement(utilityId, actorId, actorName, id);
+      return reply.send(sa);
+    },
+  );
 
   // Cascading close: terminal-status the SA AND set removed_date on
   // every still-open meter assignment, in one transaction. Replaces

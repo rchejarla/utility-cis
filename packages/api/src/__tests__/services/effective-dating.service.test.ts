@@ -123,23 +123,30 @@ describe("closeServiceAgreement", () => {
     expect(writeAuditRow).not.toHaveBeenCalled();
   });
 
-  it("rejects re-closing with a different terminal status", async () => {
+  it("allows FINAL → CLOSED (final-bill-issued step) as a status-only update with no cascade", async () => {
     const endDate = new Date("2026-04-30");
     const alreadyFinal = sa({ status: "FINAL", endDate });
     (prisma.serviceAgreement.findFirstOrThrow as ReturnType<typeof vi.fn>).mockResolvedValue(alreadyFinal);
+    (prisma.serviceAgreement.update as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...alreadyFinal,
+      status: "CLOSED",
+    });
 
-    await expect(
-      closeServiceAgreement(UID, ACTOR, "Tester", {
-        saId: SA_ID,
-        endDate,
-        status: "CLOSED",
-      }),
-    ).rejects.toMatchObject({ statusCode: 409, code: "SA_ALREADY_TERMINAL" });
+    const result = await closeServiceAgreement(UID, ACTOR, "Tester", {
+      saId: SA_ID,
+      endDate,
+      status: "CLOSED",
+    });
 
-    expect(prisma.serviceAgreement.update).not.toHaveBeenCalled();
+    expect(result.metersClosed).toBe(0);
+    // SA update was called with status-only data, no endDate (already set).
+    expect((prisma.serviceAgreement.update as ReturnType<typeof vi.fn>).mock.calls[0][0].data)
+      .toEqual({ status: "CLOSED" });
+    // No SAM cascade — meter assignments were already closed at FINAL.
+    expect(prisma.serviceAgreementMeter.findMany).not.toHaveBeenCalled();
   });
 
-  it("rejects re-closing with a different endDate even if status matches", async () => {
+  it("rejects FINAL → CLOSED if the supplied endDate doesn't match the SA's existing endDate", async () => {
     const oldEnd = new Date("2026-04-30");
     const newEnd = new Date("2026-05-15");
     (prisma.serviceAgreement.findFirstOrThrow as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -150,7 +157,22 @@ describe("closeServiceAgreement", () => {
       closeServiceAgreement(UID, ACTOR, "Tester", {
         saId: SA_ID,
         endDate: newEnd,
-        status: "FINAL",
+        status: "CLOSED",
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: "SA_ALREADY_TERMINAL" });
+  });
+
+  it("rejects re-closing an already-CLOSED SA (terminal-terminal)", async () => {
+    const endDate = new Date("2026-04-30");
+    (prisma.serviceAgreement.findFirstOrThrow as ReturnType<typeof vi.fn>).mockResolvedValue(
+      sa({ status: "CLOSED", endDate }),
+    );
+
+    await expect(
+      closeServiceAgreement(UID, ACTOR, "Tester", {
+        saId: SA_ID,
+        endDate,
+        status: "CLOSED",
       }),
     ).rejects.toMatchObject({ statusCode: 409, code: "SA_ALREADY_TERMINAL" });
   });
