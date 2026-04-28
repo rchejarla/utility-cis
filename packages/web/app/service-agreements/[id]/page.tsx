@@ -3,6 +3,7 @@
 import { useState, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
 import type { FieldDefinition } from "@utility-cis/shared";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -117,6 +118,8 @@ export default function ServiceAgreementDetailPage({
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
   const [transitioning, setTransitioning] = useState(false);
+  const [stopDialog, setStopDialog] = useState<{ endDate: string } | null>(null);
+  const [closeBillDialog, setCloseBillDialog] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
   const [editCustomFields, setEditCustomFields] = useState<Record<string, unknown>>({});
@@ -172,46 +175,67 @@ export default function ServiceAgreementDetailPage({
 
   const handleTransition = async (newStatus: string) => {
     if (!sa) return;
+    if (newStatus === "ACTIVE") {
+      setTransitioning(true);
+      try {
+        await apiClient.post(`/api/v1/service-agreements/${id}/activate`, {});
+        await loadSA();
+        toast("Service activated", "success");
+      } catch (err: any) {
+        toast(err?.message ?? "Activation failed", "error");
+      } finally {
+        setTransitioning(false);
+      }
+      return;
+    }
+    if (newStatus === "FINAL") {
+      // Open the Stop Service dialog; the dialog handles the actual close.
+      setStopDialog({ endDate: new Date().toISOString().slice(0, 10) });
+      return;
+    }
+    if (newStatus === "CLOSED") {
+      // Open the Issue Final Bill dialog. No date input — re-uses the
+      // existing endDate that was set at FINAL.
+      setCloseBillDialog(true);
+      return;
+    }
+  };
+
+  const confirmStopService = async () => {
+    if (!sa || !stopDialog) return;
     setTransitioning(true);
     try {
-      if (newStatus === "ACTIVE") {
-        // PENDING → ACTIVE: dedicated activate endpoint.
-        await apiClient.post(`/api/v1/service-agreements/${id}/activate`, {});
-      } else if (newStatus === "FINAL") {
-        // ACTIVE → FINAL: prompt for end date and route through the
-        // cascading close endpoint, which also closes child meter
-        // assignments atomically.
-        const today = new Date().toISOString().slice(0, 10);
-        const endDate = window.prompt(
-          "End date for service stop (YYYY-MM-DD):",
-          today,
-        );
-        if (!endDate) {
-          setTransitioning(false);
-          return;
-        }
-        await apiClient.post(`/api/v1/service-agreements/${id}/close`, {
-          endDate,
-          status: "FINAL",
-        });
-      } else if (newStatus === "CLOSED") {
-        // FINAL → CLOSED: final bill issued. Re-uses /close with the
-        // SA's existing endDate; the helper detects the FINAL→CLOSED
-        // case and just flips the status (no further cascade).
-        if (!sa.endDate) {
-          throw new Error("Cannot close: end date is missing");
-        }
-        await apiClient.post(`/api/v1/service-agreements/${id}/close`, {
-          endDate: sa.endDate.slice(0, 10),
-          status: "CLOSED",
-        });
-      } else {
-        throw new Error(`Unsupported transition target: ${newStatus}`);
-      }
+      await apiClient.post(`/api/v1/service-agreements/${id}/close`, {
+        endDate: stopDialog.endDate,
+        status: "FINAL",
+      });
       await loadSA();
-      toast(`Status updated to ${newStatus}`, "success");
+      toast("Service stopped", "success");
+      setStopDialog(null);
     } catch (err: any) {
-      toast(err?.message ?? "Transition failed", "error");
+      toast(err?.message ?? "Stop service failed", "error");
+    } finally {
+      setTransitioning(false);
+    }
+  };
+
+  const confirmIssueFinalBill = async () => {
+    if (!sa) return;
+    if (!sa.endDate) {
+      toast("Cannot close: end date is missing", "error");
+      return;
+    }
+    setTransitioning(true);
+    try {
+      await apiClient.post(`/api/v1/service-agreements/${id}/close`, {
+        endDate: sa.endDate.slice(0, 10),
+        status: "CLOSED",
+      });
+      await loadSA();
+      toast("Final bill issued; agreement closed", "success");
+      setCloseBillDialog(false);
+    } catch (err: any) {
+      toast(err?.message ?? "Close failed", "error");
     } finally {
       setTransitioning(false);
     }
@@ -336,7 +360,7 @@ export default function ServiceAgreementDetailPage({
                 {nextStatus === "ACTIVE"
                   ? "Activate"
                   : nextStatus === "FINAL"
-                    ? "Close"
+                    ? "Stop Service"
                     : nextStatus === "CLOSED"
                       ? "Issue Final Bill"
                       : nextStatus}
@@ -663,6 +687,52 @@ export default function ServiceAgreementDetailPage({
           />
         )}
       </Tabs>
+
+      {stopDialog && sa && (
+        <ConfirmDialog
+          title="Stop service"
+          message={`This will close service agreement ${sa.agreementNumber} and remove all ${
+            sa.meters?.filter((m: any) => !m.removedDate).length ?? 0
+          } currently-assigned meters as of the end date below. The action emits an audit row for each row affected and cannot be undone via Edit. Issuing the final bill is a separate step.`}
+          confirmLabel={transitioning ? "Stopping…" : "Stop Service"}
+          cancelLabel="Cancel"
+          confirmDisabled={transitioning || !stopDialog.endDate}
+          destructive
+          onConfirm={confirmStopService}
+          onCancel={() => !transitioning && setStopDialog(null)}
+        >
+          <label
+            style={{
+              display: "block",
+              fontSize: "12px",
+              color: "var(--text-muted)",
+              marginBottom: "6px",
+              fontWeight: 500,
+            }}
+          >
+            Service end date
+          </label>
+          <DatePicker
+            value={stopDialog.endDate}
+            onChange={(v) => setStopDialog({ endDate: v })}
+          />
+        </ConfirmDialog>
+      )}
+
+      {closeBillDialog && sa && (
+        <ConfirmDialog
+          title="Issue final bill"
+          message={`Mark service agreement ${sa.agreementNumber} as CLOSED. The end date (${
+            sa.endDate?.slice(0, 10) ?? "—"
+          }) was set when the service was stopped and will not change. Once closed, the agreement is permanently terminal.`}
+          confirmLabel={transitioning ? "Closing…" : "Issue Final Bill"}
+          cancelLabel="Cancel"
+          confirmDisabled={transitioning}
+          destructive
+          onConfirm={confirmIssueFinalBill}
+          onCancel={() => !transitioning && setCloseBillDialog(false)}
+        />
+      )}
     </div>
   );
 }

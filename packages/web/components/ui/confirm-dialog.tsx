@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 
 interface ConfirmDialogProps {
   title: string;
@@ -11,6 +11,8 @@ interface ConfirmDialogProps {
   destructive?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  /** Optional form fields rendered between the message and the action buttons. */
+  children?: ReactNode;
 }
 
 /**
@@ -30,6 +32,7 @@ export function ConfirmDialog({
   destructive = true,
   onConfirm,
   onCancel,
+  children,
 }: ConfirmDialogProps) {
   const reactId = useId();
   const titleId = `cd-title-${reactId}`;
@@ -40,8 +43,13 @@ export function ConfirmDialog({
 
   useEffect(() => {
     previouslyFocused.current = document.activeElement as HTMLElement | null;
-    // Move focus to the Cancel button — the safer default for destructive dialogs.
-    cancelBtnRef.current?.focus();
+    // If the dialog has form fields (children), focus the first one so
+    // the user can type immediately. Otherwise fall back to the Cancel
+    // button, which is the safer default for a plain destructive prompt.
+    const firstField = dialogRef.current?.querySelector<HTMLElement>(
+      'input:not([type="hidden"]), select, textarea',
+    );
+    (firstField ?? cancelBtnRef.current)?.focus();
     return () => {
       previouslyFocused.current?.focus?.();
     };
@@ -123,12 +131,13 @@ export function ConfirmDialog({
             margin: 0,
             fontSize: "13px",
             color: "var(--text-secondary)",
-            marginBottom: "20px",
+            marginBottom: children ? "16px" : "20px",
             lineHeight: 1.5,
           }}
         >
           {message}
         </p>
+        {children && <div style={{ marginBottom: "20px" }}>{children}</div>}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
           <button
             ref={cancelBtnRef}
