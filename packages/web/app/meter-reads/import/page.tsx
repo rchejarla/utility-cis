@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import Link from "next/link";
-import { apiClient } from "@/lib/api-client";
+import { apiClient, API_URL } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { useToast } from "@/components/ui/toast";
@@ -432,7 +432,11 @@ export default function ImportCenterPage() {
               >
                 Need the column layout?
                 <a
-                  href="/api/v1/meter-reads/import/template.csv"
+                  // Absolute URL: the API runs on its own port (3001
+                  // in dev) so a path-relative href would resolve to
+                  // the Next.js host and 404. The endpoint is
+                  // skipAuth so a plain anchor download works.
+                  href={`${API_URL}/api/v1/meter-reads/import/template.csv`}
                   download
                   // Stop the click from bubbling up to the dropzone, which
                   // would also fire the hidden file input.
