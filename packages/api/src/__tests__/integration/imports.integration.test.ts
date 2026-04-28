@@ -121,6 +121,13 @@ beforeEach(async () => {
     });
   }
 
+  // RBAC caches tenant-modules + user-role in Redis (TTL 600s).
+  // Without explicit invalidation, state from a previous test file
+  // leaks into this one when vitest runs them sequentially in the
+  // same process.
+  const rbac = await import("../../services/rbac.service.js");
+  await rbac.invalidateTenantModulesCache(fixA.utilityId);
+
   // SA + open SAMs so meter-read processing can resolve agreement.
   const sa = await prisma.serviceAgreement.create({
     data: {

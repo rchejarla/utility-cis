@@ -11,3 +11,4 @@
  */
 // Handlers register here as they're written:
 import "./meter-read.js";
+import "./customer.js";
