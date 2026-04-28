@@ -333,7 +333,13 @@ export default function ServiceAgreementDetailPage({
                   opacity: transitioning ? 0.6 : 1,
                 }}
               >
-                {nextStatus === "ACTIVE" ? "Activate" : nextStatus === "CLOSED" ? "Close" : nextStatus}
+                {nextStatus === "ACTIVE"
+                  ? "Activate"
+                  : nextStatus === "FINAL"
+                    ? "Close"
+                    : nextStatus === "CLOSED"
+                      ? "Issue Final Bill"
+                      : nextStatus}
               </button>
             ))}
           </div>
