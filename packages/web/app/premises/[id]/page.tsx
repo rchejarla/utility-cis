@@ -16,6 +16,7 @@ import { AttachmentsTab } from "@/components/ui/attachments-tab";
 import { HistoryTimeline, type HistoryEvent } from "@/components/effective-dating/history-timeline";
 import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { usePermission } from "@/lib/use-permission";
+import { usePremiseTypes } from "@/lib/use-type-defs";
 import { AccessDenied } from "@/components/ui/access-denied";
 
 interface Premise {
@@ -84,7 +85,6 @@ const US_STATES = [
   "RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY",
 ];
 
-const PREMISE_TYPES = ["RESIDENTIAL", "COMMERCIAL", "INDUSTRIAL", "AGRICULTURAL", "OTHER"];
 const PREMISE_STATUSES = ["ACTIVE", "INACTIVE", "PENDING", "DEMOLISHED"];
 
 const fieldStyle = {
@@ -126,6 +126,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
   const { canView, canEdit, canDelete } = usePermission("premises");
   const { canCreate: canCreateMeter } = usePermission("meters");
   const { canCreate: canCreateAgreement } = usePermission("agreements");
+  const { types: premiseTypes } = usePremiseTypes();
   const [premise, setPremise] = useState<Premise | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -573,8 +574,8 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
                   value={editForm.premiseType}
                   onChange={(e) => setEditForm((f) => ({ ...f, premiseType: e.target.value }))}
                 >
-                  {PREMISE_TYPES.map((t) => (
-                    <option key={t} value={t}>{t.charAt(0) + t.slice(1).toLowerCase()}</option>
+                  {premiseTypes.map((t) => (
+                    <option key={t.code} value={t.code}>{t.label}</option>
                   ))}
                 </select>
               ) : (

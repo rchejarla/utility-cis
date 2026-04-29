@@ -15,6 +15,7 @@ import { AttachmentsTab } from "@/components/ui/attachments-tab";
 import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { ServiceRequestList } from "@/components/service-requests/request-list";
 import { usePermission } from "@/lib/use-permission";
+import { useAccountTypes } from "@/lib/use-type-defs";
 import { AccessDenied } from "@/components/ui/access-denied";
 
 interface Contact {
@@ -74,7 +75,6 @@ interface AuditEntry {
   createdAt: string;
 }
 
-const ACCOUNT_TYPES = ["RESIDENTIAL", "COMMERCIAL", "INDUSTRIAL", "GOVERNMENT", "OTHER"];
 const ACCOUNT_STATUSES = ["ACTIVE", "INACTIVE", "SUSPENDED", "CLOSED"];
 const CREDIT_RATINGS = ["AAA", "AA", "A", "BBB", "BB", "B", "CCC", "CC", "C", "D"];
 const LANGUAGE_PREFS = [
@@ -114,6 +114,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
   const { toast } = useToast();
   const { canView, canEdit, canDelete } = usePermission("accounts");
   const { canCreate: canCreateContact } = usePermission("customers");
+  const { types: accountTypes } = useAccountTypes();
   const [account, setAccount] = useState<Account | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -412,8 +413,8 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
                   value={editForm.accountType as string}
                   onChange={(e) => setEditForm((f) => ({ ...f, accountType: e.target.value }))}
                 >
-                  {ACCOUNT_TYPES.map((t) => (
-                    <option key={t} value={t}>{t.charAt(0) + t.slice(1).toLowerCase()}</option>
+                  {accountTypes.map((t) => (
+                    <option key={t.code} value={t.code}>{t.label}</option>
                   ))}
                 </select>
               ) : (

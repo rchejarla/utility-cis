@@ -5,6 +5,7 @@ import type { FieldDefinition } from "@utility-cis/shared";
 import { EntityFormPage } from "@/components/ui/entity-form-page";
 import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { apiClient } from "@/lib/api-client";
+import { useAccountTypes } from "@/lib/use-type-defs";
 
 interface AccountForm extends Record<string, unknown> {
   accountNumber: string;
@@ -14,13 +15,6 @@ interface AccountForm extends Record<string, unknown> {
   languagePref: string;
   customFields: Record<string, unknown>;
 }
-
-const ACCOUNT_TYPES = [
-  { value: "RESIDENTIAL", label: "Residential" },
-  { value: "COMMERCIAL", label: "Commercial" },
-  { value: "INDUSTRIAL", label: "Industrial" },
-  { value: "MUNICIPAL", label: "Municipal" },
-];
 
 const CREDIT_RATINGS = [
   { value: "EXCELLENT", label: "EXCELLENT" },
@@ -42,6 +36,8 @@ export default function NewAccountPage() {
   // Tenant custom-field schema for accounts. Loaded once on mount;
   // when empty, the section renders nothing and the form is unchanged.
   const [customSchema, setCustomSchema] = useState<FieldDefinition[]>([]);
+  const { types: accountTypes } = useAccountTypes();
+  const accountTypeOptions = accountTypes.map((t) => ({ value: t.code, label: t.label }));
   useEffect(() => {
     (async () => {
       try {
@@ -86,7 +82,7 @@ export default function NewAccountPage() {
           label: "Account Type",
           type: "select",
           required: true,
-          options: ACCOUNT_TYPES,
+          options: accountTypeOptions,
           hint: "Determines default rate eligibility",
         },
         {

@@ -5,6 +5,7 @@ import type { FieldDefinition } from "@utility-cis/shared";
 import { EntityFormPage } from "@/components/ui/entity-form-page";
 import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { apiClient } from "@/lib/api-client";
+import { usePremiseTypes } from "@/lib/use-type-defs";
 
 interface PremiseForm extends Record<string, unknown> {
   addressLine1: string;
@@ -35,16 +36,6 @@ const US_STATES = [
   "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
 ].map((s) => ({ value: s, label: s }));
 
-const PREMISE_TYPES = [
-  "RESIDENTIAL",
-  "COMMERCIAL",
-  "INDUSTRIAL",
-  "AGRICULTURAL",
-  "OTHER",
-].map((t) => ({
-  value: t,
-  label: t.charAt(0) + t.slice(1).toLowerCase(),
-}));
 
 export default function NewPremisePage() {
   // Commodities are loaded locally because the commodity-toggle field
@@ -53,6 +44,8 @@ export default function NewPremisePage() {
   const [commodities, setCommodities] = useState<Commodity[]>([]);
   // Tenant custom-field schema for premises.
   const [customSchema, setCustomSchema] = useState<FieldDefinition[]>([]);
+  const { types: premiseTypes } = usePremiseTypes();
+  const premiseTypeOptions = premiseTypes.map((t) => ({ value: t.code, label: t.label }));
 
   useEffect(() => {
     apiClient
@@ -132,7 +125,7 @@ export default function NewPremisePage() {
           label: "Premise Type",
           type: "select",
           required: true,
-          options: PREMISE_TYPES,
+          options: premiseTypeOptions,
         },
         {
           key: "commodityIds",

@@ -18,6 +18,7 @@ import { MapView } from "@/components/premises/map-view";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { usePaginatedList } from "@/lib/use-paginated-list";
+import { usePremiseTypes } from "@/lib/use-type-defs";
 
 interface Customer {
   id: string;
@@ -40,13 +41,6 @@ interface Premise {
   commodities?: Array<{ commodity: { name: string } }>;
   meters?: Array<unknown>;
 }
-
-const PREMISE_TYPE_OPTIONS = [
-  { label: "Residential", value: "RESIDENTIAL" },
-  { label: "Commercial", value: "COMMERCIAL" },
-  { label: "Industrial", value: "INDUSTRIAL" },
-  { label: "Agricultural", value: "AGRICULTURAL" },
-];
 
 const STATUS_OPTIONS = [
   { label: "Active", value: "ACTIVE" },
@@ -132,6 +126,8 @@ interface PremisesStats {
 export default function PremisesPage() {
   const router = useRouter();
   const { canView, canCreate } = usePermission("premises");
+  const { types: premiseTypes } = usePremiseTypes();
+  const PREMISE_TYPE_OPTIONS = premiseTypes.map((t) => ({ label: t.label, value: t.code }));
 
   const [view, setView] = useState<"table" | "map">("table");
   const [premiseType, setPremiseType] = useState<string | undefined>();

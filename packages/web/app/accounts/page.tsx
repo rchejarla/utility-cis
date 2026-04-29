@@ -2,6 +2,7 @@
 
 import { StatusBadge } from "@/components/ui/status-badge";
 import { EntityListPage } from "@/components/ui/entity-list-page";
+import { useAccountTypes } from "@/lib/use-type-defs";
 import type { Column } from "@/components/ui/data-table";
 
 interface Account {
@@ -12,13 +13,6 @@ interface Account {
   creditRating?: string;
   serviceAgreements?: Array<unknown>;
 }
-
-const ACCOUNT_TYPE_OPTIONS = [
-  { label: "Residential", value: "RESIDENTIAL" },
-  { label: "Commercial", value: "COMMERCIAL" },
-  { label: "Industrial", value: "INDUSTRIAL" },
-  { label: "Government", value: "GOVERNMENT" },
-];
 
 const STATUS_OPTIONS = [
   { label: "Active", value: "ACTIVE" },
@@ -66,6 +60,8 @@ const columns: Column<Account>[] = [
 ];
 
 export default function AccountsPage() {
+  const { types: accountTypes } = useAccountTypes();
+  const ACCOUNT_TYPE_OPTIONS = accountTypes.map((t) => ({ label: t.label, value: t.code }));
   return (
     <EntityListPage<Account>
       title="Accounts"
