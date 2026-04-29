@@ -34,6 +34,11 @@ import {
   buildImportWorker,
   reclaimAndEnqueueZombies,
 } from "./workers/import-worker.js";
+// Side-effect import: registers every import-kind handler at module
+// load. The worker calls getKindHandler() inside processBatch, so the
+// registry must be populated before any job runs — same reason app.ts
+// imports it on the API side.
+import "./imports/handlers/index.js";
 
 /**
  * Worker process entry point.
