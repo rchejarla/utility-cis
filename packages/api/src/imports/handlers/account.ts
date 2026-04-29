@@ -25,7 +25,6 @@ import type { ImportKindHandler } from "../types.js";
  * rather than overwriting existing accounts.
  */
 
-const ACCOUNT_TYPES = ["RESIDENTIAL", "COMMERCIAL", "INDUSTRIAL", "MUNICIPAL"] as const;
 const ACCOUNT_STATUSES = [
   "ACTIVE",
   "INACTIVE",
@@ -34,13 +33,15 @@ const ACCOUNT_STATUSES = [
   "SUSPENDED",
 ] as const;
 const CREDIT_RATINGS = ["EXCELLENT", "GOOD", "FAIR", "POOR", "UNRATED"] as const;
-type AccountType = (typeof ACCOUNT_TYPES)[number];
 type AccountStatus = (typeof ACCOUNT_STATUSES)[number];
 type CreditRating = (typeof CREDIT_RATINGS)[number];
 
+// AccountType is no longer an enum — it's a code string validated
+// against the account_type_def reference table at processRow time.
+
 interface AccountRow {
   accountNumber: string;
-  accountType: AccountType;
+  accountType: string; // validated against account_type_def in prepareBatch
   status: AccountStatus;
   customerEmail?: string;
   creditRating?: CreditRating;
@@ -53,6 +54,8 @@ interface AccountRow {
 interface BatchData {
   /** Lower-cased email → customer id, populated once per batch. */
   customerByEmail: Map<string, string>;
+  /** Set of valid (active) account type codes for this tenant. */
+  validAccountTypes: Set<string>;
 }
 
 function parseBool(s: string | undefined): boolean | undefined {
@@ -168,15 +171,14 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
       };
     }
 
-    const atRaw = (raw.accountType ?? "").trim().toUpperCase();
-    if (!ACCOUNT_TYPES.includes(atRaw as AccountType)) {
+    const accountType = (raw.accountType ?? "").trim().toUpperCase();
+    if (!accountType) {
       return {
         ok: false,
-        code: "INVALID_ACCOUNT_TYPE",
-        message: `account_type "${raw.accountType}" must be one of ${ACCOUNT_TYPES.join(", ")}`,
+        code: "MISSING_ACCOUNT_TYPE",
+        message: "account_type is required",
       };
     }
-    const accountType = atRaw as AccountType;
 
     const stRaw = (raw.status ?? "").trim().toUpperCase();
     if (!ACCOUNT_STATUSES.includes(stRaw as AccountStatus)) {
@@ -258,10 +260,25 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
         if (c.email) customerByEmail.set(c.email.toLowerCase(), c.id);
       }
     }
-    return { customerByEmail };
+
+    const { listAccountTypes } = await import(
+      "../../services/account-type-def.service.js"
+    );
+    const types = await listAccountTypes(ctx.utilityId);
+    const validAccountTypes = new Set(types.map((t) => t.code));
+
+    return { customerByEmail, validAccountTypes };
   },
 
   async processRow(ctx, row, batch) {
+    if (!batch.validAccountTypes.has(row.accountType)) {
+      return {
+        ok: false,
+        code: "INVALID_ACCOUNT_TYPE",
+        message: `account_type "${row.accountType}" is not a known active code (configure under Configuration → Account Types)`,
+      };
+    }
+
     let customerId: string | null = null;
     if (row.customerEmail) {
       const id = batch.customerByEmail.get(row.customerEmail);

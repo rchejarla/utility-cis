@@ -13,15 +13,6 @@ datasource db {
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
-enum PremiseType {
-  RESIDENTIAL
-  COMMERCIAL
-  INDUSTRIAL
-  MUNICIPAL
-
-  @@map("premise_type")
-}
-
 enum PremiseStatus {
   ACTIVE
   INACTIVE
@@ -46,15 +37,6 @@ enum MeterStatus {
   PENDING_INSTALL
 
   @@map("meter_status")
-}
-
-enum AccountType {
-  RESIDENTIAL
-  COMMERCIAL
-  INDUSTRIAL
-  MUNICIPAL
-
-  @@map("account_type")
 }
 
 enum AccountStatus {
@@ -220,6 +202,38 @@ model UnitOfMeasure {
 // utilityId NULL are global and visible to every tenant, while rows
 // with a utility_id are tenant-local. Drives UOM grouping on commodities
 // and register-type classification on meter registers.
+model PremiseTypeDef {
+  id          String   @id @default(uuid()) @db.Uuid
+  utilityId   String?  @map("utility_id") @db.Uuid
+  code        String   @db.VarChar(50)
+  label       String   @db.VarChar(100)
+  description String?  @db.Text
+  sortOrder   Int      @default(100) @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([utilityId, code])
+  @@index([isActive, sortOrder])
+  @@map("premise_type_def")
+}
+
+model AccountTypeDef {
+  id          String   @id @default(uuid()) @db.Uuid
+  utilityId   String?  @map("utility_id") @db.Uuid
+  code        String   @db.VarChar(50)
+  label       String   @db.VarChar(100)
+  description String?  @db.Text
+  sortOrder   Int      @default(100) @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([utilityId, code])
+  @@index([isActive, sortOrder])
+  @@map("account_type_def")
+}
+
 model MeasureTypeDef {
   id          String   @id @default(uuid()) @db.Uuid
   utilityId   String?  @map("utility_id") @db.Uuid
@@ -249,7 +263,7 @@ model Premise {
   zip                String        @map("zip") @db.VarChar(10)
   geoLat             Decimal?      @map("geo_lat") @db.Decimal(9, 6)
   geoLng             Decimal?      @map("geo_lng") @db.Decimal(9, 6)
-  premiseType        PremiseType   @map("premise_type")
+  premiseType        String        @map("premise_type") @db.VarChar(50)
   commodityIds       String[]      @map("commodity_ids") @db.Uuid
   serviceTerritoryId String?       @map("service_territory_id") @db.Uuid
   municipalityCode   String?       @map("municipality_code") @db.VarChar(50)
@@ -319,7 +333,7 @@ model Account {
   utilityId           String        @map("utility_id") @db.Uuid
   accountNumber       String        @map("account_number") @db.VarChar(50)
   customerId          String?       @map("customer_id") @db.Uuid
-  accountType         AccountType   @map("account_type")
+  accountType         String        @map("account_type") @db.VarChar(50)
   status              AccountStatus @map("status")
   creditRating        CreditRating  @default(UNRATED) @map("credit_rating")
   depositAmount       Decimal       @default(0) @map("deposit_amount") @db.Decimal(10, 2)
@@ -1214,7 +1228,7 @@ model DelinquencyRule {
   id                    String       @id @default(uuid()) @db.Uuid
   utilityId             String       @map("utility_id") @db.Uuid
   name                  String       @db.VarChar(255)
-  accountType           AccountType? @map("account_type")
+  accountType           String?      @map("account_type") @db.VarChar(50)
   commodityId           String?      @map("commodity_id") @db.Uuid
   tier                  Int
   daysPastDue           Int          @map("days_past_due")

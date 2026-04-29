@@ -1061,3 +1061,177 @@ describe("processBatch — cancellation", () => {
     expect(updated.importedCount).toBeLessThanOrEqual(50);
   });
 });
+
+// ─── Reference tables: premise_type_def / account_type_def ───────────
+
+describe("GET /api/v1/premise-types", () => {
+  it("returns the seeded global standards", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/premise-types",
+      headers: headers(),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body) as {
+      data: Array<{ code: string; isGlobal: boolean }>;
+    };
+    const codes = body.data.map((t) => t.code).sort();
+    // Migration seeds these five.
+    expect(codes).toEqual(
+      ["COMMERCIAL", "INDUSTRIAL", "MULTI_FAMILY", "MUNICIPAL", "RESIDENTIAL"].sort(),
+    );
+    // All five are isGlobal=true; tenant has no custom rows in this test.
+    expect(body.data.every((t) => t.isGlobal)).toBe(true);
+  });
+});
+
+describe("POST /api/v1/premise-types", () => {
+  it("creates a tenant-scoped premise type and shadows a global of the same code", async () => {
+    const { prisma } = prismaImports;
+    // Tenant adds a custom code.
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/premise-types",
+      headers: headers(),
+      payload: { code: "agricultural", label: "Agricultural", sortOrder: 25 },
+    });
+    expect(create.statusCode).toBe(201);
+    const created = JSON.parse(create.body);
+    expect(created.code).toBe("AGRICULTURAL"); // service upper-cases
+    expect(created.isGlobal).toBe(false);
+
+    // Tenant shadows a global by inserting a row with the same code.
+    await prisma.premiseTypeDef.create({
+      data: {
+        utilityId: fixA.utilityId,
+        code: "RESIDENTIAL",
+        label: "Single-Family Residential",
+        sortOrder: 5,
+        isActive: true,
+      },
+    });
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/v1/premise-types",
+      headers: headers(),
+    });
+    const body = JSON.parse(list.body) as {
+      data: Array<{ code: string; label: string; isGlobal: boolean }>;
+    };
+    // RESIDENTIAL appears once, with the tenant's overridden label.
+    const residential = body.data.filter((t) => t.code === "RESIDENTIAL");
+    expect(residential).toHaveLength(1);
+    expect(residential[0].label).toBe("Single-Family Residential");
+    expect(residential[0].isGlobal).toBe(false);
+  });
+});
+
+describe("PATCH /api/v1/premise-types/:id", () => {
+  it("404s when the row is global (read-only)", async () => {
+    const { prisma } = prismaImports;
+    const global = await prisma.premiseTypeDef.findFirstOrThrow({
+      where: { utilityId: null, code: "RESIDENTIAL" },
+    });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/premise-types/${global.id}`,
+      headers: headers(),
+      payload: { label: "Should not work" },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+describe("POST /api/v1/imports — premise import with unknown type code", () => {
+  it("rejects rows whose premise_type isn't in the reference table", async () => {
+    const csv =
+      "addressLine1,city,state,zip,premiseType\n" +
+      "1 Foo St,Springfield,IL,62704,SPACE_STATION\n";
+    const mapping = {
+      addressLine1: "addressLine1",
+      city: "city",
+      state: "state",
+      zip: "zip",
+      premiseType: "premiseType",
+    };
+    const { body, contentType } = buildMultipart([
+      { name: "kind", value: "premise" },
+      { name: "source", value: "MANUAL_UPLOAD" },
+      { name: "mapping", value: JSON.stringify(mapping) },
+      { name: "file", filename: "p.csv", contentType: "text/csv", body: csv },
+    ]);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/imports",
+      headers: { ...headers(), "content-type": contentType },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    const result = JSON.parse(res.body);
+    expect(result.status).toBe("FAILED");
+    expect(result.errors[0].errorCode).toBe("INVALID_PREMISE_TYPE");
+  });
+});
+
+describe("POST /api/v1/imports — account import with unknown type code", () => {
+  it("rejects rows whose account_type isn't in the reference table", async () => {
+    const csv =
+      "accountNumber,accountType,status\n" +
+      "ACC-BAD-1,SPACE_FORCE,ACTIVE\n";
+    const mapping = {
+      accountNumber: "accountNumber",
+      accountType: "accountType",
+      status: "status",
+    };
+    const { body, contentType } = buildMultipart([
+      { name: "kind", value: "account" },
+      { name: "source", value: "MANUAL_UPLOAD" },
+      { name: "mapping", value: JSON.stringify(mapping) },
+      { name: "file", filename: "a.csv", contentType: "text/csv", body: csv },
+    ]);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/imports",
+      headers: { ...headers(), "content-type": contentType },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    const result = JSON.parse(res.body);
+    expect(result.status).toBe("FAILED");
+    expect(result.errors[0].errorCode).toBe("INVALID_ACCOUNT_TYPE");
+  });
+});
+
+describe("POST /api/v1/imports — account import with new GOVERNMENT code", () => {
+  it("accepts the seeded GOVERNMENT account type (RFP gap closed)", async () => {
+    const { prisma } = prismaImports;
+    const csv =
+      "accountNumber,accountType,status\n" +
+      "ACC-GOV-1,GOVERNMENT,ACTIVE\n";
+    const mapping = {
+      accountNumber: "accountNumber",
+      accountType: "accountType",
+      status: "status",
+    };
+    const { body, contentType } = buildMultipart([
+      { name: "kind", value: "account" },
+      { name: "source", value: "MANUAL_UPLOAD" },
+      { name: "mapping", value: JSON.stringify(mapping) },
+      { name: "file", filename: "a.csv", contentType: "text/csv", body: csv },
+    ]);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/imports",
+      headers: { ...headers(), "content-type": contentType },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    const result = JSON.parse(res.body);
+    expect(result.status).toBe("COMPLETE");
+    const created = await prisma.account.findFirstOrThrow({
+      where: { utilityId: fixA.utilityId, accountNumber: "ACC-GOV-1" },
+    });
+    expect(created.accountType).toBe("GOVERNMENT");
+  });
+});
+

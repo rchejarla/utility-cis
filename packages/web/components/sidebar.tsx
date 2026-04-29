@@ -42,6 +42,8 @@ import {
   faRobot,
   faRulerHorizontal,
   faFileImport,
+  faHouse,
+  faIdCard,
 } from "@fortawesome/pro-solid-svg-icons";
 
 interface NavItem {
@@ -107,6 +109,8 @@ const navSections: NavSection[] = [
     items: [
       { href: "/commodities", label: "Commodities & UOM", icon: faDroplet, module: "commodities" },
       { href: "/measure-types", label: "Measure Types", icon: faRulerHorizontal, module: "commodities" },
+      { href: "/premise-types", label: "Premise Types", icon: faHouse, module: "premises" },
+      { href: "/account-types", label: "Account Types", icon: faIdCard, module: "accounts" },
       { href: "/rate-schedules", label: "Rate Schedules", icon: faMoneyBill, module: "rate_schedules" },
       { href: "/billing-cycles", label: "Billing Cycles", icon: faCalendarDays, module: "billing_cycles" },
     ],

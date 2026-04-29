@@ -23,10 +23,13 @@ import type { ImportKindHandler } from "../types.js";
  * problems operators want to see.
  */
 
-const PREMISE_TYPES = ["RESIDENTIAL", "COMMERCIAL", "INDUSTRIAL", "MUNICIPAL"] as const;
 const PREMISE_STATUSES = ["ACTIVE", "INACTIVE", "CONDEMNED"] as const;
-type PremiseType = (typeof PREMISE_TYPES)[number];
 type PremiseStatus = (typeof PREMISE_STATUSES)[number];
+
+// PremiseType is no longer an enum — it's a code string validated
+// against the premise_type_def reference table at processRow time
+// (see prepareBatch). The fixed enum is gone; tenants can define
+// their own codes via /settings/premise-types.
 
 interface PremiseRow {
   addressLine1: string;
@@ -34,7 +37,7 @@ interface PremiseRow {
   city: string;
   state: string;
   zip: string;
-  premiseType: PremiseType;
+  premiseType: string; // validated against premise_type_def in prepareBatch
   ownerEmail?: string;
   commodityCodes?: string[];
   serviceTerritory?: string;
@@ -49,6 +52,8 @@ interface BatchData {
   customerByEmail: Map<string, string>;
   /** Upper-cased commodity code → commodity id, populated once. */
   commodityByCode: Map<string, string>;
+  /** Set of valid (active) premise type codes for this tenant. */
+  validPremiseTypes: Set<string>;
 }
 
 const handler: ImportKindHandler<PremiseRow, BatchData> = {
@@ -192,15 +197,17 @@ const handler: ImportKindHandler<PremiseRow, BatchData> = {
     const zip = (raw.zip ?? "").trim();
     if (!zip) return { ok: false, code: "MISSING_ZIP", message: "zip is required" };
 
-    const ptRaw = (raw.premiseType ?? "").trim().toUpperCase();
-    if (!PREMISE_TYPES.includes(ptRaw as PremiseType)) {
+    const premiseType = (raw.premiseType ?? "").trim().toUpperCase();
+    if (!premiseType) {
       return {
         ok: false,
-        code: "INVALID_PREMISE_TYPE",
-        message: `premise_type "${raw.premiseType}" must be one of ${PREMISE_TYPES.join(", ")}`,
+        code: "MISSING_PREMISE_TYPE",
+        message: "premise_type is required",
       };
     }
-    const premiseType = ptRaw as PremiseType;
+    // Whether the code is *known* to this tenant is checked in
+    // processRow (against the prepared reference set) — keeps parseRow
+    // database-free.
 
     const statusRaw = (raw.status ?? "").trim().toUpperCase();
     let status: PremiseStatus | undefined;
@@ -275,6 +282,14 @@ const handler: ImportKindHandler<PremiseRow, BatchData> = {
       if (r.ownerEmail) emails.add(r.ownerEmail);
       if (r.commodityCodes) for (const c of r.commodityCodes) codes.add(c);
     }
+    // Reference data: pull the tenant's active premise types so
+    // processRow can reject unknown codes with a friendly error.
+    const { listPremiseTypes } = await import(
+      "../../services/premise-type-def.service.js"
+    );
+    const types = await listPremiseTypes(ctx.utilityId);
+    const validPremiseTypes = new Set(types.map((t) => t.code));
+
     const customerByEmail = new Map<string, string>();
     if (emails.size > 0) {
       const customers = await prisma.customer.findMany({
@@ -298,10 +313,18 @@ const handler: ImportKindHandler<PremiseRow, BatchData> = {
       });
       for (const c of commodities) commodityByCode.set(c.code.toUpperCase(), c.id);
     }
-    return { customerByEmail, commodityByCode };
+    return { customerByEmail, commodityByCode, validPremiseTypes };
   },
 
   async processRow(ctx, row, batch) {
+    if (!batch.validPremiseTypes.has(row.premiseType)) {
+      return {
+        ok: false,
+        code: "INVALID_PREMISE_TYPE",
+        message: `premise_type "${row.premiseType}" is not a known active code (configure under Configuration → Premise Types)`,
+      };
+    }
+
     let ownerId: string | null = null;
     if (row.ownerEmail) {
       const id = batch.customerByEmail.get(row.ownerEmail);
