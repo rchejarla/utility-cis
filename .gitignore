@@ -12,3 +12,6 @@ tsconfig.tsbuildinfo
 uploads/
 .expeed_reqs.json
 .expeed_reqs.xlsx
+
+# Generated test fixtures (regenerate via scripts/generate-meter-reads-csv.mjs)
+reads-*.csv
