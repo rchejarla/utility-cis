@@ -1,12 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
+  cancelImport,
   createImport,
   errorsAsCsv,
   getErrorSummary,
   getImport,
   getImportRows,
   listImports,
+  retryImport,
 } from "../services/imports.service.js";
 import { getKindHandler, listKinds } from "../imports/registry.js";
 import { idParamSchema } from "../lib/route-schemas.js";
@@ -251,6 +253,30 @@ export async function importRoutes(app: FastifyInstance) {
       const { id } = idParamSchema.parse(request.params);
       const result = await getErrorSummary(utilityId, id);
       return reply.send(result);
+    },
+  );
+
+  // Soft cancel
+  app.post(
+    "/api/v1/imports/:id/cancel",
+    { config: { module: "imports", permission: "VIEW" } },
+    async (request, reply) => {
+      const { utilityId, id: actorId, name: actorName } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      const result = await cancelImport(utilityId, id, { id: actorId, name: actorName });
+      return reply.send(result);
+    },
+  );
+
+  // Retry
+  app.post(
+    "/api/v1/imports/:id/retry",
+    { config: { module: "imports", permission: "VIEW" } },
+    async (request, reply) => {
+      const { utilityId, id: actorId, name: actorName } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      const result = await retryImport(utilityId, id, { id: actorId, name: actorName });
+      return reply.status(202).send(result);
     },
   );
 

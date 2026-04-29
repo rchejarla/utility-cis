@@ -244,6 +244,100 @@ export async function createImport(
   };
 }
 
+/**
+ * Soft cancel. Sets `cancel_requested = true` on the batch; the worker
+ * (or sync loop) sees the flag between row chunks and finalises
+ * CANCELLED. Already-IMPORTED rows stay imported. No-op if the batch
+ * is already terminal.
+ */
+export async function cancelImport(
+  utilityId: string,
+  batchId: string,
+  actor: { id: string; name: string },
+): Promise<{ batchId: string; status: string }> {
+  const batch = await prisma.importBatch.findFirstOrThrow({
+    where: { id: batchId, utilityId },
+  });
+  const terminal = ["COMPLETE", "PARTIAL", "FAILED", "CANCELLED"];
+  if (terminal.includes(batch.status)) {
+    return { batchId, status: batch.status };
+  }
+  await prisma.importBatch.update({
+    where: { id: batchId },
+    data: { cancelRequested: true },
+  });
+  await prisma.$transaction(async (tx) => {
+    await writeAuditRow(
+      tx,
+      { utilityId, actorId: actor.id, actorName: actor.name, entityType: "ImportBatch" },
+      "import_batch.cancel_requested",
+      batchId,
+      null,
+      { previousStatus: batch.status },
+    );
+  });
+  return { batchId, status: batch.status };
+}
+
+/**
+ * User-driven retry. Re-enqueues a terminal batch.
+ *   - FAILED / PARTIAL → scope="errors-only" (re-attempts only ERROR
+ *     rows; previously IMPORTED rows are left alone).
+ *   - CANCELLED        → scope="pending-and-errors" (resume both un-
+ *     attempted PENDING rows and prior errors).
+ *
+ * Resets cancel_requested. Audit row emitted on enqueue. Always async,
+ * regardless of original batch size — the operator already saw a
+ * terminal state and isn't watching a wizard, so there's no need to
+ * branch on row count.
+ */
+export async function retryImport(
+  utilityId: string,
+  batchId: string,
+  actor: { id: string; name: string },
+): Promise<{ batchId: string; enqueued: true }> {
+  const batch = await prisma.importBatch.findFirstOrThrow({
+    where: { id: batchId, utilityId },
+  });
+  const retryable = ["FAILED", "PARTIAL", "CANCELLED"];
+  if (!retryable.includes(batch.status)) {
+    throw Object.assign(
+      new Error(`Batch in status ${batch.status} cannot be retried`),
+      { statusCode: 400, code: "NOT_RETRYABLE" },
+    );
+  }
+  const scope: "errors-only" | "pending-and-errors" =
+    batch.status === "CANCELLED" ? "pending-and-errors" : "errors-only";
+
+  await prisma.importBatch.update({
+    where: { id: batchId },
+    data: {
+      status: "PENDING",
+      cancelRequested: false,
+      completedAt: null,
+    },
+  });
+  await prisma.$transaction(async (tx) => {
+    await writeAuditRow(
+      tx,
+      { utilityId, actorId: actor.id, actorName: actor.name, entityType: "ImportBatch" },
+      "import_batch.retried",
+      batchId,
+      { status: batch.status },
+      { scope },
+    );
+  });
+
+  await enqueueSafely(QUEUE_NAMES.imports, IMPORT_WORKER_JOB_NAME, {
+    batchId,
+    utilityId,
+    actorId: actor.id,
+    actorName: actor.name,
+    scope,
+  });
+  return { batchId, enqueued: true };
+}
+
 function validateMapping(
   mapping: Record<string, string>,
   canonicalFields: CanonicalFieldDef[],
