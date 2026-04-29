@@ -491,10 +491,10 @@ function UploadStage({
           }
           style={selectStyle}
         >
-          <option value="MANUAL_UPLOAD">Manual CSV upload</option>
+          <option value="MANUAL_UPLOAD">Manual upload</option>
           <option value="AMR">AMR drive-by</option>
-          <option value="AMI">AMI interval data</option>
-          <option value="API">API payload</option>
+          <option value="AMI">AMI interval</option>
+          <option value="API">API</option>
         </select>
       </div>
 

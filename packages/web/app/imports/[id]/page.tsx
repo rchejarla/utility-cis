@@ -10,6 +10,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Tabs } from "@/components/ui/tabs";
 import { DataTable } from "@/components/ui/data-table";
 import { useToast } from "@/components/ui/toast";
+import { sourceLabel } from "@/components/imports/source-label";
 
 /**
  * Browser <a href download> sends the GET request without our
@@ -161,7 +162,7 @@ export default function ImportDetailPage({
     <div>
       <PageHeader
         title={`Import ${batch.id.slice(0, 8)}`}
-        subtitle={`${batch.entityKind} · ${batch.source} · ${batch.fileName ?? "—"}`}
+        subtitle={`${batch.entityKind} · ${sourceLabel(batch.source)} · ${batch.fileName ?? "—"}`}
         actions={
           <div style={{ display: "flex", gap: "8px" }}>
             {batch.status === "PROCESSING" && (

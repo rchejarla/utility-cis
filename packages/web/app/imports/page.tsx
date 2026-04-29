@@ -8,6 +8,7 @@ import { AccessDenied } from "@/components/ui/access-denied";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { DataTable } from "@/components/ui/data-table";
+import { sourceLabel } from "@/components/imports/source-label";
 
 interface ImportBatchRow {
   id: string;
@@ -113,7 +114,11 @@ export default function ImportsListPage() {
               header: "Kind",
               render: (row: any) => kindLabel(row.entityKind),
             },
-            { key: "source", header: "Source" },
+            {
+              key: "source",
+              header: "Source",
+              render: (row: any) => sourceLabel(row.source),
+            },
             {
               key: "fileName",
               header: "File",
