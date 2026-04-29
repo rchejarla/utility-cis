@@ -306,6 +306,36 @@ async function main() {
   });
   console.log("  ✓ tenant theme");
 
+  // ============ IMPORT.COMPLETE NOTIFICATION TEMPLATE ============
+  await prisma.notificationTemplate.upsert({
+    where: { utilityId_eventType: { utilityId: UTILITY_ID, eventType: "import.complete" } },
+    update: {},
+    create: {
+      utilityId: UTILITY_ID,
+      eventType: "import.complete",
+      isActive: true,
+      channels: {
+        email: {
+          subject: "{{kind}} import {{status}} — {{imported}} of {{total}} imported",
+          body: [
+            "Hi {{actorName}},",
+            "",
+            "Your {{kind}} import of {{fileName}} has finished with status {{status}}.",
+            "",
+            "  • Total rows: {{total}}",
+            "  • Imported: {{imported}}",
+            "  • Errors: {{errored}}",
+            "",
+            "View the full result: {{link}}",
+            "",
+            "— Utility CIS",
+          ].join("\n"),
+        },
+      },
+    },
+  });
+  console.log("  ✓ import.complete notification template");
+
   console.log("\nSeed complete!");
   console.log("  Tenant ID: " + UTILITY_ID);
   console.log("  12 premises, 10 accounts, 21 meters, 14 service agreements");
