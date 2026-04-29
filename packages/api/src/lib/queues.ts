@@ -22,6 +22,7 @@ export const QUEUE_NAMES = {
   delinquencyDispatch: "delinquency-dispatch",
   delinquencyTenant: "delinquency-tenant",
   auditRetention: "audit-retention",
+  imports: "imports",
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
@@ -89,6 +90,16 @@ export const QUEUE_DEFAULTS: Record<QueueName, QueueDefaults> = {
     defaultJobOptions: {
       attempts: 2,
       backoff: { type: "fixed", delay: 300_000 },
+      ...RETENTION_OPTS,
+    },
+  },
+  imports: {
+    concurrency: 4,
+    // attempts=1: failed batches stay FAILED until the user explicitly
+    // hits Retry. Auto-retry from row 1 would double-import already-
+    // processed rows; user-driven retry uses scope="errors-only".
+    defaultJobOptions: {
+      attempts: 1,
       ...RETENTION_OPTS,
     },
   },

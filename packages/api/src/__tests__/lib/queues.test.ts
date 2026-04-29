@@ -48,7 +48,7 @@ beforeEach(async () => {
 });
 
 describe("QUEUE_NAMES + ALL_QUEUE_NAMES", () => {
-  it("exposes the six expected queue names", () => {
+  it("exposes the seven expected queue names", () => {
     expect(QUEUE_NAMES).toEqual({
       suspensionTransitions: "suspension-transitions",
       notificationSend: "notification-send",
@@ -56,12 +56,13 @@ describe("QUEUE_NAMES + ALL_QUEUE_NAMES", () => {
       delinquencyDispatch: "delinquency-dispatch",
       delinquencyTenant: "delinquency-tenant",
       auditRetention: "audit-retention",
+      imports: "imports",
     });
   });
 
   it("ALL_QUEUE_NAMES is the value list of QUEUE_NAMES", () => {
     expect(new Set(ALL_QUEUE_NAMES)).toEqual(new Set(Object.values(QUEUE_NAMES)));
-    expect(ALL_QUEUE_NAMES).toHaveLength(6);
+    expect(ALL_QUEUE_NAMES).toHaveLength(7);
   });
 });
 
@@ -74,10 +75,11 @@ describe("QUEUE_DEFAULTS", () => {
     }
   });
 
-  it("delinquency-tenant has concurrency 5 (per spec §3.3) — others are 1", () => {
+  it("delinquency-tenant=5, imports=4, others=1", () => {
     expect(QUEUE_DEFAULTS["delinquency-tenant"].concurrency).toBe(5);
+    expect(QUEUE_DEFAULTS.imports.concurrency).toBe(4);
     for (const name of ALL_QUEUE_NAMES) {
-      if (name === "delinquency-tenant") continue;
+      if (name === "delinquency-tenant" || name === "imports") continue;
       expect(QUEUE_DEFAULTS[name].concurrency).toBe(1);
     }
   });
