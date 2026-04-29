@@ -431,10 +431,19 @@ function localMinutes(utc: Date, tz: string): number {
 
 async function trySendOne(row: PendingWithTenantCfg): Promise<"sent" | "failed" | "skipped"> {
   try {
-    await prisma.notification.update({
-      where: { id: row.id },
+    // Conditional claim: only flip PENDING → SENDING. If another worker
+    // raced ahead (e.g. two cron ticks overlapped because BullMQ lost a
+    // lock and re-dispatched the job), updateMany returns count=0 and
+    // we skip — the other worker owns this notification. Without this
+    // predicate two workers would both call provider.send for the same
+    // notification id and the customer would get a duplicate message.
+    const claimed = await prisma.notification.updateMany({
+      where: { id: row.id, status: "PENDING" },
       data: { status: "SENDING" },
     });
+    if (claimed.count === 0) {
+      return "skipped";
+    }
 
     const provider = getProvider(row.channel);
     const to = row.channel === "EMAIL" ? row.recipient_email! : row.recipient_phone!;

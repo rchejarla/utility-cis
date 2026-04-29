@@ -32,6 +32,19 @@ export const ALL_QUEUE_NAMES: readonly QueueName[] = Object.values(QUEUE_NAMES);
 const DAY_SECONDS = 86_400;
 const WEEK_SECONDS = 604_800;
 
+/**
+ * Per-Worker lock duration. BullMQ default is 30s; we bump to 60s to
+ * tolerate one missed lock-renewal round-trip (Redis pause, GC stall,
+ * Docker Desktop hiccup) without releasing the job to a competing
+ * worker. The renewal timer fires at lockDuration/2 = 30s, so a
+ * single missed renewal still leaves 30s of headroom before the lock
+ * actually expires.
+ *
+ * Handlers MUST still be idempotent — this just reduces the rate of
+ * spurious "Missing lock for job" errors during normal Redis flakes.
+ */
+export const WORKER_LOCK_DURATION_MS = 60_000;
+
 const RETENTION_OPTS: Pick<JobsOptions, "removeOnComplete" | "removeOnFail"> = {
   removeOnComplete: { age: DAY_SECONDS, count: 1000 },
   removeOnFail: { age: WEEK_SECONDS },

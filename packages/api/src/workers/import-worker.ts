@@ -2,7 +2,7 @@ import { Worker } from "bullmq";
 import { queueRedisConnection } from "../lib/queue-redis.js";
 import { logger } from "../lib/logger.js";
 import { withTelemetry } from "../lib/telemetry.js";
-import { QUEUE_NAMES, QUEUE_DEFAULTS, enqueueSafely } from "../lib/queues.js";
+import { QUEUE_NAMES, QUEUE_DEFAULTS, WORKER_LOCK_DURATION_MS, enqueueSafely } from "../lib/queues.js";
 import {
   processBatch,
   type ProcessScope,
@@ -71,6 +71,7 @@ export function buildImportWorker(): Worker<ImportJobData> {
     {
       connection: queueRedisConnection.duplicate(),
       concurrency: QUEUE_DEFAULTS[QUEUE_NAMES.imports].concurrency,
+      lockDuration: WORKER_LOCK_DURATION_MS,
     },
   );
 

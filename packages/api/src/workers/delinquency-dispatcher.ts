@@ -2,7 +2,7 @@ import { Worker } from "bullmq";
 import { queueRedisConnection } from "../lib/queue-redis.js";
 import { logger } from "../lib/logger.js";
 import { withTelemetry } from "../lib/telemetry.js";
-import { QUEUE_NAMES, QUEUE_DEFAULTS, getQueue, enqueueSafely } from "../lib/queues.js";
+import { QUEUE_NAMES, QUEUE_DEFAULTS, WORKER_LOCK_DURATION_MS, getQueue, enqueueSafely } from "../lib/queues.js";
 import { localHour, formatInTimeZone } from "../lib/iana-tz.js";
 import { priorityForTenant } from "../services/automation-config.service.js";
 import { prisma } from "../lib/prisma.js";
@@ -114,6 +114,7 @@ export function buildDelinquencyDispatcher(): Worker {
     {
       connection: queueRedisConnection.duplicate(),
       concurrency: QUEUE_DEFAULTS[QUEUE_NAMES.delinquencyDispatch].concurrency,
+      lockDuration: WORKER_LOCK_DURATION_MS,
     },
   );
 

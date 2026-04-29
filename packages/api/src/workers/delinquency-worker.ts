@@ -2,7 +2,7 @@ import { Worker, type Job } from "bullmq";
 import { queueRedisConnection } from "../lib/queue-redis.js";
 import { logger } from "../lib/logger.js";
 import { withTelemetry } from "../lib/telemetry.js";
-import { QUEUE_NAMES, QUEUE_DEFAULTS } from "../lib/queues.js";
+import { QUEUE_NAMES, QUEUE_DEFAULTS, WORKER_LOCK_DURATION_MS } from "../lib/queues.js";
 import { evaluateDelinquencyForTenant } from "../services/delinquency.service.js";
 
 /**
@@ -47,6 +47,7 @@ export function buildDelinquencyWorker(): Worker<DelinquencyTenantJobData> {
     {
       connection: queueRedisConnection.duplicate(),
       concurrency: QUEUE_DEFAULTS[QUEUE_NAMES.delinquencyTenant].concurrency,
+      lockDuration: WORKER_LOCK_DURATION_MS,
     },
   );
 
