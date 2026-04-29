@@ -178,81 +178,25 @@ function NavItemWithPermission({ item, collapsed, isActive }: { item: NavItem; c
   );
 }
 
-const SECTION_COLLAPSE_KEY = "cis_nav_collapsed_sections";
-
-function getCollapsedSections(): Set<string> {
-  if (typeof window === "undefined") return new Set();
-  try {
-    const raw = localStorage.getItem(SECTION_COLLAPSE_KEY);
-    return raw ? new Set(JSON.parse(raw)) : new Set();
-  } catch {
-    return new Set();
-  }
-}
-
-function saveCollapsedSections(set: Set<string>) {
-  if (typeof window !== "undefined") {
-    localStorage.setItem(SECTION_COLLAPSE_KEY, JSON.stringify([...set]));
-  }
-}
+/** Accordion behaviour: only one section is open at a time. The
+ *  open section is persisted in localStorage so the user's choice
+ *  survives reloads. */
+const OPEN_SECTION_KEY = "cis_nav_open_section";
 
 function CollapsibleSection({
   section,
   pathname,
   sidebarCollapsed,
+  sectionOpen,
+  onToggle,
 }: {
   section: NavSection;
   pathname: string;
   sidebarCollapsed: boolean;
+  sectionOpen: boolean;
+  onToggle: () => void;
 }) {
-  const hasActiveItem = section.items.some(
-    (item) => pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href + "/")),
-  );
-
-  // Always start open on first render. The persisted collapse state
-  // lives in localStorage and gets synced in the mount effect below —
-  // reading it in the useState initializer ran on both server (empty)
-  // and client (populated) and caused a hydration mismatch.
-  const [sectionOpen, setSectionOpen] = useState(true);
-
-  useEffect(() => {
-    const collapsed = getCollapsedSections();
-    const userHasToggled =
-      collapsed.has(section.title) || collapsed.has(`__open:${section.title}`);
-    // Rarely-visited sections (defaultCollapsed) start closed unless
-    // the user has explicitly opened them or we're on a route inside
-    // them. For sections the user has toggled either direction, honor
-    // the persisted choice.
-    if (hasActiveItem) {
-      setSectionOpen(true);
-    } else if (section.defaultCollapsed && !userHasToggled) {
-      setSectionOpen(false);
-    } else if (collapsed.has(section.title)) {
-      setSectionOpen(false);
-    }
-    // Mount-only: user toggles go through toggleSection() directly.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (hasActiveItem && !sectionOpen) setSectionOpen(true);
-  }, [hasActiveItem]);
-
-  const toggleSection = () => {
-    const next = !sectionOpen;
-    setSectionOpen(next);
-    const set = getCollapsedSections();
-    if (next) {
-      set.delete(section.title);
-      // Mark that the user has explicitly opened a default-collapsed
-      // section so we don't re-close it on subsequent mounts.
-      if (section.defaultCollapsed) set.add(`__open:${section.title}`);
-    } else {
-      set.add(section.title);
-      set.delete(`__open:${section.title}`);
-    }
-    saveCollapsedSections(set);
-  };
+  const toggleSection = onToggle;
 
   return (
     <div style={{ marginBottom: 4 }}>
@@ -327,8 +271,52 @@ interface SidebarProps {
 export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
-
   const width = collapsed ? 64 : 240;
+
+  // Section accordion: a single open section at a time. The active-
+  // route's section is opened automatically on mount; user toggles
+  // override and persist via localStorage. Server render uses null
+  // (all closed) to avoid hydration mismatch — the mount effect picks
+  // the right one immediately.
+  const [openSection, setOpenSection] = useState<string | null>(null);
+  useEffect(() => {
+    const sectionForActive = navSections.find((s) =>
+      s.items.some(
+        (item) =>
+          pathname === item.href ||
+          (item.href !== "/" && pathname.startsWith(item.href + "/")),
+      ),
+    );
+    let stored: string | null = null;
+    try {
+      stored = window.localStorage.getItem(OPEN_SECTION_KEY);
+    } catch {
+      stored = null;
+    }
+    // Prefer the section containing the current route — otherwise the
+    // user navigates into a section and finds it closed. If no active
+    // route matches a section, fall back to the persisted choice, then
+    // to the first non-default-collapsed section.
+    if (sectionForActive) {
+      setOpenSection(sectionForActive.title);
+    } else if (stored && navSections.some((s) => s.title === stored)) {
+      setOpenSection(stored);
+    } else {
+      const fallback = navSections.find((s) => !s.defaultCollapsed)?.title ?? null;
+      setOpenSection(fallback);
+    }
+  }, [pathname]);
+
+  const toggleOpenSection = (title: string) => {
+    const next = openSection === title ? null : title;
+    setOpenSection(next);
+    try {
+      if (next) window.localStorage.setItem(OPEN_SECTION_KEY, next);
+      else window.localStorage.removeItem(OPEN_SECTION_KEY);
+    } catch {
+      /* best-effort persistence */
+    }
+  };
 
   return (
     <aside
@@ -428,6 +416,8 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
             section={section}
             pathname={pathname}
             sidebarCollapsed={collapsed}
+            sectionOpen={openSection === section.title}
+            onToggle={() => toggleOpenSection(section.title)}
           />
         ))}
       </nav>
