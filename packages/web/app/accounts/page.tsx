@@ -75,6 +75,7 @@ export default function AccountsPage() {
       getDetailHref={(row) => `/accounts/${row.id}`}
       columns={columns}
       newAction={{ label: "Add Account", href: "/accounts/new" }}
+      importHref="/accounts/import"
       emptyState={{
         headline: "No accounts yet",
         description:

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faTableList, faMap, faMagnifyingGlass } from "@fortawesome/pro-solid-svg-icons";
@@ -350,10 +351,46 @@ export default function PremisesPage() {
       <PageHeader
         title="Premises"
         subtitle={`${meta.total.toLocaleString()} total premises`}
-        action={
-          canCreate && !showEmptyCta
-            ? { label: "Add Premise", href: "/premises/new" }
-            : undefined
+        actions={
+          canCreate && !showEmptyCta ? (
+            <>
+              <Link
+                href="/premises/import"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  padding: "8px 16px",
+                  borderRadius: "var(--radius)",
+                  background: "transparent",
+                  color: "var(--accent-primary)",
+                  border: "1px solid var(--accent-primary)",
+                  fontSize: "13px",
+                  fontWeight: 500,
+                  textDecoration: "none",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Import
+              </Link>
+              <Link
+                href="/premises/new"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  padding: "8px 16px",
+                  borderRadius: "var(--radius)",
+                  background: "var(--accent-primary)",
+                  color: "#fff",
+                  fontSize: "13px",
+                  fontWeight: 500,
+                  textDecoration: "none",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Add Premise
+              </Link>
+            </>
+          ) : undefined
         }
       />
       {statTiles}

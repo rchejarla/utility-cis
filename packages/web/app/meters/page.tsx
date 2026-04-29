@@ -71,6 +71,7 @@ export default function MetersPage() {
       getDetailHref={(row) => `/meters/${row.id}`}
       columns={columns}
       newAction={{ label: "Add Meter", href: "/meters/new" }}
+      importHref="/meters/import"
       emptyState={{
         headline: "No meters installed",
         description:

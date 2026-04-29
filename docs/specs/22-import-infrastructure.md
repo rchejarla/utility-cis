@@ -651,8 +651,11 @@ BullMQ `imports` queue + `import-worker`. Sync/async threshold (≤ 250 rows run
 ### Slice 3 — Customer handler
 First non-meter-read consumer. Customer canonical fields, parser, processRow. `/customers/import` page mounts `<ImportWizard kind="customer" />`. Integration tests mirror Slice 1's. Validates the abstraction holds; this is the slice that earns the framework.
 
-### Slice 4 — Premise / Meter / Account handlers + bell icon
-Three more handlers, three more `/<entity>/import` pages. Topbar bell renders unread `InAppNotification` rows (since by now there are enough notifications to make the bell worth its space).
+### Slice 4a — Premise / Meter / Account handlers  *(✓ shipped 2026-04-29)*
+Three new handlers (`premise`, `meter`, `account`) and three `/<entity>/import` pages mounting the existing `<ImportWizard>`. Premise resolves owner-by-email and commodity-codes via `prepareBatch`. Meter resolves premise (composite address+zip), commodity-by-code, and UoM-by-code-per-commodity in `prepareBatch`; ambiguous premises and unique-meter-number conflicts surface as row-level errors. Account resolves customer-by-email and surfaces unique-account-number conflicts as `DUPLICATE_ACCOUNT`.
+
+### Slice 4b — Bell icon
+Topbar bell renders unread `InAppNotification` rows (since by now there are enough notifications to make the bell worth its space). Backend endpoints (`GET /notifications/unread`, `POST /notifications/:id/read`, `POST /notifications/read-all`) are also part of this slice.
 
 Each slice gets its own plan in `docs/superpowers/plans/`.
 
