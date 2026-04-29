@@ -285,10 +285,15 @@ const handler: ImportKindHandler<PremiseRow, BatchData> = {
         if (c.email) customerByEmail.set(c.email.toLowerCase(), c.id);
       }
     }
+    // Case-insensitive: codes are upper-cased in parseRow, but the DB
+    // may store mixed-case codes. Pull all of this tenant's commodities
+    // (small set in practice — typically <10 per tenant) and bucket
+    // them by upper-case code so the lookup matches regardless of how
+    // the operator's CSV cases the value.
     const commodityByCode = new Map<string, string>();
     if (codes.size > 0) {
       const commodities = await prisma.commodity.findMany({
-        where: { utilityId: ctx.utilityId, code: { in: [...codes] } },
+        where: { utilityId: ctx.utilityId },
         select: { id: true, code: true },
       });
       for (const c of commodities) commodityByCode.set(c.code.toUpperCase(), c.id);

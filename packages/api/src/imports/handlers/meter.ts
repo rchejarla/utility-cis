@@ -314,11 +314,13 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
       }
     }
 
+    // Case-insensitive — same rationale as premise.ts. Pull all
+    // commodities for the tenant; cardinality is low (~10 per tenant).
     const commodityByCode = new Map<string, string>();
     let commodities: Array<{ id: string; code: string }> = [];
     if (commodityCodes.size > 0) {
       commodities = await prisma.commodity.findMany({
-        where: { utilityId: ctx.utilityId, code: { in: [...commodityCodes] } },
+        where: { utilityId: ctx.utilityId },
         select: { id: true, code: true },
       });
       for (const c of commodities) commodityByCode.set(c.code.toUpperCase(), c.id);

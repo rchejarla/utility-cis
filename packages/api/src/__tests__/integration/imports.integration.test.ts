@@ -29,7 +29,15 @@ let saId: string;
 let meterNumber: string;
 let meter2Number: string;
 
-const ENABLED_MODULES = ["imports", "meter_reads", "meters", "premises", "agreements"];
+const ENABLED_MODULES = [
+  "imports",
+  "meter_reads",
+  "meters",
+  "premises",
+  "accounts",
+  "customers",
+  "agreements",
+];
 
 function makeToken(utilityId: string, actorId = "00000000-0000-4000-8000-aaaa00000001") {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
@@ -717,6 +725,287 @@ describe("reclaimZombieBatches", () => {
     });
     expect(staleAfter.status).toBe("PENDING");
     expect(freshAfter.status).toBe("PROCESSING");
+  });
+});
+
+// ─── Slice 4a — Premise / Meter / Account handlers ──────────────────
+
+describe("POST /api/v1/imports — premise handler", () => {
+  it("imports a premise; resolves ownerEmail to customerId and commodityCodes to uuid[]", async () => {
+    const { prisma } = prismaImports;
+
+    // Seed a customer for the owner-email lookup. The fixture's
+    // commodity is `WATER-<suffix>`, so use that exact code.
+    const owner = await prisma.customer.create({
+      data: {
+        utilityId: fixA.utilityId,
+        customerType: "INDIVIDUAL",
+        firstName: "Owner",
+        lastName: "Test",
+        email: "owner@example.com",
+      },
+    });
+    const commodity = await prisma.commodity.findFirstOrThrow({
+      where: { utilityId: fixA.utilityId },
+    });
+
+    const csv =
+      "addressLine1,city,state,zip,premiseType,ownerEmail,commodityCodes\n" +
+      `999 Main St,Springfield,IL,62704,RESIDENTIAL,owner@example.com,${commodity.code}\n`;
+
+    const mapping = {
+      addressLine1: "addressLine1",
+      city: "city",
+      state: "state",
+      zip: "zip",
+      premiseType: "premiseType",
+      ownerEmail: "ownerEmail",
+      commodityCodes: "commodityCodes",
+    };
+
+    const { body, contentType } = buildMultipart([
+      { name: "kind", value: "premise" },
+      { name: "source", value: "MANUAL_UPLOAD" },
+      { name: "mapping", value: JSON.stringify(mapping) },
+      { name: "file", filename: "p.csv", contentType: "text/csv", body: csv },
+    ]);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/imports",
+      headers: { ...headers(), "content-type": contentType },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    const result = JSON.parse(res.body);
+    expect(result.status).toBe("COMPLETE");
+    expect(result.importedCount).toBe(1);
+
+    const created = await prisma.premise.findFirstOrThrow({
+      where: { utilityId: fixA.utilityId, addressLine1: "999 Main St" },
+    });
+    expect(created.ownerId).toBe(owner.id);
+    expect(created.commodityIds).toEqual([commodity.id]);
+    expect(created.state).toBe("IL");
+  });
+
+  it("rejects rows whose ownerEmail doesn't match any customer", async () => {
+    const csv =
+      "addressLine1,city,state,zip,premiseType,ownerEmail\n" +
+      "100 Oak Ave,Springfield,IL,62704,RESIDENTIAL,nobody@example.com\n";
+    const mapping = {
+      addressLine1: "addressLine1",
+      city: "city",
+      state: "state",
+      zip: "zip",
+      premiseType: "premiseType",
+      ownerEmail: "ownerEmail",
+    };
+    const { body, contentType } = buildMultipart([
+      { name: "kind", value: "premise" },
+      { name: "source", value: "MANUAL_UPLOAD" },
+      { name: "mapping", value: JSON.stringify(mapping) },
+      { name: "file", filename: "p.csv", contentType: "text/csv", body: csv },
+    ]);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/imports",
+      headers: { ...headers(), "content-type": contentType },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    const result = JSON.parse(res.body);
+    expect(result.status).toBe("FAILED");
+    expect(result.errors[0].errorCode).toBe("OWNER_NOT_FOUND");
+  });
+});
+
+describe("POST /api/v1/imports — meter handler", () => {
+  it("imports a meter; resolves premise via (address, zip), commodity by code, UoM by code", async () => {
+    const { prisma } = prismaImports;
+    // Use the existing fixture premise: addressLine1 "1 Test Lane <suffix>", zip "00000".
+    const fixturePremise = await prisma.premise.findFirstOrThrow({
+      where: { utilityId: fixA.utilityId, zip: "00000" },
+    });
+    const commodity = await prisma.commodity.findFirstOrThrow({
+      where: { utilityId: fixA.utilityId },
+    });
+    const uom = await prisma.unitOfMeasure.findFirstOrThrow({
+      where: { utilityId: fixA.utilityId, commodityId: commodity.id },
+    });
+
+    const csv =
+      "meterNumber,premiseAddress,premiseZip,commodityCode,uomCode,meterType,installDate\n" +
+      `MTR-IMP-1,${fixturePremise.addressLine1},00000,${commodity.code},${uom.code},MANUAL,2025-01-15\n`;
+
+    const mapping = {
+      meterNumber: "meterNumber",
+      premiseAddress: "premiseAddress",
+      premiseZip: "premiseZip",
+      commodityCode: "commodityCode",
+      uomCode: "uomCode",
+      meterType: "meterType",
+      installDate: "installDate",
+    };
+
+    const { body, contentType } = buildMultipart([
+      { name: "kind", value: "meter" },
+      { name: "source", value: "MANUAL_UPLOAD" },
+      { name: "mapping", value: JSON.stringify(mapping) },
+      { name: "file", filename: "m.csv", contentType: "text/csv", body: csv },
+    ]);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/imports",
+      headers: { ...headers(), "content-type": contentType },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    const result = JSON.parse(res.body);
+    expect(result.status).toBe("COMPLETE");
+    expect(result.importedCount).toBe(1);
+
+    const created = await prisma.meter.findFirstOrThrow({
+      where: { utilityId: fixA.utilityId, meterNumber: "MTR-IMP-1" },
+    });
+    expect(created.premiseId).toBe(fixturePremise.id);
+    expect(created.commodityId).toBe(commodity.id);
+    expect(created.uomId).toBe(uom.id);
+  });
+
+  it("surfaces DUPLICATE_METER when meter_number already exists", async () => {
+    const { prisma } = prismaImports;
+    const fixturePremise = await prisma.premise.findFirstOrThrow({
+      where: { utilityId: fixA.utilityId, zip: "00000" },
+    });
+    const commodity = await prisma.commodity.findFirstOrThrow({
+      where: { utilityId: fixA.utilityId },
+    });
+    const uom = await prisma.unitOfMeasure.findFirstOrThrow({
+      where: { utilityId: fixA.utilityId, commodityId: commodity.id },
+    });
+    // Pre-insert a meter with the same number.
+    await prisma.meter.create({
+      data: {
+        utilityId: fixA.utilityId,
+        premiseId: fixturePremise.id,
+        commodityId: commodity.id,
+        uomId: uom.id,
+        meterNumber: "MTR-DUP",
+        meterType: "MANUAL",
+        status: "ACTIVE",
+        installDate: new Date("2024-01-01"),
+      },
+    });
+
+    const csv =
+      "meterNumber,premiseAddress,premiseZip,commodityCode,uomCode,meterType,installDate\n" +
+      `MTR-DUP,${fixturePremise.addressLine1},00000,${commodity.code},${uom.code},MANUAL,2025-01-15\n`;
+    const mapping = {
+      meterNumber: "meterNumber",
+      premiseAddress: "premiseAddress",
+      premiseZip: "premiseZip",
+      commodityCode: "commodityCode",
+      uomCode: "uomCode",
+      meterType: "meterType",
+      installDate: "installDate",
+    };
+    const { body, contentType } = buildMultipart([
+      { name: "kind", value: "meter" },
+      { name: "source", value: "MANUAL_UPLOAD" },
+      { name: "mapping", value: JSON.stringify(mapping) },
+      { name: "file", filename: "m.csv", contentType: "text/csv", body: csv },
+    ]);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/imports",
+      headers: { ...headers(), "content-type": contentType },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    const result = JSON.parse(res.body);
+    expect(result.status).toBe("FAILED");
+    expect(result.errors[0].errorCode).toBe("DUPLICATE_METER");
+  });
+});
+
+describe("POST /api/v1/imports — account handler", () => {
+  it("imports an account; resolves customerEmail to customerId", async () => {
+    const { prisma } = prismaImports;
+    const customer = await prisma.customer.create({
+      data: {
+        utilityId: fixA.utilityId,
+        customerType: "INDIVIDUAL",
+        firstName: "Acct",
+        lastName: "Customer",
+        email: "acct@example.com",
+      },
+    });
+
+    const csv =
+      "accountNumber,accountType,status,customerEmail\n" +
+      "ACC-IMP-1,RESIDENTIAL,ACTIVE,acct@example.com\n";
+    const mapping = {
+      accountNumber: "accountNumber",
+      accountType: "accountType",
+      status: "status",
+      customerEmail: "customerEmail",
+    };
+    const { body, contentType } = buildMultipart([
+      { name: "kind", value: "account" },
+      { name: "source", value: "MANUAL_UPLOAD" },
+      { name: "mapping", value: JSON.stringify(mapping) },
+      { name: "file", filename: "a.csv", contentType: "text/csv", body: csv },
+    ]);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/imports",
+      headers: { ...headers(), "content-type": contentType },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    const result = JSON.parse(res.body);
+    expect(result.status).toBe("COMPLETE");
+    expect(result.importedCount).toBe(1);
+
+    const created = await prisma.account.findFirstOrThrow({
+      where: { utilityId: fixA.utilityId, accountNumber: "ACC-IMP-1" },
+    });
+    expect(created.customerId).toBe(customer.id);
+    expect(created.accountType).toBe("RESIDENTIAL");
+  });
+
+  it("surfaces DUPLICATE_ACCOUNT when account_number already exists", async () => {
+    // The fixture pre-creates an account with accountNumber=ACCT-<suffix>.
+    const { prisma } = prismaImports;
+    const existing = await prisma.account.findFirstOrThrow({
+      where: { utilityId: fixA.utilityId },
+    });
+
+    const csv =
+      "accountNumber,accountType,status\n" + `${existing.accountNumber},RESIDENTIAL,ACTIVE\n`;
+    const mapping = {
+      accountNumber: "accountNumber",
+      accountType: "accountType",
+      status: "status",
+    };
+    const { body, contentType } = buildMultipart([
+      { name: "kind", value: "account" },
+      { name: "source", value: "MANUAL_UPLOAD" },
+      { name: "mapping", value: JSON.stringify(mapping) },
+      { name: "file", filename: "a.csv", contentType: "text/csv", body: csv },
+    ]);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/imports",
+      headers: { ...headers(), "content-type": contentType },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    const result = JSON.parse(res.body);
+    expect(result.status).toBe("FAILED");
+    expect(result.errors[0].errorCode).toBe("DUPLICATE_ACCOUNT");
   });
 });
 
