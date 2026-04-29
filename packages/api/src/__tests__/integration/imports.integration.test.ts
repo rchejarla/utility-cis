@@ -502,3 +502,273 @@ describe("GET /api/v1/imports/:id/error-summary", () => {
     expect(meterNotFound?.count).toBe(3);
   });
 });
+
+// ─── Slice 2 — async-path service-level tests ────────────────────────
+//
+// These exercise the cancel/retry/zombie service functions and the
+// processBatch cancellation path. They run against the same Postgres
+// fixture as the rest of the file — Redis is not required because
+// enqueueSafely returns null when Redis is unreachable rather than
+// throwing, so the cancel/retry endpoints succeed without a worker
+// listening. Full end-to-end worker tests live in import-worker.
+
+describe("POST /api/v1/imports — async path threshold", () => {
+  it("returns 202 + async:true when recordCount > SYNC_THRESHOLD_ROWS (250)", async () => {
+    const lines = ["meterNumber,readDatetime,reading"];
+    for (let i = 0; i < 251; i++) {
+      const day = String((i % 28) + 1).padStart(2, "0");
+      const hh = String(i % 24).padStart(2, "0");
+      const mm = String(i % 60).padStart(2, "0");
+      lines.push(`${meterNumber},2024-02-${day}T${hh}:${mm}:00Z,${1000 + i}`);
+    }
+    const csv = lines.join("\n");
+    const { body, contentType } = buildMultipart([
+      { name: "kind", value: "meter_read" },
+      { name: "source", value: "MANUAL_UPLOAD" },
+      {
+        name: "mapping",
+        value: JSON.stringify({
+          meterNumber: "meterNumber",
+          readDatetime: "readDatetime",
+          reading: "reading",
+        }),
+      },
+      { name: "file", filename: "251.csv", contentType: "text/csv", body: csv },
+    ]);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/imports",
+      headers: { ...headers(), "content-type": contentType },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(202);
+    const result = JSON.parse(res.body) as {
+      async: boolean;
+      batchId: string;
+      recordCount: number;
+    };
+    expect(result.async).toBe(true);
+    expect(result.recordCount).toBe(251);
+    expect(result.batchId).toBeTruthy();
+
+    // Batch is in PENDING because no worker picked it up in this test
+    // (Redis isn't running). That's the expected state for an
+    // un-drained queue.
+    const { prisma } = prismaImports;
+    const batch = await prisma.importBatch.findUniqueOrThrow({
+      where: { id: result.batchId },
+    });
+    expect(batch.status).toBe("PENDING");
+    expect(batch.recordCount).toBe(251);
+  });
+});
+
+describe("POST /api/v1/imports/:id/cancel", () => {
+  it("flips cancel_requested on a PENDING batch", async () => {
+    const { prisma } = prismaImports;
+    const batch = await prisma.importBatch.create({
+      data: {
+        utilityId: fixA.utilityId,
+        entityKind: "meter_read",
+        source: "MANUAL_UPLOAD",
+        fileName: "x.csv",
+        recordCount: 5,
+        status: "PROCESSING",
+        createdBy: "00000000-0000-4000-8000-aaaa00000001",
+        lastProgressAt: new Date(),
+      },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/imports/${batch.id}/cancel`,
+      headers: headers(),
+    });
+    expect(res.statusCode).toBe(200);
+    const updated = await prisma.importBatch.findUniqueOrThrow({
+      where: { id: batch.id },
+    });
+    expect(updated.cancelRequested).toBe(true);
+  });
+
+  it("is a no-op on terminal batches", async () => {
+    const { prisma } = prismaImports;
+    const batch = await prisma.importBatch.create({
+      data: {
+        utilityId: fixA.utilityId,
+        entityKind: "meter_read",
+        source: "MANUAL_UPLOAD",
+        fileName: "x.csv",
+        recordCount: 5,
+        importedCount: 5,
+        status: "COMPLETE",
+        createdBy: "00000000-0000-4000-8000-aaaa00000001",
+        lastProgressAt: new Date(),
+      },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/imports/${batch.id}/cancel`,
+      headers: headers(),
+    });
+    expect(res.statusCode).toBe(200);
+    const updated = await prisma.importBatch.findUniqueOrThrow({
+      where: { id: batch.id },
+    });
+    expect(updated.cancelRequested).toBe(false);
+  });
+});
+
+describe("POST /api/v1/imports/:id/retry", () => {
+  it("flips PARTIAL → PENDING and clears completedAt", async () => {
+    const { prisma } = prismaImports;
+    const batch = await prisma.importBatch.create({
+      data: {
+        utilityId: fixA.utilityId,
+        entityKind: "meter_read",
+        source: "MANUAL_UPLOAD",
+        fileName: "x.csv",
+        recordCount: 10,
+        importedCount: 7,
+        errorCount: 3,
+        status: "PARTIAL",
+        createdBy: "00000000-0000-4000-8000-aaaa00000001",
+        lastProgressAt: new Date(),
+        completedAt: new Date(),
+      },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/imports/${batch.id}/retry`,
+      headers: headers(),
+    });
+    expect(res.statusCode).toBe(202);
+    const updated = await prisma.importBatch.findUniqueOrThrow({
+      where: { id: batch.id },
+    });
+    expect(updated.status).toBe("PENDING");
+    expect(updated.cancelRequested).toBe(false);
+    expect(updated.completedAt).toBeNull();
+  });
+
+  it("rejects retry on a PROCESSING batch (not retryable)", async () => {
+    const { prisma } = prismaImports;
+    const batch = await prisma.importBatch.create({
+      data: {
+        utilityId: fixA.utilityId,
+        entityKind: "meter_read",
+        source: "MANUAL_UPLOAD",
+        fileName: "x.csv",
+        recordCount: 5,
+        status: "PROCESSING",
+        createdBy: "00000000-0000-4000-8000-aaaa00000001",
+        lastProgressAt: new Date(),
+      },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/imports/${batch.id}/retry`,
+      headers: headers(),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error.code).toBe("NOT_RETRYABLE");
+  });
+});
+
+describe("reclaimZombieBatches", () => {
+  it("flips PROCESSING + stale lastProgressAt back to PENDING", async () => {
+    const { prisma } = prismaImports;
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+    const stale = await prisma.importBatch.create({
+      data: {
+        utilityId: fixA.utilityId,
+        entityKind: "meter_read",
+        source: "MANUAL_UPLOAD",
+        fileName: "stale.csv",
+        recordCount: 5,
+        status: "PROCESSING",
+        createdBy: "00000000-0000-4000-8000-aaaa00000001",
+        lastProgressAt: tenMinutesAgo,
+      },
+    });
+    const fresh = await prisma.importBatch.create({
+      data: {
+        utilityId: fixA.utilityId,
+        entityKind: "meter_read",
+        source: "MANUAL_UPLOAD",
+        fileName: "fresh.csv",
+        recordCount: 5,
+        status: "PROCESSING",
+        createdBy: "00000000-0000-4000-8000-aaaa00000001",
+        lastProgressAt: new Date(),
+      },
+    });
+    const { reclaimZombieBatches } = await import(
+      "../../services/imports/zombie-sweep.service.js"
+    );
+    const ids = await reclaimZombieBatches(new Date());
+    expect(ids).toContain(stale.id);
+    expect(ids).not.toContain(fresh.id);
+
+    const staleAfter = await prisma.importBatch.findUniqueOrThrow({
+      where: { id: stale.id },
+    });
+    const freshAfter = await prisma.importBatch.findUniqueOrThrow({
+      where: { id: fresh.id },
+    });
+    expect(staleAfter.status).toBe("PENDING");
+    expect(freshAfter.status).toBe("PROCESSING");
+  });
+});
+
+describe("processBatch — cancellation", () => {
+  it("finalises CANCELLED when cancelRequested is set before the loop runs", async () => {
+    const { prisma } = prismaImports;
+    // 60 PENDING rows: > PROGRESS_INTERVAL (50) so the cancel check
+    // fires after the first chunk.
+    const batch = await prisma.importBatch.create({
+      data: {
+        utilityId: fixA.utilityId,
+        entityKind: "meter_read",
+        source: "MANUAL_UPLOAD",
+        fileName: "cancel.csv",
+        recordCount: 60,
+        status: "PENDING",
+        cancelRequested: true, // pre-flag so the first heartbeat aborts
+        createdBy: "00000000-0000-4000-8000-aaaa00000001",
+        lastProgressAt: new Date(),
+      },
+    });
+    await prisma.importRow.createMany({
+      data: Array.from({ length: 60 }, (_, i) => ({
+        importBatchId: batch.id,
+        rowIndex: i + 1,
+        rawData: {
+          meterNumber,
+          readDatetime: `2024-02-01T${String(i % 24).padStart(2, "0")}:00:00Z`,
+          reading: String(1000 + i),
+        },
+        status: "PENDING" as const,
+      })),
+    });
+
+    const { processBatch } = await import(
+      "../../services/imports/process-batch.service.js"
+    );
+    const result = await processBatch({
+      batchId: batch.id,
+      utilityId: fixA.utilityId,
+      actorId: "00000000-0000-4000-8000-aaaa00000001",
+      actorName: "Tester",
+      scope: "pending",
+    });
+    expect(result.status).toBe("CANCELLED");
+
+    const updated = await prisma.importBatch.findUniqueOrThrow({
+      where: { id: batch.id },
+    });
+    expect(updated.status).toBe("CANCELLED");
+    // Some rows may be IMPORTED (the first 50-row chunk processed
+    // before the cancel check fired); the rest stay PENDING.
+    expect(updated.importedCount).toBeLessThanOrEqual(50);
+  });
+});
