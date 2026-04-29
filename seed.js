@@ -10,6 +10,7 @@ async function main() {
   // so they must be cleared before those parents can be deleted. The
   // original seed script predates Phase 2 and skipped them, which now
   // blocks reseeding any DB that has accumulated operational data.
+  if (p.userRole) await p.userRole.deleteMany({});
   await p.cisUser.deleteMany({});
   await p.role.deleteMany({});
   await p.tenantModule.deleteMany({});
@@ -261,11 +262,11 @@ async function main() {
   await p.premise.update({ where: { id: pArr[7].id }, data: { ownerId: cArr[2].id } });
   console.log("  9 premises linked to owners");
 
+  // Contacts are now record-only people on file. Anyone who needs
+  // portal access is represented by cis_user + user_role instead.
   const contactData = [
-    { accountId: aArr[0].id, customerId: cArr[0].id, role: "PRIMARY", firstName: "Jane", lastName: "Smith", email: "jane.smith@example.com", phone: "555-100-0001", isPrimary: true },
-    { accountId: aArr[0].id, role: "AUTHORIZED", firstName: "Tom", lastName: "Smith", email: "tom.smith@example.com", phone: "555-100-0099", isPrimary: false },
-    { accountId: aArr[1].id, customerId: cArr[2].id, role: "BILLING", firstName: "Alice", lastName: "Walker", email: "alice@acme.example.com", phone: "555-200-0002", isPrimary: true },
-    { accountId: aArr[2].id, customerId: cArr[1].id, role: "PRIMARY", firstName: "Robert", lastName: "Johnson", email: "robert.j@example.com", phone: "555-100-0002", isPrimary: true },
+    { accountId: aArr[0].id, firstName: "Tom", lastName: "Smith", email: "tom.smith@example.com", phone: "555-100-0099", notes: "Spouse — authorized to discuss billing" },
+    { accountId: aArr[1].id, customerId: cArr[2].id, firstName: "Alice", lastName: "Walker", email: "alice@acme.example.com", phone: "555-200-0002", notes: "Office manager" },
   ];
 
   for (const ct of contactData) {
@@ -633,7 +634,11 @@ async function main() {
   ];
   for (const u of testUsers) {
     await p.cisUser.create({
-      data: { id: u.id, utilityId: UID, email: u.email, name: u.name, roleId: roleArr[u.roleIdx].id, isActive: true },
+      data: { id: u.id, utilityId: UID, email: u.email, name: u.name, isActive: true },
+    });
+    // Tenant-wide role assignment (account_id NULL).
+    await p.userRole.create({
+      data: { utilityId: UID, userId: u.id, accountId: null, roleId: roleArr[u.roleIdx].id },
     });
   }
   console.log("  " + testUsers.length + " test users (admin)");
@@ -652,9 +657,19 @@ async function main() {
         utilityId: UID,
         email: pu.email,
         name: pu.name,
-        roleId: roleArr[5].id,  // Portal Customer
         customerId: cArr[pu.customerIdx].id,
         isActive: true,
+      },
+    });
+    // Slice 1 transitional: portal users get a tenant-wide Portal
+    // Customer assignment so existing portal middleware keeps working.
+    // Slice 3 will migrate this to per-account user_role rows.
+    await p.userRole.create({
+      data: {
+        utilityId: UID,
+        userId: pu.id,
+        accountId: null,
+        roleId: roleArr[5].id, // Portal Customer
       },
     });
   }
@@ -761,7 +776,7 @@ async function main() {
     update: { nextValue: 4n },
   });
 
-  console.log("\nDone! 10 premises, 8 accounts, 15 meters, 10 agreements, 3 customers, 4 contacts, 3 billing addresses, 2 portal users");
+  console.log("\nDone! 10 premises, 8 accounts, 15 meters, 10 agreements, 3 customers, " + contactData.length + " contacts, 3 billing addresses, 2 portal users");
 }
 
 main().catch(e => { console.error("SEED ERROR:", e); process.exit(1); }).finally(() => p.$disconnect());

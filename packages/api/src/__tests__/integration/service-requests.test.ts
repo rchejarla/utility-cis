@@ -102,10 +102,21 @@ beforeAll(async () => {
         utilityId: UID,
         email: "portal-integration@test.com",
         name: "Portal Integration Test",
-        roleId: portalRole.id,
         isActive: true,
       },
     });
+    // Tenant-wide assignment via user_role.
+    const existing = await prisma.userRole.findFirst({
+      where: { userId: PORTAL_SUB, utilityId: UID, accountId: null },
+      select: { id: true },
+    });
+    if (existing) {
+      await prisma.userRole.update({ where: { id: existing.id }, data: { roleId: portalRole.id } });
+    } else {
+      await prisma.userRole.create({
+        data: { utilityId: UID, userId: PORTAL_SUB, accountId: null, roleId: portalRole.id },
+      });
+    }
   }
 
   // Create a CSR CisUser so the FK on service_request.created_by resolves.
@@ -124,16 +135,26 @@ beforeAll(async () => {
     });
     await prisma.cisUser.upsert({
       where: { id: CSR_SUB },
-      update: { roleId: csrRole.id, isActive: true },
+      update: { isActive: true },
       create: {
         id: CSR_SUB,
         utilityId: UID,
         email: "csr-integration@test.com",
         name: "CSR Integration Test",
-        roleId: csrRole.id,
         isActive: true,
       },
     });
+    const existing = await prisma.userRole.findFirst({
+      where: { userId: CSR_SUB, utilityId: UID, accountId: null },
+      select: { id: true },
+    });
+    if (existing) {
+      await prisma.userRole.update({ where: { id: existing.id }, data: { roleId: csrRole.id } });
+    } else {
+      await prisma.userRole.create({
+        data: { utilityId: UID, userId: CSR_SUB, accountId: null, roleId: csrRole.id },
+      });
+    }
   }
 });
 

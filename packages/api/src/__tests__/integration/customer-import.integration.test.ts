@@ -356,9 +356,11 @@ describe("POST /api/v1/imports — customer permission gate", () => {
         id: userId,
         email: "scoped@example.com",
         name: "Scoped User",
-        roleId: roleRow.id,
         isActive: true,
       },
+    });
+    await prisma.userRole.create({
+      data: { utilityId: fixA.utilityId, userId, accountId: null, roleId: roleRow.id },
     });
 
     const csv = "customer_type,first_name,last_name\nINDIVIDUAL,Jane,Doe\n";

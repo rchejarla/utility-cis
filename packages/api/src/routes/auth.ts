@@ -47,7 +47,6 @@ export async function authRoutes(app: FastifyInstance) {
 
         const user = await prisma.cisUser.findFirst({
           where: { utilityId, email: email.toLowerCase(), isActive: true },
-          include: { role: true },
         });
 
         if (!user) {
@@ -56,13 +55,23 @@ export async function authRoutes(app: FastifyInstance) {
           });
         }
 
+        // Tenant-wide role lives in user_role with account_id NULL.
+        // Per-account portal roles are resolved by the portal's active-
+        // account middleware later; this dev-login token captures the
+        // tenant-wide identity only.
+        const tenantWide = await prisma.userRole.findFirst({
+          where: { userId: user.id, utilityId, accountId: null },
+          include: { role: { select: { name: true } } },
+        });
+        const roleName = tenantWide?.role.name ?? "Portal Customer";
+
         const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
         const payload = Buffer.from(JSON.stringify({
           sub: user.id,
           utility_id: utilityId,
           email: user.email,
           name: user.name,
-          role: user.role.name,
+          role: roleName,
           customer_id: user.customerId ?? undefined,
         })).toString("base64url");
         const token = `${header}.${payload}.dev`;
@@ -75,7 +84,7 @@ export async function authRoutes(app: FastifyInstance) {
             id: user.id,
             email: user.email,
             name: user.name,
-            roleName: user.role.name,
+            roleName,
             customerId: user.customerId ?? null,
           },
           isPortal,
@@ -113,10 +122,21 @@ export async function authRoutes(app: FastifyInstance) {
         return;
       }
 
-      await prisma.cisUser.update({
-        where: { id: userId },
-        data: { roleId },
+      // Tenant-wide row is unique-by-user via the partial index; can't
+      // use Prisma's upsert with a composite key that includes a
+      // nullable column (Postgres treats NULL as distinct, so the
+      // composite key isn't a single matching row to upsert against).
+      const existing = await prisma.userRole.findFirst({
+        where: { userId, utilityId, accountId: null },
+        select: { id: true },
       });
+      if (existing) {
+        await prisma.userRole.update({ where: { id: existing.id }, data: { roleId } });
+      } else {
+        await prisma.userRole.create({
+          data: { utilityId, userId, accountId: null, roleId },
+        });
+      }
 
       await invalidateUserRoleCache(userId, utilityId);
 
@@ -131,6 +151,8 @@ export async function authRoutes(app: FastifyInstance) {
     { config: { module: "settings", permission: "VIEW" } },
     async (request) => {
       const { utilityId } = request.user;
+      // Resolve each user's tenant-wide role (account_id NULL). Users
+      // who only have per-account roles (portal-only) show as null.
       const users = await prisma.cisUser.findMany({
         where: { utilityId },
         select: {
@@ -139,11 +161,22 @@ export async function authRoutes(app: FastifyInstance) {
           name: true,
           isActive: true,
           customerId: true,
-          role: { select: { id: true, name: true } },
+          userRoles: {
+            where: { accountId: null },
+            select: { role: { select: { id: true, name: true } } },
+            take: 1,
+          },
         },
         orderBy: { name: "asc" },
       });
-      return users;
+      return users.map((u) => ({
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        isActive: u.isActive,
+        customerId: u.customerId,
+        role: u.userRoles[0]?.role ?? null,
+      }));
     }
   );
 
@@ -155,10 +188,15 @@ export async function authRoutes(app: FastifyInstance) {
       const { utilityId } = request.user;
       const roles = await prisma.role.findMany({
         where: { utilityId },
-        include: { _count: { select: { users: true } } },
+        include: { _count: { select: { userRoles: true } } },
         orderBy: [{ isSystem: "desc" }, { name: "asc" }],
       });
-      return roles;
+      // Preserve the legacy response shape (`_count.users`) so the
+      // /users-roles UI doesn't need to change.
+      return roles.map((r) => ({
+        ...r,
+        _count: { users: r._count.userRoles },
+      }));
     }
   );
 }

@@ -9,7 +9,7 @@ export async function listContacts(utilityId: string, accountId: string) {
     include: {
       customer: true,
     },
-    orderBy: { isPrimary: "desc" },
+    orderBy: { lastName: "asc" },
   });
 }
 

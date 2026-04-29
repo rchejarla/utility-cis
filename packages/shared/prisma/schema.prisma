@@ -137,15 +137,6 @@ enum CustomerStatus {
   @@map("customer_status")
 }
 
-enum ContactRole {
-  PRIMARY
-  BILLING
-  AUTHORIZED
-  EMERGENCY
-
-  @@map("contact_role")
-}
-
 // ─── Models ───────────────────────────────────────────────────────────────────
 
 model Commodity {
@@ -361,6 +352,7 @@ model Account {
   billingAddresses   BillingAddress[]
   delinquencyActions DelinquencyAction[]
   serviceRequests    ServiceRequest[]
+  userRoles          UserRole[]
 
   @@unique([utilityId, accountNumber])
   @@index([customerId])
@@ -618,19 +610,22 @@ model Customer {
   @@map("customer")
 }
 
+/// Record-only contacts: people on file for an account who do NOT
+/// have portal access. Anyone with portal permissions is represented
+/// by a CisUser + UserRole(account_id=this account) row instead — the
+/// Contacts UI on the account-detail page is a UNION of both sources.
 model Contact {
-  id         String      @id @default(uuid()) @db.Uuid
-  utilityId  String      @map("utility_id") @db.Uuid
-  accountId  String      @map("account_id") @db.Uuid
-  customerId String?     @map("customer_id") @db.Uuid
-  role       ContactRole
-  firstName  String      @map("first_name") @db.VarChar(100)
-  lastName   String      @map("last_name") @db.VarChar(100)
-  email      String?     @db.VarChar(255)
-  phone      String?     @db.VarChar(20)
-  isPrimary  Boolean     @default(false) @map("is_primary")
-  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt  DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+  id         String   @id @default(uuid()) @db.Uuid
+  utilityId  String   @map("utility_id") @db.Uuid
+  accountId  String   @map("account_id") @db.Uuid
+  customerId String?  @map("customer_id") @db.Uuid
+  firstName  String   @map("first_name") @db.VarChar(100)
+  lastName   String   @map("last_name") @db.VarChar(100)
+  email      String?  @db.VarChar(255)
+  phone      String?  @db.VarChar(20)
+  notes      String?  @db.Text
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   // Relations
   account  Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
@@ -716,7 +711,7 @@ model Role {
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   // Relations
-  users CisUser[]
+  userRoles UserRole[]
 
   @@unique([utilityId, name])
   @@map("role")
@@ -728,7 +723,8 @@ model CisUser {
   externalId  String?   @map("external_id") @db.VarChar(255)
   email       String    @map("email") @db.VarChar(255)
   name        String    @map("name") @db.VarChar(255)
-  roleId      String    @map("role_id") @db.Uuid
+  // Customer link is identity-only ("this user IS this customer person").
+  // Permissions live on user_role, not here.
   customerId  String?   @map("customer_id") @db.Uuid
   isActive    Boolean   @default(true) @map("is_active")
   lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz
@@ -736,18 +732,50 @@ model CisUser {
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz
 
   // Relations
-  role                    Role             @relation(fields: [roleId], references: [id], onDelete: Restrict)
   customer                Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  userRoles               UserRole[]
   assignedServiceRequests ServiceRequest[] @relation("ServiceRequestAssignee")
   createdServiceRequests  ServiceRequest[] @relation("ServiceRequestCreator")
   slaEscalations          Sla[]            @relation("SlaEscalationUser")
 
   @@unique([utilityId, email])
   @@unique([utilityId, externalId])
-  @@index([roleId])
   @@index([customerId])
   @@index([utilityId, isActive])
   @@map("cis_user")
+}
+
+/// Joins users to roles, optionally scoped per account. account_id NULL
+/// means the role applies tenant-wide (admin staff). account_id NOT NULL
+/// means the role applies only when the user is acting on that account
+/// (portal contacts).
+///
+/// Constraints:
+///   - At most one tenant-wide row per user (partial unique index on
+///     user_id WHERE account_id IS NULL — Prisma can't express this so
+///     it lives in the migration SQL).
+///   - At most one role per (user, account) pair — Prisma unique on
+///     (userId, accountId) which Postgres treats as distinct when one
+///     side is NULL, so it allows the tenant-wide row to coexist with
+///     per-account rows. The partial index above closes the only gap.
+model UserRole {
+  id        String   @id @default(uuid()) @db.Uuid
+  utilityId String   @map("utility_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  accountId String?  @map("account_id") @db.Uuid
+  roleId    String   @map("role_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user    CisUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account Account? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  role    Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, accountId])
+  @@index([accountId])
+  @@index([roleId])
+  @@index([utilityId, userId])
+  @@map("user_role")
 }
 
 model TenantModule {

@@ -48,12 +48,12 @@ describe("automation-config routes", () => {
     (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: "test-user-001",
       utilityId,
-      roleId: "role-admin",
       isActive: true,
-      role: {
-        name: "Admin",
-        permissions: { tenant_profile: ["VIEW", "EDIT"] },
-      },
+      customerId: null,
+    });
+    (prisma.userRole.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+      roleId: "role-admin",
+      role: { name: "Admin", permissions: { tenant_profile: ["VIEW", "EDIT"] } },
     });
   }
 
@@ -108,8 +108,11 @@ describe("automation-config routes", () => {
       (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
         id: "test-user-001",
         utilityId,
-        roleId: "role-readonly",
         isActive: true,
+        customerId: null,
+      });
+      (prisma.userRole.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+        roleId: "role-readonly",
         role: { name: "ReadOnly", permissions: { other_module: ["VIEW"] } },
       });
 
@@ -195,8 +198,11 @@ describe("automation-config routes", () => {
       (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
         id: "test-user-001",
         utilityId,
-        roleId: "role-viewer",
         isActive: true,
+        customerId: null,
+      });
+      (prisma.userRole.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+        roleId: "role-viewer",
         role: { name: "Viewer", permissions: { tenant_profile: ["VIEW"] } },
       });
 

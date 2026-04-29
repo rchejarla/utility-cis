@@ -96,16 +96,30 @@ export async function portalAuthRoutes(app: FastifyInstance) {
         });
       }
 
-      const user = await prisma.cisUser.create({
-        data: {
-          utilityId,
-          email: email.toLowerCase(),
-          name,
-          roleId: portalRole.id,
-          customerId: customer.id,
-          isActive: true,
-        },
-        include: { role: true },
+      // Slice 1 transitional behavior: portal users still get a tenant-
+      // wide user_role assignment to the Portal Customer role so the
+      // existing portal middleware (which reads tenant-wide role)
+      // keeps working. Slice 3 will switch to per-account user_role
+      // rows and migrate this row out.
+      const user = await prisma.$transaction(async (tx) => {
+        const created = await tx.cisUser.create({
+          data: {
+            utilityId,
+            email: email.toLowerCase(),
+            name,
+            customerId: customer.id,
+            isActive: true,
+          },
+        });
+        await tx.userRole.create({
+          data: {
+            utilityId,
+            userId: created.id,
+            accountId: null,
+            roleId: portalRole.id,
+          },
+        });
+        return created;
       });
 
       const token = buildDevToken({
@@ -113,7 +127,7 @@ export async function portalAuthRoutes(app: FastifyInstance) {
         utility_id: utilityId,
         email: user.email,
         name: user.name,
-        role: user.role.name,
+        role: portalRole.name,
         customer_id: customer.id,
       });
 
@@ -123,7 +137,7 @@ export async function portalAuthRoutes(app: FastifyInstance) {
           id: user.id,
           email: user.email,
           name: user.name,
-          roleName: user.role.name,
+          roleName: portalRole.name,
           customerId: customer.id,
         },
       });
@@ -143,7 +157,6 @@ export async function portalAuthRoutes(app: FastifyInstance) {
           customerId: { not: null },
           isActive: true,
         },
-        include: { role: true },
       });
 
       if (!user) {
@@ -155,6 +168,14 @@ export async function portalAuthRoutes(app: FastifyInstance) {
         });
       }
 
+      // Resolve their tenant-wide role for the JWT (Portal Customer
+      // for now; Slice 3 introduces per-account roles).
+      const roleAssignment = await prisma.userRole.findFirst({
+        where: { userId: user.id, utilityId, accountId: null },
+        include: { role: { select: { name: true } } },
+      });
+      const roleName = roleAssignment?.role.name ?? "Portal Customer";
+
       await prisma.cisUser.update({
         where: { id: user.id },
         data: { lastLoginAt: new Date() },
@@ -165,7 +186,7 @@ export async function portalAuthRoutes(app: FastifyInstance) {
         utility_id: utilityId,
         email: user.email,
         name: user.name,
-        role: user.role.name,
+        role: roleName,
         customer_id: user.customerId,
       });
 
@@ -175,7 +196,7 @@ export async function portalAuthRoutes(app: FastifyInstance) {
           id: user.id,
           email: user.email,
           name: user.name,
-          roleName: user.role.name,
+          roleName,
           customerId: user.customerId,
         },
       });

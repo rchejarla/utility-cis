@@ -30,6 +30,14 @@ vi.mock("../../lib/prisma.js", async (importOriginal) => {
         update: vi.fn().mockResolvedValue({}),
         count: vi.fn().mockResolvedValue(0),
       },
+      userRole: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        findMany: vi.fn().mockResolvedValue([]),
+        create: vi.fn().mockResolvedValue({}),
+        update: vi.fn().mockResolvedValue({}),
+        upsert: vi.fn().mockResolvedValue({}),
+        count: vi.fn().mockResolvedValue(0),
+      },
       cisRole: {
         findMany: vi.fn().mockResolvedValue([]),
         findUnique: vi.fn().mockResolvedValue(null),
@@ -53,6 +61,36 @@ vi.mock("../../lib/prisma.js", async (importOriginal) => {
 
 // Import prisma after mocking so we get the mock
 import { prisma } from "../../lib/prisma.js";
+
+/**
+ * Helper to set up the auth-related prisma mocks for a single test
+ * scenario. After Slice 1, role assignments live on the user_role
+ * table (not cis_user.role_id), so we mock both: cis_user holds the
+ * user identity row, user_role holds the (user, role) assignment.
+ */
+function mockAuthUser(opts: {
+  isActive?: boolean;
+  cisUser?: Record<string, unknown> | null;
+  role?: { id: string; name: string; permissions: Record<string, string[]> } | null;
+}) {
+  const isActive = opts.isActive ?? true;
+  const cisUser =
+    opts.cisUser === null
+      ? null
+      : {
+          id: "test-user-001",
+          utilityId: "test-utility-001",
+          email: "test@example.com",
+          name: "Test User",
+          customerId: null,
+          isActive,
+          ...opts.cisUser,
+        };
+  (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(cisUser);
+  (prisma.userRole.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(
+    opts.role ? { roleId: opts.role.id, role: opts.role } : null,
+  );
+}
 
 describe("Authorization middleware", () => {
   const validToken = createTestToken();
@@ -83,19 +121,12 @@ describe("Authorization middleware", () => {
     ]);
 
     // Admin user with full commodities permission
-    const mockRole = {
-      id: "role-admin",
-      name: "Admin",
-      permissions: { commodities: ["VIEW", "CREATE", "EDIT", "DELETE"] },
-    };
-    (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
-      id: "test-user-001",
-      utilityId: "test-utility-001",
-      email: "test@example.com",
-      name: "Test User",
-      roleId: "role-admin",
-      isActive: true,
-      role: mockRole,
+    mockAuthUser({
+      role: {
+        id: "role-admin",
+        name: "Admin",
+        permissions: { commodities: ["VIEW", "CREATE", "EDIT", "DELETE"] },
+      },
     });
 
     const response = await app.inject({
@@ -137,33 +168,21 @@ describe("Authorization middleware", () => {
   it("GET /api/v1/auth/me returns user info, permissions, and enabledModules", async () => {
     const app = await createTestApp();
 
-    const mockRole = {
-      id: "role-001",
-      name: "Admin",
-      permissions: {
-        customers: ["VIEW", "CREATE", "EDIT", "DELETE"],
-        premises: ["VIEW", "CREATE"],
+    mockAuthUser({
+      role: {
+        id: "role-001",
+        name: "Admin",
+        permissions: {
+          customers: ["VIEW", "CREATE", "EDIT", "DELETE"],
+          premises: ["VIEW", "CREATE"],
+        },
       },
-    };
-
-    const mockCisUser = {
-      id: "test-user-001",
-      utilityId: "test-utility-001",
-      email: "test@example.com",
-      name: "Test User",
-      roleId: "role-001",
-      isActive: true,
-      role: mockRole,
-    };
-
-    const mockModules = [
+    });
+    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "customers" },
       { moduleKey: "premises" },
       { moduleKey: "meters" },
-    ];
-
-    (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(mockCisUser);
-    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue(mockModules);
+    ]);
 
     const response = await app.inject({
       method: "GET",
@@ -195,23 +214,14 @@ describe("Authorization middleware", () => {
   it("rejects inactive user (is_active=false) with 403 USER_INACTIVE (BR-RB-009)", async () => {
     const app = await createTestApp();
 
-    const mockRole = {
-      id: "role-001",
-      name: "CSR",
-      permissions: { customers: ["VIEW"] },
-    };
-
-    const inactiveCisUser = {
-      id: "test-user-001",
-      utilityId: "test-utility-001",
-      email: "test@example.com",
-      name: "Test User",
-      roleId: "role-001",
-      isActive: false, // deactivated
-      role: mockRole,
-    };
-
-    (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(inactiveCisUser);
+    mockAuthUser({
+      isActive: false,
+      role: {
+        id: "role-001",
+        name: "CSR",
+        permissions: { customers: ["VIEW"] },
+      },
+    });
     (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "customers" },
     ]);
@@ -231,25 +241,13 @@ describe("Authorization middleware", () => {
   it("rejects user without required module permission with 403 FORBIDDEN", async () => {
     const app = await createTestApp();
 
-    const mockRole = {
-      id: "role-readonly",
-      name: "Read-Only",
-      permissions: {
-        customers: ["VIEW"], // no CREATE
+    mockAuthUser({
+      role: {
+        id: "role-readonly",
+        name: "Read-Only",
+        permissions: { customers: ["VIEW"] }, // no CREATE
       },
-    };
-
-    const cisUserWithLimitedPerms = {
-      id: "test-user-001",
-      utilityId: "test-utility-001",
-      email: "test@example.com",
-      name: "Test User",
-      roleId: "role-readonly",
-      isActive: true,
-      role: mockRole,
-    };
-
-    (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(cisUserWithLimitedPerms);
+    });
     (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "customers" },
     ]);
@@ -276,25 +274,13 @@ describe("Authorization middleware", () => {
   it("rejects request when module is disabled for tenant with 403 MODULE_DISABLED", async () => {
     const app = await createTestApp();
 
-    const mockRole = {
-      id: "role-admin",
-      name: "Admin",
-      permissions: {
-        customers: ["VIEW", "CREATE", "EDIT", "DELETE"],
+    mockAuthUser({
+      role: {
+        id: "role-admin",
+        name: "Admin",
+        permissions: { customers: ["VIEW", "CREATE", "EDIT", "DELETE"] },
       },
-    };
-
-    const adminUser = {
-      id: "test-user-001",
-      utilityId: "test-utility-001",
-      email: "test@example.com",
-      name: "Test User",
-      roleId: "role-admin",
-      isActive: true,
-      role: mockRole,
-    };
-
-    (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(adminUser);
+    });
     // Customers module NOT in enabled modules list
     (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "premises" }, // only premises enabled, not customers

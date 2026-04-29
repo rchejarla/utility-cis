@@ -25,8 +25,11 @@ describe("Contract: attachments ← web", () => {
     (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: "test-user-001",
       utilityId: "test-utility-001",
-      roleId: "role-admin",
       isActive: true,
+      customerId: null,
+    });
+    (prisma.userRole.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+      roleId: "role-admin",
       role: {
         name: "Admin",
         permissions: { attachments: ["VIEW", "CREATE", "EDIT", "DELETE"] },

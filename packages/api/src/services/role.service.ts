@@ -2,45 +2,69 @@ import { prisma } from "../lib/prisma.js";
 import { invalidateUserRoleCache } from "./rbac.service.js";
 import type { CreateRoleInput, UpdateRoleInput } from "@utility-cis/shared";
 
+/**
+ * Slice 1 reshape: role assignments live on user_role, not directly on
+ * cis_user. The legacy `_count.users` shape on the API response is
+ * preserved by mapping `_count.userRoles → _count.users` so the
+ * existing /users-roles UI keeps rendering. The count now reflects
+ * total user_role assignments (including per-account portal roles)
+ * rather than the prior cis_user.role_id headcount.
+ */
+
+type RoleWithCount = Awaited<ReturnType<typeof loadOne>>;
+
+async function loadOne(id: string, utilityId: string) {
+  return prisma.role.findUniqueOrThrow({
+    where: { id, utilityId },
+    include: { _count: { select: { userRoles: true } } },
+  });
+}
+
+function withLegacyUsersCount<T extends { _count: { userRoles: number } }>(role: T) {
+  const { _count, ...rest } = role;
+  return { ...rest, _count: { users: _count.userRoles } };
+}
+
 export async function listRoles(utilityId: string) {
-  return prisma.role.findMany({
+  const rows = await prisma.role.findMany({
     where: { utilityId },
-    include: { _count: { select: { users: true } } },
+    include: { _count: { select: { userRoles: true } } },
     orderBy: [{ isSystem: "desc" }, { name: "asc" }],
   });
+  return rows.map(withLegacyUsersCount);
 }
 
 export async function getRole(id: string, utilityId: string) {
-  return prisma.role.findUniqueOrThrow({
-    where: { id, utilityId },
-    include: { _count: { select: { users: true } } },
-  });
+  const role = await loadOne(id, utilityId);
+  return withLegacyUsersCount(role);
 }
 
 export async function createRole(utilityId: string, data: CreateRoleInput) {
-  return prisma.role.create({
+  const role = await prisma.role.create({
     data: { ...data, utilityId },
-    include: { _count: { select: { users: true } } },
+    include: { _count: { select: { userRoles: true } } },
   });
+  return withLegacyUsersCount(role);
 }
 
 export async function updateRole(utilityId: string, id: string, data: UpdateRoleInput) {
   const role = await prisma.role.update({
     where: { id, utilityId },
     data,
-    include: { _count: { select: { users: true } } },
+    include: { _count: { select: { userRoles: true } } },
   });
 
-  // Invalidate cache for all users with this role (batched, tenant-scoped)
-  const usersWithRole = await prisma.cisUser.findMany({
+  // Invalidate cache for every user with this role (any scope).
+  const assignments = await prisma.userRole.findMany({
     where: { roleId: id, utilityId },
-    select: { id: true },
+    select: { userId: true },
+    distinct: ["userId"],
   });
   await Promise.all(
-    usersWithRole.map((u) => invalidateUserRoleCache(u.id, utilityId))
+    assignments.map((a) => invalidateUserRoleCache(a.userId, utilityId)),
   );
 
-  return role;
+  return withLegacyUsersCount(role);
 }
 
 export async function deleteRole(utilityId: string, id: string) {
@@ -52,16 +76,20 @@ export async function deleteRole(utilityId: string, id: string) {
   if (role.isSystem) {
     throw Object.assign(
       new Error("Cannot delete a system role (BR-RB-002)"),
-      { statusCode: 400, code: "SYSTEM_ROLE" }
+      { statusCode: 400, code: "SYSTEM_ROLE" },
     );
   }
 
-  // BR-RB-003: Roles with users cannot be deleted
-  const userCount = await prisma.cisUser.count({ where: { roleId: id } });
-  if (userCount > 0) {
+  // BR-RB-003: Roles in use (assigned to any user, on any scope) can't
+  // be deleted. The check is now over user_role rather than
+  // cis_user.role_id.
+  const assignmentCount = await prisma.userRole.count({ where: { roleId: id, utilityId } });
+  if (assignmentCount > 0) {
     throw Object.assign(
-      new Error(`Cannot delete role — ${userCount} user(s) are assigned to it (BR-RB-003)`),
-      { statusCode: 400, code: "ROLE_IN_USE" }
+      new Error(
+        `Cannot delete role — ${assignmentCount} assignment(s) reference it (BR-RB-003)`,
+      ),
+      { statusCode: 400, code: "ROLE_IN_USE" },
     );
   }
 

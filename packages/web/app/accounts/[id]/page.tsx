@@ -20,12 +20,11 @@ import { AccessDenied } from "@/components/ui/access-denied";
 
 interface Contact {
   id: string;
-  role: string;
   firstName: string;
   lastName: string;
   email?: string | null;
   phone?: string | null;
-  isPrimary: boolean;
+  notes?: string | null;
 }
 
 interface BillingAddress {

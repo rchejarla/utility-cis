@@ -20,8 +20,14 @@ describe("Contract: accounts ← web", () => {
     (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: "test-user-001",
       utilityId: "test-utility-001",
-      roleId: "role-admin",
       isActive: true,
+      customerId: null,
+    });
+    // Tenant-wide user_role assignment now lives in user_role, not on
+    // the cis_user row itself. Mock the lookup the new getUserRole
+    // does to keep these contract tests realistic.
+    (prisma.userRole.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+      roleId: "role-admin",
       role: {
         name: "Admin",
         permissions: { accounts: ["VIEW", "CREATE", "EDIT", "DELETE"] },
