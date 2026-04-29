@@ -88,13 +88,56 @@ export default function ImportDetailPage({
   const [errorSummary, setErrorSummary] = useState<ErrorSummaryEntry[]>([]);
   const [rowFilter, setRowFilter] = useState<string>("");
 
+  const refresh = async () => {
+    try {
+      const [d, es] = await Promise.all([
+        apiClient.get<DetailResponse>(`/api/v1/imports/${id}`),
+        apiClient.get<ErrorSummaryEntry[]>(`/api/v1/imports/${id}/error-summary`),
+      ]);
+      setDetail(d);
+      setErrorSummary(es);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   useEffect(() => {
-    apiClient.get<DetailResponse>(`/api/v1/imports/${id}`).then(setDetail).catch(console.error);
-    apiClient
-      .get<ErrorSummaryEntry[]>(`/api/v1/imports/${id}/error-summary`)
-      .then(setErrorSummary)
-      .catch(console.error);
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // Poll while batch is in a non-terminal state.
+  useEffect(() => {
+    if (!detail) return;
+    const inFlight = ["PENDING", "PROCESSING"].includes(detail.batch.status);
+    if (!inFlight) return;
+    const t = setInterval(refresh, 5000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.batch.status]);
+
+  const handleCancel = async () => {
+    try {
+      await apiClient.post(`/api/v1/imports/${id}/cancel`, {});
+      toast(
+        "Cancellation requested. The import will stop after the current batch of rows.",
+        "info",
+      );
+      await refresh();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Cancel failed", "error");
+    }
+  };
+
+  const handleRetry = async () => {
+    try {
+      await apiClient.post(`/api/v1/imports/${id}/retry`, {});
+      toast("Retry enqueued. The import is re-running.", "info");
+      await refresh();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Retry failed", "error");
+    }
+  };
 
   useEffect(() => {
     if (activeTab !== "rows" && activeTab !== "errors") return;
@@ -120,33 +163,71 @@ export default function ImportDetailPage({
         title={`Import ${batch.id.slice(0, 8)}`}
         subtitle={`${batch.entityKind} · ${batch.source} · ${batch.fileName ?? "—"}`}
         actions={
-          attachment ? (
-            <button
-              onClick={async () => {
-                try {
-                  await authDownload(
-                    `${API_URL}/api/v1/attachments/${attachment.id}/download`,
-                    attachment.fileName,
-                  );
-                } catch (err) {
-                  toast(err instanceof Error ? err.message : "Download failed", "error");
-                }
-              }}
-              style={{
-                padding: "7px 16px",
-                background: "transparent",
-                border: "1px solid var(--accent-primary)",
-                borderRadius: "var(--radius)",
-                color: "var(--accent-primary)",
-                fontSize: "12px",
-                fontWeight: 500,
-                cursor: "pointer",
-                fontFamily: "inherit",
-              }}
-            >
-              Download original file
-            </button>
-          ) : undefined
+          <div style={{ display: "flex", gap: "8px" }}>
+            {batch.status === "PROCESSING" && (
+              <button
+                onClick={handleCancel}
+                style={{
+                  padding: "7px 16px",
+                  background: "transparent",
+                  border: "1px solid var(--warning)",
+                  borderRadius: "var(--radius)",
+                  color: "var(--warning)",
+                  fontSize: "12px",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                Cancel
+              </button>
+            )}
+            {["FAILED", "PARTIAL", "CANCELLED"].includes(batch.status) && (
+              <button
+                onClick={handleRetry}
+                style={{
+                  padding: "7px 16px",
+                  background: "var(--accent-primary)",
+                  border: "1px solid var(--accent-primary)",
+                  borderRadius: "var(--radius)",
+                  color: "#fff",
+                  fontSize: "12px",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                Retry
+              </button>
+            )}
+            {attachment && (
+              <button
+                onClick={async () => {
+                  try {
+                    await authDownload(
+                      `${API_URL}/api/v1/attachments/${attachment.id}/download`,
+                      attachment.fileName,
+                    );
+                  } catch (err) {
+                    toast(err instanceof Error ? err.message : "Download failed", "error");
+                  }
+                }}
+                style={{
+                  padding: "7px 16px",
+                  background: "transparent",
+                  border: "1px solid var(--accent-primary)",
+                  borderRadius: "var(--radius)",
+                  color: "var(--accent-primary)",
+                  fontSize: "12px",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                Download original file
+              </button>
+            )}
+          </div>
         }
       />
 
