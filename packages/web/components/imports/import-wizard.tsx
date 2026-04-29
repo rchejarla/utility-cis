@@ -34,7 +34,11 @@ interface KindMeta {
   canonicalFields: CanonicalFieldDef[];
 }
 
-interface CommitResult {
+type CommitResult =
+  | (CommitSyncResult & { async: false })
+  | { async: true; batchId: string; recordCount: number; attachmentId: string };
+
+interface CommitSyncResult {
   batchId: string;
   status: string;
   recordCount: number;
@@ -271,12 +275,12 @@ export function ImportWizard({ kind }: ImportWizardProps) {
       const data = (await response.json()) as CommitResult;
       setResult(data);
       setStage("commit");
-      // Toast message + severity reflect the actual outcome. The
-      // earlier version always said "X of Y rows failed to import"
-      // using importedCount even when status was FAILED, which
-      // produced "0 of 2 rows failed to import" — wrong both
-      // numerically and tonally.
-      if (data.status === "COMPLETE") {
+      if (data.async) {
+        toast(
+          "Import running in the background — we'll notify you when it's done.",
+          "info",
+        );
+      } else if (data.status === "COMPLETE") {
         toast(
           `${data.importedCount} of ${data.recordCount} rows imported`,
           "success",
@@ -388,7 +392,9 @@ export function ImportWizard({ kind }: ImportWizardProps) {
         )}
 
         {stage === "commit" && result && (
-          <CommitStage result={result} onReset={reset} />
+          result.async
+            ? <AsyncCommitStage batchId={result.batchId} recordCount={result.recordCount} onReset={reset} />
+            : <CommitStage result={result} onReset={reset} />
         )}
       </div>
     </div>
@@ -796,7 +802,7 @@ function CommitStage({
   result,
   onReset,
 }: {
-  result: CommitResult;
+  result: CommitSyncResult;
   onReset: () => void;
 }) {
   const isComplete = result.status === "COMPLETE";
@@ -886,6 +892,116 @@ function CommitStage({
         </button>
         <Link
           href={`/imports/${result.batchId}`}
+          style={{ ...secondaryButton, textDecoration: "none", marginLeft: "auto" }}
+        >
+          View import details →
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+// ─── Async commit stage ─────────────────────────────────────────────
+
+function AsyncCommitStage({
+  batchId,
+  recordCount,
+  onReset,
+}: {
+  batchId: string;
+  recordCount: number;
+  onReset: () => void;
+}) {
+  const [batch, setBatch] = useState<{
+    status: string;
+    importedCount: number;
+    errorCount: number;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    async function poll() {
+      try {
+        const data = await apiClient.get<{
+          batch: { status: string; importedCount: number; errorCount: number };
+        }>(`/api/v1/imports/${batchId}`);
+        if (cancelled) return;
+        setBatch(data.batch);
+        const terminal = ["COMPLETE", "PARTIAL", "FAILED", "CANCELLED"];
+        if (!terminal.includes(data.batch.status)) {
+          timeoutId = setTimeout(poll, 2000);
+        }
+      } catch {
+        if (!cancelled) timeoutId = setTimeout(poll, 5000);
+      }
+    }
+    poll();
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [batchId]);
+
+  const processed = (batch?.importedCount ?? 0) + (batch?.errorCount ?? 0);
+  const pct = recordCount === 0 ? 0 : Math.round((processed / recordCount) * 100);
+  const terminal = batch && ["COMPLETE", "PARTIAL", "FAILED", "CANCELLED"].includes(batch.status);
+
+  return (
+    <div>
+      <div
+        style={{
+          padding: "20px 24px",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          background: "var(--bg-card)",
+          marginBottom: "16px",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "13px",
+            fontWeight: 600,
+            color: terminal ? "var(--text-primary)" : "var(--accent-primary)",
+            marginBottom: "12px",
+            textTransform: "uppercase",
+            letterSpacing: "0.05em",
+          }}
+        >
+          {terminal ? `Status: ${batch!.status}` : "Importing in the background…"}
+        </div>
+        <div
+          style={{
+            height: "8px",
+            background: "var(--bg-elevated)",
+            borderRadius: "4px",
+            overflow: "hidden",
+            marginBottom: "12px",
+          }}
+        >
+          <div
+            style={{
+              width: `${pct}%`,
+              height: "100%",
+              background: "var(--accent-gradient)",
+              transition: "width 0.3s ease",
+            }}
+          />
+        </div>
+        <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+          {processed.toLocaleString()} / {recordCount.toLocaleString()} rows processed
+          {batch
+            ? ` · ${batch.importedCount.toLocaleString()} imported · ${batch.errorCount.toLocaleString()} errors`
+            : ""}
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: "8px" }}>
+        <button onClick={onReset} style={primaryButton}>
+          Import another
+        </button>
+        <Link
+          href={`/imports/${batchId}`}
           style={{ ...secondaryButton, textDecoration: "none", marginLeft: "auto" }}
         >
           View import details →
