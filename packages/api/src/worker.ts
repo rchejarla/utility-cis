@@ -30,6 +30,10 @@ import {
   registerAuditRetentionScheduler,
   AUDIT_RETENTION_SCHEDULER_ID,
 } from "./workers/audit-retention-worker.js";
+import {
+  buildImportWorker,
+  reclaimAndEnqueueZombies,
+} from "./workers/import-worker.js";
 
 /**
  * Worker process entry point.
@@ -196,6 +200,11 @@ async function main(): Promise<void> {
   if (activeQueues.includes(QUEUE_NAMES.auditRetention)) {
     activeWorkers.push(buildAuditRetentionWorker());
     await registerAuditRetentionScheduler();
+  }
+
+  if (activeQueues.includes(QUEUE_NAMES.imports)) {
+    activeWorkers.push(buildImportWorker());
+    await reclaimAndEnqueueZombies();
   }
 
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
