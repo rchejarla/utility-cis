@@ -8,6 +8,9 @@ import { writeAuditRow } from "../lib/audit-wrap.js";
 import { uploadAttachment } from "./attachment.service.js";
 import { getKindHandler } from "../imports/registry.js";
 import { processBatch } from "./imports/process-batch.service.js";
+import { emitImportTerminalNotifications } from "./imports/notify.service.js";
+import { enqueueSafely, QUEUE_NAMES } from "../lib/queues.js";
+import { IMPORT_WORKER_JOB_NAME } from "../workers/import-worker.js";
 
 /**
  * Generic bulk-import engine. Drives every kind handler through the
@@ -32,7 +35,12 @@ import { processBatch } from "./imports/process-batch.service.js";
  * rows and lift the cap.
  */
 
-export const MAX_SYNC_ROWS = 10_000;
+/** Batches with > SYNC_THRESHOLD_ROWS rows enqueue to the imports
+ * worker; smaller ones run inline before the HTTP response returns. */
+export const SYNC_THRESHOLD_ROWS = 250;
+/** Hard cap per batch in phase 1 — covers ~500k rows of typical CSV
+ * over the 50 MB upload limit. Streaming uploads are a phase 3 concern. */
+export const MAX_TOTAL_ROWS = 100_000;
 
 export interface CreateImportInput {
   kind: string;
@@ -48,9 +56,18 @@ export interface CreateImportInput {
   mapping: Record<string, string>;
 }
 
-export interface CreateImportResult {
+export type CreateImportResult =
+  | (CreateImportSyncResult & { async: false })
+  | {
+      async: true;
+      batchId: string;
+      recordCount: number;
+      attachmentId: string;
+    };
+
+export interface CreateImportSyncResult {
   batchId: string;
-  status: string;
+  status: "COMPLETE" | "PARTIAL" | "FAILED";
   recordCount: number;
   importedCount: number;
   errorCount: number;
@@ -93,10 +110,10 @@ export async function createImport(
       { statusCode: 400, code: "NO_DATA_ROWS" },
     );
   }
-  if (parsed.rows.length > MAX_SYNC_ROWS) {
+  if (parsed.rows.length > MAX_TOTAL_ROWS) {
     throw Object.assign(
       new Error(
-        `Batch has ${parsed.rows.length} rows; sync import is capped at ${MAX_SYNC_ROWS}. Async path lands in slice 2.`,
+        `Batch has ${parsed.rows.length} rows; the per-batch cap is ${MAX_TOTAL_ROWS}.`,
       ),
       { statusCode: 400, code: "BATCH_TOO_LARGE" },
     );
@@ -131,9 +148,8 @@ export async function createImport(
       source: input.source,
       fileName: input.fileName,
       recordCount: parsed.rows.length,
-      status: "PROCESSING",
+      status: "PENDING",
       mapping: input.mapping as Prisma.InputJsonValue,
-      processingStartedAt: new Date(),
       lastProgressAt: new Date(),
       createdBy: actorId,
     },
@@ -172,7 +188,24 @@ export async function createImport(
     );
   });
 
-  // ─── 5. Hand off to the shared per-row dispatch loop ──────────────
+  // ─── 5. Sync vs. async dispatch ───────────────────────────────────
+  if (parsed.rows.length > SYNC_THRESHOLD_ROWS) {
+    await enqueueSafely(QUEUE_NAMES.imports, IMPORT_WORKER_JOB_NAME, {
+      batchId: batch.id,
+      utilityId,
+      actorId,
+      actorName,
+      scope: "pending",
+    });
+    return {
+      async: true,
+      batchId: batch.id,
+      recordCount: parsed.rows.length,
+      attachmentId: attachment.id,
+    };
+  }
+
+  // Sync path: ≤ 250 rows. Run the per-row loop inline.
   const { status: finalStatus, importedCount, errorCount } = await processBatch({
     batchId: batch.id,
     utilityId,
@@ -181,6 +214,14 @@ export async function createImport(
     scope: "pending",
   });
 
+  // Sync path emits the in-app notification too — operator was watching
+  // and won't get email (gated by recordCount > SYNC_THRESHOLD inside
+  // notify.service), but the bell-icon row still lands.
+  const updatedBatch = await prisma.importBatch.findUniqueOrThrow({
+    where: { id: batch.id },
+  });
+  await emitImportTerminalNotifications(updatedBatch);
+
   const errorRows = await prisma.importRow.findMany({
     where: { importBatchId: batch.id, status: "ERROR" },
     orderBy: { rowIndex: "asc" },
@@ -188,8 +229,9 @@ export async function createImport(
   });
 
   return {
+    async: false,
     batchId: batch.id,
-    status: finalStatus,
+    status: finalStatus as "COMPLETE" | "PARTIAL" | "FAILED",
     recordCount: parsed.rows.length,
     importedCount,
     errorCount,

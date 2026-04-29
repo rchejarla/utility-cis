@@ -198,7 +198,10 @@ export async function importRoutes(app: FastifyInstance) {
         mapping,
       });
 
-      return reply.status(result.status === "FAILED" ? 200 : 200).send(result);
+      if (result.async) {
+        return reply.status(202).send(result);
+      }
+      return reply.status(200).send(result);
     },
   );
 
