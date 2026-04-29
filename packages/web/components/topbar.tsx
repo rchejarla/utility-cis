@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { useTheme } from "@/lib/theme-provider";
 import { GlobalSearch } from "./ui/global-search";
+import { NotificationBell } from "./notifications/notification-bell";
 import { logout } from "@/lib/api-client";
 
 function getBreadcrumbs(pathname: string): string[] {
@@ -206,6 +207,8 @@ export function Topbar({ compact = false }: TopbarProps) {
       >
         {effectiveMode === "dark" ? <SunIcon /> : <MoonIcon />}
       </button>
+
+      <NotificationBell />
 
       <UserMenu />
     </header>

@@ -10,6 +10,12 @@ import {
 import { prisma } from "../lib/prisma.js";
 import { paginatedTenantList } from "../lib/pagination.js";
 import { sendNotification, previewTemplate } from "../services/notification.service.js";
+import {
+  listUnreadNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+} from "../services/in-app-notifications.service.js";
+import { z } from "zod";
 
 export async function notificationRoutes(app: FastifyInstance) {
   // ─── Template CRUD ─────────────────────────────────────────────
@@ -209,4 +215,30 @@ export async function notificationRoutes(app: FastifyInstance) {
       return reply.status(201).send({ notificationId });
     },
   );
+
+  // ─── In-app inbox (bell-icon) ──────────────────────────────────
+  // These are intentionally NOT gated by a tenant module — every
+  // signed-in user sees their own bell. Auth + tenant scoping still
+  // apply via the standard middleware chain.
+
+  const inboxIdParam = z.object({ id: z.string().uuid() });
+
+  app.get("/api/v1/inbox/unread", async (request, reply) => {
+    const { utilityId, id: userId } = request.user;
+    const result = await listUnreadNotifications(utilityId, userId);
+    return reply.send(result);
+  });
+
+  app.post("/api/v1/inbox/:id/read", async (request, reply) => {
+    const { utilityId, id: userId } = request.user;
+    const { id } = inboxIdParam.parse(request.params);
+    const result = await markNotificationRead(utilityId, userId, id);
+    return reply.send(result);
+  });
+
+  app.post("/api/v1/inbox/read-all", async (request, reply) => {
+    const { utilityId, id: userId } = request.user;
+    const result = await markAllNotificationsRead(utilityId, userId);
+    return reply.send(result);
+  });
 }

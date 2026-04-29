@@ -654,8 +654,8 @@ First non-meter-read consumer. Customer canonical fields, parser, processRow. `/
 ### Slice 4a — Premise / Meter / Account handlers  *(✓ shipped 2026-04-29)*
 Three new handlers (`premise`, `meter`, `account`) and three `/<entity>/import` pages mounting the existing `<ImportWizard>`. Premise resolves owner-by-email and commodity-codes via `prepareBatch`. Meter resolves premise (composite address+zip), commodity-by-code, and UoM-by-code-per-commodity in `prepareBatch`; ambiguous premises and unique-meter-number conflicts surface as row-level errors. Account resolves customer-by-email and surfaces unique-account-number conflicts as `DUPLICATE_ACCOUNT`.
 
-### Slice 4b — Bell icon
-Topbar bell renders unread `InAppNotification` rows (since by now there are enough notifications to make the bell worth its space). Backend endpoints (`GET /notifications/unread`, `POST /notifications/:id/read`, `POST /notifications/read-all`) are also part of this slice.
+### Slice 4b — Bell icon  *(✓ shipped 2026-04-29)*
+Topbar bell renders unread `InAppNotification` rows. Three backend endpoints under `/api/v1/inbox/*` (separated from `/api/v1/notifications/*` which already serves the outbound email/SMS template log): `GET /inbox/unread` (list + unread count), `POST /inbox/:id/read`, `POST /inbox/read-all`. These intentionally bypass the tenant-module gate — every signed-in user sees their own bell — but auth + tenant scoping still apply via the standard middleware. Bell polls every 30s while focused, pauses on blur, optimistic mark-read on click. Items with a `link` (e.g. `/imports/<id>`) render as clickable rows.
 
 Each slice gets its own plan in `docs/superpowers/plans/`.
 
