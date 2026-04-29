@@ -11,7 +11,10 @@ interface Account {
   accountType: string;
   status: string;
   creditRating?: string;
-  serviceAgreements?: Array<unknown>;
+  // Returned by listAccounts via Prisma's `_count` aggregation, not as
+  // the relation array. Reading `serviceAgreements.length` always
+  // shows 0 because that field isn't selected on the list endpoint.
+  _count?: { serviceAgreements: number };
 }
 
 const STATUS_OPTIONS = [
@@ -53,7 +56,7 @@ const columns: Column<Account>[] = [
     header: "Agreements",
     render: (row) => (
       <span style={{ fontFamily: "monospace", fontSize: "12px" }}>
-        {row.serviceAgreements?.length ?? 0}
+        {row._count?.serviceAgreements ?? 0}
       </span>
     ),
   },
