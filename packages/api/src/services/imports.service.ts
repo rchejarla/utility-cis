@@ -7,7 +7,7 @@ import { prisma } from "../lib/prisma.js";
 import { writeAuditRow } from "../lib/audit-wrap.js";
 import { uploadAttachment } from "./attachment.service.js";
 import { getKindHandler } from "../imports/registry.js";
-import type { ImportTx } from "../imports/types.js";
+import { processBatch } from "./imports/process-batch.service.js";
 
 /**
  * Generic bulk-import engine. Drives every kind handler through the
@@ -172,129 +172,15 @@ export async function createImport(
     );
   });
 
-  // ─── 5. Per-row parse + processRow ────────────────────────────────
-  // Phase 1: parse every row up-front (cheap, no DB round-trips).
-  // Rows that fail parseRow get their import_row flipped to ERROR
-  // immediately; rows that pass are queued for processRow.
-  const importRows = await prisma.importRow.findMany({
-    where: { importBatchId: batch.id },
-    orderBy: { rowIndex: "asc" },
+  // ─── 5. Hand off to the shared per-row dispatch loop ──────────────
+  const { status: finalStatus, importedCount, errorCount } = await processBatch({
+    batchId: batch.id,
+    utilityId,
+    actorId,
+    actorName,
+    scope: "pending",
   });
 
-  const parsedByRowId: Map<string, unknown> = new Map();
-  const parsedRowsForBatch: unknown[] = [];
-
-  for (const importRow of importRows) {
-    const rawData = importRow.rawData as Record<string, string>;
-    const result = handler.parseRow(rawData);
-    if (result.ok) {
-      parsedByRowId.set(importRow.id, result.row);
-      parsedRowsForBatch.push(result.row);
-    } else {
-      await prisma.importRow.update({
-        where: { id: importRow.id },
-        data: {
-          status: "ERROR",
-          errorCode: result.code,
-          errorMessage: result.message,
-          processedAt: new Date(),
-        },
-      });
-    }
-  }
-
-  // Phase 2: prepareBatch (handler caches lookups + derives defaults).
-  const prepared = handler.prepareBatch
-    ? await handler.prepareBatch(
-        { utilityId, actorId, actorName, source: input.source },
-        parsedRowsForBatch,
-      )
-    : undefined;
-
-  // Phase 3: processRow per surviving row.
-  let importedCount = 0;
-  for (const importRow of importRows) {
-    const parsedRow = parsedByRowId.get(importRow.id);
-    if (parsedRow === undefined) continue; // already marked ERROR
-
-    try {
-      const result = await prisma.$transaction(async (txClient) => {
-        const tx = txClient as unknown as ImportTx;
-        return handler.processRow(
-          { utilityId, actorId, actorName, tx },
-          parsedRow,
-          prepared,
-        );
-      });
-
-      if (result.ok) {
-        await prisma.importRow.update({
-          where: { id: importRow.id },
-          data: {
-            status: "IMPORTED",
-            resultEntityId: result.entityId ?? null,
-            processedAt: new Date(),
-          },
-        });
-        importedCount++;
-      } else {
-        await prisma.importRow.update({
-          where: { id: importRow.id },
-          data: {
-            status: "ERROR",
-            errorCode: result.code,
-            errorMessage: result.message,
-            processedAt: new Date(),
-          },
-        });
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unhandled error in handler";
-      await prisma.importRow.update({
-        where: { id: importRow.id },
-        data: {
-          status: "ERROR",
-          errorCode: "UNHANDLED",
-          errorMessage: message,
-          processedAt: new Date(),
-        },
-      });
-    }
-  }
-
-  // ─── 6. Finalise ──────────────────────────────────────────────────
-  const errorCount = parsed.rows.length - importedCount;
-  const finalStatus =
-    importedCount === 0
-      ? "FAILED"
-      : errorCount === 0
-        ? "COMPLETE"
-        : "PARTIAL";
-
-  await prisma.importBatch.update({
-    where: { id: batch.id },
-    data: {
-      status: finalStatus,
-      importedCount,
-      errorCount,
-      completedAt: new Date(),
-      lastProgressAt: new Date(),
-    },
-  });
-
-  // Terminal audit row.
-  await prisma.$transaction(async (tx) => {
-    await writeAuditRow(
-      tx,
-      { utilityId, actorId, actorName, entityType: "ImportBatch" },
-      `import_batch.${finalStatus.toLowerCase()}`,
-      batch.id,
-      { status: "PROCESSING" },
-      { status: finalStatus, importedCount, errorCount },
-    );
-  });
-
-  // Fetch error rows for the response payload.
   const errorRows = await prisma.importRow.findMany({
     where: { importBatchId: batch.id, status: "ERROR" },
     orderBy: { rowIndex: "asc" },
