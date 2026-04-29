@@ -47,6 +47,10 @@ export const accountQuerySchema = z.object({
   status: accountStatusEnum.optional(),
   accountType: accountTypeEnum.optional(),
   creditRating: creditRatingEnum.optional(),
+  customerId: z.string().uuid().optional(),
+  /** Free-text match against premise.addressLine1 / city — joins
+   *  through serviceAgreements. Case-insensitive contains. */
+  premiseSearch: z.string().min(1).max(200).optional(),
   search: z.string().optional(),
 }).strict();
 

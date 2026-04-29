@@ -51,6 +51,13 @@ interface Account {
   paperlessBilling?: boolean;
   budgetBilling?: boolean;
   customerId?: string;
+  customer?: {
+    id: string;
+    customerType: "INDIVIDUAL" | "ORGANIZATION";
+    firstName?: string | null;
+    lastName?: string | null;
+    organizationName?: string | null;
+  } | null;
   saaslogicAccountId?: string;
   customFields?: Record<string, unknown>;
   serviceAgreements?: Array<{
@@ -58,7 +65,7 @@ interface Account {
     agreementNumber: string;
     status: string;
     startDate: string;
-    premise?: { addressLine1: string; city: string };
+    premise?: { id: string; addressLine1: string; city: string; state?: string };
   }>;
   contacts?: Contact[];
   billingAddresses?: BillingAddress[];
@@ -258,7 +265,22 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
     <div>
       <PageHeader
         title={account.accountNumber}
-        subtitle={`${account.accountType} account`}
+        subtitle={(() => {
+          const c = account.customer;
+          const customerLabel = !c
+            ? null
+            : c.customerType === "ORGANIZATION"
+              ? c.organizationName ?? null
+              : `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || null;
+          const p = account.serviceAgreements?.[0]?.premise;
+          const premiseLabel = p ? `${p.addressLine1}, ${p.city}` : null;
+          const parts = [
+            `${account.accountType} account`,
+            customerLabel,
+            premiseLabel,
+          ].filter(Boolean);
+          return parts.join(" · ");
+        })()}
       />
 
       <Tabs

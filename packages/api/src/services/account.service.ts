@@ -11,12 +11,61 @@ export async function listAccounts(utilityId: string, query: AccountQuery) {
 
   if (query.status) where.status = query.status;
   if (query.accountType) where.accountType = query.accountType;
+  if (query.creditRating) where.creditRating = query.creditRating;
+  if (query.customerId) where.customerId = query.customerId;
+  if (query.premiseSearch) {
+    where.serviceAgreements = {
+      some: {
+        premise: {
+          OR: [
+            { addressLine1: { contains: query.premiseSearch, mode: "insensitive" } },
+            { city: { contains: query.premiseSearch, mode: "insensitive" } },
+          ],
+        },
+      },
+    };
+  }
   if (query.search) {
-    where.accountNumber = { contains: query.search, mode: "insensitive" };
+    // Search matches both the account number and any associated
+    // premise's address — operators usually know one or the other,
+    // not which field to search.
+    where.OR = [
+      { accountNumber: { contains: query.search, mode: "insensitive" } },
+      {
+        serviceAgreements: {
+          some: {
+            premise: {
+              OR: [
+                { addressLine1: { contains: query.search, mode: "insensitive" } },
+                { city: { contains: query.search, mode: "insensitive" } },
+              ],
+            },
+          },
+        },
+      },
+    ];
   }
 
+  // Hydrate customer + the first SA's premise address so the list
+  // page can show "who" and "where" alongside the account number.
+  // An account serves one premise (CLAUDE.md memory: "An account
+  // serves one premise; don't UI it as 1→many"), so picking the
+  // first SA's premise is the right derivation rather than listing
+  // every SA's premise. We sort SAs by status ASC + startDate DESC
+  // so the most-recent ACTIVE agreement wins; FINAL/CLOSED accounts
+  // still get their last-known premise as a fallback.
   return paginatedTenantList(prisma.account, where, query, {
-    include: { _count: { select: { serviceAgreements: true } } },
+    include: {
+      _count: { select: { serviceAgreements: true } },
+      customer: {
+        select: { id: true, customerType: true, firstName: true, lastName: true, organizationName: true },
+      },
+      serviceAgreements: {
+        select: { premise: { select: { id: true, addressLine1: true, city: true, state: true } } },
+        orderBy: [{ status: "asc" }, { startDate: "desc" }],
+        take: 1,
+      },
+    },
   });
 }
 
@@ -24,6 +73,9 @@ export async function getAccount(id: string, utilityId: string) {
   return prisma.account.findUniqueOrThrow({
     where: { id, utilityId },
     include: {
+      customer: {
+        select: { id: true, customerType: true, firstName: true, lastName: true, organizationName: true, email: true, phone: true },
+      },
       serviceAgreements: {
         include: {
           premise: true,
