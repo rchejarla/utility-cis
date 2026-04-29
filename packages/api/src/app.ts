@@ -31,6 +31,7 @@ import { containerRoutes } from "./routes/containers.js";
 import { serviceSuspensionRoutes } from "./routes/service-suspensions.js";
 import { suspensionTypeDefRoutes } from "./routes/suspension-type-defs.js";
 import { measureTypeDefRoutes } from "./routes/measure-type-defs.js";
+import { accountContactRoutes } from "./routes/account-contacts.js";
 import { premiseTypeDefRoutes } from "./routes/premise-type-defs.js";
 import { accountTypeDefRoutes } from "./routes/account-type-defs.js";
 import { tenantConfigRoutes } from "./routes/tenant-config.js";
@@ -113,6 +114,7 @@ export async function buildApp() {
   await app.register(measureTypeDefRoutes);
   await app.register(premiseTypeDefRoutes);
   await app.register(accountTypeDefRoutes);
+  await app.register(accountContactRoutes);
   await app.register(tenantConfigRoutes);
   await app.register(automationConfigRoutes);
   await app.register(customFieldSchemaRoutes);

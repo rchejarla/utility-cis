@@ -690,7 +690,6 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
         {activeTab === "contacts" && (
           <ContactsTab
             accountId={id}
-            contacts={account.contacts ?? []}
             onContactsChanged={loadAccount}
             showForm={showAddContact}
             onShowFormChange={setShowAddContact}
