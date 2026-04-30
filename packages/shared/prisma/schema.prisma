@@ -270,6 +270,7 @@ model Premise {
   // Relations
   meters            Meter[]
   serviceAgreements ServiceAgreement[]
+  servicePoints     ServicePoint[]
   owner             Customer?          @relation("PremiseOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   containers        Container[]
   serviceEvents     ServiceEvent[]
@@ -308,6 +309,7 @@ model Meter {
   uom                    UnitOfMeasure           @relation(fields: [uomId], references: [id], onDelete: Restrict)
   meterReads             MeterRead[]
   serviceAgreementMeters ServiceAgreementMeter[]
+  servicePointMeters     ServicePointMeter[]
   registers              MeterRegister[]
   events                 MeterEvent[]
 
@@ -366,7 +368,7 @@ model ServiceAgreement {
   utilityId       String                 @map("utility_id") @db.Uuid
   agreementNumber String                 @map("agreement_number") @db.VarChar(50)
   accountId       String                 @map("account_id") @db.Uuid
-  premiseId       String                 @map("premise_id") @db.Uuid
+  premiseId       String?                @map("premise_id") @db.Uuid
   commodityId     String                 @map("commodity_id") @db.Uuid
   rateScheduleId  String                 @map("rate_schedule_id") @db.Uuid
   billingCycleId  String                 @map("billing_cycle_id") @db.Uuid
@@ -384,11 +386,12 @@ model ServiceAgreement {
 
   // Relations
   account         Account                 @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  premise         Premise                 @relation(fields: [premiseId], references: [id], onDelete: Restrict)
+  premise         Premise?                @relation(fields: [premiseId], references: [id], onDelete: Restrict)
   commodity       Commodity               @relation(fields: [commodityId], references: [id], onDelete: Restrict)
   rateSchedule    RateSchedule            @relation(fields: [rateScheduleId], references: [id], onDelete: Restrict)
   billingCycle    BillingCycle            @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
   meters          ServiceAgreementMeter[]
+  servicePoints   ServicePoint[]
   meterReads      MeterRead[]
   containers      Container[]
   suspensions     ServiceSuspension[]
@@ -426,6 +429,72 @@ model ServiceAgreementMeter {
   @@index([serviceAgreementId])
   @@index([meterId])
   @@map("service_agreement_meter")
+}
+
+/// Per-place service-delivery anchor between SA and Premise. One
+/// SA can have multiple SPs (multi-premise commercial accounts,
+/// master/sub-meter); each SP belongs to exactly one Premise. SP
+/// type controls whether meters or items hang off it; Slice 1
+/// only uses METERED.
+enum ServicePointType {
+  METERED
+  ITEM_BASED
+  NON_BADGED
+
+  @@map("service_point_type")
+}
+
+enum ServicePointStatus {
+  PENDING
+  ACTIVE
+  FINAL
+  CLOSED
+
+  @@map("service_point_status")
+}
+
+model ServicePoint {
+  id                 String              @id @default(uuid()) @db.Uuid
+  utilityId          String              @map("utility_id") @db.Uuid
+  serviceAgreementId String              @map("service_agreement_id") @db.Uuid
+  premiseId          String              @map("premise_id") @db.Uuid
+  type               ServicePointType   @default(METERED) @map("type")
+  status             ServicePointStatus @default(ACTIVE) @map("status")
+  startDate          DateTime            @map("start_date") @db.Date
+  endDate            DateTime?           @map("end_date") @db.Date
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+
+  serviceAgreement ServiceAgreement     @relation(fields: [serviceAgreementId], references: [id], onDelete: Cascade)
+  premise          Premise              @relation(fields: [premiseId], references: [id], onDelete: Restrict)
+  meters           ServicePointMeter[]
+
+  @@index([serviceAgreementId])
+  @@index([premiseId])
+  @@index([utilityId, status])
+  @@map("service_point")
+}
+
+/// SP ↔ Meter assignment with effective dates. Replaces SAM. At
+/// most one ACTIVE row per (meter_id) at any instant — enforced by
+/// the partial exclusion constraint defined in the migration.
+model ServicePointMeter {
+  id              String    @id @default(uuid()) @db.Uuid
+  utilityId       String    @map("utility_id") @db.Uuid
+  servicePointId  String    @map("service_point_id") @db.Uuid
+  meterId         String    @map("meter_id") @db.Uuid
+  addedDate       DateTime  @map("added_date") @db.Date
+  removedDate     DateTime? @map("removed_date") @db.Date
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  /// Generated tsrange [added_date, removed_date) — DB-managed, read-only.
+  effectiveRange  Unsupported("tsrange")? @map("effective_range")
+
+  servicePoint ServicePoint @relation(fields: [servicePointId], references: [id], onDelete: Cascade)
+  meter        Meter        @relation(fields: [meterId], references: [id], onDelete: Restrict)
+
+  @@index([servicePointId])
+  @@index([meterId])
+  @@map("service_point_meter")
 }
 
 model RateSchedule {
