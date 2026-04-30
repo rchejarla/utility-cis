@@ -100,21 +100,30 @@ async function makeActiveSaWithTwoMeters() {
     },
   });
 
-  await prisma.serviceAgreementMeter.createMany({
+  const sp = await prisma.servicePoint.create({
+    data: {
+      utilityId: fixA.utilityId,
+      serviceAgreementId: sa.id,
+      premiseId: fixA.premiseId,
+      type: "METERED",
+      status: "ACTIVE",
+      startDate: new Date("2024-01-01"),
+    },
+  });
+
+  await prisma.servicePointMeter.createMany({
     data: [
       {
         utilityId: fixA.utilityId,
-        serviceAgreementId: sa.id,
+        servicePointId: sp.id,
         meterId: fixA.meterId,
         addedDate: new Date("2024-01-01"),
-        isPrimary: true,
       },
       {
         utilityId: fixA.utilityId,
-        serviceAgreementId: sa.id,
+        servicePointId: sp.id,
         meterId: fixA.meterId2,
         addedDate: new Date("2024-01-01"),
-        isPrimary: false,
       },
     ],
   });
@@ -142,10 +151,10 @@ describe("POST /api/v1/service-agreements/:id/close", () => {
     expect(reloaded.status).toBe("FINAL");
     expect(reloaded.endDate?.toISOString().slice(0, 10)).toBe("2024-12-31");
 
-    const sams = await prisma.serviceAgreementMeter.findMany({
-      where: { serviceAgreementId: sa.id },
+    const spms = await prisma.servicePointMeter.findMany({
+      where: { servicePoint: { serviceAgreementId: sa.id } },
     });
-    expect(sams.every((s) => s.removedDate?.toISOString().slice(0, 10) === "2024-12-31"))
+    expect(spms.every((s) => s.removedDate?.toISOString().slice(0, 10) === "2024-12-31"))
       .toBe(true);
   });
 
@@ -197,7 +206,7 @@ describe("PATCH /api/v1/service-agreements/:id (lifecycle field rejection)", () 
 });
 
 describe("POST /api/v1/service-agreements/:id/meters/:meterId/remove", () => {
-  it("closes a single SAM by (saId, meterId), emits an audit row, leaves the SA open", async () => {
+  it("closes a single SPM by (saId, meterId), emits an audit row, leaves the SA open", async () => {
     const { prisma } = prismaImports;
     const sa = await makeActiveSaWithTwoMeters();
 
@@ -209,12 +218,12 @@ describe("POST /api/v1/service-agreements/:id/meters/:meterId/remove", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const sams = await prisma.serviceAgreementMeter.findMany({
-      where: { serviceAgreementId: sa.id },
+    const spms = await prisma.servicePointMeter.findMany({
+      where: { servicePoint: { serviceAgreementId: sa.id } },
       orderBy: { addedDate: "asc" },
     });
-    const removed = sams.find((s) => s.meterId === fixA.meterId);
-    const stillOpen = sams.find((s) => s.meterId === fixA.meterId2);
+    const removed = spms.find((s) => s.meterId === fixA.meterId);
+    const stillOpen = spms.find((s) => s.meterId === fixA.meterId2);
     expect(removed?.removedDate?.toISOString().slice(0, 10)).toBe("2024-08-15");
     expect(stillOpen?.removedDate).toBeNull();
 
@@ -223,16 +232,16 @@ describe("POST /api/v1/service-agreements/:id/meters/:meterId/remove", () => {
     expect(reloaded.status).toBe("ACTIVE");
     expect(reloaded.endDate).toBeNull();
 
-    // Audit row for the SAM mutation.
+    // Audit row for the SPM mutation.
     const audits = await prisma.auditLog.count({
-      where: { utilityId: fixA.utilityId, entityType: "ServiceAgreementMeter" },
+      where: { utilityId: fixA.utilityId, entityType: "ServicePointMeter" },
     });
     expect(audits).toBe(1);
   });
 });
 
 describe("POST /api/v1/service-agreements/:id/meters/swap", () => {
-  it("swaps old meter for new in one transaction (old.removedDate set, new SAM created)", async () => {
+  it("swaps old meter for new in one transaction (old.removedDate set, new SPM created)", async () => {
     const { prisma } = prismaImports;
     const sa = await makeActiveSaWithTwoMeters();
 
@@ -251,20 +260,20 @@ describe("POST /api/v1/service-agreements/:id/meters/swap", () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.closedOld.removedDate).toBeTruthy();
-    expect(body.newSam.meterId).toBe(fixA.meterId3);
+    expect(body.newSpm.meterId).toBe(fixA.meterId3);
 
-    const sams = await prisma.serviceAgreementMeter.findMany({
-      where: { serviceAgreementId: sa.id },
+    const spms = await prisma.servicePointMeter.findMany({
+      where: { servicePoint: { serviceAgreementId: sa.id } },
     });
-    // 3 SAMs total: old (closed), other (still open), new (open).
-    expect(sams).toHaveLength(3);
-    expect(sams.find((s) => s.meterId === fixA.meterId)?.removedDate?.toISOString().slice(0, 10))
+    // 3 SPMs total: old (closed), other (still open), new (open).
+    expect(spms).toHaveLength(3);
+    expect(spms.find((s) => s.meterId === fixA.meterId)?.removedDate?.toISOString().slice(0, 10))
       .toBe("2024-09-01");
-    expect(sams.find((s) => s.meterId === fixA.meterId3)?.addedDate.toISOString().slice(0, 10))
+    expect(spms.find((s) => s.meterId === fixA.meterId3)?.addedDate.toISOString().slice(0, 10))
       .toBe("2024-09-01");
   });
 
-  it("returns 409 when the new meter is already on another open SAM", async () => {
+  it("returns 409 when the new meter is already on another open SPM", async () => {
     const sa = await makeActiveSaWithTwoMeters();
 
     // Try to swap meter1 → meter2; meter2 is already on this SA.

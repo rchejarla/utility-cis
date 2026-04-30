@@ -85,25 +85,35 @@ beforeEach(async () => {
   });
   saAccount1Id = sa1.id;
 
-  // Two SAMs on SA-1: meter 1 (Jan-Mar), meter 2 (Apr-Jun).
-  await prisma.serviceAgreementMeter.create({
+  const sp1 = await prisma.servicePoint.create({
     data: {
       utilityId: fixA.utilityId,
       serviceAgreementId: sa1.id,
+      premiseId: fixA.premiseId,
+      type: "METERED",
+      status: "CLOSED",
+      startDate: new Date("2024-01-01"),
+      endDate: new Date("2024-06-30"),
+    },
+  });
+
+  // Two SPMs on SA-1: meter 1 (Jan-Mar), meter 2 (Apr-Jun).
+  await prisma.servicePointMeter.create({
+    data: {
+      utilityId: fixA.utilityId,
+      servicePointId: sp1.id,
       meterId: fixA.meterId,
       addedDate: new Date("2024-01-01"),
       removedDate: new Date("2024-03-31"),
-      isPrimary: true,
     },
   });
-  await prisma.serviceAgreementMeter.create({
+  await prisma.servicePointMeter.create({
     data: {
       utilityId: fixA.utilityId,
-      serviceAgreementId: sa1.id,
+      servicePointId: sp1.id,
       meterId: fixA.meterId2,
       addedDate: new Date("2024-04-01"),
       removedDate: new Date("2024-06-30"),
-      isPrimary: true,
     },
   });
 
@@ -134,15 +144,25 @@ beforeEach(async () => {
   });
   saAccount2Id = sa2.id;
 
-  // SA-2 has meter 1 again (was removed from SA-1 at end of March,
-  // sat unassigned through June, comes back online for SA-2 Jul 1).
-  await prisma.serviceAgreementMeter.create({
+  const sp2 = await prisma.servicePoint.create({
     data: {
       utilityId: fixA.utilityId,
       serviceAgreementId: sa2.id,
+      premiseId: fixA.premiseId,
+      type: "METERED",
+      status: "ACTIVE",
+      startDate: new Date("2024-07-01"),
+    },
+  });
+
+  // SA-2 has meter 1 again (was removed from SA-1 at end of March,
+  // sat unassigned through June, comes back online for SA-2 Jul 1).
+  await prisma.servicePointMeter.create({
+    data: {
+      utilityId: fixA.utilityId,
+      servicePointId: sp2.id,
       meterId: fixA.meterId,
       addedDate: new Date("2024-07-01"),
-      isPrimary: true,
     },
   });
 });

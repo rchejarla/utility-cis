@@ -15,8 +15,8 @@ import {
  *      two PENDING/ACTIVE SAs from sharing time on the same
  *      (utility, account, premise, commodity).
  *   2. `no_double_assigned_meter` — same pattern on
- *      service_agreement_meter, scoped (utility, meter).
- *   3. `chk_sa_end_ge_start` / `chk_sam_removed_ge_added` — backwards
+ *      service_point_meter, scoped (utility, meter).
+ *   3. `chk_sa_end_ge_start` / `chk_spm_removed_ge_added` — backwards
  *      ranges rejected at the row level.
  *   4. `enforce_sa_lifecycle_invariants` trigger — terminal status
  *      requires endDate; setting endDate alone while still ACTIVE is
@@ -164,7 +164,7 @@ describe("no_overlapping_active_sa exclusion constraint", () => {
 });
 
 describe("no_double_assigned_meter exclusion constraint", () => {
-  it("rejects creating a second open SAM for a meter already on an open SAM", async () => {
+  it("rejects creating a second open SPM for a meter already on an open SPM", async () => {
     const { prisma } = prismaImports;
 
     const sa1 = await prisma.serviceAgreement.create({
@@ -181,13 +181,23 @@ describe("no_double_assigned_meter exclusion constraint", () => {
       },
     });
 
-    await prisma.serviceAgreementMeter.create({
+    const sp1 = await prisma.servicePoint.create({
       data: {
         utilityId: fixA.utilityId,
         serviceAgreementId: sa1.id,
+        premiseId: fixA.premiseId,
+        type: "METERED",
+        status: "ACTIVE",
+        startDate: new Date("2024-01-01"),
+      },
+    });
+
+    await prisma.servicePointMeter.create({
+      data: {
+        utilityId: fixA.utilityId,
+        servicePointId: sp1.id,
         meterId: fixA.meterId,
         addedDate: new Date("2024-01-01"),
-        isPrimary: true,
       },
     });
 
@@ -207,14 +217,25 @@ describe("no_double_assigned_meter exclusion constraint", () => {
       },
     });
 
+    const sp2 = await prisma.servicePoint.create({
+      data: {
+        utilityId: fixA.utilityId,
+        serviceAgreementId: sa2.id,
+        premiseId: fixA.premiseId,
+        type: "METERED",
+        status: "CLOSED",
+        startDate: new Date("2024-01-01"),
+        endDate: new Date("2024-12-31"),
+      },
+    });
+
     await expect(
-      prisma.serviceAgreementMeter.create({
+      prisma.servicePointMeter.create({
         data: {
           utilityId: fixA.utilityId,
-          serviceAgreementId: sa2.id,
+          servicePointId: sp2.id,
           meterId: fixA.meterId, // same meter — conflict
           addedDate: new Date("2024-06-01"),
-          isPrimary: true,
         },
       }),
     ).rejects.toThrow(/no_double_assigned_meter|exclusion/);
@@ -238,14 +259,25 @@ describe("no_double_assigned_meter exclusion constraint", () => {
       },
     });
 
-    await prisma.serviceAgreementMeter.create({
+    const sp1 = await prisma.servicePoint.create({
       data: {
         utilityId: fixA.utilityId,
         serviceAgreementId: sa1.id,
+        premiseId: fixA.premiseId,
+        type: "METERED",
+        status: "CLOSED",
+        startDate: new Date("2024-01-01"),
+        endDate: new Date("2024-06-30"),
+      },
+    });
+
+    await prisma.servicePointMeter.create({
+      data: {
+        utilityId: fixA.utilityId,
+        servicePointId: sp1.id,
         meterId: fixA.meterId,
         addedDate: new Date("2024-01-01"),
         removedDate: new Date("2024-06-30"), // closed assignment
-        isPrimary: true,
       },
     });
 
@@ -263,14 +295,24 @@ describe("no_double_assigned_meter exclusion constraint", () => {
       },
     });
 
+    const sp2 = await prisma.servicePoint.create({
+      data: {
+        utilityId: fixA.utilityId,
+        serviceAgreementId: sa2.id,
+        premiseId: fixA.premiseId,
+        type: "METERED",
+        status: "ACTIVE",
+        startDate: new Date("2024-07-01"),
+      },
+    });
+
     await expect(
-      prisma.serviceAgreementMeter.create({
+      prisma.servicePointMeter.create({
         data: {
           utilityId: fixA.utilityId,
-          serviceAgreementId: sa2.id,
+          servicePointId: sp2.id,
           meterId: fixA.meterId,
           addedDate: new Date("2024-07-01"),
-          isPrimary: true,
         },
       }),
     ).resolves.toBeDefined();
@@ -304,7 +346,7 @@ describe("CHECK constraints reject backwards date ranges", () => {
     ).rejects.toThrow(/chk_sa_end_ge_start|check|range lower bound/i);
   });
 
-  it("rejects a SAM with removedDate < addedDate (CHECK or tsrange constructor)", async () => {
+  it("rejects a SPM with removedDate < addedDate (tsrange constructor)", async () => {
     const { prisma } = prismaImports;
 
     const sa = await prisma.serviceAgreement.create({
@@ -321,17 +363,28 @@ describe("CHECK constraints reject backwards date ranges", () => {
       },
     });
 
+    const sp = await prisma.servicePoint.create({
+      data: {
+        utilityId: fixA.utilityId,
+        serviceAgreementId: sa.id,
+        premiseId: fixA.premiseId,
+        type: "METERED",
+        status: "ACTIVE",
+        startDate: new Date("2024-01-01"),
+      },
+    });
+
     await expect(
-      prisma.serviceAgreementMeter.create({
+      prisma.servicePointMeter.create({
         data: {
           utilityId: fixA.utilityId,
-          serviceAgreementId: sa.id,
+          servicePointId: sp.id,
           meterId: fixA.meterId,
           addedDate: new Date("2024-12-31"),
           removedDate: new Date("2024-01-01"),
         },
       }),
-    ).rejects.toThrow(/chk_sam_removed_ge_added|check|range lower bound/i);
+    ).rejects.toThrow(/check|range lower bound/i);
   });
 });
 

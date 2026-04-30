@@ -136,7 +136,7 @@ beforeEach(async () => {
   const rbac = await import("../../services/rbac.service.js");
   await rbac.invalidateTenantModulesCache(fixA.utilityId);
 
-  // SA + open SAMs so meter-read processing can resolve agreement.
+  // SA + open SPMs so meter-read processing can resolve agreement.
   const sa = await prisma.serviceAgreement.create({
     data: {
       utilityId: fixA.utilityId,
@@ -152,21 +152,30 @@ beforeEach(async () => {
   });
   saId = sa.id;
 
-  await prisma.serviceAgreementMeter.createMany({
+  const sp = await prisma.servicePoint.create({
+    data: {
+      utilityId: fixA.utilityId,
+      serviceAgreementId: sa.id,
+      premiseId: fixA.premiseId,
+      type: "METERED",
+      status: "ACTIVE",
+      startDate: new Date("2024-01-01"),
+    },
+  });
+
+  await prisma.servicePointMeter.createMany({
     data: [
       {
         utilityId: fixA.utilityId,
-        serviceAgreementId: sa.id,
+        servicePointId: sp.id,
         meterId: fixA.meterId,
         addedDate: new Date("2024-01-01"),
-        isPrimary: true,
       },
       {
         utilityId: fixA.utilityId,
-        serviceAgreementId: sa.id,
+        servicePointId: sp.id,
         meterId: fixA.meterId2,
         addedDate: new Date("2024-01-01"),
-        isPrimary: false,
       },
     ],
   });

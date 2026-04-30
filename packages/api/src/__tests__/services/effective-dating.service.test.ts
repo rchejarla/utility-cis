@@ -18,6 +18,7 @@ import { writeAuditRow } from "../../lib/audit-wrap.js";
 const UID = "00000000-0000-4000-8000-00000000000a";
 const ACTOR = "00000000-0000-4000-8000-00000000000b";
 const SA_ID = "00000000-0000-4000-8000-00000000aa01";
+const SP_ID = "00000000-0000-4000-8000-00000000bb01";
 
 function sa(partial: Partial<{
   id: string;
@@ -38,13 +39,12 @@ function sa(partial: Partial<{
   };
 }
 
-function sam(partial: Partial<{ id: string; meterId: string; removedDate: Date | null }> = {}) {
+function spm(partial: Partial<{ id: string; meterId: string; removedDate: Date | null; servicePointId: string }> = {}) {
   return {
-    id: partial.id ?? "sam-1",
+    id: partial.id ?? "spm-1",
     utilityId: UID,
-    serviceAgreementId: SA_ID,
+    servicePointId: partial.servicePointId ?? SP_ID,
     meterId: partial.meterId ?? "meter-1",
-    isPrimary: true,
     addedDate: new Date("2024-01-01"),
     removedDate: partial.removedDate === undefined ? null : partial.removedDate,
   };
@@ -61,7 +61,7 @@ beforeEach(() => {
 });
 
 describe("closeServiceAgreement", () => {
-  it("closes an ACTIVE SA and cascades removed_date onto every open SAM", async () => {
+  it("closes an ACTIVE SA and cascades removed_date onto every open SPM", async () => {
     const endDate = new Date("2026-04-30");
     const before = sa({ status: "ACTIVE" });
     (prisma.serviceAgreement.findFirstOrThrow as ReturnType<typeof vi.fn>).mockResolvedValue(before);
@@ -70,14 +70,15 @@ describe("closeServiceAgreement", () => {
       status: "FINAL",
       endDate,
     });
-    (prisma.serviceAgreementMeter.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
-      sam({ id: "sam-1" }),
-      sam({ id: "sam-2", meterId: "meter-2" }),
-      sam({ id: "sam-3", meterId: "meter-3" }),
+    (prisma.servicePoint.updateMany as ReturnType<typeof vi.fn>).mockResolvedValue({ count: 1 });
+    (prisma.servicePointMeter.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      spm({ id: "spm-1" }),
+      spm({ id: "spm-2", meterId: "meter-2" }),
+      spm({ id: "spm-3", meterId: "meter-3" }),
     ]);
-    (prisma.serviceAgreementMeter.update as ReturnType<typeof vi.fn>).mockImplementation(
+    (prisma.servicePointMeter.update as ReturnType<typeof vi.fn>).mockImplementation(
       async ({ where, data }: { where: { id: string }; data: { removedDate: Date } }) =>
-        sam({ id: where.id, removedDate: data.removedDate }),
+        spm({ id: where.id, removedDate: data.removedDate }),
     );
 
     const result = await closeServiceAgreement(UID, ACTOR, "Tester", {
@@ -91,18 +92,18 @@ describe("closeServiceAgreement", () => {
     // SA update called once with the terminal status + endDate.
     const saUpdateCall = (prisma.serviceAgreement.update as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(saUpdateCall.data).toEqual({ status: "FINAL", endDate });
-    // SAM update called once per open child.
-    expect((prisma.serviceAgreementMeter.update as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(3);
-    for (const call of (prisma.serviceAgreementMeter.update as ReturnType<typeof vi.fn>).mock.calls) {
+    // SPM update called once per open child.
+    expect((prisma.servicePointMeter.update as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(3);
+    for (const call of (prisma.servicePointMeter.update as ReturnType<typeof vi.fn>).mock.calls) {
       expect(call[0].data).toEqual({ removedDate: endDate });
     }
-    // One audit row for the SA + one per cascaded SAM.
+    // One audit row for the SA + one per cascaded SPM.
     expect(writeAuditRow).toHaveBeenCalledTimes(4);
     const auditCalls = (writeAuditRow as ReturnType<typeof vi.fn>).mock.calls;
     expect(auditCalls[0][3]).toBe(SA_ID); // entityId on first audit = SA
     expect(auditCalls[0][2]).toBe("service_agreement.updated");
     for (let i = 1; i < 4; i++) {
-      expect(auditCalls[i][2]).toBe("service_agreement_meter.updated");
+      expect(auditCalls[i][2]).toBe("service_point_meter.updated");
     }
   });
 
@@ -119,7 +120,7 @@ describe("closeServiceAgreement", () => {
 
     expect(result.metersClosed).toBe(0);
     expect(prisma.serviceAgreement.update).not.toHaveBeenCalled();
-    expect(prisma.serviceAgreementMeter.update).not.toHaveBeenCalled();
+    expect(prisma.servicePointMeter.update).not.toHaveBeenCalled();
     expect(writeAuditRow).not.toHaveBeenCalled();
   });
 
@@ -142,8 +143,8 @@ describe("closeServiceAgreement", () => {
     // SA update was called with status-only data, no endDate (already set).
     expect((prisma.serviceAgreement.update as ReturnType<typeof vi.fn>).mock.calls[0][0].data)
       .toEqual({ status: "CLOSED" });
-    // No SAM cascade — meter assignments were already closed at FINAL.
-    expect(prisma.serviceAgreementMeter.findMany).not.toHaveBeenCalled();
+    // No SPM cascade — meter assignments were already closed at FINAL.
+    expect(prisma.servicePointMeter.findMany).not.toHaveBeenCalled();
   });
 
   it("rejects FINAL → CLOSED if the supplied endDate doesn't match the SA's existing endDate", async () => {
@@ -177,7 +178,7 @@ describe("closeServiceAgreement", () => {
     ).rejects.toMatchObject({ statusCode: 409, code: "SA_ALREADY_TERMINAL" });
   });
 
-  it("propagates a SAM-update failure (transactional rollback is Postgres' job)", async () => {
+  it("propagates a SPM-update failure (transactional rollback is Postgres' job)", async () => {
     const endDate = new Date("2026-04-30");
     (prisma.serviceAgreement.findFirstOrThrow as ReturnType<typeof vi.fn>).mockResolvedValue(
       sa({ status: "ACTIVE" }),
@@ -187,13 +188,14 @@ describe("closeServiceAgreement", () => {
       status: "FINAL",
       endDate,
     });
-    (prisma.serviceAgreementMeter.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
-      sam({ id: "sam-1" }),
-      sam({ id: "sam-2" }),
+    (prisma.servicePoint.updateMany as ReturnType<typeof vi.fn>).mockResolvedValue({ count: 1 });
+    (prisma.servicePointMeter.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      spm({ id: "spm-1" }),
+      spm({ id: "spm-2" }),
     ]);
-    const boom = new Error("simulated SAM update failure");
-    (prisma.serviceAgreementMeter.update as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce(sam({ id: "sam-1", removedDate: endDate }))
+    const boom = new Error("simulated SPM update failure");
+    (prisma.servicePointMeter.update as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(spm({ id: "spm-1", removedDate: endDate }))
       .mockRejectedValueOnce(boom);
 
     await expect(
@@ -215,7 +217,8 @@ describe("closeServiceAgreement", () => {
       status: "FINAL",
       endDate,
     });
-    (prisma.serviceAgreementMeter.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (prisma.servicePoint.updateMany as ReturnType<typeof vi.fn>).mockResolvedValue({ count: 0 });
+    (prisma.servicePointMeter.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
     const result = await closeServiceAgreement(UID, ACTOR, "Tester", {
       saId: SA_ID,
@@ -224,7 +227,7 @@ describe("closeServiceAgreement", () => {
     });
 
     expect(result.metersClosed).toBe(0);
-    expect(prisma.serviceAgreementMeter.update).not.toHaveBeenCalled();
+    expect(prisma.servicePointMeter.update).not.toHaveBeenCalled();
     // Still writes the SA audit row.
     expect(writeAuditRow).toHaveBeenCalledTimes(1);
   });
@@ -239,7 +242,8 @@ describe("closeServiceAgreement", () => {
       status: "CLOSED",
       endDate,
     });
-    (prisma.serviceAgreementMeter.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (prisma.servicePoint.updateMany as ReturnType<typeof vi.fn>).mockResolvedValue({ count: 0 });
+    (prisma.servicePointMeter.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
     await closeServiceAgreement(
       UID,
@@ -254,13 +258,13 @@ describe("closeServiceAgreement", () => {
 });
 
 describe("removeMeterFromAgreement", () => {
-  it("closes a single SAM and emits one audit row", async () => {
+  it("closes a single SPM and emits one audit row", async () => {
     const removedDate = new Date("2026-05-01");
-    (prisma.serviceAgreementMeter.findFirstOrThrow as ReturnType<typeof vi.fn>).mockResolvedValue(
-      sam({ id: "sam-1", removedDate: null }),
+    (prisma.servicePointMeter.findFirstOrThrow as ReturnType<typeof vi.fn>).mockResolvedValue(
+      spm({ id: "spm-1", removedDate: null }),
     );
-    (prisma.serviceAgreementMeter.update as ReturnType<typeof vi.fn>).mockResolvedValue(
-      sam({ id: "sam-1", removedDate }),
+    (prisma.servicePointMeter.update as ReturnType<typeof vi.fn>).mockResolvedValue(
+      spm({ id: "spm-1", removedDate }),
     );
 
     const result = await removeMeterFromAgreement(UID, ACTOR, "Tester", {
@@ -271,16 +275,16 @@ describe("removeMeterFromAgreement", () => {
     });
 
     expect(result.removedDate).toEqual(removedDate);
-    expect((prisma.serviceAgreementMeter.update as ReturnType<typeof vi.fn>).mock.calls[0][0].data)
+    expect((prisma.servicePointMeter.update as ReturnType<typeof vi.fn>).mock.calls[0][0].data)
       .toEqual({ removedDate });
     expect(writeAuditRow).toHaveBeenCalledTimes(1);
     expect((writeAuditRow as ReturnType<typeof vi.fn>).mock.calls[0][2]).toBe(
-      "service_agreement_meter.updated",
+      "service_point_meter.updated",
     );
   });
 
-  it("throws not-found when no open SAM exists for (saId, meterId)", async () => {
-    (prisma.serviceAgreementMeter.findFirstOrThrow as ReturnType<typeof vi.fn>).mockRejectedValue(
+  it("throws not-found when no open SPM exists for (saId, meterId)", async () => {
+    (prisma.servicePointMeter.findFirstOrThrow as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error("Not found"),
     );
 
@@ -295,18 +299,18 @@ describe("removeMeterFromAgreement", () => {
 });
 
 describe("swapMeter", () => {
-  it("closes the old SAM, creates the new one, emits two audit rows", async () => {
+  it("closes the old SPM, creates the new one, emits two audit rows", async () => {
     const swapDate = new Date("2026-05-01");
-    const oldSam = sam({ id: "sam-old", meterId: "meter-old", removedDate: null });
-    (prisma.serviceAgreementMeter.findFirst as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce(oldSam) // old assignment lookup
+    const oldSpm = spm({ id: "spm-old", meterId: "meter-old", removedDate: null });
+    (prisma.servicePointMeter.findFirst as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(oldSpm) // old assignment lookup
       .mockResolvedValueOnce(null); // new meter conflict lookup -- none
-    (prisma.serviceAgreementMeter.update as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ...oldSam,
+    (prisma.servicePointMeter.update as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...oldSpm,
       removedDate: swapDate,
     });
-    const newSam = sam({ id: "sam-new", meterId: "meter-new", removedDate: null });
-    (prisma.serviceAgreementMeter.create as ReturnType<typeof vi.fn>).mockResolvedValue(newSam);
+    const newSpm = spm({ id: "spm-new", meterId: "meter-new", removedDate: null });
+    (prisma.servicePointMeter.create as ReturnType<typeof vi.fn>).mockResolvedValue(newSpm);
 
     const result = await swapMeter(UID, ACTOR, "Tester", {
       saId: SA_ID,
@@ -317,23 +321,22 @@ describe("swapMeter", () => {
     });
 
     expect(result.closedOld.removedDate).toEqual(swapDate);
-    expect(result.newSam.id).toBe("sam-new");
-    expect((prisma.serviceAgreementMeter.create as ReturnType<typeof vi.fn>).mock.calls[0][0].data)
+    expect(result.newSpm.id).toBe("spm-new");
+    expect((prisma.servicePointMeter.create as ReturnType<typeof vi.fn>).mock.calls[0][0].data)
       .toMatchObject({
         utilityId: UID,
-        serviceAgreementId: SA_ID,
+        servicePointId: SP_ID,
         meterId: "meter-new",
         addedDate: swapDate,
-        isPrimary: true, // inherits from oldSam
       });
     expect(writeAuditRow).toHaveBeenCalledTimes(2);
     const calls = (writeAuditRow as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls[0][2]).toBe("service_agreement_meter.updated"); // old close
-    expect(calls[1][2]).toBe("service_agreement_meter.created"); // new open
+    expect(calls[0][2]).toBe("service_point_meter.updated"); // old close
+    expect(calls[1][2]).toBe("service_point_meter.created"); // new open
   });
 
   it("rejects when oldMeterId is not currently assigned", async () => {
-    (prisma.serviceAgreementMeter.findFirst as ReturnType<typeof vi.fn>)
+    (prisma.servicePointMeter.findFirst as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(null);
 
     await expect(
@@ -345,15 +348,15 @@ describe("swapMeter", () => {
       }),
     ).rejects.toMatchObject({ statusCode: 400, code: "OLD_METER_NOT_ASSIGNED" });
 
-    expect(prisma.serviceAgreementMeter.update).not.toHaveBeenCalled();
-    expect(prisma.serviceAgreementMeter.create).not.toHaveBeenCalled();
+    expect(prisma.servicePointMeter.update).not.toHaveBeenCalled();
+    expect(prisma.servicePointMeter.create).not.toHaveBeenCalled();
   });
 
   it("rejects when newMeterId is already on another open assignment (friendly pre-check)", async () => {
-    const oldSam = sam({ id: "sam-old", meterId: "meter-old", removedDate: null });
-    const conflicting = sam({ id: "sam-other", meterId: "meter-new", removedDate: null });
-    (prisma.serviceAgreementMeter.findFirst as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce(oldSam)
+    const oldSpm = spm({ id: "spm-old", meterId: "meter-old", removedDate: null });
+    const conflicting = spm({ id: "spm-other", meterId: "meter-new", removedDate: null });
+    (prisma.servicePointMeter.findFirst as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(oldSpm)
       .mockResolvedValueOnce(conflicting);
 
     await expect(
@@ -365,7 +368,7 @@ describe("swapMeter", () => {
       }),
     ).rejects.toMatchObject({ statusCode: 409, code: "NEW_METER_ALREADY_ASSIGNED" });
 
-    expect(prisma.serviceAgreementMeter.update).not.toHaveBeenCalled();
-    expect(prisma.serviceAgreementMeter.create).not.toHaveBeenCalled();
+    expect(prisma.servicePointMeter.update).not.toHaveBeenCalled();
+    expect(prisma.servicePointMeter.create).not.toHaveBeenCalled();
   });
 });

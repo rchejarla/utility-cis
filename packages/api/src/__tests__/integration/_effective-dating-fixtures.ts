@@ -71,7 +71,8 @@ export async function resetDb(prisma: {
   await prisma.$executeRawUnsafe(`
     TRUNCATE TABLE
       audit_log,
-      service_agreement_meter,
+      service_point_meter,
+      service_point,
       service_agreement,
       meter,
       account,

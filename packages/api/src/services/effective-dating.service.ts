@@ -330,11 +330,8 @@ export async function swapMeter(
     );
 
     // The new SPM hangs off the SAME ServicePoint the old one did —
-    // primacy is implicit (one meter at a time per SP). Field name
-    // `newSam` is preserved on the return shape so existing API
-    // consumers (route + tests) don't break during the migration; the
-    // value is now an SPM row.
-    const newSam = await tx.servicePointMeter.create({
+    // primacy is implicit (one meter at a time per SP).
+    const newSpm = await tx.servicePointMeter.create({
       data: {
         utilityId,
         servicePointId: oldSpm.servicePointId,
@@ -347,12 +344,12 @@ export async function swapMeter(
       tx,
       { utilityId, actorId, actorName, entityType: "ServicePointMeter" },
       "service_point_meter.created",
-      newSam.id,
+      newSpm.id,
       null,
-      input.reason ? { ...newSam, _reason: input.reason } : newSam,
+      input.reason ? { ...newSpm, _reason: input.reason } : newSpm,
     );
 
-    return { closedOld, newSam };
+    return { closedOld, newSpm };
   };
 
   if (existingTx) return run(existingTx);

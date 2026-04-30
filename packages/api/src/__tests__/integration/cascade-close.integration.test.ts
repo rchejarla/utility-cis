@@ -16,15 +16,15 @@ import {
  * a real Postgres to be meaningful tests.
  *
  * Scenarios:
- *   1. Happy path: 3 open SAMs all get `removed_date = endDate`; SA
+ *   1. Happy path: 3 open SPMs all get `removed_date = endDate`; SA
  *      ends up FINAL with the supplied endDate; 4 audit rows emitted
- *      (1 SA + 3 SAMs).
+ *      (1 SA + 3 SPMs).
  *   2. Idempotent re-close: same terminal status + endDate is a no-op;
  *      no extra audit rows; counts unchanged.
- *   3. Pre-closed SAMs are left alone — already-removed assignments
+ *   3. Pre-closed SPMs are left alone — already-removed assignments
  *      are skipped by the cascade (selector filters `removedDate IS NULL`).
  *   4. Mid-tx failure rolls back: forcing a failure inside the same
- *      transaction leaves SA in original ACTIVE state and SAMs open.
+ *      transaction leaves SA in original ACTIVE state and SPMs open.
  */
 
 let pgContainer: StartedPostgreSqlContainer;
@@ -66,28 +66,36 @@ async function makeSaWithThreeMeters() {
     },
   });
 
-  await prisma.serviceAgreementMeter.createMany({
+  const sp = await prisma.servicePoint.create({
+    data: {
+      utilityId: fixA.utilityId,
+      serviceAgreementId: sa.id,
+      premiseId: fixA.premiseId,
+      type: "METERED",
+      status: "ACTIVE",
+      startDate: new Date("2024-01-01"),
+    },
+  });
+
+  await prisma.servicePointMeter.createMany({
     data: [
       {
         utilityId: fixA.utilityId,
-        serviceAgreementId: sa.id,
+        servicePointId: sp.id,
         meterId: fixA.meterId,
         addedDate: new Date("2024-01-01"),
-        isPrimary: true,
       },
       {
         utilityId: fixA.utilityId,
-        serviceAgreementId: sa.id,
+        servicePointId: sp.id,
         meterId: fixA.meterId2,
         addedDate: new Date("2024-01-01"),
-        isPrimary: false,
       },
       {
         utilityId: fixA.utilityId,
-        serviceAgreementId: sa.id,
+        servicePointId: sp.id,
         meterId: fixA.meterId3,
         addedDate: new Date("2024-01-01"),
-        isPrimary: false,
       },
     ],
   });
@@ -96,7 +104,7 @@ async function makeSaWithThreeMeters() {
 }
 
 describe("closeServiceAgreement (real DB)", () => {
-  it("happy path: cascades removed_date onto all 3 open SAMs and emits 4 audit rows", async () => {
+  it("happy path: cascades removed_date onto all 3 open SPMs and emits 4 audit rows", async () => {
     const { prisma } = prismaImports;
     const { closeServiceAgreement } = serviceImports;
 
@@ -116,12 +124,12 @@ describe("closeServiceAgreement (real DB)", () => {
     expect(reloaded.status).toBe("FINAL");
     expect(reloaded.endDate?.toISOString().slice(0, 10)).toBe("2024-12-31");
 
-    const sams = await prisma.serviceAgreementMeter.findMany({
-      where: { serviceAgreementId: sa.id },
+    const spms = await prisma.servicePointMeter.findMany({
+      where: { servicePoint: { serviceAgreementId: sa.id } },
     });
-    expect(sams).toHaveLength(3);
-    for (const sam of sams) {
-      expect(sam.removedDate?.toISOString().slice(0, 10)).toBe("2024-12-31");
+    expect(spms).toHaveLength(3);
+    for (const spm of spms) {
+      expect(spm.removedDate?.toISOString().slice(0, 10)).toBe("2024-12-31");
     }
 
     const audits = await prisma.auditLog.findMany({
@@ -130,7 +138,7 @@ describe("closeServiceAgreement (real DB)", () => {
     });
     expect(audits).toHaveLength(4);
     expect(audits.filter((a) => a.entityType === "ServiceAgreement")).toHaveLength(1);
-    expect(audits.filter((a) => a.entityType === "ServiceAgreementMeter")).toHaveLength(3);
+    expect(audits.filter((a) => a.entityType === "ServicePointMeter")).toHaveLength(3);
   });
 
   it("is idempotent: re-closing with the same terminal status + endDate is a no-op (no extra audits)", async () => {
@@ -200,17 +208,17 @@ describe("closeServiceAgreement (real DB)", () => {
     ).rejects.toMatchObject({ statusCode: 409, code: "SA_ALREADY_TERMINAL" });
   });
 
-  it("skips already-removed SAMs (cascade only touches removedDate IS NULL rows)", async () => {
+  it("skips already-removed SPMs (cascade only touches removedDate IS NULL rows)", async () => {
     const { prisma } = prismaImports;
     const { closeServiceAgreement } = serviceImports;
 
     const sa = await makeSaWithThreeMeters();
     // Pre-close meter1 with an earlier removedDate.
-    const sam1 = await prisma.serviceAgreementMeter.findFirstOrThrow({
-      where: { serviceAgreementId: sa.id, meterId: fixA.meterId },
+    const spm1 = await prisma.servicePointMeter.findFirstOrThrow({
+      where: { servicePoint: { serviceAgreementId: sa.id }, meterId: fixA.meterId },
     });
-    await prisma.serviceAgreementMeter.update({
-      where: { id: sam1.id },
+    await prisma.servicePointMeter.update({
+      where: { id: spm1.id },
       data: { removedDate: new Date("2024-06-30") },
     });
 
@@ -220,17 +228,17 @@ describe("closeServiceAgreement (real DB)", () => {
       status: "FINAL",
     });
 
-    // Only the 2 still-open SAMs got cascaded.
+    // Only the 2 still-open SPMs got cascaded.
     expect(result.metersClosed).toBe(2);
 
-    const sam1After = await prisma.serviceAgreementMeter.findUniqueOrThrow({
-      where: { id: sam1.id },
+    const spm1After = await prisma.servicePointMeter.findUniqueOrThrow({
+      where: { id: spm1.id },
     });
     // The pre-closed meter retains its earlier removedDate, NOT 2024-12-31.
-    expect(sam1After.removedDate?.toISOString().slice(0, 10)).toBe("2024-06-30");
+    expect(spm1After.removedDate?.toISOString().slice(0, 10)).toBe("2024-06-30");
   });
 
-  it("mid-tx failure rolls everything back (SA stays ACTIVE, all SAMs stay open)", async () => {
+  it("mid-tx failure rolls everything back (SA stays ACTIVE, all SPMs stay open)", async () => {
     const { prisma } = prismaImports;
     const { closeServiceAgreement } = serviceImports;
 
@@ -251,17 +259,17 @@ describe("closeServiceAgreement (real DB)", () => {
       }),
     ).rejects.toThrow("forced rollback after cascade");
 
-    // Post-rollback: SA still ACTIVE, no endDate, all SAMs still open,
-    // no audit rows written for the SA or its SAMs.
+    // Post-rollback: SA still ACTIVE, no endDate, all SPMs still open,
+    // no audit rows written for the SA or its SPMs.
     const reloaded = await prisma.serviceAgreement.findUniqueOrThrow({ where: { id: sa.id } });
     expect(reloaded.status).toBe("ACTIVE");
     expect(reloaded.endDate).toBeNull();
 
-    const sams = await prisma.serviceAgreementMeter.findMany({
-      where: { serviceAgreementId: sa.id },
+    const spms = await prisma.servicePointMeter.findMany({
+      where: { servicePoint: { serviceAgreementId: sa.id } },
     });
-    for (const sam of sams) {
-      expect(sam.removedDate).toBeNull();
+    for (const spm of spms) {
+      expect(spm.removedDate).toBeNull();
     }
 
     const audits = await prisma.auditLog.count({ where: { utilityId: fixA.utilityId } });
