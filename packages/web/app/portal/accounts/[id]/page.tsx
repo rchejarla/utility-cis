@@ -30,7 +30,7 @@ interface Agreement {
   startDate: string;
   endDate?: string;
   commodity: { id: string; name: string };
-  servicePoints: Array<{ id: string; premise: Premise }>;
+  servicePoints?: Array<{ id: string; premise: Premise }>;
   billingCycle: { id: string; name: string };
   rateSchedule: { id: string; name: string };
   meters: MeterInfo[];

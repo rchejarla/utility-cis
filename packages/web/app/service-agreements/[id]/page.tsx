@@ -341,7 +341,7 @@ export default function ServiceAgreementDetailPage({
             {sa.agreementNumber}
           </h1>
           <p style={{ fontSize: "14px", color: "var(--text-secondary)", margin: 0 }}>
-            {sa.account?.accountNumber} — {sa.servicePoints?.[0]?.premise.addressLine1 ?? "—"}
+            {sa.account?.accountNumber} — {sa.servicePoints?.[0]?.premise?.addressLine1 ?? "—"}
           </p>
         </div>
         {canEdit && availableTransitions.length > 0 && (

@@ -13,7 +13,7 @@ interface ServiceAgreement {
   startDate: string;
   account?: { accountNumber: string };
   servicePoints?: Array<{
-    premise: { id: string; addressLine1: string; city: string; state?: string };
+    premise: { id: string; addressLine1: string; city: string; state: string };
   }>;
   commodity?: { name: string };
 }

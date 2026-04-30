@@ -67,7 +67,7 @@ interface Account {
     startDate: string;
     servicePoints?: Array<{
       id: string;
-      premise: { id: string; addressLine1: string; city: string; state?: string };
+      premise: { id: string; addressLine1: string; city: string; state: string };
     }>;
   }>;
   contacts?: Contact[];
