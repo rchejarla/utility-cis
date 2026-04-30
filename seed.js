@@ -27,7 +27,7 @@ async function main() {
   await p.meterRead.deleteMany({});
   if (p.attachment) await p.attachment.deleteMany({});
 
-  await p.serviceAgreementMeter.deleteMany({});
+  // SAM table dropped in slice 1 migration; SP/SPM cascade from SA deletion.
   await p.serviceAgreement.deleteMany({});
   await p.meterRegister.deleteMany({});
   await p.contact.deleteMany({});
@@ -174,12 +174,31 @@ async function main() {
 
   for (const sa of saData) {
     const { mIdx, ...data } = sa;
-    await p.serviceAgreement.create({
+    const created = await p.serviceAgreement.create({
       data: {
         utilityId: UID, ...data, startDate: new Date("2025-01-01"), status: "ACTIVE",
-        meters: { create: mIdx.map((i, j) => ({ utilityId: UID, meterId: mArr[i].id, isPrimary: j === 0, addedDate: new Date("2025-01-01") })) },
       },
     });
+    const sp = await p.servicePoint.create({
+      data: {
+        utilityId: UID,
+        serviceAgreementId: created.id,
+        premiseId: created.premiseId,
+        type: "METERED",
+        status: "ACTIVE",
+        startDate: new Date("2025-01-01"),
+      },
+    });
+    for (const i of mIdx) {
+      await p.servicePointMeter.create({
+        data: {
+          utilityId: UID,
+          servicePointId: sp.id,
+          meterId: mArr[i].id,
+          addedDate: new Date("2025-01-01"),
+        },
+      });
+    }
   }
   console.log("  " + saData.length + " service agreements");
 
@@ -187,7 +206,7 @@ async function main() {
   // These give the portal usage page real data to chart. Each month has one ACTUAL read.
   const saList = await p.serviceAgreement.findMany({
     where: { utilityId: UID },
-    include: { meters: { include: { meter: { select: { uomId: true } } } } },
+    include: { servicePoints: { include: { meters: { include: { meter: { select: { uomId: true } } } } } } },
     orderBy: { agreementNumber: "asc" },
   });
   const sa0001 = saList.find(s => s.agreementNumber === "SA-0001");
@@ -197,9 +216,10 @@ async function main() {
     { sa: sa0001, baseReading: 1200, monthlyUsage: () => 3500 + Math.floor(Math.random() * 2000) },  // water: gallons
     { sa: sa0006, baseReading: 45000, monthlyUsage: () => 650 + Math.floor(Math.random() * 300) },   // electric: kWh
   ]) {
-    if (!sa || !sa.meters[0]) continue;
-    const meterId = sa.meters[0].meterId;
-    const uomId = sa.meters[0].meter.uomId;
+    const firstSpm = sa && sa.servicePoints[0] && sa.servicePoints[0].meters[0];
+    if (!firstSpm) continue;
+    const meterId = firstSpm.meterId;
+    const uomId = firstSpm.meter.uomId;
     let running = baseReading;
     for (let m = 11; m >= 0; m--) {
       const d = new Date();

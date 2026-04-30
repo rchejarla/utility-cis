@@ -270,22 +270,34 @@ async function main() {
 
   for (const sa of agreements) {
     const { meterIndices, ...saData } = sa;
-    await prisma.serviceAgreement.create({
+    const created = await prisma.serviceAgreement.create({
       data: {
         utilityId: UTILITY_ID,
         ...saData,
         startDate: new Date("2025-01-01"),
         status: "ACTIVE",
-        meters: {
-          create: meterIndices.map((idx, i) => ({
-            utilityId: UTILITY_ID,
-            meterId: createdMeters[idx].id,
-            isPrimary: i === 0,
-            addedDate: new Date("2025-01-01"),
-          })),
-        },
       },
     });
+    const sp = await prisma.servicePoint.create({
+      data: {
+        utilityId: UTILITY_ID,
+        serviceAgreementId: created.id,
+        premiseId: created.premiseId!,
+        type: "METERED",
+        status: "ACTIVE",
+        startDate: new Date("2025-01-01"),
+      },
+    });
+    for (const idx of meterIndices) {
+      await prisma.servicePointMeter.create({
+        data: {
+          utilityId: UTILITY_ID,
+          servicePointId: sp.id,
+          meterId: createdMeters[idx].id,
+          addedDate: new Date("2025-01-01"),
+        },
+      });
+    }
   }
   console.log(`  ✓ ${agreements.length} service agreements (1 with multi-meter)`);
 
