@@ -16,12 +16,19 @@ const fullInclude = {
   commodity: true,
   rateSchedule: true,
   billingCycle: true,
-  meters: {
-    where: { removedDate: null as null },
-    orderBy: { addedDate: "asc" as const },
+  servicePoints: {
+    where: { endDate: null as null },
+    orderBy: { startDate: "asc" as const },
     include: {
-      meter: {
-        include: { uom: true },
+      premise: true,
+      meters: {
+        where: { removedDate: null as null },
+        orderBy: { addedDate: "asc" as const },
+        include: {
+          meter: {
+            include: { uom: true },
+          },
+        },
       },
     },
   },
@@ -56,12 +63,11 @@ export async function createServiceAgreement(
   actorName: string,
   data: CreateServiceAgreementInput
 ) {
-  // Rule 2: Ensure at least one primary meter (computed before transaction)
+  // Initial meter list (isPrimary on the input is no longer persisted —
+  // Oracle's SP holds at most one meter at a time, so primacy is implicit.
+  // The flag is still accepted on the input for API compatibility, just
+  // dropped before write).
   const metersToCreate = [...data.meters];
-  const hasPrimary = metersToCreate.some((m) => m.isPrimary);
-  if (!hasPrimary && metersToCreate.length > 0) {
-    metersToCreate[0] = { ...metersToCreate[0], isPrimary: true };
-  }
 
   // Validate custom fields against the tenant schema before opening
   // the transaction. The validator does its own DB read so it can
@@ -77,15 +83,17 @@ export async function createServiceAgreement(
     { utilityId, actorId, actorName, entityType: "ServiceAgreement" },
     EVENT_TYPES.SERVICE_AGREEMENT_CREATED,
     async (tx) => {
-      // Rule 1: Check meter uniqueness per commodity
+      // Rule 1: Check meter uniqueness per commodity (now via SPM → SP → SA).
       for (const m of metersToCreate) {
-        const existing = await tx.serviceAgreementMeter.findFirst({
+        const existing = await tx.servicePointMeter.findFirst({
           where: {
             meterId: m.meterId,
             removedDate: null,
-            serviceAgreement: {
-              commodityId: data.commodityId,
-              status: { in: ["PENDING", "ACTIVE"] },
+            servicePoint: {
+              serviceAgreement: {
+                commodityId: data.commodityId,
+                status: { in: ["PENDING", "ACTIVE"] },
+              },
             },
           },
         });
@@ -97,10 +105,10 @@ export async function createServiceAgreement(
         }
       }
 
-      // Rule 3: Create the agreement with nested meters. If the caller
-      // didn't supply an agreementNumber, generate one from the tenant
-      // template inside this same tx so the max-query sees any rows
-      // the caller has already inserted.
+      // Rule 3: Create the agreement. If the caller didn't supply an
+      // agreementNumber, generate one from the tenant template inside
+      // this same tx so the max-query sees any rows the caller has
+      // already inserted.
       const agreementNumber =
         data.agreementNumber ??
         (await generateNumber({
@@ -111,7 +119,9 @@ export async function createServiceAgreement(
           columnName: "agreement_number",
           db: tx,
         }));
-      return tx.serviceAgreement.create({
+      const status = data.status || "PENDING";
+      const startDate = new Date(data.startDate);
+      const sa = await tx.serviceAgreement.create({
         data: {
           utilityId,
           agreementNumber,
@@ -120,20 +130,41 @@ export async function createServiceAgreement(
           commodityId: data.commodityId,
           rateScheduleId: data.rateScheduleId,
           billingCycleId: data.billingCycleId,
-          startDate: new Date(data.startDate),
+          startDate,
           endDate: data.endDate ? new Date(data.endDate) : null,
-          status: data.status || "PENDING",
+          status,
           readSequence: data.readSequence,
           customFields: validatedCustom as object,
-          meters: {
-            create: metersToCreate.map((m) => ({
-              utilityId,
-              meterId: m.meterId,
-              isPrimary: m.isPrimary,
-              addedDate: new Date(data.startDate),
-            })),
-          },
         },
+      });
+
+      // Create one ServicePoint mirroring the SA's status. METERED type
+      // for slice 1 (item-based / non-badged come later).
+      const sp = await tx.servicePoint.create({
+        data: {
+          utilityId,
+          serviceAgreementId: sa.id,
+          premiseId: data.premiseId,
+          type: "METERED",
+          status: status === "PENDING" ? "PENDING" : "ACTIVE",
+          startDate,
+        },
+      });
+
+      // Attach initial meters via SPM (replaces the old SAM nested write).
+      if (metersToCreate.length > 0) {
+        await tx.servicePointMeter.createMany({
+          data: metersToCreate.map((m) => ({
+            utilityId,
+            servicePointId: sp.id,
+            meterId: m.meterId,
+            addedDate: startDate,
+          })),
+        });
+      }
+
+      return tx.serviceAgreement.findUniqueOrThrow({
+        where: { id: sa.id },
         include: fullInclude,
       });
     },
@@ -149,13 +180,15 @@ export async function addMeterToAgreement(
     where: { id: agreementId, utilityId },
   });
 
-  const existing = await prisma.serviceAgreementMeter.findFirst({
+  const existing = await prisma.servicePointMeter.findFirst({
     where: {
       meterId,
       removedDate: null,
-      serviceAgreement: {
-        commodityId: agreement.commodityId,
-        status: { in: ["PENDING", "ACTIVE"] },
+      servicePoint: {
+        serviceAgreement: {
+          commodityId: agreement.commodityId,
+          status: { in: ["PENDING", "ACTIVE"] },
+        },
       },
     },
   });
@@ -166,12 +199,27 @@ export async function addMeterToAgreement(
     );
   }
 
-  return prisma.serviceAgreementMeter.create({
+  // Find the SA's open ServicePoint to attach the meter under. Slice 1
+  // creates exactly one SP per SA at create time; if we don't find one
+  // here, the SA pre-dates the SP backfill or was created via a path
+  // that didn't make one — surface that as an error rather than
+  // silently inventing an SP without a premise.
+  const sp = await prisma.servicePoint.findFirst({
+    where: { serviceAgreementId: agreementId, utilityId, endDate: null },
+    orderBy: { startDate: "asc" },
+  });
+  if (!sp) {
+    throw Object.assign(
+      new Error("Service agreement has no open service point to attach the meter to"),
+      { statusCode: 400, code: "NO_OPEN_SERVICE_POINT" }
+    );
+  }
+
+  return prisma.servicePointMeter.create({
     data: {
       utilityId,
-      serviceAgreementId: agreementId,
+      servicePointId: sp.id,
       meterId,
-      isPrimary: false,
       addedDate: new Date(),
     },
     include: {
