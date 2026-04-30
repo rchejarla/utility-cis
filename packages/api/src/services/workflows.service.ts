@@ -416,7 +416,7 @@ export async function moveOut(
       where: {
         utilityId,
         accountId: data.accountId,
-        servicePoints: { some: { premiseId: data.premiseId } },
+        servicePoints: { some: { premiseId: data.premiseId, endDate: null } },
         status: { in: ["PENDING", "ACTIVE"] },
       },
     });

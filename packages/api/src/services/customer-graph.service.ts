@@ -42,7 +42,11 @@ export async function buildCustomerGraph(
         include: {
           serviceAgreements: {
             include: {
-              servicePoints: { include: { premise: true } },
+              servicePoints: {
+                where: { endDate: null },
+                orderBy: { startDate: "asc" },
+                include: { premise: true },
+              },
               commodity: { select: { id: true, code: true, name: true } },
               rateSchedule: { select: { id: true, code: true, name: true } },
               meters: {

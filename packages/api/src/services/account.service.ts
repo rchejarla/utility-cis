@@ -16,11 +16,16 @@ export async function listAccounts(utilityId: string, query: AccountQuery) {
   if (query.premiseSearch) {
     where.serviceAgreements = {
       some: {
-        premise: {
-          OR: [
-            { addressLine1: { contains: query.premiseSearch, mode: "insensitive" } },
-            { city: { contains: query.premiseSearch, mode: "insensitive" } },
-          ],
+        servicePoints: {
+          some: {
+            endDate: null,
+            premise: {
+              OR: [
+                { addressLine1: { contains: query.premiseSearch, mode: "insensitive" } },
+                { city: { contains: query.premiseSearch, mode: "insensitive" } },
+              ],
+            },
+          },
         },
       },
     };
@@ -34,11 +39,16 @@ export async function listAccounts(utilityId: string, query: AccountQuery) {
       {
         serviceAgreements: {
           some: {
-            premise: {
-              OR: [
-                { addressLine1: { contains: query.search, mode: "insensitive" } },
-                { city: { contains: query.search, mode: "insensitive" } },
-              ],
+            servicePoints: {
+              some: {
+                endDate: null,
+                premise: {
+                  OR: [
+                    { addressLine1: { contains: query.search, mode: "insensitive" } },
+                    { city: { contains: query.search, mode: "insensitive" } },
+                  ],
+                },
+              },
             },
           },
         },
@@ -63,6 +73,7 @@ export async function listAccounts(utilityId: string, query: AccountQuery) {
       serviceAgreements: {
         select: {
           servicePoints: {
+            where: { endDate: null },
             select: {
               premise: { select: { id: true, addressLine1: true, city: true, state: true } },
             },
@@ -86,7 +97,11 @@ export async function getAccount(id: string, utilityId: string) {
       },
       serviceAgreements: {
         include: {
-          servicePoints: { include: { premise: true } },
+          servicePoints: {
+            where: { endDate: null },
+            orderBy: { startDate: "asc" },
+            include: { premise: true },
+          },
           commodity: true,
           rateSchedule: true,
         },
