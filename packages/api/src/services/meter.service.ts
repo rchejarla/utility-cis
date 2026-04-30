@@ -27,10 +27,12 @@ export async function getMeter(id: string, utilityId: string) {
       premise: true,
       commodity: true,
       uom: true,
-      serviceAgreementMeters: {
+      servicePointMeters: {
         where: { removedDate: null },
         include: {
-          serviceAgreement: true,
+          servicePoint: {
+            include: { serviceAgreement: true },
+          },
         },
       },
       registers: {

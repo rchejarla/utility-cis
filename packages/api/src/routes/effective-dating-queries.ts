@@ -52,7 +52,7 @@ export async function effectiveDatingQueryRoutes(app: FastifyInstance) {
     },
   );
 
-  // Full SAM history for a meter — every assignment, ordered by
+  // Full SPM history for a meter — every assignment, ordered by
   // addedDate desc. Used by the meter detail History tab.
   app.get(
     "/api/v1/meters/:id/assignment-history",
@@ -61,20 +61,24 @@ export async function effectiveDatingQueryRoutes(app: FastifyInstance) {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);
 
-      const rows = await prisma.serviceAgreementMeter.findMany({
+      const rows = await prisma.servicePointMeter.findMany({
         where: { utilityId, meterId: id },
         select: {
           id: true,
-          isPrimary: true,
           addedDate: true,
           removedDate: true,
-          serviceAgreement: {
+          servicePoint: {
             select: {
               id: true,
-              agreementNumber: true,
-              status: true,
-              account: { select: { id: true, accountNumber: true } },
-              premise: { select: { id: true, addressLine1: true } },
+              serviceAgreement: {
+                select: {
+                  id: true,
+                  agreementNumber: true,
+                  status: true,
+                  account: { select: { id: true, accountNumber: true } },
+                  premise: { select: { id: true, addressLine1: true } },
+                },
+              },
             },
           },
         },

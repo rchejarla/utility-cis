@@ -55,10 +55,11 @@ export interface CloseServiceAgreementResult {
 
 /**
  * Cascading close of a service agreement. Marks the SA as terminal AND
- * sets `removed_date = endDate` on every still-open
- * `service_agreement_meter` child in the SAME transaction. Replaces the
- * silent-orphan bug in `transferService` / `moveOut` where SA closure
- * left SAM rows with `removed_date IS NULL`. Per FR-EFF-004.
+ * end-dates every still-open ServicePoint AND sets `removed_date =
+ * endDate` on every still-open `service_point_meter` child in the SAME
+ * transaction. Replaces the silent-orphan bug in `transferService` /
+ * `moveOut` where SA closure left SPM rows with `removed_date IS
+ * NULL`. Per FR-EFF-004.
  *
  * Idempotent: re-closing an SA with the same terminal status + endDate
  * is a no-op (no audits emitted, no SAM updates). A different terminal
@@ -146,30 +147,44 @@ export async function closeServiceAgreement(
       input.reason ? { ...updated, _reason: input.reason } : updated,
     );
 
-    const openSams = await tx.serviceAgreementMeter.findMany({
-      where: { utilityId, serviceAgreementId: input.saId, removedDate: null },
+    // End-date open ServicePoints attached to this SA (status mirrors
+    // the SA's terminal state). The SP→SPM relation has onDelete:
+    // Cascade but we don't delete here; we soft-close by setting
+    // endDate so the history is preserved.
+    await tx.servicePoint.updateMany({
+      where: { serviceAgreementId: input.saId, endDate: null },
+      data: { status: "CLOSED", endDate: input.endDate },
     });
 
-    for (const sam of openSams) {
-      const updatedSam = await tx.serviceAgreementMeter.update({
-        where: { id: sam.id },
+    // Then close every still-open SPM for this SA, traversing through SP.
+    const openSpms = await tx.servicePointMeter.findMany({
+      where: {
+        utilityId,
+        servicePoint: { serviceAgreementId: input.saId },
+        removedDate: null,
+      },
+    });
+
+    for (const spm of openSpms) {
+      const updatedSpm = await tx.servicePointMeter.update({
+        where: { id: spm.id },
         data: { removedDate: input.endDate },
       });
       await writeAuditRow(
         tx,
-        { utilityId, actorId, actorName, entityType: "ServiceAgreementMeter" },
-        "service_agreement_meter.updated",
-        updatedSam.id,
-        sam,
+        { utilityId, actorId, actorName, entityType: "ServicePointMeter" },
+        "service_point_meter.updated",
+        updatedSpm.id,
+        spm,
         {
-          ...updatedSam,
+          ...updatedSpm,
           _cascadeFromSaId: input.saId,
           ...(input.reason ? { _reason: input.reason } : {}),
         },
       );
     }
 
-    return { agreement: updated, metersClosed: openSams.length };
+    return { agreement: updated, metersClosed: openSpms.length };
   };
 
   if (existingTx) return run(existingTx);
@@ -201,10 +216,10 @@ export async function removeMeterFromAgreement(
   existingTx?: TxClient,
 ) {
   const run = async (tx: TxClient) => {
-    const before = await tx.serviceAgreementMeter.findFirstOrThrow({
+    const before = await tx.servicePointMeter.findFirstOrThrow({
       where: {
         utilityId,
-        serviceAgreementId: input.saId,
+        servicePoint: { serviceAgreementId: input.saId },
         meterId: input.meterId,
         removedDate: null,
       },
@@ -216,19 +231,19 @@ export async function removeMeterFromAgreement(
       if (sameRemove) return before;
       throw Object.assign(
         new Error("Meter assignment is already removed"),
-        { statusCode: 409, code: "SAM_ALREADY_REMOVED" },
+        { statusCode: 409, code: "SPM_ALREADY_REMOVED" },
       );
     }
 
-    const updated = await tx.serviceAgreementMeter.update({
+    const updated = await tx.servicePointMeter.update({
       where: { id: before.id },
       data: { removedDate: input.removedDate },
     });
 
     await writeAuditRow(
       tx,
-      { utilityId, actorId, actorName, entityType: "ServiceAgreementMeter" },
-      "service_agreement_meter.updated",
+      { utilityId, actorId, actorName, entityType: "ServicePointMeter" },
+      "service_point_meter.updated",
       updated.id,
       before,
       input.reason ? { ...updated, _reason: input.reason } : updated,
@@ -269,22 +284,22 @@ export async function swapMeter(
   existingTx?: TxClient,
 ) {
   const run = async (tx: TxClient) => {
-    const oldSam = await tx.serviceAgreementMeter.findFirst({
+    const oldSpm = await tx.servicePointMeter.findFirst({
       where: {
         utilityId,
-        serviceAgreementId: input.saId,
+        servicePoint: { serviceAgreementId: input.saId },
         meterId: input.oldMeterId,
         removedDate: null,
       },
     });
-    if (!oldSam) {
+    if (!oldSpm) {
       throw Object.assign(
         new Error("Old meter is not currently assigned to this service agreement"),
         { statusCode: 400, code: "OLD_METER_NOT_ASSIGNED" },
       );
     }
 
-    const newMeterConflict = await tx.serviceAgreementMeter.findFirst({
+    const newMeterConflict = await tx.servicePointMeter.findFirst({
       where: {
         utilityId,
         meterId: input.newMeterId,
@@ -300,34 +315,38 @@ export async function swapMeter(
       );
     }
 
-    const closedOld = await tx.serviceAgreementMeter.update({
-      where: { id: oldSam.id },
+    const closedOld = await tx.servicePointMeter.update({
+      where: { id: oldSpm.id },
       data: { removedDate: input.swapDate },
     });
 
     await writeAuditRow(
       tx,
-      { utilityId, actorId, actorName, entityType: "ServiceAgreementMeter" },
-      "service_agreement_meter.updated",
+      { utilityId, actorId, actorName, entityType: "ServicePointMeter" },
+      "service_point_meter.updated",
       closedOld.id,
-      oldSam,
+      oldSpm,
       input.reason ? { ...closedOld, _reason: input.reason } : closedOld,
     );
 
-    const newSam = await tx.serviceAgreementMeter.create({
+    // The new SPM hangs off the SAME ServicePoint the old one did —
+    // primacy is implicit (one meter at a time per SP). Field name
+    // `newSam` is preserved on the return shape so existing API
+    // consumers (route + tests) don't break during the migration; the
+    // value is now an SPM row.
+    const newSam = await tx.servicePointMeter.create({
       data: {
         utilityId,
-        serviceAgreementId: input.saId,
+        servicePointId: oldSpm.servicePointId,
         meterId: input.newMeterId,
-        isPrimary: oldSam.isPrimary,
         addedDate: input.swapDate,
       },
     });
 
     await writeAuditRow(
       tx,
-      { utilityId, actorId, actorName, entityType: "ServiceAgreementMeter" },
-      "service_agreement_meter.created",
+      { utilityId, actorId, actorName, entityType: "ServicePointMeter" },
+      "service_point_meter.created",
       newSam.id,
       null,
       input.reason ? { ...newSam, _reason: input.reason } : newSam,

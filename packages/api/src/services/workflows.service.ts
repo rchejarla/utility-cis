@@ -36,8 +36,23 @@ export async function transferService(
   const result = await prisma.$transaction(async (tx) => {
     const source = await tx.serviceAgreement.findFirstOrThrow({
       where: { id: sourceAgreementId, utilityId },
-      include: { meters: { where: { removedDate: null }, include: { meter: true } } },
+      include: {
+        servicePoints: {
+          where: { endDate: null },
+          include: {
+            meters: {
+              where: { removedDate: null },
+              orderBy: { addedDate: "desc" },
+              include: { meter: true },
+            },
+          },
+        },
+      },
     });
+    // Flatten the SPMs across all open SPs on this SA. Ordered most
+    // recent addedDate first so callers can grab `[0]` as the
+    // representative meter (primacy is implicit in the SP model).
+    const sourceSpms = source.servicePoints.flatMap((sp) => sp.meters);
 
     if (source.status === "CLOSED" || source.status === "FINAL") {
       throw Object.assign(
@@ -61,7 +76,8 @@ export async function transferService(
 
     // Optional FINAL read on the source side
     if (data.finalMeterReading !== undefined) {
-      const primary = source.meters.find((m) => m.isPrimary) ?? source.meters[0];
+      // Most-recently-added open SPM; primacy is implicit in the SP model.
+      const primary = sourceSpms[0];
       if (primary) {
         const pm = await tx.meter.findUniqueOrThrow({ where: { id: primary.meterId }, select: { uomId: true } });
         await tx.meterRead.create({
@@ -113,7 +129,7 @@ export async function transferService(
         columnName: "agreement_number",
         db: tx,
       }));
-    const newAgreement = await tx.serviceAgreement.create({
+    const newAgreementBase = await tx.serviceAgreement.create({
       data: {
         utilityId,
         agreementNumber: newAgreementNumber,
@@ -125,21 +141,60 @@ export async function transferService(
         startDate: transferDate,
         status: "ACTIVE",
         readSequence: source.readSequence,
-        meters: {
-          create: source.meters.map((m) => ({
-            utilityId,
-            meterId: m.meterId,
-            isPrimary: m.isPrimary,
-            addedDate: transferDate,
-          })),
+      },
+    });
+
+    // Create one SP on the new SA mirroring the source's premise, then
+    // copy each open meter from the source's SPMs onto it. Primacy is
+    // implicit in the SP model (one meter at a time per SP).
+    if (!source.premiseId) {
+      throw Object.assign(
+        new Error("Source service agreement has no premise; cannot transfer"),
+        { statusCode: 400, code: "SOURCE_AGREEMENT_NO_PREMISE" },
+      );
+    }
+    const newSp = await tx.servicePoint.create({
+      data: {
+        utilityId,
+        serviceAgreementId: newAgreementBase.id,
+        premiseId: source.premiseId,
+        type: "METERED",
+        status: "ACTIVE",
+        startDate: transferDate,
+      },
+    });
+    if (sourceSpms.length > 0) {
+      await tx.servicePointMeter.createMany({
+        data: sourceSpms.map((m) => ({
+          utilityId,
+          servicePointId: newSp.id,
+          meterId: m.meterId,
+          addedDate: transferDate,
+        })),
+      });
+    }
+
+    // Re-read the new agreement with the include shape callers expect.
+    const newAgreement = await tx.serviceAgreement.findUniqueOrThrow({
+      where: { id: newAgreementBase.id },
+      include: {
+        servicePoints: {
+          where: { endDate: null },
+          include: {
+            meters: {
+              where: { removedDate: null },
+              orderBy: { addedDate: "desc" },
+              include: { meter: true },
+            },
+          },
         },
       },
-      include: { meters: { include: { meter: true } } },
     });
+    const newAgreementSpms = newAgreement.servicePoints.flatMap((sp) => sp.meters);
 
     // Optional ACTUAL read on the new agreement side
     if (data.initialMeterReading !== undefined) {
-      const primary = newAgreement.meters.find((m) => m.isPrimary) ?? newAgreement.meters[0];
+      const primary = newAgreementSpms[0];
       if (primary) {
         const pm2 = await tx.meter.findUniqueOrThrow({ where: { id: primary.meterId }, select: { uomId: true } });
         await tx.meterRead.create({
@@ -275,14 +330,26 @@ export async function moveIn(
         },
       });
 
+      // One SP per SA at create time (slice 1 invariant). SPMs hang
+      // off this SP; primacy is implicit (one meter at a time per SP).
+      const sp = await tx.servicePoint.create({
+        data: {
+          utilityId,
+          serviceAgreementId: sa.id,
+          premiseId: data.premiseId,
+          type: "METERED",
+          status: "ACTIVE",
+          startDate: moveInDate,
+        },
+      });
+
       if (agreement.initialMeterReadings) {
         for (const ir of agreement.initialMeterReadings) {
-          await tx.serviceAgreementMeter.create({
+          await tx.servicePointMeter.create({
             data: {
               utilityId,
-              serviceAgreementId: sa.id,
+              servicePointId: sp.id,
               meterId: ir.meterId,
-              isPrimary: true,
               addedDate: moveInDate,
             },
           });
@@ -368,8 +435,11 @@ export async function moveOut(
       data.finalMeterReadings.map((r) => [r.meterId, r.reading]),
     );
     for (const sa of activeAgreements) {
-      const agreementMeters = await tx.serviceAgreementMeter.findMany({
-        where: { serviceAgreementId: sa.id, removedDate: null },
+      const agreementMeters = await tx.servicePointMeter.findMany({
+        where: {
+          servicePoint: { serviceAgreementId: sa.id },
+          removedDate: null,
+        },
       });
       for (const am of agreementMeters) {
         const reading = readingsByMeter.get(am.meterId);
