@@ -142,7 +142,6 @@ beforeEach(async () => {
       utilityId: fixA.utilityId,
       agreementNumber: "SA-IMP",
       accountId: fixA.accountId,
-      premiseId: fixA.premiseId,
       commodityId: fixA.commodityId,
       rateScheduleId: fixA.rateScheduleId,
       billingCycleId: fixA.billingCycleId,

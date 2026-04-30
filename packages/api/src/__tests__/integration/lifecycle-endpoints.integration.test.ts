@@ -91,7 +91,6 @@ async function makeActiveSaWithTwoMeters() {
       utilityId: fixA.utilityId,
       agreementNumber: "SA-HTTP",
       accountId: fixA.accountId,
-      premiseId: fixA.premiseId,
       commodityId: fixA.commodityId,
       rateScheduleId: fixA.rateScheduleId,
       billingCycleId: fixA.billingCycleId,

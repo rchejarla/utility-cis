@@ -57,7 +57,6 @@ async function makeSaWithThreeMeters() {
       utilityId: fixA.utilityId,
       agreementNumber: "SA-CASCADE",
       accountId: fixA.accountId,
-      premiseId: fixA.premiseId,
       commodityId: fixA.commodityId,
       rateScheduleId: fixA.rateScheduleId,
       billingCycleId: fixA.billingCycleId,

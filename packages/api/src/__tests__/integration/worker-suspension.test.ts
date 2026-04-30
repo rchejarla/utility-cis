@@ -201,18 +201,27 @@ async function seedAgreementChain(utilityId: string, agreementId: string): Promi
       billDayOfMonth: 5,
     },
   });
-  await prisma.serviceAgreement.create({
+  const sa = await prisma.serviceAgreement.create({
     data: {
       id: agreementId,
       utilityId,
       agreementNumber: `SA-${agreementId.slice(-8)}`,
       accountId: account.id,
-      premiseId: premise.id,
       commodityId: commodity.id,
       rateScheduleId: rateSchedule.id,
       billingCycleId: billingCycle.id,
       startDate: new Date("2026-01-01"),
       status: "ACTIVE",
+    },
+  });
+  await prisma.servicePoint.create({
+    data: {
+      utilityId,
+      serviceAgreementId: sa.id,
+      premiseId: premise.id,
+      type: "METERED",
+      status: "ACTIVE",
+      startDate: new Date("2026-01-01"),
     },
   });
 }
