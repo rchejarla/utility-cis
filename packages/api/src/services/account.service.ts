@@ -61,7 +61,15 @@ export async function listAccounts(utilityId: string, query: AccountQuery) {
         select: { id: true, customerType: true, firstName: true, lastName: true, organizationName: true },
       },
       serviceAgreements: {
-        select: { premise: { select: { id: true, addressLine1: true, city: true, state: true } } },
+        select: {
+          servicePoints: {
+            select: {
+              premise: { select: { id: true, addressLine1: true, city: true, state: true } },
+            },
+            orderBy: { startDate: "asc" },
+            take: 1,
+          },
+        },
         orderBy: [{ status: "asc" }, { startDate: "desc" }],
         take: 1,
       },
@@ -78,7 +86,7 @@ export async function getAccount(id: string, utilityId: string) {
       },
       serviceAgreements: {
         include: {
-          premise: true,
+          servicePoints: { include: { premise: true } },
           commodity: true,
           rateSchedule: true,
         },

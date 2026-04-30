@@ -42,7 +42,7 @@ export async function buildCustomerGraph(
         include: {
           serviceAgreements: {
             include: {
-              premise: true,
+              servicePoints: { include: { premise: true } },
               commodity: { select: { id: true, code: true, name: true } },
               rateSchedule: { select: { id: true, code: true, name: true } },
               meters: {
@@ -108,8 +108,9 @@ export async function buildCustomerGraph(
   for (const p of customer.ownedPremises) premiseById.set(p.id, p);
   for (const acc of customer.accounts) {
     for (const ag of acc.serviceAgreements) {
-      if (ag.premise && !premiseById.has(ag.premise.id)) {
-        premiseById.set(ag.premise.id, ag.premise);
+      const sp = ag.servicePoints[0];
+      if (sp?.premise && !premiseById.has(sp.premise.id)) {
+        premiseById.set(sp.premise.id, sp.premise);
       }
     }
   }
@@ -196,7 +197,7 @@ export async function buildCustomerGraph(
           // The web layout sorts accounts by the premise their
           // agreements serve; without this, accounts with flat-rate
           // (meterless) agreements would have nowhere to look.
-          premiseId: ag.premise?.id ?? null,
+          premiseId: ag.servicePoints[0]?.premise?.id ?? null,
           startDate: ag.startDate.toISOString(),
           endDate: ag.endDate ? ag.endDate.toISOString() : null,
         },
@@ -224,10 +225,11 @@ export async function buildCustomerGraph(
       // agreement's premise so the meter becomes a child of the
       // premise in the spanning tree. The agreement-uses-meter edge
       // is emitted as a secondary cross-link.
+      const sp = ag.servicePoints[0];
       for (const agm of ag.meters) {
         const m = agm.meter;
-        if (ag.premise && !meterPremiseIdByMeterId.has(m.id)) {
-          meterPremiseIdByMeterId.set(m.id, ag.premise.id);
+        if (sp?.premise && !meterPremiseIdByMeterId.has(m.id)) {
+          meterPremiseIdByMeterId.set(m.id, sp.premise.id);
         }
       }
     }

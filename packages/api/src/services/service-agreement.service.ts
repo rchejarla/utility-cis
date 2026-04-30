@@ -12,7 +12,6 @@ import { paginatedTenantList } from "../lib/pagination.js";
 
 const fullInclude = {
   account: true,
-  premise: true,
   commodity: true,
   rateSchedule: true,
   billingCycle: true,
@@ -41,7 +40,9 @@ export async function listServiceAgreements(
   const where: Record<string, unknown> = { utilityId };
 
   if (query.accountId) where.accountId = query.accountId;
-  if (query.premiseId) where.premiseId = query.premiseId;
+  if (query.premiseId) {
+    where.servicePoints = { some: { premiseId: query.premiseId } };
+  }
   if (query.status) where.status = query.status;
   if (query.search) {
     where.agreementNumber = { contains: query.search, mode: "insensitive" };
@@ -126,7 +127,6 @@ export async function createServiceAgreement(
           utilityId,
           agreementNumber,
           accountId: data.accountId,
-          premiseId: data.premiseId,
           commodityId: data.commodityId,
           rateScheduleId: data.rateScheduleId,
           billingCycleId: data.billingCycleId,

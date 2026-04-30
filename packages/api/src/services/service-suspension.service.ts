@@ -16,7 +16,12 @@ const fullInclude = {
       id: true,
       agreementNumber: true,
       accountId: true,
-      premiseId: true,
+      servicePoints: {
+        select: { premiseId: true },
+        where: { endDate: null as null },
+        orderBy: { startDate: "asc" as const },
+        take: 1,
+      },
       status: true,
     },
   },

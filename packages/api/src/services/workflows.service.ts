@@ -74,6 +74,14 @@ export async function transferService(
 
     const transferDate = new Date(data.transferDate);
 
+    const sourcePremiseId = source.servicePoints[0]?.premiseId;
+    if (!sourcePremiseId) {
+      throw Object.assign(
+        new Error("Source agreement has no service point with a premise; cannot transfer."),
+        { statusCode: 400, code: "SOURCE_AGREEMENT_NO_PREMISE" },
+      );
+    }
+
     // Optional FINAL read on the source side
     if (data.finalMeterReading !== undefined) {
       // Most-recently-added open SPM; primacy is implicit in the SP model.
@@ -134,7 +142,6 @@ export async function transferService(
         utilityId,
         agreementNumber: newAgreementNumber,
         accountId: data.targetAccountId,
-        premiseId: source.premiseId,
         commodityId: source.commodityId,
         rateScheduleId: source.rateScheduleId,
         billingCycleId: source.billingCycleId,
@@ -147,17 +154,11 @@ export async function transferService(
     // Create one SP on the new SA mirroring the source's premise, then
     // copy each open meter from the source's SPMs onto it. Primacy is
     // implicit in the SP model (one meter at a time per SP).
-    if (!source.premiseId) {
-      throw Object.assign(
-        new Error("Source service agreement has no premise; cannot transfer"),
-        { statusCode: 400, code: "SOURCE_AGREEMENT_NO_PREMISE" },
-      );
-    }
     const newSp = await tx.servicePoint.create({
       data: {
         utilityId,
         serviceAgreementId: newAgreementBase.id,
-        premiseId: source.premiseId,
+        premiseId: sourcePremiseId,
         type: "METERED",
         status: "ACTIVE",
         startDate: transferDate,
@@ -321,7 +322,6 @@ export async function moveIn(
           utilityId,
           agreementNumber,
           accountId: account.id,
-          premiseId: data.premiseId,
           commodityId: agreement.commodityId,
           rateScheduleId: agreement.rateScheduleId,
           billingCycleId: agreement.billingCycleId,
@@ -416,7 +416,7 @@ export async function moveOut(
       where: {
         utilityId,
         accountId: data.accountId,
-        premiseId: data.premiseId,
+        servicePoints: { some: { premiseId: data.premiseId } },
         status: { in: ["PENDING", "ACTIVE"] },
       },
     });
