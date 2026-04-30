@@ -28,14 +28,21 @@ interface ServiceAgreement {
   readSequence?: number;
   customFields?: Record<string, unknown>;
   account?: { id: string; accountNumber: string };
-  premise?: { id: string; addressLine1: string; city: string; state: string };
+  servicePoints?: Array<{
+    id: string;
+    premise: {
+      id: string;
+      addressLine1: string;
+      city: string;
+      state: string;
+    };
+  }>;
   commodity?: { name: string };
   rateSchedule?: { id: string; name: string; code: string };
   billingCycle?: { id: string; name: string; cycleCode: string };
   rateScheduleId?: string;
   billingCycleId?: string;
   commodityId?: string;
-  premiseId?: string;
   meters?: Array<{
     id: string;
     meterId: string;
@@ -334,7 +341,7 @@ export default function ServiceAgreementDetailPage({
             {sa.agreementNumber}
           </h1>
           <p style={{ fontSize: "14px", color: "var(--text-secondary)", margin: 0 }}>
-            {sa.account?.accountNumber} — {sa.premise?.addressLine1}
+            {sa.account?.accountNumber} — {sa.servicePoints?.[0]?.premise.addressLine1 ?? "—"}
           </p>
         </div>
         {canEdit && availableTransitions.length > 0 && (
@@ -502,7 +509,10 @@ export default function ServiceAgreementDetailPage({
             <div style={fieldStyle}>
               <span style={labelStyle}>Premise</span>
               <button
-                onClick={() => sa.premise && router.push(`/premises/${sa.premise.id}`)}
+                onClick={() => {
+                  const sp = sa.servicePoints?.[0];
+                  if (sp?.premise) router.push(`/premises/${sp.premise.id}`);
+                }}
                 style={{
                   background: "none",
                   border: "none",
@@ -515,9 +525,10 @@ export default function ServiceAgreementDetailPage({
                   textAlign: "left",
                 }}
               >
-                {sa.premise
-                  ? `${sa.premise.addressLine1}, ${sa.premise.city}, ${sa.premise.state}`
-                  : "—"}
+                {(() => {
+                  const p = sa.servicePoints?.[0]?.premise;
+                  return p ? `${p.addressLine1}, ${p.city}, ${p.state}` : "—";
+                })()}
               </button>
             </div>
             <div style={fieldStyle}>
@@ -672,7 +683,7 @@ export default function ServiceAgreementDetailPage({
         {activeTab === "meters" && (
           <MeterManagementTab
             agreementId={sa.id}
-            premiseId={sa.premise?.id ?? sa.premiseId ?? ""}
+            premiseId={sa.servicePoints?.[0]?.premise?.id ?? ""}
             commodityId={sa.commodityId ?? ""}
             meters={(sa.meters ?? []) as any}
             onMetersChanged={loadSA}

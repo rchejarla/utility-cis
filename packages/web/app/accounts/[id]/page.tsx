@@ -65,7 +65,10 @@ interface Account {
     agreementNumber: string;
     status: string;
     startDate: string;
-    premise?: { id: string; addressLine1: string; city: string; state?: string };
+    servicePoints?: Array<{
+      id: string;
+      premise: { id: string; addressLine1: string; city: string; state?: string };
+    }>;
   }>;
   contacts?: Contact[];
   billingAddresses?: BillingAddress[];
@@ -272,7 +275,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
             : c.customerType === "ORGANIZATION"
               ? c.organizationName ?? null
               : `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || null;
-          const p = account.serviceAgreements?.[0]?.premise;
+          const p = account.serviceAgreements?.[0]?.servicePoints?.[0]?.premise;
           const premiseLabel = p ? `${p.addressLine1}, ${p.city}` : null;
           const parts = [
             `${account.accountType} account`,
@@ -690,8 +693,10 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
               {
                 key: "premise",
                 header: "Premise",
-                render: (row: any) =>
-                  row.premise ? `${row.premise.addressLine1}, ${row.premise.city}` : "—",
+                render: (row: any) => {
+                  const p = row.servicePoints?.[0]?.premise;
+                  return p ? `${p.addressLine1}, ${p.city}` : "—";
+                },
               },
               {
                 key: "startDate",

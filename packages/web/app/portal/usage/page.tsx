@@ -10,7 +10,9 @@ interface Agreement {
   agreementNumber: string;
   status: string;
   commodity?: { name: string };
-  premise?: { addressLine1: string; city: string; state: string; zip: string };
+  servicePoints?: Array<{
+    premise: { id: string; addressLine1: string; city: string; state: string; zip: string };
+  }>;
   billingCycle?: { name: string };
 }
 
@@ -171,7 +173,10 @@ function PortalUsagePageInner() {
                     >
                       <div>{sa.commodity?.name ?? "—"} · {sa.agreementNumber}</div>
                       <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
-                        {sa.premise ? `${sa.premise.addressLine1}, ${sa.premise.city}` : "—"}
+                        {(() => {
+                          const p = sa.servicePoints?.[0]?.premise;
+                          return p ? `${p.addressLine1}, ${p.city}` : "—";
+                        })()}
                       </div>
                     </button>
                   );
@@ -245,7 +250,10 @@ function PortalUsagePageInner() {
           </strong>{" "}
           at{" "}
           <strong style={{ color: "var(--text-secondary)" }}>
-            {selectedAgreement.premise?.addressLine1}, {selectedAgreement.premise?.city}
+            {(() => {
+              const p = selectedAgreement.servicePoints?.[0]?.premise;
+              return p ? `${p.addressLine1}, ${p.city}` : "—";
+            })()}
           </strong>
           {uomLabel && (
             <> · measured in <strong style={{ color: "var(--text-secondary)" }}>{uomName || uomLabel}</strong> ({uomLabel})</>

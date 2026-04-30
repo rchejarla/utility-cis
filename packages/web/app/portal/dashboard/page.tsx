@@ -16,7 +16,9 @@ interface Agreement {
   agreementNumber: string;
   status: string;
   commodity?: { name: string };
-  premise?: { addressLine1: string; city: string; state: string };
+  servicePoints?: Array<{
+    premise: { id: string; addressLine1: string; city: string; state: string };
+  }>;
 }
 
 interface AccountWithAgreements {
@@ -157,7 +159,7 @@ export default function PortalDashboardPage() {
                     <div>
                       <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)" }}>
                         {sa.commodity?.name ?? "Service"}
-                        <span style={{ fontSize: 11, color: "var(--text-muted)" }}> · {sa.premise?.addressLine1 ?? sa.agreementNumber}</span>
+                        <span style={{ fontSize: 11, color: "var(--text-muted)" }}> · {sa.servicePoints?.[0]?.premise?.addressLine1 ?? sa.agreementNumber}</span>
                       </div>
                       {read && (
                         <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
@@ -192,7 +194,9 @@ export default function PortalDashboardPage() {
       <h2 style={sectionTitleStyle}>Your Accounts</h2>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {accounts.map((acct) => {
-          const premises = new Set(acct.serviceAgreements.map((sa) => sa.premise?.addressLine1).filter(Boolean));
+          const premises = new Set(
+            acct.serviceAgreements.map((sa) => sa.servicePoints?.[0]?.premise?.addressLine1).filter(Boolean),
+          );
           const commodities = new Set(acct.serviceAgreements.map((sa) => sa.commodity?.name).filter(Boolean));
 
           return (

@@ -15,6 +15,14 @@ interface MeterInfo {
   };
 }
 
+interface Premise {
+  id: string;
+  addressLine1: string;
+  city: string;
+  state: string;
+  zip: string;
+}
+
 interface Agreement {
   id: string;
   agreementNumber: string;
@@ -22,7 +30,7 @@ interface Agreement {
   startDate: string;
   endDate?: string;
   commodity: { id: string; name: string };
-  premise: { id: string; addressLine1: string; city: string; state: string; zip: string };
+  servicePoints: Array<{ id: string; premise: Premise }>;
   billingCycle: { id: string; name: string };
   rateSchedule: { id: string; name: string };
   meters: MeterInfo[];
@@ -58,11 +66,13 @@ export default function PortalAccountDetailPage({ params }: { params: Promise<{ 
   }
 
   // Group agreements by premise
-  const premiseMap = new Map<string, { premise: Agreement["premise"]; agreements: Agreement[] }>();
+  const premiseMap = new Map<string, { premise: Premise; agreements: Agreement[] }>();
   for (const sa of account.serviceAgreements) {
-    const key = sa.premise.id;
+    const sp = sa.servicePoints?.[0];
+    if (!sp?.premise) continue;
+    const key = sp.premise.id;
     if (!premiseMap.has(key)) {
-      premiseMap.set(key, { premise: sa.premise, agreements: [] });
+      premiseMap.set(key, { premise: sp.premise, agreements: [] });
     }
     premiseMap.get(key)!.agreements.push(sa);
   }

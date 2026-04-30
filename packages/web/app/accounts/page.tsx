@@ -18,15 +18,17 @@ interface Account {
     lastName?: string | null;
     organizationName?: string | null;
   } | null;
-  /** Hydrated by listAccounts: the most-recent SA's premise. An
-   *  account serves one premise; this is that premise. */
+  /** Hydrated by listAccounts: the most-recent SA's premise via its
+   *  service point. An account serves one premise; this is that premise. */
   serviceAgreements?: Array<{
-    premise?: {
-      id: string;
-      addressLine1: string;
-      city: string;
-      state: string;
-    } | null;
+    servicePoints?: Array<{
+      premise?: {
+        id: string;
+        addressLine1: string;
+        city: string;
+        state: string;
+      } | null;
+    }>;
   }>;
   _count?: { serviceAgreements: number };
 }
@@ -38,7 +40,7 @@ function customerName(c: Account["customer"]): string {
 }
 
 function premiseLabel(row: Account): string {
-  const p = row.serviceAgreements?.[0]?.premise;
+  const p = row.serviceAgreements?.[0]?.servicePoints?.[0]?.premise;
   if (!p) return "—";
   return `${p.addressLine1}, ${p.city}`;
 }

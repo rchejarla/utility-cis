@@ -12,7 +12,9 @@ interface ServiceAgreement {
   status: string;
   startDate: string;
   account?: { accountNumber: string };
-  premise?: { addressLine1: string; city: string; state: string };
+  servicePoints?: Array<{
+    premise: { id: string; addressLine1: string; city: string; state?: string };
+  }>;
   commodity?: { name: string };
 }
 
@@ -43,14 +45,16 @@ const columns: Column<ServiceAgreement>[] = [
   {
     key: "premise",
     header: "Premise",
-    render: (row) =>
-      row.premise ? (
+    render: (row) => {
+      const p = row.servicePoints?.[0]?.premise;
+      return p ? (
         <span style={{ fontSize: "12px" }}>
-          {row.premise.addressLine1}, {row.premise.city}
+          {p.addressLine1}, {p.city}
         </span>
       ) : (
         <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>—</span>
-      ),
+      );
+    },
   },
   {
     key: "commodity",
