@@ -237,7 +237,9 @@ export async function resolveServiceAgreementId(
   meterId: string,
   readDate: Date,
 ): Promise<string> {
-  const assignment = await prisma.serviceAgreementMeter.findFirst({
+  // Walk SPM (the meter's installation row at this date) → SP →
+  // serviceAgreementId. Replaces the old SAM → SA single-step walk.
+  const installation = await prisma.servicePointMeter.findFirst({
     where: {
       utilityId,
       meterId,
@@ -245,9 +247,9 @@ export async function resolveServiceAgreementId(
       OR: [{ removedDate: null }, { removedDate: { gte: readDate } }],
     },
     orderBy: { addedDate: "desc" },
-    select: { serviceAgreementId: true },
+    select: { servicePoint: { select: { serviceAgreementId: true } } },
   });
-  if (!assignment) {
+  if (!installation) {
     throw Object.assign(
       new Error(
         "Meter is not assigned to any active service agreement at the given read date. Assign the meter to an agreement before recording a read.",
@@ -255,7 +257,7 @@ export async function resolveServiceAgreementId(
       { statusCode: 400, code: "METER_NOT_ASSIGNED" },
     );
   }
-  return assignment.serviceAgreementId;
+  return installation.servicePoint.serviceAgreementId;
 }
 
 export async function createMeterRead(
