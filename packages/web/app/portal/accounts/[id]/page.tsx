@@ -30,10 +30,13 @@ interface Agreement {
   startDate: string;
   endDate?: string;
   commodity: { id: string; name: string };
-  servicePoints?: Array<{ id: string; premise: Premise }>;
+  servicePoints?: Array<{
+    id: string;
+    premise: Premise;
+    meters: MeterInfo[];
+  }>;
   billingCycle: { id: string; name: string };
   rateSchedule: { id: string; name: string };
-  meters: MeterInfo[];
 }
 
 interface AccountDetail {
@@ -167,29 +170,33 @@ export default function PortalAccountDetailPage({ params }: { params: Promise<{ 
               </div>
 
               {/* Meters */}
-              {sa.meters.length > 0 && (
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  {sa.meters.map((am) => (
-                    <div
-                      key={am.meter.id}
-                      style={{
-                        padding: "8px 14px",
-                        background: "var(--bg-surface)",
-                        border: "1px solid var(--border-subtle)",
-                        borderRadius: "var(--radius)",
-                        fontSize: 12,
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, color: "var(--text-primary)", fontFamily: "'JetBrains Mono', monospace" }}>
-                        {am.meter.meterNumber}
+              {(() => {
+                const meters = sa.servicePoints?.flatMap((sp) => sp.meters) ?? [];
+                if (meters.length === 0) return null;
+                return (
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    {meters.map((am) => (
+                      <div
+                        key={am.meter.id}
+                        style={{
+                          padding: "8px 14px",
+                          background: "var(--bg-surface)",
+                          border: "1px solid var(--border-subtle)",
+                          borderRadius: "var(--radius)",
+                          fontSize: 12,
+                        }}
+                      >
+                        <div style={{ fontWeight: 600, color: "var(--text-primary)", fontFamily: "'JetBrains Mono', monospace" }}>
+                          {am.meter.meterNumber}
+                        </div>
+                        <div style={{ color: "var(--text-muted)", marginTop: 2 }}>
+                          {am.meter.meterType} · {am.meter.uom.code}
+                        </div>
                       </div>
-                      <div style={{ color: "var(--text-muted)", marginTop: 2 }}>
-                        {am.meter.meterType} · {am.meter.uom.code}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           ))}
         </div>
