@@ -40,7 +40,10 @@ const fullInclude = {
       id: true,
       agreementNumber: true,
       accountId: true,
-      premiseId: true,
+      servicePoints: {
+        where: { endDate: null },
+        select: { premiseId: true },
+      },
     },
   },
   register: true,
@@ -76,13 +79,18 @@ export async function getMeterRead(id: string, utilityId: string) {
       serviceAgreement: {
         include: {
           account: { select: { id: true, accountNumber: true } },
-          premise: {
+          servicePoints: {
+            where: { endDate: null },
             select: {
-              id: true,
-              addressLine1: true,
-              city: true,
-              state: true,
-              zip: true,
+              premise: {
+                select: {
+                  id: true,
+                  addressLine1: true,
+                  city: true,
+                  state: true,
+                  zip: true,
+                },
+              },
             },
           },
           commodity: { select: { id: true, name: true } },

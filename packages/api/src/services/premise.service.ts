@@ -42,7 +42,7 @@ export async function listPremises(utilityId: string, query: PremiseQuery) {
         _count: {
           select: {
             meters: true,
-            serviceAgreements: true,
+            servicePoints: true,
           },
         },
       },
@@ -61,7 +61,7 @@ export async function listPremises(utilityId: string, query: PremiseQuery) {
 }
 
 export async function getPremise(id: string, utilityId: string) {
-  return prisma.premise.findUniqueOrThrow({
+  const premise = await prisma.premise.findUniqueOrThrow({
     where: { id, utilityId },
     include: {
       owner: true,
@@ -71,18 +71,37 @@ export async function getPremise(id: string, utilityId: string) {
           commodity: { select: { id: true, name: true } },
         },
       },
-      serviceAgreements: {
+      servicePoints: {
         where: {
-          status: { in: ["ACTIVE", "PENDING"] },
+          endDate: null,
+          serviceAgreement: { status: { in: ["ACTIVE", "PENDING"] } },
         },
         include: {
-          account: true,
-          rateSchedule: true,
-          billingCycle: true,
+          serviceAgreement: {
+            include: {
+              account: true,
+              rateSchedule: true,
+              billingCycle: true,
+              commodity: { select: { id: true, name: true } },
+            },
+          },
         },
       },
     },
   });
+
+  // Project SP-traversed agreements back into the legacy
+  // `serviceAgreements` array shape the web layer consumes. Dedupe by
+  // SA id in case multi-SP-per-SA arrives later.
+  const seen = new Set<string>();
+  const serviceAgreements = [];
+  for (const sp of premise.servicePoints) {
+    if (sp.serviceAgreement && !seen.has(sp.serviceAgreement.id)) {
+      seen.add(sp.serviceAgreement.id);
+      serviceAgreements.push(sp.serviceAgreement);
+    }
+  }
+  return { ...premise, serviceAgreements };
 }
 
 export async function getPremisesGeo(utilityId: string) {

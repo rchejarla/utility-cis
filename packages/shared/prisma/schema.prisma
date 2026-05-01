@@ -269,7 +269,6 @@ model Premise {
 
   // Relations
   meters            Meter[]
-  serviceAgreements ServiceAgreement[]
   servicePoints     ServicePoint[]
   owner             Customer?          @relation("PremiseOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   containers        Container[]
@@ -308,7 +307,6 @@ model Meter {
   commodity              Commodity               @relation(fields: [commodityId], references: [id], onDelete: Restrict)
   uom                    UnitOfMeasure           @relation(fields: [uomId], references: [id], onDelete: Restrict)
   meterReads             MeterRead[]
-  serviceAgreementMeters ServiceAgreementMeter[]
   servicePointMeters     ServicePointMeter[]
   registers              MeterRegister[]
   events                 MeterEvent[]
@@ -368,7 +366,6 @@ model ServiceAgreement {
   utilityId       String                 @map("utility_id") @db.Uuid
   agreementNumber String                 @map("agreement_number") @db.VarChar(50)
   accountId       String                 @map("account_id") @db.Uuid
-  premiseId       String?                @map("premise_id") @db.Uuid
   commodityId     String                 @map("commodity_id") @db.Uuid
   rateScheduleId  String                 @map("rate_schedule_id") @db.Uuid
   billingCycleId  String                 @map("billing_cycle_id") @db.Uuid
@@ -386,11 +383,9 @@ model ServiceAgreement {
 
   // Relations
   account         Account                 @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  premise         Premise?                @relation(fields: [premiseId], references: [id], onDelete: Restrict)
   commodity       Commodity               @relation(fields: [commodityId], references: [id], onDelete: Restrict)
   rateSchedule    RateSchedule            @relation(fields: [rateScheduleId], references: [id], onDelete: Restrict)
   billingCycle    BillingCycle            @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
-  meters          ServiceAgreementMeter[]
   servicePoints   ServicePoint[]
   meterReads      MeterRead[]
   containers      Container[]
@@ -400,35 +395,11 @@ model ServiceAgreement {
 
   @@unique([utilityId, agreementNumber])
   @@index([accountId])
-  @@index([premiseId])
   @@index([commodityId])
   @@index([rateScheduleId])
   @@index([billingCycleId])
   @@index([utilityId, status])
   @@map("service_agreement")
-}
-
-model ServiceAgreementMeter {
-  id                 String    @id @default(uuid()) @db.Uuid
-  utilityId          String    @map("utility_id") @db.Uuid
-  serviceAgreementId String    @map("service_agreement_id") @db.Uuid
-  meterId            String    @map("meter_id") @db.Uuid
-  isPrimary          Boolean   @default(true) @map("is_primary")
-  addedDate          DateTime  @map("added_date") @db.Date
-  removedDate        DateTime? @map("removed_date") @db.Date
-  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz
-  /// Generated tsrange [added_date, removed_date) — DB-managed, read-only.
-  /// Source of truth for the no_double_assigned_meter exclusion. Service
-  /// code uses added_date/removed_date directly.
-  effectiveRange     Unsupported("tsrange")? @map("effective_range")
-
-  // Relations
-  serviceAgreement ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Cascade)
-  meter            Meter            @relation(fields: [meterId], references: [id], onDelete: Restrict)
-
-  @@index([serviceAgreementId])
-  @@index([meterId])
-  @@map("service_agreement_meter")
 }
 
 /// Per-place service-delivery anchor between SA and Premise. One

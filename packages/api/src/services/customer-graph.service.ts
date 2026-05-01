@@ -45,15 +45,16 @@ export async function buildCustomerGraph(
               servicePoints: {
                 where: { endDate: null },
                 orderBy: { startDate: "asc" },
-                include: { premise: true },
+                include: {
+                  premise: true,
+                  meters: {
+                    where: { removedDate: null },
+                    include: { meter: true },
+                  },
+                },
               },
               commodity: { select: { id: true, code: true, name: true } },
               rateSchedule: { select: { id: true, code: true, name: true } },
-              meters: {
-                include: {
-                  meter: true,
-                },
-              },
             },
             orderBy: { startDate: "asc" },
           },
@@ -226,14 +227,15 @@ export async function buildCustomerGraph(
       });
 
       // Meters for this agreement — route each meter under its
-      // agreement's premise so the meter becomes a child of the
+      // SP's premise so the meter becomes a child of the
       // premise in the spanning tree. The agreement-uses-meter edge
       // is emitted as a secondary cross-link.
-      const sp = ag.servicePoints[0];
-      for (const agm of ag.meters) {
-        const m = agm.meter;
-        if (sp?.premise && !meterPremiseIdByMeterId.has(m.id)) {
-          meterPremiseIdByMeterId.set(m.id, sp.premise.id);
+      for (const sp of ag.servicePoints) {
+        for (const spm of sp.meters) {
+          const m = spm.meter;
+          if (sp.premise && !meterPremiseIdByMeterId.has(m.id)) {
+            meterPremiseIdByMeterId.set(m.id, sp.premise.id);
+          }
         }
       }
     }
@@ -304,8 +306,11 @@ export async function buildCustomerGraph(
   for (const acc of customer.accounts) {
     for (const ag of acc.serviceAgreements) {
       const agNodeId = `agreement:${ag.id}`;
-      for (const agm of ag.meters) {
-        const m = agm.meter;
+      const meterPairsForAg: { id: string; meterNumber: string; meterType: string; status: string; installDate: Date; removalDate: Date | null }[] = [];
+      for (const sp of ag.servicePoints) {
+        for (const spm of sp.meters) meterPairsForAg.push(spm.meter);
+      }
+      for (const m of meterPairsForAg) {
         const mNodeId = `meter:${m.id}`;
         if (!meterNodesEmitted.has(mNodeId)) {
           meterNodesEmitted.add(mNodeId);

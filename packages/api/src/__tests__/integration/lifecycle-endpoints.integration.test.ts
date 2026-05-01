@@ -294,17 +294,26 @@ describe("POST /api/v1/service-agreements/:id/meters/swap", () => {
 describe("GET /api/v1/premises/:id/responsible-account", () => {
   it("returns the account responsible at a given as_of date", async () => {
     const { prisma } = prismaImports;
-    await prisma.serviceAgreement.create({
+    const sa = await prisma.serviceAgreement.create({
       data: {
         utilityId: fixA.utilityId,
         agreementNumber: "SA-PIT",
         accountId: fixA.accountId,
-        premiseId: fixA.premiseId,
         commodityId: fixA.commodityId,
         rateScheduleId: fixA.rateScheduleId,
         billingCycleId: fixA.billingCycleId,
         startDate: new Date("2024-01-01"),
         status: "ACTIVE",
+      },
+    });
+    await prisma.servicePoint.create({
+      data: {
+        utilityId: fixA.utilityId,
+        serviceAgreementId: sa.id,
+        premiseId: fixA.premiseId,
+        type: "METERED",
+        status: "ACTIVE",
+        startDate: new Date("2024-01-01"),
       },
     });
 
@@ -322,17 +331,26 @@ describe("GET /api/v1/premises/:id/responsible-account", () => {
 
   it("returns 404 when no SA covered the date", async () => {
     const { prisma } = prismaImports;
-    await prisma.serviceAgreement.create({
+    const sa = await prisma.serviceAgreement.create({
       data: {
         utilityId: fixA.utilityId,
         agreementNumber: "SA-PIT-2",
         accountId: fixA.accountId,
-        premiseId: fixA.premiseId,
         commodityId: fixA.commodityId,
         rateScheduleId: fixA.rateScheduleId,
         billingCycleId: fixA.billingCycleId,
         startDate: new Date("2024-01-01"),
         status: "ACTIVE",
+      },
+    });
+    await prisma.servicePoint.create({
+      data: {
+        utilityId: fixA.utilityId,
+        serviceAgreementId: sa.id,
+        premiseId: fixA.premiseId,
+        type: "METERED",
+        status: "ACTIVE",
+        startDate: new Date("2024-01-01"),
       },
     });
 
@@ -350,12 +368,11 @@ describe("GET /api/v1/premises/:id/agreement-history", () => {
   it("returns every SA covering the premise (incl. FINAL/CLOSED)", async () => {
     const { prisma } = prismaImports;
 
-    await prisma.serviceAgreement.create({
+    const saOld = await prisma.serviceAgreement.create({
       data: {
         utilityId: fixA.utilityId,
         agreementNumber: "SA-OLD",
         accountId: fixA.accountId,
-        premiseId: fixA.premiseId,
         commodityId: fixA.commodityId,
         rateScheduleId: fixA.rateScheduleId,
         billingCycleId: fixA.billingCycleId,
@@ -364,17 +381,37 @@ describe("GET /api/v1/premises/:id/agreement-history", () => {
         status: "FINAL",
       },
     });
-    await prisma.serviceAgreement.create({
+    await prisma.servicePoint.create({
+      data: {
+        utilityId: fixA.utilityId,
+        serviceAgreementId: saOld.id,
+        premiseId: fixA.premiseId,
+        type: "METERED",
+        status: "CLOSED",
+        startDate: new Date("2023-01-01"),
+        endDate: new Date("2023-12-31"),
+      },
+    });
+    const saNew = await prisma.serviceAgreement.create({
       data: {
         utilityId: fixA.utilityId,
         agreementNumber: "SA-NEW",
         accountId: fixA.accountId,
-        premiseId: fixA.premiseId,
         commodityId: fixA.commodityId,
         rateScheduleId: fixA.rateScheduleId,
         billingCycleId: fixA.billingCycleId,
         startDate: new Date("2024-01-01"),
         status: "ACTIVE",
+      },
+    });
+    await prisma.servicePoint.create({
+      data: {
+        utilityId: fixA.utilityId,
+        serviceAgreementId: saNew.id,
+        premiseId: fixA.premiseId,
+        type: "METERED",
+        status: "ACTIVE",
+        startDate: new Date("2024-01-01"),
       },
     });
 

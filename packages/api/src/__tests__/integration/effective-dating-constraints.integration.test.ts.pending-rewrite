@@ -1,3 +1,4 @@
+// Rewrite scheduled for Slice 3 — invariant moves to service_point.
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import {

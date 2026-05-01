@@ -71,13 +71,18 @@ export async function portalApiRoutes(app: FastifyInstance) {
               startDate: true,
               commodity: { select: { id: true, name: true } },
               billingCycle: { select: { id: true, name: true } },
-              premise: {
+              servicePoints: {
+                where: { endDate: null },
                 select: {
-                  id: true,
-                  addressLine1: true,
-                  city: true,
-                  state: true,
-                  zip: true,
+                  premise: {
+                    select: {
+                      id: true,
+                      addressLine1: true,
+                      city: true,
+                      state: true,
+                      zip: true,
+                    },
+                  },
                 },
               },
             },
@@ -122,18 +127,22 @@ export async function portalApiRoutes(app: FastifyInstance) {
           serviceAgreements: {
             include: {
               commodity: { select: { id: true, name: true } },
-              premise: { select: { id: true, addressLine1: true, city: true, state: true, zip: true } },
               billingCycle: { select: { id: true, name: true } },
               rateSchedule: { select: { id: true, name: true } },
-              meters: {
+              servicePoints: {
                 include: {
-                  meter: {
-                    select: {
-                      id: true,
-                      meterNumber: true,
-                      meterType: true,
-                      status: true,
-                      uom: { select: { code: true, name: true } },
+                  premise: { select: { id: true, addressLine1: true, city: true, state: true, zip: true } },
+                  meters: {
+                    include: {
+                      meter: {
+                        select: {
+                          id: true,
+                          meterNumber: true,
+                          meterType: true,
+                          status: true,
+                          uom: { select: { code: true, name: true } },
+                        },
+                      },
                     },
                   },
                 },

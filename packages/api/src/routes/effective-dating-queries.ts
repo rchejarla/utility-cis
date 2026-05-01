@@ -35,7 +35,7 @@ export async function effectiveDatingQueryRoutes(app: FastifyInstance) {
       const { id } = idParamSchema.parse(request.params);
 
       const rows = await prisma.serviceAgreement.findMany({
-        where: { utilityId, premiseId: id },
+        where: { utilityId, servicePoints: { some: { premiseId: id } } },
         select: {
           id: true,
           agreementNumber: true,
@@ -70,13 +70,13 @@ export async function effectiveDatingQueryRoutes(app: FastifyInstance) {
           servicePoint: {
             select: {
               id: true,
+              premise: { select: { id: true, addressLine1: true } },
               serviceAgreement: {
                 select: {
                   id: true,
                   agreementNumber: true,
                   status: true,
                   account: { select: { id: true, accountNumber: true } },
-                  premise: { select: { id: true, addressLine1: true } },
                 },
               },
             },
