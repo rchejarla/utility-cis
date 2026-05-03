@@ -1,5 +1,9 @@
 import type { FastifyInstance } from "fastify";
-import { createRateScheduleSchema, rateScheduleQuerySchema } from "@utility-cis/shared";
+import {
+  createRateScheduleSchema,
+  rateScheduleQuerySchema,
+  reviseRateScheduleSchema,
+} from "@utility-cis/shared";
 import {
   listRateSchedules,
   getRateSchedule,
@@ -32,7 +36,7 @@ export async function rateScheduleRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
-      const data = createRateScheduleSchema.parse(request.body);
+      const data = reviseRateScheduleSchema.parse(request.body);
       const schedule = await reviseRateSchedule(utilityId, actorId, actorName, id, data);
       return reply.status(201).send(schedule);
     }

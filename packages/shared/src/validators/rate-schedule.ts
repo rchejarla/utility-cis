@@ -85,6 +85,20 @@ export const createRateScheduleSchema = z
     }
   );
 
+// Revising a rate schedule forks it forward. The route copies all
+// non-supplied fields from the predecessor; the only required input
+// is the new effective date. Optional overrides let the operator
+// adjust rates / description without leaving the dialog.
+export const reviseRateScheduleSchema = z.object({
+  effectiveDate: z.string().date(),
+  expirationDate: z.string().date().optional(),
+  description: z.string().optional(),
+  regulatoryRef: z.string().max(100).optional(),
+  rateConfig: rateConfigSchema.optional(),
+});
+
+export type ReviseRateScheduleInput = z.infer<typeof reviseRateScheduleSchema>;
+
 export const rateScheduleSortFields = [
   "createdAt",
   "updatedAt",

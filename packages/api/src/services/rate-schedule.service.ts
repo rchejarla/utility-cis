@@ -1,7 +1,11 @@
 import { prisma } from "../lib/prisma.js";
 import { cacheDel } from "../lib/cache-redis.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
-import type { CreateRateScheduleInput, RateScheduleQuery } from "@utility-cis/shared";
+import type {
+  CreateRateScheduleInput,
+  RateScheduleQuery,
+  ReviseRateScheduleInput,
+} from "@utility-cis/shared";
 import { paginatedTenantList } from "../lib/pagination.js";
 import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
 
@@ -68,9 +72,25 @@ export async function reviseRateSchedule(
   actorId: string,
   actorName: string,
   id: string,
-  data: CreateRateScheduleInput
+  data: ReviseRateScheduleInput
 ) {
-  const predecessor = await prisma.rateSchedule.findUniqueOrThrow({ where: { id } });
+  const predecessor = await prisma.rateSchedule.findUniqueOrThrow({ where: { id, utilityId } });
+
+  const newEffectiveDate = new Date(data.effectiveDate);
+  if (newEffectiveDate <= predecessor.effectiveDate) {
+    throw Object.assign(
+      new Error("Revision effective date must be after the predecessor's"),
+      { statusCode: 400, code: "REVISE_DATE_NOT_AFTER_PREDECESSOR" },
+    );
+  }
+
+  if (data.rateConfig && data.rateConfig.type !== predecessor.rateType) {
+    throw Object.assign(
+      new Error("rateConfig.type must match the predecessor's rateType (rateType is fixed across revisions)"),
+      { statusCode: 400, code: "REVISE_RATE_CONFIG_TYPE_MISMATCH" },
+    );
+  }
+
   return auditUpdate(
     { utilityId, actorId, actorName, entityType: "RateSchedule" },
     EVENT_TYPES.RATE_SCHEDULE_REVISED,
@@ -78,20 +98,20 @@ export async function reviseRateSchedule(
     async (tx) => {
       await tx.rateSchedule.update({
         where: { id },
-        data: { expirationDate: new Date(data.effectiveDate) },
+        data: { expirationDate: newEffectiveDate },
       });
       const newSchedule = await tx.rateSchedule.create({
         data: {
           utilityId,
-          name: data.name,
+          name: predecessor.name,
           code: predecessor.code,
-          commodityId: data.commodityId,
-          rateType: data.rateType,
-          effectiveDate: new Date(data.effectiveDate),
+          commodityId: predecessor.commodityId,
+          rateType: predecessor.rateType,
+          effectiveDate: newEffectiveDate,
           expirationDate: data.expirationDate ? new Date(data.expirationDate) : null,
-          description: data.description,
-          regulatoryRef: data.regulatoryRef,
-          rateConfig: data.rateConfig,
+          description: data.description ?? predecessor.description,
+          regulatoryRef: data.regulatoryRef ?? predecessor.regulatoryRef,
+          rateConfig: (data.rateConfig ?? predecessor.rateConfig) as object,
           version: predecessor.version + 1,
           supersedesId: id,
         },

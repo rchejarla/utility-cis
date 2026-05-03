@@ -355,6 +355,7 @@ export default function ImportDetailPage({
                 {
                   key: "rawData",
                   header: "Source values",
+                  wrap: true,
                   render: (row: any) => (
                     <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "11px", color: "var(--text-muted)" }}>
                       {Object.entries(row.rawData ?? {})
@@ -400,10 +401,11 @@ export default function ImportDetailPage({
                     </span>
                   ),
                 },
-                { key: "errorMessage", header: "Message" },
+                { key: "errorMessage", header: "Message", wrap: true },
                 {
                   key: "rawData",
                   header: "Source values",
+                  wrap: true,
                   render: (row: any) => (
                     <span
                       style={{

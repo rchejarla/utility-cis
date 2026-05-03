@@ -11,6 +11,7 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
+import { useToast } from "@/components/ui/toast";
 
 interface RateSchedule {
   id: string;
@@ -56,6 +57,7 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
   const { id } = use(params);
   const router = useRouter();
   const { canView, canEdit } = usePermission("rate_schedules");
+  const { toast } = useToast();
   const [rs, setRs] = useState<RateSchedule | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -91,12 +93,15 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
       const newRS = await apiClient.post<{ id: string }>(`/api/v1/rate-schedules/${id}/revise`, {
         effectiveDate: reviseDate,
       });
+      setShowReviseDialog(false);
       router.push(`/rate-schedules/${newRS.id}`);
     } catch (err) {
-      console.error("Revise failed", err);
+      const message = err instanceof Error
+        ? err.message.replace(/^API error \d+:\s*/, "")
+        : "Revise failed";
+      toast(message, "error");
     } finally {
       setRevising(false);
-      setShowReviseDialog(false);
     }
   };
 
@@ -184,6 +189,9 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
                 value={reviseDate}
                 onChange={(v) => setReviseDate(v)}
               />
+              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "6px" }}>
+                Must be after the current version's effective date ({rs.effectiveDate.split("T")[0]}).
+              </div>
             </div>
             <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
               <button

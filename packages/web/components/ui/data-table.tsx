@@ -8,6 +8,9 @@ export interface Column<T> {
   header: string;
   render?: (row: T) => React.ReactNode;
   sortable?: boolean;
+  /** Allow the cell to wrap long content. Default false — most lists need
+   * single-line rows, but error tables with long messages opt in. */
+  wrap?: boolean;
 }
 
 export interface DataTableMeta {
@@ -277,7 +280,8 @@ export function DataTable<T extends Record<string, unknown>>({
                           fontSize: "13px",
                           color: "var(--text-primary)",
                           borderBottom: "1px solid var(--border-subtle)",
-                          whiteSpace: "nowrap",
+                          whiteSpace: col.wrap ? "normal" : "nowrap",
+                          wordBreak: col.wrap ? "break-word" : "normal",
                         }}
                       >
                         {col.render

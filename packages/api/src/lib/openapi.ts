@@ -21,6 +21,7 @@ import {
   premiseQuerySchema,
   createRateScheduleSchema,
   rateScheduleQuerySchema,
+  reviseRateScheduleSchema,
   createServiceAgreementSchema,
   updateServiceAgreementSchema,
   serviceAgreementQuerySchema,
@@ -75,6 +76,7 @@ const COMPONENT_SCHEMAS: Record<SchemaName, ZodTypeAny> = {
   UpdatePremise: updatePremiseSchema,
   PremiseQuery: premiseQuerySchema,
   CreateRateSchedule: createRateScheduleSchema,
+  ReviseRateSchedule: reviseRateScheduleSchema,
   RateScheduleQuery: rateScheduleQuerySchema,
   CreateServiceAgreement: createServiceAgreementSchema,
   UpdateServiceAgreement: updateServiceAgreementSchema,
@@ -159,7 +161,7 @@ const ROUTES: RouteSpec[] = [
   { method: "get", path: "/api/v1/rate-schedules", tag: "Rate Schedules", summary: "List rate schedules", query: "RateScheduleQuery", paginatedResponse: true },
   { method: "get", path: "/api/v1/rate-schedules/{id}", tag: "Rate Schedules", summary: "Get rate schedule", idParam: true },
   { method: "post", path: "/api/v1/rate-schedules", tag: "Rate Schedules", summary: "Create rate schedule", body: "CreateRateSchedule", createdStatus: true },
-  { method: "post", path: "/api/v1/rate-schedules/{id}/revise", tag: "Rate Schedules", summary: "Revise (supersede) a rate schedule", body: "CreateRateSchedule", idParam: true, createdStatus: true },
+  { method: "post", path: "/api/v1/rate-schedules/{id}/revise", tag: "Rate Schedules", summary: "Revise (supersede) a rate schedule", body: "ReviseRateSchedule", idParam: true, createdStatus: true },
 
   // Roles
   { method: "get", path: "/api/v1/roles", tag: "Settings", summary: "List roles" },
