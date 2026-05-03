@@ -28,3 +28,6 @@ export * from "./service-request-type-def";
 export * from "./sla";
 export * from "./service-request";
 export * from "./automation-config";
+export * from "./rate-component-kind";
+export * from "./rate-assignment-role";
+export * from "./rate-grammar/registered-codes";

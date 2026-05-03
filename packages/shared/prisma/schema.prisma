@@ -1489,3 +1489,35 @@ model ServiceRequest {
   @@index([utilityId, assignedTo, status])
   @@map("service_request")
 }
+
+model RateComponentKind {
+  id          String   @id @default(uuid()) @db.Uuid
+  utilityId   String?  @map("utility_id") @db.Uuid
+  code        String   @map("code") @db.VarChar(50)
+  label       String   @map("label") @db.VarChar(100)
+  description String?  @map("description") @db.Text
+  sortOrder   Int      @default(100) @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([utilityId, code])
+  @@index([isActive, sortOrder])
+  @@map("rate_component_kind")
+}
+
+model RateAssignmentRole {
+  id          String   @id @default(uuid()) @db.Uuid
+  utilityId   String?  @map("utility_id") @db.Uuid
+  code        String   @map("code") @db.VarChar(50)
+  label       String   @map("label") @db.VarChar(100)
+  description String?  @map("description") @db.Text
+  sortOrder   Int      @default(100) @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([utilityId, code])
+  @@index([isActive, sortOrder])
+  @@map("rate_assignment_role")
+}
