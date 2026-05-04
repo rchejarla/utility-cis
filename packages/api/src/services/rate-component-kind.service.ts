@@ -27,7 +27,12 @@ interface ResolvedKind {
 }
 
 export async function listRateComponentKinds(utilityId: string): Promise<ResolvedKind[]> {
-  // Globals + tenant overrides, override winning per code.
+  // Fetch all globals + tenant overrides regardless of is_active.
+  // The merge loop below requires visibility into INACTIVE overrides
+  // because a tenant's isActive:false override is the documented way
+  // to disable a global kind for that tenant — filtering at the SQL
+  // layer would silently expose the global instead. The .filter(...)
+  // at the end strips the resolved (post-override) inactive rows.
   const rows = await prisma.rateComponentKind.findMany({
     where: { OR: [{ utilityId: null }, { utilityId }] },
     orderBy: [{ code: "asc" }],

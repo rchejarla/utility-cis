@@ -1,8 +1,14 @@
 # Rate Management
 
 **Module:** 07 — Rate Management
-**Status:** Built
-**Entities:** RateSchedule, BillingCycle
+**Status:** Built (v1) — Migrating to v2
+**Entities:** RateSchedule, BillingCycle (v1) plus the v2 entities listed below
+
+> **⚠️ v2 migration in progress.** The single-blob `rate_type` + `rate_config` model documented below is being replaced with a normalised component-based model. Work is split across 5 slices. The full v2 design is in [`07b-rate-model-v2-design.md`](./07b-rate-model-v2-design.md). The slice-1 schema additions (`rate_component_kind`, `rate_assignment_role`, plus more entities coming) are landing now; this doc will be rewritten when v2 is complete.
+>
+> v2 entities added so far:
+> - `rate_component_kind` (slice 1) — closed-grammar codes for component kinds (service_charge, consumption, …)
+> - `rate_assignment_role` (slice 1) — closed-grammar codes for SA→schedule assignment roles (primary, delivery, supply, rider, opt_in)
 
 ## Overview
 

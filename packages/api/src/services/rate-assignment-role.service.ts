@@ -26,6 +26,12 @@ interface ResolvedRole {
 }
 
 export async function listRateAssignmentRoles(utilityId: string): Promise<ResolvedRole[]> {
+  // Fetch all globals + tenant overrides regardless of is_active.
+  // The merge loop below requires visibility into INACTIVE overrides
+  // because a tenant's isActive:false override is the documented way
+  // to disable a global role for that tenant — filtering at the SQL
+  // layer would silently expose the global instead. The .filter(...)
+  // at the end strips the resolved (post-override) inactive rows.
   const rows = await prisma.rateAssignmentRole.findMany({
     where: { OR: [{ utilityId: null }, { utilityId }] },
     orderBy: [{ code: "asc" }],
@@ -53,6 +59,8 @@ export async function listRateAssignmentRoles(utilityId: string): Promise<Resolv
     .sort((a, b) => a.sortOrder - b.sortOrder);
 }
 
+// Tenant-only get: the where clause excludes globals (utility_id IS
+// NULL) so a tenant cannot fetch a global by id from this endpoint.
 export async function getRateAssignmentRole(id: string, utilityId: string) {
   return prisma.rateAssignmentRole.findUniqueOrThrow({
     where: { id, utilityId },
