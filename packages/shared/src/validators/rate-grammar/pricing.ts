@@ -3,7 +3,7 @@
 // engine (slice 3). New pricing shapes require a code change.
 
 import { z } from "zod";
-import { selectorSchema } from "./selectors.js";
+import { selectorSchema } from "./selectors";
 
 const flatSchema = z
   .object({

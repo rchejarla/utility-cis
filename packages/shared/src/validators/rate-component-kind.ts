@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { RATE_COMPONENT_KIND_CODES } from "./rate-grammar/registered-codes.js";
+import { RATE_COMPONENT_KIND_CODES } from "./rate-grammar/registered-codes";
 
 const rateComponentKindCode = z.enum([...RATE_COMPONENT_KIND_CODES] as [string, ...string[]]);
 

@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { predicateSchema } from "./rate-grammar/predicate.js";
-import { quantitySourceSchema } from "./rate-grammar/quantity-source.js";
-import { pricingSchema } from "./rate-grammar/pricing.js";
-import { RATE_COMPONENT_KIND_CODES } from "./rate-grammar/registered-codes.js";
+import { predicateSchema } from "./rate-grammar/predicate";
+import { quantitySourceSchema } from "./rate-grammar/quantity-source";
+import { pricingSchema } from "./rate-grammar/pricing";
+import { RATE_COMPONENT_KIND_CODES } from "./rate-grammar/registered-codes";
 
 const kindCodeSchema = z.enum([...RATE_COMPONENT_KIND_CODES] as [string, ...string[]]);
 

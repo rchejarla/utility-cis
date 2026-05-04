@@ -7,7 +7,7 @@ import { z } from "zod";
 import {
   RATE_COMPONENT_KIND_CODES,
   RATE_ASSIGNMENT_ROLE_CODES,
-} from "./registered-codes.js";
+} from "./registered-codes";
 
 const kindEnum = z.enum([...RATE_COMPONENT_KIND_CODES] as [string, ...string[]]);
 const roleEnum = z.enum([...RATE_ASSIGNMENT_ROLE_CODES] as [string, ...string[]]);

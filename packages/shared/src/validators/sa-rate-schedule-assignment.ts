@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { RATE_ASSIGNMENT_ROLE_CODES } from "./rate-grammar/registered-codes.js";
+import { RATE_ASSIGNMENT_ROLE_CODES } from "./rate-grammar/registered-codes";
 
 const roleCodeSchema = z.enum([...RATE_ASSIGNMENT_ROLE_CODES] as [string, ...string[]]);
 
