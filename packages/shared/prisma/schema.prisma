@@ -150,12 +150,13 @@ model Commodity {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   // Relations
-  defaultUom        UnitOfMeasure?     @relation("DefaultUom", fields: [defaultUomId], references: [id], onDelete: SetNull)
-  unitsOfMeasure    UnitOfMeasure[]    @relation("CommodityUoms")
-  meters            Meter[]
-  serviceAgreements ServiceAgreement[]
-  rateSchedules     RateSchedule[]
-  delinquencyRules  DelinquencyRule[]
+  defaultUom         UnitOfMeasure?     @relation("DefaultUom", fields: [defaultUomId], references: [id], onDelete: SetNull)
+  unitsOfMeasure     UnitOfMeasure[]    @relation("CommodityUoms")
+  meters             Meter[]
+  serviceAgreements  ServiceAgreement[]
+  rateSchedules      RateSchedule[]
+  delinquencyRules   DelinquencyRule[]
+  rateServiceClasses RateServiceClass[]
 
   @@unique([utilityId, code])
   @@index([defaultUomId])
@@ -1520,4 +1521,22 @@ model RateAssignmentRole {
   @@unique([utilityId, code])
   @@index([isActive, sortOrder])
   @@map("rate_assignment_role")
+}
+
+model RateServiceClass {
+  id           String   @id @default(uuid()) @db.Uuid
+  utilityId    String   @map("utility_id") @db.Uuid
+  commodityId  String   @map("commodity_id") @db.Uuid
+  code         String   @map("code") @db.VarChar(50)
+  label        String   @map("label") @db.VarChar(100)
+  sortOrder    Int      @default(100) @map("sort_order")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  commodity    Commodity @relation(fields: [commodityId], references: [id], onDelete: Restrict)
+
+  @@unique([utilityId, commodityId, code])
+  @@index([utilityId, commodityId, isActive, sortOrder])
+  @@map("rate_service_class")
 }

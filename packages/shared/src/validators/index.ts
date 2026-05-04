@@ -30,4 +30,5 @@ export * from "./service-request";
 export * from "./automation-config";
 export * from "./rate-component-kind";
 export * from "./rate-assignment-role";
+export * from "./rate-service-class";
 export * from "./rate-grammar/registered-codes";
