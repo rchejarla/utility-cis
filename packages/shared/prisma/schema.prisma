@@ -380,6 +380,7 @@ model ServiceAgreement {
   suspensions     ServiceSuspension[]
   serviceEvents   ServiceEvent[]
   serviceRequests ServiceRequest[]
+  rateScheduleAssignments SAScheduleAssignment[]
 
   @@unique([utilityId, agreementNumber])
   @@index([accountId])
@@ -474,6 +475,7 @@ model RateSchedule {
   supersedes        RateSchedule?      @relation("RateScheduleVersions", fields: [supersedesId], references: [id], onDelete: SetNull)
   supersededBy      RateSchedule[]     @relation("RateScheduleVersions")
   components        RateComponent[]
+  saAssignments     SAScheduleAssignment[]
 
   @@unique([utilityId, code, version])
   @@index([commodityId])
@@ -503,6 +505,31 @@ model RateComponent {
   @@index([utilityId, rateScheduleId, sortOrder])
   @@index([kindCode])
   @@map("rate_component")
+}
+
+/// Slice 1 task 6 — SA-to-RateSchedule join. One SA can hold N schedules
+/// each with a role (delivery/supply/rider/...) and its own effective
+/// dating window. Tenant scope enforced at insert by the service layer
+/// AND by the standard RLS policy on utility_id. Overlap exclusion is
+/// deferred to slice 2/3.
+model SAScheduleAssignment {
+  id                  String   @id @default(uuid()) @db.Uuid
+  utilityId           String   @map("utility_id") @db.Uuid
+  serviceAgreementId  String   @map("service_agreement_id") @db.Uuid
+  rateScheduleId      String   @map("rate_schedule_id") @db.Uuid
+  roleCode            String   @map("role_code") @db.VarChar(50)
+  effectiveDate       DateTime @map("effective_date") @db.Date
+  expirationDate      DateTime? @map("expiration_date") @db.Date
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  serviceAgreement    ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Cascade)
+  rateSchedule        RateSchedule     @relation(fields: [rateScheduleId], references: [id], onDelete: Restrict)
+
+  @@index([serviceAgreementId, effectiveDate])
+  @@index([rateScheduleId])
+  @@index([roleCode])
+  @@map("sa_rate_schedule_assignment")
 }
 
 model BillingCycle {
