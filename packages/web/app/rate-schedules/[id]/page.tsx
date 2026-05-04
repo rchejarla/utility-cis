@@ -13,6 +13,7 @@ import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { useToast } from "@/components/ui/toast";
 import { ComponentList, type RateComponent } from "@/components/rate-schedules/component-list";
+import { ComponentEditor } from "@/components/rate-schedules/component-editor";
 
 interface RateSchedule {
   id: string;
@@ -60,14 +61,20 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
   const [reviseDate, setReviseDate] = useState("");
   const [revising, setRevising] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingComponent, setEditingComponent] = useState<RateComponent | null>(null);
 
-  // Editor modal lands in slice 2 task 4. setRefreshKey will fire from
-  // the editor's onSave to retrigger the list fetch.
   const handleAdd = () => {
-    alert("Editor coming in Task 4");
+    setEditingComponent(null);
+    setEditorOpen(true);
   };
-  const handleEdit = (_component: RateComponent) => {
-    alert("Editor coming in Task 4");
+  const handleEdit = (c: RateComponent) => {
+    setEditingComponent(c);
+    setEditorOpen(true);
+  };
+  const handleSaved = () => {
+    setEditorOpen(false);
+    setRefreshKey((k) => k + 1);
   };
 
   useEffect(() => {
@@ -415,6 +422,15 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
           />
         )}
       </Tabs>
+
+      {editorOpen && (
+        <ComponentEditor
+          scheduleId={id}
+          component={editingComponent}
+          onClose={() => setEditorOpen(false)}
+          onSaved={handleSaved}
+        />
+      )}
     </div>
   );
 }
