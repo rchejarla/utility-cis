@@ -250,6 +250,9 @@ model Premise {
   municipalityCode   String?       @map("municipality_code") @db.VarChar(50)
   status             PremiseStatus @default(ACTIVE) @map("status")
   ownerId            String?       @map("owner_id") @db.Uuid
+  eruCount           Decimal?      @map("eru_count") @db.Decimal(8, 2)
+  impervioussSqft    Int?          @map("impervious_sqft")
+  hasStormwaterInfra Boolean       @default(false) @map("has_stormwater_infra")
   customFields       Json          @default("{}") @map("custom_fields")
   createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz
   updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz
@@ -362,6 +365,7 @@ model ServiceAgreement {
   endDate         DateTime?              @map("end_date") @db.Date
   status          ServiceAgreementStatus @default(PENDING) @map("status")
   readSequence    Int?                   @map("read_sequence")
+  rateServiceClassId String?             @map("rate_service_class_id") @db.Uuid
   customFields    Json                   @default("{}") @map("custom_fields")
   createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz
   updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz
@@ -374,6 +378,7 @@ model ServiceAgreement {
   account         Account                 @relation(fields: [accountId], references: [id], onDelete: Restrict)
   commodity       Commodity               @relation(fields: [commodityId], references: [id], onDelete: Restrict)
   billingCycle    BillingCycle            @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
+  rateServiceClass RateServiceClass?      @relation(fields: [rateServiceClassId], references: [id], onDelete: SetNull)
   servicePoints   ServicePoint[]
   meterReads      MeterRead[]
   containers      Container[]
@@ -387,6 +392,7 @@ model ServiceAgreement {
   @@index([commodityId])
   @@index([billingCycleId])
   @@index([utilityId, status])
+  @@index([rateServiceClassId])
   @@map("service_agreement")
 }
 
@@ -975,6 +981,9 @@ model Container {
   removalDate        DateTime?       @map("removal_date") @db.Date
   ramsContainerId    String?         @map("rams_container_id") @db.VarChar(100)
   locationNotes      String?         @map("location_notes") @db.VarChar(500)
+  size               String?         @map("size") @db.VarChar(20)
+  frequency          String?         @map("frequency") @db.VarChar(20)
+  itemType           String?         @map("item_type") @db.VarChar(50)
   createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz
   updatedAt          DateTime        @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -1590,7 +1599,8 @@ model RateServiceClass {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  commodity    Commodity @relation(fields: [commodityId], references: [id], onDelete: Restrict)
+  commodity         Commodity          @relation(fields: [commodityId], references: [id], onDelete: Restrict)
+  serviceAgreements ServiceAgreement[]
 
   @@unique([utilityId, commodityId, code])
   @@index([utilityId, commodityId, isActive, sortOrder])
