@@ -1,3 +1,4 @@
-// Public exports for the v2 rate engine. Implementations land in
-// subsequent tasks (slice 3 tasks 2-7).
+// Public exports for the v2 rate engine.
 export * from "./types.js";
+export { rate } from "./rate.js";
+export { topoSortComponents, detectCycles } from "./ordering/topo-sort.js";
