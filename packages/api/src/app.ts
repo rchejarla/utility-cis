@@ -35,6 +35,7 @@ import { rateComponentKindRoutes } from "./routes/rate-component-kinds.js";
 import { rateAssignmentRoleRoutes } from "./routes/rate-assignment-roles.js";
 import { rateServiceClassRoutes } from "./routes/rate-service-classes.js";
 import { rateComponentRoutes } from "./routes/rate-components.js";
+import { rateGrammarRoutes } from "./routes/rate-grammar.js";
 import { saRateScheduleAssignmentRoutes } from "./routes/sa-rate-schedule-assignments.js";
 import { rateIndexRoutes } from "./routes/rate-indices.js";
 import { accountContactRoutes } from "./routes/account-contacts.js";
@@ -122,6 +123,7 @@ export async function buildApp() {
   await app.register(rateAssignmentRoleRoutes);
   await app.register(rateServiceClassRoutes);
   await app.register(rateComponentRoutes);
+  await app.register(rateGrammarRoutes);
   await app.register(saRateScheduleAssignmentRoutes);
   await app.register(rateIndexRoutes);
   await app.register(premiseTypeDefRoutes);
