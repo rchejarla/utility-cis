@@ -5,11 +5,11 @@ import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { DatePicker } from "@/components/ui/date-picker";
 import { JsonFallbackEditor } from "./pricing-editors/json-fallback-editor";
+import { PricingEditor } from "./pricing-editor";
 import type { RateComponent } from "./component-list";
 import {
   predicateSchema,
   quantitySourceSchema,
-  pricingSchema,
 } from "@utility-cis/shared";
 
 interface KindOption {
@@ -136,14 +136,24 @@ export function ComponentEditor({
     () => stringifyOr(component?.quantitySource, DEFAULT_QUANTITY_SOURCE),
     [component],
   );
-  const initialPricingJson = useMemo(
-    () => stringifyOr(component?.pricing, DEFAULT_PRICING),
-    [component],
-  );
+  // Pricing flows through the structured PricingEditor as a parsed
+  // object (not a JSON string). We seed it once from the loaded
+  // component, falling back to the same default flat shape we used
+  // when the field was a raw JSON textarea.
+  const initialPricing = useMemo<unknown>(() => {
+    if (component?.pricing !== undefined && component?.pricing !== null) {
+      return component.pricing;
+    }
+    try {
+      return JSON.parse(DEFAULT_PRICING);
+    } catch {
+      return null;
+    }
+  }, [component]);
 
   const [predicate, setPredicate] = useState<unknown>(null);
   const [quantitySource, setQuantitySource] = useState<unknown>(null);
-  const [pricing, setPricing] = useState<unknown>(null);
+  const [pricing, setPricing] = useState<unknown>(initialPricing);
   const [predicateValid, setPredicateValid] = useState(false);
   const [quantitySourceValid, setQuantitySourceValid] = useState(false);
   const [pricingValid, setPricingValid] = useState(false);
@@ -427,15 +437,12 @@ export function ComponentEditor({
           </div>
 
           <div style={{ marginBottom: 4 }}>
-            <JsonFallbackEditor
-              label="Pricing"
-              initialJson={initialPricingJson}
-              schema={pricingSchema}
+            <PricingEditor
+              value={initialPricing}
               onChange={(parsed, valid) => {
                 setPricing(parsed);
                 setPricingValid(valid);
               }}
-              rows={8}
             />
           </div>
 
