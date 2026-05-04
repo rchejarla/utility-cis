@@ -12,6 +12,7 @@ import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { useToast } from "@/components/ui/toast";
+import { ComponentList, type RateComponent } from "@/components/rate-schedules/component-list";
 
 interface RateSchedule {
   id: string;
@@ -58,6 +59,16 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
   const [showReviseDialog, setShowReviseDialog] = useState(false);
   const [reviseDate, setReviseDate] = useState("");
   const [revising, setRevising] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  // Editor modal lands in slice 2 task 4. setRefreshKey will fire from
+  // the editor's onSave to retrigger the list fetch.
+  const handleAdd = () => {
+    alert("Editor coming in Task 4");
+  };
+  const handleEdit = (_component: RateComponent) => {
+    alert("Editor coming in Task 4");
+  };
 
   useEffect(() => {
     apiClient
@@ -300,18 +311,23 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
                 </button>
               </div>
             )}
-            <div style={fieldStyle}>
-              <span style={labelStyle}>Components</span>
-              <span style={{ ...valueStyle, color: "var(--text-muted)", fontStyle: "italic" }}>
-                Components (coming soon)
-              </span>
-            </div>
             <div style={{ ...fieldStyle, borderBottom: "none" }}>
               <span style={labelStyle}>Schedule ID</span>
               <span style={{ ...valueStyle, fontFamily: "monospace", fontSize: "11px", color: "var(--text-muted)" }}>
                 {rs.id}
               </span>
             </div>
+          </div>
+        )}
+
+        {activeTab === "overview" && (
+          <div style={{ marginTop: 20 }}>
+            <ComponentList
+              scheduleId={id}
+              refreshKey={refreshKey}
+              onEdit={handleEdit}
+              onAdd={handleAdd}
+            />
           </div>
         )}
 
