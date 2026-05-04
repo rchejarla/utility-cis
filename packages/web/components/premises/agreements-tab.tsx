@@ -26,13 +26,6 @@ interface Account {
   };
 }
 
-interface RateSchedule {
-  id: string;
-  name: string;
-  code: string;
-  commodityId: string;
-}
-
 interface BillingCycle {
   id: string;
   name: string;
@@ -118,7 +111,6 @@ export function AgreementsTab({
   const [submitting, setSubmitting] = useState(false);
   const [commodities, setCommodities] = useState<Commodity[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [rateSchedules, setRateSchedules] = useState<RateSchedule[]>([]);
   const [billingCycles, setBillingCycles] = useState<BillingCycle[]>([]);
 
   const [form, setForm] = useState({
@@ -155,24 +147,6 @@ export function AgreementsTab({
       })
       .catch(console.error);
   }, [showForm, premise.commodityIds]);
-
-  // Fetch rate schedules when commodity changes
-  useEffect(() => {
-    if (!form.commodityId) {
-      setRateSchedules([]);
-      return;
-    }
-    apiClient
-      .get<RateSchedule[] | { data: RateSchedule[] }>("/api/v1/rate-schedules", {
-        commodityId: form.commodityId,
-        active: "true",
-      })
-      .then((res) => {
-        const list = Array.isArray(res) ? res : (res as any).data ?? [];
-        setRateSchedules(list);
-      })
-      .catch(console.error);
-  }, [form.commodityId]);
 
   // When commodity changes, clear meter selection and rate schedule
   const handleCommodityChange = (commodityId: string) => {

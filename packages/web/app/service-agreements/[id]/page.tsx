@@ -66,12 +66,6 @@ interface AuditEntry {
   createdAt: string;
 }
 
-interface RateSchedule {
-  id: string;
-  name: string;
-  code: string;
-}
-
 interface BillingCycle {
   id: string;
   name: string;
@@ -130,7 +124,6 @@ export default function ServiceAgreementDetailPage({
   const [editCustomFields, setEditCustomFields] = useState<Record<string, unknown>>({});
   const [customFieldSchema, setCustomFieldSchema] = useState<FieldDefinition[]>([]);
   const [saving, setSaving] = useState(false);
-  const [rateSchedules, setRateSchedules] = useState<RateSchedule[]>([]);
   const [billingCycles, setBillingCycles] = useState<BillingCycle[]>([]);
   const [showAddMeter, setShowAddMeter] = useState(false);
   const [showUpload, setShowUpload] = useState(false);

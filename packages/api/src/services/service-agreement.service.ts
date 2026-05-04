@@ -14,6 +14,18 @@ const fullInclude = {
   account: true,
   commodity: true,
   billingCycle: true,
+  rateServiceClass: true,
+  rateScheduleAssignments: {
+    where: { expirationDate: null as null },
+    orderBy: { effectiveDate: "asc" as const },
+    include: {
+      rateSchedule: {
+        include: {
+          components: { orderBy: { sortOrder: "asc" as const } },
+        },
+      },
+    },
+  },
   servicePoints: {
     where: { endDate: null as null },
     orderBy: { startDate: "asc" as const },

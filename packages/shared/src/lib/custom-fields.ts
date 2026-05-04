@@ -541,7 +541,6 @@ export const CORE_FIELD_KEYS: Record<CustomFieldEntityType, readonly string[]> =
     "account_id",
     "premise_id",
     "commodity_id",
-    "rate_schedule_id",
     "billing_cycle_id",
     "start_date",
     "end_date",

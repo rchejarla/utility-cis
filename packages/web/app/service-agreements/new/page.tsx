@@ -29,13 +29,6 @@ interface Commodity {
   name: string;
 }
 
-interface RateSchedule {
-  id: string;
-  name: string;
-  code: string;
-  commodityId: string;
-}
-
 interface BillingCycle {
   id: string;
   name: string;
@@ -74,7 +67,6 @@ export default function NewServiceAgreementPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [premises, setPremises] = useState<Premise[]>([]);
   const [commodities, setCommodities] = useState<Commodity[]>([]);
-  const [allRateSchedules, setAllRateSchedules] = useState<RateSchedule[]>([]);
   const [billingCycles, setBillingCycles] = useState<BillingCycle[]>([]);
   const [allMeters, setAllMeters] = useState<Meter[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -113,15 +105,13 @@ export default function NewServiceAgreementPage() {
       apiClient.get<{ data: Account[] }>("/api/v1/accounts", { limit: "200" }),
       apiClient.get<{ data: Premise[] }>("/api/v1/premises", { limit: "200" }),
       apiClient.get<{ data: Commodity[] }>("/api/v1/commodities"),
-      apiClient.get<{ data: RateSchedule[] }>("/api/v1/rate-schedules", { limit: "200" }),
       apiClient.get<{ data: BillingCycle[] }>("/api/v1/billing-cycles"),
       apiClient.get<{ data: Meter[] }>("/api/v1/meters", { limit: "500" }),
     ])
-      .then(([accRes, premRes, comRes, rsRes, bcRes, mRes]) => {
+      .then(([accRes, premRes, comRes, bcRes, mRes]) => {
         setAccounts(accRes.data ?? []);
         setPremises(premRes.data ?? []);
         setCommodities(comRes.data ?? []);
-        setAllRateSchedules(rsRes.data ?? []);
         setBillingCycles(bcRes.data ?? []);
         setAllMeters(mRes.data ?? []);
       })

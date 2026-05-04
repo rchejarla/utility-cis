@@ -37,13 +37,6 @@ interface Customer {
   email?: string;
 }
 
-interface RateSchedule {
-  id: string;
-  name: string;
-  code: string;
-  commodityId: string;
-}
-
 interface BillingCycle {
   id: string;
   name: string;
@@ -101,7 +94,6 @@ export default function MoveInWizardPage() {
   const [premises, setPremises] = useState<Premise[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [commodities, setCommodities] = useState<Commodity[]>([]);
-  const [rateSchedules, setRateSchedules] = useState<RateSchedule[]>([]);
   const [billingCycles, setBillingCycles] = useState<BillingCycle[]>([]);
 
   useEffect(() => {
@@ -109,14 +101,12 @@ export default function MoveInWizardPage() {
       apiClient.get<{ data: Premise[] }>("/api/v1/premises", { limit: "500" }),
       apiClient.get<{ data: Customer[] }>("/api/v1/customers", { limit: "500" }),
       apiClient.get<{ data: Commodity[] } | Commodity[]>("/api/v1/commodities"),
-      apiClient.get<{ data: RateSchedule[] }>("/api/v1/rate-schedules", { limit: "500" }),
       apiClient.get<BillingCycle[] | { data: BillingCycle[] }>("/api/v1/billing-cycles"),
     ])
-      .then(([pr, cu, co, rs, bc]) => {
+      .then(([pr, cu, co, bc]) => {
         setPremises(pr.data ?? []);
         setCustomers(cu.data ?? []);
         setCommodities(Array.isArray(co) ? co : co.data ?? []);
-        setRateSchedules(rs.data ?? []);
         setBillingCycles(Array.isArray(bc) ? bc : bc.data ?? []);
       })
       .catch(console.error);
