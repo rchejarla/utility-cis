@@ -1606,3 +1606,22 @@ model RateServiceClass {
   @@index([utilityId, commodityId, isActive, sortOrder])
   @@map("rate_service_class")
 }
+
+/// Slice 4 task 4 — generic per-tenant key/value setting backing the
+/// TenantLoader. Holds drought_stage, flag toggles (flags.<name>), and
+/// any other tenant-scoped scalar/JSON value the rate engine needs to
+/// resolve at evaluation time. Distinct from TenantConfig (a single
+/// row of well-known scheduler/runtime fields) — this is an open-ended
+/// (utility_id, name) → JSON map.
+model TenantSetting {
+  id        String   @id @default(uuid()) @db.Uuid
+  utilityId String   @map("utility_id") @db.Uuid
+  name      String   @map("name") @db.VarChar(100)
+  value     Json     @map("value")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([utilityId, name])
+  @@index([utilityId])
+  @@map("tenant_setting")
+}
