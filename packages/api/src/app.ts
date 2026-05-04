@@ -34,6 +34,7 @@ import { measureTypeDefRoutes } from "./routes/measure-type-defs.js";
 import { rateComponentKindRoutes } from "./routes/rate-component-kinds.js";
 import { rateAssignmentRoleRoutes } from "./routes/rate-assignment-roles.js";
 import { rateServiceClassRoutes } from "./routes/rate-service-classes.js";
+import { rateComponentRoutes } from "./routes/rate-components.js";
 import { accountContactRoutes } from "./routes/account-contacts.js";
 import { premiseTypeDefRoutes } from "./routes/premise-type-defs.js";
 import { accountTypeDefRoutes } from "./routes/account-type-defs.js";
@@ -118,6 +119,7 @@ export async function buildApp() {
   await app.register(rateComponentKindRoutes);
   await app.register(rateAssignmentRoleRoutes);
   await app.register(rateServiceClassRoutes);
+  await app.register(rateComponentRoutes);
   await app.register(premiseTypeDefRoutes);
   await app.register(accountTypeDefRoutes);
   await app.register(accountContactRoutes);
