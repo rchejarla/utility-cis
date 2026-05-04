@@ -2,6 +2,7 @@
 
 import { useState, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import type { FieldDefinition } from "@utility-cis/shared";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PageHeader } from "@/components/ui/page-header";
@@ -56,6 +57,30 @@ interface ServiceAgreement {
       uom?: { code: string };
     };
   }>;
+  rateScheduleAssignments?: Array<RateScheduleAssignment>;
+}
+
+interface RateScheduleAssignment {
+  id: string;
+  rateScheduleId: string;
+  roleCode: string;
+  effectiveDate: string;
+  expirationDate: string | null;
+  rateSchedule: {
+    id: string;
+    name: string;
+    code: string;
+    version: number;
+    components: Array<{
+      id: string;
+      kindCode: string;
+      label: string;
+      pricing: { type: string };
+      sortOrder: number;
+      effectiveDate: string;
+      expirationDate: string | null;
+    }>;
+  };
 }
 
 interface AuditEntry {
@@ -427,6 +452,7 @@ export default function ServiceAgreementDetailPage({
         }
       >
         {activeTab === "overview" && (
+          <>
           <div
             style={{
               background: "var(--bg-card)",
@@ -518,12 +544,6 @@ export default function ServiceAgreementDetailPage({
             <div style={fieldStyle}>
               <span style={labelStyle}>Commodity</span>
               <CommodityBadge commodity={sa.commodity?.name ?? ""} />
-            </div>
-            <div style={fieldStyle}>
-              <span style={labelStyle}>Rate Components</span>
-              <span style={{ ...valueStyle, color: "var(--text-muted)", fontStyle: "italic" }}>
-                Components (coming soon)
-              </span>
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Billing Cycle</span>
@@ -649,6 +669,203 @@ export default function ServiceAgreementDetailPage({
               </span>
             </div>
           </div>
+
+          {/* Rate Schedules panel — read-only view of assigned schedules
+              and their components. Edits happen on the rate-schedule
+              detail page, reachable via the schedule-name link. */}
+          <div
+            style={{
+              background: "var(--bg-card)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              padding: "20px 24px",
+              marginTop: "16px",
+            }}
+          >
+            <div
+              style={{
+                fontSize: "11px",
+                fontWeight: 600,
+                color: "var(--text-muted)",
+                textTransform: "uppercase",
+                letterSpacing: "0.08em",
+                marginBottom: "12px",
+              }}
+            >
+              Rate Schedules
+            </div>
+            {(!sa.rateScheduleAssignments || sa.rateScheduleAssignments.length === 0) && (
+              <p style={{ color: "var(--text-muted)", fontSize: "13px", margin: 0 }}>
+                No rate schedules assigned.
+              </p>
+            )}
+            {sa.rateScheduleAssignments?.map((a) => (
+              <div
+                key={a.id}
+                style={{
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius)",
+                  padding: "12px 14px",
+                  marginBottom: "10px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: "10px",
+                    gap: "12px",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "baseline", gap: "8px" }}>
+                    <Link
+                      href={`/rate-schedules/${a.rateSchedule.id}`}
+                      style={{
+                        fontWeight: 600,
+                        color: "var(--accent-primary)",
+                        textDecoration: "none",
+                        fontSize: "14px",
+                      }}
+                    >
+                      {a.rateSchedule.name}
+                    </Link>
+                    <span style={{ color: "var(--text-muted)", fontSize: "12px", fontFamily: "monospace" }}>
+                      {a.rateSchedule.code} · v{a.rateSchedule.version}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                    <span
+                      style={{
+                        background: "var(--bg-deep)",
+                        border: "1px solid var(--border-subtle)",
+                        padding: "2px 8px",
+                        borderRadius: 4,
+                        fontSize: 11,
+                        fontFamily: "'JetBrains Mono', monospace",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      {a.roleCode}
+                    </span>
+                    <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>
+                      {a.effectiveDate.slice(0, 10)}
+                      {a.expirationDate ? ` — ${a.expirationDate.slice(0, 10)}` : " — Open-ended"}
+                    </span>
+                  </div>
+                </div>
+                {a.rateSchedule.components.length === 0 ? (
+                  <p style={{ color: "var(--text-muted)", fontSize: "12px", margin: "6px 0 0", fontStyle: "italic" }}>
+                    No components defined.
+                  </p>
+                ) : (
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                    <thead>
+                      <tr>
+                        <th
+                          style={{
+                            textAlign: "left",
+                            padding: "6px 8px",
+                            color: "var(--text-muted)",
+                            fontWeight: 500,
+                            borderBottom: "1px solid var(--border-subtle)",
+                            fontSize: 11,
+                            textTransform: "uppercase",
+                            letterSpacing: "0.05em",
+                            width: "60px",
+                          }}
+                        >
+                          Sort
+                        </th>
+                        <th
+                          style={{
+                            textAlign: "left",
+                            padding: "6px 8px",
+                            color: "var(--text-muted)",
+                            fontWeight: 500,
+                            borderBottom: "1px solid var(--border-subtle)",
+                            fontSize: 11,
+                            textTransform: "uppercase",
+                            letterSpacing: "0.05em",
+                          }}
+                        >
+                          Label
+                        </th>
+                        <th
+                          style={{
+                            textAlign: "left",
+                            padding: "6px 8px",
+                            color: "var(--text-muted)",
+                            fontWeight: 500,
+                            borderBottom: "1px solid var(--border-subtle)",
+                            fontSize: 11,
+                            textTransform: "uppercase",
+                            letterSpacing: "0.05em",
+                          }}
+                        >
+                          Kind
+                        </th>
+                        <th
+                          style={{
+                            textAlign: "left",
+                            padding: "6px 8px",
+                            color: "var(--text-muted)",
+                            fontWeight: 500,
+                            borderBottom: "1px solid var(--border-subtle)",
+                            fontSize: 11,
+                            textTransform: "uppercase",
+                            letterSpacing: "0.05em",
+                          }}
+                        >
+                          Pricing
+                        </th>
+                        <th
+                          style={{
+                            textAlign: "left",
+                            padding: "6px 8px",
+                            color: "var(--text-muted)",
+                            fontWeight: 500,
+                            borderBottom: "1px solid var(--border-subtle)",
+                            fontSize: 11,
+                            textTransform: "uppercase",
+                            letterSpacing: "0.05em",
+                          }}
+                        >
+                          Effective
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...a.rateSchedule.components]
+                        .sort((x, y) => x.sortOrder - y.sortOrder)
+                        .map((c) => (
+                          <tr key={c.id}>
+                            <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border-subtle)", color: "var(--text-secondary)", fontFamily: "monospace" }}>
+                              {c.sortOrder}
+                            </td>
+                            <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border-subtle)", color: "var(--text-primary)" }}>
+                              {c.label}
+                            </td>
+                            <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border-subtle)", color: "var(--text-secondary)", fontFamily: "monospace", fontSize: 11 }}>
+                              {c.kindCode}
+                            </td>
+                            <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border-subtle)", color: "var(--text-secondary)", fontFamily: "monospace", fontSize: 11 }}>
+                              {c.pricing.type}
+                            </td>
+                            <td style={{ padding: "6px 8px", borderBottom: "1px solid var(--border-subtle)", color: "var(--text-muted)", fontSize: 11 }}>
+                              {c.effectiveDate.slice(0, 10)}
+                              {c.expirationDate ? ` — ${c.expirationDate.slice(0, 10)}` : ""}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            ))}
+          </div>
+          </>
         )}
 
         {activeTab === "meters" && (
