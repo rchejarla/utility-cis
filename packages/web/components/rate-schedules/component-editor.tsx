@@ -4,13 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { DatePicker } from "@/components/ui/date-picker";
-import { JsonFallbackEditor } from "./pricing-editors/json-fallback-editor";
 import { PricingEditor } from "./pricing-editor";
+import { PredicateBuilder } from "./predicate-builder";
+import { QuantitySourceBuilder } from "./quantity-source-builder";
 import type { RateComponent } from "./component-list";
-import {
-  predicateSchema,
-  quantitySourceSchema,
-} from "@utility-cis/shared";
 
 interface KindOption {
   code: string;
@@ -33,8 +30,6 @@ interface Props {
   onSaved: () => void;
 }
 
-const DEFAULT_PREDICATE = "{}";
-const DEFAULT_QUANTITY_SOURCE = '{ "base": "fixed" }';
 const DEFAULT_PRICING = '{ "type": "flat", "rate": 0 }';
 
 const fieldLabelStyle = {
@@ -79,32 +74,24 @@ const secondaryBtnStyle = {
   fontFamily: "inherit",
 };
 
-function stringifyOr(value: unknown, fallback: string): string {
-  if (value === null || value === undefined) return fallback;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return fallback;
-  }
-}
-
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
 /**
- * Slice 2 task 4 — ComponentEditor modal scaffold.
+ * Slice 2 task 4 — ComponentEditor modal.
  *
- * Form for creating + editing a single RateComponent. Three big JSON
- * textareas back the predicate / quantitySource / pricing fields with
- * live Zod validation against the closed-grammar schemas exported from
- * @utility-cis/shared. Save flow:
- *   parse → cycle-check → POST /api/v1/rate-schedules/:id/components
+ * Form for creating + editing a single RateComponent. Predicate /
+ * quantity source / pricing are edited via structured builders
+ * (PredicateBuilder / QuantitySourceBuilder / PricingEditor) that
+ * assemble closed-grammar shapes validated against the Zod schemas
+ * from @utility-cis/shared. Each builder still falls back to a JSON
+ * textarea for the long tail of operators and pricing types it doesn't
+ * surface explicitly. Save flow:
+ *   build → cycle-check → POST /api/v1/rate-schedules/:id/components
  *                       (or PATCH /api/v1/rate-components/:id on edit).
  *
- * Cycle errors surface inline with the offending component path. The
- * structured editors that replace the JSON textareas land in tasks 5-7;
- * the JSON fallback stays available as an "advanced" mode after that.
+ * Cycle errors surface inline with the offending component path.
  */
 export function ComponentEditor({
   scheduleId,
@@ -128,18 +115,25 @@ export function ComponentEditor({
     component?.expirationDate?.slice(0, 10) ?? "",
   );
 
-  const initialPredicateJson = useMemo(
-    () => stringifyOr(component?.predicate, DEFAULT_PREDICATE),
-    [component],
-  );
-  const initialQuantitySourceJson = useMemo(
-    () => stringifyOr(component?.quantitySource, DEFAULT_QUANTITY_SOURCE),
-    [component],
-  );
-  // Pricing flows through the structured PricingEditor as a parsed
-  // object (not a JSON string). We seed it once from the loaded
-  // component, falling back to the same default flat shape we used
-  // when the field was a raw JSON textarea.
+  // Predicate / quantitySource flow through structured builders as parsed
+  // objects. We seed them once from the loaded component, falling back to
+  // the closed-grammar empty-predicate / fixed-base shapes the engine
+  // accepts as defaults. Same pattern as pricing below.
+  const initialPredicate = useMemo<Record<string, unknown>>(() => {
+    if (component?.predicate && typeof component.predicate === "object") {
+      return component.predicate as Record<string, unknown>;
+    }
+    return {};
+  }, [component]);
+  const initialQuantitySource = useMemo<Record<string, unknown>>(() => {
+    if (
+      component?.quantitySource &&
+      typeof component.quantitySource === "object"
+    ) {
+      return component.quantitySource as Record<string, unknown>;
+    }
+    return { base: "fixed" };
+  }, [component]);
   const initialPricing = useMemo<unknown>(() => {
     if (component?.pricing !== undefined && component?.pricing !== null) {
       return component.pricing;
@@ -151,8 +145,12 @@ export function ComponentEditor({
     }
   }, [component]);
 
-  const [predicate, setPredicate] = useState<unknown>(null);
-  const [quantitySource, setQuantitySource] = useState<unknown>(null);
+  const [predicate, setPredicate] = useState<Record<string, unknown>>(
+    initialPredicate,
+  );
+  const [quantitySource, setQuantitySource] = useState<Record<string, unknown>>(
+    initialQuantitySource,
+  );
   const [pricing, setPricing] = useState<unknown>(initialPricing);
   const [predicateValid, setPredicateValid] = useState(false);
   const [quantitySourceValid, setQuantitySourceValid] = useState(false);
@@ -323,8 +321,8 @@ export function ComponentEditor({
               color: "var(--text-muted)",
             }}
           >
-            Predicate / quantity source / pricing use the closed-grammar
-            JSON shapes. Structured editors land in tasks 5-7.
+            Predicate, quantity source, and pricing use structured
+            builders with a JSON escape hatch for advanced cases.
           </p>
         </div>
 
@@ -411,28 +409,22 @@ export function ComponentEditor({
           </div>
 
           <div style={{ marginBottom: 16 }}>
-            <JsonFallbackEditor
-              label="Predicate"
-              initialJson={initialPredicateJson}
-              schema={predicateSchema}
+            <PredicateBuilder
+              value={initialPredicate}
               onChange={(parsed, valid) => {
                 setPredicate(parsed);
                 setPredicateValid(valid);
               }}
-              rows={6}
             />
           </div>
 
           <div style={{ marginBottom: 16 }}>
-            <JsonFallbackEditor
-              label="Quantity Source"
-              initialJson={initialQuantitySourceJson}
-              schema={quantitySourceSchema}
+            <QuantitySourceBuilder
+              value={initialQuantitySource}
               onChange={(parsed, valid) => {
                 setQuantitySource(parsed);
                 setQuantitySourceValid(valid);
               }}
-              rows={6}
             />
           </div>
 
