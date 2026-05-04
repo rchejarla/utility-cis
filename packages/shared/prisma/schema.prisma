@@ -473,12 +473,36 @@ model RateSchedule {
   commodity         Commodity          @relation(fields: [commodityId], references: [id], onDelete: Restrict)
   supersedes        RateSchedule?      @relation("RateScheduleVersions", fields: [supersedesId], references: [id], onDelete: SetNull)
   supersededBy      RateSchedule[]     @relation("RateScheduleVersions")
+  components        RateComponent[]
 
   @@unique([utilityId, code, version])
   @@index([commodityId])
   @@index([supersedesId])
   @@index([utilityId, effectiveDate, expirationDate])
   @@map("rate_schedule")
+}
+
+model RateComponent {
+  id              String    @id @default(uuid()) @db.Uuid
+  utilityId       String    @map("utility_id") @db.Uuid
+  rateScheduleId  String    @map("rate_schedule_id") @db.Uuid
+  kindCode        String    @map("kind_code") @db.VarChar(50)
+  label           String    @map("label") @db.VarChar(255)
+  predicate       Json      @map("predicate")
+  quantitySource  Json      @map("quantity_source")
+  pricing         Json      @map("pricing")
+  sortOrder       Int       @default(100) @map("sort_order")
+  effectiveDate   DateTime  @map("effective_date") @db.Date
+  expirationDate  DateTime? @map("expiration_date") @db.Date
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  rateSchedule    RateSchedule @relation(fields: [rateScheduleId], references: [id], onDelete: Cascade)
+
+  @@index([rateScheduleId])
+  @@index([utilityId, rateScheduleId, sortOrder])
+  @@index([kindCode])
+  @@map("rate_component")
 }
 
 model BillingCycle {
