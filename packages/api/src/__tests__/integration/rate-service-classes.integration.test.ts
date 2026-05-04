@@ -175,6 +175,8 @@ describe("/api/v1/rate-service-classes", () => {
     const body = JSON.parse(res.body);
     expect(body.label).toBe("Master-Sub-Metered Unit");
     expect(body.code).toBe("msu");
+    expect(body.commodity).toBeDefined();
+    expect(body.commodity.id).toBe(waterCommodityId);
   });
 
   it("DELETE soft-deletes (status 204, follow-up GET returns 200 with isActive: false)", async () => {

@@ -1532,7 +1532,7 @@ model RateServiceClass {
   sortOrder    Int      @default(100) @map("sort_order")
   isActive     Boolean  @default(true) @map("is_active")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   commodity    Commodity @relation(fields: [commodityId], references: [id], onDelete: Restrict)
 

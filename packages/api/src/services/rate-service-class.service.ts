@@ -47,6 +47,7 @@ export async function createRateServiceClass(
 ) {
   return prisma.rateServiceClass.create({
     data: { ...data, utilityId },
+    include: { commodity: { select: commoditySelect } },
   });
 }
 
@@ -58,6 +59,7 @@ export async function updateRateServiceClass(
   return prisma.rateServiceClass.update({
     where: { id, utilityId },
     data,
+    include: { commodity: { select: commoditySelect } },
   });
 }
 

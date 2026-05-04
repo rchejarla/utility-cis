@@ -31,6 +31,15 @@ describe("createRateServiceClassSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects hyphens in the code", () => {
+    const result = createRateServiceClassSchema.safeParse({
+      commodityId: COMMODITY_ID,
+      code: "single-family",
+      label: "Single Family",
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects missing commodityId", () => {
     const result = createRateServiceClassSchema.safeParse({
       code: "single_family",
