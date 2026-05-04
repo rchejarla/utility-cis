@@ -386,6 +386,7 @@ model ServiceAgreement {
   serviceEvents   ServiceEvent[]
   serviceRequests ServiceRequest[]
   rateScheduleAssignments SAScheduleAssignment[]
+  wqaValues       WqaValue[]
 
   @@unique([utilityId, agreementNumber])
   @@index([accountId])
@@ -1624,4 +1625,34 @@ model TenantSetting {
   @@unique([utilityId, name])
   @@index([utilityId])
   @@map("tenant_setting")
+}
+
+/// Slice 4 task 5 — Winter Quarter Average (WQA) value backing the
+/// WqaLoader. One row per (utility_id, service_agreement_id, water_year)
+/// stores both the seasonally-computed average and an optional staff
+/// override. The Bozeman sewer Residential/Multi-Family classes use
+/// this via the `wqa:current:<sa_id>` and `wqa:override:<sa_id>`
+/// variable patterns; override wins over computed_avg when both are
+/// set, otherwise computed_avg is returned.
+model WqaValue {
+  id                  String    @id @default(uuid()) @db.Uuid
+  utilityId           String    @map("utility_id") @db.Uuid
+  serviceAgreementId  String    @map("service_agreement_id") @db.Uuid
+  waterYear           Int       @map("water_year")
+  computedAt          DateTime  @map("computed_at") @db.Timestamptz
+  sourceWindowStart   DateTime  @map("source_window_start") @db.Date
+  sourceWindowEnd     DateTime  @map("source_window_end") @db.Date
+  computedAvg         Decimal   @map("computed_avg") @db.Decimal(10, 4)
+  overrideValue       Decimal?  @map("override_value") @db.Decimal(10, 4)
+  overrideReason      String?   @map("override_reason") @db.Text
+  overrideBy          String?   @map("override_by") @db.Uuid
+  overrideAt          DateTime? @map("override_at") @db.Timestamptz
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  serviceAgreement    ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Cascade)
+
+  @@unique([utilityId, serviceAgreementId, waterYear])
+  @@index([utilityId, serviceAgreementId])
+  @@map("wqa_value")
 }
