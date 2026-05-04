@@ -17,7 +17,6 @@ export async function listRateSchedules(utilityId: string, query: RateScheduleQu
   const where: Record<string, unknown> = { utilityId };
 
   if (query.commodityId) where.commodityId = query.commodityId;
-  if (query.rateType) where.rateType = query.rateType;
   if (query.active === true) where.expirationDate = null;
   if (query.active === false) where.expirationDate = { not: null };
 
@@ -51,12 +50,10 @@ export async function createRateSchedule(
           name: data.name,
           code: data.code,
           commodityId: data.commodityId,
-          rateType: data.rateType,
           effectiveDate: new Date(data.effectiveDate),
           expirationDate: data.expirationDate ? new Date(data.expirationDate) : null,
           description: data.description,
           regulatoryRef: data.regulatoryRef,
-          rateConfig: data.rateConfig,
           version: 1,
         },
         include: fullInclude,
@@ -84,13 +81,6 @@ export async function reviseRateSchedule(
     );
   }
 
-  if (data.rateConfig && data.rateConfig.type !== predecessor.rateType) {
-    throw Object.assign(
-      new Error("rateConfig.type must match the predecessor's rateType (rateType is fixed across revisions)"),
-      { statusCode: 400, code: "REVISE_RATE_CONFIG_TYPE_MISMATCH" },
-    );
-  }
-
   return auditUpdate(
     { utilityId, actorId, actorName, entityType: "RateSchedule" },
     EVENT_TYPES.RATE_SCHEDULE_REVISED,
@@ -106,12 +96,10 @@ export async function reviseRateSchedule(
           name: predecessor.name,
           code: predecessor.code,
           commodityId: predecessor.commodityId,
-          rateType: predecessor.rateType,
           effectiveDate: newEffectiveDate,
           expirationDate: data.expirationDate ? new Date(data.expirationDate) : null,
           description: data.description ?? predecessor.description,
           regulatoryRef: data.regulatoryRef ?? predecessor.regulatoryRef,
-          rateConfig: (data.rateConfig ?? predecessor.rateConfig) as object,
           version: predecessor.version + 1,
           supersedesId: id,
         },

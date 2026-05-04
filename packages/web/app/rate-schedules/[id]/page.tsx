@@ -17,21 +17,14 @@ interface RateSchedule {
   id: string;
   name: string;
   code: string;
-  rateType: string;
   effectiveDate: string;
   expirationDate?: string;
   version: number;
   description?: string;
   regulatoryRef?: string;
-  rateConfig?: Record<string, unknown>;
   commodity?: { name: string };
   supersededById?: string;
   supersedes?: { id: string; version: number; name: string; effectiveDate: string };
-  serviceAgreements?: Array<{
-    id: string;
-    agreementNumber: string;
-    status: string;
-  }>;
 }
 
 interface AuditEntry {
@@ -236,7 +229,7 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
         tabs={[
           { key: "overview", label: "Overview" },
           { key: "versions", label: "Version History" },
-          { key: "agreements", label: `Agreements (${rs.serviceAgreements?.length ?? 0})` },
+          { key: "agreements", label: "Agreements" },
           { key: "audit", label: "Audit" },
         ]}
         activeTab={activeTab}
@@ -262,10 +255,6 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
             <div style={fieldStyle}>
               <span style={labelStyle}>Commodity</span>
               <CommodityBadge commodity={rs.commodity?.name ?? ""} />
-            </div>
-            <div style={fieldStyle}>
-              <span style={labelStyle}>Rate Type</span>
-              <span style={valueStyle}>{rs.rateType}</span>
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Version</span>
@@ -312,21 +301,10 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
               </div>
             )}
             <div style={fieldStyle}>
-              <span style={labelStyle}>Rate Config</span>
-              <pre
-                style={{
-                  fontFamily: "monospace",
-                  fontSize: "11px",
-                  color: "var(--text-secondary)",
-                  margin: 0,
-                  background: "var(--bg-elevated)",
-                  padding: "8px 10px",
-                  borderRadius: "6px",
-                  overflowX: "auto",
-                }}
-              >
-                {JSON.stringify(rs.rateConfig ?? {}, null, 2)}
-              </pre>
+              <span style={labelStyle}>Components</span>
+              <span style={{ ...valueStyle, color: "var(--text-muted)", fontStyle: "italic" }}>
+                Components (coming soon)
+              </span>
             </div>
             <div style={{ ...fieldStyle, borderBottom: "none" }}>
               <span style={labelStyle}>Schedule ID</span>
@@ -392,18 +370,18 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
         )}
 
         {activeTab === "agreements" && (
-          <DataTable
-            columns={[
-              { key: "agreementNumber", header: "Agreement Number" },
-              {
-                key: "status",
-                header: "Status",
-                render: (row: any) => <StatusBadge status={row.status} />,
-              },
-            ]}
-            data={(rs.serviceAgreements ?? []) as any}
-            onRowClick={(row: any) => router.push(`/service-agreements/${row.id}`)}
-          />
+          <div
+            style={{
+              padding: "32px 24px",
+              textAlign: "center",
+              color: "var(--text-muted)",
+              fontSize: 13,
+            }}
+          >
+            Agreement assignments will be listed here once the v2 schedule
+            assignment join (SAScheduleAssignment) is wired through — see
+            slice 1 task 9.
+          </div>
         )}
 
         {activeTab === "audit" && (

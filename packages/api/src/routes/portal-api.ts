@@ -128,7 +128,6 @@ export async function portalApiRoutes(app: FastifyInstance) {
             include: {
               commodity: { select: { id: true, name: true } },
               billingCycle: { select: { id: true, name: true } },
-              rateSchedule: { select: { id: true, name: true } },
               servicePoints: {
                 include: {
                   premise: { select: { id: true, addressLine1: true, city: true, state: true, zip: true } },

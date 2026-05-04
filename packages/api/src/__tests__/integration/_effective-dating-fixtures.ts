@@ -52,7 +52,6 @@ export interface TenantFixture {
   commodityId: string;
   uomId: string;
   billingCycleId: string;
-  rateScheduleId: string;
   accountId: string;
   premiseId: string;
   meterId: string;
@@ -147,16 +146,18 @@ export async function makeTenantFixture(
     },
   });
 
-  const rateSchedule = await prisma.rateSchedule.create({
+  // v2 RateSchedule has no rateType/rateConfig — pricing is in
+  // RateComponent rows (slice 1 task 5) and SAs link to schedules
+  // via SAScheduleAssignment (task 6). The schedule still exists
+  // for completeness in case future fixtures reference it.
+  await prisma.rateSchedule.create({
     data: {
       utilityId,
       name: `Rate-${suffix}`,
       code: `RATE-${suffix}`,
       commodityId: commodity.id,
-      rateType: "FLAT",
       effectiveDate: new Date("2024-01-01"),
       version: 1,
-      rateConfig: { base_charge: 10, unit: "MONTH" },
     },
   });
 
@@ -227,7 +228,6 @@ export async function makeTenantFixture(
     commodityId: commodity.id,
     uomId: uom.id,
     billingCycleId: billingCycle.id,
-    rateScheduleId: rateSchedule.id,
     accountId: account.id,
     premiseId: premise.id,
     meterId: meter.id,

@@ -101,7 +101,6 @@ export default function NewServiceAgreementPage() {
     accountId: "",
     premiseId: "",
     commodityId: "",
-    rateScheduleId: "",
     billingCycleId: "",
     startDate: "",
     endDate: "",
@@ -131,10 +130,6 @@ export default function NewServiceAgreementPage() {
 
   const set = (key: string, value: unknown) =>
     setForm((prev) => ({ ...prev, [key]: value }));
-
-  const filteredRateSchedules = form.commodityId
-    ? allRateSchedules.filter((rs) => rs.commodityId === form.commodityId)
-    : allRateSchedules;
 
   const filteredMeters = allMeters.filter(
     (m) =>
@@ -175,7 +170,6 @@ export default function NewServiceAgreementPage() {
         startDate: form.startDate,
         meters: validMeters,
       };
-      if (form.rateScheduleId) body.rateScheduleId = form.rateScheduleId;
       if (form.billingCycleId) body.billingCycleId = form.billingCycleId;
       if (form.endDate) body.endDate = form.endDate;
       if (Object.keys(customValues).length > 0) body.customFields = customValues;
@@ -254,7 +248,6 @@ export default function NewServiceAgreementPage() {
               value={form.commodityId}
               onChange={(e) => {
                 set("commodityId", e.target.value);
-                set("rateScheduleId", "");
                 setMeterEntries([{ meterId: "", isPrimary: true }]);
               }}
               required
@@ -269,21 +262,6 @@ export default function NewServiceAgreementPage() {
           </FormField>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-            <FormField label="Rate Schedule">
-              <select
-                style={inputStyle}
-                value={form.rateScheduleId}
-                onChange={(e) => set("rateScheduleId", e.target.value)}
-              >
-                <option value="">Select rate schedule...</option>
-                {filteredRateSchedules.map((rs) => (
-                  <option key={rs.id} value={rs.id}>
-                    {rs.name} ({rs.code})
-                  </option>
-                ))}
-              </select>
-            </FormField>
-
             <FormField label="Billing Cycle">
               <select
                 style={inputStyle}

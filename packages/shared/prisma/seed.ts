@@ -98,57 +98,43 @@ async function main() {
   console.log("  ✓ 3 billing cycles");
 
   // ============ RATE SCHEDULES ============
-  const rsWaterRes = await prisma.rateSchedule.upsert({
+  // v2 RateSchedules are metadata-only — pricing logic moved to
+  // RateComponent rows (slice 1 task 5) and SAs link to schedules
+  // via SAScheduleAssignment (task 6). Keeping the schedules in
+  // seed for the entity picker and the future configurator UI.
+  await prisma.rateSchedule.upsert({
     where: { utilityId_code_version: { utilityId: UTILITY_ID, code: "RS-W-RES", version: 1 } },
     update: {},
     create: {
       utilityId: UTILITY_ID, name: "Residential Water — Tiered", code: "RS-W-RES", commodityId: water.id,
-      rateType: "TIERED", effectiveDate: new Date("2025-01-01"), version: 1,
-      rateConfig: {
-        base_charge: 12.50, unit: "GAL",
-        tiers: [
-          { from: 0, to: 2000, rate: 0.004 },
-          { from: 2001, to: 5000, rate: 0.006 },
-          { from: 5001, to: null, rate: 0.009 },
-        ],
-      },
+      effectiveDate: new Date("2025-01-01"), version: 1,
     },
   });
 
-  const rsSewerFlat = await prisma.rateSchedule.upsert({
+  await prisma.rateSchedule.upsert({
     where: { utilityId_code_version: { utilityId: UTILITY_ID, code: "RS-S-FLAT", version: 1 } },
     update: {},
     create: {
       utilityId: UTILITY_ID, name: "Sewer — Flat Rate", code: "RS-S-FLAT", commodityId: sewer.id,
-      rateType: "FLAT", effectiveDate: new Date("2025-01-01"), version: 1,
-      rateConfig: { base_charge: 9.00, unit: "MONTH" },
+      effectiveDate: new Date("2025-01-01"), version: 1,
     },
   });
 
-  const rsElecRes = await prisma.rateSchedule.upsert({
+  await prisma.rateSchedule.upsert({
     where: { utilityId_code_version: { utilityId: UTILITY_ID, code: "RS-E-RES", version: 1 } },
     update: {},
     create: {
       utilityId: UTILITY_ID, name: "Residential Electric — Tiered", code: "RS-E-RES", commodityId: electric.id,
-      rateType: "TIERED", effectiveDate: new Date("2025-01-01"), version: 1,
-      rateConfig: {
-        base_charge: 15.00, unit: "KWH",
-        tiers: [
-          { from: 0, to: 500, rate: 0.08 },
-          { from: 501, to: 1000, rate: 0.12 },
-          { from: 1001, to: null, rate: 0.18 },
-        ],
-      },
+      effectiveDate: new Date("2025-01-01"), version: 1,
     },
   });
 
-  const rsGasRes = await prisma.rateSchedule.upsert({
+  await prisma.rateSchedule.upsert({
     where: { utilityId_code_version: { utilityId: UTILITY_ID, code: "RS-G-RES", version: 1 } },
     update: {},
     create: {
       utilityId: UTILITY_ID, name: "Residential Gas — Flat", code: "RS-G-RES", commodityId: gas.id,
-      rateType: "FLAT", effectiveDate: new Date("2025-01-01"), version: 1,
-      rateConfig: { base_charge: 18.50, unit: "MONTH" },
+      effectiveDate: new Date("2025-01-01"), version: 1,
     },
   });
 
@@ -247,25 +233,25 @@ async function main() {
   // ============ SERVICE AGREEMENTS ============
   const agreements = [
     // Account 0 at Premise 0: water + sewer
-    { agreementNumber: "SA-0001", accountId: createdAccounts[0].id, premiseId: createdPremises[0].id, commodityId: water.id, rateScheduleId: rsWaterRes.id, billingCycleId: cycle1.id, meterIndices: [0] },
-    { agreementNumber: "SA-0002", accountId: createdAccounts[0].id, premiseId: createdPremises[0].id, commodityId: sewer.id, rateScheduleId: rsSewerFlat.id, billingCycleId: cycle1.id, meterIndices: [1] },
+    { agreementNumber: "SA-0001", accountId: createdAccounts[0].id, premiseId: createdPremises[0].id, commodityId: water.id, billingCycleId: cycle1.id, meterIndices: [0] },
+    { agreementNumber: "SA-0002", accountId: createdAccounts[0].id, premiseId: createdPremises[0].id, commodityId: sewer.id, billingCycleId: cycle1.id, meterIndices: [1] },
     // Account 1 at Premise 1: water + electric + gas
-    { agreementNumber: "SA-0003", accountId: createdAccounts[1].id, premiseId: createdPremises[1].id, commodityId: water.id, rateScheduleId: rsWaterRes.id, billingCycleId: cycle3.id, meterIndices: [2] },
-    { agreementNumber: "SA-0004", accountId: createdAccounts[1].id, premiseId: createdPremises[1].id, commodityId: electric.id, rateScheduleId: rsElecRes.id, billingCycleId: cycle3.id, meterIndices: [3] },
-    { agreementNumber: "SA-0005", accountId: createdAccounts[1].id, premiseId: createdPremises[1].id, commodityId: gas.id, rateScheduleId: rsGasRes.id, billingCycleId: cycle3.id, meterIndices: [4] },
+    { agreementNumber: "SA-0003", accountId: createdAccounts[1].id, premiseId: createdPremises[1].id, commodityId: water.id, billingCycleId: cycle3.id, meterIndices: [2] },
+    { agreementNumber: "SA-0004", accountId: createdAccounts[1].id, premiseId: createdPremises[1].id, commodityId: electric.id, billingCycleId: cycle3.id, meterIndices: [3] },
+    { agreementNumber: "SA-0005", accountId: createdAccounts[1].id, premiseId: createdPremises[1].id, commodityId: gas.id, billingCycleId: cycle3.id, meterIndices: [4] },
     // Account 2 at Premise 2: electric + gas
-    { agreementNumber: "SA-0006", accountId: createdAccounts[2].id, premiseId: createdPremises[2].id, commodityId: electric.id, rateScheduleId: rsElecRes.id, billingCycleId: cycle1.id, meterIndices: [5] },
-    { agreementNumber: "SA-0007", accountId: createdAccounts[2].id, premiseId: createdPremises[2].id, commodityId: gas.id, rateScheduleId: rsGasRes.id, billingCycleId: cycle1.id, meterIndices: [6] },
+    { agreementNumber: "SA-0006", accountId: createdAccounts[2].id, premiseId: createdPremises[2].id, commodityId: electric.id, billingCycleId: cycle1.id, meterIndices: [5] },
+    { agreementNumber: "SA-0007", accountId: createdAccounts[2].id, premiseId: createdPremises[2].id, commodityId: gas.id, billingCycleId: cycle1.id, meterIndices: [6] },
     // Account 3 at Premise 3: water + electric (2 sub-meters!) + sewer
-    { agreementNumber: "SA-0008", accountId: createdAccounts[3].id, premiseId: createdPremises[3].id, commodityId: water.id, rateScheduleId: rsWaterRes.id, billingCycleId: cycle2.id, meterIndices: [7] },
-    { agreementNumber: "SA-0009", accountId: createdAccounts[3].id, premiseId: createdPremises[3].id, commodityId: electric.id, rateScheduleId: rsElecRes.id, billingCycleId: cycle2.id, meterIndices: [8, 9] }, // multi-meter!
-    { agreementNumber: "SA-0010", accountId: createdAccounts[3].id, premiseId: createdPremises[3].id, commodityId: sewer.id, rateScheduleId: rsSewerFlat.id, billingCycleId: cycle2.id, meterIndices: [10] },
+    { agreementNumber: "SA-0008", accountId: createdAccounts[3].id, premiseId: createdPremises[3].id, commodityId: water.id, billingCycleId: cycle2.id, meterIndices: [7] },
+    { agreementNumber: "SA-0009", accountId: createdAccounts[3].id, premiseId: createdPremises[3].id, commodityId: electric.id, billingCycleId: cycle2.id, meterIndices: [8, 9] }, // multi-meter!
+    { agreementNumber: "SA-0010", accountId: createdAccounts[3].id, premiseId: createdPremises[3].id, commodityId: sewer.id, billingCycleId: cycle2.id, meterIndices: [10] },
     // Account 4 at Premise 4
-    { agreementNumber: "SA-0011", accountId: createdAccounts[4].id, premiseId: createdPremises[4].id, commodityId: water.id, rateScheduleId: rsWaterRes.id, billingCycleId: cycle2.id, meterIndices: [11] },
-    { agreementNumber: "SA-0012", accountId: createdAccounts[4].id, premiseId: createdPremises[4].id, commodityId: electric.id, rateScheduleId: rsElecRes.id, billingCycleId: cycle2.id, meterIndices: [12] },
+    { agreementNumber: "SA-0011", accountId: createdAccounts[4].id, premiseId: createdPremises[4].id, commodityId: water.id, billingCycleId: cycle2.id, meterIndices: [11] },
+    { agreementNumber: "SA-0012", accountId: createdAccounts[4].id, premiseId: createdPremises[4].id, commodityId: electric.id, billingCycleId: cycle2.id, meterIndices: [12] },
     // Account 5 at Premise 5
-    { agreementNumber: "SA-0013", accountId: createdAccounts[5].id, premiseId: createdPremises[5].id, commodityId: water.id, rateScheduleId: rsWaterRes.id, billingCycleId: cycle1.id, meterIndices: [13] },
-    { agreementNumber: "SA-0014", accountId: createdAccounts[5].id, premiseId: createdPremises[5].id, commodityId: electric.id, rateScheduleId: rsElecRes.id, billingCycleId: cycle1.id, meterIndices: [14] },
+    { agreementNumber: "SA-0013", accountId: createdAccounts[5].id, premiseId: createdPremises[5].id, commodityId: water.id, billingCycleId: cycle1.id, meterIndices: [13] },
+    { agreementNumber: "SA-0014", accountId: createdAccounts[5].id, premiseId: createdPremises[5].id, commodityId: electric.id, billingCycleId: cycle1.id, meterIndices: [14] },
   ];
 
   for (const sa of agreements) {

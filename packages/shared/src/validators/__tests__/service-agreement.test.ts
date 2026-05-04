@@ -9,7 +9,6 @@ const validAgreement = {
   accountId: "550e8400-e29b-41d4-a716-446655440001",
   premiseId: "550e8400-e29b-41d4-a716-446655440002",
   commodityId: "550e8400-e29b-41d4-a716-446655440003",
-  rateScheduleId: "550e8400-e29b-41d4-a716-446655440004",
   billingCycleId: "550e8400-e29b-41d4-a716-446655440005",
   startDate: "2024-01-01",
   meters: [

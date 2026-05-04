@@ -88,7 +88,6 @@ function fieldsForNode(node: GraphNode): Field[] {
       return [
         { label: "Number", value: str("agreementNumber"), mono: true },
         { label: "Commodity", value: str("commodity") },
-        { label: "Rate", value: str("rateSchedule"), mono: true },
         { label: "Start", value: formatDate(d["startDate"]) },
         { label: "End", value: formatDate(d["endDate"]) },
       ];

@@ -181,15 +181,13 @@ async function seedAgreementChain(utilityId: string, agreementId: string): Promi
   const commodity = await prisma.commodity.create({
     data: { utilityId, code: `C-${agreementId.slice(-4)}`, name: "Test Commodity" },
   });
-  const rateSchedule = await prisma.rateSchedule.create({
+  await prisma.rateSchedule.create({
     data: {
       utilityId,
       name: "Test Rate",
       code: `R-${agreementId.slice(-4)}`,
       commodityId: commodity.id,
-      rateType: "FLAT",
       effectiveDate: new Date("2026-01-01"),
-      rateConfig: { baseCharge: 0 },
     },
   });
   const billingCycle = await prisma.billingCycle.create({
@@ -208,7 +206,6 @@ async function seedAgreementChain(utilityId: string, agreementId: string): Promi
       agreementNumber: `SA-${agreementId.slice(-8)}`,
       accountId: account.id,
       commodityId: commodity.id,
-      rateScheduleId: rateSchedule.id,
       billingCycleId: billingCycle.id,
       startDate: new Date("2026-01-01"),
       status: "ACTIVE",

@@ -45,7 +45,6 @@ export const moveInSchema = z.object({
   newCustomer: newCustomerPayload.optional(),
   agreements: z.array(z.object({
     commodityId: z.string().uuid(),
-    rateScheduleId: z.string().uuid(),
     billingCycleId: z.string().uuid(),
     // Optional: auto-generated per agreement from the tenant template.
     agreementNumber: z.string().min(1).max(50).optional(),

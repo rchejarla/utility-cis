@@ -190,7 +190,6 @@ describe("Request validation", () => {
           accountId: "550e8400-e29b-41d4-a716-446655440000",
           premiseId: "550e8400-e29b-41d4-a716-446655440001",
           commodityId: "550e8400-e29b-41d4-a716-446655440002",
-          rateScheduleId: "550e8400-e29b-41d4-a716-446655440003",
           billingCycleId: "550e8400-e29b-41d4-a716-446655440004",
           startDate: "2026-04-01",
           meters: [], // should fail - min 1
@@ -225,7 +224,6 @@ describe("Request validation", () => {
           accountId: "550e8400-e29b-41d4-a716-446655440000",
           premiseId: "550e8400-e29b-41d4-a716-446655440001",
           commodityId: "550e8400-e29b-41d4-a716-446655440002",
-          rateScheduleId: "550e8400-e29b-41d4-a716-446655440003",
           billingCycleId: "550e8400-e29b-41d4-a716-446655440004",
           startDate: "2026-04-01",
           status: "INVALID_STATUS",
@@ -294,63 +292,27 @@ describe("Request validation", () => {
   });
 
   describe("Rate Schedules", () => {
-    it("rejects rate schedule with negative base charge in FLAT config", async () => {
-      const app = await createTestApp();
-      const response = await app.inject({
-        method: "POST",
-        url: "/api/v1/rate-schedules",
-        headers,
-        payload: {
-          name: "Bad Rate",
-          code: "BAD",
-          commodityId: "550e8400-e29b-41d4-a716-446655440000",
-          rateType: "FLAT",
-          effectiveDate: "2026-04-01",
-          rateConfig: {
-            type: "FLAT",
-            baseCharge: -5, // negative - should fail
-            perUnitCharge: 0.1,
-          },
-        },
-      });
-      expect(response.statusCode).toBe(400);
-      const body = JSON.parse(response.body);
-      expect(body.error.code).toBe("VALIDATION_ERROR");
+    // Legacy v1 validation tests targeted rateType + rateConfig
+    // (FLAT/TIERED/etc.). Those fields no longer exist on the
+    // RateSchedule — pricing moved to RateComponent rows in slice
+    // 1 task 5, with grammar validators in task 4. The new
+    // configurator's validation tests will replace these once
+    // tasks 4-5 land.
+    it.skip("rejects rate schedule with invalid component grammar (task 4-5)", () => {
+      // placeholder — see slice 1 task 4 for rate-grammar tests
+      // and task 5 for component CRUD validation tests.
     });
 
-    it("rejects rate schedule with missing rateConfig", async () => {
+    it("rejects rate schedule with missing required name", async () => {
       const app = await createTestApp();
       const response = await app.inject({
         method: "POST",
         url: "/api/v1/rate-schedules",
         headers,
         payload: {
-          name: "Rate Without Config",
-          code: "RWC",
-          commodityId: "550e8400-e29b-41d4-a716-446655440000",
-          rateType: "FLAT",
-          effectiveDate: "2026-04-01",
-          // rateConfig missing
-        },
-      });
-      expect(response.statusCode).toBe(400);
-      const body = JSON.parse(response.body);
-      expect(body.error.code).toBe("VALIDATION_ERROR");
-    });
-
-    it("rejects rate schedule with invalid rateType", async () => {
-      const app = await createTestApp();
-      const response = await app.inject({
-        method: "POST",
-        url: "/api/v1/rate-schedules",
-        headers,
-        payload: {
-          name: "Bad Rate",
           code: "BAD",
           commodityId: "550e8400-e29b-41d4-a716-446655440000",
-          rateType: "UNKNOWN",
           effectiveDate: "2026-04-01",
-          rateConfig: { type: "FLAT", baseCharge: 5, perUnitCharge: 0.1 },
         },
       });
       expect(response.statusCode).toBe(400);

@@ -58,7 +58,6 @@ async function makeSaWithThreeMeters() {
       agreementNumber: "SA-CASCADE",
       accountId: fixA.accountId,
       commodityId: fixA.commodityId,
-      rateScheduleId: fixA.rateScheduleId,
       billingCycleId: fixA.billingCycleId,
       startDate: new Date("2024-01-01"),
       status: "ACTIVE",

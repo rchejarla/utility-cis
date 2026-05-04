@@ -38,9 +38,7 @@ interface ServiceAgreement {
     };
   }>;
   commodity?: { name: string };
-  rateSchedule?: { id: string; name: string; code: string };
   billingCycle?: { id: string; name: string; cycleCode: string };
-  rateScheduleId?: string;
   billingCycleId?: string;
   commodityId?: string;
   meters?: Array<{
@@ -251,17 +249,12 @@ export default function ServiceAgreementDetailPage({
   const handleEdit = async () => {
     if (!sa) return;
     setEditForm({
-      rateScheduleId: sa.rateScheduleId ?? sa.rateSchedule?.id ?? "",
       billingCycleId: sa.billingCycleId ?? sa.billingCycle?.id ?? "",
       readSequence: sa.readSequence != null ? String(sa.readSequence) : "",
     });
     // Fetch dropdowns
     try {
-      const [rsRes, bcRes] = await Promise.all([
-        apiClient.get<{ data: RateSchedule[] }>("/api/v1/rate-schedules", { limit: "200" }),
-        apiClient.get<{ data: BillingCycle[] }>("/api/v1/billing-cycles"),
-      ]);
-      setRateSchedules(rsRes.data ?? []);
+      const bcRes = await apiClient.get<{ data: BillingCycle[] }>("/api/v1/billing-cycles");
       setBillingCycles(bcRes.data ?? []);
     } catch (err) {
       console.error("Failed to load dropdowns", err);
@@ -281,9 +274,7 @@ export default function ServiceAgreementDetailPage({
     setSaving(true);
     try {
       const changes: Record<string, unknown> = {};
-      const currentRsId = sa.rateScheduleId ?? sa.rateSchedule?.id ?? "";
       const currentBcId = sa.billingCycleId ?? sa.billingCycle?.id ?? "";
-      if (editForm.rateScheduleId !== currentRsId) changes.rateScheduleId = editForm.rateScheduleId || null;
       if (editForm.billingCycleId !== currentBcId) changes.billingCycleId = editForm.billingCycleId || null;
       // endDate is no longer settable via PATCH — it's set via the
       // close endpoint, which also cascades onto meter assignments.
@@ -536,23 +527,10 @@ export default function ServiceAgreementDetailPage({
               <CommodityBadge commodity={sa.commodity?.name ?? ""} />
             </div>
             <div style={fieldStyle}>
-              <span style={labelStyle}>Rate Schedule</span>
-              {editing ? (
-                <select
-                  style={inputStyle}
-                  value={editForm.rateScheduleId}
-                  onChange={(e) => setEditForm((f) => ({ ...f, rateScheduleId: e.target.value }))}
-                >
-                  <option value="">None</option>
-                  {rateSchedules.map((rs) => (
-                    <option key={rs.id} value={rs.id}>{rs.name} ({rs.code})</option>
-                  ))}
-                </select>
-              ) : (
-                <span style={valueStyle}>
-                  {sa.rateSchedule ? `${sa.rateSchedule.name} (${sa.rateSchedule.code})` : "—"}
-                </span>
-              )}
+              <span style={labelStyle}>Rate Components</span>
+              <span style={{ ...valueStyle, color: "var(--text-muted)", fontStyle: "italic" }}>
+                Components (coming soon)
+              </span>
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Billing Cycle</span>

@@ -103,7 +103,6 @@ export async function getAccount(id: string, utilityId: string) {
             include: { premise: true },
           },
           commodity: true,
-          rateSchedule: true,
         },
         orderBy: { startDate: "desc" },
       },

@@ -37,7 +37,6 @@ export const createServiceAgreementSchema = z.object({
   accountId: z.string().uuid(),
   premiseId: z.string().uuid(),
   commodityId: z.string().uuid(),
-  rateScheduleId: z.string().uuid(),
   billingCycleId: z.string().uuid(),
   startDate: z.string().date(),
   endDate: z.string().date().optional(),
@@ -58,7 +57,6 @@ export const createServiceAgreementSchema = z.object({
 // `.strict()` so passing a removed field returns 422 instead of being
 // silently stripped — the deprecation needs to be visible.
 export const updateServiceAgreementSchema = z.object({
-  rateScheduleId: z.string().uuid().optional(),
   billingCycleId: z.string().uuid().optional(),
   readSequence: z.number().int().optional(),
   customFields: z.record(z.unknown()).optional(),

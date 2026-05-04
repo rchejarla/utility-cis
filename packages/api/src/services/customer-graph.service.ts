@@ -54,7 +54,6 @@ export async function buildCustomerGraph(
                 },
               },
               commodity: { select: { id: true, code: true, name: true } },
-              rateSchedule: { select: { id: true, code: true, name: true } },
             },
             orderBy: { startDate: "asc" },
           },
@@ -190,13 +189,12 @@ export async function buildCustomerGraph(
         id: agNodeId,
         type: "agreement",
         label: ag.agreementNumber,
-        subtext: `${ag.commodity?.name ?? ""} · ${ag.rateSchedule?.code ?? ""}`,
+        subtext: ag.commodity?.name ?? "",
         data: {
           id: ag.id,
           agreementNumber: ag.agreementNumber,
           status: ag.status,
           commodity: ag.commodity,
-          rateSchedule: ag.rateSchedule,
           // Keep the premise reference on the agreement node data even
           // though we don't draw a premise→agreement edge any more.
           // The web layout sorts accounts by the premise their

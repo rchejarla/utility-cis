@@ -36,7 +36,6 @@ interface Agreement {
     meters: MeterInfo[];
   }>;
   billingCycle: { id: string; name: string };
-  rateSchedule: { id: string; name: string };
 }
 
 interface AccountDetail {
@@ -151,7 +150,7 @@ export default function PortalAccountDetailPage({ params }: { params: Promise<{ 
                     <StatusBadge status={sa.status} />
                   </div>
                   <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
-                    {sa.agreementNumber} · {sa.rateSchedule.name} · {sa.billingCycle.name}
+                    {sa.agreementNumber} · {sa.billingCycle.name}
                   </div>
                 </div>
                 <Link

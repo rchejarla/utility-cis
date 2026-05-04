@@ -68,17 +68,6 @@ enum ServiceAgreementStatus {
   @@map("service_agreement_status")
 }
 
-enum RateType {
-  FLAT
-  TIERED
-  TIME_OF_USE
-  DEMAND
-  BUDGET
-  SEASONAL
-
-  @@map("rate_type")
-}
-
 enum BillingFrequency {
   MONTHLY
   BIMONTHLY
@@ -368,7 +357,6 @@ model ServiceAgreement {
   agreementNumber String                 @map("agreement_number") @db.VarChar(50)
   accountId       String                 @map("account_id") @db.Uuid
   commodityId     String                 @map("commodity_id") @db.Uuid
-  rateScheduleId  String                 @map("rate_schedule_id") @db.Uuid
   billingCycleId  String                 @map("billing_cycle_id") @db.Uuid
   startDate       DateTime               @map("start_date") @db.Date
   endDate         DateTime?              @map("end_date") @db.Date
@@ -385,7 +373,6 @@ model ServiceAgreement {
   // Relations
   account         Account                 @relation(fields: [accountId], references: [id], onDelete: Restrict)
   commodity       Commodity               @relation(fields: [commodityId], references: [id], onDelete: Restrict)
-  rateSchedule    RateSchedule            @relation(fields: [rateScheduleId], references: [id], onDelete: Restrict)
   billingCycle    BillingCycle            @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
   servicePoints   ServicePoint[]
   meterReads      MeterRead[]
@@ -397,7 +384,6 @@ model ServiceAgreement {
   @@unique([utilityId, agreementNumber])
   @@index([accountId])
   @@index([commodityId])
-  @@index([rateScheduleId])
   @@index([billingCycleId])
   @@index([utilityId, status])
   @@map("service_agreement")
@@ -475,12 +461,10 @@ model RateSchedule {
   name           String    @map("name") @db.VarChar(255)
   code           String    @map("code") @db.VarChar(50)
   commodityId    String    @map("commodity_id") @db.Uuid
-  rateType       RateType  @map("rate_type")
   effectiveDate  DateTime  @map("effective_date") @db.Date
   expirationDate DateTime? @map("expiration_date") @db.Date
   description    String?   @map("description") @db.Text
   regulatoryRef  String?   @map("regulatory_ref") @db.VarChar(100)
-  rateConfig     Json      @map("rate_config")
   version        Int       @default(1) @map("version")
   supersedesId   String?   @map("supersedes_id") @db.Uuid
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
@@ -489,7 +473,6 @@ model RateSchedule {
   commodity         Commodity          @relation(fields: [commodityId], references: [id], onDelete: Restrict)
   supersedes        RateSchedule?      @relation("RateScheduleVersions", fields: [supersedesId], references: [id], onDelete: SetNull)
   supersededBy      RateSchedule[]     @relation("RateScheduleVersions")
-  serviceAgreements ServiceAgreement[]
 
   @@unique([utilityId, code, version])
   @@index([commodityId])

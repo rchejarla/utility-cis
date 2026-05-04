@@ -90,12 +90,11 @@ export default function MoveInWizardPage() {
   interface AgreementDraft {
     key: string;
     commodityId: string;
-    rateScheduleId: string;
     billingCycleId: string;
     agreementNumber: string;
   }
   const [agreements, setAgreements] = useState<AgreementDraft[]>([
-    { key: "a1", commodityId: "", rateScheduleId: "", billingCycleId: "", agreementNumber: "" },
+    { key: "a1", commodityId: "", billingCycleId: "", agreementNumber: "" },
   ]);
 
   // Data lookups
@@ -139,7 +138,6 @@ export default function MoveInWizardPage() {
       {
         key: `a${prev.length + 1}`,
         commodityId: "",
-        rateScheduleId: "",
         billingCycleId: "",
         agreementNumber: "",
       },
@@ -161,7 +159,7 @@ export default function MoveInWizardPage() {
         ((customerType === "INDIVIDUAL" && firstName && lastName) ||
           (customerType === "ORGANIZATION" && organizationName))));
   const step3Valid = agreements.every(
-    (a) => a.commodityId && a.rateScheduleId && a.billingCycleId,
+    (a) => a.commodityId && a.billingCycleId,
   );
 
   const submit = async () => {
@@ -179,7 +177,6 @@ export default function MoveInWizardPage() {
         ...(accountNumber ? { accountNumber } : {}),
         agreements: agreements.map((a) => ({
           commodityId: a.commodityId,
-          rateScheduleId: a.rateScheduleId,
           billingCycleId: a.billingCycleId,
           // Same for each agreement — omit when blank.
           ...(a.agreementNumber ? { agreementNumber: a.agreementNumber } : {}),
@@ -558,23 +555,6 @@ export default function MoveInWizardPage() {
                           {c.name}
                         </option>
                       ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label style={labelStyle}>RATE SCHEDULE</label>
-                    <select
-                      value={a.rateScheduleId}
-                      onChange={(e) => updateAgreement(a.key, { rateScheduleId: e.target.value })}
-                      style={fieldStyle}
-                    >
-                      <option value="">Select...</option>
-                      {rateSchedules
-                        .filter((rs) => !a.commodityId || rs.commodityId === a.commodityId)
-                        .map((rs) => (
-                          <option key={rs.id} value={rs.id}>
-                            {rs.name} ({rs.code})
-                          </option>
-                        ))}
                     </select>
                   </div>
                   <div>

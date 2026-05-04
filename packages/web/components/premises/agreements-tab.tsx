@@ -125,7 +125,6 @@ export function AgreementsTab({
     agreementNumber: "",
     commodityId: "",
     accountId: "",
-    rateScheduleId: "",
     billingCycleId: "",
     startDate: new Date().toISOString().slice(0, 10),
     selectedMeterIds: [] as string[],
@@ -180,7 +179,6 @@ export function AgreementsTab({
     setForm((f) => ({
       ...f,
       commodityId,
-      rateScheduleId: "",
       selectedMeterIds: [],
     }));
   };
@@ -219,10 +217,6 @@ export function AgreementsTab({
       toast("Account is required", "error");
       return;
     }
-    if (!form.rateScheduleId) {
-      toast("Rate Schedule is required", "error");
-      return;
-    }
     if (!form.billingCycleId) {
       toast("Billing Cycle is required", "error");
       return;
@@ -249,7 +243,6 @@ export function AgreementsTab({
         accountId: form.accountId,
         premiseId: premise.id,
         commodityId: form.commodityId,
-        rateScheduleId: form.rateScheduleId,
         billingCycleId: form.billingCycleId,
         startDate: form.startDate,
         meters,
@@ -260,7 +253,6 @@ export function AgreementsTab({
         agreementNumber: "",
         commodityId: "",
         accountId: "",
-        rateScheduleId: "",
         billingCycleId: "",
         startDate: new Date().toISOString().slice(0, 10),
         selectedMeterIds: [],
@@ -396,48 +388,15 @@ export function AgreementsTab({
             </div>
           </div>
 
-          {/* Row 2: Rate Schedule, Billing Cycle, Start Date */}
+          {/* Row 2: Billing Cycle, Start Date */}
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "1fr 1fr 1fr",
+              gridTemplateColumns: "1fr 1fr",
               gap: "12px",
               marginBottom: "12px",
             }}
           >
-            {/* Rate Schedule */}
-            <div>
-              <div
-                style={{
-                  fontSize: "11px",
-                  color: "var(--text-muted)",
-                  marginBottom: "4px",
-                  fontWeight: 500,
-                }}
-              >
-                Rate Schedule *
-              </div>
-              <select
-                style={inputStyle}
-                value={form.rateScheduleId}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, rateScheduleId: e.target.value }))
-                }
-                disabled={!form.commodityId}
-              >
-                <option value="">
-                  {form.commodityId
-                    ? "Select rate schedule..."
-                    : "Select commodity first"}
-                </option>
-                {rateSchedules.map((rs) => (
-                  <option key={rs.id} value={rs.id}>
-                    {rs.name} ({rs.code})
-                  </option>
-                ))}
-              </select>
-            </div>
-
             {/* Billing Cycle */}
             <div>
               <div
