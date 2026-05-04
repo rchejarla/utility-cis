@@ -21,5 +21,18 @@ export const createRateComponentSchema = z
 
 export const updateRateComponentSchema = createRateComponentSchema.partial();
 
+export const cycleCheckRequestSchema = z
+  .object({
+    componentId: z.string().uuid().nullable(),
+    kindCode: z.string(),
+    label: z.string(),
+    predicate: z.unknown(),
+    quantitySource: z.unknown(),
+    pricing: z.unknown(),
+    sortOrder: z.number().int().nonnegative(),
+  })
+  .strict();
+
 export type CreateRateComponentInput = z.infer<typeof createRateComponentSchema>;
 export type UpdateRateComponentInput = z.infer<typeof updateRateComponentSchema>;
+export type CycleCheckRequest = z.infer<typeof cycleCheckRequestSchema>;

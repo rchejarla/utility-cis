@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   createRateComponentSchema,
   updateRateComponentSchema,
+  cycleCheckRequestSchema,
 } from "@utility-cis/shared";
 import {
   listComponentsForSchedule,
@@ -10,6 +11,7 @@ import {
   createRateComponent,
   updateRateComponent,
   deleteRateComponent,
+  checkComponentCycle,
 } from "../services/rate-component.service.js";
 import { idParamSchema } from "../lib/route-schemas.js";
 
@@ -67,6 +69,21 @@ export async function rateComponentRoutes(app: FastifyInstance) {
       const { id } = idParamSchema.parse(request.params);
       await deleteRateComponent(utilityId, id);
       return reply.status(204).send();
+    },
+  );
+
+  app.post(
+    "/api/v1/rate-schedules/:scheduleId/cycle-check",
+    { config: { module: "rate_schedules", permission: "EDIT" } },
+    async (request, reply) => {
+      const { utilityId } = request.user;
+      const { scheduleId } = scheduleIdParamSchema.parse(request.params);
+      const data = cycleCheckRequestSchema.parse(request.body);
+      const result = await checkComponentCycle(utilityId, scheduleId, data);
+      if (!result.valid) {
+        return reply.status(400).send(result);
+      }
+      return reply.status(200).send(result);
     },
   );
 }

@@ -2,7 +2,10 @@ import { prisma } from "../lib/prisma.js";
 import type {
   CreateRateComponentInput,
   UpdateRateComponentInput,
+  CycleCheckRequest,
 } from "@utility-cis/shared";
+import { detectCycles } from "../lib/rate-engine/index.js";
+import type { RateComponentSnapshot } from "../lib/rate-engine/types.js";
 
 /**
  * Slice 1 task 5 — RateComponent CRUD service.
@@ -82,4 +85,66 @@ export async function deleteRateComponent(utilityId: string, id: string) {
   return prisma.rateComponent.delete({
     where: { id, utilityId },
   });
+}
+
+/**
+ * Slice 2 task 2 — cycle-check for a proposed RateComponent.
+ *
+ * Loads the schedule's existing components, swaps in the proposed
+ * component (replacing by id when editing, or appending when new),
+ * and runs the rate engine's `detectCycles`. Returns either
+ * `{ valid: true }` or `{ valid: false, cycle }` so the route can
+ * render either an HTTP 200 success or an HTTP 400 with the cycle
+ * path.
+ */
+export async function checkComponentCycle(
+  utilityId: string,
+  rateScheduleId: string,
+  proposed: CycleCheckRequest,
+): Promise<{ valid: boolean; cycle?: string[] }> {
+  // Verify the schedule belongs to the tenant before doing any work.
+  // Without this guard a cross-tenant id would silently load an empty
+  // component list and falsely report "valid".
+  await prisma.rateSchedule.findUniqueOrThrow({
+    where: { id: rateScheduleId, utilityId },
+  });
+
+  const current = await prisma.rateComponent.findMany({
+    where: { rateScheduleId, utilityId },
+  });
+
+  const proposedSnapshot: RateComponentSnapshot = {
+    id: proposed.componentId ?? "PROPOSED-NEW",
+    rateScheduleId,
+    kindCode: proposed.kindCode,
+    label: proposed.label,
+    predicate: proposed.predicate,
+    quantitySource: proposed.quantitySource,
+    pricing: proposed.pricing,
+    sortOrder: proposed.sortOrder,
+    effectiveDate: new Date(),
+    expirationDate: null,
+  };
+
+  const merged: RateComponentSnapshot[] = [
+    ...current
+      .filter((c) => c.id !== proposed.componentId)
+      .map((c) => ({
+        id: c.id,
+        rateScheduleId: c.rateScheduleId,
+        kindCode: c.kindCode,
+        label: c.label,
+        predicate: c.predicate,
+        quantitySource: c.quantitySource,
+        pricing: c.pricing,
+        sortOrder: c.sortOrder,
+        effectiveDate: c.effectiveDate,
+        expirationDate: c.expirationDate,
+      })),
+    proposedSnapshot,
+  ];
+
+  const result = detectCycles(merged);
+  if (result === null) return { valid: true };
+  return { valid: false, cycle: result.cycle };
 }
