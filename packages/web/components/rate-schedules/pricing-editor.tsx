@@ -4,6 +4,8 @@ import { useState } from "react";
 import { pricingSchema } from "@utility-cis/shared";
 import { FlatEditor } from "./pricing-editors/flat-editor";
 import { TieredEditor } from "./pricing-editors/tiered-editor";
+import { LookupEditor } from "./pricing-editors/lookup-editor";
+import { PercentOfEditor } from "./pricing-editors/percent-of-editor";
 import { JsonFallbackEditor } from "./pricing-editors/json-fallback-editor";
 
 interface Props {
@@ -58,6 +60,22 @@ export function PricingEditor({ value, onChange }: Props) {
           tiers: Array<{ to: number | null; rate: number }>;
         })
       : null;
+  const lookupValue =
+    currentValue?.type === "lookup"
+      ? (currentValue as {
+          type: "lookup";
+          by: string;
+          table: Record<string, number>;
+        })
+      : null;
+  const percentOfValue =
+    currentValue?.type === "percent_of"
+      ? (currentValue as {
+          type: "percent_of";
+          selector: Record<string, unknown>;
+          percent: number;
+        })
+      : null;
 
   return (
     <div>
@@ -69,12 +87,10 @@ export function PricingEditor({ value, onChange }: Props) {
       >
         <option value="flat">Flat per unit</option>
         <option value="tiered">Tiered blocks</option>
-        <option value="lookup">Lookup (advanced — JSON for now)</option>
+        <option value="lookup">Lookup table</option>
+        <option value="percent_of">Percent of selected lines</option>
         <option value="catalog">Catalog (advanced — JSON for now)</option>
         <option value="per_unit">Per unit (advanced — JSON for now)</option>
-        <option value="percent_of">
-          Percent of selected lines (advanced — JSON for now)
-        </option>
         <option value="indexed">Indexed (advanced — JSON for now)</option>
         <option value="floor">Floor (advanced — JSON for now)</option>
       </select>
@@ -89,7 +105,19 @@ export function PricingEditor({ value, onChange }: Props) {
             onChange={handleStructuredChange}
           />
         )}
-        {!["flat", "tiered"].includes(type) && (
+        {type === "lookup" && (
+          <LookupEditor
+            value={lookupValue}
+            onChange={handleStructuredChange}
+          />
+        )}
+        {type === "percent_of" && (
+          <PercentOfEditor
+            value={percentOfValue}
+            onChange={handleStructuredChange}
+          />
+        )}
+        {!["flat", "tiered", "lookup", "percent_of"].includes(type) && (
           <JsonFallbackEditor
             initialJson={JSON.stringify(value ?? { type }, null, 2)}
             schema={pricingSchema}
