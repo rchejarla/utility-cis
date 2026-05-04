@@ -27,8 +27,16 @@ async function main() {
   await p.meterRead.deleteMany({});
   if (p.attachment) await p.attachment.deleteMany({});
 
+  // Rate v2 cleanup (slice 1 task 10) — sa_rate_schedule_assignment
+  // points at service_agreement and rate_schedule; rate_component points
+  // at rate_schedule. Clear them before SAs and schedules.
+  if (p.sAScheduleAssignment) await p.sAScheduleAssignment.deleteMany({});
+  if (p.rateComponent) await p.rateComponent.deleteMany({});
+  if (p.rateIndex) await p.rateIndex.deleteMany({});
+
   // SAM table dropped in slice 1 migration; SP/SPM cascade from SA deletion.
   await p.serviceAgreement.deleteMany({});
+  if (p.rateServiceClass) await p.rateServiceClass.deleteMany({});
   await p.meterRegister.deleteMany({});
   await p.contact.deleteMany({});
   await p.billingAddress.deleteMany({});
@@ -61,7 +69,9 @@ async function main() {
   const electric = await p.commodity.create({ data: { utilityId: UID, code: "ELECTRIC", name: "Electricity", displayOrder: 2 } });
   const gas = await p.commodity.create({ data: { utilityId: UID, code: "GAS", name: "Natural Gas", displayOrder: 3 } });
   const sewer = await p.commodity.create({ data: { utilityId: UID, code: "SEWER", name: "Sewer", displayOrder: 4 } });
-  console.log("  4 commodities");
+  const stormwater = await p.commodity.create({ data: { utilityId: UID, code: "STORMWATER", name: "Stormwater", displayOrder: 5 } });
+  const solidWaste = await p.commodity.create({ data: { utilityId: UID, code: "SOLID_WASTE", name: "Solid Waste", displayOrder: 6 } });
+  console.log("  6 commodities");
 
   // Global measure types are seeded by migration
   // 20260424161251_add_measure_type_def; look them up by code.
@@ -83,30 +93,408 @@ async function main() {
   const c2 = await p.billingCycle.create({ data: { utilityId: UID, name: "Route 2 - South District", cycleCode: "R02", readDayOfMonth: 12, billDayOfMonth: 17, frequency: "MONTHLY" } });
   console.log("  2 billing cycles");
 
-  const rsW = await p.rateSchedule.create({ data: { utilityId: UID, name: "Residential Water Tiered", code: "RS-W-RES", commodityId: water.id, rateType: "TIERED", effectiveDate: new Date("2025-01-01"), rateConfig: { base_charge: 12.50, unit: "GAL", tiers: [{ from: 0, to: 2000, rate: 0.004 }, { from: 2001, to: 5000, rate: 0.006 }, { from: 5001, to: null, rate: 0.009 }] } } });
-  const rsS = await p.rateSchedule.create({ data: { utilityId: UID, name: "Sewer Flat Rate", code: "RS-S-FLAT", commodityId: sewer.id, rateType: "FLAT", effectiveDate: new Date("2025-01-01"), rateConfig: { base_charge: 9.00, unit: "MONTH" } } });
-  const rsE = await p.rateSchedule.create({ data: { utilityId: UID, name: "Residential Electric Tiered", code: "RS-E-RES", commodityId: electric.id, rateType: "TIERED", effectiveDate: new Date("2025-01-01"), rateConfig: { base_charge: 15.00, unit: "KWH", tiers: [{ from: 0, to: 500, rate: 0.08 }, { from: 501, to: null, rate: 0.12 }] } } });
-  const rsG = await p.rateSchedule.create({ data: { utilityId: UID, name: "Residential Gas Flat", code: "RS-G-RES", commodityId: gas.id, rateType: "FLAT", effectiveDate: new Date("2025-01-01"), rateConfig: { base_charge: 18.50, unit: "MONTH" } } });
-  console.log("  4 rate schedules");
+  // ============ RATE SERVICE CLASSES (v2 — slice 1 task 10) ============
+  // Per-commodity classes used by SAs (rate_service_class_id) and by
+  // RateComponent predicates (`{ class: "single_family" }`).
+  const classDefs = [
+    { commodity: water, codes: [
+      ["single_family", "Single Family"], ["multi_family", "Multi-Family"],
+      ["government", "Government"], ["msu", "MSU"], ["commercial", "Commercial"],
+    ]},
+    { commodity: sewer, codes: [
+      ["residential", "Residential"], ["multi_family", "Multi-Family"],
+      ["commercial", "Commercial"], ["government", "Government"],
+      ["msu", "MSU"], ["industrial", "Industrial"],
+    ]},
+    { commodity: stormwater, codes: [
+      ["residential", "Residential"], ["commercial", "Commercial"],
+    ]},
+    { commodity: solidWaste, codes: [
+      ["residential", "Residential"], ["commercial", "Commercial"],
+    ]},
+    { commodity: electric, codes: [
+      ["residential", "Residential"], ["small_commercial", "Small Commercial"],
+      ["large_commercial", "Large Commercial"], ["irrigation", "Irrigation"],
+      ["lighting", "Lighting"],
+    ]},
+  ];
+  /** @type {Record<string, Record<string, { id: string }>>} */
+  const classMap = {};
+  let classCount = 0;
+  for (const grp of classDefs) {
+    classMap[grp.commodity.code] = {};
+    let order = 10;
+    for (const [code, label] of grp.codes) {
+      const c = await p.rateServiceClass.create({
+        data: { utilityId: UID, commodityId: grp.commodity.id, code, label, sortOrder: order, isActive: true },
+      });
+      classMap[grp.commodity.code][code] = c;
+      order += 10;
+      classCount++;
+    }
+  }
+  console.log("  " + classCount + " rate service classes");
+
+  // ============ RATE INDICES (v2 — slice 1 task 10) ============
+  await p.rateIndex.create({ data: { utilityId: UID, name: "fac",                period: "2026-Q2",      value: 0.00125, effectiveDate: new Date("2026-04-01") } });
+  await p.rateIndex.create({ data: { utilityId: UID, name: "epcc",               period: "2026-current", value: 0.00050, effectiveDate: new Date("2026-01-01") } });
+  await p.rateIndex.create({ data: { utilityId: UID, name: "supply_residential", period: "2026-Q2",      value: 0.07000, effectiveDate: new Date("2026-04-01") } });
+  console.log("  3 rate indices");
+
+  // ============ RATE SCHEDULES + COMPONENTS (v2 — slice 1 task 10) ============
+  // Schedules are metadata-only; pricing lives in rate_component rows.
+  // Components carry effective_date independently of the schedule.
+  const SLICE1_EFF = new Date("2025-09-15");
+
+  // ---- Bozeman Water 2025-09 ----
+  const rsW = await p.rateSchedule.create({
+    data: {
+      utilityId: UID,
+      name: "Bozeman Water 2025-09",
+      code: "BZN-WATER",
+      commodityId: water.id,
+      effectiveDate: SLICE1_EFF,
+      description: "City of Bozeman water tariff effective 2025-09-15",
+      regulatoryRef: "Resolution 5378",
+      version: 1,
+    },
+  });
+  await p.rateComponent.createMany({
+    data: [
+      // Service charge — same for all classes, keyed to meter size.
+      { utilityId: UID, rateScheduleId: rsW.id, kindCode: "service_charge",
+        label: "Water Service Charge", sortOrder: 10, effectiveDate: SLICE1_EFF,
+        predicate: {}, quantitySource: { base: "fixed" },
+        pricing: { type: "lookup", by: "meter_size", table: {
+          '5/8"': 22.31, '1"': 29.56, '1.5"': 46.52, '2"': 67.64,
+          '3"': 116.92, '4"': 187.50, '6"': 349.42, '8"': 552.48,
+        }},
+      },
+      // SFR — inclining-block tiers.
+      { utilityId: UID, rateScheduleId: rsW.id, kindCode: "consumption",
+        label: "Water Usage — Single Family", sortOrder: 20, effectiveDate: SLICE1_EFF,
+        predicate: { class: "single_family" },
+        quantitySource: { base: "metered" },
+        pricing: { type: "tiered", tiers: [
+          { to: 6, rate: 3.31 }, { to: 25, rate: 4.58 },
+          { to: 55, rate: 6.39 }, { to: null, rate: 9.58 },
+        ]},
+      },
+      // Multi-Family flat per HCF.
+      { utilityId: UID, rateScheduleId: rsW.id, kindCode: "consumption",
+        label: "Water Usage — Multi-Family", sortOrder: 21, effectiveDate: SLICE1_EFF,
+        predicate: { class: "multi_family" },
+        quantitySource: { base: "metered" },
+        pricing: { type: "flat", rate: 3.01, unit: "HCF" },
+      },
+      { utilityId: UID, rateScheduleId: rsW.id, kindCode: "consumption",
+        label: "Water Usage — Government", sortOrder: 22, effectiveDate: SLICE1_EFF,
+        predicate: { class: "government" },
+        quantitySource: { base: "metered" },
+        pricing: { type: "flat", rate: 5.74, unit: "HCF" },
+      },
+      { utilityId: UID, rateScheduleId: rsW.id, kindCode: "consumption",
+        label: "Water Usage — MSU", sortOrder: 23, effectiveDate: SLICE1_EFF,
+        predicate: { class: "msu" },
+        quantitySource: { base: "metered" },
+        pricing: { type: "flat", rate: 3.77, unit: "HCF" },
+      },
+      { utilityId: UID, rateScheduleId: rsW.id, kindCode: "consumption",
+        label: "Water Usage — Commercial", sortOrder: 24, effectiveDate: SLICE1_EFF,
+        predicate: { class: "commercial" },
+        quantitySource: { base: "metered" },
+        pricing: { type: "flat", rate: 3.40, unit: "HCF" },
+      },
+      // SFR minimum bill — applies as floor on subtotal.
+      { utilityId: UID, rateScheduleId: rsW.id, kindCode: "minimum_bill",
+        label: "Water Minimum Bill", sortOrder: 90, effectiveDate: SLICE1_EFF,
+        predicate: { class: "single_family" },
+        quantitySource: { base: "fixed" },
+        pricing: { type: "floor", amount: 6.62, applies_to_subtotal: true },
+      },
+      // Drought reserve — flat per HCF, predicate-gated.
+      { utilityId: UID, rateScheduleId: rsW.id, kindCode: "surcharge",
+        label: "Drought Reserve", sortOrder: 80, effectiveDate: SLICE1_EFF,
+        predicate: { drought_stage_active: true },
+        quantitySource: { base: "metered" },
+        pricing: { type: "flat", rate: 0.11, unit: "HCF" },
+      },
+      // Drought stage surcharge — 25% of consumption when stage active.
+      { utilityId: UID, rateScheduleId: rsW.id, kindCode: "surcharge",
+        label: "Drought Stage Surcharge", sortOrder: 81, effectiveDate: SLICE1_EFF,
+        predicate: { drought_stage_active: true },
+        quantitySource: { base: "metered" },
+        pricing: { type: "percent_of", selector: { kind: "consumption" }, percent: 25 },
+      },
+    ],
+  });
+
+  // ---- Bozeman Sewer 2025-09 ----
+  const rsS = await p.rateSchedule.create({
+    data: {
+      utilityId: UID,
+      name: "Bozeman Sewer 2025-09",
+      code: "BZN-SEWER",
+      commodityId: sewer.id,
+      effectiveDate: SLICE1_EFF,
+      description: "City of Bozeman wastewater tariff effective 2025-09-15",
+      regulatoryRef: "Resolution 5378",
+      version: 1,
+    },
+  });
+  await p.rateComponent.createMany({
+    data: [
+      // Service charge — three brackets (Residential, mid group, Industrial).
+      { utilityId: UID, rateScheduleId: rsS.id, kindCode: "service_charge",
+        label: "Sewer Service Charge — Residential", sortOrder: 10, effectiveDate: SLICE1_EFF,
+        predicate: { class: "residential" },
+        quantitySource: { base: "fixed" },
+        pricing: { type: "flat", rate: 24.65, unit: "MONTH" },
+      },
+      { utilityId: UID, rateScheduleId: rsS.id, kindCode: "service_charge",
+        label: "Sewer Service Charge — Mid Class Group", sortOrder: 11, effectiveDate: SLICE1_EFF,
+        predicate: { class_in: ["multi_family", "commercial", "government", "msu"] },
+        quantitySource: { base: "fixed" },
+        pricing: { type: "flat", rate: 25.26, unit: "MONTH" },
+      },
+      { utilityId: UID, rateScheduleId: rsS.id, kindCode: "service_charge",
+        label: "Sewer Service Charge — Industrial", sortOrder: 12, effectiveDate: SLICE1_EFF,
+        predicate: { class: "industrial" },
+        quantitySource: { base: "fixed" },
+        pricing: { type: "flat", rate: 49.06, unit: "MONTH" },
+      },
+      // Consumption — Residential / Multi-Family use WQA, others use linked-commodity (water).
+      { utilityId: UID, rateScheduleId: rsS.id, kindCode: "derived_consumption",
+        label: "Sewer Usage — Residential (WQA)", sortOrder: 20, effectiveDate: SLICE1_EFF,
+        predicate: { class: "residential" },
+        quantitySource: { base: "wqa" },
+        pricing: { type: "flat", rate: 4.12, unit: "HCF" },
+      },
+      { utilityId: UID, rateScheduleId: rsS.id, kindCode: "derived_consumption",
+        label: "Sewer Usage — Multi-Family (WQA)", sortOrder: 21, effectiveDate: SLICE1_EFF,
+        predicate: { class: "multi_family" },
+        quantitySource: { base: "wqa" },
+        pricing: { type: "flat", rate: 4.58, unit: "HCF" },
+      },
+      { utilityId: UID, rateScheduleId: rsS.id, kindCode: "derived_consumption",
+        label: "Sewer Usage — Commercial", sortOrder: 22, effectiveDate: SLICE1_EFF,
+        predicate: { class: "commercial" },
+        quantitySource: { base: "linked_commodity" },
+        pricing: { type: "flat", rate: 5.13, unit: "HCF" },
+      },
+      { utilityId: UID, rateScheduleId: rsS.id, kindCode: "derived_consumption",
+        label: "Sewer Usage — Government", sortOrder: 23, effectiveDate: SLICE1_EFF,
+        predicate: { class: "government" },
+        quantitySource: { base: "linked_commodity" },
+        pricing: { type: "flat", rate: 4.95, unit: "HCF" },
+      },
+      { utilityId: UID, rateScheduleId: rsS.id, kindCode: "derived_consumption",
+        label: "Sewer Usage — MSU", sortOrder: 24, effectiveDate: SLICE1_EFF,
+        predicate: { class: "msu" },
+        quantitySource: { base: "linked_commodity" },
+        pricing: { type: "flat", rate: 5.34, unit: "HCF" },
+      },
+      { utilityId: UID, rateScheduleId: rsS.id, kindCode: "derived_consumption",
+        label: "Sewer Usage — Industrial", sortOrder: 25, effectiveDate: SLICE1_EFF,
+        predicate: { class: "industrial" },
+        quantitySource: { base: "linked_commodity" },
+        pricing: { type: "flat", rate: 7.79, unit: "HCF" },
+      },
+    ],
+  });
+
+  // ---- Bozeman Stormwater 2025-09 ----
+  const rsSW = await p.rateSchedule.create({
+    data: {
+      utilityId: UID,
+      name: "Bozeman Stormwater 2025-09",
+      code: "BZN-STORMWATER",
+      commodityId: stormwater.id,
+      effectiveDate: SLICE1_EFF,
+      description: "City of Bozeman stormwater tariff effective 2025-09-15",
+      regulatoryRef: "Resolution 5378",
+      version: 1,
+    },
+  });
+  await p.rateComponent.createMany({
+    data: [
+      { utilityId: UID, rateScheduleId: rsSW.id, kindCode: "service_charge",
+        label: "Stormwater Flat Charge", sortOrder: 10, effectiveDate: SLICE1_EFF,
+        predicate: {},
+        quantitySource: { base: "fixed" },
+        pricing: { type: "flat", rate: 4.81, unit: "MONTH" },
+      },
+      { utilityId: UID, rateScheduleId: rsSW.id, kindCode: "non_meter",
+        label: "Stormwater Per-ERU Variable", sortOrder: 20, effectiveDate: SLICE1_EFF,
+        predicate: {},
+        quantitySource: { base: "premise_attribute", source_attr: "premise.eru_count" },
+        pricing: { type: "per_unit", rate: 3.99, unit: "ERU" },
+      },
+      // 45% credit applies only to the variable portion, only when the
+      // premise has approved on-site stormwater infra.
+      { utilityId: UID, rateScheduleId: rsSW.id, kindCode: "credit",
+        label: "Stormwater Infrastructure Credit", sortOrder: 30, effectiveDate: SLICE1_EFF,
+        predicate: { premise_attr: { attr: "has_stormwater_infra", eq: true } },
+        quantitySource: { base: "fixed" },
+        pricing: { type: "percent_of", selector: { kind: "non_meter" }, percent: -45 },
+      },
+    ],
+  });
+
+  // ---- Bozeman Solid Waste 2025-09 ----
+  const rsSolid = await p.rateSchedule.create({
+    data: {
+      utilityId: UID,
+      name: "Bozeman Solid Waste 2025-09",
+      code: "BZN-SOLID-WASTE",
+      commodityId: solidWaste.id,
+      effectiveDate: SLICE1_EFF,
+      description: "City of Bozeman solid waste tariff effective 2025-09-15",
+      regulatoryRef: "Resolution 5378",
+      version: 1,
+    },
+  });
+  await p.rateComponent.createMany({
+    data: [
+      // Garbage cart — catalog by (size, frequency). Keys are
+      // pipe-joined to keep the lookup table flat. The engine resolves
+      // (size, frequency) from the container row at billing time.
+      { utilityId: UID, rateScheduleId: rsSolid.id, kindCode: "item_price",
+        label: "Garbage Cart", sortOrder: 10, effectiveDate: SLICE1_EFF,
+        predicate: {},
+        quantitySource: { base: "item_count" },
+        pricing: { type: "catalog", by: ["size", "frequency"], table: {
+          "35|weekly":  18.96,  "45|weekly":  18.96,  "45|monthly": 14.11,
+          "65|weekly":  27.24,  "100|weekly": 34.91,  "220|weekly": 58.30,
+          "300|weekly": 73.09,  "450|weekly": 105.30,
+        }},
+      },
+      // Recycling cart — keyed by size only.
+      { utilityId: UID, rateScheduleId: rsSolid.id, kindCode: "item_price",
+        label: "Recycling Cart", sortOrder: 20, effectiveDate: SLICE1_EFF,
+        predicate: {},
+        quantitySource: { base: "item_count" },
+        pricing: { type: "catalog", by: ["size"], table: {
+          "65": 12.96, "100": 12.96, "300": 20.17,
+        }},
+      },
+      // Organics cart — keyed by size only.
+      { utilityId: UID, rateScheduleId: rsSolid.id, kindCode: "item_price",
+        label: "Organics Cart", sortOrder: 30, effectiveDate: SLICE1_EFF,
+        predicate: {},
+        quantitySource: { base: "item_count" },
+        pricing: { type: "catalog", by: ["size"], table: {
+          "35": 12.00, "95": 12.00,
+        }},
+      },
+    ],
+  });
+
+  // ---- NWE Residential Electric — three schedules (delivery + supply + rider) ----
+  // Demonstrates multi-assignment: one electric SA holds three schedules,
+  // each with its own role (delivery / supply / rider).
+  const rsE_REDS = await p.rateSchedule.create({
+    data: {
+      utilityId: UID,
+      name: "NWE Residential Delivery",
+      code: "NWE-REDS-1",
+      commodityId: electric.id,
+      effectiveDate: new Date("2026-01-01"),
+      description: "NWE-style residential delivery (REDS-1)",
+      regulatoryRef: "Sched REDS-1",
+      version: 1,
+    },
+  });
+  await p.rateComponent.createMany({
+    data: [
+      { utilityId: UID, rateScheduleId: rsE_REDS.id, kindCode: "service_charge",
+        label: "Residential Delivery Service Charge", sortOrder: 10, effectiveDate: new Date("2026-01-01"),
+        predicate: { class: "residential" },
+        quantitySource: { base: "fixed" },
+        pricing: { type: "flat", rate: 4.20, unit: "MONTH" },
+      },
+      { utilityId: UID, rateScheduleId: rsE_REDS.id, kindCode: "consumption",
+        label: "Residential Delivery Energy", sortOrder: 20, effectiveDate: new Date("2026-01-01"),
+        predicate: { class: "residential" },
+        quantitySource: { base: "metered" },
+        pricing: { type: "flat", rate: 0.04125, unit: "kWh" },
+      },
+      { utilityId: UID, rateScheduleId: rsE_REDS.id, kindCode: "surcharge",
+        label: "Residential Delivery Tax", sortOrder: 30, effectiveDate: new Date("2026-01-01"),
+        predicate: { class: "residential" },
+        quantitySource: { base: "metered" },
+        pricing: { type: "flat", rate: 0.0117650, unit: "kWh" },
+      },
+    ],
+  });
+
+  const rsE_ESS = await p.rateSchedule.create({
+    data: {
+      utilityId: UID,
+      name: "NWE Default Supply",
+      code: "NWE-ESS-1",
+      commodityId: electric.id,
+      effectiveDate: new Date("2026-01-01"),
+      description: "NWE-style default supply (ESS-1) — indexed quarterly",
+      regulatoryRef: "Sched ESS-1",
+      version: 1,
+    },
+  });
+  await p.rateComponent.create({
+    data: {
+      utilityId: UID, rateScheduleId: rsE_ESS.id, kindCode: "consumption",
+      label: "Default Supply — Indexed Quarterly", sortOrder: 10,
+      effectiveDate: new Date("2026-01-01"),
+      predicate: { class: "residential" },
+      quantitySource: { base: "metered" },
+      pricing: { type: "indexed", index_name: "supply_residential",
+        period_resolver: "current_quarter", multiplier: 1, unit: "kWh" },
+    },
+  });
+
+  const rsE_USBC = await p.rateSchedule.create({
+    data: {
+      utilityId: UID,
+      name: "NWE USBC",
+      code: "NWE-USBC-1",
+      commodityId: electric.id,
+      effectiveDate: new Date("2026-01-01"),
+      description: "NWE-style universal system benefits charge",
+      regulatoryRef: "Sched USBC",
+      version: 1,
+    },
+  });
+  await p.rateComponent.create({
+    data: {
+      utilityId: UID, rateScheduleId: rsE_USBC.id, kindCode: "surcharge",
+      label: "Universal System Benefits Charge", sortOrder: 10,
+      effectiveDate: new Date("2026-01-01"),
+      predicate: {},
+      quantitySource: { base: "metered" },
+      pricing: { type: "flat", rate: 0.0024, unit: "kWh" },
+    },
+  });
+
+  console.log("  7 rate schedules with components");
 
   const premiseData = [
-    { addressLine1: "742 Evergreen Terrace", city: "Springfield", state: "IL", zip: "62704", geoLat: 39.7817, geoLng: -89.6501, premiseType: "RESIDENTIAL", commodityIds: [water.id, sewer.id] },
-    { addressLine1: "1600 Pennsylvania Ave NW", city: "Washington", state: "DC", zip: "20500", geoLat: 38.8977, geoLng: -77.0365, premiseType: "COMMERCIAL", commodityIds: [water.id, electric.id, gas.id] },
-    { addressLine1: "221B Baker Street", city: "New York", state: "NY", zip: "10001", geoLat: 40.7484, geoLng: -73.9856, premiseType: "RESIDENTIAL", commodityIds: [electric.id, gas.id] },
-    { addressLine1: "350 Fifth Avenue", city: "New York", state: "NY", zip: "10118", geoLat: 40.7484, geoLng: -73.9857, premiseType: "INDUSTRIAL", commodityIds: [water.id, electric.id, sewer.id] },
-    { addressLine1: "1060 W Addison St", city: "Chicago", state: "IL", zip: "60613", geoLat: 41.9484, geoLng: -87.6553, premiseType: "COMMERCIAL", commodityIds: [water.id, electric.id] },
-    { addressLine1: "4059 Mt Lee Dr", city: "Los Angeles", state: "CA", zip: "90068", geoLat: 34.1341, geoLng: -118.3215, premiseType: "RESIDENTIAL", commodityIds: [water.id, electric.id, sewer.id] },
-    { addressLine1: "1 Infinite Loop", city: "Cupertino", state: "CA", zip: "95014", geoLat: 37.3318, geoLng: -122.0312, premiseType: "COMMERCIAL", commodityIds: [water.id, electric.id, gas.id, sewer.id] },
-    { addressLine1: "233 S Wacker Dr", city: "Chicago", state: "IL", zip: "60606", geoLat: 41.8789, geoLng: -87.6359, premiseType: "COMMERCIAL", commodityIds: [water.id, electric.id, gas.id] },
-    { addressLine1: "600 Navarro St", city: "San Antonio", state: "TX", zip: "78205", geoLat: 29.4241, geoLng: -98.4936, premiseType: "MUNICIPAL", commodityIds: [water.id, sewer.id] },
-    { addressLine1: "1 Main Street", city: "Smallville", state: "KS", zip: "66002", geoLat: 39.0997, geoLng: -94.5786, premiseType: "RESIDENTIAL", commodityIds: [water.id, electric.id] },
+    { addressLine1: "742 Evergreen Terrace", city: "Springfield", state: "IL", zip: "62704", geoLat: 39.7817, geoLng: -89.6501, premiseType: "RESIDENTIAL", commodityIds: [water.id, sewer.id, stormwater.id, solidWaste.id], eruCount: 1, hasStormwaterInfra: true },
+    { addressLine1: "1600 Pennsylvania Ave NW", city: "Washington", state: "DC", zip: "20500", geoLat: 38.8977, geoLng: -77.0365, premiseType: "COMMERCIAL", commodityIds: [water.id, electric.id, gas.id], eruCount: 6 },
+    { addressLine1: "221B Baker Street", city: "New York", state: "NY", zip: "10001", geoLat: 40.7484, geoLng: -73.9856, premiseType: "RESIDENTIAL", commodityIds: [electric.id, gas.id], eruCount: 1 },
+    { addressLine1: "350 Fifth Avenue", city: "New York", state: "NY", zip: "10118", geoLat: 40.7484, geoLng: -73.9857, premiseType: "INDUSTRIAL", commodityIds: [water.id, electric.id, sewer.id], eruCount: 12 },
+    { addressLine1: "1060 W Addison St", city: "Chicago", state: "IL", zip: "60613", geoLat: 41.9484, geoLng: -87.6553, premiseType: "COMMERCIAL", commodityIds: [water.id, electric.id], eruCount: 4 },
+    { addressLine1: "4059 Mt Lee Dr", city: "Los Angeles", state: "CA", zip: "90068", geoLat: 34.1341, geoLng: -118.3215, premiseType: "RESIDENTIAL", commodityIds: [water.id, electric.id, sewer.id, solidWaste.id], eruCount: 1, hasStormwaterInfra: true },
+    { addressLine1: "1 Infinite Loop", city: "Cupertino", state: "CA", zip: "95014", geoLat: 37.3318, geoLng: -122.0312, premiseType: "COMMERCIAL", commodityIds: [water.id, electric.id, gas.id, sewer.id], eruCount: 8 },
+    { addressLine1: "233 S Wacker Dr", city: "Chicago", state: "IL", zip: "60606", geoLat: 41.8789, geoLng: -87.6359, premiseType: "COMMERCIAL", commodityIds: [water.id, electric.id, gas.id], eruCount: 10 },
+    { addressLine1: "600 Navarro St", city: "San Antonio", state: "TX", zip: "78205", geoLat: 29.4241, geoLng: -98.4936, premiseType: "MUNICIPAL", commodityIds: [water.id, sewer.id], eruCount: 3 },
+    { addressLine1: "1 Main Street", city: "Smallville", state: "KS", zip: "66002", geoLat: 39.0997, geoLng: -94.5786, premiseType: "RESIDENTIAL", commodityIds: [water.id, electric.id], eruCount: 1 },
   ];
 
   const pArr = [];
   for (const pr of premiseData) {
     pArr.push(await p.premise.create({ data: { utilityId: UID, ...pr } }));
   }
-  console.log("  " + pArr.length + " premises");
+  console.log("  " + pArr.length + " premises (with eru_count + has_stormwater_infra)");
 
   const accountData = [
     { accountNumber: "0001000-00", accountType: "RESIDENTIAL", creditRating: "EXCELLENT", status: "ACTIVE" },
@@ -152,38 +540,52 @@ async function main() {
   // EM-003 at 350 Fifth Avenue (industrial) is the multi-register test
   // fixture. Commercial/industrial electric meters typically expose two
   // registers — one for energy consumption (kWh) and one for peak demand
-  // (kW) — captured together on each field visit. This is what the
-  // Phase 2.5 read-event grouping is built around.
+  // (kW) — captured together on each field visit.
   const em003 = mArr[8];
   await p.meterRegister.create({ data: { utilityId: UID, meterId: em003.id, registerNumber: 1, description: "Energy usage", uomId: kwh.id, measureTypeId: measureUsage.id, multiplier: 1.0, isActive: true } });
   await p.meterRegister.create({ data: { utilityId: UID, meterId: em003.id, registerNumber: 2, description: "Peak demand", uomId: kw.id, measureTypeId: measureDemand.id, multiplier: 1.0, isActive: true } });
   console.log("  2 registers on EM-003 (multi-register demo)");
 
+  // SAs now carry rate_service_class_id (slice 1 task 10). The class
+  // depends on (commodity, account_type / premise_type). Assign sensible
+  // defaults and let later edits override.
+  const W = water.code, S = sewer.code, E = electric.code;
   const saData = [
-    { agreementNumber: "SA-0001", accountId: aArr[0].id, premiseId: pArr[0].id, commodityId: water.id, rateScheduleId: rsW.id, billingCycleId: c1.id, mIdx: [0] },
-    { agreementNumber: "SA-0002", accountId: aArr[0].id, premiseId: pArr[0].id, commodityId: sewer.id, rateScheduleId: rsS.id, billingCycleId: c1.id, mIdx: [1] },
-    { agreementNumber: "SA-0003", accountId: aArr[1].id, premiseId: pArr[1].id, commodityId: water.id, rateScheduleId: rsW.id, billingCycleId: c2.id, mIdx: [2] },
-    { agreementNumber: "SA-0004", accountId: aArr[1].id, premiseId: pArr[1].id, commodityId: electric.id, rateScheduleId: rsE.id, billingCycleId: c2.id, mIdx: [3] },
-    { agreementNumber: "SA-0005", accountId: aArr[1].id, premiseId: pArr[1].id, commodityId: gas.id, rateScheduleId: rsG.id, billingCycleId: c2.id, mIdx: [4] },
-    { agreementNumber: "SA-0006", accountId: aArr[2].id, premiseId: pArr[2].id, commodityId: electric.id, rateScheduleId: rsE.id, billingCycleId: c1.id, mIdx: [5] },
-    { agreementNumber: "SA-0007", accountId: aArr[3].id, premiseId: pArr[3].id, commodityId: water.id, rateScheduleId: rsW.id, billingCycleId: c1.id, mIdx: [7] },
-    { agreementNumber: "SA-0008", accountId: aArr[3].id, premiseId: pArr[3].id, commodityId: electric.id, rateScheduleId: rsE.id, billingCycleId: c1.id, mIdx: [8] },
-    { agreementNumber: "SA-0009", accountId: aArr[4].id, premiseId: pArr[4].id, commodityId: water.id, rateScheduleId: rsW.id, billingCycleId: c2.id, mIdx: [9] },
-    { agreementNumber: "SA-0010", accountId: aArr[5].id, premiseId: pArr[5].id, commodityId: water.id, rateScheduleId: rsW.id, billingCycleId: c1.id, mIdx: [11] },
+    { agreementNumber: "SA-0001", accountId: aArr[0].id, premiseId: pArr[0].id, commodityId: water.id, billingCycleId: c1.id, mIdx: [0], svcClass: classMap[W].single_family.id, schedules: [{ rs: rsW, role: "primary" }] },
+    { agreementNumber: "SA-0002", accountId: aArr[0].id, premiseId: pArr[0].id, commodityId: sewer.id, billingCycleId: c1.id, mIdx: [1], svcClass: classMap[S].residential.id, schedules: [{ rs: rsS, role: "primary" }] },
+    { agreementNumber: "SA-0003", accountId: aArr[1].id, premiseId: pArr[1].id, commodityId: water.id, billingCycleId: c2.id, mIdx: [2], svcClass: classMap[W].commercial.id, schedules: [{ rs: rsW, role: "primary" }] },
+    { agreementNumber: "SA-0004", accountId: aArr[1].id, premiseId: pArr[1].id, commodityId: electric.id, billingCycleId: c2.id, mIdx: [3], svcClass: classMap[E].small_commercial.id, schedules: [
+      { rs: rsE_REDS, role: "delivery" }, { rs: rsE_ESS, role: "supply" }, { rs: rsE_USBC, role: "rider" },
+    ]},
+    { agreementNumber: "SA-0006", accountId: aArr[2].id, premiseId: pArr[2].id, commodityId: electric.id, billingCycleId: c1.id, mIdx: [5], svcClass: classMap[E].residential.id, schedules: [
+      { rs: rsE_REDS, role: "delivery" }, { rs: rsE_ESS, role: "supply" }, { rs: rsE_USBC, role: "rider" },
+    ]},
+    { agreementNumber: "SA-0007", accountId: aArr[3].id, premiseId: pArr[3].id, commodityId: water.id, billingCycleId: c1.id, mIdx: [7], svcClass: classMap[W].commercial.id, schedules: [{ rs: rsW, role: "primary" }] },
+    { agreementNumber: "SA-0008", accountId: aArr[3].id, premiseId: pArr[3].id, commodityId: electric.id, billingCycleId: c1.id, mIdx: [8], svcClass: classMap[E].large_commercial.id, schedules: [
+      { rs: rsE_REDS, role: "delivery" }, { rs: rsE_ESS, role: "supply" }, { rs: rsE_USBC, role: "rider" },
+    ]},
+    { agreementNumber: "SA-0009", accountId: aArr[4].id, premiseId: pArr[4].id, commodityId: water.id, billingCycleId: c2.id, mIdx: [9], svcClass: classMap[W].commercial.id, schedules: [{ rs: rsW, role: "primary" }] },
+    { agreementNumber: "SA-0010", accountId: aArr[5].id, premiseId: pArr[5].id, commodityId: water.id, billingCycleId: c1.id, mIdx: [11], svcClass: classMap[W].single_family.id, schedules: [{ rs: rsW, role: "primary" }] },
   ];
 
+  const saCreated = [];
+  let assignmentCount = 0;
   for (const sa of saData) {
-    const { mIdx, ...data } = sa;
+    const { mIdx, schedules, svcClass, premiseId, ...data } = sa;
     const created = await p.serviceAgreement.create({
       data: {
-        utilityId: UID, ...data, startDate: new Date("2025-01-01"), status: "ACTIVE",
+        utilityId: UID, ...data,
+        rateServiceClassId: svcClass,
+        startDate: new Date("2025-01-01"),
+        status: "ACTIVE",
       },
     });
+    saCreated.push({ ...created, _premiseId: premiseId });
     const sp = await p.servicePoint.create({
       data: {
         utilityId: UID,
         serviceAgreementId: created.id,
-        premiseId: created.premiseId,
+        premiseId,
         type: "METERED",
         status: "ACTIVE",
         startDate: new Date("2025-01-01"),
@@ -199,8 +601,58 @@ async function main() {
         },
       });
     }
+    // SAScheduleAssignment rows — one per (sa, schedule, role).
+    for (const { rs, role } of schedules) {
+      await p.sAScheduleAssignment.create({
+        data: {
+          utilityId: UID,
+          serviceAgreementId: created.id,
+          rateScheduleId: rs.id,
+          roleCode: role,
+          effectiveDate: new Date("2025-01-01"),
+        },
+      });
+      assignmentCount++;
+    }
   }
   console.log("  " + saData.length + " service agreements");
+  console.log("  " + assignmentCount + " SA -> rate schedule assignments");
+
+  // ============ Solid-waste containers (with size/frequency/itemType for v2 catalog lookup) ============
+  // Premise 0 (single-family, has all four utilities incl. solid waste):
+  // garbage 65 weekly + recycling 65 + organics 35.
+  // Premise 5 (Hollywood residential): garbage 35 weekly + recycling 65.
+  await p.container.create({ data: {
+    utilityId: UID, premiseId: pArr[0].id, containerType: "CART_GARBAGE",
+    sizeGallons: 65, quantity: 1, status: "ACTIVE",
+    deliveryDate: new Date("2025-01-15"),
+    size: "65", frequency: "weekly", itemType: "garbage_cart",
+  }});
+  await p.container.create({ data: {
+    utilityId: UID, premiseId: pArr[0].id, containerType: "CART_RECYCLING",
+    sizeGallons: 65, quantity: 1, status: "ACTIVE",
+    deliveryDate: new Date("2025-01-15"),
+    size: "65", frequency: "weekly", itemType: "recycling_cart",
+  }});
+  await p.container.create({ data: {
+    utilityId: UID, premiseId: pArr[0].id, containerType: "CART_ORGANICS",
+    sizeGallons: 35, quantity: 1, status: "ACTIVE",
+    deliveryDate: new Date("2025-03-01"),
+    size: "35", frequency: "weekly", itemType: "organics_cart",
+  }});
+  await p.container.create({ data: {
+    utilityId: UID, premiseId: pArr[5].id, containerType: "CART_GARBAGE",
+    sizeGallons: 35, quantity: 1, status: "ACTIVE",
+    deliveryDate: new Date("2025-02-01"),
+    size: "35", frequency: "weekly", itemType: "garbage_cart",
+  }});
+  await p.container.create({ data: {
+    utilityId: UID, premiseId: pArr[5].id, containerType: "CART_RECYCLING",
+    sizeGallons: 65, quantity: 1, status: "ACTIVE",
+    deliveryDate: new Date("2025-02-01"),
+    size: "65", frequency: "weekly", itemType: "recycling_cart",
+  }});
+  console.log("  5 containers (with size/frequency/item_type)");
 
   // Seed 12 months of meter reads for SA-0001 (water, WM-001) and SA-0006 (electric, EM-002).
   // These give the portal usage page real data to chart. Each month has one ACTUAL read.
@@ -213,8 +665,8 @@ async function main() {
   const sa0006 = saList.find(s => s.agreementNumber === "SA-0006");
   let readCount = 0;
   for (const { sa, baseReading, monthlyUsage } of [
-    { sa: sa0001, baseReading: 1200, monthlyUsage: () => 3500 + Math.floor(Math.random() * 2000) },  // water: gallons
-    { sa: sa0006, baseReading: 45000, monthlyUsage: () => 650 + Math.floor(Math.random() * 300) },   // electric: kWh
+    { sa: sa0001, baseReading: 1200, monthlyUsage: () => 3500 + Math.floor(Math.random() * 2000) },
+    { sa: sa0006, baseReading: 45000, monthlyUsage: () => 650 + Math.floor(Math.random() * 300) },
   ]) {
     const firstSpm = sa && sa.servicePoints[0] && sa.servicePoints[0].meters[0];
     if (!firstSpm) continue;
@@ -268,13 +720,10 @@ async function main() {
   console.log("  " + cArr.length + " customers");
 
   // Link customers as premise owners
-  // Jane Smith owns premises 0, 5 (residential)
   await p.premise.update({ where: { id: pArr[0].id }, data: { ownerId: cArr[0].id } });
   await p.premise.update({ where: { id: pArr[5].id }, data: { ownerId: cArr[0].id } });
-  // Robert Johnson owns premises 2, 9 (residential)
   await p.premise.update({ where: { id: pArr[2].id }, data: { ownerId: cArr[1].id } });
   await p.premise.update({ where: { id: pArr[9].id }, data: { ownerId: cArr[1].id } });
-  // Acme Industries owns premises 1, 3, 4, 6, 7 (commercial/industrial)
   await p.premise.update({ where: { id: pArr[1].id }, data: { ownerId: cArr[2].id } });
   await p.premise.update({ where: { id: pArr[3].id }, data: { ownerId: cArr[2].id } });
   await p.premise.update({ where: { id: pArr[4].id }, data: { ownerId: cArr[2].id } });
@@ -282,8 +731,6 @@ async function main() {
   await p.premise.update({ where: { id: pArr[7].id }, data: { ownerId: cArr[2].id } });
   console.log("  9 premises linked to owners");
 
-  // Contacts are now record-only people on file. Anyone who needs
-  // portal access is represented by cis_user + user_role instead.
   const contactData = [
     { accountId: aArr[0].id, firstName: "Tom", lastName: "Smith", email: "tom.smith@example.com", phone: "555-100-0099", notes: "Spouse — authorized to discuss billing" },
     { accountId: aArr[1].id, customerId: cArr[2].id, firstName: "Alice", lastName: "Walker", email: "alice@acme.example.com", phone: "555-200-0002", notes: "Office manager" },
@@ -315,7 +762,6 @@ async function main() {
   console.log("  theme");
 
   // Seed preset roles — MUST stay in sync with packages/shared/src/modules/constants.ts MODULES
-  // When a new module is added there, append it here AND update the permission maps below.
   const allModules = [
     "customers","premises","meters","meter_reads","meter_events",
     "accounts","agreements","commodities","rate_schedules","billing_cycles",
@@ -419,10 +865,7 @@ async function main() {
   }
   console.log("  " + moduleKeys.length + " tenant modules");
 
-  // Seed global suspension (hold) type codes. utilityId null = visible to
-  // every tenant. Tenants can later insert their own rows with a non-null
-  // utilityId to add or override codes. Use upsert-by-composite-unique so
-  // re-running seed doesn't duplicate.
+  // Seed global suspension (hold) type codes.
   const suspensionTypes = [
     { code: "VACATION_HOLD", label: "Vacation hold", description: "Customer is out of town for a short period", sortOrder: 10, defaultBillingSuspended: true },
     { code: "SEASONAL",      label: "Seasonal",      description: "Seasonal property closed part of the year",  sortOrder: 20, defaultBillingSuspended: true },
@@ -635,7 +1078,6 @@ async function main() {
   console.log("  " + delinqRules.length + " delinquency rules");
 
   // Set balance and lastDueDate on a couple of accounts for delinquency testing
-  // aArr[0] = Jane Smith's first account, aArr[1] = Acme's account
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   const fifteenDaysAgo = new Date();
@@ -646,26 +1088,22 @@ async function main() {
   console.log("  2 accounts with delinquent balances");
 
   const testUsers = [
-    { id: "00000000-0000-4000-8000-000000000091", email: "sysadmin@utility.com", name: "Sarah Mitchell", roleIdx: 0 },  // System Admin
-    { id: "00000000-0000-4000-8000-000000000092", email: "admin@utility.com", name: "Michael Chen", roleIdx: 1 },       // Utility Admin
-    { id: "00000000-0000-4000-8000-000000000093", email: "csr@utility.com", name: "Jessica Rodriguez", roleIdx: 2 },     // CSR
-    { id: "00000000-0000-4000-8000-000000000094", email: "tech@utility.com", name: "David Park", roleIdx: 3 },           // Field Technician
-    { id: "00000000-0000-4000-8000-000000000095", email: "viewer@utility.com", name: "Emily Thompson", roleIdx: 4 },     // Read-Only
+    { id: "00000000-0000-4000-8000-000000000091", email: "sysadmin@utility.com", name: "Sarah Mitchell", roleIdx: 0 },
+    { id: "00000000-0000-4000-8000-000000000092", email: "admin@utility.com", name: "Michael Chen", roleIdx: 1 },
+    { id: "00000000-0000-4000-8000-000000000093", email: "csr@utility.com", name: "Jessica Rodriguez", roleIdx: 2 },
+    { id: "00000000-0000-4000-8000-000000000094", email: "tech@utility.com", name: "David Park", roleIdx: 3 },
+    { id: "00000000-0000-4000-8000-000000000095", email: "viewer@utility.com", name: "Emily Thompson", roleIdx: 4 },
   ];
   for (const u of testUsers) {
     await p.cisUser.create({
       data: { id: u.id, utilityId: UID, email: u.email, name: u.name, isActive: true },
     });
-    // Tenant-wide role assignment (account_id NULL).
     await p.userRole.create({
       data: { utilityId: UID, userId: u.id, accountId: null, roleId: roleArr[u.roleIdx].id },
     });
   }
   console.log("  " + testUsers.length + " test users (admin)");
 
-  // Seed portal customer logins. Each is a CisUser with the Portal Customer
-  // role (roleArr[5]) linked to an existing Customer record via customerId.
-  // Login credentials: email from the customer record, no password (dev JWT).
   const portalUsers = [
     { id: "00000000-0000-4000-8000-0000000000a1", email: "jane.smith@example.com", name: "Jane Smith", customerIdx: 0 },
     { id: "00000000-0000-4000-8000-0000000000a2", email: "robert.j@example.com", name: "Robert Johnson", customerIdx: 1 },
@@ -681,15 +1119,12 @@ async function main() {
         isActive: true,
       },
     });
-    // Slice 1 transitional: portal users get a tenant-wide Portal
-    // Customer assignment so existing portal middleware keeps working.
-    // Slice 3 will migrate this to per-account user_role rows.
     await p.userRole.create({
       data: {
         utilityId: UID,
         userId: pu.id,
         accountId: null,
-        roleId: roleArr[5].id, // Portal Customer
+        roleId: roleArr[5].id,
       },
     });
   }
@@ -727,13 +1162,18 @@ async function main() {
   }
   console.log("  " + slaRows.length + " SLAs");
 
-  // --- Demo Service Requests (3 rows across different statuses) ---
-  // Use the first two accounts we already created. Pull premiseId via
-  // the account's first service agreement so the detail page has a
-  // premise context to render.
   const [acc1, acc2] = aArr.slice(0, 2);
-  const sr1Premise = await p.serviceAgreement.findFirst({ where: { accountId: acc1.id }, select: { premiseId: true } });
-  const sr2Premise = await p.serviceAgreement.findFirst({ where: { accountId: acc2.id }, select: { premiseId: true } });
+  // SA no longer holds premiseId — fetch it through the first ServicePoint.
+  const sr1Sa = await p.serviceAgreement.findFirst({
+    where: { accountId: acc1.id },
+    include: { servicePoints: { take: 1, select: { premiseId: true } } },
+  });
+  const sr2Sa = await p.serviceAgreement.findFirst({
+    where: { accountId: acc2.id },
+    include: { servicePoints: { take: 1, select: { premiseId: true } } },
+  });
+  const sr1Premise = { premiseId: sr1Sa?.servicePoints[0]?.premiseId ?? null };
+  const sr2Premise = { premiseId: sr2Sa?.servicePoints[0]?.premiseId ?? null };
   const now = new Date();
   const hoursAgo = (h) => new Date(now.getTime() - h * 60 * 60 * 1000);
 
@@ -789,14 +1229,13 @@ async function main() {
   });
   console.log("  3 demo service requests");
 
-  // Counter picks up at 4 so new CSR-created SRs continue the sequence.
   await p.serviceRequestCounter.upsert({
     where: { utilityId_year: { utilityId: UID, year: 2026 } },
     create: { utilityId: UID, year: 2026, nextValue: 4n },
     update: { nextValue: 4n },
   });
 
-  console.log("\nDone! 10 premises, 8 accounts, 15 meters, 10 agreements, 3 customers, " + contactData.length + " contacts, 3 billing addresses, 2 portal users");
+  console.log("\nDone! 10 premises, 8 accounts, 15 meters, " + saData.length + " agreements, " + assignmentCount + " assignments, 3 customers");
 }
 
 main().catch(e => { console.error("SEED ERROR:", e); process.exit(1); }).finally(() => p.$disconnect());
