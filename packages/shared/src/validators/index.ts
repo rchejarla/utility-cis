@@ -34,6 +34,7 @@ export * from "./rate-service-class";
 export * from "./rate-grammar/registered-codes";
 export * from "./rate-component";
 export * from "./sa-rate-schedule-assignment";
+export * from "./rate-index";
 export * from "./rate-grammar/predicate";
 export * from "./rate-grammar/quantity-source";
 export * from "./rate-grammar/pricing";

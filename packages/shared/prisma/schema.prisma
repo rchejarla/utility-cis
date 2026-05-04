@@ -532,6 +532,28 @@ model SAScheduleAssignment {
   @@map("sa_rate_schedule_assignment")
 }
 
+/// Slice 1 task 7 — RateIndex backs pricing.type = "indexed". Each row
+/// is a (name, period) value snapshot with its own effective dating
+/// window — FAC, EPCC, supply quarterlies, drought_reserve_rate, etc.
+/// Components reference indexes by name; the engine resolves the period
+/// at evaluation time (current_quarter, prior_month, ...).
+model RateIndex {
+  id              String   @id @default(uuid()) @db.Uuid
+  utilityId       String   @map("utility_id") @db.Uuid
+  name            String   @map("name") @db.VarChar(50)
+  period          String   @map("period") @db.VarChar(20)
+  value           Decimal  @map("value") @db.Decimal(18, 8)
+  effectiveDate   DateTime @map("effective_date") @db.Date
+  expirationDate  DateTime? @map("expiration_date") @db.Date
+  description     String?  @map("description") @db.Text
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([utilityId, name, period])
+  @@index([utilityId, name, effectiveDate])
+  @@map("rate_index")
+}
+
 model BillingCycle {
   id             String           @id @default(uuid()) @db.Uuid
   utilityId      String           @map("utility_id") @db.Uuid
