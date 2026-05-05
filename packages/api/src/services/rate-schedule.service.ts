@@ -86,10 +86,6 @@ export async function reviseRateSchedule(
     EVENT_TYPES.RATE_SCHEDULE_REVISED,
     predecessor,
     async (tx) => {
-      await tx.rateSchedule.update({
-        where: { id },
-        data: { expirationDate: newEffectiveDate },
-      });
       const newSchedule = await tx.rateSchedule.create({
         data: {
           utilityId,
@@ -102,11 +98,64 @@ export async function reviseRateSchedule(
           regulatoryRef: data.regulatoryRef ?? predecessor.regulatoryRef,
           version: predecessor.version + 1,
           supersedesId: id,
+          // publishedAt left NULL — the new revision is a draft until
+          // the operator explicitly publishes it. This is the whole
+          // point of the publish/draft state: backdating workflows are
+          // safe because the schedule is editable until publish.
         },
         include: fullInclude,
+      });
+      // Set the predecessor's expiration AND its supersededById so the
+      // editability gate (publishedAt IS NULL AND supersededById IS NULL)
+      // becomes a single column read instead of an inverse-relation count.
+      await tx.rateSchedule.update({
+        where: { id },
+        data: {
+          expirationDate: newEffectiveDate,
+          supersededById: newSchedule.id,
+        },
       });
       await cacheDel(`rate-schedule:${utilityId}:${predecessor.code}`);
       return newSchedule;
     }
+  );
+}
+
+export async function publishRateSchedule(
+  utilityId: string,
+  actorId: string,
+  actorName: string,
+  id: string,
+) {
+  const before = await prisma.rateSchedule.findUniqueOrThrow({
+    where: { id, utilityId },
+  });
+
+  if (before.publishedAt !== null) {
+    throw Object.assign(
+      new Error("Schedule is already published"),
+      { statusCode: 409, code: "ALREADY_PUBLISHED" },
+    );
+  }
+  if (before.supersededById !== null) {
+    throw Object.assign(
+      new Error("Cannot publish a superseded schedule"),
+      { statusCode: 409, code: "SUPERSEDED" },
+    );
+  }
+
+  return auditUpdate(
+    { utilityId, actorId, actorName, entityType: "RateSchedule" },
+    EVENT_TYPES.RATE_SCHEDULE_PUBLISHED,
+    before,
+    async (tx) => {
+      const updated = await tx.rateSchedule.update({
+        where: { id, utilityId },
+        data: { publishedAt: new Date() },
+        include: fullInclude,
+      });
+      await cacheDel(`rate-schedule:${utilityId}:${before.code}`);
+      return updated;
+    },
   );
 }

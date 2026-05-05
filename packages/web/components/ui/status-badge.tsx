@@ -15,10 +15,10 @@ function getTone(status: string): { tone: Tone; label: string } {
   const s = status?.toLowerCase() ?? "";
   const label = status ? status.charAt(0).toUpperCase() + status.slice(1).toLowerCase() : "";
 
-  if (s === "active") return { tone: "success", label: label || "Active" };
-  if (s === "inactive" || s === "pending") return { tone: "warning", label };
+  if (s === "active" || s === "published") return { tone: "success", label: label || "Active" };
+  if (s === "inactive" || s === "pending" || s === "draft") return { tone: "warning", label };
   if (s === "condemned" || s === "suspended") return { tone: "danger", label };
-  // closed / final / unknown → neutral slate
+  // closed / final / superseded / unknown → neutral slate
   return { tone: "neutral", label };
 }
 

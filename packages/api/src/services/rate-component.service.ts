@@ -17,6 +17,43 @@ import type { RateComponentSnapshot } from "../lib/rate-engine/types.js";
  * the RLS policy.
  */
 
+/**
+ * Editability gate for component mutations. Slice 2 follow-up: a
+ * RateSchedule is editable iff
+ *   publishedAt IS NULL AND supersededById IS NULL
+ * Once published the components freeze (historical bills calculated
+ * against this schedule must not silently change). Once superseded the
+ * predecessor is locked too — further changes ride on the new revision.
+ *
+ * Surfaces 409 SCHEDULE_NOT_EDITABLE so the UI can render an
+ * informative message rather than a generic "save failed".
+ */
+async function assertScheduleEditable(
+  rateScheduleId: string,
+  utilityId: string,
+): Promise<void> {
+  const sched = await prisma.rateSchedule.findUniqueOrThrow({
+    where: { id: rateScheduleId, utilityId },
+    select: { publishedAt: true, supersededById: true },
+  });
+  if (sched.publishedAt !== null) {
+    throw Object.assign(
+      new Error(
+        "Schedule has been published — components are immutable. Revise the schedule to create a new draft version.",
+      ),
+      { statusCode: 409, code: "SCHEDULE_NOT_EDITABLE" },
+    );
+  }
+  if (sched.supersededById !== null) {
+    throw Object.assign(
+      new Error(
+        "Schedule has been superseded by a newer version — components are immutable.",
+      ),
+      { statusCode: 409, code: "SCHEDULE_NOT_EDITABLE" },
+    );
+  }
+}
+
 export async function listComponentsForSchedule(rateScheduleId: string, utilityId: string) {
   return prisma.rateComponent.findMany({
     where: { rateScheduleId, utilityId },
@@ -35,12 +72,10 @@ export async function createRateComponent(
   rateScheduleId: string,
   data: CreateRateComponentInput,
 ) {
-  // Verify the schedule exists in tenant scope before inserting the
-  // component. Without this guard, a client posting a stale schedule
-  // ID would get a confusing FK error from Postgres.
-  await prisma.rateSchedule.findUniqueOrThrow({
-    where: { id: rateScheduleId, utilityId },
-  });
+  // Editability gate: must be a draft, not-yet-superseded schedule.
+  // Also covers the existing-in-tenant-scope check (findUniqueOrThrow
+  // inside assertScheduleEditable will 404 on cross-tenant ids).
+  await assertScheduleEditable(rateScheduleId, utilityId);
 
   return prisma.rateComponent.create({
     data: {
@@ -63,6 +98,15 @@ export async function updateRateComponent(
   id: string,
   data: UpdateRateComponentInput,
 ) {
+  // Look up the parent schedule via the existing component first, then
+  // assert editability. Done before validating the patch payload so
+  // locked-schedule writes fail fast with the canonical 409.
+  const existing = await prisma.rateComponent.findUniqueOrThrow({
+    where: { id, utilityId },
+    select: { rateScheduleId: true },
+  });
+  await assertScheduleEditable(existing.rateScheduleId, utilityId);
+
   const updateData: Record<string, unknown> = {};
   if (data.kindCode !== undefined) updateData.kindCode = data.kindCode;
   if (data.label !== undefined) updateData.label = data.label;
@@ -82,6 +126,13 @@ export async function updateRateComponent(
 }
 
 export async function deleteRateComponent(utilityId: string, id: string) {
+  // Same editability gate as update — fetch parent schedule first.
+  const existing = await prisma.rateComponent.findUniqueOrThrow({
+    where: { id, utilityId },
+    select: { rateScheduleId: true },
+  });
+  await assertScheduleEditable(existing.rateScheduleId, utilityId);
+
   return prisma.rateComponent.delete({
     where: { id, utilityId },
   });
@@ -102,12 +153,10 @@ export async function checkComponentCycle(
   rateScheduleId: string,
   proposed: CycleCheckRequest,
 ): Promise<{ valid: boolean; cycle?: string[] }> {
-  // Verify the schedule belongs to the tenant before doing any work.
-  // Without this guard a cross-tenant id would silently load an empty
-  // component list and falsely report "valid".
-  await prisma.rateSchedule.findUniqueOrThrow({
-    where: { id: rateScheduleId, utilityId },
-  });
+  // Editability gate: cycle-check is only useful when a save is going
+  // to be permitted. On a published/superseded schedule, fail fast with
+  // 409 SCHEDULE_NOT_EDITABLE rather than running the engine.
+  await assertScheduleEditable(rateScheduleId, utilityId);
 
   const current = await prisma.rateComponent.findMany({
     where: { rateScheduleId, utilityId },

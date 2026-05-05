@@ -475,6 +475,8 @@ model RateSchedule {
   regulatoryRef  String?   @map("regulatory_ref") @db.VarChar(100)
   version        Int       @default(1) @map("version")
   supersedesId   String?   @map("supersedes_id") @db.Uuid
+  supersededById String?   @map("superseded_by_id") @db.Uuid
+  publishedAt    DateTime? @map("published_at") @db.Timestamptz
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
 
   // Relations

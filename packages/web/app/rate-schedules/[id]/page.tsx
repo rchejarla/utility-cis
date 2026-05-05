@@ -25,7 +25,8 @@ interface RateSchedule {
   description?: string;
   regulatoryRef?: string;
   commodity?: { name: string };
-  supersededById?: string;
+  publishedAt?: string | null;
+  supersededById?: string | null;
   supersedes?: { id: string; version: number; name: string; effectiveDate: string };
 }
 
@@ -63,6 +64,14 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
   const [refreshKey, setRefreshKey] = useState(0);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingComponent, setEditingComponent] = useState<RateComponent | null>(null);
+  const [publishing, setPublishing] = useState(false);
+
+  const isEditable = !!rs && !rs.publishedAt && !rs.supersededById;
+  const lifecycleStatus: "Draft" | "Published" | "Superseded" = rs?.supersededById
+    ? "Superseded"
+    : rs?.publishedAt
+      ? "Published"
+      : "Draft";
 
   const handleAdd = () => {
     setEditingComponent(null);
@@ -116,6 +125,32 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
     }
   };
 
+  const handlePublish = async () => {
+    if (!rs) return;
+    if (
+      !confirm(
+        "Publish this schedule? Components will become immutable. Use Revise later to make changes.",
+      )
+    )
+      return;
+    setPublishing(true);
+    try {
+      const updated = await apiClient.post<RateSchedule>(
+        `/api/v1/rate-schedules/${id}/publish`,
+        {},
+      );
+      setRs(updated);
+      setRefreshKey((k) => k + 1);
+      toast("Schedule published", "success");
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message.replace(/^API error \d+:\s*/, "") : "Publish failed";
+      toast(message, "error");
+    } finally {
+      setPublishing(false);
+    }
+  };
+
   if (loading) {
     return <div style={{ color: "var(--text-muted)", padding: "40px 0" }}>Loading...</div>;
   }
@@ -136,31 +171,56 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
         }}
       >
         <div>
-          <h1 style={{ fontSize: "22px", fontWeight: "600", color: "var(--text-primary)", margin: "0 0 4px" }}>
-            {rs.name}
-          </h1>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "4px" }}>
+            <h1 style={{ fontSize: "22px", fontWeight: "600", color: "var(--text-primary)", margin: 0 }}>
+              {rs.name}
+            </h1>
+            <StatusBadge status={lifecycleStatus} />
+          </div>
           <p style={{ fontSize: "14px", color: "var(--text-secondary)", margin: 0 }}>
             {rs.code} — v{rs.version}
           </p>
         </div>
-        {canEdit && !rs.supersededById && (
-          <button
-            onClick={() => setShowReviseDialog(true)}
-            style={{
-              padding: "7px 16px",
-              borderRadius: "var(--radius)",
-              border: "1px solid var(--accent-primary)",
-              background: "transparent",
-              color: "var(--accent-primary)",
-              fontSize: "12px",
-              fontWeight: "500",
-              cursor: "pointer",
-              fontFamily: "inherit",
-            }}
-          >
-            Revise
-          </button>
-        )}
+        <div style={{ display: "flex", gap: "8px" }}>
+          {canEdit && isEditable && (
+            <button
+              onClick={handlePublish}
+              disabled={publishing}
+              style={{
+                padding: "7px 16px",
+                borderRadius: "var(--radius)",
+                border: "none",
+                background: "var(--accent-primary)",
+                color: "#fff",
+                fontSize: "12px",
+                fontWeight: "500",
+                cursor: publishing ? "not-allowed" : "pointer",
+                opacity: publishing ? 0.6 : 1,
+                fontFamily: "inherit",
+              }}
+            >
+              {publishing ? "Publishing..." : "Publish"}
+            </button>
+          )}
+          {canEdit && rs.publishedAt && !rs.supersededById && (
+            <button
+              onClick={() => setShowReviseDialog(true)}
+              style={{
+                padding: "7px 16px",
+                borderRadius: "var(--radius)",
+                border: "1px solid var(--accent-primary)",
+                background: "transparent",
+                color: "var(--accent-primary)",
+                fontSize: "12px",
+                fontWeight: "500",
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              Revise
+            </button>
+          )}
+        </div>
       </div>
 
       {showReviseDialog && (
@@ -334,6 +394,7 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
               refreshKey={refreshKey}
               onEdit={handleEdit}
               onAdd={handleAdd}
+              disabled={!isEditable}
             />
           </div>
         )}

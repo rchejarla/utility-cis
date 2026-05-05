@@ -9,6 +9,7 @@ import {
   getRateSchedule,
   createRateSchedule,
   reviseRateSchedule,
+  publishRateSchedule,
 } from "../services/rate-schedule.service.js";
 import { idParamSchema } from "../lib/route-schemas.js";
 import { registerCrudRoutes } from "../lib/crud-routes.js";
@@ -40,5 +41,16 @@ export async function rateScheduleRoutes(app: FastifyInstance) {
       const schedule = await reviseRateSchedule(utilityId, actorId, actorName, id, data);
       return reply.status(201).send(schedule);
     }
+  );
+
+  app.post(
+    "/api/v1/rate-schedules/:id/publish",
+    { config: { module: "rate_schedules", permission: "EDIT" } },
+    async (request, reply) => {
+      const { utilityId, id: actorId, name: actorName } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      const schedule = await publishRateSchedule(utilityId, actorId, actorName, id);
+      return reply.status(200).send(schedule);
+    },
   );
 }

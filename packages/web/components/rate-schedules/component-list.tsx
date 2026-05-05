@@ -26,6 +26,13 @@ interface Props {
   refreshKey: number;
   onEdit: (component: RateComponent) => void;
   onAdd: () => void;
+  /**
+   * When true, hides the Add / Edit / Delete buttons and renders an
+   * explanatory note. Used by the schedule detail page after the
+   * schedule has been published or superseded — components are
+   * immutable in those states (slice 2 follow-up).
+   */
+  disabled?: boolean;
 }
 
 const thStyle = {
@@ -108,9 +115,11 @@ function pricingType(pricing: unknown): string {
   return "—";
 }
 
-export function ComponentList({ scheduleId, refreshKey, onEdit, onAdd }: Props) {
+export function ComponentList({ scheduleId, refreshKey, onEdit, onAdd, disabled = false }: Props) {
   const { toast } = useToast();
-  const { canEdit, canDelete } = usePermission("rate_schedules");
+  const { canEdit: rawCanEdit, canDelete: rawCanDelete } = usePermission("rate_schedules");
+  const canEdit = rawCanEdit && !disabled;
+  const canDelete = rawCanDelete && !disabled;
   const [components, setComponents] = useState<RateComponent[]>([]);
   const [loading, setLoading] = useState(true);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -200,6 +209,17 @@ export function ComponentList({ scheduleId, refreshKey, onEdit, onAdd }: Props) 
           >
             Charges, taxes, credits, and other line items applied during rating.
           </p>
+          {disabled && (
+            <p
+              style={{
+                margin: "6px 0 0",
+                fontSize: 12,
+                color: "var(--warning, #b45309)",
+              }}
+            >
+              Schedule is published — components are immutable. Revise to make changes.
+            </p>
+          )}
         </div>
         {canEdit && (
           <button type="button" onClick={onAdd} style={addBtnStyle}>
