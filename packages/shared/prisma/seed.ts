@@ -199,6 +199,7 @@ async function main() {
         effectiveDate: args.effectiveDate,
         description: args.description, regulatoryRef: args.regulatoryRef,
         version: 1,
+        publishedAt: new Date(),
       },
     });
     const componentCount = await prisma.rateComponent.count({
