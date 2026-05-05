@@ -5,7 +5,7 @@ import { getBill } from "../services/bill.service.js";
 export async function billRoutes(app: FastifyInstance) {
   app.get(
     "/api/v1/bills/:id",
-    { config: { module: "service_agreements", permission: "VIEW" } },
+    { config: { module: "agreements", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);

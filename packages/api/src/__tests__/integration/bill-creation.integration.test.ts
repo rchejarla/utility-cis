@@ -86,14 +86,14 @@ beforeAll(async () => {
   saId = assignment.serviceAgreementId;
   utilityId = assignment.serviceAgreement.utilityId;
 
-  // Enable the service_agreements module so the bill routes' permission
-  // check (module: service_agreements, permission: EDIT/VIEW) passes.
+  // Enable the agreements module so the bill routes' permission
+  // check (module: agreements, permission: EDIT/VIEW) passes.
   const existingMod = await prisma.tenantModule.findFirst({
-    where: { utilityId, moduleKey: "service_agreements" },
+    where: { utilityId, moduleKey: "agreements" },
   });
   if (!existingMod) {
     await prisma.tenantModule.create({
-      data: { utilityId, moduleKey: "service_agreements" },
+      data: { utilityId, moduleKey: "agreements" },
     });
   }
   const rbac = await import("../../services/rbac.service.js");

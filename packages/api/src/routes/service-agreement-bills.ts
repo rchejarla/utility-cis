@@ -9,7 +9,7 @@ import {
 export async function serviceAgreementBillRoutes(app: FastifyInstance) {
   app.post(
     "/api/v1/service-agreements/:id/bills",
-    { config: { module: "service_agreements", permission: "EDIT" } },
+    { config: { module: "agreements", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id: saId } = idParamSchema.parse(request.params);
@@ -30,7 +30,7 @@ export async function serviceAgreementBillRoutes(app: FastifyInstance) {
 
   app.get(
     "/api/v1/service-agreements/:id/bills",
-    { config: { module: "service_agreements", permission: "VIEW" } },
+    { config: { module: "agreements", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id: saId } = idParamSchema.parse(request.params);
