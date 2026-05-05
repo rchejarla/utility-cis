@@ -51,7 +51,7 @@ export async function listRateSchedules(utilityId: string, query: RateScheduleQu
 }
 
 export async function getRateSchedule(id: string, utilityId: string) {
-  return prisma.rateSchedule.findUniqueOrThrow({
+  const schedule = await prisma.rateSchedule.findUniqueOrThrow({
     where: { id, utilityId },
     include: {
       commodity: true,
@@ -59,6 +59,26 @@ export async function getRateSchedule(id: string, utilityId: string) {
       supersededBy: true,
     },
   });
+
+  // Full version chain — every schedule that shares this (utilityId, code)
+  // ordered by version asc. Lets the detail page render a single timeline
+  // (v1 → v2 → … → vN) instead of only the immediate predecessor, so an
+  // operator can jump to any prior version in one click rather than
+  // walking the supersedes chain hop-by-hop.
+  const chain = await prisma.rateSchedule.findMany({
+    where: { utilityId, code: schedule.code },
+    select: {
+      id: true,
+      version: true,
+      effectiveDate: true,
+      expirationDate: true,
+      publishedAt: true,
+      supersededById: true,
+    },
+    orderBy: { version: "asc" },
+  });
+
+  return { ...schedule, chain };
 }
 
 export async function createRateSchedule(

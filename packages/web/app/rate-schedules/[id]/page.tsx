@@ -15,6 +15,15 @@ import { useToast } from "@/components/ui/toast";
 import { ComponentList, type RateComponent } from "@/components/rate-schedules/component-list";
 import { ComponentEditor } from "@/components/rate-schedules/component-editor";
 
+interface ChainEntry {
+  id: string;
+  version: number;
+  effectiveDate: string;
+  expirationDate: string | null;
+  publishedAt: string | null;
+  supersededById: string | null;
+}
+
 interface RateSchedule {
   id: string;
   name: string;
@@ -28,6 +37,7 @@ interface RateSchedule {
   publishedAt?: string | null;
   supersededById?: string | null;
   supersedes?: { id: string; version: number; name: string; effectiveDate: string };
+  chain?: ChainEntry[];
 }
 
 interface AuditEntry {
@@ -408,48 +418,94 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
               padding: "20px 24px",
             }}
           >
-            <div style={{ color: "var(--text-muted)", fontSize: "13px" }}>
-              {rs.supersedes ? (
-                <div>
-                  <div style={{ marginBottom: "12px", color: "var(--text-secondary)", fontSize: "13px" }}>
-                    This schedule supersedes:
-                  </div>
-                  <div
-                    style={{
-                      padding: "12px 16px",
-                      borderRadius: "var(--radius)",
-                      border: "1px solid var(--border)",
-                      background: "var(--bg-elevated)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                    }}
-                  >
-                    <div>
-                      <span style={{ fontWeight: 500 }}>{rs.supersedes.name}</span>
-                      <span style={{ fontFamily: "monospace", fontSize: "11px", color: "var(--text-muted)", marginLeft: "8px" }}>
-                        v{rs.supersedes.version}
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => router.push(`/rate-schedules/${rs.supersedes!.id}`)}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: "var(--accent-primary)",
-                        fontSize: "12px",
-                        cursor: "pointer",
-                        fontFamily: "inherit",
-                      }}
-                    >
-                      View →
-                    </button>
-                  </div>
+            {rs.chain && rs.chain.length > 0 ? (
+              <div>
+                <div
+                  style={{
+                    marginBottom: "12px",
+                    color: "var(--text-secondary)",
+                    fontSize: "13px",
+                  }}
+                >
+                  All versions of <b>{rs.code}</b> ({rs.chain.length} total). Click any version to open it.
                 </div>
-              ) : (
-                "This is the original version of this schedule."
-              )}
-            </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  {rs.chain.map((entry) => {
+                    const isCurrent = entry.id === rs.id;
+                    const status: "Draft" | "Published" | "Superseded" = entry.supersededById
+                      ? "Superseded"
+                      : entry.publishedAt
+                        ? "Published"
+                        : "Draft";
+                    return (
+                      <button
+                        key={entry.id}
+                        onClick={() => {
+                          if (!isCurrent) router.push(`/rate-schedules/${entry.id}`);
+                        }}
+                        disabled={isCurrent}
+                        style={{
+                          padding: "10px 14px",
+                          borderRadius: "var(--radius)",
+                          border: isCurrent
+                            ? "1px solid var(--accent-primary)"
+                            : "1px solid var(--border)",
+                          background: isCurrent ? "var(--bg-elevated)" : "var(--bg-card)",
+                          textAlign: "left",
+                          cursor: isCurrent ? "default" : "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "12px",
+                          fontFamily: "inherit",
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontFamily: "monospace",
+                            fontSize: "12px",
+                            color: "var(--text-muted)",
+                            minWidth: "32px",
+                          }}
+                        >
+                          v{entry.version}
+                        </span>
+                        <span style={{ fontSize: "12px", flex: 1 }}>
+                          {entry.effectiveDate.slice(0, 10)}
+                          <span style={{ color: "var(--text-muted)" }}> → </span>
+                          {entry.expirationDate ? entry.expirationDate.slice(0, 10) : "—"}
+                        </span>
+                        <StatusBadge status={status} />
+                        {isCurrent ? (
+                          <span
+                            style={{
+                              fontSize: "11px",
+                              color: "var(--accent-primary)",
+                              fontWeight: 500,
+                            }}
+                          >
+                            Current
+                          </span>
+                        ) : (
+                          <span
+                            style={{
+                              color: "var(--accent-primary)",
+                              fontSize: "12px",
+                            }}
+                          >
+                            View →
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div style={{ color: "var(--text-muted)", fontSize: "13px" }}>
+                This is the only version of this schedule.
+              </div>
+            )}
           </div>
         )}
 
