@@ -15,6 +15,7 @@ import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { MeterManagementTab } from "@/components/service-agreements/meters-tab";
 import { AgreementBillingTab } from "@/components/billing/agreement-billing-tab";
+import { BillsTab } from "@/components/bills/bills-tab";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
 import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { usePermission } from "@/lib/use-permission";
@@ -405,6 +406,7 @@ export default function ServiceAgreementDetailPage({
         tabs={[
           { key: "overview", label: "Overview" },
           { key: "meters", label: `Meters (${sa.meters?.length ?? 0})` },
+          { key: "bills", label: "Bills" },
           { key: "billing", label: "Billing" },
           { key: "attachments", label: "Attachments" },
           { key: "audit", label: "Audit" },
@@ -879,6 +881,8 @@ export default function ServiceAgreementDetailPage({
             onShowFormChange={setShowAddMeter}
           />
         )}
+
+        {activeTab === "bills" && <BillsTab saId={id} canEdit={canEdit} />}
 
         {activeTab === "billing" && <AgreementBillingTab agreementId={sa.id} />}
 
