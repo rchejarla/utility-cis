@@ -387,6 +387,7 @@ model ServiceAgreement {
   serviceRequests ServiceRequest[]
   rateScheduleAssignments SAScheduleAssignment[]
   wqaValues       WqaValue[]
+  bills            Bill[]
 
   @@unique([utilityId, agreementNumber])
   @@index([accountId])
@@ -485,6 +486,7 @@ model RateSchedule {
   supersededBy      RateSchedule[]     @relation("RateScheduleVersions")
   components        RateComponent[]
   saAssignments     SAScheduleAssignment[]
+  billLines         BillLine[]
 
   @@unique([utilityId, code, version])
   @@index([commodityId])
@@ -509,6 +511,7 @@ model RateComponent {
   updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz
 
   rateSchedule    RateSchedule @relation(fields: [rateScheduleId], references: [id], onDelete: Cascade)
+  billLines       BillLine[]
 
   @@index([rateScheduleId])
   @@index([utilityId, rateScheduleId, sortOrder])
@@ -579,6 +582,53 @@ model BillingCycle {
   @@unique([utilityId, cycleCode])
   @@index([utilityId, active])
   @@map("billing_cycle")
+}
+
+/// Slice 5a — persisted output of the v2 rate engine for one SA + one period.
+/// Immutable financial record. Slice 5c (rebill) will add a self-relation to
+/// chain corrections; for now each Bill is a leaf.
+model Bill {
+  id                   String   @id @default(uuid()) @db.Uuid
+  utilityId            String   @map("utility_id") @db.Uuid
+  serviceAgreementId   String   @map("service_agreement_id") @db.Uuid
+  periodStart          DateTime @map("period_start") @db.Date
+  periodEnd            DateTime @map("period_end") @db.Date
+  subtotal             Decimal  @map("subtotal") @db.Decimal(14, 4)
+  taxes                Decimal  @map("taxes") @db.Decimal(14, 4)
+  credits              Decimal  @map("credits") @db.Decimal(14, 4)
+  total                Decimal  @map("total") @db.Decimal(14, 4)
+  minimumFloorApplied  Boolean  @map("minimum_floor_applied")
+  billNumber           String   @map("bill_number") @db.VarChar(50)
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  serviceAgreement     ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Restrict)
+  lines                BillLine[]
+
+  @@unique([utilityId, billNumber])
+  @@index([utilityId, serviceAgreementId, periodStart])
+  @@index([utilityId, periodEnd])
+  @@map("bill")
+}
+
+model BillLine {
+  id                  String   @id @default(uuid()) @db.Uuid
+  utilityId           String   @map("utility_id") @db.Uuid
+  billId              String   @map("bill_id") @db.Uuid
+  label               String   @map("label") @db.VarChar(255)
+  kindCode            String   @map("kind_code") @db.VarChar(50)
+  amount              Decimal  @map("amount") @db.Decimal(14, 4)
+  quantity            Decimal? @map("quantity") @db.Decimal(14, 4)
+  sourceScheduleId    String   @map("source_schedule_id") @db.Uuid
+  sourceComponentId   String   @map("source_component_id") @db.Uuid
+  sortOrder           Int      @map("sort_order")
+
+  bill                Bill          @relation(fields: [billId], references: [id], onDelete: Cascade)
+  sourceSchedule      RateSchedule  @relation(fields: [sourceScheduleId], references: [id], onDelete: Restrict)
+  sourceComponent     RateComponent @relation(fields: [sourceComponentId], references: [id], onDelete: Restrict)
+
+  @@index([billId, sortOrder])
+  @@index([utilityId, sourceComponentId])
+  @@map("bill_line")
 }
 
 model MeterRead {
