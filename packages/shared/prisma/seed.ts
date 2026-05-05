@@ -526,16 +526,23 @@ async function main() {
   console.log(`  ${createdAccounts.length} accounts`);
 
   // ============ METERS ============
-  const meterSpecs = [
-    { premiseIdx: 0, meterNumber: "WM-001", commodityId: water.id, uomId: gal.id },
+  // `size` (only set on water meters) flows through `customFields.size` and
+  // is read by the v2 rate engine via the `meter:size:<id>` loader key.
+  // The Bozeman water service_charge component does a `lookup by meter_size`
+  // — without a size set, the lookup fails and bill generation throws.
+  const meterSpecs: Array<{
+    premiseIdx: number; meterNumber: string;
+    commodityId: string; uomId: string; size?: string;
+  }> = [
+    { premiseIdx: 0, meterNumber: "WM-001", commodityId: water.id, uomId: gal.id, size: '5/8"' },
     { premiseIdx: 0, meterNumber: "SM-001", commodityId: sewer.id, uomId: sewerUom.id },
-    { premiseIdx: 1, meterNumber: "WM-002", commodityId: water.id, uomId: gal.id },
+    { premiseIdx: 1, meterNumber: "WM-002", commodityId: water.id, uomId: gal.id, size: '2"' },
     { premiseIdx: 1, meterNumber: "EM-001", commodityId: electric.id, uomId: kwh.id },
     { premiseIdx: 2, meterNumber: "EM-002", commodityId: electric.id, uomId: kwh.id },
-    { premiseIdx: 3, meterNumber: "WM-003", commodityId: water.id, uomId: gal.id },
+    { premiseIdx: 3, meterNumber: "WM-003", commodityId: water.id, uomId: gal.id, size: '1"' },
     { premiseIdx: 3, meterNumber: "EM-003", commodityId: electric.id, uomId: kwh.id },
-    { premiseIdx: 4, meterNumber: "WM-004", commodityId: water.id, uomId: gal.id },
-    { premiseIdx: 5, meterNumber: "WM-005", commodityId: water.id, uomId: gal.id },
+    { premiseIdx: 4, meterNumber: "WM-004", commodityId: water.id, uomId: gal.id, size: '2"' },
+    { premiseIdx: 5, meterNumber: "WM-005", commodityId: water.id, uomId: gal.id, size: '5/8"' },
     { premiseIdx: 5, meterNumber: "EM-005", commodityId: electric.id, uomId: kwh.id },
   ];
   const createdMeters: { id: string }[] = [];
@@ -554,6 +561,7 @@ async function main() {
           meterType: "MANUAL",
           status: "ACTIVE",
           installDate: new Date("2024-01-15"),
+          customFields: m.size ? { size: m.size } : {},
         },
       });
     }
@@ -614,6 +622,7 @@ async function main() {
   ];
 
   let saCount = 0, asCount = 0;
+  const createdSAs: { id: string }[] = [];
   for (const sa of saSpecs) {
     let created = await prisma.serviceAgreement.findFirst({
       where: { utilityId: UTILITY_ID, agreementNumber: sa.agreementNumber },
@@ -639,6 +648,7 @@ async function main() {
         data: { rateServiceClassId: sa.svcClassId },
       });
     }
+    createdSAs.push(created);
     // ServicePoint — created if missing.
     let sp = await prisma.servicePoint.findFirst({
       where: { serviceAgreementId: created.id },
@@ -689,6 +699,64 @@ async function main() {
     }
   }
   console.log(`  ${saSpecs.length} service agreements (created ${saCount}, ${asCount} new assignments)`);
+
+  // ============ SAMPLE METER READS (so bill generation has data) ============
+  // One read per water meter for the most recent full calendar month, with
+  // priorReading + reading chosen to give realistic SFR/MFR consumption.
+  // Without these, "Generate Bill" runs the engine against zero
+  // consumption and produces only the service charge.
+  const today = new Date();
+  const periodEnd = new Date(today.getFullYear(), today.getMonth(), 0); // last day of last month
+  const periodEndDt = new Date(periodEnd.getFullYear(), periodEnd.getMonth(), periodEnd.getDate(), 12, 0, 0);
+  // saIdx is the position in saSpecs above (0=SA-0001, 1=SA-0002, 2=SA-0003,
+  // 3=SA-0004, 4=SA-0006, 5=SA-0007, 6=SA-0008, 7=SA-0009, 8=SA-0010 — note
+  // SA-0005 is skipped in the spec list).
+  const sampleReads: Array<{ meterIdx: number; saIdx: number; prior: number; reading: number }> = [
+    // SFR: 12 HCF — walks tier 1 (6 @ $3.31) + part of tier 2 (6 @ $4.58) = $47.34
+    { meterIdx: 0, saIdx: 0, prior: 88, reading: 100 },  // WM-001 → SA-0001 (Jane Smith SFR)
+    // Commercial: 35 HCF
+    { meterIdx: 2, saIdx: 2, prior: 165, reading: 200 }, // WM-002 → SA-0003
+    // Commercial: 80 HCF
+    { meterIdx: 5, saIdx: 5, prior: 420, reading: 500 }, // WM-003 → SA-0007
+    // Commercial: 28 HCF
+    { meterIdx: 7, saIdx: 7, prior: 372, reading: 400 }, // WM-004 → SA-0009
+    // SFR: 9 HCF
+    { meterIdx: 8, saIdx: 8, prior: 41, reading: 50 },   // WM-005 → SA-0010
+  ];
+  let readCount = 0;
+  for (const r of sampleReads) {
+    const meterId = createdMeters[r.meterIdx].id;
+    const saId = createdSAs[r.saIdx]?.id;
+    if (!saId) continue;
+    const meter = await prisma.meter.findUniqueOrThrow({
+      where: { id: meterId }, select: { uomId: true },
+    });
+    const existing = await prisma.meterRead.findFirst({
+      where: {
+        utilityId: UTILITY_ID, meterId, serviceAgreementId: saId,
+        readDate: periodEnd,
+      },
+    });
+    if (!existing) {
+      await prisma.meterRead.create({
+        data: {
+          utilityId: UTILITY_ID,
+          meterId,
+          serviceAgreementId: saId,
+          uomId: meter.uomId,
+          readDate: periodEnd,
+          readDatetime: periodEndDt,
+          reading: r.reading,
+          priorReading: r.prior,
+          consumption: r.reading - r.prior,
+          readType: "ACTUAL",
+          readSource: "MANUAL",
+        },
+      });
+      readCount++;
+    }
+  }
+  console.log(`  ${readCount} sample meter reads (period ending ${periodEnd.toISOString().slice(0, 10)})`);
 
   // ============ CONTAINERS (with size/frequency/itemType) ============
   // Premise 0: garbage 65 weekly + recycling 65 weekly + organics 35 weekly
