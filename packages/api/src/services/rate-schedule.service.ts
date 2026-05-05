@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { prisma } from "../lib/prisma.js";
 import { cacheDel } from "../lib/cache-redis.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
@@ -8,6 +9,32 @@ import type {
 } from "@utility-cis/shared";
 import { paginatedTenantList } from "../lib/pagination.js";
 import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
+
+/**
+ * Recursive deep-walk that rewrites every `component_id: <uuid>` key it
+ * finds, using the supplied old→new id map. Used when copying components
+ * to a new revision: a `pricing.percent_of.selector` (or nested
+ * `and`/`or` selector) may reference a sibling component by id, and
+ * those references need to point at the freshly-minted ids in the new
+ * schedule. References that aren't in the map (e.g., to an expired
+ * component that wasn't copied) are left untouched — the rate engine
+ * will surface the dangling reference at evaluation time, which matches
+ * what would happen anyway.
+ */
+function remapComponentIds(value: unknown, idMap: Map<string, string>): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((v) => remapComponentIds(v, idMap));
+  const obj = value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (key === "component_id" && typeof val === "string") {
+      result[key] = idMap.get(val) ?? val;
+    } else {
+      result[key] = remapComponentIds(val, idMap);
+    }
+  }
+  return result;
+}
 
 const fullInclude = {
   commodity: true,
@@ -115,6 +142,37 @@ export async function reviseRateSchedule(
           supersededById: newSchedule.id,
         },
       });
+
+      // Carry forward every still-active component (expirationDate IS
+      // NULL) onto the new revision. Pre-generate ids so we can rewrite
+      // intra-schedule `component_id` references in pricing selectors
+      // (percent_of / floor / and / or) to point at the new ids before
+      // insert. Components with an explicit expirationDate are treated
+      // as "retired in the predecessor" and not carried forward.
+      const activeComponents = await tx.rateComponent.findMany({
+        where: { rateScheduleId: id, utilityId, expirationDate: null },
+        orderBy: { sortOrder: "asc" },
+      });
+      if (activeComponents.length > 0) {
+        const idMap = new Map<string, string>();
+        for (const c of activeComponents) idMap.set(c.id, randomUUID());
+        await tx.rateComponent.createMany({
+          data: activeComponents.map((c) => ({
+            id: idMap.get(c.id)!,
+            utilityId,
+            rateScheduleId: newSchedule.id,
+            kindCode: c.kindCode,
+            label: c.label,
+            predicate: c.predicate as object,
+            quantitySource: c.quantitySource as object,
+            pricing: remapComponentIds(c.pricing, idMap) as object,
+            sortOrder: c.sortOrder,
+            effectiveDate: newEffectiveDate,
+            expirationDate: null,
+          })),
+        });
+      }
+
       await cacheDel(`rate-schedule:${utilityId}:${predecessor.code}`);
       return newSchedule;
     }
