@@ -6,6 +6,7 @@ export * from "./account";
 export * from "./service-agreement";
 export * from "./rate-schedule";
 export * from "./billing-cycle";
+export * from "./bill";
 export * from "./theme";
 export * from "./customer";
 export * from "./contact";

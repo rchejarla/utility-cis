@@ -29,6 +29,7 @@ export const EVENT_TYPES = {
   RATE_SCHEDULE_PUBLISHED: "rate_schedule.published",
   BILLING_CYCLE_CREATED: "billing_cycle.created",
   BILLING_CYCLE_UPDATED: "billing_cycle.updated",
+  BILL_CREATED: "bill.created",
   CUSTOMER_CREATED: "customer.created",
   CUSTOMER_UPDATED: "customer.updated",
   CONTACT_CREATED: "contact.created",
