@@ -564,6 +564,14 @@ async function main() {
           customFields: m.size ? { size: m.size } : {},
         },
       });
+    } else if (m.size) {
+      // Re-seed: backfill `customFields.size` on meters created before
+      // the v2 rate engine started reading it. Idempotent — same value
+      // every run, so it's safe to re-apply.
+      await prisma.meter.update({
+        where: { id: mt.id },
+        data: { customFields: { size: m.size } },
+      });
     }
     createdMeters.push(mt);
   }
