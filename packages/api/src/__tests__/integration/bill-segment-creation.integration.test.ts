@@ -7,8 +7,8 @@ import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { bootPostgres } from "./_effective-dating-fixtures.js";
 
 /**
- * Slice 5a task 7 — POST /api/v1/service-agreements/:id/bills produces a
- * persisted Bill with line items matching the Slice 4 golden test:
+ * Slice 5a task 7 — POST /api/v1/service-agreements/:id/bill-segments produces
+ * a persisted BillSegment with line items matching the Slice 4 golden test:
  * Bozeman SFR water customer, May 2026, 12 HCF read → $69.65 subtotal.
  */
 
@@ -86,7 +86,7 @@ beforeAll(async () => {
   saId = assignment.serviceAgreementId;
   utilityId = assignment.serviceAgreement.utilityId;
 
-  // Enable the agreements module so the bill routes' permission
+  // Enable the agreements module so the bill-segment routes' permission
   // check (module: agreements, permission: EDIT/VIEW) passes.
   const existingMod = await prisma.tenantModule.findFirst({
     where: { utilityId, moduleKey: "agreements" },
@@ -134,20 +134,20 @@ afterAll(async () => {
 
 beforeEach(async () => {
   const { prisma } = prismaImports;
-  // Wipe any bills from a prior test in the same suite — keep meters / SAs.
-  await prisma.$executeRawUnsafe("DELETE FROM bill_line");
-  await prisma.$executeRawUnsafe("DELETE FROM bill");
+  // Wipe any segments from a prior test in the same suite — keep meters / SAs.
+  await prisma.$executeRawUnsafe("DELETE FROM bill_segment_line");
+  await prisma.$executeRawUnsafe("DELETE FROM bill_segment");
   await prisma.$executeRawUnsafe(
     "UPDATE meter_read SET billed_at = NULL WHERE service_agreement_id = $1::uuid",
     saId,
   );
 });
 
-describe("POST /api/v1/service-agreements/:id/bills — Bozeman SFR golden", () => {
-  it("creates a Bill with $69.65 subtotal and persists lines", async () => {
+describe("POST /api/v1/service-agreements/:id/bill-segments — Bozeman SFR golden", () => {
+  it("creates a BillSegment with $69.65 subtotal and persists lines", async () => {
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/service-agreements/${saId}/bills`,
+      url: `/api/v1/service-agreements/${saId}/bill-segments`,
       headers: headers(),
       payload: { periodStart: "2026-05-01", periodEnd: "2026-05-31" },
     });
@@ -167,12 +167,12 @@ describe("POST /api/v1/service-agreements/:id/bills — Bozeman SFR golden", () 
 
     // DB row exists
     const { prisma } = prismaImports;
-    const dbBill = await prisma.bill.findUniqueOrThrow({
+    const dbSegment = await prisma.billSegment.findUniqueOrThrow({
       where: { id: body.id, utilityId },
       include: { lines: true },
     });
-    expect(dbBill.lines.length).toBe(body.lines.length);
-    expect(dbBill.subtotal.toFixed(2)).toBe("69.65");
+    expect(dbSegment.lines.length).toBe(body.lines.length);
+    expect(dbSegment.subtotal.toFixed(2)).toBe("69.65");
 
     // MeterRead consumed
     const consumed = await prisma.meterRead.findFirst({
@@ -181,10 +181,10 @@ describe("POST /api/v1/service-agreements/:id/bills — Bozeman SFR golden", () 
     expect(consumed).not.toBeNull();
   }, 600_000);
 
-  it("GET /service-agreements/:id/bills returns the new bill", async () => {
+  it("GET /service-agreements/:id/bill-segments returns the new segment", async () => {
     const create = await app.inject({
       method: "POST",
-      url: `/api/v1/service-agreements/${saId}/bills`,
+      url: `/api/v1/service-agreements/${saId}/bill-segments`,
       headers: headers(),
       payload: { periodStart: "2026-05-01", periodEnd: "2026-05-31" },
     });
@@ -192,7 +192,7 @@ describe("POST /api/v1/service-agreements/:id/bills — Bozeman SFR golden", () 
 
     const list = await app.inject({
       method: "GET",
-      url: `/api/v1/service-agreements/${saId}/bills`,
+      url: `/api/v1/service-agreements/${saId}/bill-segments`,
       headers: headers(),
     });
     expect(list.statusCode).toBe(200);
@@ -201,10 +201,10 @@ describe("POST /api/v1/service-agreements/:id/bills — Bozeman SFR golden", () 
     expect(arr.length).toBe(1);
   }, 600_000);
 
-  it("GET /bills/:id returns full bill with lines", async () => {
+  it("GET /bill-segments/:id returns full segment with lines", async () => {
     const create = await app.inject({
       method: "POST",
-      url: `/api/v1/service-agreements/${saId}/bills`,
+      url: `/api/v1/service-agreements/${saId}/bill-segments`,
       headers: headers(),
       payload: { periodStart: "2026-05-01", periodEnd: "2026-05-31" },
     });
@@ -212,7 +212,7 @@ describe("POST /api/v1/service-agreements/:id/bills — Bozeman SFR golden", () 
 
     const get = await app.inject({
       method: "GET",
-      url: `/api/v1/bills/${created.id}`,
+      url: `/api/v1/bill-segments/${created.id}`,
       headers: headers(),
     });
     expect(get.statusCode).toBe(200);
@@ -224,7 +224,7 @@ describe("POST /api/v1/service-agreements/:id/bills — Bozeman SFR golden", () 
   it("returns 400 INVALID_PERIOD when periodEnd < periodStart", async () => {
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/service-agreements/${saId}/bills`,
+      url: `/api/v1/service-agreements/${saId}/bill-segments`,
       headers: headers(),
       payload: { periodStart: "2026-05-31", periodEnd: "2026-05-01" },
     });
@@ -236,7 +236,7 @@ describe("POST /api/v1/service-agreements/:id/bills — Bozeman SFR golden", () 
   it("returns 400 NO_ACTIVE_ASSIGNMENTS for a period before any assignment", async () => {
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/service-agreements/${saId}/bills`,
+      url: `/api/v1/service-agreements/${saId}/bill-segments`,
       headers: headers(),
       payload: { periodStart: "1999-01-01", periodEnd: "1999-01-31" },
     });
@@ -258,7 +258,7 @@ describe("POST /api/v1/service-agreements/:id/bills — Bozeman SFR golden", () 
     try {
       const res = await app.inject({
         method: "POST",
-        url: `/api/v1/service-agreements/${saId}/bills`,
+        url: `/api/v1/service-agreements/${saId}/bill-segments`,
         headers: headers(),
         payload: { periodStart: "2026-05-01", periodEnd: "2026-05-31" },
       });

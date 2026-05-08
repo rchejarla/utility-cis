@@ -694,7 +694,7 @@ The `trace` is the audit record and the "explain this bill" log — what fired, 
 
 | Not engine | Why |
 |---|---|
-| **Persistence** | Engine returns lines; a `Bill` record is built and stored separately |
+| **Persistence** | Engine returns lines; a `BillSegment` record (per-SA charge calculation, industry term — Oracle CC&B "bill segment") is built and stored separately |
 | **Notification / delivery** | Bill template + send is a separate module |
 | **Adjustments / corrections / write-offs** | A `Correction` is its own concept; calls the engine for rebill |
 | **Bill template rendering (PDF/HTML)** | Engine returns line items; renderer turns them into the artifact, may apply `bill_group_id` rollup |

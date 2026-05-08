@@ -4,11 +4,11 @@ import { useEffect, useState } from "react";
 import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
-import { BillDetailDialog } from "./bill-detail-dialog";
+import { BillSegmentDetailDialog } from "./bill-segment-detail-dialog";
 
-interface BillSummary {
+interface BillSegmentSummary {
   id: string;
-  billNumber: string;
+  segmentNumber: string;
   periodStart: string;
   periodEnd: string;
   total: string;
@@ -17,21 +17,21 @@ interface BillSummary {
 
 const fmt = (s: string) => `$${parseFloat(s).toFixed(2)}`;
 
-export function BillsTab({ saId, canEdit }: { saId: string; canEdit: boolean }) {
+export function BillSegmentsTab({ saId, canEdit }: { saId: string; canEdit: boolean }) {
   const { toast } = useToast();
-  const [bills, setBills] = useState<BillSummary[]>([]);
+  const [segments, setSegments] = useState<BillSegmentSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
   const [showDialog, setShowDialog] = useState(false);
   const [periodStart, setPeriodStart] = useState("");
   const [periodEnd, setPeriodEnd] = useState("");
   const [creating, setCreating] = useState(false);
-  const [openBillId, setOpenBillId] = useState<string | null>(null);
+  const [openSegmentId, setOpenSegmentId] = useState<string | null>(null);
 
   useEffect(() => {
     apiClient
-      .get<BillSummary[]>(`/api/v1/service-agreements/${saId}/bills`)
-      .then(setBills)
+      .get<BillSegmentSummary[]>(`/api/v1/service-agreements/${saId}/bill-segments`)
+      .then(setSegments)
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [saId, refreshKey]);
@@ -40,7 +40,7 @@ export function BillsTab({ saId, canEdit }: { saId: string; canEdit: boolean }) 
     if (!periodStart || !periodEnd) return;
     setCreating(true);
     try {
-      await apiClient.post(`/api/v1/service-agreements/${saId}/bills`, {
+      await apiClient.post(`/api/v1/service-agreements/${saId}/bill-segments`, {
         periodStart,
         periodEnd,
       });
@@ -83,7 +83,7 @@ export function BillsTab({ saId, canEdit }: { saId: string; canEdit: boolean }) 
 
       {loading ? (
         <div style={{ color: "var(--text-muted)", padding: "24px 0" }}>Loading...</div>
-      ) : bills.length === 0 ? (
+      ) : segments.length === 0 ? (
         <div
           style={{
             color: "var(--text-muted)",
@@ -106,21 +106,21 @@ export function BillsTab({ saId, canEdit }: { saId: string; canEdit: boolean }) 
             </tr>
           </thead>
           <tbody>
-            {bills.map((b) => (
-              <tr key={b.id}>
-                <td style={{ ...td, fontFamily: "monospace", fontSize: "12px" }}>{b.billNumber}</td>
+            {segments.map((s) => (
+              <tr key={s.id}>
+                <td style={{ ...td, fontFamily: "monospace", fontSize: "12px" }}>{s.segmentNumber}</td>
                 <td style={td}>
-                  {b.periodStart.slice(0, 10)} → {b.periodEnd.slice(0, 10)}
+                  {s.periodStart.slice(0, 10)} → {s.periodEnd.slice(0, 10)}
                 </td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "monospace", fontWeight: 600 }}>
-                  {fmt(b.total)}
+                  {fmt(s.total)}
                 </td>
                 <td style={{ ...td, color: "var(--text-muted)", fontSize: "12px" }}>
-                  {new Date(b.createdAt).toLocaleString()}
+                  {new Date(s.createdAt).toLocaleString()}
                 </td>
                 <td style={td}>
                   <button
-                    onClick={() => setOpenBillId(b.id)}
+                    onClick={() => setOpenSegmentId(s.id)}
                     style={{
                       background: "none",
                       border: "none",
@@ -218,8 +218,11 @@ export function BillsTab({ saId, canEdit }: { saId: string; canEdit: boolean }) 
         </div>
       )}
 
-      {openBillId && (
-        <BillDetailDialog billId={openBillId} onClose={() => setOpenBillId(null)} />
+      {openSegmentId && (
+        <BillSegmentDetailDialog
+          segmentId={openSegmentId}
+          onClose={() => setOpenSegmentId(null)}
+        />
       )}
     </div>
   );

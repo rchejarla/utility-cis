@@ -7,12 +7,12 @@ import { loadBase } from "../lib/rate-engine-loaders/index.js";
 import { buildRegistry } from "../lib/rate-engine-registry.js";
 import type { Decimal as JsDecimal } from "../lib/rate-engine/decimal.js";
 
-export interface CreateBillInput {
+export interface CreateBillSegmentInput {
   periodStart: Date;
   periodEnd: Date;
 }
 
-export interface BillLineRow {
+export interface BillSegmentLineRow {
   id: string;
   label: string;
   kindCode: string;
@@ -23,7 +23,7 @@ export interface BillLineRow {
   sortOrder: number;
 }
 
-export interface BillSummary {
+export interface BillSegmentSummary {
   id: string;
   utilityId: string;
   serviceAgreementId: string;
@@ -34,49 +34,49 @@ export interface BillSummary {
   credits: string;
   total: string;
   minimumFloorApplied: boolean;
-  billNumber: string;
+  segmentNumber: string;
   createdAt: Date;
 }
 
-export interface BillWithLines extends BillSummary {
-  lines: BillLineRow[];
+export interface BillSegmentWithLines extends BillSegmentSummary {
+  lines: BillSegmentLineRow[];
 }
 
 function decToFixedRequired(d: JsDecimal): string {
   return d.toFixed(4);
 }
 
-function billNumberPrefix(d: Date): string {
+function segmentNumberPrefix(d: Date): string {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `BILL-${yyyy}${mm}-`;
+  return `SEG-${yyyy}${mm}-`;
 }
 
 /**
- * Allocate a per-tenant sequential bill number. The unique index on
- * (utility_id, bill_number) makes a tight race produce a 23505 that the
+ * Allocate a per-tenant sequential segment number. The unique index on
+ * (utility_id, segment_number) makes a tight race produce a 23505 that the
  * route layer can map to a 409 — but the human-in-the-loop create flow
  * makes a race almost impossible.
  */
-async function nextBillNumber(
+async function nextSegmentNumber(
   tx: Prisma.TransactionClient,
   utilityId: string,
   now: Date,
 ): Promise<string> {
-  const prefix = billNumberPrefix(now);
-  const count = await tx.bill.count({
-    where: { utilityId, billNumber: { startsWith: prefix } },
+  const prefix = segmentNumberPrefix(now);
+  const count = await tx.billSegment.count({
+    where: { utilityId, segmentNumber: { startsWith: prefix } },
   });
   return `${prefix}${count + 1}`;
 }
 
-export async function createBillForServiceAgreement(
+export async function createBillSegmentForServiceAgreement(
   utilityId: string,
   actorId: string,
   actorName: string,
   saId: string,
-  input: CreateBillInput,
-): Promise<BillWithLines> {
+  input: CreateBillSegmentInput,
+): Promise<BillSegmentWithLines> {
   if (input.periodEnd < input.periodStart) {
     throw Object.assign(new Error("periodEnd must be on/after periodStart"), {
       statusCode: 400,
@@ -85,8 +85,8 @@ export async function createBillForServiceAgreement(
   }
 
   return auditCreate(
-    { utilityId, actorId, actorName, entityType: "Bill" },
-    EVENT_TYPES.BILL_CREATED,
+    { utilityId, actorId, actorName, entityType: "BillSegment" },
+    EVENT_TYPES.BILL_SEGMENT_CREATED,
     async (tx) => {
       // 1. loadBase — assignments + components + snapshots
       const period = { startDate: input.periodStart, endDate: input.periodEnd };
@@ -148,10 +148,10 @@ export async function createBillForServiceAgreement(
       // 6. rate
       const result = engine.rate({ base, vars });
 
-      // 7. allocate bill number + persist Bill row
+      // 7. allocate segment number + persist BillSegment row
       const now = new Date();
-      const billNumber = await nextBillNumber(tx, utilityId, now);
-      const bill = await tx.bill.create({
+      const segmentNumber = await nextSegmentNumber(tx, utilityId, now);
+      const segment = await tx.billSegment.create({
         data: {
           utilityId,
           serviceAgreementId: saId,
@@ -162,14 +162,14 @@ export async function createBillForServiceAgreement(
           credits: new Prisma.Decimal(decToFixedRequired(result.totals.credits)),
           total: new Prisma.Decimal(decToFixedRequired(result.totals.total)),
           minimumFloorApplied: result.totals.minimumFloorApplied,
-          billNumber,
+          segmentNumber,
         },
       });
 
-      // 8. persist BillLine rows preserving engine order
+      // 8. persist BillSegmentLine rows preserving engine order
       const lineRows = result.lines.map((line, idx) => ({
         utilityId,
-        billId: bill.id,
+        billSegmentId: segment.id,
         label: line.label,
         kindCode: line.kindCode,
         amount: new Prisma.Decimal(decToFixedRequired(line.amount)),
@@ -182,7 +182,7 @@ export async function createBillForServiceAgreement(
         sortOrder: (idx + 1) * 100,
       }));
       if (lineRows.length > 0) {
-        await tx.billLine.createMany({ data: lineRows });
+        await tx.billSegmentLine.createMany({ data: lineRows });
       }
 
       // 9. mark MeterReads consumed by the engine. The engine consumes
@@ -201,34 +201,34 @@ export async function createBillForServiceAgreement(
         });
       }
 
-      return assembleBillWithLines(tx, utilityId, bill.id);
+      return assembleSegmentWithLines(tx, utilityId, segment.id);
     },
   );
 }
 
-async function assembleBillWithLines(
+async function assembleSegmentWithLines(
   tx: Prisma.TransactionClient,
   utilityId: string,
   id: string,
-): Promise<BillWithLines> {
-  const bill = await tx.bill.findUniqueOrThrow({
+): Promise<BillSegmentWithLines> {
+  const segment = await tx.billSegment.findUniqueOrThrow({
     where: { id, utilityId },
     include: { lines: { orderBy: { sortOrder: "asc" } } },
   });
   return {
-    id: bill.id,
-    utilityId: bill.utilityId,
-    serviceAgreementId: bill.serviceAgreementId,
-    periodStart: bill.periodStart,
-    periodEnd: bill.periodEnd,
-    subtotal: bill.subtotal.toFixed(4),
-    taxes: bill.taxes.toFixed(4),
-    credits: bill.credits.toFixed(4),
-    total: bill.total.toFixed(4),
-    minimumFloorApplied: bill.minimumFloorApplied,
-    billNumber: bill.billNumber,
-    createdAt: bill.createdAt,
-    lines: bill.lines.map((l) => ({
+    id: segment.id,
+    utilityId: segment.utilityId,
+    serviceAgreementId: segment.serviceAgreementId,
+    periodStart: segment.periodStart,
+    periodEnd: segment.periodEnd,
+    subtotal: segment.subtotal.toFixed(4),
+    taxes: segment.taxes.toFixed(4),
+    credits: segment.credits.toFixed(4),
+    total: segment.total.toFixed(4),
+    minimumFloorApplied: segment.minimumFloorApplied,
+    segmentNumber: segment.segmentNumber,
+    createdAt: segment.createdAt,
+    lines: segment.lines.map((l) => ({
       id: l.id,
       label: l.label,
       kindCode: l.kindCode,
@@ -241,30 +241,33 @@ async function assembleBillWithLines(
   };
 }
 
-export async function listBillsForServiceAgreement(
+export async function listBillSegmentsForServiceAgreement(
   utilityId: string,
   saId: string,
-): Promise<BillSummary[]> {
-  const bills = await prisma.bill.findMany({
+): Promise<BillSegmentSummary[]> {
+  const segments = await prisma.billSegment.findMany({
     where: { utilityId, serviceAgreementId: saId },
     orderBy: { periodStart: "desc" },
   });
-  return bills.map((b) => ({
-    id: b.id,
-    utilityId: b.utilityId,
-    serviceAgreementId: b.serviceAgreementId,
-    periodStart: b.periodStart,
-    periodEnd: b.periodEnd,
-    subtotal: b.subtotal.toFixed(4),
-    taxes: b.taxes.toFixed(4),
-    credits: b.credits.toFixed(4),
-    total: b.total.toFixed(4),
-    minimumFloorApplied: b.minimumFloorApplied,
-    billNumber: b.billNumber,
-    createdAt: b.createdAt,
+  return segments.map((s) => ({
+    id: s.id,
+    utilityId: s.utilityId,
+    serviceAgreementId: s.serviceAgreementId,
+    periodStart: s.periodStart,
+    periodEnd: s.periodEnd,
+    subtotal: s.subtotal.toFixed(4),
+    taxes: s.taxes.toFixed(4),
+    credits: s.credits.toFixed(4),
+    total: s.total.toFixed(4),
+    minimumFloorApplied: s.minimumFloorApplied,
+    segmentNumber: s.segmentNumber,
+    createdAt: s.createdAt,
   }));
 }
 
-export async function getBill(utilityId: string, id: string): Promise<BillWithLines> {
-  return assembleBillWithLines(prisma as unknown as Prisma.TransactionClient, utilityId, id);
+export async function getBillSegment(
+  utilityId: string,
+  id: string,
+): Promise<BillSegmentWithLines> {
+  return assembleSegmentWithLines(prisma as unknown as Prisma.TransactionClient, utilityId, id);
 }

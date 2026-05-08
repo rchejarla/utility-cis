@@ -15,7 +15,7 @@ import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { MeterManagementTab } from "@/components/service-agreements/meters-tab";
 import { AgreementBillingTab } from "@/components/billing/agreement-billing-tab";
-import { BillsTab } from "@/components/bills/bills-tab";
+import { BillSegmentsTab } from "@/components/bill-segments/bill-segments-tab";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
 import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { usePermission } from "@/lib/use-permission";
@@ -882,7 +882,7 @@ export default function ServiceAgreementDetailPage({
           />
         )}
 
-        {activeTab === "bills" && <BillsTab saId={id} canEdit={canEdit} />}
+        {activeTab === "bills" && <BillSegmentsTab saId={id} canEdit={canEdit} />}
 
         {activeTab === "billing" && <AgreementBillingTab agreementId={sa.id} />}
 

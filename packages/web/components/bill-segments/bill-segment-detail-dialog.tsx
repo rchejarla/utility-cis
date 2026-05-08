@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api-client";
 
-interface BillLine {
+interface BillSegmentLine {
   id: string;
   label: string;
   kindCode: string;
@@ -13,9 +13,9 @@ interface BillLine {
   sourceComponentId: string;
   sortOrder: number;
 }
-interface BillWithLines {
+interface BillSegmentWithLines {
   id: string;
-  billNumber: string;
+  segmentNumber: string;
   periodStart: string;
   periodEnd: string;
   subtotal: string;
@@ -23,22 +23,28 @@ interface BillWithLines {
   credits: string;
   total: string;
   minimumFloorApplied: boolean;
-  lines: BillLine[];
+  lines: BillSegmentLine[];
 }
 
 const fmt = (s: string) => `$${parseFloat(s).toFixed(2)}`;
 
-export function BillDetailDialog({ billId, onClose }: { billId: string; onClose: () => void }) {
-  const [bill, setBill] = useState<BillWithLines | null>(null);
+export function BillSegmentDetailDialog({
+  segmentId,
+  onClose,
+}: {
+  segmentId: string;
+  onClose: () => void;
+}) {
+  const [segment, setSegment] = useState<BillSegmentWithLines | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     apiClient
-      .get<BillWithLines>(`/api/v1/bills/${billId}`)
-      .then(setBill)
+      .get<BillSegmentWithLines>(`/api/v1/bill-segments/${segmentId}`)
+      .then(setSegment)
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [billId]);
+  }, [segmentId]);
 
   return (
     <div
@@ -65,15 +71,15 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
           overflowY: "auto",
         }}
       >
-        {loading || !bill ? (
+        {loading || !segment ? (
           <div style={{ color: "var(--text-muted)" }}>Loading...</div>
         ) : (
           <>
             <h3 style={{ margin: "0 0 8px", fontSize: "16px", color: "var(--text-primary)" }}>
-              {bill.billNumber}
+              {segment.segmentNumber}
             </h3>
             <div style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "16px" }}>
-              {bill.periodStart.slice(0, 10)} → {bill.periodEnd.slice(0, 10)}
+              {segment.periodStart.slice(0, 10)} → {segment.periodEnd.slice(0, 10)}
             </div>
 
             <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "16px" }}>
@@ -86,7 +92,7 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
                 </tr>
               </thead>
               <tbody>
-                {bill.lines.map((l) => (
+                {segment.lines.map((l) => (
                   <tr key={l.id}>
                     <td style={td}>{l.label}</td>
                     <td style={{ ...td, color: "var(--text-muted)", fontSize: "11px" }}>
@@ -107,29 +113,29 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
                     Subtotal
                   </td>
                   <td style={{ ...td, textAlign: "right", fontFamily: "monospace", fontWeight: 600 }}>
-                    {fmt(bill.subtotal)}
+                    {fmt(segment.subtotal)}
                   </td>
                 </tr>
-                {parseFloat(bill.taxes) !== 0 && (
+                {parseFloat(segment.taxes) !== 0 && (
                   <tr>
                     <td colSpan={3} style={{ ...td, textAlign: "right" }}>Taxes</td>
                     <td style={{ ...td, textAlign: "right", fontFamily: "monospace" }}>
-                      {fmt(bill.taxes)}
+                      {fmt(segment.taxes)}
                     </td>
                   </tr>
                 )}
-                {parseFloat(bill.credits) !== 0 && (
+                {parseFloat(segment.credits) !== 0 && (
                   <tr>
                     <td colSpan={3} style={{ ...td, textAlign: "right" }}>Credits</td>
                     <td style={{ ...td, textAlign: "right", fontFamily: "monospace" }}>
-                      {fmt(bill.credits)}
+                      {fmt(segment.credits)}
                     </td>
                   </tr>
                 )}
                 <tr>
                   <td colSpan={3} style={{ ...td, textAlign: "right", fontWeight: 700 }}>Total</td>
                   <td style={{ ...td, textAlign: "right", fontFamily: "monospace", fontWeight: 700 }}>
-                    {fmt(bill.total)}
+                    {fmt(segment.total)}
                   </td>
                 </tr>
               </tfoot>
