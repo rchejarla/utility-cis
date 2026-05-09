@@ -1,0 +1,236 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { DatePicker } from "@/components/ui/date-picker";
+import { apiClient } from "@/lib/api-client";
+import { useToast } from "@/components/ui/toast";
+import { BillDetailDialog } from "./bill-detail-dialog";
+
+interface BillSummary {
+  id: string;
+  billNumber: string;
+  periodStart: string;
+  periodEnd: string;
+  billDate: string;
+  dueDate: string;
+  total: string;
+  createdAt: string;
+}
+
+const fmt = (s: string) => `$${parseFloat(s).toFixed(2)}`;
+const ymd = (s: string) => s.slice(0, 10);
+
+export function BillsTab({ accountId, canEdit }: { accountId: string; canEdit: boolean }) {
+  const { toast } = useToast();
+  const [bills, setBills] = useState<BillSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [showDialog, setShowDialog] = useState(false);
+  const [asOfDate, setAsOfDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [creating, setCreating] = useState(false);
+  const [openBillId, setOpenBillId] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiClient
+      .get<BillSummary[]>(`/api/v1/accounts/${accountId}/bills`)
+      .then(setBills)
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [accountId, refreshKey]);
+
+  const handleCreate = async () => {
+    if (!asOfDate) return;
+    setCreating(true);
+    try {
+      await apiClient.post(`/api/v1/accounts/${accountId}/bills`, { asOfDate });
+      toast("Bill generated", "success");
+      setShowDialog(false);
+      setRefreshKey((k) => k + 1);
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message.replace(/^API error \d+:\s*/, "") : "Bill generation failed";
+      toast(msg, "error");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px" }}>
+        {canEdit && (
+          <button
+            onClick={() => setShowDialog(true)}
+            style={{
+              padding: "7px 16px",
+              borderRadius: "var(--radius)",
+              border: "none",
+              background: "var(--accent-primary)",
+              color: "#fff",
+              fontSize: "12px",
+              fontWeight: 500,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            Generate Bill
+          </button>
+        )}
+      </div>
+
+      {loading ? (
+        <div style={{ color: "var(--text-muted)", padding: "24px 0" }}>Loading...</div>
+      ) : bills.length === 0 ? (
+        <div
+          style={{
+            color: "var(--text-muted)",
+            padding: "32px 0",
+            textAlign: "center",
+            fontSize: "13px",
+          }}
+        >
+          No bills yet. Click <b>Generate Bill</b> above to create one for the current period.
+        </div>
+      ) : (
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ background: "var(--bg-elevated)" }}>
+              <th style={th}>Bill #</th>
+              <th style={th}>Period</th>
+              <th style={th}>Due</th>
+              <th style={{ ...th, textAlign: "right" }}>Total</th>
+              <th style={th}>Created</th>
+              <th style={th}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {bills.map((b) => (
+              <tr key={b.id}>
+                <td style={{ ...td, fontFamily: "monospace", fontSize: "12px" }}>{b.billNumber}</td>
+                <td style={td}>
+                  {ymd(b.periodStart)} → {ymd(b.periodEnd)}
+                </td>
+                <td style={td}>{ymd(b.dueDate)}</td>
+                <td style={{ ...td, textAlign: "right", fontFamily: "monospace", fontWeight: 600 }}>
+                  {fmt(b.total)}
+                </td>
+                <td style={{ ...td, color: "var(--text-muted)", fontSize: "12px" }}>
+                  {new Date(b.createdAt).toLocaleString()}
+                </td>
+                <td style={td}>
+                  <button
+                    onClick={() => setOpenBillId(b.id)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "var(--accent-primary)",
+                      fontSize: "12px",
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                    }}
+                  >
+                    View →
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {showDialog && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.6)",
+            zIndex: 100,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <div
+            style={{
+              background: "var(--bg-card)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              padding: "24px",
+              width: "420px",
+            }}
+          >
+            <h3 style={{ margin: "0 0 16px", fontSize: "16px", color: "var(--text-primary)" }}>
+              Generate Bill
+            </h3>
+            <div style={{ marginBottom: "16px" }}>
+              <label
+                style={{ fontSize: "12px", color: "var(--text-muted)", display: "block", marginBottom: "6px" }}
+              >
+                As of date
+              </label>
+              <DatePicker value={asOfDate} onChange={setAsOfDate} />
+              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "6px" }}>
+                Period auto-derived from this account&apos;s billing cycle. Override the date to bill an earlier period.
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setShowDialog(false)}
+                style={{
+                  padding: "7px 16px",
+                  borderRadius: "var(--radius)",
+                  border: "1px solid var(--border)",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  fontSize: "12px",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreate}
+                disabled={creating || !asOfDate}
+                style={{
+                  padding: "7px 16px",
+                  borderRadius: "var(--radius)",
+                  border: "none",
+                  background: "var(--accent-primary)",
+                  color: "#fff",
+                  fontSize: "12px",
+                  fontWeight: 500,
+                  cursor: creating || !asOfDate ? "not-allowed" : "pointer",
+                  opacity: creating || !asOfDate ? 0.6 : 1,
+                  fontFamily: "inherit",
+                }}
+              >
+                {creating ? "Generating..." : "Generate"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {openBillId && (
+        <BillDetailDialog billId={openBillId} onClose={() => setOpenBillId(null)} />
+      )}
+    </div>
+  );
+}
+
+const th: React.CSSProperties = {
+  padding: "10px 12px",
+  fontSize: "11px",
+  textAlign: "left",
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+  color: "var(--text-muted)",
+  borderBottom: "1px solid var(--border)",
+};
+const td: React.CSSProperties = {
+  padding: "10px 12px",
+  fontSize: "13px",
+  color: "var(--text-primary)",
+  borderBottom: "1px solid var(--border-subtle)",
+};

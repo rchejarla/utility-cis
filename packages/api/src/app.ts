@@ -17,6 +17,8 @@ import { billingCycleRoutes } from "./routes/billing-cycles.js";
 import { serviceAgreementRoutes } from "./routes/service-agreements.js";
 import { serviceAgreementBillSegmentRoutes } from "./routes/service-agreement-bill-segments.js";
 import { billSegmentRoutes } from "./routes/bill-segments.js";
+import { accountBillRoutes } from "./routes/account-bills.js";
+import { billRoutes } from "./routes/bills.js";
 import { rateScheduleRoutes } from "./routes/rate-schedules.js";
 import { themeRoutes } from "./routes/theme.js";
 import { auditLogRoutes } from "./routes/audit-log.js";
@@ -107,6 +109,8 @@ export async function buildApp() {
   await app.register(serviceAgreementRoutes);
   await app.register(serviceAgreementBillSegmentRoutes);
   await app.register(billSegmentRoutes);
+  await app.register(accountBillRoutes);
+  await app.register(billRoutes);
   await app.register(rateScheduleRoutes);
   await app.register(themeRoutes);
   await app.register(auditLogRoutes);

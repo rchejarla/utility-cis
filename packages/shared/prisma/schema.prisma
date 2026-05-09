@@ -348,6 +348,7 @@ model Account {
   delinquencyActions DelinquencyAction[]
   serviceRequests    ServiceRequest[]
   userRoles          UserRole[]
+  bills              Bill[]
 
   @@unique([utilityId, accountNumber])
   @@index([customerId])
@@ -577,6 +578,7 @@ model BillingCycle {
 
   // Relations
   accounts       Account[]
+  bills          Bill[]
 
   @@unique([utilityId, cycleCode])
   @@index([utilityId, active])
@@ -592,6 +594,10 @@ model BillSegment {
   id                   String   @id @default(uuid()) @db.Uuid
   utilityId            String   @map("utility_id") @db.Uuid
   serviceAgreementId   String   @map("service_agreement_id") @db.Uuid
+  /// Slice 5b.2 — once an account-level Bill aggregates this segment,
+  /// `bill_id` is set to it. Null = not yet on a Bill. At-most-one is
+  /// enforced structurally by this column being singular (no join table).
+  billId               String?  @map("bill_id") @db.Uuid
   periodStart          DateTime @map("period_start") @db.Date
   periodEnd            DateTime @map("period_end") @db.Date
   subtotal             Decimal  @map("subtotal") @db.Decimal(14, 4)
@@ -603,11 +609,13 @@ model BillSegment {
   createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   serviceAgreement     ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Restrict)
+  bill                 Bill?            @relation(fields: [billId], references: [id], onDelete: Restrict)
   lines                BillSegmentLine[]
 
   @@unique([utilityId, segmentNumber])
   @@index([utilityId, serviceAgreementId, periodStart])
   @@index([utilityId, periodEnd])
+  @@index([utilityId, billId])
   @@map("bill_segment")
 }
 
@@ -630,6 +638,40 @@ model BillSegmentLine {
   @@index([billSegmentId, sortOrder])
   @@index([utilityId, sourceComponentId])
   @@map("bill_segment_line")
+}
+
+/// Slice 5b.2 — per-Account, per-period customer-facing bill. Aggregates
+/// many BillSegments (one per service the Account holds). Industry term
+/// for the customer-facing document — Oracle CC&B "Bill"; SAP IS-U
+/// billing document at Contract Account level. Immutable once issued;
+/// future Slice 5d (rebill / corrections) will introduce a supersedes
+/// pointer if needed.
+model Bill {
+  id                   String   @id @default(uuid()) @db.Uuid
+  utilityId            String   @map("utility_id") @db.Uuid
+  accountId            String   @map("account_id") @db.Uuid
+  /// Cycle in effect at issue time. Materialized so a later cycle switch
+  /// on the Account doesn't rewrite history.
+  billingCycleId       String   @map("billing_cycle_id") @db.Uuid
+  periodStart          DateTime @map("period_start") @db.Date
+  periodEnd            DateTime @map("period_end") @db.Date
+  billDate             DateTime @map("bill_date") @db.Date
+  dueDate              DateTime @map("due_date") @db.Date
+  subtotal             Decimal  @map("subtotal") @db.Decimal(14, 4)
+  taxes                Decimal  @map("taxes") @db.Decimal(14, 4)
+  credits              Decimal  @map("credits") @db.Decimal(14, 4)
+  total                Decimal  @map("total") @db.Decimal(14, 4)
+  billNumber           String   @map("bill_number") @db.VarChar(50)
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  account              Account       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  billingCycle         BillingCycle  @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
+  segments             BillSegment[]
+
+  @@unique([utilityId, billNumber])
+  @@index([utilityId, accountId, periodEnd])
+  @@index([utilityId, dueDate])
+  @@map("bill")
 }
 
 model MeterRead {

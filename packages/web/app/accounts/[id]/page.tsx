@@ -11,6 +11,7 @@ import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { ContactsTab } from "@/components/accounts/contacts-tab";
 import { BillingAddressesTab } from "@/components/accounts/billing-addresses-tab";
+import { BillsTab } from "@/components/bills/bills-tab";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
 import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { ServiceRequestList } from "@/components/service-requests/request-list";
@@ -290,6 +291,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
         tabs={[
           { key: "overview", label: "Overview" },
           { key: "agreements", label: `Agreements (${account.serviceAgreements?.length ?? 0})` },
+          { key: "bills", label: "Bills" },
           { key: "contacts", label: `Contacts (${account.contacts?.length ?? 0})` },
           { key: "billing-addresses", label: `Billing Addresses (${account.billingAddresses?.length ?? 0})` },
           { key: "service-requests", label: "Service Requests" },
@@ -713,6 +715,8 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
             onRowClick={(row: any) => router.push(`/service-agreements/${row.id}`)}
           />
         )}
+
+        {activeTab === "bills" && <BillsTab accountId={id} canEdit={canEdit} />}
 
         {activeTab === "contacts" && (
           <ContactsTab
