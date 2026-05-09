@@ -11,9 +11,16 @@ interface AccountForm extends Record<string, unknown> {
   accountNumber: string;
   accountType: string;
   creditRating: string;
+  billingCycleId: string;
   depositAmount: string;
   languagePref: string;
   customFields: Record<string, unknown>;
+}
+
+interface BillingCycle {
+  id: string;
+  name: string;
+  cycleCode: string;
 }
 
 const CREDIT_RATINGS = [
@@ -36,6 +43,7 @@ export default function NewAccountPage() {
   // Tenant custom-field schema for accounts. Loaded once on mount;
   // when empty, the section renders nothing and the form is unchanged.
   const [customSchema, setCustomSchema] = useState<FieldDefinition[]>([]);
+  const [billingCycles, setBillingCycles] = useState<BillingCycle[]>([]);
   const { types: accountTypes } = useAccountTypes();
   const accountTypeOptions = accountTypes.map((t) => ({ value: t.code, label: t.label }));
   useEffect(() => {
@@ -50,7 +58,17 @@ export default function NewAccountPage() {
         setCustomSchema([]);
       }
     })();
+    (async () => {
+      try {
+        const res = await apiClient.get<BillingCycle[] | { data: BillingCycle[] }>("/api/v1/billing-cycles");
+        setBillingCycles(Array.isArray(res) ? res : (res as any).data ?? []);
+      } catch (err) {
+        console.error("[accounts/new] failed to load billing cycles", err);
+        setBillingCycles([]);
+      }
+    })();
   }, []);
+  const billingCycleOptions = billingCycles.map((bc) => ({ value: bc.id, label: `${bc.name} (${bc.cycleCode})` }));
 
   return (
     <EntityFormPage<AccountForm>
@@ -64,6 +82,7 @@ export default function NewAccountPage() {
         accountNumber: "",
         accountType: "RESIDENTIAL",
         creditRating: "",
+        billingCycleId: "",
         depositAmount: "",
         languagePref: "en-US",
         customFields: {},
@@ -84,6 +103,14 @@ export default function NewAccountPage() {
           required: true,
           options: accountTypeOptions,
           hint: "Determines default rate eligibility",
+        },
+        {
+          key: "billingCycleId",
+          label: "Billing Cycle",
+          type: "select",
+          required: true,
+          options: billingCycleOptions,
+          hint: "All service agreements on this account will bill on this cycle",
         },
         {
           row: [
@@ -131,6 +158,7 @@ export default function NewAccountPage() {
       toRequestBody={(form) => {
         const body: Record<string, unknown> = {
           accountType: form.accountType,
+          billingCycleId: form.billingCycleId,
           languagePref: form.languagePref,
         };
         // Only include accountNumber when the user explicitly typed

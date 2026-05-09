@@ -108,12 +108,12 @@ async function main() {
   const cycle1 = await prisma.billingCycle.upsert({
     where: { utilityId_cycleCode: { utilityId: UTILITY_ID, cycleCode: "R01" } },
     update: {},
-    create: { utilityId: UTILITY_ID, name: "Route 1 — North District", cycleCode: "R01", readDayOfMonth: 5, billDayOfMonth: 10, frequency: "MONTHLY" },
+    create: { utilityId: UTILITY_ID, name: "Route 1 — North District", cycleCode: "R01", billDayOfMonth: 10, frequency: "MONTHLY" },
   });
   const cycle2 = await prisma.billingCycle.upsert({
     where: { utilityId_cycleCode: { utilityId: UTILITY_ID, cycleCode: "R02" } },
     update: {},
-    create: { utilityId: UTILITY_ID, name: "Route 2 — South District", cycleCode: "R02", readDayOfMonth: 12, billDayOfMonth: 17, frequency: "MONTHLY" },
+    create: { utilityId: UTILITY_ID, name: "Route 2 — South District", cycleCode: "R02", billDayOfMonth: 17, frequency: "MONTHLY" },
   });
   console.log("  2 billing cycles");
 
@@ -503,23 +503,30 @@ async function main() {
   console.log(`  ${createdPremises.length} premises (with eru_count + has_stormwater_infra)`);
 
   // ============ ACCOUNTS ============
+  // Slice 5b.1 — billing cycle moved from SA to Account. Each Account picks
+  // one cycle; all SAs under it inherit. Cycle assignments preserve the
+  // pre-5b.1 grouping (every SA's cycle was already consistent per account).
   const accountSpecs = [
-    { accountNumber: "0001000-00", accountType: "RESIDENTIAL" as const, creditRating: "EXCELLENT" as const },
-    { accountNumber: "0001001-00", accountType: "COMMERCIAL" as const, creditRating: "GOOD" as const },
-    { accountNumber: "0001002-00", accountType: "RESIDENTIAL" as const, creditRating: "GOOD" as const },
-    { accountNumber: "0001003-00", accountType: "INDUSTRIAL" as const, creditRating: "EXCELLENT" as const },
-    { accountNumber: "0001004-00", accountType: "COMMERCIAL" as const, creditRating: "FAIR" as const },
-    { accountNumber: "0001005-00", accountType: "RESIDENTIAL" as const, creditRating: "GOOD" as const },
+    { accountNumber: "0001000-00", accountType: "RESIDENTIAL" as const, creditRating: "EXCELLENT" as const, cycleId: cycle1.id },
+    { accountNumber: "0001001-00", accountType: "COMMERCIAL"  as const, creditRating: "GOOD"      as const, cycleId: cycle2.id },
+    { accountNumber: "0001002-00", accountType: "RESIDENTIAL" as const, creditRating: "GOOD"      as const, cycleId: cycle1.id },
+    { accountNumber: "0001003-00", accountType: "INDUSTRIAL"  as const, creditRating: "EXCELLENT" as const, cycleId: cycle1.id },
+    { accountNumber: "0001004-00", accountType: "COMMERCIAL"  as const, creditRating: "FAIR"      as const, cycleId: cycle2.id },
+    { accountNumber: "0001005-00", accountType: "RESIDENTIAL" as const, creditRating: "GOOD"      as const, cycleId: cycle1.id },
   ];
   const createdAccounts: { id: string }[] = [];
   for (const a of accountSpecs) {
+    const { cycleId, ...rest } = a;
     let acct = await prisma.account.findFirst({
-      where: { utilityId: UTILITY_ID, accountNumber: a.accountNumber },
+      where: { utilityId: UTILITY_ID, accountNumber: rest.accountNumber },
     });
     if (!acct) {
       acct = await prisma.account.create({
-        data: { utilityId: UTILITY_ID, ...a, status: "ACTIVE", depositAmount: 0 },
+        data: { utilityId: UTILITY_ID, ...rest, billingCycleId: cycleId, status: "ACTIVE", depositAmount: 0 },
       });
+    } else if (!acct.billingCycleId) {
+      // Re-seed: backfill cycle on accounts created before 5b.1.
+      acct = await prisma.account.update({ where: { id: acct.id }, data: { billingCycleId: cycleId } });
     }
     createdAccounts.push(acct);
   }
@@ -578,53 +585,54 @@ async function main() {
   console.log(`  ${createdMeters.length} meters`);
 
   // ============ SERVICE AGREEMENTS + ASSIGNMENTS ============
-  // SA in v2 has no premiseId — premise lives on the ServicePoint.
-  // Each SA gets a rateServiceClassId and ≥1 SAScheduleAssignment.
+  // Slice 5b.1 — SA no longer carries billingCycleId; it's inherited from the
+  // owning Account. SA in v2 also has no premiseId — premise lives on the
+  // ServicePoint. Each SA gets a rateServiceClassId and ≥1 SAScheduleAssignment.
   const W = water.code, S = sewer.code, E = electric.code;
   const saSpecs: Array<{
     agreementNumber: string; accountIdx: number; premiseIdx: number;
-    commodityId: string; billingCycleId: string;
+    commodityId: string;
     meterIdxs: number[];
     svcClassId: string;
     schedules: Array<{ rs: { id: string }; role: string }>;
   }> = [
-    { agreementNumber: "SA-0001", accountIdx: 0, premiseIdx: 0, commodityId: water.id, billingCycleId: cycle1.id,
+    { agreementNumber: "SA-0001", accountIdx: 0, premiseIdx: 0, commodityId: water.id,
       meterIdxs: [0], svcClassId: classMap[W].single_family.id,
       schedules: [{ rs: rsW, role: "primary" }] },
-    { agreementNumber: "SA-0002", accountIdx: 0, premiseIdx: 0, commodityId: sewer.id, billingCycleId: cycle1.id,
+    { agreementNumber: "SA-0002", accountIdx: 0, premiseIdx: 0, commodityId: sewer.id,
       meterIdxs: [1], svcClassId: classMap[S].residential.id,
       schedules: [{ rs: rsS, role: "primary" }] },
-    { agreementNumber: "SA-0003", accountIdx: 1, premiseIdx: 1, commodityId: water.id, billingCycleId: cycle2.id,
+    { agreementNumber: "SA-0003", accountIdx: 1, premiseIdx: 1, commodityId: water.id,
       meterIdxs: [2], svcClassId: classMap[W].commercial.id,
       schedules: [{ rs: rsW, role: "primary" }] },
-    { agreementNumber: "SA-0004", accountIdx: 1, premiseIdx: 1, commodityId: electric.id, billingCycleId: cycle2.id,
+    { agreementNumber: "SA-0004", accountIdx: 1, premiseIdx: 1, commodityId: electric.id,
       meterIdxs: [3], svcClassId: classMap[E].small_commercial.id,
       schedules: [
         { rs: rsE_REDS, role: "delivery" },
         { rs: rsE_ESS,  role: "supply" },
         { rs: rsE_USBC, role: "rider" },
       ] },
-    { agreementNumber: "SA-0006", accountIdx: 2, premiseIdx: 2, commodityId: electric.id, billingCycleId: cycle1.id,
+    { agreementNumber: "SA-0006", accountIdx: 2, premiseIdx: 2, commodityId: electric.id,
       meterIdxs: [4], svcClassId: classMap[E].residential.id,
       schedules: [
         { rs: rsE_REDS, role: "delivery" },
         { rs: rsE_ESS,  role: "supply" },
         { rs: rsE_USBC, role: "rider" },
       ] },
-    { agreementNumber: "SA-0007", accountIdx: 3, premiseIdx: 3, commodityId: water.id, billingCycleId: cycle1.id,
+    { agreementNumber: "SA-0007", accountIdx: 3, premiseIdx: 3, commodityId: water.id,
       meterIdxs: [5], svcClassId: classMap[W].commercial.id,
       schedules: [{ rs: rsW, role: "primary" }] },
-    { agreementNumber: "SA-0008", accountIdx: 3, premiseIdx: 3, commodityId: electric.id, billingCycleId: cycle1.id,
+    { agreementNumber: "SA-0008", accountIdx: 3, premiseIdx: 3, commodityId: electric.id,
       meterIdxs: [6], svcClassId: classMap[E].large_commercial.id,
       schedules: [
         { rs: rsE_REDS, role: "delivery" },
         { rs: rsE_ESS,  role: "supply" },
         { rs: rsE_USBC, role: "rider" },
       ] },
-    { agreementNumber: "SA-0009", accountIdx: 4, premiseIdx: 4, commodityId: water.id, billingCycleId: cycle2.id,
+    { agreementNumber: "SA-0009", accountIdx: 4, premiseIdx: 4, commodityId: water.id,
       meterIdxs: [7], svcClassId: classMap[W].commercial.id,
       schedules: [{ rs: rsW, role: "primary" }] },
-    { agreementNumber: "SA-0010", accountIdx: 5, premiseIdx: 5, commodityId: water.id, billingCycleId: cycle1.id,
+    { agreementNumber: "SA-0010", accountIdx: 5, premiseIdx: 5, commodityId: water.id,
       meterIdxs: [8], svcClassId: classMap[W].single_family.id,
       schedules: [{ rs: rsW, role: "primary" }] },
   ];
@@ -642,7 +650,6 @@ async function main() {
           agreementNumber: sa.agreementNumber,
           accountId: createdAccounts[sa.accountIdx].id,
           commodityId: sa.commodityId,
-          billingCycleId: sa.billingCycleId,
           rateServiceClassId: sa.svcClassId,
           startDate: new Date("2025-01-01"),
           status: "ACTIVE",

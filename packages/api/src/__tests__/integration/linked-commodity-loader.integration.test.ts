@@ -84,7 +84,6 @@ async function makeLinkedFixture(opts: {
       agreementNumber: "SA-CURRENT-1",
       accountId: fix.accountId,
       commodityId: sewer.id, // current is sewer; sibling will be water
-      billingCycleId: fix.billingCycleId,
       startDate: new Date("2026-01-01"),
       status: "ACTIVE",
     },
@@ -107,7 +106,6 @@ async function makeLinkedFixture(opts: {
       agreementNumber: "SA-SIBLING-1",
       accountId: fix.accountId,
       commodityId: fix.commodityId,
-      billingCycleId: fix.billingCycleId,
       startDate: new Date("2026-01-01"),
       status: opts.siblingStatus ?? "ACTIVE",
     },
@@ -133,7 +131,6 @@ async function makeLinkedFixture(opts: {
         agreementNumber: "SA-SIBLING-EXTRA",
         accountId: fix.accountId,
         commodityId: extraComm.id,
-        billingCycleId: fix.billingCycleId,
         startDate: new Date("2026-01-01"),
         status: "ACTIVE",
       },
@@ -319,7 +316,6 @@ describe("LinkedCommodityLoader", () => {
         agreementNumber: "SA-SIBLING-DUP",
         accountId: fix.accountId,
         commodityId: fix.commodityId, // same water commodity
-        billingCycleId: fix.billingCycleId,
         startDate: new Date("2026-01-01"),
         status: "ACTIVE",
       },

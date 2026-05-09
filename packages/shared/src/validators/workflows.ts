@@ -41,11 +41,14 @@ export const moveInSchema = z.object({
   // Optional: auto-generated via tenant numberFormats.account if absent.
   accountNumber: z.string().min(1).max(50).optional(),
   accountType: z.enum(["RESIDENTIAL", "COMMERCIAL", "INDUSTRIAL", "MUNICIPAL"]),
+  // Cycle now lives at the Account level (Slice 5b.1) — one cycle per
+  // move-in, not per agreement. All agreements created in this move-in
+  // inherit the account's cycle.
+  billingCycleId: z.string().uuid(),
   existingCustomerId: z.string().uuid().optional(),
   newCustomer: newCustomerPayload.optional(),
   agreements: z.array(z.object({
     commodityId: z.string().uuid(),
-    billingCycleId: z.string().uuid(),
     // Optional: auto-generated per agreement from the tenant template.
     agreementNumber: z.string().min(1).max(50).optional(),
     initialMeterReadings: z.array(z.object({

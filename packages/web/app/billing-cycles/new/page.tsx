@@ -5,7 +5,6 @@ import { EntityFormPage } from "@/components/ui/entity-form-page";
 interface BillingCycleForm extends Record<string, unknown> {
   name: string;
   cycleCode: string;
-  readDayOfMonth: string;
   billDayOfMonth: string;
   frequency: string;
 }
@@ -28,7 +27,6 @@ export default function NewBillingCyclePage() {
       initialValues={{
         name: "",
         cycleCode: "",
-        readDayOfMonth: "",
         billDayOfMonth: "",
         frequency: "MONTHLY",
       }}
@@ -44,30 +42,15 @@ export default function NewBillingCyclePage() {
         },
         { key: "frequency", label: "Frequency", type: "select", required: true, options: FREQUENCIES },
         {
-          row: [
-            {
-              key: "readDayOfMonth",
-              label: "Read Day of Month",
-              type: "number",
-              min: "1",
-              max: "31",
-              placeholder: "15",
-              hint: "1–28",
-              tooltip: "Must be 1-28 to avoid month-length issues",
-              tooltipRuleId: "BR-BC-001",
-            },
-            {
-              key: "billDayOfMonth",
-              label: "Bill Day of Month",
-              type: "number",
-              min: "1",
-              max: "31",
-              placeholder: "25",
-              hint: "1–28",
-              tooltip: "Must be 1-28 to avoid month-length issues",
-              tooltipRuleId: "BR-BC-001",
-            },
-          ],
+          key: "billDayOfMonth",
+          label: "Bill Day of Month",
+          type: "number",
+          min: "1",
+          max: "31",
+          placeholder: "25",
+          hint: "1–28",
+          tooltip: "Must be 1-28 to avoid month-length issues",
+          tooltipRuleId: "BR-BC-001",
         },
       ]}
       toRequestBody={(form) => {
@@ -76,7 +59,6 @@ export default function NewBillingCyclePage() {
           cycleCode: form.cycleCode,
           frequency: form.frequency,
         };
-        if (form.readDayOfMonth) body.readDayOfMonth = parseInt(form.readDayOfMonth, 10);
         if (form.billDayOfMonth) body.billDayOfMonth = parseInt(form.billDayOfMonth, 10);
         return body;
       }}

@@ -112,12 +112,27 @@ async function seedTenant(utilityId: string, opts: SeedTenantOpts = {}): Promise
     const customer = await prisma.customer.create({
       data: { utilityId, customerType: "INDIVIDUAL", firstName: "Test", lastName: "Customer" },
     });
+    // Slice 5b.1 — Account requires a billing cycle. Spin up one per
+    // tenant on demand. cycleCode includes a random tail so multiple
+    // seedTenant calls under the same utility (test runs that share a
+    // pgContainer with a shared "tenants" tenant) don't collide on the
+    // (utility_id, cycle_code) unique.
+    const billingCycle = await prisma.billingCycle.create({
+      data: {
+        utilityId,
+        name: "Default Cycle",
+        cycleCode: `BC-${utilityId.slice(-4)}-${Math.random().toString(36).slice(2, 6)}`,
+        billDayOfMonth: 5,
+        frequency: "MONTHLY",
+      },
+    });
     const data = Array.from({ length: accountCount }).map((_, i) => ({
       utilityId,
       accountNumber: `ACC-${utilityId.slice(-4)}-${i}`,
       customerId: customer.id,
       accountType: "RESIDENTIAL" as const,
       status: "ACTIVE" as const,
+      billingCycleId: billingCycle.id,
     }));
     await prisma.account.createMany({ data });
   }

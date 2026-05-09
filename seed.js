@@ -89,8 +89,8 @@ async function main() {
   const sgal = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "GAL", name: "Gallons", commodityId: sewer.id, measureTypeId: measureUsage.id, conversionFactor: 1, isBaseUnit: true, isActive: true } });
   console.log("  5 UOMs");
 
-  const c1 = await p.billingCycle.create({ data: { utilityId: UID, name: "Route 1 - North District", cycleCode: "R01", readDayOfMonth: 5, billDayOfMonth: 10, frequency: "MONTHLY" } });
-  const c2 = await p.billingCycle.create({ data: { utilityId: UID, name: "Route 2 - South District", cycleCode: "R02", readDayOfMonth: 12, billDayOfMonth: 17, frequency: "MONTHLY" } });
+  const c1 = await p.billingCycle.create({ data: { utilityId: UID, name: "Route 1 - North District", cycleCode: "R01", billDayOfMonth: 10, frequency: "MONTHLY" } });
+  const c2 = await p.billingCycle.create({ data: { utilityId: UID, name: "Route 2 - South District", cycleCode: "R02", billDayOfMonth: 17, frequency: "MONTHLY" } });
   console.log("  2 billing cycles");
 
   // ============ RATE SERVICE CLASSES (v2 — slice 1 task 10) ============
@@ -496,15 +496,16 @@ async function main() {
   }
   console.log("  " + pArr.length + " premises (with eru_count + has_stormwater_infra)");
 
+  // Slice 5b.1 — billing cycle moved from SA to Account.
   const accountData = [
-    { accountNumber: "0001000-00", accountType: "RESIDENTIAL", creditRating: "EXCELLENT", status: "ACTIVE" },
-    { accountNumber: "0001001-00", accountType: "COMMERCIAL", creditRating: "GOOD", status: "ACTIVE", depositAmount: 500 },
-    { accountNumber: "0001002-00", accountType: "RESIDENTIAL", creditRating: "GOOD", status: "ACTIVE" },
-    { accountNumber: "0001003-00", accountType: "INDUSTRIAL", creditRating: "EXCELLENT", status: "ACTIVE", depositAmount: 2000 },
-    { accountNumber: "0001004-00", accountType: "COMMERCIAL", creditRating: "FAIR", status: "ACTIVE", depositAmount: 300 },
-    { accountNumber: "0001005-00", accountType: "RESIDENTIAL", creditRating: "GOOD", status: "ACTIVE", paperlessBilling: true },
-    { accountNumber: "0001006-00", accountType: "MUNICIPAL", creditRating: "EXCELLENT", status: "ACTIVE" },
-    { accountNumber: "0001007-00", accountType: "RESIDENTIAL", creditRating: "POOR", status: "ACTIVE", depositAmount: 200 },
+    { accountNumber: "0001000-00", accountType: "RESIDENTIAL", creditRating: "EXCELLENT", status: "ACTIVE", billingCycleId: c1.id },
+    { accountNumber: "0001001-00", accountType: "COMMERCIAL",  creditRating: "GOOD",      status: "ACTIVE", depositAmount: 500,  billingCycleId: c2.id },
+    { accountNumber: "0001002-00", accountType: "RESIDENTIAL", creditRating: "GOOD",      status: "ACTIVE", billingCycleId: c1.id },
+    { accountNumber: "0001003-00", accountType: "INDUSTRIAL",  creditRating: "EXCELLENT", status: "ACTIVE", depositAmount: 2000, billingCycleId: c1.id },
+    { accountNumber: "0001004-00", accountType: "COMMERCIAL",  creditRating: "FAIR",      status: "ACTIVE", depositAmount: 300,  billingCycleId: c2.id },
+    { accountNumber: "0001005-00", accountType: "RESIDENTIAL", creditRating: "GOOD",      status: "ACTIVE", paperlessBilling: true, billingCycleId: c1.id },
+    { accountNumber: "0001006-00", accountType: "MUNICIPAL",   creditRating: "EXCELLENT", status: "ACTIVE", billingCycleId: c1.id },
+    { accountNumber: "0001007-00", accountType: "RESIDENTIAL", creditRating: "POOR",      status: "ACTIVE", depositAmount: 200,  billingCycleId: c1.id },
   ];
 
   const aArr = [];
@@ -551,21 +552,21 @@ async function main() {
   // defaults and let later edits override.
   const W = water.code, S = sewer.code, E = electric.code;
   const saData = [
-    { agreementNumber: "SA-0001", accountId: aArr[0].id, premiseId: pArr[0].id, commodityId: water.id, billingCycleId: c1.id, mIdx: [0], svcClass: classMap[W].single_family.id, schedules: [{ rs: rsW, role: "primary" }] },
-    { agreementNumber: "SA-0002", accountId: aArr[0].id, premiseId: pArr[0].id, commodityId: sewer.id, billingCycleId: c1.id, mIdx: [1], svcClass: classMap[S].residential.id, schedules: [{ rs: rsS, role: "primary" }] },
-    { agreementNumber: "SA-0003", accountId: aArr[1].id, premiseId: pArr[1].id, commodityId: water.id, billingCycleId: c2.id, mIdx: [2], svcClass: classMap[W].commercial.id, schedules: [{ rs: rsW, role: "primary" }] },
-    { agreementNumber: "SA-0004", accountId: aArr[1].id, premiseId: pArr[1].id, commodityId: electric.id, billingCycleId: c2.id, mIdx: [3], svcClass: classMap[E].small_commercial.id, schedules: [
+    { agreementNumber: "SA-0001", accountId: aArr[0].id, premiseId: pArr[0].id, commodityId: water.id, mIdx: [0], svcClass: classMap[W].single_family.id, schedules: [{ rs: rsW, role: "primary" }] },
+    { agreementNumber: "SA-0002", accountId: aArr[0].id, premiseId: pArr[0].id, commodityId: sewer.id, mIdx: [1], svcClass: classMap[S].residential.id, schedules: [{ rs: rsS, role: "primary" }] },
+    { agreementNumber: "SA-0003", accountId: aArr[1].id, premiseId: pArr[1].id, commodityId: water.id, mIdx: [2], svcClass: classMap[W].commercial.id, schedules: [{ rs: rsW, role: "primary" }] },
+    { agreementNumber: "SA-0004", accountId: aArr[1].id, premiseId: pArr[1].id, commodityId: electric.id, mIdx: [3], svcClass: classMap[E].small_commercial.id, schedules: [
       { rs: rsE_REDS, role: "delivery" }, { rs: rsE_ESS, role: "supply" }, { rs: rsE_USBC, role: "rider" },
     ]},
-    { agreementNumber: "SA-0006", accountId: aArr[2].id, premiseId: pArr[2].id, commodityId: electric.id, billingCycleId: c1.id, mIdx: [5], svcClass: classMap[E].residential.id, schedules: [
+    { agreementNumber: "SA-0006", accountId: aArr[2].id, premiseId: pArr[2].id, commodityId: electric.id, mIdx: [5], svcClass: classMap[E].residential.id, schedules: [
       { rs: rsE_REDS, role: "delivery" }, { rs: rsE_ESS, role: "supply" }, { rs: rsE_USBC, role: "rider" },
     ]},
-    { agreementNumber: "SA-0007", accountId: aArr[3].id, premiseId: pArr[3].id, commodityId: water.id, billingCycleId: c1.id, mIdx: [7], svcClass: classMap[W].commercial.id, schedules: [{ rs: rsW, role: "primary" }] },
-    { agreementNumber: "SA-0008", accountId: aArr[3].id, premiseId: pArr[3].id, commodityId: electric.id, billingCycleId: c1.id, mIdx: [8], svcClass: classMap[E].large_commercial.id, schedules: [
+    { agreementNumber: "SA-0007", accountId: aArr[3].id, premiseId: pArr[3].id, commodityId: water.id, mIdx: [7], svcClass: classMap[W].commercial.id, schedules: [{ rs: rsW, role: "primary" }] },
+    { agreementNumber: "SA-0008", accountId: aArr[3].id, premiseId: pArr[3].id, commodityId: electric.id, mIdx: [8], svcClass: classMap[E].large_commercial.id, schedules: [
       { rs: rsE_REDS, role: "delivery" }, { rs: rsE_ESS, role: "supply" }, { rs: rsE_USBC, role: "rider" },
     ]},
-    { agreementNumber: "SA-0009", accountId: aArr[4].id, premiseId: pArr[4].id, commodityId: water.id, billingCycleId: c2.id, mIdx: [9], svcClass: classMap[W].commercial.id, schedules: [{ rs: rsW, role: "primary" }] },
-    { agreementNumber: "SA-0010", accountId: aArr[5].id, premiseId: pArr[5].id, commodityId: water.id, billingCycleId: c1.id, mIdx: [11], svcClass: classMap[W].single_family.id, schedules: [{ rs: rsW, role: "primary" }] },
+    { agreementNumber: "SA-0009", accountId: aArr[4].id, premiseId: pArr[4].id, commodityId: water.id, mIdx: [9], svcClass: classMap[W].commercial.id, schedules: [{ rs: rsW, role: "primary" }] },
+    { agreementNumber: "SA-0010", accountId: aArr[5].id, premiseId: pArr[5].id, commodityId: water.id, mIdx: [11], svcClass: classMap[W].single_family.id, schedules: [{ rs: rsW, role: "primary" }] },
   ];
 
   const saCreated = [];

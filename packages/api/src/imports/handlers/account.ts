@@ -43,6 +43,9 @@ interface AccountRow {
   accountNumber: string;
   accountType: string; // validated against account_type_def in prepareBatch
   status: AccountStatus;
+  // Slice 5b.1 — billing cycle is required on Account. Resolved from
+  // billingCycleCode → billingCycleId in prepareBatch.
+  billingCycleCode: string;
   customerEmail?: string;
   creditRating?: CreditRating;
   depositAmount?: number;
@@ -56,6 +59,8 @@ interface BatchData {
   customerByEmail: Map<string, string>;
   /** Set of valid (active) account type codes for this tenant. */
   validAccountTypes: Set<string>;
+  /** cycleCode → billingCycle.id, populated once per batch. */
+  cycleByCode: Map<string, string>;
 }
 
 function parseBool(s: string | undefined): boolean | undefined {
@@ -96,6 +101,14 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
       description: "ACTIVE, INACTIVE, FINAL, CLOSED, or SUSPENDED.",
       example: "ACTIVE",
       aliases: ["^status$", "^state$"],
+    },
+    {
+      name: "billingCycleCode",
+      label: "Billing cycle code",
+      required: true,
+      description: "Cycle code from the billing-cycles configuration; resolves to billingCycleId.",
+      example: "R01",
+      aliases: ["^billingcyclecode$", "^cyclecode$", "^cycle$"],
     },
     {
       name: "customerEmail",
@@ -152,6 +165,7 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
       accountNumber: "ACC-1001",
       accountType: "RESIDENTIAL",
       status: "ACTIVE",
+      billingCycleCode: "R01",
       customerEmail: "jane.doe@example.com",
       creditRating: "GOOD",
       depositAmount: "150.00",
@@ -189,6 +203,15 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
       };
     }
     const status = stRaw as AccountStatus;
+
+    const billingCycleCode = (raw.billingCycleCode ?? "").trim();
+    if (!billingCycleCode) {
+      return {
+        ok: false,
+        code: "MISSING_BILLING_CYCLE",
+        message: "billing_cycle_code is required (Slice 5b.1)",
+      };
+    }
 
     const crRaw = (raw.creditRating ?? "").trim().toUpperCase();
     let creditRating: CreditRating | undefined;
@@ -235,6 +258,7 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
         accountNumber,
         accountType,
         status,
+        billingCycleCode,
         customerEmail: ((raw.customerEmail ?? "").trim().toLowerCase()) || undefined,
         creditRating,
         depositAmount,
@@ -267,7 +291,17 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
     const types = await listAccountTypes(ctx.utilityId);
     const validAccountTypes = new Set(types.map((t) => t.code));
 
-    return { customerByEmail, validAccountTypes };
+    const cycleCodes = new Set(rows.map((r) => r.billingCycleCode).filter(Boolean));
+    const cycleByCode = new Map<string, string>();
+    if (cycleCodes.size > 0) {
+      const cycles = await prisma.billingCycle.findMany({
+        where: { utilityId: ctx.utilityId, cycleCode: { in: [...cycleCodes] } },
+        select: { id: true, cycleCode: true },
+      });
+      for (const c of cycles) cycleByCode.set(c.cycleCode, c.id);
+    }
+
+    return { customerByEmail, validAccountTypes, cycleByCode };
   },
 
   async processRow(ctx, row, batch) {
@@ -276,6 +310,15 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
         ok: false,
         code: "INVALID_ACCOUNT_TYPE",
         message: `account_type "${row.accountType}" is not a known active code (configure under Configuration → Account Types)`,
+      };
+    }
+
+    const billingCycleId = batch.cycleByCode.get(row.billingCycleCode);
+    if (!billingCycleId) {
+      return {
+        ok: false,
+        code: "BILLING_CYCLE_NOT_FOUND",
+        message: `No active billing cycle with code "${row.billingCycleCode}"`,
       };
     }
 
@@ -300,6 +343,7 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
           accountType: row.accountType,
           status: row.status,
           customerId,
+          billingCycleId,
           creditRating: row.creditRating ?? "UNRATED",
           depositAmount: row.depositAmount ?? 0,
           languagePref: row.languagePref ?? "en-US",

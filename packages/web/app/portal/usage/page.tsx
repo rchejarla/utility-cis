@@ -13,12 +13,13 @@ interface Agreement {
   servicePoints?: Array<{
     premise: { id: string; addressLine1: string; city: string; state: string; zip: string };
   }>;
-  billingCycle?: { name: string };
 }
 
 interface AccountWithAgreements {
   id: string;
   accountNumber: string;
+  // Slice 5b.1 — billing cycle moved to Account.
+  billingCycle?: { id: string; name: string };
   serviceAgreements: Agreement[];
 }
 

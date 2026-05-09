@@ -35,7 +35,6 @@ interface Agreement {
     premise: Premise;
     meters: MeterInfo[];
   }>;
-  billingCycle: { id: string; name: string };
 }
 
 interface AccountDetail {
@@ -43,6 +42,8 @@ interface AccountDetail {
   accountNumber: string;
   accountType: string;
   status: string;
+  // Slice 5b.1 — billing cycle moved to Account.
+  billingCycle?: { id: string; name: string };
   serviceAgreements: Agreement[];
 }
 
@@ -150,7 +151,7 @@ export default function PortalAccountDetailPage({ params }: { params: Promise<{ 
                     <StatusBadge status={sa.status} />
                   </div>
                   <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
-                    {sa.agreementNumber} · {sa.billingCycle.name}
+                    {sa.agreementNumber}{account?.billingCycle ? ` · ${account.billingCycle.name}` : ""}
                   </div>
                 </div>
                 <Link

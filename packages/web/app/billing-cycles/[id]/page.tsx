@@ -13,7 +13,6 @@ interface BillingCycle {
   id: string;
   name: string;
   cycleCode: string;
-  readDayOfMonth: number;
   billDayOfMonth: number;
   frequency: string;
   active: boolean;
@@ -77,7 +76,6 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
     if (!cycle) return;
     setEditForm({
       name: cycle.name ?? "",
-      readDayOfMonth: String(cycle.readDayOfMonth),
       billDayOfMonth: String(cycle.billDayOfMonth),
       frequency: cycle.frequency ?? "",
       active: cycle.active,
@@ -111,8 +109,6 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
     try {
       const changes: Record<string, unknown> = {};
       if (editForm.name !== cycle.name) changes.name = editForm.name;
-      const readDay = parseInt(editForm.readDayOfMonth as string, 10);
-      if (readDay !== cycle.readDayOfMonth) changes.readDayOfMonth = readDay;
       const billDay = parseInt(editForm.billDayOfMonth as string, 10);
       if (billDay !== cycle.billDayOfMonth) changes.billDayOfMonth = billDay;
       if (editForm.frequency !== cycle.frequency) changes.frequency = editForm.frequency;
@@ -231,22 +227,6 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
             <div style={fieldStyle}>
               <span style={labelStyle}>Cycle Code</span>
               <span style={{ ...valueStyle, fontFamily: "monospace" }}>{cycle.cycleCode}</span>
-            </div>
-
-            <div style={fieldStyle}>
-              <span style={labelStyle}>Read Day of Month</span>
-              {editing ? (
-                <input
-                  style={inputStyle}
-                  type="number"
-                  min="1"
-                  max="31"
-                  value={editForm.readDayOfMonth as string}
-                  onChange={(e) => setEditForm((f) => ({ ...f, readDayOfMonth: e.target.value }))}
-                />
-              ) : (
-                <span style={valueStyle}>{cycle.readDayOfMonth}</span>
-              )}
             </div>
 
             <div style={fieldStyle}>

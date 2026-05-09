@@ -29,12 +29,6 @@ interface Commodity {
   name: string;
 }
 
-interface BillingCycle {
-  id: string;
-  name: string;
-  cycleCode: string;
-}
-
 interface Meter {
   id: string;
   meterNumber: string;
@@ -67,7 +61,6 @@ export default function NewServiceAgreementPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [premises, setPremises] = useState<Premise[]>([]);
   const [commodities, setCommodities] = useState<Commodity[]>([]);
-  const [billingCycles, setBillingCycles] = useState<BillingCycle[]>([]);
   const [allMeters, setAllMeters] = useState<Meter[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,7 +86,6 @@ export default function NewServiceAgreementPage() {
     accountId: "",
     premiseId: "",
     commodityId: "",
-    billingCycleId: "",
     startDate: "",
     endDate: "",
   });
@@ -105,14 +97,12 @@ export default function NewServiceAgreementPage() {
       apiClient.get<{ data: Account[] }>("/api/v1/accounts", { limit: "200" }),
       apiClient.get<{ data: Premise[] }>("/api/v1/premises", { limit: "200" }),
       apiClient.get<{ data: Commodity[] }>("/api/v1/commodities"),
-      apiClient.get<{ data: BillingCycle[] }>("/api/v1/billing-cycles"),
       apiClient.get<{ data: Meter[] }>("/api/v1/meters", { limit: "500" }),
     ])
-      .then(([accRes, premRes, comRes, bcRes, mRes]) => {
+      .then(([accRes, premRes, comRes, mRes]) => {
         setAccounts(accRes.data ?? []);
         setPremises(premRes.data ?? []);
         setCommodities(comRes.data ?? []);
-        setBillingCycles(bcRes.data ?? []);
         setAllMeters(mRes.data ?? []);
       })
       .catch(console.error);
@@ -160,7 +150,6 @@ export default function NewServiceAgreementPage() {
         startDate: form.startDate,
         meters: validMeters,
       };
-      if (form.billingCycleId) body.billingCycleId = form.billingCycleId;
       if (form.endDate) body.endDate = form.endDate;
       if (Object.keys(customValues).length > 0) body.customFields = customValues;
 
@@ -251,21 +240,8 @@ export default function NewServiceAgreementPage() {
             </select>
           </FormField>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-            <FormField label="Billing Cycle">
-              <select
-                style={inputStyle}
-                value={form.billingCycleId}
-                onChange={(e) => set("billingCycleId", e.target.value)}
-              >
-                <option value="">Select billing cycle...</option>
-                {billingCycles.map((bc) => (
-                  <option key={bc.id} value={bc.id}>
-                    {bc.name} ({bc.cycleCode})
-                  </option>
-                ))}
-              </select>
-            </FormField>
+          <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "-12px" }}>
+            Billing cycle is inherited from the account — set on the account, not the agreement.
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>

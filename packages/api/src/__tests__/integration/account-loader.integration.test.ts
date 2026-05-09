@@ -86,7 +86,6 @@ async function makeSaFixture(opts: {
       agreementNumber: opts.agreementNumber ?? "SA-LOADER-1",
       accountId: fix.accountId,
       commodityId: fix.commodityId,
-      billingCycleId: fix.billingCycleId,
       startDate: new Date("2026-01-01"),
       status: "ACTIVE",
       rateServiceClassId: opts.attachServiceClass ? serviceClassId : null,

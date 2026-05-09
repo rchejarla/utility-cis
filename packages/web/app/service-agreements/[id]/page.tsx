@@ -29,7 +29,9 @@ interface ServiceAgreement {
   endDate?: string;
   readSequence?: number;
   customFields?: Record<string, unknown>;
-  account?: { id: string; accountNumber: string };
+  // Slice 5b.1: billingCycle now lives on Account; SA detail surfaces it
+  // by reading sa.account.billingCycle (read-only at the SA layer).
+  account?: { id: string; accountNumber: string; billingCycle?: { id: string; name: string; cycleCode: string } };
   servicePoints?: Array<{
     id: string;
     premise: {
@@ -40,8 +42,6 @@ interface ServiceAgreement {
     };
   }>;
   commodity?: { name: string };
-  billingCycle?: { id: string; name: string; cycleCode: string };
-  billingCycleId?: string;
   commodityId?: string;
   meters?: Array<{
     id: string;
@@ -150,7 +150,6 @@ export default function ServiceAgreementDetailPage({
   const [editCustomFields, setEditCustomFields] = useState<Record<string, unknown>>({});
   const [customFieldSchema, setCustomFieldSchema] = useState<FieldDefinition[]>([]);
   const [saving, setSaving] = useState(false);
-  const [billingCycles, setBillingCycles] = useState<BillingCycle[]>([]);
   const [showAddMeter, setShowAddMeter] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
 
@@ -268,16 +267,8 @@ export default function ServiceAgreementDetailPage({
   const handleEdit = async () => {
     if (!sa) return;
     setEditForm({
-      billingCycleId: sa.billingCycleId ?? sa.billingCycle?.id ?? "",
       readSequence: sa.readSequence != null ? String(sa.readSequence) : "",
     });
-    // Fetch dropdowns
-    try {
-      const bcRes = await apiClient.get<{ data: BillingCycle[] }>("/api/v1/billing-cycles");
-      setBillingCycles(bcRes.data ?? []);
-    } catch (err) {
-      console.error("Failed to load dropdowns", err);
-    }
     setEditCustomFields({ ...(sa.customFields ?? {}) });
     setEditing(true);
   };
@@ -293,10 +284,9 @@ export default function ServiceAgreementDetailPage({
     setSaving(true);
     try {
       const changes: Record<string, unknown> = {};
-      const currentBcId = sa.billingCycleId ?? sa.billingCycle?.id ?? "";
-      if (editForm.billingCycleId !== currentBcId) changes.billingCycleId = editForm.billingCycleId || null;
       // endDate is no longer settable via PATCH — it's set via the
       // close endpoint, which also cascades onto meter assignments.
+      // billingCycleId moved to Account in Slice 5b.1; not editable here.
       const readSeqVal = editForm.readSequence !== "" ? parseInt(editForm.readSequence, 10) : null;
       if (readSeqVal !== (sa.readSequence ?? null)) changes.readSequence = readSeqVal;
 
@@ -549,22 +539,16 @@ export default function ServiceAgreementDetailPage({
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Billing Cycle</span>
-              {editing ? (
-                <select
-                  style={inputStyle}
-                  value={editForm.billingCycleId}
-                  onChange={(e) => setEditForm((f) => ({ ...f, billingCycleId: e.target.value }))}
-                >
-                  <option value="">None</option>
-                  {billingCycles.map((bc) => (
-                    <option key={bc.id} value={bc.id}>{bc.name} ({bc.cycleCode})</option>
-                  ))}
-                </select>
-              ) : (
-                <span style={valueStyle}>
-                  {sa.billingCycle ? `${sa.billingCycle.name} (${sa.billingCycle.cycleCode})` : "—"}
-                </span>
-              )}
+              <span style={valueStyle}>
+                {sa.account?.billingCycle
+                  ? `${sa.account.billingCycle.name} (${sa.account.billingCycle.cycleCode})`
+                  : "—"}
+                {editing && (
+                  <span style={{ marginLeft: "8px", fontSize: "11px", color: "var(--text-muted)" }}>
+                    (inherited from account — edit on the account)
+                  </span>
+                )}
+              </span>
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Start Date</span>

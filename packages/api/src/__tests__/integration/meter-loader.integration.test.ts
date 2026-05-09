@@ -85,7 +85,6 @@ async function makeMeterFixture(opts: {
       agreementNumber: "SA-METER-LOADER-1",
       accountId: fix.accountId,
       commodityId: fix.commodityId,
-      billingCycleId: fix.billingCycleId,
       startDate: new Date("2026-01-01"),
       status: "ACTIVE",
     },

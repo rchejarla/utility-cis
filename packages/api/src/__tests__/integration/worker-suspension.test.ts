@@ -157,6 +157,14 @@ async function seedAgreementChain(utilityId: string, agreementId: string): Promi
   // with "00000000-..."), which would collide on the unique
   // (utility_id, account_number) constraint.
   const idSuffix = agreementId.slice(-8);
+  const billingCycle = await prisma.billingCycle.create({
+    data: {
+      utilityId,
+      name: "Test Cycle",
+      cycleCode: `BC-${agreementId.slice(-4)}`,
+      billDayOfMonth: 5,
+    },
+  });
   const account = await prisma.account.create({
     data: {
       utilityId,
@@ -164,6 +172,7 @@ async function seedAgreementChain(utilityId: string, agreementId: string): Promi
       customerId: customer.id,
       accountType: "RESIDENTIAL",
       status: "ACTIVE",
+      billingCycleId: billingCycle.id,
     },
   });
   const premise = await prisma.premise.create({
@@ -190,15 +199,6 @@ async function seedAgreementChain(utilityId: string, agreementId: string): Promi
       effectiveDate: new Date("2026-01-01"),
     },
   });
-  const billingCycle = await prisma.billingCycle.create({
-    data: {
-      utilityId,
-      name: "Test Cycle",
-      cycleCode: `BC-${agreementId.slice(-4)}`,
-      readDayOfMonth: 1,
-      billDayOfMonth: 5,
-    },
-  });
   const sa = await prisma.serviceAgreement.create({
     data: {
       id: agreementId,
@@ -206,7 +206,6 @@ async function seedAgreementChain(utilityId: string, agreementId: string): Promi
       agreementNumber: `SA-${agreementId.slice(-8)}`,
       accountId: account.id,
       commodityId: commodity.id,
-      billingCycleId: billingCycle.id,
       startDate: new Date("2026-01-01"),
       status: "ACTIVE",
     },

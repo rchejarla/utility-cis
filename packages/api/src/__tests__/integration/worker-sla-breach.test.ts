@@ -92,6 +92,16 @@ async function seedAccount(utilityId: string): Promise<{ accountId: string }> {
   const customer = await prisma.customer.create({
     data: { utilityId, customerType: "INDIVIDUAL", firstName: "Test", lastName: "Customer" },
   });
+  // Slice 5b.1 — Account requires a billing cycle.
+  const billingCycle = await prisma.billingCycle.create({
+    data: {
+      utilityId,
+      name: "Default Cycle",
+      cycleCode: `BC-${utilityId.slice(-4)}-${Math.random().toString(36).slice(2, 6)}`,
+      billDayOfMonth: 5,
+      frequency: "MONTHLY",
+    },
+  });
   const account = await prisma.account.create({
     data: {
       utilityId,
@@ -99,6 +109,7 @@ async function seedAccount(utilityId: string): Promise<{ accountId: string }> {
       customerId: customer.id,
       accountType: "RESIDENTIAL",
       status: "ACTIVE",
+      billingCycleId: billingCycle.id,
     },
   });
   return { accountId: account.id };

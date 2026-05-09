@@ -75,19 +75,21 @@ export default function MoveInWizardPage() {
   const [existingCustomerId, setExistingCustomerId] = useState("");
 
   // Step 2 (shared): account fields
+  // Slice 5b.1: billing cycle moved from per-agreement to account-level.
+  // One cycle per move-in; all agreements created here inherit it.
   const [accountNumber, setAccountNumber] = useState("");
   const [accountType, setAccountType] = useState("RESIDENTIAL");
+  const [billingCycleId, setBillingCycleId] = useState("");
   const [depositAmount, setDepositAmount] = useState("");
 
   // Step 3: service agreements
   interface AgreementDraft {
     key: string;
     commodityId: string;
-    billingCycleId: string;
     agreementNumber: string;
   }
   const [agreements, setAgreements] = useState<AgreementDraft[]>([
-    { key: "a1", commodityId: "", billingCycleId: "", agreementNumber: "" },
+    { key: "a1", commodityId: "", agreementNumber: "" },
   ]);
 
   // Data lookups
@@ -128,7 +130,6 @@ export default function MoveInWizardPage() {
       {
         key: `a${prev.length + 1}`,
         commodityId: "",
-        billingCycleId: "",
         agreementNumber: "",
       },
     ]);
@@ -144,13 +145,12 @@ export default function MoveInWizardPage() {
   // template when absent. Same for each agreement number below.
   const step2Valid =
     accountType &&
+    billingCycleId &&
     ((customerMode === "EXISTING" && existingCustomerId) ||
       (customerMode === "NEW" &&
         ((customerType === "INDIVIDUAL" && firstName && lastName) ||
           (customerType === "ORGANIZATION" && organizationName))));
-  const step3Valid = agreements.every(
-    (a) => a.commodityId && a.billingCycleId,
-  );
+  const step3Valid = agreements.every((a) => a.commodityId);
 
   const submit = async () => {
     if (!canCreate) {
@@ -163,11 +163,11 @@ export default function MoveInWizardPage() {
         premiseId,
         moveInDate,
         accountType,
+        billingCycleId,
         // Omit accountNumber when blank so the backend generates one.
         ...(accountNumber ? { accountNumber } : {}),
         agreements: agreements.map((a) => ({
           commodityId: a.commodityId,
-          billingCycleId: a.billingCycleId,
           // Same for each agreement — omit when blank.
           ...(a.agreementNumber ? { agreementNumber: a.agreementNumber } : {}),
         })),
@@ -445,7 +445,7 @@ export default function MoveInWizardPage() {
               </div>
             )}
 
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "12px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: "12px" }}>
               <div>
                 <label style={labelStyle}>ACCOUNT NUMBER (OPTIONAL)</label>
                 <input
@@ -462,6 +462,21 @@ export default function MoveInWizardPage() {
                   <option value="COMMERCIAL">Commercial</option>
                   <option value="INDUSTRIAL">Industrial</option>
                   <option value="MUNICIPAL">Municipal</option>
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>BILLING CYCLE</label>
+                <select
+                  value={billingCycleId}
+                  onChange={(e) => setBillingCycleId(e.target.value)}
+                  style={fieldStyle}
+                >
+                  <option value="">Select...</option>
+                  {billingCycles.map((bc) => (
+                    <option key={bc.id} value={bc.id}>
+                      {bc.cycleCode}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div>
@@ -531,7 +546,7 @@ export default function MoveInWizardPage() {
                     </button>
                   )}
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr 1fr 1fr", gap: "10px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "10px" }}>
                   <div>
                     <label style={labelStyle}>COMMODITY</label>
                     <select
@@ -543,21 +558,6 @@ export default function MoveInWizardPage() {
                       {commodities.map((c) => (
                         <option key={c.id} value={c.id}>
                           {c.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label style={labelStyle}>CYCLE</label>
-                    <select
-                      value={a.billingCycleId}
-                      onChange={(e) => updateAgreement(a.key, { billingCycleId: e.target.value })}
-                      style={fieldStyle}
-                    >
-                      <option value="">Select...</option>
-                      {billingCycles.map((bc) => (
-                        <option key={bc.id} value={bc.id}>
-                          {bc.cycleCode}
                         </option>
                       ))}
                     </select>

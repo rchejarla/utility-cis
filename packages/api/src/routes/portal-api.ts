@@ -63,6 +63,7 @@ export async function portalApiRoutes(app: FastifyInstance) {
           accountNumber: true,
           accountType: true,
           status: true,
+          billingCycle: { select: { id: true, name: true } },
           serviceAgreements: {
             select: {
               id: true,
@@ -70,7 +71,6 @@ export async function portalApiRoutes(app: FastifyInstance) {
               status: true,
               startDate: true,
               commodity: { select: { id: true, name: true } },
-              billingCycle: { select: { id: true, name: true } },
               servicePoints: {
                 where: { endDate: null },
                 select: {
@@ -124,10 +124,10 @@ export async function portalApiRoutes(app: FastifyInstance) {
       const account = await prisma.account.findFirst({
         where: { id: accountId, customerId },
         include: {
+          billingCycle: { select: { id: true, name: true } },
           serviceAgreements: {
             include: {
               commodity: { select: { id: true, name: true } },
-              billingCycle: { select: { id: true, name: true } },
               servicePoints: {
                 include: {
                   premise: { select: { id: true, addressLine1: true, city: true, state: true, zip: true } },

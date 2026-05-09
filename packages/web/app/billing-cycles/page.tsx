@@ -7,7 +7,6 @@ interface BillingCycle {
   id: string;
   name: string;
   cycleCode: string;
-  readDayOfMonth?: number;
   billDayOfMonth?: number;
   frequency: string;
   isActive: boolean;
@@ -25,11 +24,6 @@ const columns: Column<BillingCycle>[] = [
     render: (row) => (
       <span style={{ fontFamily: "monospace", fontSize: "12px" }}>{row.cycleCode}</span>
     ),
-  },
-  {
-    key: "readDayOfMonth",
-    header: "Read Day",
-    render: (row) => <span style={{ fontSize: "12px" }}>{row.readDayOfMonth ?? "—"}</span>,
   },
   {
     key: "billDayOfMonth",

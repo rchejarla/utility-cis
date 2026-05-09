@@ -52,6 +52,7 @@ export interface TenantFixture {
   commodityId: string;
   uomId: string;
   billingCycleId: string;
+  billingCycleCode: string;
   accountId: string;
   premiseId: string;
   meterId: string;
@@ -140,7 +141,6 @@ export async function makeTenantFixture(
       utilityId,
       name: `Cycle-${suffix}`,
       cycleCode: `C-${suffix}`,
-      readDayOfMonth: 5,
       billDayOfMonth: 10,
       frequency: "MONTHLY",
     },
@@ -167,6 +167,7 @@ export async function makeTenantFixture(
       accountNumber: `ACCT-${suffix}`,
       accountType: "RESIDENTIAL",
       status: "ACTIVE",
+      billingCycleId: billingCycle.id,
       depositAmount: 0,
     },
   });
@@ -228,6 +229,7 @@ export async function makeTenantFixture(
     commodityId: commodity.id,
     uomId: uom.id,
     billingCycleId: billingCycle.id,
+    billingCycleCode: billingCycle.cycleCode,
     accountId: account.id,
     premiseId: premise.id,
     meterId: meter.id,

@@ -49,7 +49,6 @@ async function makeSa(agreementNumber = "SA-WQA-1"): Promise<SaFixture> {
       agreementNumber,
       accountId: fix.accountId,
       commodityId: fix.commodityId,
-      billingCycleId: fix.billingCycleId,
       startDate: new Date("2026-01-01"),
       status: "ACTIVE",
     },

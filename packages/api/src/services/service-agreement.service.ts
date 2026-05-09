@@ -11,9 +11,11 @@ import type {
 import { paginatedTenantList } from "../lib/pagination.js";
 
 const fullInclude = {
-  account: true,
+  // Slice 5b.1 — billingCycle now lives on Account; nest the include so
+  // existing consumers that read `sa.account.billingCycle` keep working
+  // and any UI that read `sa.billingCycle` migrates explicitly.
+  account: { include: { billingCycle: true } },
   commodity: true,
-  billingCycle: true,
   rateServiceClass: true,
   rateScheduleAssignments: {
     where: { expirationDate: null as null },
@@ -139,7 +141,6 @@ export async function createServiceAgreement(
           agreementNumber,
           accountId: data.accountId,
           commodityId: data.commodityId,
-          billingCycleId: data.billingCycleId,
           startDate,
           endDate: data.endDate ? new Date(data.endDate) : null,
           status,
@@ -258,7 +259,6 @@ export async function updateServiceAgreement(
   // effective-dating.service.ts) which cascades onto child meter
   // assignments — see FR-EFF-006.
   const updateData: Record<string, unknown> = {};
-  if (data.billingCycleId !== undefined) updateData.billingCycleId = data.billingCycleId;
   if (data.readSequence !== undefined) updateData.readSequence = data.readSequence;
 
   // Custom fields: validate against tenant schema and merge with

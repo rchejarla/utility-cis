@@ -137,13 +137,15 @@ export async function transferService(
         columnName: "agreement_number",
         db: tx,
       }));
+    // Slice 5b.1 — billingCycleId is no longer on SA; the target Account
+    // owns it. The transfer simply attaches to the target account; the
+    // target's billing cycle applies automatically.
     const newAgreementBase = await tx.serviceAgreement.create({
       data: {
         utilityId,
         agreementNumber: newAgreementNumber,
         accountId: data.targetAccountId,
         commodityId: source.commodityId,
-        billingCycleId: source.billingCycleId,
         startDate: transferDate,
         status: "ACTIVE",
         readSequence: source.readSequence,
@@ -296,6 +298,7 @@ export async function moveIn(
         customerId,
         accountType: data.accountType,
         status: "ACTIVE",
+        billingCycleId: data.billingCycleId,
         depositAmount: data.depositAmount ?? 0,
       },
     });
@@ -322,7 +325,6 @@ export async function moveIn(
           agreementNumber,
           accountId: account.id,
           commodityId: agreement.commodityId,
-          billingCycleId: agreement.billingCycleId,
           startDate: moveInDate,
           status: "ACTIVE",
         },

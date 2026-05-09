@@ -5,7 +5,6 @@ export const billingFrequencyEnum = z.enum(["MONTHLY", "BIMONTHLY", "QUARTERLY"]
 export const createBillingCycleSchema = z.object({
   name: z.string().min(1).max(255),
   cycleCode: z.string().min(1).max(20),
-  readDayOfMonth: z.number().int().min(1).max(28),
   billDayOfMonth: z.number().int().min(1).max(28),
   frequency: billingFrequencyEnum.default("MONTHLY"),
   active: z.boolean().default(true),

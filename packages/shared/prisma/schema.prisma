@@ -326,6 +326,7 @@ model Account {
   languagePref        String        @default("en-US") @map("language_pref") @db.Char(5)
   paperlessBilling    Boolean       @default(false) @map("paperless_billing")
   budgetBilling       Boolean       @default(false) @map("budget_billing")
+  billingCycleId      String        @map("billing_cycle_id") @db.Uuid
   saaslogicAccountId  String?       @map("saaslogic_account_id") @db.Uuid
   balance             Decimal       @default(0) @map("balance") @db.Decimal(14, 2)
   lastDueDate         DateTime?     @map("last_due_date") @db.Date
@@ -340,6 +341,7 @@ model Account {
 
   // Relations
   customer           Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  billingCycle       BillingCycle        @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
   serviceAgreements  ServiceAgreement[]
   contacts           Contact[]
   billingAddresses   BillingAddress[]
@@ -351,6 +353,7 @@ model Account {
   @@index([customerId])
   @@index([utilityId, status])
   @@index([utilityId, balance])
+  @@index([utilityId, billingCycleId])
   @@map("account")
 }
 
@@ -360,7 +363,6 @@ model ServiceAgreement {
   agreementNumber String                 @map("agreement_number") @db.VarChar(50)
   accountId       String                 @map("account_id") @db.Uuid
   commodityId     String                 @map("commodity_id") @db.Uuid
-  billingCycleId  String                 @map("billing_cycle_id") @db.Uuid
   startDate       DateTime               @map("start_date") @db.Date
   endDate         DateTime?              @map("end_date") @db.Date
   status          ServiceAgreementStatus @default(PENDING) @map("status")
@@ -377,7 +379,6 @@ model ServiceAgreement {
   // Relations
   account         Account                 @relation(fields: [accountId], references: [id], onDelete: Restrict)
   commodity       Commodity               @relation(fields: [commodityId], references: [id], onDelete: Restrict)
-  billingCycle    BillingCycle            @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
   rateServiceClass RateServiceClass?      @relation(fields: [rateServiceClassId], references: [id], onDelete: SetNull)
   servicePoints   ServicePoint[]
   meterReads      MeterRead[]
@@ -392,7 +393,6 @@ model ServiceAgreement {
   @@unique([utilityId, agreementNumber])
   @@index([accountId])
   @@index([commodityId])
-  @@index([billingCycleId])
   @@index([utilityId, status])
   @@index([rateServiceClassId])
   @@map("service_agreement")
@@ -571,13 +571,12 @@ model BillingCycle {
   utilityId      String           @map("utility_id") @db.Uuid
   name           String           @map("name") @db.VarChar(255)
   cycleCode      String           @map("cycle_code") @db.VarChar(20)
-  readDayOfMonth Int              @map("read_day_of_month")
   billDayOfMonth Int              @map("bill_day_of_month")
   frequency      BillingFrequency @default(MONTHLY) @map("frequency")
   active         Boolean          @default(true) @map("active")
 
   // Relations
-  serviceAgreements ServiceAgreement[]
+  accounts       Account[]
 
   @@unique([utilityId, cycleCode])
   @@index([utilityId, active])

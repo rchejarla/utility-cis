@@ -75,7 +75,6 @@ beforeEach(async () => {
       agreementNumber: "SA-A1",
       accountId: fixA.accountId,
       commodityId: fixA.commodityId,
-      billingCycleId: fixA.billingCycleId,
       startDate: new Date("2024-01-01"),
       endDate: new Date("2024-06-30"),
       status: "FINAL",
@@ -122,6 +121,7 @@ beforeEach(async () => {
       accountNumber: "ACCT-A-2",
       accountType: "RESIDENTIAL",
       status: "ACTIVE",
+      billingCycleId: fixA.billingCycleId,
       depositAmount: 0,
     },
   });
@@ -133,7 +133,6 @@ beforeEach(async () => {
       agreementNumber: "SA-A2",
       accountId: acct2.id,
       commodityId: fixA.commodityId,
-      billingCycleId: fixA.billingCycleId,
       startDate: new Date("2024-07-01"),
       status: "ACTIVE",
     },

@@ -143,7 +143,6 @@ beforeEach(async () => {
       agreementNumber: "SA-IMP",
       accountId: fixA.accountId,
       commodityId: fixA.commodityId,
-      billingCycleId: fixA.billingCycleId,
       startDate: new Date("2024-01-01"),
       status: "ACTIVE",
     },
@@ -951,12 +950,13 @@ describe("POST /api/v1/imports — account handler", () => {
     });
 
     const csv =
-      "accountNumber,accountType,status,customerEmail\n" +
-      "ACC-IMP-1,RESIDENTIAL,ACTIVE,acct@example.com\n";
+      "accountNumber,accountType,status,billingCycleCode,customerEmail\n" +
+      `ACC-IMP-1,RESIDENTIAL,ACTIVE,${fixA.billingCycleCode},acct@example.com\n`;
     const mapping = {
       accountNumber: "accountNumber",
       accountType: "accountType",
       status: "status",
+      billingCycleCode: "billingCycleCode",
       customerEmail: "customerEmail",
     };
     const { body, contentType } = buildMultipart([
@@ -991,11 +991,13 @@ describe("POST /api/v1/imports — account handler", () => {
     });
 
     const csv =
-      "accountNumber,accountType,status\n" + `${existing.accountNumber},RESIDENTIAL,ACTIVE\n`;
+      "accountNumber,accountType,status,billingCycleCode\n" +
+      `${existing.accountNumber},RESIDENTIAL,ACTIVE,${fixA.billingCycleCode}\n`;
     const mapping = {
       accountNumber: "accountNumber",
       accountType: "accountType",
       status: "status",
+      billingCycleCode: "billingCycleCode",
     };
     const { body, contentType } = buildMultipart([
       { name: "kind", value: "account" },
@@ -1183,12 +1185,13 @@ describe("POST /api/v1/imports — premise import with unknown type code", () =>
 describe("POST /api/v1/imports — account import with unknown type code", () => {
   it("rejects rows whose account_type isn't in the reference table", async () => {
     const csv =
-      "accountNumber,accountType,status\n" +
-      "ACC-BAD-1,SPACE_FORCE,ACTIVE\n";
+      "accountNumber,accountType,status,billingCycleCode\n" +
+      `ACC-BAD-1,SPACE_FORCE,ACTIVE,${fixA.billingCycleCode}\n`;
     const mapping = {
       accountNumber: "accountNumber",
       accountType: "accountType",
       status: "status",
+      billingCycleCode: "billingCycleCode",
     };
     const { body, contentType } = buildMultipart([
       { name: "kind", value: "account" },
@@ -1213,12 +1216,13 @@ describe("POST /api/v1/imports — account import with new GOVERNMENT code", () 
   it("accepts the seeded GOVERNMENT account type (RFP gap closed)", async () => {
     const { prisma } = prismaImports;
     const csv =
-      "accountNumber,accountType,status\n" +
-      "ACC-GOV-1,GOVERNMENT,ACTIVE\n";
+      "accountNumber,accountType,status,billingCycleCode\n" +
+      `ACC-GOV-1,GOVERNMENT,ACTIVE,${fixA.billingCycleCode}\n`;
     const mapping = {
       accountNumber: "accountNumber",
       accountType: "accountType",
       status: "status",
+      billingCycleCode: "billingCycleCode",
     };
     const { body, contentType } = buildMultipart([
       { name: "kind", value: "account" },

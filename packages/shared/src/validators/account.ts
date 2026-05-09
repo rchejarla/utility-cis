@@ -21,6 +21,7 @@ export const createAccountSchema = z.object({
   accountType: accountTypeEnum,
   status: accountStatusEnum.default("ACTIVE"),
   creditRating: creditRatingEnum.default("UNRATED"),
+  billingCycleId: z.string().uuid(),
   depositAmount: z.number().min(0).default(0),
   depositWaived: z.boolean().default(false),
   depositWaivedReason: z.string().max(255).optional(),

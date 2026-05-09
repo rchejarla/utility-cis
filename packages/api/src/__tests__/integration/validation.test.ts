@@ -190,7 +190,6 @@ describe("Request validation", () => {
           accountId: "550e8400-e29b-41d4-a716-446655440000",
           premiseId: "550e8400-e29b-41d4-a716-446655440001",
           commodityId: "550e8400-e29b-41d4-a716-446655440002",
-          billingCycleId: "550e8400-e29b-41d4-a716-446655440004",
           startDate: "2026-04-01",
           meters: [], // should fail - min 1
         },
@@ -224,7 +223,6 @@ describe("Request validation", () => {
           accountId: "550e8400-e29b-41d4-a716-446655440000",
           premiseId: "550e8400-e29b-41d4-a716-446655440001",
           commodityId: "550e8400-e29b-41d4-a716-446655440002",
-          billingCycleId: "550e8400-e29b-41d4-a716-446655440004",
           startDate: "2026-04-01",
           status: "INVALID_STATUS",
           meters: [{ meterId: "550e8400-e29b-41d4-a716-446655440005", isPrimary: true }],
@@ -322,25 +320,6 @@ describe("Request validation", () => {
   });
 
   describe("Billing Cycles", () => {
-    it("rejects billing cycle with read day > 28", async () => {
-      const app = await createTestApp();
-      const response = await app.inject({
-        method: "POST",
-        url: "/api/v1/billing-cycles",
-        headers,
-        payload: {
-          name: "Bad Cycle",
-          cycleCode: "BAD",
-          readDayOfMonth: 31, // max is 28
-          billDayOfMonth: 15,
-          frequency: "MONTHLY",
-        },
-      });
-      expect(response.statusCode).toBe(400);
-      const body = JSON.parse(response.body);
-      expect(body.error.code).toBe("VALIDATION_ERROR");
-    });
-
     it("rejects billing cycle with bill day > 28", async () => {
       const app = await createTestApp();
       const response = await app.inject({
@@ -350,7 +329,6 @@ describe("Request validation", () => {
         payload: {
           name: "Bad Cycle",
           cycleCode: "BAD",
-          readDayOfMonth: 15,
           billDayOfMonth: 29, // max is 28
           frequency: "MONTHLY",
         },
@@ -369,7 +347,6 @@ describe("Request validation", () => {
         payload: {
           name: "Bad Cycle",
           cycleCode: "BAD",
-          readDayOfMonth: 15,
           billDayOfMonth: 20,
           frequency: "WEEKLY", // not a valid enum value
         },

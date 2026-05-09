@@ -79,8 +79,7 @@ export async function getPremise(id: string, utilityId: string) {
         include: {
           serviceAgreement: {
             include: {
-              account: true,
-              billingCycle: true,
+              account: { include: { billingCycle: true } },
               commodity: { select: { id: true, name: true } },
             },
           },

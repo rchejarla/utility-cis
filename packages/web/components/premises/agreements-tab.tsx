@@ -26,12 +26,6 @@ interface Account {
   };
 }
 
-interface BillingCycle {
-  id: string;
-  name: string;
-  cycleCode: string;
-}
-
 interface PremiseMeter {
   id: string;
   meterNumber: string;
@@ -111,30 +105,27 @@ export function AgreementsTab({
   const [submitting, setSubmitting] = useState(false);
   const [commodities, setCommodities] = useState<Commodity[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [billingCycles, setBillingCycles] = useState<BillingCycle[]>([]);
 
   const [form, setForm] = useState({
     agreementNumber: "",
     commodityId: "",
     accountId: "",
-    billingCycleId: "",
     startDate: new Date().toISOString().slice(0, 10),
     selectedMeterIds: [] as string[],
   });
 
-  // Fetch commodities, accounts, and billing cycles when form opens
+  // Fetch commodities and accounts when form opens. Slice 5b.1: billing
+  // cycle is no longer per-agreement — it's inherited from the account.
   useEffect(() => {
     if (!showForm) return;
 
     Promise.all([
       apiClient.get<Commodity[] | { data: Commodity[] }>("/api/v1/commodities"),
       apiClient.get<{ data: Account[] }>("/api/v1/accounts", { limit: "500" }),
-      apiClient.get<BillingCycle[] | { data: BillingCycle[] }>("/api/v1/billing-cycles"),
     ])
-      .then(([cRes, aRes, bcRes]) => {
+      .then(([cRes, aRes]) => {
         const cList = Array.isArray(cRes) ? cRes : (cRes as any).data ?? [];
         const aList = aRes.data ?? [];
-        const bcList = Array.isArray(bcRes) ? bcRes : (bcRes as any).data ?? [];
 
         // Filter commodities to those available at this premise
         if (premise.commodityIds && premise.commodityIds.length > 0) {
@@ -143,7 +134,6 @@ export function AgreementsTab({
           setCommodities(cList);
         }
         setAccounts(aList);
-        setBillingCycles(bcList);
       })
       .catch(console.error);
   }, [showForm, premise.commodityIds]);
@@ -191,10 +181,6 @@ export function AgreementsTab({
       toast("Account is required", "error");
       return;
     }
-    if (!form.billingCycleId) {
-      toast("Billing Cycle is required", "error");
-      return;
-    }
     if (!form.startDate) {
       toast("Start Date is required", "error");
       return;
@@ -217,7 +203,6 @@ export function AgreementsTab({
         accountId: form.accountId,
         premiseId: premise.id,
         commodityId: form.commodityId,
-        billingCycleId: form.billingCycleId,
         startDate: form.startDate,
         meters,
       });
@@ -227,7 +212,6 @@ export function AgreementsTab({
         agreementNumber: "",
         commodityId: "",
         accountId: "",
-        billingCycleId: "",
         startDate: new Date().toISOString().slice(0, 10),
         selectedMeterIds: [],
       });
@@ -362,43 +346,16 @@ export function AgreementsTab({
             </div>
           </div>
 
-          {/* Row 2: Billing Cycle, Start Date */}
+          {/* Row 2: Start Date — billing cycle is now inherited from the
+              account (Slice 5b.1) so it's no longer asked here. */}
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "1fr 1fr",
+              gridTemplateColumns: "1fr",
               gap: "12px",
               marginBottom: "12px",
             }}
           >
-            {/* Billing Cycle */}
-            <div>
-              <div
-                style={{
-                  fontSize: "11px",
-                  color: "var(--text-muted)",
-                  marginBottom: "4px",
-                  fontWeight: 500,
-                }}
-              >
-                Billing Cycle *
-              </div>
-              <select
-                style={inputStyle}
-                value={form.billingCycleId}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, billingCycleId: e.target.value }))
-                }
-              >
-                <option value="">Select billing cycle...</option>
-                {billingCycles.map((bc) => (
-                  <option key={bc.id} value={bc.id}>
-                    {bc.name} ({bc.cycleCode})
-                  </option>
-                ))}
-              </select>
-            </div>
-
             {/* Start Date */}
             <div>
               <div

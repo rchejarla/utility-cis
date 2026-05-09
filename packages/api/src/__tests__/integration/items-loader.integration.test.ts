@@ -52,7 +52,6 @@ async function makeItemsFixture(): Promise<ItemsFixture> {
       agreementNumber: "SA-ITEMS-1",
       accountId: fix.accountId,
       commodityId: fix.commodityId,
-      billingCycleId: fix.billingCycleId,
       startDate: new Date("2026-01-01"),
       status: "ACTIVE",
     },
