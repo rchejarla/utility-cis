@@ -183,16 +183,46 @@ describe("postBill", () => {
     expect(account.balance.toFixed(2)).toBe("37.50");
   });
 
-  it("keeps both bills in the balance when posted concurrently", async () => {
+  it("waits on the account row lock, then updates balance and lastDueDate", async () => {
     const { prisma } = prismaImports;
-    const a = await makeBill("30.0000");
-    const b = await makeBill("20.0000");
-    await Promise.all([
-      posting.postBill(utilityId, ACTOR, "Tester", a),
-      posting.postBill(utilityId, ACTOR, "Tester", b),
-    ]);
+    await posting.postBill(utilityId, ACTOR, "Tester", await makeBill("30.0000", "2026-06-14"));
+    const billB = await makeBill("20.0000", "2026-05-01");
+
+    // Hold the account row lock in a transaction we control.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let locked!: () => void;
+    const lockTaken = new Promise<void>((r) => (locked = r));
+    const holder = prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM account
+                            WHERE id = ${accountId}::uuid AND utility_id = ${utilityId}::uuid
+                              FOR UPDATE`;
+        locked();
+        await gate;
+      },
+      { timeout: 30_000, maxWait: 10_000 },
+    );
+    await lockTaken;
+
+    let resolved = false;
+    const posting2 = posting.postBill(utilityId, ACTOR, "Tester", billB).then((r) => {
+      resolved = true;
+      return r;
+    });
+
+    // Discriminating assertion: without the account lock this resolves at once.
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(resolved).toBe(false);
+
+    release();
+    await holder;
+    const result = await posting2;
+    expect(result.balance).toBe("50.00");
+
     const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
     expect(account.balance.toFixed(2)).toBe("50.00");
+    expect(account.lastDueDate?.toISOString().slice(0, 10)).toBe("2026-05-01");
   });
 
   it("clears lastDueDate when no open debit remains", async () => {
