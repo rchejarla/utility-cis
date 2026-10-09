@@ -50,22 +50,22 @@ The prior design is superseded. Removed, with reasons:
 
 `MeterIntervalRead` from the prior design is **not** dropped — interval reads are independently valuable to the native rate engine (`quantity-source` already resolves consumption). It is not a SaaSLogic concern, so it belongs with meter reading in module 08 rather than here.
 
-## Prerequisite — AR posting does not exist yet
+## Prerequisite — payment recording does not exist yet
 
-This module cannot be built first. Today the billing chain dead-ends:
+This module cannot be built first. The billing chain now reaches the ledger, but stops short of payments:
 
 ```
-rate() -> BillSegment -> Bill -> (nothing)
+rate() -> BillSegment -> Bill -> LedgerEntry -> Account.balance
 ```
 
-Nothing writes `Account.balance`. The only reference to it in the API is a read filter in `delinquency.service.ts`, which means the delinquency module currently sweeps balances that only the seeder sets. There is no `Payment` entity.
+AR posting writes `Account.balance` inside the same transaction that creates the receivable, so delinquency sweeps real balances rather than seeded ones. What still blocks this module is the rest of the loop: there is no `Payment` entity, no allocation, and no way to record money received. Those arrive in the AR slices that follow.
 
 So the order is:
 
-1. **Module 10 — AR and payments (design needed).** At minimum: a `Payment` entity, a rule for how an issued `Bill` increases what is owed, how a payment reduces it, and whether `Account.balance` stays a materialized column or becomes derived. That decision belongs there, not here.
-2. **This module.** Once CIS knows what is owed and can record a payment, SaaSLogic becomes a thin adapter: register an amount, receive a result, call AR posting.
+1. **Module 10 — AR and payments (ledger shipped; payments outstanding).** Still needed: a `Payment` entity, recording of money received, and allocation of payments against open ledger entries. The posting rule and the choice of a materialized `Account.balance` are already settled (see module 10 and the AR design doc). Payment plans and the collections workflow follow.
+2. **This module.** Once CIS can record a payment, SaaSLogic becomes a thin adapter: register an amount, receive a result, call AR posting.
 
-Building the adapter before the ledger would mean inventing AR semantics inside an integration, which is the wrong place for them.
+Building the adapter before payments can be recorded would mean inventing AR semantics inside an integration, which is the wrong place for them.
 
 ## Data model
 
