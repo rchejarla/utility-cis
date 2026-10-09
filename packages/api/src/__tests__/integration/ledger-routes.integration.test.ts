@@ -187,6 +187,24 @@ describe("POST /api/v1/bills/:id/post", () => {
     expect(JSON.parse(second.body).error.code).toBe("BILL_ALREADY_POSTED");
   });
 
+  // A well-shaped but impossible date used to pass the regex, become an
+  // Invalid Date, and reach Prisma inside the posting transaction, which
+  // answered 400 PRISMA_VALIDATION — "the database client rejected the
+  // input shape" for what is plainly a bad request body. Asserting the
+  // code, not just the status, is what makes this test discriminate.
+  it("returns 400 for an effectiveDate that is not a real date", async () => {
+    const billId = await makeBill();
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/post`,
+      headers: headers(),
+      payload: { effectiveDate: "2026-13-45" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error.code).toBe("VALIDATION_ERROR");
+    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  });
+
   it("returns 404 for an unknown bill", async () => {
     const res = await app.inject({
       method: "POST",
@@ -283,5 +301,63 @@ describe("GET /api/v1/accounts/:id/unposted-bills", () => {
       headers: headers(NO_PERMS),
     });
     expect(none.statusCode).toBe(403);
+  });
+});
+
+describe("GET /api/v1/ar/reconciliation", () => {
+  // This tenant has only the `accounts` module enabled. A 200 here is
+  // therefore the regression guard on the gate itself: while the route
+  // asked for `tenant_profile`, the authorization middleware answered
+  // 403 MODULE_DISABLED and this tenant could not reach its own AR
+  // reconciliation at all.
+  it("reports no drift on a clean tenant, to a VIEW-only user", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/ar/reconciliation",
+      headers: headers(VIEWER),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ ok: true, drift: [] });
+  });
+
+  it("reports the account whose cached balance was changed behind the ledger's back", async () => {
+    const billId = await makeBill();
+    const posted = await app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/post`,
+      headers: headers(),
+      payload: {},
+    });
+    expect(posted.statusCode).toBe(201);
+
+    // Straight to the column, bypassing every posting path — the only
+    // way the cache can drift is something that is not the ledger
+    // writing it.
+    const { prisma } = prismaImports;
+    await prisma.$executeRawUnsafe(
+      "UPDATE account SET balance = 999.99 WHERE id = $1::uuid",
+      accountId,
+    );
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/ar/reconciliation",
+      headers: headers(VIEWER),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.ok).toBe(false);
+    expect(body.drift).toEqual([
+      { accountId, accountNumber: "ROUTES-001", cached: "999.99", ledger: "25.00" },
+    ]);
+  });
+
+  it("rejects a user without accounts:VIEW", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/ar/reconciliation",
+      headers: headers(NO_PERMS),
+    });
+    expect(res.statusCode).toBe(403);
   });
 });

@@ -47,4 +47,23 @@ describe("postBillSchema", () => {
   it("rejects a malformed effectiveDate", () => {
     expect(() => postBillSchema.parse({ effectiveDate: "15/05/2026" })).toThrow();
   });
+
+  // Well-shaped but out of calendar range. Without the refine these pass
+  // and become an Invalid Date inside the posting transaction.
+  it("rejects a well-shaped date whose month or day is out of range", () => {
+    expect(() => postBillSchema.parse({ effectiveDate: "2026-13-45" })).toThrow();
+    expect(() => postBillSchema.parse({ effectiveDate: "2026-00-10" })).toThrow();
+  });
+
+  // Known limit of Date.parse, pinned so nobody reads the refine as
+  // stronger than it is: a day that overflows a real month is accepted
+  // and rolls forward — "2026-02-30" posts as 2026-03-02. That is JS
+  // Date semantics, not a crash, and it is what the rest of this
+  // codebase already relies on for date arithmetic.
+  it("accepts a day that overflows its month, which rolls forward", () => {
+    expect(postBillSchema.parse({ effectiveDate: "2026-02-30" })).toEqual({
+      effectiveDate: "2026-02-30",
+    });
+    expect(new Date("2026-02-30").toISOString().slice(0, 10)).toBe("2026-03-02");
+  });
 });

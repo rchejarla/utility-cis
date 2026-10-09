@@ -151,10 +151,12 @@ describe("postBill", () => {
     const { prisma } = prismaImports;
     const billId = await makeBill("-12.5000");
     await posting.postBill(utilityId, ACTOR, "Tester", billId);
-    // A credit carries no billId (type/sign CHECK), so find it by account.
-    const entry = await prisma.ledgerEntry.findFirstOrThrow({ where: { accountId } });
+    // The credit still names its bill — no constraint objects, and the
+    // link is what a rebill would need to find this entry.
+    const entry = await prisma.ledgerEntry.findFirstOrThrow({ where: { billId } });
     expect(entry.type).toBe("ADJUSTMENT_CREDIT");
-    expect(entry.billId).toBeNull();
+    expect(entry.billId).toBe(billId);
+    // ...but it has no due date: only a debit ages.
     expect(entry.dueDate).toBeNull();
     expect(entry.amount.toFixed(2)).toBe("-12.50");
     const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
@@ -230,7 +232,17 @@ describe("postBill", () => {
       return r;
     });
 
-    // Discriminating assertion: without the account lock this resolves at once.
+    // This wait is NOT what discriminates. With no account lock anywhere
+    // on the path the poster would still block here: its final
+    // `account.update` conflicts with the holder's FOR NO KEY UPDATE, so
+    // `resolved` is false either way.
+    //
+    // What discriminates is the three assertions after `release()`.
+    // Unlocked, the poster sums before the holder's uncommitted 5.00
+    // entry is visible, then writes that stale 20.00 total and stale due
+    // date over the top. The lock that prevents it is the one
+    // recomputeAccountCache takes before its SUM. Do not delete those
+    // assertions — they are the test.
     await new Promise((r) => setTimeout(r, 1500));
     expect(resolved).toBe(false);
 

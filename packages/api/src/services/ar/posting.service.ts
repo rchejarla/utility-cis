@@ -40,12 +40,32 @@ function err(code: string, message: string, statusCode: number): Error {
  * openAmount are signed. lastDueDate is the oldest open debit's due
  * date, and clears to null when nothing is open, so the delinquency
  * sweep stops seeing an account that owes nothing.
+ *
+ * **Locks the account row** (FOR UPDATE) before summing, and throws
+ * ACCOUNT_NOT_FOUND if the row does not belong to this tenant. The lock
+ * belongs here rather than in the callers: this function is the
+ * read-then-write that needs it, so every caller gets it by
+ * construction instead of having to remember an invariant documented
+ * somewhere else.
  */
 export async function recomputeAccountCache(
   tx: TxClient,
   utilityId: string,
   accountId: string,
 ): Promise<{ balance: string; lastDueDate: Date | null }> {
+  // Asserting a row came back matters twice over: SELECT ... FOR UPDATE
+  // takes no lock at all when it matches nothing, and proving the row is
+  // this tenant's is what makes the `tx.account.update` below safe —
+  // Prisma's `where: { id }` carries no utilityId, and RLS does not
+  // currently enforce because the application role is a superuser.
+  const locked = await tx.$queryRaw<{ id: string }[]>`
+    SELECT id FROM account
+     WHERE id = ${accountId}::uuid AND utility_id = ${utilityId}::uuid
+       FOR UPDATE`;
+  if (locked.length === 0) {
+    throw err("ACCOUNT_NOT_FOUND", `Account ${accountId} not found`, 404);
+  }
+
   const [agg] = await tx.$queryRaw<{ balance: Prisma.Decimal | null }[]>`
     SELECT COALESCE(SUM(open_amount), 0) AS balance
       FROM ledger_entry
@@ -95,6 +115,13 @@ export async function postBill(
     // per-account lock, two concurrent posts on one account each miss the
     // other's uncommitted entry and the later update overwrites with a
     // stale sum. The lock also serializes double-posts of the same bill.
+    //
+    // recomputeAccountCache takes this same lock before its SUM, and
+    // that is what actually prevents the stale sum. Keeping this one is
+    // still deliberate: it fixes the lock order as account-then-bill for
+    // every posting path, and it is what makes the re-read below see a
+    // post that committed meanwhile. Re-locking a row this transaction
+    // already holds costs nothing. Do not delete either as redundant.
     const owner = await tx.bill.findUnique({
       where: { id: billId, utilityId },
       select: { accountId: true },
@@ -138,6 +165,11 @@ export async function postBill(
       throw err("BILL_MISSING_DUE_DATE", `Bill ${billId} has no due date`, 422);
     }
 
+    // Spec §6.1 step 4 — auto-applying this account's open credits
+    // against a new debit — is deliberately slice 2, along with every
+    // other LedgerApplication write. The balance is right either way:
+    // it is SUM(open_amount) and an unapplied credit still sums into it.
+    // Only the open-item detail is left unsettled.
     const entry = await tx.ledgerEntry.create({
       data: {
         utilityId,
@@ -148,7 +180,12 @@ export async function postBill(
         // Only a debit ages; a credit has nothing to fall due.
         dueDate: isCredit ? null : bill.dueDate,
         effectiveDate,
-        billId: isCredit ? null : bill.id,
+        // Both sides carry the bill. Nothing stops a credit from naming
+        // it — the type/sign CHECK constrains the amount, and the partial
+        // unique index covers BILL_CHARGE rows only — and the link is
+        // what lets a rebill find the entry to correct and the FK refuse
+        // to delete a bill that produced one.
+        billId: bill.id,
         createdBy: actorId,
         memo: isCredit ? `Net credit from bill ${billId}` : null,
       },
@@ -168,7 +205,7 @@ export async function postBill(
       await writeAuditRow(
         tx,
         { utilityId, actorId, actorName, entityType: "LedgerEntry" },
-        EVENT_TYPES.LEDGER_ENTRY_POSTED,
+        EVENT_TYPES.LEDGER_ENTRY_CREATED,
         result.entryId,
         null,
         result,
@@ -201,7 +238,10 @@ export async function resolveAutoPostBills(
   accountId: string,
 ): Promise<boolean> {
   const [account, config] = await Promise.all([
-    tx.account.findUnique({ where: { id: accountId }, select: { autoPostBills: true } }),
+    // findFirst, not findUnique: the lookup has to carry utilityId, so a
+    // cross-tenant account id resolves to nothing rather than to its own
+    // tenant's setting.
+    tx.account.findFirst({ where: { id: accountId, utilityId }, select: { autoPostBills: true } }),
     tx.tenantConfig.findUnique({ where: { utilityId }, select: { autoPostBills: true } }),
   ]);
   return account?.autoPostBills ?? config?.autoPostBills ?? true;

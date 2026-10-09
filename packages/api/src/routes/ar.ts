@@ -11,6 +11,12 @@ import { reconcileBalances } from "../services/ar/reconciliation.service.js";
  * Generation already posts the bill when auto-post is on, so posting must
  * require no more permission than generating; otherwise switching auto-post
  * on would let a user create receivables they cannot post directly.
+ *
+ * The two reads are gated on `accounts:VIEW`, including reconciliation:
+ * what it returns is account balances, not tenant configuration. Gating
+ * it on `tenant_profile` would have made it unreachable for a tenant
+ * licensed for accounts but not that module, because the authorization
+ * middleware answers 403 MODULE_DISABLED before any permission check.
  */
 export async function arRoutes(app: FastifyInstance): Promise<void> {
   app.post(
@@ -51,7 +57,7 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
 
   app.get(
     "/api/v1/ar/reconciliation",
-    { config: { module: "tenant_profile", permission: "VIEW" } },
+    { config: { module: "accounts", permission: "VIEW" } },
     async (request, reply) => {
       const drift = await reconcileBalances(request.user.utilityId);
       return reply.send({ ok: drift.length === 0, drift });

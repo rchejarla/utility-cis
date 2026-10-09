@@ -57,11 +57,27 @@ export function roundToCents(value: string | number): string {
   return neg && cents !== 0n ? `-${body}` : body;
 }
 
-/** Body for POST /api/v1/bills/:id/post. Both fields optional. */
+/**
+ * Body for POST /api/v1/bills/:id/post. One optional field: an
+ * effectiveDate override, defaulting to the bill's billDate.
+ *
+ * The regex pins the shape and the refine pins the calendar range.
+ * Without the refine, "2026-13-45" is well-shaped, becomes an Invalid
+ * Date, and reaches Prisma inside the posting transaction, which rejects
+ * it as a PrismaClientValidationError — a 400 that blames the database
+ * client for a malformed request body. Rejecting it here says what is
+ * actually wrong.
+ *
+ * `Date.parse` is range-checking, not calendar-exact: a day that
+ * overflows a real month ("2026-02-30") is accepted and rolls forward to
+ * 2026-03-02. Pinned in the tests so the refine is not read as stronger
+ * than it is.
+ */
 export const postBillSchema = z.object({
   effectiveDate: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD")
+    .refine((s) => !Number.isNaN(Date.parse(s)), "effectiveDate is not a real date")
     .optional(),
 });
 
