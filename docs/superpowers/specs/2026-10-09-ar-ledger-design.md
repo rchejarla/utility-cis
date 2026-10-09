@@ -96,16 +96,20 @@ An enum is also better where it fits: typos are compile errors, switches are exh
 
 **Naming.** This schema already distinguishes the two cases consistently: `XType` is a fixed enum (`MeterType`, `CustomerType`, `ContainerType`, `ServicePointType`, `MeterEventType`), while `XTypeDef` and `XKind` are tenant-configurable tables (`PremiseTypeDef`, `AccountTypeDef`, `MeasureTypeDef`, `SuspensionTypeDef`, `RateComponentKind`). A draft called this enum `LedgerEntryKind`, which reuses "Kind" with the opposite meaning — a reader who knows `RateComponentKind` is a table would expect the same here. Hence `LedgerEntryType`, and `LedgerReasonDef` for the table, keeping the `*Def` suffix that already signals tenant-configurable.
 
-### 3.3a Direction is explicit data, not the sign of `amount`
+### 3.3a Signed amounts, not a separate direction column
 
-**Rejected: a signed `amount`** — debits positive, credits negative — justified in a draft as making the balance "a plain `SUM()`".
+`amount` and `openAmount` are both **signed**: positive increases what the customer owes, negative reduces it.
 
-That justification does not hold. §5 computes the balance from **`openAmount`**, which is non-negative on both sides by design, so direction-aware arithmetic is required regardless. Signing `amount` bought nothing and cost two things:
+**Rejected: a `LedgerDirection` column** (`DEBIT`/`CREDIT`) with `amount` as a positive magnitude. An intermediate draft adopted it on two arguments, both of which were wrong:
 
-1. **A redundancy.** `type` implies direction, and the sign had to agree with it — two sources for one fact, held together by a constraint.
-2. **An exemption.** `REVERSAL` has no direction derivable from its type, so it had to be excluded from that constraint. A model needing a special case for one of its core operations — NSF, corrections and rebills are all reversals — is mis-factored.
+1. *"The balance is computed from `openAmount`, which is non-negative on both sides, so direction-aware arithmetic is needed anyway."* Circular — `openAmount` was non-negative only because that draft defined it so. Sign it to match its parent and `SUM(open_amount)` **is** the balance.
+2. *"`REVERSAL` needs an exemption from the type↔sign constraint, so the signed model is mis-factored."* The exemption is identical either way: `CHECK sign matches type, REVERSAL exempt` versus `CHECK direction matches type, REVERSAL exempt`. It was never a differentiator.
 
-So `direction` is its own column, `amount` is a positive magnitude, and a reversal simply takes the opposite direction of the entry it reverses. The cost, stated honestly: net sums need `CASE WHEN direction = 'DEBIT' THEN amount ELSE -amount END` rather than a bare `SUM`. That is not a new cost, only a visible one.
+Signed is in fact simpler on the point the draft claimed was its weakness: **a reversal is `-original.amount`.** There is no "direction is the opposite of its target" rule to state, implement and test. One column carries one fact, instead of two columns that must agree.
+
+What a direction column genuinely buys is readability — `WHERE direction = 'CREDIT'` over `WHERE amount < 0`, and a self-documenting column. That is a preference, and it costs a redundant column plus a derivation rule for reversals.
+
+`ADJUSTMENT_CREDIT` is kept as the type name even though the collision with `LedgerDirection.CREDIT` that originally motivated it is gone, because it pairs symmetrically with `ADJUSTMENT_DEBIT`.
 
 ### 3.4 Extensibility lives in the *reason*, not the type
 
@@ -176,7 +180,7 @@ enum LedgerEntryType {
   PAYMENT            // credit — triggers allocation
   ADJUSTMENT_CREDIT  // credit — manual (waiver, goodwill)
   WRITE_OFF          // credit — uncollectable
-  REVERSAL           // negates a prior entry; direction taken from reversesId
+  REVERSAL           // negates a prior entry: amount = -reversesId.amount
 }
 
 enum PaymentTender {
@@ -188,30 +192,23 @@ enum PaymentTender {
 }
 ```
 
-```prisma
-enum LedgerDirection {
-  DEBIT    // increases what the customer owes the utility
-  CREDIT   // reduces what the customer owes the utility
-}
-```
+**The sign convention is fixed from one viewpoint: the customer's obligation to the utility.** Positive increases what they owe; negative reduces it.
 
-**Both values are defined from one fixed viewpoint: the customer's obligation to the utility.** This matters because debit and credit in double-entry bookkeeping are relative to whichever account you are looking at — a charge is a debit to receivables and a credit to revenue, simultaneously. CIS is deliberately not double-entry (§2.2), so there is only one viewpoint here and it must be pinned, or every reader will silently pick their own. If this ledger is ever exported to the City's ERP, the mapping to GL debits and credits happens there.
+Stating the viewpoint matters because debit and credit in double-entry bookkeeping are relative to whichever account you are looking at — a charge is a debit to receivables and a credit to revenue, simultaneously. CIS is deliberately not double-entry (§2.2), so there is only one viewpoint here and it must be pinned, or every reader silently picks their own. If this ledger is ever exported to the City's ERP, the mapping to GL debits and credits happens there.
 
-Note `ADJUSTMENT_CREDIT` as the entry type rather than `CREDIT`: the direction enum already uses `CREDIT`, and the same word meaning two things on one row ("a goodwill adjustment" vs "reduces the balance") is the kind of ambiguity that produces sign errors. It also pairs symmetrically with `ADJUSTMENT_DEBIT`.
-
-Direction is a column (§3.3a), not inferred from the type at read time. The expected pairing is still asserted, as a constant in `@utility-cis/shared` and as a DB constraint:
+The expected sign per type is asserted both as a constant in `@utility-cis/shared` and as a DB constraint:
 
 ```ts
-export const ENTRY_DIRECTION: Record<Exclude<LedgerEntryType, "REVERSAL">, LedgerDirection> = {
-  BILL_CHARGE:       "DEBIT",
-  FEE:               "DEBIT",
-  ADJUSTMENT_DEBIT:  "DEBIT",
-  PAYMENT:           "CREDIT",
-  ADJUSTMENT_CREDIT: "CREDIT",
-  WRITE_OFF:         "CREDIT",
+export const ENTRY_SIGN: Record<Exclude<LedgerEntryType, "REVERSAL">, 1 | -1> = {
+  BILL_CHARGE:        1,
+  FEE:                1,
+  ADJUSTMENT_DEBIT:   1,
+  PAYMENT:           -1,
+  ADJUSTMENT_CREDIT: -1,
+  WRITE_OFF:         -1,
 };
-// REVERSAL is excluded by construction: its direction is the opposite of
-// the entry it reverses, so there is no fixed mapping to assert.
+// REVERSAL is excluded: its amount is -original.amount, so its sign
+// follows the entry it reverses and has no fixed mapping.
 ```
 
 ### 4.2 `LedgerEntry`
@@ -222,9 +219,8 @@ export const ENTRY_DIRECTION: Record<Exclude<LedgerEntryType, "REVERSAL">, Ledge
 | utilityId | UUID | Tenant scope |
 | accountId | UUID FK | The receivable is the account's |
 | type | LedgerEntryType | What sort of event this is |
-| direction | LedgerDirection | DEBIT increases what is owed, CREDIT reduces it (§3.3a) |
-| amount | Decimal(14,2) | **Positive magnitude.** Direction carries the arithmetic |
-| openAmount | Decimal(14,2) | Unconsumed remainder, `0 <= openAmount <= amount` |
+| amount | Decimal(14,2) | **Signed.** Positive increases what the customer owes, negative reduces it (§3.3a) |
+| openAmount | Decimal(14,2) | Unconsumed remainder, same sign as `amount`, `abs(openAmount) <= abs(amount)` |
 | dueDate | Date? | Debits only. Drives aging and days-past-due |
 | effectiveDate | Date | Accounting date; may differ from `postedAt` (backdated entries) |
 | postedAt | Timestamptz | When it hit the ledger |
@@ -240,9 +236,9 @@ export const ENTRY_DIRECTION: Record<Exclude<LedgerEntryType, "REVERSAL">, Ledge
 **Constraints**
 
 - `UNIQUE (utility_id, bill_id) WHERE type = 'BILL_CHARGE'` — structural idempotency; posting the same Bill twice is refused rather than double-charging.
-- `CHECK (amount > 0)` — a zero-amount entry is never meaningful, and a negative one is a direction error. This is also the constraint that stops a $0 late fee being posted; the *policy* question of a minimum fee amount belongs on `DelinquencyRule` (§10 slice 6), not here.
-- `CHECK (open_amount >= 0 AND open_amount <= amount)`
-- `CHECK` direction matches type, per the `ENTRY_DIRECTION` map in §4.1, **for every type except `REVERSAL`**, which instead requires `reverses_id IS NOT NULL`. Not an exemption from a rule it ought to follow — a reversal's direction is genuinely a property of its target, so there is no fixed pairing to assert.
+- `CHECK (amount <> 0)` — a zero-amount entry is never meaningful. This is what rejects a $0 late fee; the *policy* question of a minimum fee amount belongs on `DelinquencyRule` (§10 slice 6), not here.
+- `CHECK (sign(open_amount) = sign(amount) OR open_amount = 0)` and `CHECK (abs(open_amount) <= abs(amount))` — an entry can be fully consumed, never over-consumed, and never flip sides.
+- `CHECK` sign matches type, per the `ENTRY_SIGN` map in §4.1, **for every type except `REVERSAL`**, which instead requires `reverses_id IS NOT NULL`. A reversal's sign follows its target, so there is no fixed pairing to assert.
 - `CHECK (reason_id IS NOT NULL)` for `FEE` / `ADJUSTMENT_DEBIT` / `ADJUSTMENT_CREDIT` / `WRITE_OFF`.
 
 **Indexes**
@@ -314,14 +310,16 @@ Consequence to state plainly: across many bills, `SUM(bill.total)` and `SUM(ledg
 ## 5. Invariants
 
 ```
-debit.openAmount   = debit.amount  − Σ applications where debitId  = debit.id
-credit.openAmount  = credit.amount − Σ applications where creditId = credit.id
-account.balance    = Σ open debits − Σ open credits
+debit.openAmount   = debit.amount  − Σ applications where debitId  = debit.id   (positive, shrinking toward 0)
+credit.openAmount  = credit.amount + Σ applications where creditId = credit.id  (negative, growing toward 0)
+account.balance    = SUM(openAmount) over the account's entries
 ```
 
-`openAmount` means the same thing on both sides: **remaining unconsumed**. On a debit it is unpaid charge; on a credit it is unapplied money — which *is* a customer credit balance. Overpayment needs no special case.
+`LedgerApplication.amount` is always positive; the signs above make it subtract from a debit and add to a credit, both converging on zero. The balance is a plain `SUM` — which is the whole point of signing both columns (§3.3a).
 
-`amount`, `type`, `direction`, `dueDate` and `effectiveDate` are **immutable** once posted. `openAmount` is explicitly *not* history — it is maintained bookkeeping, like `account.balance`. Worth stating because "immutable ledger" and "we update openAmount" otherwise read as a contradiction.
+`openAmount` means the same thing on both sides: **remaining unconsumed**. On a debit it is unpaid charge; on a credit it is unapplied money — which *is* a customer credit balance, and a negative total balance *is* a credit balance. Overpayment needs no special case.
+
+`amount`, `type`, `dueDate` and `effectiveDate` are **immutable** once posted. `openAmount` is explicitly *not* history — it is maintained bookkeeping, like `account.balance`. Worth stating because "immutable ledger" and "we update openAmount" otherwise read as a contradiction.
 
 ---
 
@@ -337,13 +335,13 @@ All of these run in one transaction, wrapped in the existing `audit-wrap`, and u
 4. **Auto-apply open credits** against it — the inverse of §6.3's walk: given the new debit, consume open credits oldest-`postedAt` first, so a credit balance is absorbed by the next bill without a sweep job.
 5. Set `bill.postedAt`, recompute `account.balance` and `lastDueDate`.
 
-A Bill whose total is negative (credits exceeding charges) posts as `ADJUSTMENT_CREDIT`, not a debit with a negative amount, so `amount` stays positive everywhere.
+A Bill whose total is negative (credits exceeding charges) posts as `ADJUSTMENT_CREDIT` rather than a `BILL_CHARGE` with a negative amount, so that the type↔sign constraint holds and the entry reads as what it is.
 
 When auto-post is on, this runs **inside `generateBillForAccount`'s existing transaction**. When off, it is a separate operator action gated by the *same* permission as bill generation — the `agreements` module key, which is where bill routes currently sit (commit `69a559a`). Deliberately not one of the new AR module keys: if posting required a stronger permission than generating, switching auto-post on would let a user create receivables they are not allowed to create directly.
 
 ### 6.2 `recordPayment({ accountId, amount, tender, receivedAt, externalRef })`
 
-Insert `PAYMENT` with `direction = CREDIT`, `openAmount = amount`, then allocate (§6.3). Leftover stays as `openAmount` on the payment — a credit balance.
+Insert `PAYMENT` with a negative `amount`, `openAmount = amount`, then allocate (§6.3). Leftover stays as `openAmount` on the payment — a credit balance.
 
 ### 6.3 Allocation
 
@@ -362,7 +360,7 @@ Insert `FEE`. `dueDate` defaults to the next bill's due date so it ages on its o
 
 ### 6.5 `adjust` / `waive` / `writeOff`
 
-All insert a credit-direction entry (`ADJUSTMENT_CREDIT` or `WRITE_OFF`) with a required `reasonId`, applied to a nominated debit. Any amount, so partial waivers are free. Waiving more than is owed, or waiving an already-paid charge, leaves an open credit — a refund due.
+All insert a negative entry (`ADJUSTMENT_CREDIT` or `WRITE_OFF`) with a required `reasonId`, applied to a nominated debit. Any amount, so partial waivers are free. Waiving more than is owed, or waiving an already-paid charge, leaves an open credit — a refund due.
 
 ### 6.6 `reverseEntry(id, reasonId)`
 
@@ -447,5 +445,5 @@ Too large for one implementation plan. **Slice 1 is the first plan's scope**; ea
 1. **Module 10 needs rewriting again** to reflect §3.9 — it currently claims the ledger, the `Payment` entity and allocation, which move here.
 2. **`docs/bozeman/12-corrections-and-reversals.md:459`** still says the accounting layer is SaaSLogic's. Under the 2026-10-09 decision that should be the City's ERP, matching the pattern `14-special-assessments.md:701` already uses.
 3. **Fee amount on `DelinquencyRule`** — the blocker for late-fee generation.
-4. **Refunds — the credit lifecycle has no terminal state.** An open credit can be consumed by a future debit (the normal path, §6.1) or refunded. Refunding needs something for the credit to be applied *against*, and no current type fits — the expected shape is a `REFUND` entry with `direction = DEBIT`, meaning "paid back to the customer." So this is not purely additive: the enum will need a migration, which §3.3 accepts as the honest cost of a fixed enum. Worth knowing before the first account closes with a credit balance, since account closure already exists.
+4. **Refunds — the credit lifecycle has no terminal state.** An open credit can be consumed by a future debit (the normal path, §6.1) or refunded. Refunding needs something for the credit to be applied *against*, and no current type fits — the expected shape is a positive-amount `REFUND` type, meaning "paid back to the customer," which the open credit is then applied against. So this is not purely additive: the enum will need a migration, which §3.3 accepts as the honest cost of a fixed enum. Worth knowing before the first account closes with a credit balance, since account closure already exists.
 5. **Backdated entries.** `effectiveDate` is separate from `postedAt` so a correction can land in a prior period, but nothing closes a period. If period close is ever needed, it constrains `effectiveDate` and belongs with it.
