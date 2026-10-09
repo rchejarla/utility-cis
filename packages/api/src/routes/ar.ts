@@ -5,15 +5,16 @@ import { prisma } from "../lib/prisma.js";
 import { postBill } from "../services/ar/posting.service.js";
 
 /**
- * AR routes. Posting is gated on the `agreements` module — the same
- * permission as bill generation — because when auto-post is on,
- * generating a bill IS posting it. A stronger gate here would let
- * someone bypass this permission by turning auto-post on.
+ * AR routes. Posting is gated on `accounts:EDIT`, the same permission as
+ * generating a bill (`POST /api/v1/accounts/:id/bills` in account-bills.ts).
+ * Generation already posts the bill when auto-post is on, so posting must
+ * require no more permission than generating; otherwise switching auto-post
+ * on would let a user create receivables they cannot post directly.
  */
 export async function arRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     "/api/v1/bills/:id/post",
-    { config: { module: "agreements", permission: "CREATE" } },
+    { config: { module: "accounts", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id: billId } = idParamSchema.parse(request.params);
@@ -25,7 +26,7 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
 
   app.get(
     "/api/v1/accounts/:id/unposted-bills",
-    { config: { module: "agreements", permission: "VIEW" } },
+    { config: { module: "accounts", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id: accountId } = idParamSchema.parse(request.params);
