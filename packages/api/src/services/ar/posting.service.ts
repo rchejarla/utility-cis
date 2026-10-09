@@ -114,14 +114,20 @@ export async function postBill(
     // the cache is a read-then-write of SUM(open_amount); without a
     // per-account lock, two concurrent posts on one account each miss the
     // other's uncommitted entry and the later update overwrites with a
-    // stale sum. The lock also serializes double-posts of the same bill.
+    // stale sum.
     //
     // recomputeAccountCache takes this same lock before its SUM, and
-    // that is what actually prevents the stale sum. Keeping this one is
-    // still deliberate: it fixes the lock order as account-then-bill for
-    // every posting path, and it is what makes the re-read below see a
-    // post that committed meanwhile. Re-locking a row this transaction
-    // already holds costs nothing. Do not delete either as redundant.
+    // either lock alone is enough to prevent the stale sum. Keeping this
+    // one is still deliberate: it fixes the lock order as
+    // account-then-bill for every posting path, so a later caller that
+    // locks in the other order cannot deadlock against this one.
+    // Re-locking a row this transaction already holds costs nothing.
+    // Do not delete either as redundant.
+    //
+    // What this lock does NOT do: it is not what guards against a double
+    // post. That is the atomic claim below — UPDATE ... WHERE posted_at
+    // IS NULL plus the claimed.count check. With both account locks
+    // removed, the double-post test still passes.
     const owner = await tx.bill.findUnique({
       where: { id: billId, utilityId },
       select: { accountId: true },
@@ -131,7 +137,9 @@ export async function postBill(
                         WHERE id = ${owner.accountId}::uuid AND utility_id = ${utilityId}::uuid
                           FOR UPDATE`;
 
-    // Re-read after the lock so we see any post that committed meanwhile.
+    // Re-read now that the lock is held, so total and dueDate are the
+    // values as of acquiring it rather than as of the queue. This is not
+    // the double-post guard — the claim below is.
     const bill = await tx.bill.findUnique({
       where: { id: billId, utilityId },
       select: { id: true, accountId: true, total: true, dueDate: true, billDate: true },

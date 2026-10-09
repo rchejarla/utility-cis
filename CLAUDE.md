@@ -54,6 +54,7 @@ docs/specs/
 ├── 15-customer-portal.md            — Self-service portal (Phase 4.1 MVP complete)
 ├── 20-custom-fields.md              — Custom fields (Phase 1+2 complete)
 ├── 21-saaslogic-billing.md          — SaaSLogic billing integration (Phase 3 design)
+├── 23-accounts-receivable.md        — AR ledger, posting, balance (slice 1 complete)
 ├── 16-special-assessments.md        — Districts, parcel assessments
 ├── 17-reporting-and-audit.md        — Audit log, reports
 ├── 18-theme-and-configuration.md    — Tenant theme, settings

@@ -239,9 +239,11 @@ describe("postBill", () => {
     //
     // What discriminates is the three assertions after `release()`.
     // Unlocked, the poster sums before the holder's uncommitted 5.00
-    // entry is visible, then writes that stale 20.00 total and stale due
-    // date over the top. The lock that prevents it is the one
-    // recomputeAccountCache takes before its SUM. Do not delete those
+    // entry is visible, so it writes 50.00 — the 30.00 already committed
+    // plus its own 20.00, with the holder's 5.00 missing — and a stale
+    // due date over the top. Either account lock on the path prevents
+    // that; measured, removing one still passes and removing both fails
+    // here with '50.00' where '55.00' is expected. Do not delete these
     // assertions — they are the test.
     await new Promise((r) => setTimeout(r, 1500));
     expect(resolved).toBe(false);

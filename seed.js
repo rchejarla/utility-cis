@@ -27,23 +27,25 @@ async function main() {
   await p.meterRead.deleteMany({});
   if (p.attachment) await p.attachment.deleteMany({});
 
-  // Rate v2 cleanup (slice 1 task 10) — sa_rate_schedule_assignment
-  // points at service_agreement and rate_schedule; rate_component points
-  // at rate_schedule. Clear them before SAs and schedules.
-  if (p.sAScheduleAssignment) await p.sAScheduleAssignment.deleteMany({});
-  if (p.rateComponent) await p.rateComponent.deleteMany({});
-  if (p.rateIndex) await p.rateIndex.deleteMany({});
-
-  // AR ledger + bills — ledger_entry has RESTRICT FKs onto both account and
-  // bill, so these must clear before either parent. They sit above the
-  // service_agreement delete because bill_segment has a RESTRICT FK onto
-  // service_agreement, and bill cannot go until its segments have.
+  // AR ledger + bills. Four RESTRICT parents, so this block has to precede
+  // all of them: ledger_entry -> account and bill; bill_segment ->
+  // service_agreement; bill -> account and billing_cycle; and
+  // bill_segment_line -> rate_component, which is why this sits above the
+  // rate v2 cleanup rather than below it. Getting that last one wrong puts
+  // a delete here that can never run on a DB holding a rated segment.
   if (p.ledgerApplication) await p.ledgerApplication.deleteMany({});
   if (p.ledgerEntry) await p.ledgerEntry.deleteMany({});
   if (p.ledgerReasonDef) await p.ledgerReasonDef.deleteMany({});
   if (p.billSegmentLine) await p.billSegmentLine.deleteMany({});
   if (p.billSegment) await p.billSegment.deleteMany({});
   if (p.bill) await p.bill.deleteMany({});
+
+  // Rate v2 cleanup (slice 1 task 10) — sa_rate_schedule_assignment
+  // points at service_agreement and rate_schedule; rate_component points
+  // at rate_schedule. Clear them before SAs and schedules.
+  if (p.sAScheduleAssignment) await p.sAScheduleAssignment.deleteMany({});
+  if (p.rateComponent) await p.rateComponent.deleteMany({});
+  if (p.rateIndex) await p.rateIndex.deleteMany({});
 
   // SAM table dropped in slice 1 migration; SP/SPM cascade from SA deletion.
   await p.serviceAgreement.deleteMany({});

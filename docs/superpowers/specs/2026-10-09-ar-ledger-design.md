@@ -337,7 +337,7 @@ All of these run in one transaction, wrapped in the existing `audit-wrap`, and u
 
 A Bill whose total is negative (credits exceeding charges) posts as `ADJUSTMENT_CREDIT` rather than a `BILL_CHARGE` with a negative amount, so that the type↔sign constraint holds and the entry reads as what it is.
 
-When auto-post is on, this runs **inside `generateBillForAccount`'s existing transaction**. When off, it is a separate operator action gated by the *same* permission as bill generation — the `agreements` module key, which is where bill routes currently sit (commit `69a559a`). Deliberately not one of the new AR module keys: if posting required a stronger permission than generating, switching auto-post on would let a user create receivables they are not allowed to create directly.
+When auto-post is on, this runs **inside `generateBillForAccount`'s existing transaction**. When off, it is a separate operator action gated by the *same* permission as bill generation — `accounts:EDIT`, which is what `POST /api/v1/accounts/:id/bills` requires (`account-bills.ts:12`), the only route that calls `generateBillForAccount`. (An earlier draft of this section said `agreements`, reasoning from commit `69a559a`; that commit moved `routes/bills.ts` and the bill-*segment* routes and never touched the account-level generate route.) Deliberately not one of the new AR module keys: if posting required a stronger permission than generating, switching auto-post on would let a user create receivables they are not allowed to create directly.
 
 ### 6.2 `recordPayment({ accountId, amount, tender, receivedAt, externalRef })`
 
