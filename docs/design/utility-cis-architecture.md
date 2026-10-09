@@ -829,10 +829,41 @@ every migration, but the application role `cis` is a SUPERUSER
 (`docker/init-cis-user.sh`), and PostgreSQL exempts superusers from row-level
 security entirely. So tenant isolation today rests **only** on the `utility_id`
 predicates in application code — the "defense in depth" bullet is in fact the
-sole defense. The fix is to stop granting the role SUPERUSER and grant the
-specific privileges it needs instead; the policies then start working with no
-code change. Until then, a query that forgets its `utility_id` predicate
-crosses tenants silently.
+sole defense. Until that changes, a query that forgets its `utility_id`
+predicate crosses tenants silently.
+
+Dropping SUPERUSER is necessary but **not** sufficient, and it is worth being
+precise about why, because "revoke superuser and the policies start working"
+is wrong in two separate ways:
+
+1. **`cis` owns the tables.** `init-cis-user.sh` does
+   `ALTER DATABASE utility_cis OWNER TO cis`, and migrations run as `cis`, so
+   it owns every table (`pg_class.relowner`). PostgreSQL exempts a table's
+   owner from RLS independently of superuser, and
+   `pg_class.relforcerowsecurity` is `false` throughout. So after
+   `ALTER ROLE cis NOSUPERUSER` the policies are *still* inert. Making them
+   bite needs either `FORCE ROW LEVEL SECURITY` on each table, or splitting
+   the role in two: an owner that runs migrations and seeds, and a
+   non-owning application role. Note also that `prisma migrate dev` builds a
+   shadow database, so a de-privileged role needs an explicit `CREATEDB`
+   grant.
+2. **The tenant context is not reliably on the connection that runs the
+   query.** `setTenantContext` (`lib/prisma.ts`) issues
+   `set_config('app.current_utility_id', …, false)` — *session*-scoped — as
+   its own statement against a pooled connection, and the service queries
+   that follow may be handed a different connection. Worse, a session-scoped
+   setting outlives the request on the connection that did receive it, so
+   once RLS is live a request whose middleware did not run can inherit the
+   previous request's tenant and read its rows without error. The supported
+   pattern is `withTenant`, which opens a transaction and uses
+   `set_config(…, true)` so the setting and the queries share one connection
+   and expire together; it currently has one caller.
+
+The policies themselves also disagree about how to fail: most use
+`current_setting('app.current_utility_id')`, which raises when unset, while
+the `ledger_*` tables use the two-argument form, which returns NULL and so
+silently filters every row. Fail-loud is the safer of the two for a table
+whose emptiness would be read as "nothing is wrong".
 
 **A token whose subject has no `cis_user` row skips the permission check.**
 `middleware/authorization.ts` returns early when `getUserRole` finds nothing,
