@@ -61,23 +61,29 @@ export function roundToCents(value: string | number): string {
  * Body for POST /api/v1/bills/:id/post. One optional field: an
  * effectiveDate override, defaulting to the bill's billDate.
  *
- * The regex pins the shape and the refine pins the calendar range.
- * Without the refine, "2026-13-45" is well-shaped, becomes an Invalid
- * Date, and reaches Prisma inside the posting transaction, which rejects
- * it as a PrismaClientValidationError — a 400 that blames the database
- * client for a malformed request body. Rejecting it here says what is
- * actually wrong.
+ * The regex pins the shape and the refine pins the calendar. Without the
+ * refine, "2026-13-45" is well-shaped, becomes an Invalid Date, and
+ * reaches Prisma inside the posting transaction, which rejects it as a
+ * PrismaClientValidationError — a 400 that blames the database client
+ * for a malformed request body. Rejecting it here says what is actually
+ * wrong.
  *
- * `Date.parse` is range-checking, not calendar-exact: a day that
- * overflows a real month ("2026-02-30") is accepted and rolls forward to
- * 2026-03-02. Pinned in the tests so the refine is not read as stronger
- * than it is.
+ * The refine is a round trip, not a `Date.parse` null check, because
+ * `Date.parse` is only range-checking: it accepts "2026-02-30" and rolls
+ * it forward to 2026-03-02, which would post a receivable dated a day
+ * the caller never asked for. Re-formatting and comparing rejects every
+ * date that does not exist, and keeps leap days that do ("2024-02-29").
+ * The `Date.parse` guard stays in front of it so `toISOString()` cannot
+ * throw on an Invalid Date.
  */
 export const postBillSchema = z.object({
   effectiveDate: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD")
-    .refine((s) => !Number.isNaN(Date.parse(s)), "effectiveDate is not a real date")
+    .refine(
+      (s) => !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0, 10) === s,
+      "effectiveDate is not a real date",
+    )
     .optional(),
 });
 

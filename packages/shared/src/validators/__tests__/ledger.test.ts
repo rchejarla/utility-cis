@@ -55,15 +55,19 @@ describe("postBillSchema", () => {
     expect(() => postBillSchema.parse({ effectiveDate: "2026-00-10" })).toThrow();
   });
 
-  // Known limit of Date.parse, pinned so nobody reads the refine as
-  // stronger than it is: a day that overflows a real month is accepted
-  // and rolls forward — "2026-02-30" posts as 2026-03-02. That is JS
-  // Date semantics, not a crash, and it is what the rest of this
-  // codebase already relies on for date arithmetic.
-  it("accepts a day that overflows its month, which rolls forward", () => {
-    expect(postBillSchema.parse({ effectiveDate: "2026-02-30" })).toEqual({
-      effectiveDate: "2026-02-30",
+  // A day that overflows a real month would roll forward under
+  // Date.parse alone — "2026-02-30" becomes 2026-03-02 — and post a
+  // receivable dated a day the caller never asked for. The round trip
+  // rejects it.
+  it("rejects a day that does not exist in its month", () => {
+    expect(() => postBillSchema.parse({ effectiveDate: "2026-02-30" })).toThrow();
+    expect(() => postBillSchema.parse({ effectiveDate: "2026-04-31" })).toThrow();
+    expect(() => postBillSchema.parse({ effectiveDate: "2026-02-29" })).toThrow();
+  });
+
+  it("keeps a leap day that does exist", () => {
+    expect(postBillSchema.parse({ effectiveDate: "2024-02-29" })).toEqual({
+      effectiveDate: "2024-02-29",
     });
-    expect(new Date("2026-02-30").toISOString().slice(0, 10)).toBe("2026-03-02");
   });
 });
