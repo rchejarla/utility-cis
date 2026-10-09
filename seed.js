@@ -34,6 +34,17 @@ async function main() {
   if (p.rateComponent) await p.rateComponent.deleteMany({});
   if (p.rateIndex) await p.rateIndex.deleteMany({});
 
+  // AR ledger + bills — ledger_entry has RESTRICT FKs onto both account and
+  // bill, so these must clear before either parent. They sit above the
+  // service_agreement delete because bill_segment has a RESTRICT FK onto
+  // service_agreement, and bill cannot go until its segments have.
+  if (p.ledgerApplication) await p.ledgerApplication.deleteMany({});
+  if (p.ledgerEntry) await p.ledgerEntry.deleteMany({});
+  if (p.ledgerReasonDef) await p.ledgerReasonDef.deleteMany({});
+  if (p.billSegmentLine) await p.billSegmentLine.deleteMany({});
+  if (p.billSegment) await p.billSegment.deleteMany({});
+  if (p.bill) await p.bill.deleteMany({});
+
   // SAM table dropped in slice 1 migration; SP/SPM cascade from SA deletion.
   await p.serviceAgreement.deleteMany({});
   if (p.rateServiceClass) await p.rateServiceClass.deleteMany({});
