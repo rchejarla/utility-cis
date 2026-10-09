@@ -23,7 +23,7 @@ The Utility CIS (Customer Information System) is a multi-tenant SaaS platform fo
 | **SaaSLogic** | Card data, hosted payment page, settlement | CIS (registers an amount due, receives the payment result) |
 | **ApptorFlow** | Workflow orchestration: start/stop service, collections, anomaly response, approvals | CIS (events), SaaSLogic (payment events) |
 
-**Not yet built:** nothing currently writes `Account.balance`, so the receivable CIS now owns does not exist in code. See module 10.
+**Built in Phase 3 AR slice 1:** an issued `Bill` posts a signed `LedgerEntry`, and `Account.balance` is recomputed from the ledger in the same transaction, so the receivable CIS owns now exists in code. **Not yet built:** payments, allocation and write-offs. See module 10.
 
 ### Target Market
 
@@ -859,13 +859,13 @@ SaaSLogic, reduced to a payment rail (see `docs/specs/21-saaslogic-billing.md`):
 
 **Interval reads** (`meter_interval_read` hypertable) remain planned but belong to meter reading, not the payment integration — the rate engine consumes them directly.
 
-**Not built: AR posting.** Nothing writes `Account.balance`, so an issued `Bill` does not become a receivable and the delinquency sweep below reads a column only the seeder sets. Module 10 has to land before the payment integration is meaningful.
+**AR posting (shipped — module 23 slice 1).** An issued `Bill` posts one signed `LedgerEntry`, and `Account.balance` plus `lastDueDate` are recomputed from the ledger in the same transaction. Posting is configurable per tenant (`TenantConfig.autoPostBills`) and overridable per account, defaulting to automatic. `GET /api/v1/ar/reconciliation` proves the cache matches the ledger. Still outstanding: payments and allocation, fees, waivers and write-offs, and the statement view that shows a customer their amount due.
 
 Notifications (complete): NotificationTemplate + Notification entities. Template CRUD with channel (EMAIL/SMS/MAIL), Mustache body with variable interpolation, event-trigger binding. Notification send + list endpoints. RBAC module `notifications` with VIEW/CREATE/EDIT/DELETE permissions. See `docs/specs/13-notifications.md`.
 
 Delinquency (complete): DelinquencyRule + DelinquencyAction entities. Rule CRUD with configurable thresholds (days past due, minimum balance), escalation tiers, and linked notification templates. Action log tracks rule firings per account. RBAC module `delinquency` with VIEW/CREATE/EDIT/DELETE permissions. Account entity extended with `balance`, `lastDueDate`, and `isProtected` columns to support delinquency evaluation. See `docs/specs/11-delinquency.md`.
 
-Still planned for Phase 3: AR posting (module 10), batch billing run (slice 5c), rebill/corrections (slice 5d), bill rendering and delivery, and late fees and payment plans — the latter now as CIS-side charges and AR arrangements, not as line items fed to SaaSLogic.
+Still planned for Phase 3: batch billing run (slice 5c), rebill/corrections (slice 5d), bill rendering and delivery, and late fees and payment plans — the latter now as CIS-side charges and AR arrangements, not as line items fed to SaaSLogic.
 
 ### Phase 4
 Customer portal + service requests. See `docs/specs/15-customer-portal.md` for the full spec.
