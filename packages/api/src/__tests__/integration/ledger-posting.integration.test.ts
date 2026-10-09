@@ -188,7 +188,11 @@ describe("postBill", () => {
     await posting.postBill(utilityId, ACTOR, "Tester", await makeBill("30.0000", "2026-06-14"));
     const billB = await makeBill("20.0000", "2026-05-01");
 
-    // Hold the account row lock in a transaction we control.
+    // Hold the account row lock in a transaction we control. FOR NO KEY
+    // UPDATE, not FOR UPDATE: it still conflicts with postBill's FOR UPDATE
+    // and with its final account UPDATE, but not with the FOR KEY SHARE an
+    // entry insert takes through the foreign key. Plain FOR UPDATE would
+    // block an unlocked poster at the insert, before its SUM, and hide the race.
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     let locked!: () => void;
@@ -197,7 +201,22 @@ describe("postBill", () => {
       async (tx) => {
         await tx.$queryRaw`SELECT id FROM account
                             WHERE id = ${accountId}::uuid AND utility_id = ${utilityId}::uuid
-                              FOR UPDATE`;
+                              FOR NO KEY UPDATE`;
+        // Write an entry that is uncommitted while we hold the lock. A poster
+        // that does not wait for the lock sums without it and then
+        // overwrites the cache with a stale total and due date.
+        await tx.ledgerEntry.create({
+          data: {
+            utilityId,
+            accountId,
+            type: "ADJUSTMENT_DEBIT",
+            amount: "5.00",
+            openAmount: "5.00",
+            dueDate: new Date("2026-04-01"),
+            effectiveDate: new Date("2026-04-01"),
+            createdBy: ACTOR,
+          },
+        });
         locked();
         await gate;
       },
@@ -218,11 +237,11 @@ describe("postBill", () => {
     release();
     await holder;
     const result = await posting2;
-    expect(result.balance).toBe("50.00");
+    expect(result.balance).toBe("55.00");
 
     const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
-    expect(account.balance.toFixed(2)).toBe("50.00");
-    expect(account.lastDueDate?.toISOString().slice(0, 10)).toBe("2026-05-01");
+    expect(account.balance.toFixed(2)).toBe("55.00");
+    expect(account.lastDueDate?.toISOString().slice(0, 10)).toBe("2026-04-01");
   });
 
   it("clears lastDueDate when no open debit remains", async () => {
