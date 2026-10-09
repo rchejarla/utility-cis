@@ -111,7 +111,7 @@ Every significant CIS state change emits a domain event. ApptorFlow subscribes a
 
 ### 4.1 Entity Summary
 
-**39 entities** across 13 categories:
+**36 core domain entities** across 13 categories (a curated summary, not the full schema: the Prisma schema defines 58 models, and type-def, plumbing and later-phase models such as `Bill` and `ServicePoint` are not listed here):
 
 | Category | Entities |
 |----------|----------|

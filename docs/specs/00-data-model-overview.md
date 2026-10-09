@@ -2,17 +2,17 @@
 
 **Module:** 00 — Data Model Overview
 **Status:** Built (Phase 1 complete, Phase 2 in progress, Phase 3 partial, Phase 4 Service Requests slice B in progress)
-**Entities:** All 34
+**Entities:** 34 core domain (of the 58 Prisma models)
 
 ## Overview
 
-This document is the master entity reference for the Utility CIS data model. It describes all 34 entities, their database tables, categories, the phase in which they were built, and their key relationships. Use this as the index when navigating module-level specs.
+This document is the master entity reference for the Utility CIS data model. It describes the 34 core domain entities, their database tables, categories, the phase in which they were built, and their key relationships. Use this as the index when navigating module-level specs.
 
 The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isolation is enforced at the database level via PostgreSQL Row-Level Security (RLS) policies, with the `utility_id` claim from the JWT applied per-request.
 
 ## Entity Summary
 
-**34 entities** across 10 categories (RBAC category added in Phase 2; TenantConfig and SuspensionTypeDef added alongside Service Holds v1; CustomFieldSchema added in Custom Fields Phase 1; Notifications and Delinquency categories added in Phase 3; Service Requests category added in Phase 4 slice B; Accounts Receivable category added in Phase 3 AR slice 1):
+**34 core domain entities** (curated; the Prisma schema defines 58 models, and type-def, plumbing and later-phase tables such as `Bill` and `ServicePoint` are not listed here) across 10 categories (RBAC category added in Phase 2; TenantConfig and SuspensionTypeDef added alongside Service Holds v1; CustomFieldSchema added in Custom Fields Phase 1; Notifications and Delinquency categories added in Phase 3; Service Requests category added in Phase 4 slice B; Accounts Receivable category added in Phase 3 AR slice 1):
 
 | # | Entity | Table | Category | Phase Built | Key Relationships |
 |---|--------|-------|----------|-------------|-------------------|
