@@ -1,5 +1,11 @@
 version: "3.9"
 
+# Pinned explicitly. Without this, Compose derives the project name from the
+# containing directory, so renaming or moving the repo silently creates a new
+# project with new, EMPTY volumes while the real data stays behind in the old
+# one (e.g. claude-test_pgdata). Keep this value stable.
+name: utility-cis
+
 services:
   db:
     image: timescale/timescaledb:latest-pg16
