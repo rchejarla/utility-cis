@@ -1167,6 +1167,50 @@ async function main() {
   }
   console.log("  2 accounts with delinquent balances");
 
+  // A late fee and a partial courtesy waiver on the first delinquent
+  // account, so the slice 3 acts are visible in a fresh database rather
+  // than only reachable by HTTP. Written directly, like the opening
+  // balances above and for the same reason: seed.js does not import the
+  // TypeScript services. The cache is then set to the figure the ledger
+  // implies, so GET /api/v1/ar/reconciliation stays clean.
+  const feeDue = new Date();
+  feeDue.setDate(feeDue.getDate() + 10);
+  const lateFee = await p.ledgerEntry.create({
+    data: {
+      utilityId: UID,
+      accountId: aArr[0].id,
+      type: "FEE",
+      amount: "15.00",
+      openAmount: "10.00", // 5.00 of it waived below
+      dueDate: feeDue,
+      effectiveDate: new Date(),
+      reasonId: reasonByCode["LATE_FEE"],
+      memo: "Late payment fee on the seeded opening balance",
+    },
+  });
+  const waiver = await p.ledgerEntry.create({
+    data: {
+      utilityId: UID,
+      accountId: aArr[0].id,
+      type: "ADJUSTMENT_CREDIT",
+      amount: "-5.00",
+      openAmount: "0.00", // fully applied to the fee
+      effectiveDate: new Date(),
+      reasonId: reasonByCode["COURTESY_WAIVER"],
+      memo: "Partial courtesy waiver of the late fee",
+    },
+  });
+  await p.ledgerApplication.create({
+    data: { utilityId: UID, creditId: waiver.id, debitId: lateFee.id, amount: "5.00" },
+  });
+  // 412.80 opening + 10.00 of the fee still open. lastDueDate stays on the
+  // opening balance, which is older than the fee.
+  await p.account.update({
+    where: { id: aArr[0].id },
+    data: { balance: "422.80", lastDueDate: thirtyDaysAgo },
+  });
+  console.log("  1 late fee, partially waived");
+
   const testUsers = [
     { id: "00000000-0000-4000-8000-000000000091", email: "sysadmin@utility.com", name: "Sarah Mitchell", roleIdx: 0 },
     { id: "00000000-0000-4000-8000-000000000092", email: "admin@utility.com", name: "Michael Chen", roleIdx: 1 },

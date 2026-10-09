@@ -1,7 +1,7 @@
 # Payments and Collections
 
 **Module:** 10 — Payments and Collections
-**Status:** Phase 3 — the ledger, posting, payment recording, allocation and reversal all shipped in module 23 (slices 1–2); waivers, write-offs, payment plans and the collections workflow are still outstanding here.
+**Status:** Phase 3 — the ledger, posting, payment recording, allocation, reversal, fees, waivers and write-offs all shipped in module 23 (slices 1–3); payment plans, the collections workflow and write-off *approval* are still outstanding here.
 **Entities:** PaymentPlan (planned), AdhocCharge (planned), WriteOff (planned). The ledger itself — `LedgerEntry`, `LedgerApplication`, `LedgerReasonDef` — lives in module 23.
 
 ## Overview
@@ -16,7 +16,7 @@ Crucially, SaaSLogic is one tender among several — cash, check and lockbox pay
 
 ### Status of the gap
 
-Closed on both the charge and the payment side. `Account.balance` is written from the ledger inside the posting transaction and reconciled by `GET /api/v1/ar/reconciliation`; delinquency therefore sweeps real receivables rather than seeded values. Money received of any tender is recorded by `POST /api/v1/accounts/:id/payments`, allocated against open charges in the module 23 §6.3 order, and reversible for NSF via `POST /api/v1/ledger-entries/:id/reverse`. Still outstanding here: waivers and write-offs (module 23 slice 3), then payment plans, the collections workflow and write-off approval.
+Closed on both the charge and the payment side. `Account.balance` is written from the ledger inside the posting transaction and reconciled by `GET /api/v1/ar/reconciliation`; delinquency therefore sweeps real receivables rather than seeded values. Money received of any tender is recorded by `POST /api/v1/accounts/:id/payments`, allocated against open charges in the module 23 §6.3 order, and reversible for NSF via `POST /api/v1/ledger-entries/:id/reverse`. Waivers and write-offs shipped with module 23 slice 3, each citing a tenant-defined reason and kept as separate acts so concessions and bad debt stay separately reportable. Still outstanding here: payment plans, the collections workflow, and *approval* of a waiver or write-off — which needs a request object outside the ledger, because posting is final and a waiver awaiting approval must not already have reduced the balance.
 
 Primary users: billing clerks, collections staff, finance managers, CSRs (for account inquiries).
 

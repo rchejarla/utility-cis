@@ -1,7 +1,7 @@
 # Accounts Receivable
 
 **Module:** 23 — Accounts Receivable
-**Status:** Phase 3 — slice 1 (ledger foundation and bill posting) and slice 2 (payments, allocation, reversal) shipped; slices 3–6 outstanding. No UI yet: the surface is five API endpoints, and the operator screens land in slice 4.
+**Status:** Phase 3 — slices 1 (ledger and posting), 2 (payments, allocation, reversal) and 3 (fees, adjustments, reason codes) shipped; slices 4–6 outstanding. No UI yet: the surface is ten API endpoints, and the operator screens land in slice 4.
 **Entities:** `LedgerEntry`, `LedgerApplication`, `LedgerReasonDef`, plus columns on existing entities (`Bill.postedAt`, `Account.balance`, `Account.lastDueDate`, `Account.autoPostBills`, `TenantConfig.autoPostBills`).
 
 ## Authority
@@ -21,7 +21,7 @@ The test is dependency direction (design §3.9). The ledger's consumers are Bill
 |---|---|---|---|
 | `LedgerEntry` | `ledger_entry` | Shipped (slice 1) | One financial event against an account. **Signed:** positive increases what the customer owes. `amount` is a snapshot, frozen at posting; `openAmount` is the unconsumed remainder, same sign, never larger in magnitude. |
 | `LedgerApplication` | `ledger_application` | Shipped (slice 2) | Which credit paid down which debit, and by how much. `amount` is always positive; the parents' signs make it subtract from a debit and add to a credit. Written by allocation, and deleted by `reverseEntry` when it gives back what an entry consumed. |
-| `LedgerReasonDef` | `ledger_reason_def` | Table shipped, empty | Why a fee or adjustment was raised, in the utility's own words. Seeded in slice 3. |
+| `LedgerReasonDef` | `ledger_reason_def` | Shipped (slice 3) | Why a fee or adjustment was raised, in the utility's own words. Tenant-configurable, following the `*TypeDef` convention; 12 defaults seeded per tenant. `appliesToType` restricts which entry type may cite it, enforced by `resolveReason` — the single gate every writing service goes through. No `requiresApproval` column, deliberately: approval cannot be a state on a ledger entry, because posting is final and a waiver awaiting approval must not already have moved the balance. |
 
 ### Columns added to existing entities
 
@@ -33,7 +33,14 @@ The test is dependency direction (design §3.9). The ledger's consumers are Bill
 | `Account.autoPostBills` | BOOLEAN? | Per-account override. Null means inherit the tenant setting, so flipping the tenant value moves every account that has not explicitly opted out. |
 | `TenantConfig.autoPostBills` | BOOLEAN NOT NULL DEFAULT true | Tenant default. No `tenant_config` row means an unconfigured tenant, which takes the column default: auto-post on. |
 
-The `tenant_isolation` RLS policies on the three new tables are inert as things stand, because the application role is a SUPERUSER and superusers bypass RLS. Tenant separation rests on the `utility_id` predicates in application code. Pre-existing condition, recorded in the migration's header comment.
+The `tenant_isolation` RLS policies on the three new tables are inert as things stand, because the application role is a SUPERUSER and superusers bypass RLS. Tenant separation rests on the `utility_id` predicates in application code. Pre-existing condition, recorded in the migration's header comment and in `docs/design/utility-cis-architecture.md` §7.1.
+
+### Constraints that differ from the design spec
+
+Both CHECKs deferred from slice 1 landed in slice 3, and neither is what §4.2 literally asks for. Each departure was established by trying the specified version against the live schema:
+
+- **`ledger_entry_reason_required`** is `reason_id IS NOT NULL OR bill_id IS NOT NULL`, not `reason_id IS NOT NULL`. The stricter version cannot be added — `ERROR: check constraint ... is violated by some row` — because `postBill` writes an `ADJUSTMENT_CREDIT` with no reason for a bill that nets negative. Requiring one there would couple posting a negative bill to the tenant having reason seeds; a credit that names its bill explains itself.
+- **`ledger_entry_assessed_on_only_fee`** is the converse of what §4.2's field table implies. "FEE only — the debit that went unpaid" cannot mean every fee names one, because a tap fee is assessed on nothing and the common case would be unwritable.
 
 ## Invariants (design §5)
 
@@ -53,6 +60,11 @@ account.balance   = SUM(openAmount) over the account's entries
 | GET | `/api/v1/accounts/:id/unposted-bills` | `accounts:VIEW` | Bills with no `postedAt`, for the operator screen used when auto-post is off. |
 | POST | `/api/v1/accounts/:id/payments` | `payments:CREATE` | Records money received. Body takes a **positive** `amount` (at most 2dp), a `tender` (CARD / ACH / CASH / CHECK / LOCKBOX), and optional `receivedAt`, `externalRef`, `memo`. 201 with the signed amount, the applications made, whatever stayed unapplied, and the new balance. 400 on a zero or negative amount; 404 for an unknown or other-tenant account. |
 | POST | `/api/v1/ledger-entries/:id/reverse` | `payments:EDIT` | Reverses any posted entry. Optional `reasonId` and `memo`. 201 with the reversal, what was restored, and any dependent fees — reported, never reversed. 409 `ENTRY_ALREADY_REVERSED` or `CANNOT_REVERSE_REVERSAL`; 404 for an unknown or other-tenant entry. |
+| GET | `/api/v1/ar/reasons` | `ar_adjustments:VIEW` | The tenant's reason codes, filterable by `appliesToType` and optionally including retired ones. |
+| POST | `/api/v1/accounts/:id/fees` | `ar_adjustments:CREATE` | Raises an off-cycle charge. Positive `amount`, required `reasonId`, optional `dueDate` (default +30 days), `assessedOnId`, `effectiveDate`, `memo`. 422 `REASON_TYPE_MISMATCH` if the reason is not a FEE reason. |
+| POST | `/api/v1/accounts/:id/adjustments` | `ar_adjustments:CREATE` | A charge raised by hand. Same shape without `assessedOnId`. |
+| POST | `/api/v1/accounts/:id/waivers` | `ar_adjustments:EDIT` | Forgives part or all of one nominated charge. Requires `debitId`. The excess stays open as a refund due and does not spill onto other charges. |
+| POST | `/api/v1/accounts/:id/write-offs` | `ar_adjustments:EDIT` | Same mechanics, recorded as bad debt rather than a concession. |
 | GET | `/api/v1/ar/reconciliation` | `accounts:VIEW` | Proof, not assertion: every account whose cached `balance` differs from `SUM(open_amount)`. `{ ok: true, drift: [] }` when the cache is correct. |
 
 Posting is gated on the same permission as generating a bill (`POST /api/v1/accounts/:id/bills`): generation already posts when auto-post is on, so posting must require no more authority than generating. The two reads are account data, not tenant configuration, so they sit on `accounts:VIEW`. The two money-moving routes sit on the `payments` module instead: taking money and reversing it is a different authority from reading or generating against an account, which is the line design §8 draws. Reversal is EDIT rather than CREATE because it changes the standing of an entry that already exists. `ar_adjustments` arrives in slice 3 with the credits, waivers and write-offs it gates.
@@ -71,10 +83,15 @@ Posting is gated on the same permission as generating a bill (`POST /api/v1/acco
 10. **Leftover money stays open on the payment**, which *is* a customer credit balance, and the next charge to post absorbs it oldest-first (§6.1 step 4). Overpayment needs no special case.
 11. **A reversal gives back exactly what the original consumed**, per application — a payment spread across two debits restores 30 and 15, not 45 to each — and is then applied against the original so both close. That stops a reversed payment being spent again.
 12. **Reversal is refused twice over**: an entry already reversed, and a `REVERSAL` itself. Both re-checked under the account lock, so a reversal committing concurrently is seen rather than doubled.
+13. **Three acts, kept distinct** (§3.5). The charge was wrong → `REVERSAL`. The charge was right and is forgiven → `ADJUSTMENT_CREDIT` with a reason. The charge was right and is uncollectable → `WRITE_OFF` with a reason. Collapsing them loses billing accuracy, concessions and bad debt as separately reportable facts, and it is unrecoverable from history. The reason's `appliesToType` is what enforces it: a write-off reason on a waiver is a 422.
+14. **Nothing touches `bill.total`.** A waiver reduces the *receivable*; the bill stands as issued. A bill computed wrongly is a rebill, not a waiver.
+15. **A waiver applies only to the charge it names.** Waiving $30 of a $10 charge leaves a $20 refund due — not $20 off whatever else is outstanding. The account balance falls by $30 either way, so this is a distinction only the per-entry open amounts record.
+16. **Every fee and adjustment cites a reason**, enforced in SQL by `ledger_entry_reason_required`. The one exception is a credit that names the bill it came from, which is self-explaining.
+17. **Only a fee may name what it was assessed on**, enforced by `ledger_entry_assessed_on_only_fee`. A fee is *not* required to name one: a tap fee or meter test fee is assessed on nothing.
 
 ## UI
 
-Still nothing after slice 2 — the surface is the five API routes above, and every one of them is reachable only by HTTP today. The account AR tab (ledger, aging summary, record-payment, adjust/waive) and the unposted-bills list with a Post action land in slice 4, per design §8. Worth stating plainly: an operator cannot record a payment or reverse one from the application yet.
+Still nothing after slice 3 — the surface is the ten API routes above, and every one of them is reachable only by HTTP today. The account AR tab (ledger, aging summary, record-payment, adjust/waive) and the unposted-bills list with a Post action land in slice 4, per design §8. Worth stating plainly: an operator cannot record a payment or reverse one from the application yet.
 
 ## Slice roadmap (design §10)
 
@@ -82,14 +99,14 @@ Still nothing after slice 2 — the surface is the five API routes above, and ev
 |---|---|---|
 | 1 | Ledger foundation — schema, enums, `postBill`, `balance` + `lastDueDate` cache, `postedAt`, auto-post config, reconciliation query and property test | **Complete** |
 | 2 | Payments — `recordPayment`, allocation, open-credit auto-apply (design §6.1 step 4), `reverseEntry` for NSF | **Complete** |
-| 3 | Fees and adjustments — `LedgerReasonDef` seeds, `assessFee`, waive / write-off / adjust, the `payments` and `ar_adjustments` module keys | Outstanding |
+| 3 | Fees and adjustments — `LedgerReasonDef` seeds, `assessFee`, waive / write-off / adjust, the `ar_adjustments` module key, and the two CHECK constraints deferred from slice 1 | **Complete** |
 | 4 | Visibility — statement view, aging query, account AR tab, portal amount due | Outstanding |
 | 5 | Delinquency rewire — the two reader call sites in `delinquency.service.ts`, and renaming `lastDueDate` to say what it holds | Outstanding |
 | 6 | Late-fee generation — a fee amount on `DelinquencyRule` and a `LATE_FEE` action type calling `assessFee` | Outstanding |
 
-Known deferrals, each recorded in the design doc: the `assessed_on_id` and `reason_id` CHECK constraints (slice 3, when fees and reasons exist); refunds, which need a new enum value and therefore a migration (§11 item 4); and tenant-configurable allocation ordering (§6.3 — one constant until a second tenant wants a different order).
+Known deferrals, each recorded in the design doc: refunds, which need a new enum value and therefore a migration (§11 item 4); tenant-configurable allocation ordering (§6.3 — one constant until a second tenant wants a different order); approval of a waiver or write-off, which needs a request object outside the ledger because posting is final (§4.4); and fee *generation* — when a late fee is raised and how much it is — which arrives with slice 6 (§6.4).
 
-Closed in slice 2: auto-applying open credits when a debit posts (§6.1 step 4).
+Closed in slice 2: auto-applying open credits when a debit posts (§6.1 step 4). Closed in slice 3: both CHECK constraints, in modified form.
 
 ## Related specs
 
