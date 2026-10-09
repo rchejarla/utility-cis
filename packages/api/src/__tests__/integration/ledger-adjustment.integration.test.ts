@@ -344,6 +344,18 @@ describe("adjustDebit", () => {
     expect(account.lastDueDate?.toISOString().slice(0, 10)).toBe("2026-08-01");
   });
 
+  it("defaults dueDate to 30 days after the effective date", async () => {
+    const { prisma } = prismaImports;
+    const res = await adjustment.adjustDebit(utilityId, ACTOR, "T", accountId, {
+      amount: "20.00",
+      reasonId: debitReasonId,
+      effectiveDate: "2026-06-01",
+    });
+    const entry = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id: res.entryId } });
+    expect(entry.effectiveDate.toISOString().slice(0, 10)).toBe("2026-06-01");
+    expect(entry.dueDate?.toISOString().slice(0, 10)).toBe("2026-07-01");
+  });
+
   it("absorbs an open credit, like any new debit", async () => {
     const { prisma } = prismaImports;
     await prisma.ledgerEntry.create({

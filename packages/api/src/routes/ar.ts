@@ -17,7 +17,7 @@ import { recordPayment } from "../services/ar/payment.service.js";
 import { reverseEntry } from "../services/ar/reversal.service.js";
 import { assessFee } from "../services/ar/fee.service.js";
 import { adjustDebit, waive, writeOff } from "../services/ar/adjustment.service.js";
-import { listReasons } from "../services/ar/reason.service.js";
+import { listReasons, seedDefaultReasons } from "../services/ar/reason.service.js";
 
 /**
  * AR routes. Posting is gated on `accounts:EDIT`, the same permission as
@@ -127,6 +127,27 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
         includeInactive: q.includeInactive === "true",
       });
       return reply.send({ data });
+    },
+  );
+
+  /**
+   * Put the default reason codes on this tenant, skipping any it already
+   * has. Without this a tenant that was not created by the dev seeder has
+   * no reason codes at all, and every fee, adjustment, waiver and
+   * write-off fails on REASON_NOT_FOUND — the routes are reachable but
+   * unusable. Idempotent, so it is safe to call again after the default
+   * list grows.
+   *
+   * Creating a tenant's OWN codes beyond the defaults (§3.4) needs a
+   * CRUD surface and belongs with slice 4's screens.
+   */
+  app.post(
+    "/api/v1/ar/reasons/seed-defaults",
+    { config: { module: "ar_adjustments", permission: "CREATE" } },
+    async (request, reply) => {
+      const { utilityId, id: actorId, name: actorName } = request.user;
+      const result = await seedDefaultReasons(utilityId, actorId, actorName);
+      return reply.status(201).send(result);
     },
   );
 

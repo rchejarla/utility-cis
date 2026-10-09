@@ -11,9 +11,16 @@ import type { TxClient } from "./posting.service.js";
  * all grow without a code change, while the three acts stay fixed in the
  * type enum (§3.4, §3.5).
  *
- * `resolveReason` is the single gate every writing service goes through,
- * so the `appliesToType` rule is enforced in one place rather than in
- * four services with a chance of being forgotten in the fourth.
+ * `resolveReason` is the single gate for every service that CITES a
+ * reason — fee, adjustment, waiver, write-off — so the `appliesToType`
+ * rule is enforced in one place rather than in four with a chance of
+ * being forgotten in the fourth.
+ *
+ * Not every writer of a reasoned type comes through here: `postBill`
+ * writes an ADJUSTMENT_CREDIT for a bill that nets negative and cites no
+ * reason at all, which `ledger_entry_reason_required` permits because
+ * the entry names the bill it came from. That is the one exception, and
+ * it is enforced in SQL rather than here.
  *
  * There is deliberately no `requiresApproval` here (§4.4): it would be
  * write-only until an approvals workflow exists, and approval cannot be

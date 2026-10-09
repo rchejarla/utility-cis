@@ -772,3 +772,54 @@ describe("POST /api/v1/accounts/:id/waivers and /write-offs", () => {
     expect(await prismaImports.prisma.ledgerEntry.count()).toBe(before);
   });
 });
+
+describe("POST /api/v1/ar/reasons/seed-defaults", () => {
+  // Without this route a tenant not created by the dev seeder has no
+  // reason codes, so every fee, adjustment, waiver and write-off fails on
+  // REASON_NOT_FOUND. The fixture seeds 4 of the 12 defaults by hand, so
+  // the count here is a real number and not merely "did not throw".
+  it("fills in the defaults the tenant is missing", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/ar/reasons/seed-defaults",
+      headers: headers(ADJUSTER),
+      payload: {},
+    });
+    expect(res.statusCode).toBe(201);
+    expect(JSON.parse(res.body).created).toBe(8);
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/api/v1/ar/reasons",
+      headers: headers(ADJUSTER),
+    });
+    expect(JSON.parse(listed.body).data).toHaveLength(12);
+  });
+
+  it("is idempotent — a second call creates nothing", async () => {
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/ar/reasons/seed-defaults",
+      headers: headers(ADJUSTER),
+      payload: {},
+    });
+    const again = await app.inject({
+      method: "POST",
+      url: "/api/v1/ar/reasons/seed-defaults",
+      headers: headers(ADJUSTER),
+      payload: {},
+    });
+    expect(again.statusCode).toBe(201);
+    expect(JSON.parse(again.body).created).toBe(0);
+  });
+
+  it("returns 403 without ar_adjustments:CREATE", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/ar/reasons/seed-defaults",
+      headers: headers(PAYER),
+      payload: {},
+    });
+    expect(res.statusCode).toBe(403);
+  });
+});

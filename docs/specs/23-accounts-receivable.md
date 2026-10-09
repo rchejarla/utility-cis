@@ -61,6 +61,7 @@ account.balance   = SUM(openAmount) over the account's entries
 | POST | `/api/v1/accounts/:id/payments` | `payments:CREATE` | Records money received. Body takes a **positive** `amount` (at most 2dp), a `tender` (CARD / ACH / CASH / CHECK / LOCKBOX), and optional `receivedAt`, `externalRef`, `memo`. 201 with the signed amount, the applications made, whatever stayed unapplied, and the new balance. 400 on a zero or negative amount; 404 for an unknown or other-tenant account. |
 | POST | `/api/v1/ledger-entries/:id/reverse` | `payments:EDIT` | Reverses any posted entry. Optional `reasonId` and `memo`. 201 with the reversal, what was restored, and any dependent fees — reported, never reversed. 409 `ENTRY_ALREADY_REVERSED` or `CANNOT_REVERSE_REVERSAL`; 404 for an unknown or other-tenant entry. |
 | GET | `/api/v1/ar/reasons` | `ar_adjustments:VIEW` | The tenant's reason codes, filterable by `appliesToType` and optionally including retired ones. |
+| POST | `/api/v1/ar/reasons/seed-defaults` | `ar_adjustments:CREATE` | Puts the 12 default reason codes on this tenant, skipping any it has. Idempotent. Without it a tenant not created by the dev seeder has no reason codes, and every fee, adjustment, waiver and write-off fails on `REASON_NOT_FOUND`. |
 | POST | `/api/v1/accounts/:id/fees` | `ar_adjustments:CREATE` | Raises an off-cycle charge. Positive `amount`, required `reasonId`, optional `dueDate` (default +30 days), `assessedOnId`, `effectiveDate`, `memo`. 422 `REASON_TYPE_MISMATCH` if the reason is not a FEE reason. |
 | POST | `/api/v1/accounts/:id/adjustments` | `ar_adjustments:CREATE` | A charge raised by hand. Same shape without `assessedOnId`. |
 | POST | `/api/v1/accounts/:id/waivers` | `ar_adjustments:EDIT` | Forgives part or all of one nominated charge. Requires `debitId`. The excess stays open as a refund due and does not spill onto other charges. |
@@ -91,7 +92,7 @@ Posting is gated on the same permission as generating a bill (`POST /api/v1/acco
 
 ## UI
 
-Still nothing after slice 3 — the surface is the ten API routes above, and every one of them is reachable only by HTTP today. The account AR tab (ledger, aging summary, record-payment, adjust/waive) and the unposted-bills list with a Post action land in slice 4, per design §8. Worth stating plainly: an operator cannot record a payment or reverse one from the application yet.
+Still nothing after slice 3 — the surface is the eleven API routes above, and every one of them is reachable only by HTTP today. The account AR tab (ledger, aging summary, record-payment, adjust/waive) and the unposted-bills list with a Post action land in slice 4, per design §8. Worth stating plainly: an operator cannot record a payment or reverse one from the application yet.
 
 ## Slice roadmap (design §10)
 
@@ -100,7 +101,7 @@ Still nothing after slice 3 — the surface is the ten API routes above, and eve
 | 1 | Ledger foundation — schema, enums, `postBill`, `balance` + `lastDueDate` cache, `postedAt`, auto-post config, reconciliation query and property test | **Complete** |
 | 2 | Payments — `recordPayment`, allocation, open-credit auto-apply (design §6.1 step 4), `reverseEntry` for NSF | **Complete** |
 | 3 | Fees and adjustments — `LedgerReasonDef` seeds, `assessFee`, waive / write-off / adjust, the `ar_adjustments` module key, and the two CHECK constraints deferred from slice 1 | **Complete** |
-| 4 | Visibility — statement view, aging query, account AR tab, portal amount due | Outstanding |
+| 4 | Visibility — statement view, aging query, account AR tab, portal amount due. Also CRUD for reason codes: §3.4 says a utility adds its own without a code change, and today it can only take the 12 defaults. | Outstanding |
 | 5 | Delinquency rewire — the two reader call sites in `delinquency.service.ts`, and renaming `lastDueDate` to say what it holds | Outstanding |
 | 6 | Late-fee generation — a fee amount on `DelinquencyRule` and a `LATE_FEE` action type calling `assessFee` | Outstanding |
 

@@ -31,6 +31,19 @@ import { resolveReason } from "./reason.service.js";
  * 5d), not a waiver, and there is a test asserting the bill is untouched.
  */
 
+/**
+ * How long a manual charge has to be paid when the caller does not say.
+ *
+ * Deliberately its own constant rather than shared with
+ * `DEFAULT_FEE_DUE_DAYS` in fee.service.ts or `DEFAULT_DUE_DAYS` in
+ * bill.service.ts. All three are 30 today, but they are three separate
+ * policies that happen to agree — a utility could give a hand-raised
+ * charge a different window from a bill — and merging them would assert
+ * a sameness nothing has established. When any becomes
+ * tenant-configurable they will need to move apart, not together.
+ */
+const DEFAULT_ADJUSTMENT_DUE_DAYS = 30;
+
 function err(code: string, message: string, statusCode: number): Error {
   return Object.assign(new Error(message), { code, statusCode });
 }
@@ -202,7 +215,7 @@ export async function adjustDebit(
         // Every debit carries a due date or the aging index cannot see it.
         dueDate: input.dueDate
           ? new Date(input.dueDate)
-          : new Date(effectiveDate.getTime() + 30 * 86_400_000),
+          : new Date(effectiveDate.getTime() + DEFAULT_ADJUSTMENT_DUE_DAYS * 86_400_000),
         effectiveDate,
         reasonId: input.reasonId,
         memo: input.memo ?? null,
