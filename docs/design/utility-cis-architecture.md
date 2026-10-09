@@ -83,7 +83,7 @@ utility-cis/
 
 ### 3.3 Multi-Tenancy
 
-Every entity is scoped by `utility_id`. Tenant isolation is enforced at the database level via PostgreSQL Row-Level Security policies.
+Every entity is scoped by `utility_id`. Tenant isolation is *designed* to be enforced at the database level via PostgreSQL Row-Level Security policies, and the policies below are created by every migration — but they are inert while the application role is a superuser, which it is today. See §7.1. Right now the `utility_id` predicates in application code are what separates tenants.
 
 ```sql
 ALTER TABLE premise ENABLE ROW LEVEL SECURITY;
@@ -812,11 +812,38 @@ Clients can pull the document and generate SDKs, contract tests, or API consoles
 
 - **JWT verification:** Signatures verified with jose + NEXTAUTH_SECRET
 - **SQL injection:** UUID validation before any raw SQL interpolation
-- **RLS:** PostgreSQL Row-Level Security on all 21 entity tables
+- **RLS:** PostgreSQL Row-Level Security policies exist on all entity tables — but see "Current gaps" below: they do not enforce today
 - **Defense in depth:** All GET-by-ID queries include utility_id in WHERE clause
 - **Race conditions:** $transaction for account closure guard and meter uniqueness
 - **PII:** SSN/payment card data never stored in CIS (SaaSLogic handles payments)
 - **Audit trail:** All modifications logged with actor, timestamp, before/after state
+
+### 7.1 Current gaps
+
+Two conditions make the list above weaker than it reads. Both are known and
+accepted for development; neither is acceptable for a production tenant, and
+anyone citing this section externally needs to read this subsection with it.
+
+**RLS does not currently enforce.** The policies are real and are created by
+every migration, but the application role `cis` is a SUPERUSER
+(`docker/init-cis-user.sh`), and PostgreSQL exempts superusers from row-level
+security entirely. So tenant isolation today rests **only** on the `utility_id`
+predicates in application code — the "defense in depth" bullet is in fact the
+sole defense. The fix is to stop granting the role SUPERUSER and grant the
+specific privileges it needs instead; the policies then start working with no
+code change. Until then, a query that forgets its `utility_id` predicate
+crosses tenants silently.
+
+**A token whose subject has no `cis_user` row skips the permission check.**
+`middleware/authorization.ts` returns early when `getUserRole` finds nothing,
+deliberately, for backwards compatibility during the RBAC migration — the
+module-enabled check still runs, but per-module VIEW/CREATE/EDIT/DELETE does
+not. It is pinned as intended behaviour by
+`authorization.test.ts` ("allows request when user has no CIS User record in
+DB"), so closing it is a migration rather than a one-line change: several
+suites authenticate with tokens that have no `cis_user` row and rely on this.
+Sequence is (1) seed `cis_user` rows for every real principal, (2) update those
+suites, (3) turn the early return into a 403.
 
 ---
 
