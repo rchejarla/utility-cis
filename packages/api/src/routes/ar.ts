@@ -3,6 +3,7 @@ import { postBillSchema } from "@utility-cis/shared";
 import { idParamSchema } from "../lib/route-schemas.js";
 import { prisma } from "../lib/prisma.js";
 import { postBill } from "../services/ar/posting.service.js";
+import { reconcileBalances } from "../services/ar/reconciliation.service.js";
 
 /**
  * AR routes. Posting is gated on `accounts:EDIT`, the same permission as
@@ -45,6 +46,15 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
       return reply.send({
         data: bills.map((b) => ({ ...b, total: b.total.toFixed(4) })),
       });
+    },
+  );
+
+  app.get(
+    "/api/v1/ar/reconciliation",
+    { config: { module: "tenant_profile", permission: "VIEW" } },
+    async (request, reply) => {
+      const drift = await reconcileBalances(request.user.utilityId);
+      return reply.send({ ok: drift.length === 0, drift });
     },
   );
 }

@@ -1084,8 +1084,31 @@ async function main() {
   const fifteenDaysAgo = new Date();
   fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
 
-  await p.account.update({ where: { id: aArr[0].id }, data: { balance: 412.80, lastDueDate: thirtyDaysAgo } });
-  await p.account.update({ where: { id: aArr[1].id }, data: { balance: 85.50, lastDueDate: fifteenDaysAgo } });
+  // Opening balances come from real ledger entries, not typed-in numbers.
+  // GET /api/v1/ar/reconciliation compares account.balance against
+  // SUM(ledger_entry.open_amount), so a balance with nothing behind it
+  // shows as drift on every fresh seed.
+  for (const [acct, amount, dueDate] of [
+    [aArr[0], "412.80", thirtyDaysAgo],
+    [aArr[1], "85.50", fifteenDaysAgo],
+  ]) {
+    await p.ledgerEntry.create({
+      data: {
+        utilityId: UID,
+        accountId: acct.id,
+        type: "ADJUSTMENT_DEBIT",
+        amount,
+        openAmount: amount,
+        dueDate,
+        effectiveDate: dueDate,
+        memo: "Seeded opening balance for delinquency demo",
+      },
+    });
+    await p.account.update({
+      where: { id: acct.id },
+      data: { balance: amount, lastDueDate: dueDate },
+    });
+  }
   console.log("  2 accounts with delinquent balances");
 
   const testUsers = [
