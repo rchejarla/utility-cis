@@ -145,6 +145,7 @@ Tenant-wide configuration flags that don't belong to the theme module. One row p
 | id | UUID | PK |
 | utility_id | UUID | Unique — one config per tenant (unique constraint) |
 | require_hold_approval | BOOLEAN | Default false. When true, ServiceSuspensions require `service_suspensions.APPROVE` permission before activation. See spec 12 rule 14. |
+| auto_post_bills | BOOLEAN | Default true. When false, a generated Bill waits for an explicit post. Overridable per account by the nullable `account.auto_post_bills`, where null inherits this value — so flipping this moves every account that has not opted out. |
 | settings | JSONB | Bucket for small, additive tenant flags. Current shape documented below. |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |

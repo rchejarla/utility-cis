@@ -1,8 +1,8 @@
 # Payments and Collections
 
 **Module:** 10 — Payments and Collections
-**Status:** Stub (Phase 3) — **now on the critical path.** CIS owns the receivable as of 2026-10-09, and nothing writes `Account.balance` yet, so this module blocks billing from meaning anything. Needs a design.
-**Entities:** Payment (planned, new), PaymentPlan (planned), AdhocCharge (planned), WriteOff (planned)
+**Status:** Phase 3 — the ledger and posting shipped in the AR slice (module 23); payments, allocation, waivers, plans and the collections workflow are still outstanding here.
+**Entities:** PaymentPlan (planned), AdhocCharge (planned), WriteOff (planned). The ledger itself — `LedgerEntry`, `LedgerApplication`, `LedgerReasonDef` — lives in module 23.
 
 ## Overview
 
@@ -14,13 +14,9 @@ SaaSLogic owns only **card data, the hosted payment page, and settlement**. CIS 
 
 Crucially, SaaSLogic is one tender among several — cash, check and lockbox payments never touch it. That is why the ledger cannot live in the payment processor. This replaces the earlier boundary, under which SaaSLogic owned "all payment processing… and real-time posting" and CIS merely received webhooks to update account standing.
 
-### The gap this module has to close
+### Status of the gap
 
-```
-rate() -> BillSegment -> Bill -> (nothing)
-```
-
-`Account.balance` exists as a column and is read by `delinquency.service.ts` to select accounts with `balance > 0`, but no code path ever writes it. So the delinquency module currently evaluates seeded values only. The first design decision here is whether `Account.balance` stays a materialized column or becomes derived from a ledger of charges and payments.
+Closed on the charge side. `Account.balance` is now written from the ledger inside the posting transaction and reconciled by `GET /api/v1/ar/reconciliation`; delinquency therefore sweeps real receivables rather than seeded values. Still outstanding here: recording payments of any tender, allocation, waivers and write-offs (module 23 slices 2–3), then payment plans and the collections workflow.
 
 Primary users: billing clerks, collections staff, finance managers, CSRs (for account inquiries).
 

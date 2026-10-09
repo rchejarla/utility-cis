@@ -8,12 +8,16 @@
       "Bash(node:*)",
       "Bash(npx:*)",
       "Bash(pnpm:*)",
+      "PowerShell(*)",
       "Read(*)",
       "Write(*)",
       "Edit(*)",
       "Glob(*)",
       "Grep(*)",
-      "Agent(*)"
+      "Agent(*)",
+      "Skill(*)",
+      "WebFetch(*)",
+      "WebSearch(*)"
     ]
   }
 }

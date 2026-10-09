@@ -329,6 +329,7 @@ model Account {
   billingCycleId      String        @map("billing_cycle_id") @db.Uuid
   saaslogicAccountId  String?       @map("saaslogic_account_id") @db.Uuid
   balance             Decimal       @default(0) @map("balance") @db.Decimal(14, 2)
+  autoPostBills       Boolean?      @map("auto_post_bills")
   lastDueDate         DateTime?     @map("last_due_date") @db.Date
   isProtected         Boolean       @default(false) @map("is_protected")
   protectionReason    String?       @map("protection_reason") @db.Text
@@ -349,6 +350,7 @@ model Account {
   serviceRequests    ServiceRequest[]
   userRoles          UserRole[]
   bills              Bill[]
+  ledgerEntries      LedgerEntry[]
 
   @@unique([utilityId, accountNumber])
   @@index([customerId])
@@ -663,10 +665,12 @@ model Bill {
   total                Decimal  @map("total") @db.Decimal(14, 4)
   billNumber           String   @map("bill_number") @db.VarChar(50)
   createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz
+  postedAt             DateTime? @map("posted_at") @db.Timestamptz
 
   account              Account       @relation(fields: [accountId], references: [id], onDelete: Restrict)
   billingCycle         BillingCycle  @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
   segments             BillSegment[]
+  ledgerEntries        LedgerEntry[]
 
   @@unique([utilityId, billNumber])
   @@index([utilityId, accountId, periodEnd])
@@ -1150,6 +1154,7 @@ model TenantConfig {
   notificationQuietStart      String    @default("22:00") @map("notification_quiet_start") @db.VarChar(5)
   notificationQuietEnd        String    @default("07:00") @map("notification_quiet_end") @db.VarChar(5)
   schedulerAuditRetentionDays Int       @default(365) @map("scheduler_audit_retention_days")
+  autoPostBills               Boolean   @default(true) @map("auto_post_bills")
 
   createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz
@@ -1750,4 +1755,113 @@ model WqaValue {
   @@unique([utilityId, serviceAgreementId, waterYear])
   @@index([utilityId, serviceAgreementId])
   @@map("wqa_value")
+}
+
+enum LedgerEntryType {
+  BILL_CHARGE
+  FEE
+  ADJUSTMENT_DEBIT
+  PAYMENT
+  ADJUSTMENT_CREDIT
+  WRITE_OFF
+  REVERSAL
+}
+
+enum PaymentTender {
+  CARD
+  ACH
+  CASH
+  CHECK
+  LOCKBOX
+}
+
+/// One financial event against an account. Signed: positive increases
+/// what the customer owes the utility, negative reduces it. `amount`,
+/// `type`, `dueDate` and `effectiveDate` are immutable once written;
+/// `openAmount` is maintained bookkeeping, like Account.balance.
+///
+/// Provenance columns differ in how hard they are held. The database
+/// enforces that a BILL_CHARGE names a bill and that only a PAYMENT
+/// carries a tender. It does NOT enforce `assessedOnId` on a FEE or
+/// `reasonId` on a fee/adjustment — those CHECKs are deferred to slice
+/// 3, when fees exist and LedgerReasonDef is seeded.
+model LedgerEntry {
+  id            String          @id @default(uuid()) @db.Uuid
+  utilityId     String          @map("utility_id") @db.Uuid
+  accountId     String          @map("account_id") @db.Uuid
+  type          LedgerEntryType @map("type")
+  amount        Decimal         @map("amount") @db.Decimal(14, 2)
+  openAmount    Decimal         @map("open_amount") @db.Decimal(14, 2)
+  dueDate       DateTime?       @map("due_date") @db.Date
+  effectiveDate DateTime        @map("effective_date") @db.Date
+  postedAt      DateTime        @default(now()) @map("posted_at") @db.Timestamptz
+  reasonId      String?         @map("reason_id") @db.Uuid
+  billId        String?         @map("bill_id") @db.Uuid
+  assessedOnId  String?         @map("assessed_on_id") @db.Uuid
+  reversesId    String?         @map("reverses_id") @db.Uuid
+  tender        PaymentTender?  @map("tender")
+  externalRef   String?         @map("external_ref") @db.VarChar(100)
+  memo          String?         @map("memo") @db.Text
+  createdBy     String?         @map("created_by") @db.Uuid
+
+  account      Account             @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  reason       LedgerReasonDef?    @relation(fields: [reasonId], references: [id], onDelete: Restrict)
+  bill         Bill?               @relation(fields: [billId], references: [id], onDelete: Restrict)
+  assessedOn   LedgerEntry?        @relation("LedgerFeeSource", fields: [assessedOnId], references: [id], onDelete: Restrict)
+  assessedFees LedgerEntry[]       @relation("LedgerFeeSource")
+  reverses     LedgerEntry?        @relation("LedgerReversal", fields: [reversesId], references: [id], onDelete: Restrict)
+  reversedBy   LedgerEntry[]       @relation("LedgerReversal")
+  creditsOut   LedgerApplication[] @relation("LedgerAppCredit")
+  debitsIn     LedgerApplication[] @relation("LedgerAppDebit")
+
+  @@index([utilityId, accountId, postedAt(sort: Desc)])
+  @@index([utilityId, billId])
+  @@index([assessedOnId])
+  @@index([reversesId])
+  @@map("ledger_entry")
+}
+
+/// Which credit paid down which debit, and by how much. `amount` is
+/// always positive; the parents' signs make it subtract from a debit
+/// and add to a credit, both converging on zero.
+///
+/// The table ships empty in slice 1: nothing writes or seeds it. Rows
+/// arrive in slice 2, when payment allocation lands.
+model LedgerApplication {
+  id        String   @id @default(uuid()) @db.Uuid
+  utilityId String   @map("utility_id") @db.Uuid
+  creditId  String   @map("credit_id") @db.Uuid
+  debitId   String   @map("debit_id") @db.Uuid
+  amount    Decimal  @map("amount") @db.Decimal(14, 2)
+  appliedAt DateTime @default(now()) @map("applied_at") @db.Timestamptz
+
+  credit LedgerEntry @relation("LedgerAppCredit", fields: [creditId], references: [id], onDelete: Restrict)
+  debit  LedgerEntry @relation("LedgerAppDebit", fields: [debitId], references: [id], onDelete: Restrict)
+
+  @@index([creditId])
+  @@index([debitId])
+  @@map("ledger_application")
+}
+
+/// Why a fee or adjustment was raised, in the utility's own words.
+/// Tenant-configurable, following the *TypeDef convention.
+///
+/// The table ships empty in slice 1: nothing writes it and the seeder
+/// does not populate it. The reason codes are seeded in slice 3,
+/// alongside the fees that reference them.
+model LedgerReasonDef {
+  id            String          @id @default(uuid()) @db.Uuid
+  utilityId     String          @map("utility_id") @db.Uuid
+  code          String          @map("code") @db.VarChar(50)
+  label         String          @map("label") @db.VarChar(255)
+  appliesToType LedgerEntryType @map("applies_to_type")
+  isActive      Boolean         @default(true) @map("is_active")
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime        @updatedAt @map("updated_at") @db.Timestamptz
+
+  entries LedgerEntry[]
+
+  @@unique([utilityId, code])
+  @@index([utilityId, appliesToType])
+  @@map("ledger_reason_def")
 }

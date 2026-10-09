@@ -67,11 +67,20 @@ export function customerCreateOrganization(): Record<string, unknown> {
  * Accounts
  * ──────────────────────────────────────────────────────── */
 
-// Source: packages/web/app/accounts/new/page.tsx:51-71 (after 2026-04-09 enum fix)
+// Source: packages/web/app/accounts/new/page.tsx:158-174 (`toRequestBody`)
+//
+// billingCycleId is required and unconditional — Account has required a
+// billing cycle since Rate Model v2 slice 5b.1. This fixture went stale
+// when that landed and said so for months without anyone seeing it,
+// because its contract test could not even be imported (ioredis /
+// `Cannot redefine property: default`). It is the exact failure this
+// file exists to catch, hidden by a broken test runner rather than by a
+// missing test.
 export function accountCreate(): Record<string, unknown> {
   return {
     accountNumber: "ACC-000001",
     accountType: "RESIDENTIAL",
+    billingCycleId: "00000000-0000-4000-8000-00000000c001",
     languagePref: "en-US",
     creditRating: "GOOD",
     depositAmount: 150,

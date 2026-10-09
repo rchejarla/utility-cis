@@ -179,6 +179,8 @@ beforeEach(async () => {
   // Wipe Bills + reattach segments (set bill_id back to null) so each
   // case starts from "segments exist, no Bill yet".
   await prisma.$executeRawUnsafe("UPDATE bill_segment SET bill_id = NULL");
+  // Generation now auto-posts, so each Bill has a ledger_entry FK-ing to it.
+  await prisma.$executeRawUnsafe("DELETE FROM ledger_entry");
   await prisma.$executeRawUnsafe("DELETE FROM bill");
   // Wipe segments + their lines so each test re-seeds the golden segment fresh.
   await prisma.$executeRawUnsafe("DELETE FROM bill_segment_line");

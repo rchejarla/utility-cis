@@ -27,6 +27,19 @@ async function main() {
   await p.meterRead.deleteMany({});
   if (p.attachment) await p.attachment.deleteMany({});
 
+  // AR ledger + bills. Four RESTRICT parents, so this block has to precede
+  // all of them: ledger_entry -> account and bill; bill_segment ->
+  // service_agreement; bill -> account and billing_cycle; and
+  // bill_segment_line -> rate_component, which is why this sits above the
+  // rate v2 cleanup rather than below it. Getting that last one wrong puts
+  // a delete here that can never run on a DB holding a rated segment.
+  if (p.ledgerApplication) await p.ledgerApplication.deleteMany({});
+  if (p.ledgerEntry) await p.ledgerEntry.deleteMany({});
+  if (p.ledgerReasonDef) await p.ledgerReasonDef.deleteMany({});
+  if (p.billSegmentLine) await p.billSegmentLine.deleteMany({});
+  if (p.billSegment) await p.billSegment.deleteMany({});
+  if (p.bill) await p.bill.deleteMany({});
+
   // Rate v2 cleanup (slice 1 task 10) — sa_rate_schedule_assignment
   // points at service_agreement and rate_schedule; rate_component points
   // at rate_schedule. Clear them before SAs and schedules.
@@ -1084,8 +1097,31 @@ async function main() {
   const fifteenDaysAgo = new Date();
   fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
 
-  await p.account.update({ where: { id: aArr[0].id }, data: { balance: 412.80, lastDueDate: thirtyDaysAgo } });
-  await p.account.update({ where: { id: aArr[1].id }, data: { balance: 85.50, lastDueDate: fifteenDaysAgo } });
+  // Opening balances come from real ledger entries, not typed-in numbers.
+  // GET /api/v1/ar/reconciliation compares account.balance against
+  // SUM(ledger_entry.open_amount), so a balance with nothing behind it
+  // shows as drift on every fresh seed.
+  for (const [acct, amount, dueDate] of [
+    [aArr[0], "412.80", thirtyDaysAgo],
+    [aArr[1], "85.50", fifteenDaysAgo],
+  ]) {
+    await p.ledgerEntry.create({
+      data: {
+        utilityId: UID,
+        accountId: acct.id,
+        type: "ADJUSTMENT_DEBIT",
+        amount,
+        openAmount: amount,
+        dueDate,
+        effectiveDate: dueDate,
+        memo: "Seeded opening balance for delinquency demo",
+      },
+    });
+    await p.account.update({
+      where: { id: acct.id },
+      data: { balance: amount, lastDueDate: dueDate },
+    });
+  }
   console.log("  2 accounts with delinquent balances");
 
   const testUsers = [

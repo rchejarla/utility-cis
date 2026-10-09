@@ -1,7 +1,7 @@
 # Billing
 
 **Module:** 09 — Billing
-**Status:** Partially shipped — `BillSegment`, `BillSegmentLine` and `Bill` are live (Rate Model v2 slices 5a–5b.2). Batch run, AR posting and bill rendering are outstanding.
+**Status:** Partially shipped — `BillSegment`, `BillSegmentLine` and `Bill` are live (Rate Model v2 slices 5a–5b.2), and AR posting is live (module 23 slice 1). Batch run and bill rendering are outstanding.
 **Entities:** BillSegment (shipped), BillSegmentLine (shipped), Bill (shipped), BillDocument (planned), BillMessage (planned)
 
 ## Overview
@@ -201,7 +201,7 @@ All pages are planned for Phase 3.
 ### Billing Dashboard (`/billing`)
 
 - Summary cards: accounts ready to bill, bills on hold, pending SaaSLogic submission, this cycle's total revenue
-- Aging dashboard widget linking to Module 10 (Bozeman Reqs 149–150)
+- Aging dashboard widget linking to Accounts Receivable (Module 23) (Bozeman Reqs 149–150)
 - "Run Billing Cycle" action: select cycle, preview impacted accounts, confirm
 
 ### Billing Run Detail (`/billing/runs/:runId`)
@@ -243,11 +243,12 @@ All pages are planned for Phase 3.
   - `BillSegment` + `BillSegmentLine` per agreement per period (slice 5a)
   - Account-level `Bill` aggregating segments (slice 5b.2)
   - Golden tests pinning the Bozeman water / sewer / stormwater / solid-waste tariffs and NorthWestern Energy residential electric
+  - AR posting (module 23 slice 1): each issued `Bill` posts one signed `LedgerEntry`; `Account.balance` and `lastDueDate` are recomputed from the ledger in the posting transaction; posting is configurable per tenant (`TenantConfig.autoPostBills`) and per account
 
 - **Phase 3 — outstanding:**
   - Batch billing run across a cycle's accounts (slice 5c)
   - Rebill / corrections and reprint versioning (slice 5d)
-  - **AR posting — nothing currently writes `Account.balance`, so issued Bills do not become receivable and delinquency sweeps a column only the seeder sets. See module 10; this is the largest gap in the chain.**
+  - Payments, allocation, waivers, write-offs and the customer statement view, against the ledger (module 23 slices 2–4)
   - Proration for partial periods
   - Bill holds
   - Final bill on account closure
@@ -284,5 +285,5 @@ All pages are planned for Phase 3.
 | 140 | Validate charges against adopted rates | Outstanding: lines already carry `source_schedule_id` / `source_component_id`, so validation has what it needs |
 | 141 | Reconciliation: water usage vs wastewater billing | Outstanding: WQA-related |
 | 142 | Rebill on read corrections | Outstanding: slice 5d, CORRECTED read → rebill flow |
-| 149–150 | Aging dashboard (real-time) | **Blocked on AR** — needs module 10; no receivable exists yet |
-| 157–164 | Payment processing (PCI, ACH, posting, reversals) | Card handling and settlement delegated to SaaSLogic (module 21); **posting and reversals are CIS's own, via module 10** |
+| 149–150 | Aging dashboard (real-time) | Outstanding: receivables now exist (module 23 slice 1); the dashboard itself is not built |
+| 157–164 | Payment processing (PCI, ACH, posting, reversals) | Card handling and settlement delegated to SaaSLogic (module 21); **posting and reversals are CIS's own, via module 23** |

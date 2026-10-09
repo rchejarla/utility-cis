@@ -6,7 +6,7 @@
 
 ## Overview
 
-The Delinquency module manages the lifecycle of past-due accounts — from initial detection through multi-tier notice escalation, shut-off eligibility, and resolution. It integrates with the Notification engine (Module 13) for automated notice delivery and will integrate with SaaSLogic payment webhooks (Module 10) and Service Requests (Module 14) when those modules ship.
+The Delinquency module manages the lifecycle of past-due accounts — from initial detection through multi-tier notice escalation, shut-off eligibility, and resolution. It integrates with the Notification engine (Module 13) for automated notice delivery and will integrate with payment recording in Accounts Receivable (Module 23), which is what SaaSLogic's payment webhooks (Module 21) feed, and with Service Requests (Module 14) when those ship.
 
 Delinquency rules are tenant-configurable: each utility defines its own escalation timelines, notice types, balance thresholds, and shut-off policies in accordance with local ordinance.
 
@@ -18,8 +18,8 @@ Primary users: collections staff, billing supervisors, CSRs.
 
 | Column | Type | Notes |
 |---|---|---|
-| `balance` | DECIMAL(14,2) | Current outstanding balance. Default 0. Updated manually by CSR or by future SaaSLogic webhook. |
-| `last_due_date` | DATE | Most recent invoice due date. Nullable. Used by the evaluation job to compute days past due. |
+| `balance` | DECIMAL(14,2) | Current outstanding balance. Default 0. A cache: recomputed from the AR ledger inside the posting transaction when a Bill posts (see module 23). |
+| `last_due_date` | DATE | The **oldest open debit's** due date — not, despite the name, the most recent invoice's. Nullable: null when nothing is open. A cache written by AR posting (module 23) alongside `balance`. The evaluation job reads it to compute days past due, so an account carrying a six-month-old unpaid bill and a current one ages from the old one. Renaming the column is a module 23 slice 5 item. |
 | `is_protected` | BOOLEAN | Default false. Exempt from SHUT_OFF_ELIGIBLE and DISCONNECT actions. |
 | `protection_reason` | TEXT | Nullable. Why the account is protected (e.g., "life support equipment", "extreme weather moratorium"). |
 
@@ -104,7 +104,7 @@ Runs hourly inside the BullMQ worker process (`packages/api/src/worker.ts`). The
 **Algorithm:**
 
 1. Query all accounts where `balance > 0` and `lastDueDate IS NOT NULL`.
-2. For each account, compute `daysPastDue = floor((today - lastDueDate) / 1 day)`.
+2. For each account, compute `daysPastDue = floor((today - lastDueDate) / 1 day)`. Since AR slice 1, `lastDueDate` is the oldest open debit's due date, so this is age of the oldest unpaid charge — not age of the latest bill. Covered by `delinquency-aging.integration.test.ts`.
 3. Load active rules for this account's type, ordered by tier ascending.
 4. For each rule where `daysPastDue >= rule.daysPastDue` and `balance >= rule.minBalance`:
    - Check if a DelinquencyAction already exists for this (account, rule). If yes, skip (no duplicate actions).
@@ -199,7 +199,7 @@ New `delinquency` module added to MODULES constant. Permissions:
 ## Seed Data
 
 - 5 sample delinquency rules (tier 1–5 as described in the example chain)
-- Set balance and lastDueDate on a few seeded accounts so the evaluation job has something to process
+- Two seeded accounts get an opening-balance `ADJUSTMENT_DEBIT` written straight into the ledger, with `balance` and `lastDueDate` written to match on the account row, so the evaluation job has ledger-backed balances and `GET /api/v1/ar/reconciliation` reports no drift on a fresh seed. The seeder deliberately does not go through `generateBillForAccount` or `postBill` — that would drag rate schedules and meter reads into seeding a balance
 - 2–3 sample DelinquencyActions showing different statuses
 
 ## Business Rules
@@ -230,7 +230,7 @@ New `delinquency` module added to MODULES constant. Permissions:
 - RBAC module + permissions
 
 ### Phase 3.2 (After SaaSLogic billing)
-- Auto-update balance and lastDueDate from SaaSLogic invoice/payment webhooks
+- Payment-driven balance updates: recording a payment recomputes balance and lastDueDate from the ledger (module 23 slice 2), and SaaSLogic payment results feed the same path
 - Auto-resolve delinquency on payment confirmation
 - Reconnection fee as ad-hoc charge on resolution after disconnect
 

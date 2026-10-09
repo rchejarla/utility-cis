@@ -57,6 +57,7 @@ import { slaRoutes } from "./routes/slas.js";
 import { serviceRequestRoutes } from "./routes/service-requests.js";
 import { effectiveDatingQueryRoutes } from "./routes/effective-dating-queries.js";
 import { importRoutes } from "./routes/imports.js";
+import { arRoutes } from "./routes/ar.js";
 // Side-effect import: registers all import-kind handlers at module load.
 import "./imports/handlers/index.js";
 import { portalAuthRoutes } from "./routes/portal-auth.js";
@@ -149,6 +150,7 @@ export async function buildApp() {
   await app.register(serviceRequestRoutes);
   await app.register(effectiveDatingQueryRoutes);
   await app.register(importRoutes);
+  await app.register(arRoutes);
   await app.register(portalAuthRoutes);
   await app.register(portalApiRoutes);
 
