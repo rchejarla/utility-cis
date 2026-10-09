@@ -1250,7 +1250,14 @@ and to the object `toDto` returns (around line 51):
     autoPostBills: row.autoPostBills,
 ```
 
-Then check the `select` / `upsert` in `getAutomationConfig` further down the same file: if it names columns explicitly, add `autoPostBills: true` to the select and `autoPostBills: true` to the create defaults, so the shape stays complete for a tenant with no config row.
+Then `getAutomationConfig` in the same file has **two** explicit `select` blocks naming all ten columns — one on the `findUnique` (around lines 64-75) and one on the `upsert` (around lines 86-97). Add `autoPostBills: true` to **both**, or a tenant with no config row comes back missing the field:
+
+```ts
+      schedulerAuditRetentionDays: true,
+      autoPostBills: true,
+```
+
+Do **not** add `autoPostBills` to the `create: { utilityId }` object. The column carries a DB default of `true`, so omitting it keeps one source for that default instead of hardcoding it a second time in application code.
 
 - [ ] **Step 5: Wire posting into bill generation**
 
