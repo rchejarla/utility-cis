@@ -2,6 +2,7 @@ import { Prisma } from "@utility-cis/shared/src/generated/prisma";
 import { prisma } from "../../lib/prisma.js";
 import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { EVENT_TYPES, roundToCents } from "@utility-cis/shared";
+import { applyCreditsToDebit, type Application } from "./allocation.service.js";
 
 type TxClient = Omit<
   typeof prisma,
@@ -27,10 +28,39 @@ export interface PostBillResult {
   amount: string;
   balance: string;
   skippedZero: boolean;
+  /** Open credits this posting absorbed into the new charge (§6.1 step 4). */
+  applied: Application[];
 }
 
 function err(code: string, message: string, statusCode: number): Error {
   return Object.assign(new Error(message), { code, statusCode });
+}
+
+/**
+ * Take the per-account row lock that every balance-changing path holds.
+ *
+ * Asserting a row came back matters twice over: `SELECT ... FOR UPDATE`
+ * takes no lock at all when it matches nothing, and proving the row is
+ * this tenant's is what makes the later `account.update` safe — Prisma's
+ * `where: { id }` carries no utilityId, and RLS does not currently
+ * enforce because the application role is a superuser.
+ *
+ * Re-locking a row this transaction already holds costs nothing, so
+ * every path that changes the balance takes it rather than assuming a
+ * caller did.
+ */
+export async function lockAccount(
+  tx: TxClient,
+  utilityId: string,
+  accountId: string,
+): Promise<void> {
+  const locked = await tx.$queryRaw<{ id: string }[]>`
+    SELECT id FROM account
+     WHERE id = ${accountId}::uuid AND utility_id = ${utilityId}::uuid
+       FOR UPDATE`;
+  if (locked.length === 0) {
+    throw err("ACCOUNT_NOT_FOUND", `Account ${accountId} not found`, 404);
+  }
 }
 
 /**
@@ -53,18 +83,7 @@ export async function recomputeAccountCache(
   utilityId: string,
   accountId: string,
 ): Promise<{ balance: string; lastDueDate: Date | null }> {
-  // Asserting a row came back matters twice over: SELECT ... FOR UPDATE
-  // takes no lock at all when it matches nothing, and proving the row is
-  // this tenant's is what makes the `tx.account.update` below safe —
-  // Prisma's `where: { id }` carries no utilityId, and RLS does not
-  // currently enforce because the application role is a superuser.
-  const locked = await tx.$queryRaw<{ id: string }[]>`
-    SELECT id FROM account
-     WHERE id = ${accountId}::uuid AND utility_id = ${utilityId}::uuid
-       FOR UPDATE`;
-  if (locked.length === 0) {
-    throw err("ACCOUNT_NOT_FOUND", `Account ${accountId} not found`, 404);
-  }
+  await lockAccount(tx, utilityId, accountId);
 
   const [agg] = await tx.$queryRaw<{ balance: Prisma.Decimal | null }[]>`
     SELECT COALESCE(SUM(open_amount), 0) AS balance
@@ -161,7 +180,7 @@ export async function postBill(
 
     if (amount === "0.00") {
       const cache = await recomputeAccountCache(tx, utilityId, bill.accountId);
-      return { billId, entryId: null, amount, balance: cache.balance, skippedZero: true };
+      return { billId, entryId: null, amount, balance: cache.balance, skippedZero: true, applied: [] };
     }
 
     // A bill that nets negative is a credit, not a debit with a negative
@@ -173,11 +192,6 @@ export async function postBill(
       throw err("BILL_MISSING_DUE_DATE", `Bill ${billId} has no due date`, 422);
     }
 
-    // Spec §6.1 step 4 — auto-applying this account's open credits
-    // against a new debit — is deliberately slice 2, along with every
-    // other LedgerApplication write. The balance is right either way:
-    // it is SUM(open_amount) and an unapplied credit still sums into it.
-    // Only the open-item detail is left unsettled.
     const entry = await tx.ledgerEntry.create({
       data: {
         utilityId,
@@ -199,9 +213,20 @@ export async function postBill(
       },
     });
 
+    // Spec §6.1 step 4 — absorb this account's open credits into the new
+    // charge, oldest postedAt first, so a credit balance is consumed by
+    // the next bill instead of waiting for a sweep job.
+    //
+    // This is directional on purpose: it absorbs credits INTO a new
+    // debit. A bill that nets negative posts a credit, so there is
+    // nothing for it to absorb and it stays open until the next debit
+    // takes it. The balance is correct either way, because it is a
+    // signed sum; only the open-item detail waits.
+    const applied = await applyCreditsToDebit(tx, utilityId, bill.accountId, entry.id);
+
     const cache = await recomputeAccountCache(tx, utilityId, bill.accountId);
 
-    return { billId, entryId: entry.id, amount, balance: cache.balance, skippedZero: false };
+    return { billId, entryId: entry.id, amount, balance: cache.balance, skippedZero: false, applied };
   };
 
   // `auditCreate` requires an entity with an id to audit; the

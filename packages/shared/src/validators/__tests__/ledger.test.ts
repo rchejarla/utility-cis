@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { ENTRY_SIGN, roundToCents, postBillSchema } from "../ledger";
+import {
+  ENTRY_SIGN,
+  roundToCents,
+  postBillSchema,
+  DEBIT_ALLOCATION_ORDER,
+  recordPaymentSchema,
+  reverseEntrySchema,
+} from "../ledger";
 
 describe("ENTRY_SIGN", () => {
   it("signs debits positive and credits negative", () => {
@@ -69,5 +76,82 @@ describe("postBillSchema", () => {
     expect(postBillSchema.parse({ effectiveDate: "2024-02-29" })).toEqual({
       effectiveDate: "2024-02-29",
     });
+  });
+});
+
+describe("DEBIT_ALLOCATION_ORDER", () => {
+  // Spec §6.3: reconnection fees, then late fees, then oldest bills FIFO.
+  it("ranks fees before adjustments before bill charges", () => {
+    expect([...DEBIT_ALLOCATION_ORDER]).toEqual(["FEE", "ADJUSTMENT_DEBIT", "BILL_CHARGE"]);
+  });
+
+  it("covers every debit type, so no debit is unrankable", () => {
+    const debitTypes = ["BILL_CHARGE", "FEE", "ADJUSTMENT_DEBIT"];
+    expect([...DEBIT_ALLOCATION_ORDER].sort()).toEqual(debitTypes.sort());
+  });
+});
+
+describe("recordPaymentSchema", () => {
+  it("accepts a positive amount with a tender", () => {
+    expect(recordPaymentSchema.parse({ amount: "50.00", tender: "CHECK" })).toEqual({
+      amount: "50.00",
+      tender: "CHECK",
+    });
+  });
+
+  // Review Focus: a negative amount would post money received as money owed.
+  it("rejects a negative or zero amount", () => {
+    expect(() => recordPaymentSchema.parse({ amount: "-50.00", tender: "CHECK" })).toThrow();
+    expect(() => recordPaymentSchema.parse({ amount: "0.00", tender: "CHECK" })).toThrow();
+    expect(() => recordPaymentSchema.parse({ amount: "0", tender: "CHECK" })).toThrow();
+  });
+
+  it("rejects a non-decimal amount and more than two decimal places", () => {
+    expect(() => recordPaymentSchema.parse({ amount: "fifty", tender: "CHECK" })).toThrow();
+    expect(() => recordPaymentSchema.parse({ amount: "50.001", tender: "CHECK" })).toThrow();
+  });
+
+  it("requires a tender and rejects an unknown one", () => {
+    expect(() => recordPaymentSchema.parse({ amount: "50.00" })).toThrow();
+    expect(() => recordPaymentSchema.parse({ amount: "50.00", tender: "BITCOIN" })).toThrow();
+  });
+
+  it("rejects a receivedAt that is not a real date", () => {
+    expect(() =>
+      recordPaymentSchema.parse({ amount: "50.00", tender: "CHECK", receivedAt: "2026-02-30" }),
+    ).toThrow();
+  });
+
+  it("accepts a real receivedAt, an externalRef and a memo", () => {
+    expect(
+      recordPaymentSchema.parse({
+        amount: "50.00",
+        tender: "LOCKBOX",
+        receivedAt: "2026-06-01",
+        externalRef: "BATCH-77",
+        memo: "lockbox batch 77",
+      }),
+    ).toEqual({
+      amount: "50.00",
+      tender: "LOCKBOX",
+      receivedAt: "2026-06-01",
+      externalRef: "BATCH-77",
+      memo: "lockbox batch 77",
+    });
+  });
+});
+
+describe("reverseEntrySchema", () => {
+  it("accepts an empty body — reasonId is slice 3", () => {
+    expect(reverseEntrySchema.parse({})).toEqual({});
+  });
+
+  it("rejects a reasonId that is not a uuid", () => {
+    expect(() => reverseEntrySchema.parse({ reasonId: "nope" })).toThrow();
+  });
+
+  it("accepts a uuid reasonId and a memo", () => {
+    const reasonId = "00000000-0000-4000-8000-00000000r001".replace("r", "a");
+    expect(reverseEntrySchema.parse({ reasonId, memo: "NSF" })).toEqual({ reasonId, memo: "NSF" });
   });
 });

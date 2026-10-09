@@ -48,7 +48,7 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 | 30 | Sla | `sla` | Service Requests | Phase 4 slice B | Per-tenant SLA policy keyed on `(request_type, priority)`; drives `sla_due_at` at SR creation and breach computation at completion. See spec 14. |
 | 31 | ServiceRequest | `service_request` | Service Requests | Phase 4 slice B | Core work item. Lifecycle NEW → ASSIGNED → IN_PROGRESS → PENDING_FIELD → COMPLETED / CANCELLED / FAILED. Per-tenant/year `SR-YYYY-NNNNNN` numbering via `service_request_counter` plumbing table. External-system, billing-action, delinquency, and attachments columns reserved but unused this slice. See spec 14. |
 | 32 | LedgerEntry | `ledger_entry` | Accounts Receivable | Phase 3 AR slice 1 | One financial event against an Account. Signed: positive increases what the customer owes. Optional FKs to Bill (`BILL_CHARGE`), to the entry a fee was assessed on, and to the entry a reversal negates. See spec 23. |
-| 33 | LedgerApplication | `ledger_application` | Accounts Receivable | Phase 3 AR slice 1 | Which credit paid down which debit, and by how much. Table created in slice 1; rows are written from slice 2 onward. See spec 23. |
+| 33 | LedgerApplication | `ledger_application` | Accounts Receivable | Phase 3 AR slice 1 | Which credit paid down which debit, and by how much. Table created in slice 1; written by payment allocation since slice 2. See spec 23. |
 | 34 | LedgerReasonDef | `ledger_reason_def` | Accounts Receivable | Phase 3 AR slice 1 | Why a fee or adjustment was raised, in the utility's own words. Tenant-configurable, following the `*TypeDef` convention. Seeded in slice 3. See spec 23. |
 
 ## ER Diagram

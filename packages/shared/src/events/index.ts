@@ -32,6 +32,8 @@ export const EVENT_TYPES = {
   BILL_SEGMENT_CREATED: "bill_segment.created",
   BILL_CREATED: "bill.created",
   LEDGER_ENTRY_CREATED: "ledger_entry.created",
+  LEDGER_PAYMENT_CREATED: "ledger_payment.created",
+  LEDGER_REVERSAL_CREATED: "ledger_reversal.created",
   CUSTOMER_CREATED: "customer.created",
   CUSTOMER_UPDATED: "customer.updated",
   CONTACT_CREATED: "contact.created",
