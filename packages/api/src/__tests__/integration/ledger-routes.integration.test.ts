@@ -14,6 +14,10 @@ const NO_PERMS = "00000000-0000-4000-8000-aaaa00000003";
 // Records and reverses payments; deliberately has no accounts:EDIT, so the
 // payment gate is tested on its own rather than riding on the posting one.
 const PAYER = "00000000-0000-4000-8000-aaaa00000004";
+// Raises fees and forgives charges. Holds no payments permission, so the
+// ar_adjustments gates are tested on their own rather than riding on one
+// subject that holds everything.
+const ADJUSTER = "00000000-0000-4000-8000-aaaa00000005";
 const utilityId = "00000000-0000-4000-8000-0000000000aa";
 const otherUtilityId = "00000000-0000-4000-8000-0000000000bb";
 
@@ -24,6 +28,7 @@ let accountId: string;
 let billingCycleId: string;
 let otherAccountId: string;
 let otherBillingCycleId: string;
+const reasonIdFor: Record<string, string> = {};
 
 function makeToken(sub: string = ACTOR) {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
@@ -66,6 +71,21 @@ beforeAll(async () => {
   accountId = account.id;
   await prisma.tenantModule.create({ data: { utilityId, moduleKey: "accounts" } });
   await prisma.tenantModule.create({ data: { utilityId, moduleKey: "payments" } });
+  await prisma.tenantModule.create({ data: { utilityId, moduleKey: "ar_adjustments" } });
+
+  // Reason codes for the fee and adjustment routes. Tenant-scoped, so
+  // these belong to `utilityId` only.
+  for (const [code, appliesToType] of [
+    ["LATE_FEE", "FEE"],
+    ["OPENING_BALANCE", "ADJUSTMENT_DEBIT"],
+    ["COURTESY_WAIVER", "ADJUSTMENT_CREDIT"],
+    ["BAD_DEBT", "WRITE_OFF"],
+  ] as const) {
+    const r = await prisma.ledgerReasonDef.create({
+      data: { utilityId, code, label: code, appliesToType },
+    });
+    reasonIdFor[appliesToType] = r.id;
+  }
 
   // A second tenant with its own account, to prove tenant scoping.
   const otherCycle = await prisma.billingCycle.create({
@@ -96,6 +116,7 @@ beforeAll(async () => {
     [VIEWER, "viewer@example.com", "Viewer", { accounts: ["VIEW"], payments: ["VIEW"] }],
     [NO_PERMS, "none@example.com", "NoPerms", { accounts: [] }],
     [PAYER, "payer@example.com", "Payer", { accounts: ["VIEW"], payments: ["VIEW", "CREATE", "EDIT"] }],
+    [ADJUSTER, "adjuster@example.com", "Adjuster", { accounts: ["VIEW"], ar_adjustments: ["VIEW", "CREATE", "EDIT"] }],
   ] as const) {
     const role = await prisma.role.create({
       data: { utilityId, name: roleName, permissions: perms },
@@ -508,6 +529,14 @@ describe("POST /api/v1/ledger-entries/:id/reverse", () => {
 
   it("returns 404 for an entry in another tenant", async () => {
     const { prisma } = prismaImports;
+    const strayReason = await prisma.ledgerReasonDef.create({
+      data: {
+        utilityId: otherUtilityId,
+        code: `ROUTES-STRAY-${Math.random().toString(36).slice(2, 7)}`,
+        label: "Stray",
+        appliesToType: "ADJUSTMENT_DEBIT",
+      },
+    });
     const stray = await prisma.ledgerEntry.create({
       data: {
         utilityId: otherUtilityId,
@@ -517,6 +546,7 @@ describe("POST /api/v1/ledger-entries/:id/reverse", () => {
         openAmount: "10.00",
         dueDate: new Date("2026-06-14"),
         effectiveDate: new Date("2026-06-14"),
+        reasonId: strayReason.id,
       },
     });
     const res = await app.inject({
@@ -539,5 +569,257 @@ describe("POST /api/v1/ledger-entries/:id/reverse", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(JSON.parse(res.body).error.code).toBe("VALIDATION_ERROR");
+  });
+});
+
+describe("GET /api/v1/ar/reasons", () => {
+  it("lists the tenant's reason codes to an ar_adjustments:VIEW user", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/ar/reasons",
+      headers: headers(ADJUSTER),
+    });
+    expect(res.statusCode).toBe(200);
+    const codes = JSON.parse(res.body).data.map((r: { code: string }) => r.code);
+    expect(codes).toContain("LATE_FEE");
+    expect(codes).toContain("BAD_DEBT");
+  });
+
+  it("filters by appliesToType", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/ar/reasons?appliesToType=WRITE_OFF",
+      headers: headers(ADJUSTER),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).data.map((r: { code: string }) => r.code)).toEqual(["BAD_DEBT"]);
+  });
+
+  it("returns 403 without ar_adjustments:VIEW", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/ar/reasons",
+      headers: headers(PAYER),
+    });
+    expect(res.statusCode).toBe(403);
+  });
+});
+
+describe("POST /api/v1/accounts/:id/fees", () => {
+  it("raises a fee and returns the new balance", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/fees`,
+      headers: headers(ADJUSTER),
+      payload: { amount: "25.00", reasonId: reasonIdFor.FEE, dueDate: "2026-07-14" },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = JSON.parse(res.body);
+    expect(body.amount).toBe("25.00");
+    expect(body.balance).toBe("25.00");
+  });
+
+  it("returns 400 without a reasonId and writes nothing", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/fees`,
+      headers: headers(ADJUSTER),
+      payload: { amount: "25.00" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error.code).toBe("VALIDATION_ERROR");
+    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  });
+
+  // Review Focus, through HTTP: the reason has to suit the type.
+  it("returns 422 when the reason is not a FEE reason", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/fees`,
+      headers: headers(ADJUSTER),
+      payload: { amount: "25.00", reasonId: reasonIdFor.WRITE_OFF },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(JSON.parse(res.body).error.code).toBe("REASON_TYPE_MISMATCH");
+    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  });
+
+  it("returns 403 without ar_adjustments:CREATE and writes nothing", async () => {
+    for (const sub of [VIEWER, PAYER]) {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/accounts/${accountId}/fees`,
+        headers: headers(sub),
+        payload: { amount: "25.00", reasonId: reasonIdFor.FEE },
+      });
+      expect(res.statusCode).toBe(403);
+    }
+    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  });
+
+  it("returns 404 for another tenant's account", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${otherAccountId}/fees`,
+      headers: headers(ADJUSTER),
+      payload: { amount: "25.00", reasonId: reasonIdFor.FEE },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(JSON.parse(res.body).error.code).toBe("ACCOUNT_NOT_FOUND");
+  });
+});
+
+describe("POST /api/v1/accounts/:id/adjustments", () => {
+  it("raises a manual charge", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/adjustments`,
+      headers: headers(ADJUSTER),
+      payload: { amount: "75.00", reasonId: reasonIdFor.ADJUSTMENT_DEBIT },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(JSON.parse(res.body).balance).toBe("75.00");
+  });
+
+  it("returns 403 without ar_adjustments:CREATE", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/adjustments`,
+      headers: headers(VIEWER),
+      payload: { amount: "75.00", reasonId: reasonIdFor.ADJUSTMENT_DEBIT },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+});
+
+describe("POST /api/v1/accounts/:id/waivers and /write-offs", () => {
+  async function postedCharge(total = "25.0000"): Promise<string> {
+    const billId = await makeBill(total);
+    const posted = await app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/post`,
+      headers: headers(),
+      payload: {},
+    });
+    expect(posted.statusCode).toBe(201);
+    return JSON.parse(posted.body).entryId;
+  }
+
+  it("waives a posted charge", async () => {
+    const entryId = await postedCharge();
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/waivers`,
+      headers: headers(ADJUSTER),
+      payload: { amount: "25.00", reasonId: reasonIdFor.ADJUSTMENT_CREDIT, debitId: entryId },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = JSON.parse(res.body);
+    expect(body.amount).toBe("-25.00");
+    expect(body.unapplied).toBe("0.00");
+    expect(body.balance).toBe("0.00");
+  });
+
+  it("writes off a posted charge as a distinct act", async () => {
+    const entryId = await postedCharge();
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/write-offs`,
+      headers: headers(ADJUSTER),
+      payload: { amount: "25.00", reasonId: reasonIdFor.WRITE_OFF, debitId: entryId },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(JSON.parse(res.body).balance).toBe("0.00");
+    const { prisma } = prismaImports;
+    expect(await prisma.ledgerEntry.count({ where: { type: "WRITE_OFF" } })).toBe(1);
+    expect(await prisma.ledgerEntry.count({ where: { type: "ADJUSTMENT_CREDIT" } })).toBe(0);
+  });
+
+  it("returns 422 when a waiver cites a WRITE_OFF reason", async () => {
+    const entryId = await postedCharge();
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/waivers`,
+      headers: headers(ADJUSTER),
+      payload: { amount: "25.00", reasonId: reasonIdFor.WRITE_OFF, debitId: entryId },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(JSON.parse(res.body).error.code).toBe("REASON_TYPE_MISMATCH");
+  });
+
+  it("returns 400 without a debitId", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/waivers`,
+      headers: headers(ADJUSTER),
+      payload: { amount: "25.00", reasonId: reasonIdFor.ADJUSTMENT_CREDIT },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("returns 403 without ar_adjustments:EDIT and writes nothing", async () => {
+    const entryId = await postedCharge();
+    const before = await prismaImports.prisma.ledgerEntry.count();
+    for (const sub of [VIEWER, PAYER]) {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/accounts/${accountId}/waivers`,
+        headers: headers(sub),
+        payload: { amount: "25.00", reasonId: reasonIdFor.ADJUSTMENT_CREDIT, debitId: entryId },
+      });
+      expect(res.statusCode).toBe(403);
+    }
+    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(before);
+  });
+});
+
+describe("POST /api/v1/ar/reasons/seed-defaults", () => {
+  // Without this route a tenant not created by the dev seeder has no
+  // reason codes, so every fee, adjustment, waiver and write-off fails on
+  // REASON_NOT_FOUND. The fixture seeds 4 of the 12 defaults by hand, so
+  // the count here is a real number and not merely "did not throw".
+  it("fills in the defaults the tenant is missing", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/ar/reasons/seed-defaults",
+      headers: headers(ADJUSTER),
+      payload: {},
+    });
+    expect(res.statusCode).toBe(201);
+    expect(JSON.parse(res.body).created).toBe(8);
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/api/v1/ar/reasons",
+      headers: headers(ADJUSTER),
+    });
+    expect(JSON.parse(listed.body).data).toHaveLength(12);
+  });
+
+  it("is idempotent — a second call creates nothing", async () => {
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/ar/reasons/seed-defaults",
+      headers: headers(ADJUSTER),
+      payload: {},
+    });
+    const again = await app.inject({
+      method: "POST",
+      url: "/api/v1/ar/reasons/seed-defaults",
+      headers: headers(ADJUSTER),
+      payload: {},
+    });
+    expect(again.statusCode).toBe(201);
+    expect(JSON.parse(again.body).created).toBe(0);
+  });
+
+  it("returns 403 without ar_adjustments:CREATE", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/ar/reasons/seed-defaults",
+      headers: headers(PAYER),
+      payload: {},
+    });
+    expect(res.statusCode).toBe(403);
   });
 });

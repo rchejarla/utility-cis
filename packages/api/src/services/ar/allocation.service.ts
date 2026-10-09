@@ -134,6 +134,47 @@ export async function applyCreditToDebits(
 }
 
 /**
+ * Apply one credit to one NOMINATED debit, up to what that debit owes,
+ * leaving any excess open on the credit.
+ *
+ * Deliberately not `applyCreditToDebits`. A payment is money against the
+ * account, so it walks every open debit in priority order. A waiver or a
+ * write-off forgives a SPECIFIC charge (§6.5), so it must not spill:
+ * waiving $30 of a $10 charge leaves a $20 refund due, not $20 off
+ * whatever else is outstanding. Choosing the general walk here would
+ * quietly turn a concession on one charge into a payment against
+ * another, and the balance would look right either way.
+ */
+export async function applyCreditToOneDebit(
+  tx: TxClient,
+  utilityId: string,
+  accountId: string,
+  creditId: string,
+  debitId: string,
+): Promise<Application[]> {
+  await lockAccount(tx, utilityId, accountId);
+
+  const [credit, debit] = await Promise.all([
+    tx.ledgerEntry.findFirstOrThrow({
+      where: { id: creditId, utilityId, accountId },
+      select: { openAmount: true },
+    }),
+    tx.ledgerEntry.findFirstOrThrow({
+      where: { id: debitId, utilityId, accountId },
+      select: { openAmount: true },
+    }),
+  ]);
+
+  const available = credit.openAmount.negated();
+  // Nothing to give, or nothing left owed on that charge — either way the
+  // credit stays open as a refund due.
+  if (available.lte(0) || debit.openAmount.lte(0)) return [];
+
+  const amount = Prisma.Decimal.min(available, debit.openAmount);
+  return [await apply(tx, utilityId, creditId, debitId, amount)];
+}
+
+/**
  * Consume this account's open credits against one open debit, oldest
  * `postedAt` first, so a credit balance is absorbed by the next charge
  * without a sweep job. Spec §6.1 step 4.

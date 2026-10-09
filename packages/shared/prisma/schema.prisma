@@ -1780,11 +1780,18 @@ enum PaymentTender {
 /// `type`, `dueDate` and `effectiveDate` are immutable once written;
 /// `openAmount` is maintained bookkeeping, like Account.balance.
 ///
-/// Provenance columns differ in how hard they are held. The database
-/// enforces that a BILL_CHARGE names a bill and that only a PAYMENT
-/// carries a tender. It does NOT enforce `assessedOnId` on a FEE or
-/// `reasonId` on a fee/adjustment — those CHECKs are deferred to slice
-/// 3, when fees exist and LedgerReasonDef is seeded.
+/// Provenance columns differ in how hard they are held, and all of it is
+/// enforced in SQL rather than by service discipline:
+///   - a BILL_CHARGE names a bill;
+///   - only a PAYMENT carries a tender;
+///   - FEE / ADJUSTMENT_DEBIT / ADJUSTMENT_CREDIT / WRITE_OFF cite a
+///     `reasonId`, OR name the bill they came from — the second clause
+///     exists for the credit a negative bill posts, which is
+///     self-explaining and must not depend on a tenant having reason
+///     seeds (`ledger_entry_reason_required`);
+///   - only a FEE may carry `assessedOnId`. It is NOT required on a fee:
+///     a tap fee or meter test fee is assessed on nothing
+///     (`ledger_entry_assessed_on_only_fee`).
 model LedgerEntry {
   id            String          @id @default(uuid()) @db.Uuid
   utilityId     String          @map("utility_id") @db.Uuid

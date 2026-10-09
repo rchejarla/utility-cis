@@ -28,6 +28,7 @@ let delinquency: typeof import("../../services/delinquency.service.js");
 
 let accountId: string;
 let ruleId: string;
+let debitReasonId: string;
 
 /** UTC midnight n days back, so `floor((now - d) / 1 day)` is exactly n. */
 function daysAgo(n: number): Date {
@@ -76,6 +77,17 @@ beforeAll(async () => {
     },
   });
   ruleId = rule.id;
+
+  // Slice 3's ledger_entry_reason_required.
+  const reason = await prisma.ledgerReasonDef.create({
+    data: {
+      utilityId,
+      code: "AGING-FIXTURE",
+      label: "Aging suite fixture",
+      appliesToType: "ADJUSTMENT_DEBIT",
+    },
+  });
+  debitReasonId = reason.id;
 }, 180_000);
 
 afterAll(async () => {
@@ -105,6 +117,7 @@ async function openDebit(amount: string, dueDaysAgo: number) {
       openAmount: amount,
       dueDate: daysAgo(dueDaysAgo),
       effectiveDate: daysAgo(dueDaysAgo),
+      reasonId: debitReasonId,
       createdBy: ACTOR,
     },
   });

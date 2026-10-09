@@ -19,9 +19,11 @@ let posting: typeof import("../../services/ar/posting.service.js");
 let recon: typeof import("../../services/ar/reconciliation.service.js");
 let payment: typeof import("../../services/ar/payment.service.js");
 let reversal: typeof import("../../services/ar/reversal.service.js");
+let fee: typeof import("../../services/ar/fee.service.js");
 
 let accountId: string;
 let billingCycleId: string;
+let feeReasonId: string;
 
 beforeAll(async () => {
   const booted = await bootPostgres();
@@ -31,6 +33,7 @@ beforeAll(async () => {
   recon = await import("../../services/ar/reconciliation.service.js");
   payment = await import("../../services/ar/payment.service.js");
   reversal = await import("../../services/ar/reversal.service.js");
+  fee = await import("../../services/ar/fee.service.js");
 
   const { prisma } = prismaImports;
   const cycle = await prisma.billingCycle.create({
@@ -47,6 +50,12 @@ beforeAll(async () => {
     },
   });
   accountId = account.id;
+  // Slice 3: a FEE must cite a FEE reason.
+  const feeReason = await prisma.ledgerReasonDef.create({
+    data: { utilityId, code: "LATE_FEE", label: "Late fee", appliesToType: "FEE" },
+  });
+  feeReasonId = feeReason.id;
+
   // An account with no ledger entries, in the same tenant: balance 0 and
   // SUM = 0 must NOT be reported as drift.
   await prisma.account.create({
@@ -179,7 +188,7 @@ describe("reconcileBalances", () => {
     }
   });
 
-  it("holds the invariants across a long sequence of charges, payments and reversals", async () => {
+  it("holds the invariants across a long sequence of charges, fees, payments and reversals", async () => {
     const { prisma } = prismaImports;
     // Deterministic LCG rather than a new fast-check dependency.
     let state = 1_234_567;
@@ -195,10 +204,15 @@ describe("reconcileBalances", () => {
     // payment's leftover can be absorbed later by a new debit under §6.1
     // step 4, so "what it consumed" is not knowable from the payment
     // alone.
+    // `cls` is the debit's rank in DEBIT_ALLOCATION_ORDER: 0 for FEE,
+    // 2 for BILL_CHARGE. Slice 3 is the first time the model needs it —
+    // until fees existed every debit was one class, so date alone
+    // reproduced allocation's choices.
     interface DebitRef {
       due: string;
       seq: number;
       open: number;
+      cls: number;
     }
     interface Slot {
       open: number;
@@ -219,7 +233,29 @@ describe("reconcileBalances", () => {
     let fullSettlements = 0;
     let absorptions = 0;
     let reversals = 0;
+    let fees = 0;
 
+    /** §6.1 step 4: a new debit absorbs open credits, oldest postedAt first. */
+    const absorbInto = (d: DebitRef): void => {
+      for (const c of credits) {
+        if (d.open === 0) break;
+        if (c.open === 0) continue;
+        const amt = Math.min(d.open, c.open);
+        c.open -= amt;
+        d.open -= amt;
+        apps.push({ debit: d, credit: c, amt });
+        absorptions++;
+      }
+    };
+
+    /** Allocation's order: §6.3 type class, then oldest dueDate, then postedAt. */
+    const allocationOrder = (a: DebitRef, b: DebitRef): number =>
+      a.cls - b.cls || a.due.localeCompare(b.due) || a.seq - b.seq;
+
+    // Deliberately NOT allocationOrder: recomputeAccountCache takes the
+    // oldest open debit by due_date whatever its type, so ranking by
+    // class here would make the model disagree with the cache the moment
+    // a fee is due later than a bill.
     const oldestOpenDue = (): string | null => {
       const open = debits.filter((d) => d.open > 0);
       if (open.length === 0) return null;
@@ -240,16 +276,8 @@ describe("reconcileBalances", () => {
           // Step 4: the new debit absorbs open credits, oldest postedAt
           // first. Absorption moves value between two open amounts, so it
           // never changes the balance.
-          const d: DebitRef = { due, seq, open: cents };
-          for (const c of credits) {
-            if (d.open === 0) break;
-            if (c.open === 0) continue;
-            const amt = Math.min(d.open, c.open);
-            c.open -= amt;
-            d.open -= amt;
-            apps.push({ debit: d, credit: c, amt });
-            absorptions++;
-          }
+          const d: DebitRef = { due, seq, open: cents, cls: 2 }; // BILL_CHARGE
+          absorbInto(d);
           debits.push(d);
         } else {
           // A bill that nets negative posts a credit, open until a debit
@@ -270,13 +298,12 @@ describe("reconcileBalances", () => {
             tender: "CHECK",
           });
 
-          // Mirror allocation: every debit here is a BILL_CHARGE, one
-          // class, so the order is oldest dueDate then postedAt.
+          // Mirror allocation. Since slice 3 there are two classes in
+          // play, so this has to rank by class before date — a fee
+          // raised today is paid before a bill due months ago.
           const slot: Slot = { open: 0 };
           let remaining = pay;
-          const ordered = debits
-            .filter((d) => d.open > 0)
-            .sort((a, b) => a.due.localeCompare(b.due) || a.seq - b.seq);
+          const ordered = debits.filter((d) => d.open > 0).sort(allocationOrder);
           for (const d of ordered) {
             if (remaining === 0) break;
             const amt = Math.min(remaining, d.open);
@@ -291,6 +318,25 @@ describe("reconcileBalances", () => {
           settlements++;
           if (full) fullSettlements++;
         }
+      }
+
+      // Every fifth step, raise a fee: a debit of a DIFFERENT class, so
+      // allocation's type ranking is under test here and not only in its
+      // own unit cases.
+      if (i % 5 === 4) {
+        const feeCents = 500 + Math.floor(next() * 2_000);
+        const due = "2026-07-" + String(10 + Math.floor(next() * 18)).padStart(2, "0");
+        await fee.assessFee(utilityId, ACTOR, "T", accountId, {
+          amount: (feeCents / 100).toFixed(2),
+          reasonId: feeReasonId,
+          dueDate: due,
+        });
+        modelBalance += feeCents;
+        seq++;
+        const d: DebitRef = { due, seq, open: feeCents, cls: 0 }; // FEE
+        absorbInto(d);
+        debits.push(d);
+        fees++;
       }
 
       // Every seventh step, reverse the most recent payment — NSF.
@@ -321,10 +367,17 @@ describe("reconcileBalances", () => {
     // covers it is never put under any pressure.
     expect(absorptions).toBeGreaterThan(0);
     expect(reversals).toBeGreaterThan(0);
+    expect(fees).toBeGreaterThan(0);
 
     const entries = await prisma.ledgerEntry.findMany({ where: { utilityId } });
     expect(entries.length).toBeGreaterThan(20);
     expect(entries.some((e) => e.type === "REVERSAL")).toBe(true);
+    expect(entries.some((e) => e.type === "FEE")).toBe(true);
+    // A fee must actually have been paid ahead of an older bill at some
+    // point, or the class ranking was never the deciding factor.
+    expect(
+      entries.some((e) => e.type === "FEE" && Number(e.openAmount) < Number(e.amount)),
+    ).toBe(true);
     // The sign invariants must be exercised on genuinely part-settled rows.
     expect(
       entries.some(

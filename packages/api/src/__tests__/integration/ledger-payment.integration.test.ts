@@ -19,6 +19,7 @@ let posting: typeof import("../../services/ar/posting.service.js");
 let payment: typeof import("../../services/ar/payment.service.js");
 
 let accountId: string;
+let debitReasonId: string;
 
 beforeAll(async () => {
   const booted = await bootPostgres();
@@ -41,6 +42,18 @@ beforeAll(async () => {
     },
   });
   accountId = account.id;
+
+  // Slice 3's ledger_entry_reason_required: an ADJUSTMENT_DEBIT must cite
+  // a reason, so the fixtures need one.
+  const reason = await prisma.ledgerReasonDef.create({
+    data: {
+      utilityId,
+      code: "PAY-FIXTURE",
+      label: "Payment suite fixture",
+      appliesToType: "ADJUSTMENT_DEBIT",
+    },
+  });
+  debitReasonId = reason.id;
 }, 180_000);
 
 afterAll(async () => {
@@ -70,6 +83,7 @@ async function debit(amount: string, dueDate: string): Promise<string> {
       openAmount: amount,
       dueDate: new Date(dueDate),
       effectiveDate: new Date(dueDate),
+      reasonId: debitReasonId,
       createdBy: ACTOR,
     },
   });

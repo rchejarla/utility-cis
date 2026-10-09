@@ -17,6 +17,7 @@ let posting: typeof import("../../services/ar/posting.service.js");
 let utilityId: string;
 let accountId: string;
 let billingCycleId: string;
+let debitReasonId: string;
 
 beforeAll(async () => {
   const booted = await bootPostgres();
@@ -46,6 +47,17 @@ beforeAll(async () => {
     },
   });
   accountId = account.id;
+
+  // Slice 3's ledger_entry_reason_required.
+  const reason = await prisma.ledgerReasonDef.create({
+    data: {
+      utilityId,
+      code: "POST-FIXTURE",
+      label: "Posting suite fixture",
+      appliesToType: "ADJUSTMENT_DEBIT",
+    },
+  });
+  debitReasonId = reason.id;
 }, 180_000);
 
 afterAll(async () => {
@@ -300,6 +312,7 @@ describe("postBill", () => {
             openAmount: "5.00",
             dueDate: new Date("2026-04-01"),
             effectiveDate: new Date("2026-04-01"),
+            reasonId: debitReasonId,
             createdBy: ACTOR,
           },
         });

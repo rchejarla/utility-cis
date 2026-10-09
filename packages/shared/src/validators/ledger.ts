@@ -41,6 +41,46 @@ export const DEBIT_ALLOCATION_ORDER = [
   "BILL_CHARGE",
 ] as const satisfies readonly DebitType[];
 
+/** The four types that must cite a reason, per spec §4.2. */
+export type ReasonedType = "FEE" | "ADJUSTMENT_DEBIT" | "ADJUSTMENT_CREDIT" | "WRITE_OFF";
+
+/**
+ * The reason codes seeded for a new tenant, following the
+ * PremiseTypeDef / MeasureTypeDef convention (spec §4.4).
+ *
+ * A starting set, not a closed one: what genuinely varies per utility is
+ * the business reason behind a fee or adjustment, and a utility adds its
+ * own without a code change (§3.4). The three acts the TYPES encode do
+ * not vary — wrong is a reversal, forgiven is a credit, uncollectable is
+ * a write-off (§3.5) — which is why WRITE_OFF and ADJUSTMENT_CREDIT get
+ * separate reasons here rather than sharing them.
+ *
+ * seed.js carries the same list, because it runs as plain `node seed.js`
+ * and cannot import this file.
+ */
+export const DEFAULT_REASON_CODES = [
+  { code: "LATE_FEE", label: "Late payment fee", appliesToType: "FEE" },
+  { code: "NSF_FEE", label: "Returned payment fee", appliesToType: "FEE" },
+  { code: "RECONNECT_FEE", label: "Reconnection fee", appliesToType: "FEE" },
+  { code: "TAP_FEE", label: "Tap fee", appliesToType: "FEE" },
+  { code: "METER_TEST_FEE", label: "Meter test fee", appliesToType: "FEE" },
+  { code: "OPENING_BALANCE", label: "Opening balance", appliesToType: "ADJUSTMENT_DEBIT" },
+  {
+    code: "BILLING_CORRECTION_DEBIT",
+    label: "Billing correction — charge",
+    appliesToType: "ADJUSTMENT_DEBIT",
+  },
+  { code: "COURTESY_WAIVER", label: "Courtesy waiver", appliesToType: "ADJUSTMENT_CREDIT" },
+  { code: "GOODWILL", label: "Goodwill credit", appliesToType: "ADJUSTMENT_CREDIT" },
+  {
+    code: "BILLING_CORRECTION_CREDIT",
+    label: "Billing correction — credit",
+    appliesToType: "ADJUSTMENT_CREDIT",
+  },
+  { code: "BAD_DEBT", label: "Written off — uncollectable", appliesToType: "WRITE_OFF" },
+  { code: "SMALL_BALANCE", label: "Written off — small balance", appliesToType: "WRITE_OFF" },
+] as const satisfies readonly { code: string; label: string; appliesToType: ReasonedType }[];
+
 /**
  * Round a rate-engine amount (Decimal(14,4)) to ledger precision
  * (Decimal(14,2)), half-up, away from zero.
@@ -155,3 +195,64 @@ export const reverseEntrySchema = z.object({
 });
 
 export type ReverseEntryInput = z.infer<typeof reverseEntrySchema>;
+
+/**
+ * Body for POST /api/v1/accounts/:id/fees (§6.4).
+ *
+ * `amount` is positive and stays positive — a fee increases what the
+ * customer owes. `assessedOnId` is optional because most fees are
+ * assessed on nothing: a tap fee or a meter test fee has no unpaid debit
+ * behind it, which is why the database constraint is "only a FEE may
+ * name one" rather than "every FEE must".
+ *
+ * `dueDate` defaults to 30 days after the effective date. §6.4 wants the
+ * next bill's due date; that needs the billing cycle and arrives with
+ * slice 6's automatic late fees.
+ */
+export const assessFeeSchema = z.object({
+  amount: positiveMoney,
+  reasonId: z.string().uuid(),
+  dueDate: calendarDate.optional(),
+  assessedOnId: z.string().uuid().optional(),
+  effectiveDate: calendarDate.optional(),
+  memo: z.string().max(2000).optional(),
+});
+
+export type AssessFeeInput = z.infer<typeof assessFeeSchema>;
+
+/** Body for POST /api/v1/accounts/:id/adjustments — a charge raised by hand. */
+export const adjustSchema = z.object({
+  amount: positiveMoney,
+  reasonId: z.string().uuid(),
+  dueDate: calendarDate.optional(),
+  effectiveDate: calendarDate.optional(),
+  memo: z.string().max(2000).optional(),
+});
+
+export type AdjustInput = z.infer<typeof adjustSchema>;
+
+/**
+ * Bodies for waiving and writing off. Both name the debit they apply to
+ * (§6.5) and both take a positive amount that the service negates.
+ *
+ * Any amount is allowed, so a partial waiver is free. Waiving more than
+ * is owed, or waiving an already-paid charge, leaves an open credit — a
+ * refund due — rather than being an error, so there is no upper bound to
+ * validate here.
+ *
+ * Two names for one shape, because §3.5 is explicit that a concession
+ * and a bad debt are different facts even though the mechanics match.
+ */
+const creditAgainstDebit = z.object({
+  amount: positiveMoney,
+  reasonId: z.string().uuid(),
+  debitId: z.string().uuid(),
+  effectiveDate: calendarDate.optional(),
+  memo: z.string().max(2000).optional(),
+});
+
+export const waiveSchema = creditAgainstDebit;
+export const writeOffSchema = creditAgainstDebit;
+
+export type WaiveInput = z.infer<typeof waiveSchema>;
+export type WriteOffInput = z.infer<typeof writeOffSchema>;

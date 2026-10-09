@@ -785,7 +785,7 @@ async function main() {
   // import the constant directly.
   const allModules = [
     "customers","premises","meters","meter_reads","meter_events",
-    "accounts","payments","agreements","commodities","rate_schedules","billing_cycles",
+    "accounts","payments","ar_adjustments","agreements","commodities","rate_schedules","billing_cycles",
     "containers","service_suspensions","service_events",
     "workflows","search",
     "audit_log","attachments","theme","settings",
@@ -827,6 +827,9 @@ async function main() {
         // A CSR is who takes a payment at the counter and reverses an NSF,
         // matching ROLE_PRESETS in packages/shared/src/modules/constants.ts.
         payments: ["VIEW","CREATE","EDIT"],
+        // Raising a charge and forgiving one are different authority
+        // (design §8); a CSR does both at the counter.
+        ar_adjustments: ["VIEW","CREATE","EDIT"],
         agreements: ["VIEW","CREATE","EDIT"], commodities: ["VIEW"],
         rate_schedules: ["VIEW"], billing_cycles: ["VIEW"],
         containers: ["VIEW","CREATE","EDIT"],
@@ -1107,6 +1110,33 @@ async function main() {
   const fifteenDaysAgo = new Date();
   fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
 
+  // AR reason codes (module 23 slice 3). Mirrors DEFAULT_REASON_CODES in
+  // packages/shared/src/validators/ledger.ts — seed.js runs as plain
+  // `node seed.js` and cannot import the TypeScript constant, so the list
+  // is duplicated here the same way allModules is.
+  const reasonCodes = [
+    ["LATE_FEE", "Late payment fee", "FEE"],
+    ["NSF_FEE", "Returned payment fee", "FEE"],
+    ["RECONNECT_FEE", "Reconnection fee", "FEE"],
+    ["TAP_FEE", "Tap fee", "FEE"],
+    ["METER_TEST_FEE", "Meter test fee", "FEE"],
+    ["OPENING_BALANCE", "Opening balance", "ADJUSTMENT_DEBIT"],
+    ["BILLING_CORRECTION_DEBIT", "Billing correction — charge", "ADJUSTMENT_DEBIT"],
+    ["COURTESY_WAIVER", "Courtesy waiver", "ADJUSTMENT_CREDIT"],
+    ["GOODWILL", "Goodwill credit", "ADJUSTMENT_CREDIT"],
+    ["BILLING_CORRECTION_CREDIT", "Billing correction — credit", "ADJUSTMENT_CREDIT"],
+    ["BAD_DEBT", "Written off — uncollectable", "WRITE_OFF"],
+    ["SMALL_BALANCE", "Written off — small balance", "WRITE_OFF"],
+  ];
+  const reasonByCode = {};
+  for (const [code, label, appliesToType] of reasonCodes) {
+    const r = await p.ledgerReasonDef.create({
+      data: { utilityId: UID, code, label, appliesToType },
+    });
+    reasonByCode[code] = r.id;
+  }
+  console.log("  " + reasonCodes.length + " AR reason codes");
+
   // Opening balances come from real ledger entries, not typed-in numbers.
   // GET /api/v1/ar/reconciliation compares account.balance against
   // SUM(ledger_entry.open_amount), so a balance with nothing behind it
@@ -1124,6 +1154,9 @@ async function main() {
         openAmount: amount,
         dueDate,
         effectiveDate: dueDate,
+        // ledger_entry_reason_required (slice 3): a reasoned type must
+        // cite a reason or name the bill it came from, and this has no bill.
+        reasonId: reasonByCode["OPENING_BALANCE"],
         memo: "Seeded opening balance for delinquency demo",
       },
     });
@@ -1133,6 +1166,50 @@ async function main() {
     });
   }
   console.log("  2 accounts with delinquent balances");
+
+  // A late fee and a partial courtesy waiver on the first delinquent
+  // account, so the slice 3 acts are visible in a fresh database rather
+  // than only reachable by HTTP. Written directly, like the opening
+  // balances above and for the same reason: seed.js does not import the
+  // TypeScript services. The cache is then set to the figure the ledger
+  // implies, so GET /api/v1/ar/reconciliation stays clean.
+  const feeDue = new Date();
+  feeDue.setDate(feeDue.getDate() + 10);
+  const lateFee = await p.ledgerEntry.create({
+    data: {
+      utilityId: UID,
+      accountId: aArr[0].id,
+      type: "FEE",
+      amount: "15.00",
+      openAmount: "10.00", // 5.00 of it waived below
+      dueDate: feeDue,
+      effectiveDate: new Date(),
+      reasonId: reasonByCode["LATE_FEE"],
+      memo: "Late payment fee on the seeded opening balance",
+    },
+  });
+  const waiver = await p.ledgerEntry.create({
+    data: {
+      utilityId: UID,
+      accountId: aArr[0].id,
+      type: "ADJUSTMENT_CREDIT",
+      amount: "-5.00",
+      openAmount: "0.00", // fully applied to the fee
+      effectiveDate: new Date(),
+      reasonId: reasonByCode["COURTESY_WAIVER"],
+      memo: "Partial courtesy waiver of the late fee",
+    },
+  });
+  await p.ledgerApplication.create({
+    data: { utilityId: UID, creditId: waiver.id, debitId: lateFee.id, amount: "5.00" },
+  });
+  // 412.80 opening + 10.00 of the fee still open. lastDueDate stays on the
+  // opening balance, which is older than the fee.
+  await p.account.update({
+    where: { id: aArr[0].id },
+    data: { balance: "422.80", lastDueDate: thirtyDaysAgo },
+  });
+  console.log("  1 late fee, partially waived");
 
   const testUsers = [
     { id: "00000000-0000-4000-8000-000000000091", email: "sysadmin@utility.com", name: "Sarah Mitchell", roleIdx: 0 },

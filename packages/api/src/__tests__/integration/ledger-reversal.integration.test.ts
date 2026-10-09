@@ -23,6 +23,8 @@ let payment: typeof import("../../services/ar/payment.service.js");
 let reversal: typeof import("../../services/ar/reversal.service.js");
 
 let accountId: string;
+let debitReasonId: string;
+let feeReasonId: string;
 
 beforeAll(async () => {
   const booted = await bootPostgres();
@@ -46,6 +48,21 @@ beforeAll(async () => {
     },
   });
   accountId = account.id;
+
+  // Slice 3's ledger_entry_reason_required.
+  const debitReason = await prisma.ledgerReasonDef.create({
+    data: {
+      utilityId,
+      code: "REV-DEBIT",
+      label: "Reversal suite debit",
+      appliesToType: "ADJUSTMENT_DEBIT",
+    },
+  });
+  debitReasonId = debitReason.id;
+  const feeReason = await prisma.ledgerReasonDef.create({
+    data: { utilityId, code: "REV-FEE", label: "Reversal suite fee", appliesToType: "FEE" },
+  });
+  feeReasonId = feeReason.id;
 }, 180_000);
 
 afterAll(async () => {
@@ -75,6 +92,7 @@ async function debit(amount: string, dueDate: string): Promise<string> {
       openAmount: amount,
       dueDate: new Date(dueDate),
       effectiveDate: new Date(dueDate),
+      reasonId: debitReasonId,
       createdBy: ACTOR,
     },
   });
@@ -204,6 +222,7 @@ describe("reverseEntry", () => {
         openAmount: "15.00",
         dueDate: new Date("2026-07-14"),
         effectiveDate: new Date("2026-06-20"),
+        reasonId: feeReasonId,
         assessedOnId: charge,
         createdBy: ACTOR,
       },
