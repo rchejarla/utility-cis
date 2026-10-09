@@ -186,9 +186,15 @@ describe("reconcileBalances", () => {
     // column (amount instead of open_amount) or dropped a row, the cache
     // would diverge from this model even though both read the same table.
     const model: { due: string; open: number }[] = []; // open debits
+    // Credit sitting open, in cents, from bills that netted negative. The
+    // model has to carry this since slice 2: §6.1 step 4 absorbs open
+    // credits into each new debit, so a debit's openAmount is its amount
+    // minus whatever credit was waiting.
+    let openCredit = 0;
     let modelBalance = 0;
     let settlements = 0;
     let fullSettlements = 0;
+    let absorptions = 0;
 
     for (let i = 0; i < 40; i++) {
       const cents = Math.floor(next() * 20_000) - 2_000; // -20.00 .. 180.00
@@ -198,7 +204,20 @@ describe("reconcileBalances", () => {
         const billId = await makeBill((cents / 100).toFixed(4), due);
         await posting.postBill(utilityId, ACTOR, "Tester", billId);
         modelBalance += cents;
-        if (cents > 0) model.push({ due, open: cents });
+        if (cents > 0) {
+          // The new debit absorbs whatever credit is open, oldest first.
+          // Absorption moves value between two open amounts, so it never
+          // changes the balance — only which rows are still open.
+          const absorbed = Math.min(cents, openCredit);
+          if (absorbed > 0) absorptions++;
+          openCredit -= absorbed;
+          const open = cents - absorbed;
+          if (open > 0) model.push({ due, open });
+        } else {
+          // A bill that nets negative posts a credit, which stays open
+          // until a later debit takes it.
+          openCredit += -cents;
+        }
       }
 
       // Every third step, settle part of the oldest open debit by hand
@@ -249,6 +268,9 @@ describe("reconcileBalances", () => {
 
     expect(settlements).toBeGreaterThan(5);
     expect(fullSettlements).toBeGreaterThan(0);
+    // The sequence must actually exercise §6.1 step 4, or the model's
+    // openCredit arithmetic is never put under any pressure.
+    expect(absorptions).toBeGreaterThan(0);
     const entries = await prisma.ledgerEntry.findMany({ where: { utilityId } });
     expect(entries.length).toBeGreaterThan(20);
     // The sign invariants must be exercised on genuinely part-settled rows.

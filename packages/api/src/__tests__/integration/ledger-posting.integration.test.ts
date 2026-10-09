@@ -183,6 +183,90 @@ describe("postBill", () => {
     await posting.postBill(utilityId, ACTOR, "Tester", await makeBill("-12.5000"));
     const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
     expect(account.balance.toFixed(2)).toBe("37.50");
+
+    // Both rows stay open and nothing is allocated. §6.1 step 4 absorbs
+    // open credits into a NEW DEBIT; the second bill here posts a
+    // credit, so there is nothing for it to absorb, and the existing
+    // debit is not its business. The balance is right regardless because
+    // it is a signed sum — only the open-item detail is unsettled, and
+    // the next debit to post will absorb this credit.
+    const apps = await prisma.ledgerApplication.findMany({ where: { utilityId } });
+    expect(apps).toEqual([]);
+  });
+
+  it("absorbs an open credit when a bill posts", async () => {
+    const { prisma } = prismaImports;
+    // An open credit sitting on the account — an overpayment from before.
+    const credit = await prisma.ledgerEntry.create({
+      data: {
+        utilityId,
+        accountId,
+        type: "PAYMENT",
+        amount: "-20.00",
+        openAmount: "-20.00",
+        effectiveDate: new Date("2026-05-01"),
+        tender: "CHECK",
+        createdBy: ACTOR,
+      },
+    });
+
+    const billId = await makeBill("50.0000");
+    const result = await posting.postBill(utilityId, ACTOR, "Tester", billId);
+
+    // The charge is reduced by the credit rather than both sitting open.
+    const charge = await prisma.ledgerEntry.findFirstOrThrow({
+      where: { billId, type: "BILL_CHARGE" },
+    });
+    expect(charge.amount.toFixed(2)).toBe("50.00");
+    expect(charge.openAmount.toFixed(2)).toBe("30.00");
+
+    const after = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id: credit.id } });
+    expect(after.openAmount.toFixed(2)).toBe("0.00");
+
+    expect(result.applied).toHaveLength(1);
+    expect(result.applied[0]!.amount).toBe("20.00");
+    expect(result.balance).toBe("30.00");
+
+    const apps = await prisma.ledgerApplication.findMany({ where: { utilityId } });
+    expect(apps).toHaveLength(1);
+  });
+
+  it("does not absorb a credit that belongs to another account", async () => {
+    const { prisma } = prismaImports;
+    const otherAccount = await prisma.account.create({
+      data: {
+        utilityId,
+        accountNumber: `LEDGER-OTHER-${Math.random().toString(36).slice(2, 7)}`,
+        accountType: "RESIDENTIAL",
+        status: "ACTIVE",
+        billingCycleId,
+      },
+    });
+    const strayCredit = await prisma.ledgerEntry.create({
+      data: {
+        utilityId,
+        accountId: otherAccount.id,
+        type: "PAYMENT",
+        amount: "-20.00",
+        openAmount: "-20.00",
+        effectiveDate: new Date("2026-05-01"),
+        tender: "CHECK",
+        createdBy: ACTOR,
+      },
+    });
+
+    try {
+      const billId = await makeBill("50.0000");
+      await posting.postBill(utilityId, ACTOR, "Tester", billId);
+
+      const after = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id: strayCredit.id } });
+      expect(after.openAmount.toFixed(2)).toBe("-20.00");
+      const charge = await prisma.ledgerEntry.findFirstOrThrow({ where: { billId } });
+      expect(charge.openAmount.toFixed(2)).toBe("50.00");
+    } finally {
+      await prisma.ledgerEntry.delete({ where: { id: strayCredit.id } });
+      await prisma.account.delete({ where: { id: otherAccount.id } });
+    }
   });
 
   it("waits on the account row lock, then updates balance and lastDueDate", async () => {
