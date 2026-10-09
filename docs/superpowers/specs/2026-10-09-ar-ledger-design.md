@@ -79,30 +79,41 @@ A side benefit: one entry per bill means one rounding step (§4.6), with no rema
 
 `LedgerEntry.amount` for a bill charge looks like a copy of `bill.total`. The no-duplication alternative — store only `openAmount` and join for the rest — was rejected for two reasons:
 
-1. **Non-bill charges have nothing to join to.** A fee, adjustment, write-off or payment has no `bill` behind it, so the column is needed regardless. Deriving it for one kind and storing it for the others makes `amount` conditionally meaningful and every balance query a conditional join.
+1. **Non-bill charges have nothing to join to.** A fee, adjustment, write-off or payment has no `bill` behind it, so the column is needed regardless. Deriving it for one type and storing it for the others makes `amount` conditionally meaningful and every balance query a conditional join.
 2. **A receivable must be frozen at posting.** Slice 5d is *rebill/corrections*; bill amounts will change. Deriving the receivable would mean correcting a bill silently rewrites what the customer owed last month. You post a correcting entry; you do not edit history.
 
 This codebase already made the same call for the same reason one slice earlier — `Bill.billingCycleId` carries the comment *"Cycle in effect at issue time. Materialized so a later cycle switch on the Account doesn't rewrite history."*
 
 What is **never** copied: line labels, quantities and rate provenance. Those stay in `BillSegmentLine`; the entry points at the bill.
 
-### 3.3 Fixed `LedgerEntryKind` enum, not a per-tenant table
+### 3.3 Fixed `LedgerEntryType` enum, not a per-tenant table
 
-**Rejected: a tenant-scoped `LedgerEntryType` table** with `sign` and `allocationPriority` columns, by analogy with `RateComponentKind` (a `utility_id`-scoped table whose seeded codes the engine branches on — `rate.ts:51` tests `kindCode === "minimum_bill"`).
+**Rejected: a tenant-scoped type table** with `sign` and `allocationPriority` columns, by analogy with `RateComponentKind` (a `utility_id`-scoped table whose seeded codes the engine branches on — `rate.ts:51` tests `kindCode === "minimum_bill"`).
 
 Rejected because no utility would add or remove one. Every utility bills, takes payments, charges late/NSF/reconnection fees, waives, and writes off bad debt. The list describes *mechanics*, not local policy. The table was reached for because it felt more flexible — the "future flexibility" justification CLAUDE.md rejects.
 
-An enum is also better where it fits: typos are compile errors, switches are exhaustively checked, and reporting categories stay comparable across tenants rather than each inventing its own spelling of "late fee". Adding a kind later means teaching the engine new behaviour anyway, so a migration is the honest cost.
+An enum is also better where it fits: typos are compile errors, switches are exhaustively checked, and reporting categories stay comparable across tenants rather than each inventing its own spelling of "late fee". Adding a type later means teaching the engine new behaviour anyway, so a migration is the honest cost.
 
-A `LedgerSign` enum was introduced to let a type row carry its own sign; with a fixed kind enum it became unnecessary and is dropped. Sign is a code-level constant map over kinds.
+**Naming.** This schema already distinguishes the two cases consistently: `XType` is a fixed enum (`MeterType`, `CustomerType`, `ContainerType`, `ServicePointType`, `MeterEventType`), while `XTypeDef` and `XKind` are tenant-configurable tables (`PremiseTypeDef`, `AccountTypeDef`, `MeasureTypeDef`, `SuspensionTypeDef`, `RateComponentKind`). A draft called this enum `LedgerEntryKind`, which reuses "Kind" with the opposite meaning — a reader who knows `RateComponentKind` is a table would expect the same here. Hence `LedgerEntryType`, and `LedgerReasonDef` for the table, keeping the `*Def` suffix that already signals tenant-configurable.
 
-### 3.4 Extensibility lives in the *reason*, not the kind
+### 3.3a Direction is explicit data, not the sign of `amount`
+
+**Rejected: a signed `amount`** — debits positive, credits negative — justified in a draft as making the balance "a plain `SUM()`".
+
+That justification does not hold. §5 computes the balance from **`openAmount`**, which is non-negative on both sides by design, so direction-aware arithmetic is required regardless. Signing `amount` bought nothing and cost two things:
+
+1. **A redundancy.** `type` implies direction, and the sign had to agree with it — two sources for one fact, held together by a constraint.
+2. **An exemption.** `REVERSAL` has no direction derivable from its type, so it had to be excluded from that constraint. A model needing a special case for one of its core operations — NSF, corrections and rebills are all reversals — is mis-factored.
+
+So `direction` is its own column, `amount` is a positive magnitude, and a reversal simply takes the opposite direction of the entry it reverses. The cost, stated honestly: net sums need `CASE WHEN direction = 'DEBIT' THEN amount ELSE -amount END` rather than a bare `SUM`. That is not a new cost, only a visible one.
+
+### 3.4 Extensibility lives in the *reason*, not the type
 
 What genuinely varies per utility is the business reason behind a fee or adjustment: tap fee, meter test fee, backflow test, tamper charge, "courtesy — first occurrence". Those grow without code changes. Hence `LedgerReasonDef`, tenant-scoped, following the established `*TypeDef` convention.
 
 ### 3.5 Waive, correct, write off — three distinct acts
 
-| Situation | What is posted | Kind |
+| Situation | What is posted | Type |
 |---|---|---|
 | The charge was **wrong** | reverse it | `REVERSAL` |
 | The charge was **right**, we forgive it | credit it | `CREDIT` + reason |
@@ -158,7 +169,7 @@ If the ledger lived inside Payments and Collections, Billing and Delinquency wou
 ### 4.1 Enums
 
 ```prisma
-enum LedgerEntryKind {
+enum LedgerEntryType {
   BILL_CHARGE       // debit  — an issued Bill; provenance billId; idempotent
   FEE               // debit  — off-cycle (late, NSF, reconnection); assessedOnId
   ADJUSTMENT_DEBIT  // debit  — manual increase
@@ -177,12 +188,23 @@ enum PaymentTender {
 }
 ```
 
-Sign is a constant map over kinds in `@utility-cis/shared`, not a column:
+```prisma
+enum LedgerDirection { DEBIT  CREDIT }
+```
+
+Direction is a column (§3.3a), not inferred from the type at read time. The expected pairing is still asserted, as a constant in `@utility-cis/shared` and as a DB constraint:
 
 ```ts
-export const DEBIT_KINDS = ["BILL_CHARGE", "FEE", "ADJUSTMENT_DEBIT"] as const;
-export const CREDIT_KINDS = ["PAYMENT", "CREDIT", "WRITE_OFF"] as const;
-// REVERSAL takes the opposite sign of the entry it reverses.
+export const ENTRY_DIRECTION: Record<Exclude<LedgerEntryType, "REVERSAL">, LedgerDirection> = {
+  BILL_CHARGE:      "DEBIT",
+  FEE:              "DEBIT",
+  ADJUSTMENT_DEBIT: "DEBIT",
+  PAYMENT:          "CREDIT",
+  CREDIT:           "CREDIT",
+  WRITE_OFF:        "CREDIT",
+};
+// REVERSAL is excluded by construction: its direction is the opposite of
+// the entry it reverses, so there is no fixed mapping to assert.
 ```
 
 ### 4.2 `LedgerEntry`
@@ -192,9 +214,10 @@ export const CREDIT_KINDS = ["PAYMENT", "CREDIT", "WRITE_OFF"] as const;
 | id | UUID | PK |
 | utilityId | UUID | Tenant scope |
 | accountId | UUID FK | The receivable is the account's |
-| kind | LedgerEntryKind | |
-| amount | Decimal(14,2) | **Signed.** Debits positive, credits negative, so a balance is a plain `SUM()` |
-| openAmount | Decimal(14,2) | Unconsumed remainder. Non-negative, `abs(openAmount) <= abs(amount)` |
+| type | LedgerEntryType | What sort of event this is |
+| direction | LedgerDirection | DEBIT increases what is owed, CREDIT reduces it (§3.3a) |
+| amount | Decimal(14,2) | **Positive magnitude.** Direction carries the arithmetic |
+| openAmount | Decimal(14,2) | Unconsumed remainder, `0 <= openAmount <= amount` |
 | dueDate | Date? | Debits only. Drives aging and days-past-due |
 | effectiveDate | Date | Accounting date; may differ from `postedAt` (backdated entries) |
 | postedAt | Timestamptz | When it hit the ledger |
@@ -209,9 +232,10 @@ export const CREDIT_KINDS = ["PAYMENT", "CREDIT", "WRITE_OFF"] as const;
 
 **Constraints**
 
-- `UNIQUE (utility_id, bill_id) WHERE kind = 'BILL_CHARGE'` — structural idempotency; posting the same Bill twice is refused rather than double-charging.
-- `CHECK (open_amount >= 0)`
-- `CHECK` sign matches kind: positive for `BILL_CHARGE` / `FEE` / `ADJUSTMENT_DEBIT`, negative for `PAYMENT` / `CREDIT` / `WRITE_OFF`. **`REVERSAL` is exempt** — its sign is the opposite of the entry it reverses, so it can be either, and the constraint instead requires `reverses_id IS NOT NULL`.
+- `UNIQUE (utility_id, bill_id) WHERE type = 'BILL_CHARGE'` — structural idempotency; posting the same Bill twice is refused rather than double-charging.
+- `CHECK (amount > 0)` — a zero-amount entry is never meaningful, and a negative one is a direction error. This is also the constraint that stops a $0 late fee being posted; the *policy* question of a minimum fee amount belongs on `DelinquencyRule` (§10 slice 6), not here.
+- `CHECK (open_amount >= 0 AND open_amount <= amount)`
+- `CHECK` direction matches type, per the `ENTRY_DIRECTION` map in §4.1, **for every type except `REVERSAL`**, which instead requires `reverses_id IS NOT NULL`. Not an exemption from a rule it ought to follow — a reversal's direction is genuinely a property of its target, so there is no fixed pairing to assert.
 - `CHECK (reason_id IS NOT NULL)` for `FEE` / `ADJUSTMENT_DEBIT` / `CREDIT` / `WRITE_OFF`.
 
 **Indexes**
@@ -243,7 +267,7 @@ Decimal(14,2), not the (14,4) the rate engine uses: rating needs sub-cent precis
 | utilityId | UUID | Tenant scope |
 | code | VarChar(50) | `LATE_FEE`, `NSF_FEE`, `RECONNECT_FEE`, `COURTESY_WAIVER`, `BAD_DEBT` … |
 | label | VarChar(255) | What appears on the statement |
-| appliesToKind | LedgerEntryKind | Restricts which kind may cite it |
+| appliesToType | LedgerEntryType | Restricts which entry type may cite it |
 | isActive | Boolean | |
 
 **No `requiresApproval` column.** An earlier draft had one "as a hook for the approvals workflow." Dropped for two reasons:
@@ -283,14 +307,14 @@ Consequence to state plainly: across many bills, `SUM(bill.total)` and `SUM(ledg
 ## 5. Invariants
 
 ```
-debit.openAmount   = debit.amount   − Σ applications where debitId  = debit.id
-credit.openAmount  = |credit.amount| − Σ applications where creditId = credit.id
+debit.openAmount   = debit.amount  − Σ applications where debitId  = debit.id
+credit.openAmount  = credit.amount − Σ applications where creditId = credit.id
 account.balance    = Σ open debits − Σ open credits
 ```
 
 `openAmount` means the same thing on both sides: **remaining unconsumed**. On a debit it is unpaid charge; on a credit it is unapplied money — which *is* a customer credit balance. Overpayment needs no special case.
 
-`amount`, `kind`, `dueDate` and `effectiveDate` are **immutable** once posted. `openAmount` is explicitly *not* history — it is maintained bookkeeping, like `account.balance`. Worth stating because "immutable ledger" and "we update openAmount" otherwise read as a contradiction.
+`amount`, `type`, `direction`, `dueDate` and `effectiveDate` are **immutable** once posted. `openAmount` is explicitly *not* history — it is maintained bookkeeping, like `account.balance`. Worth stating because "immutable ledger" and "we update openAmount" otherwise read as a contradiction.
 
 ---
 
@@ -312,13 +336,13 @@ When auto-post is on, this runs **inside `generateBillForAccount`'s existing tra
 
 ### 6.2 `recordPayment({ accountId, amount, tender, receivedAt, externalRef })`
 
-Insert `PAYMENT` with negative `amount`, `openAmount = |amount|`, then allocate (§6.3). Leftover stays as `openAmount` on the payment — a credit balance.
+Insert `PAYMENT` with `direction = CREDIT`, `openAmount = amount`, then allocate (§6.3). Leftover stays as `openAmount` on the payment — a credit balance.
 
 ### 6.3 Allocation
 
 Walk open debits in this order:
 
-1. **Kind class:** `FEE`, then `ADJUSTMENT_DEBIT`, then `BILL_CHARGE`
+1. **Type class:** `FEE`, then `ADJUSTMENT_DEBIT`, then `BILL_CHARGE`
 2. **Oldest `dueDate`** within a class, tie-broken by `postedAt`
 
 Which is spec 10's rule — reconnection fees, then late fees, then oldest bills FIFO. The ranking lives in **one constant**. Spec 10 says it should be tenant-configurable; not built, because no second tenant wants a different order. When one does, it moves to `TenantSetting`, which already exists.
@@ -416,5 +440,5 @@ Too large for one implementation plan. **Slice 1 is the first plan's scope**; ea
 1. **Module 10 needs rewriting again** to reflect §3.9 — it currently claims the ledger, the `Payment` entity and allocation, which move here.
 2. **`docs/bozeman/12-corrections-and-reversals.md:459`** still says the accounting layer is SaaSLogic's. Under the 2026-10-09 decision that should be the City's ERP, matching the pattern `14-special-assessments.md:701` already uses.
 3. **Fee amount on `DelinquencyRule`** — the blocker for late-fee generation.
-4. **Refunds — the credit lifecycle has no terminal state.** An open credit can be consumed by a future debit (the normal path, §6.1) or refunded. Refunding needs something for the credit to be applied *against*, and no current kind fits — the expected shape is a `REFUND` debit kind, meaning "paid back to the customer." So this is not purely additive: the enum will need a migration, which §3.3 accepts as the honest cost of a fixed enum. Worth knowing before the first account closes with a credit balance, since account closure already exists.
+4. **Refunds — the credit lifecycle has no terminal state.** An open credit can be consumed by a future debit (the normal path, §6.1) or refunded. Refunding needs something for the credit to be applied *against*, and no current type fits — the expected shape is a `REFUND` entry with `direction = DEBIT`, meaning "paid back to the customer." So this is not purely additive: the enum will need a migration, which §3.3 accepts as the honest cost of a fixed enum. Worth knowing before the first account closes with a credit balance, since account closure already exists.
 5. **Backdated entries.** `effectiveDate` is separate from `postedAt` so a correction can land in a prior period, but nothing closes a period. If period close is ever needed, it constrains `effectiveDate` and belongs with it.
