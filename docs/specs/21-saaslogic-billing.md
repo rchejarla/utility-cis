@@ -1,7 +1,7 @@
 # SaaSLogic Payment Collection
 
 **Module:** 21 — SaaSLogic Payment Collection
-**Status:** Design — scope reduced 2026-10-09 (see Decision below). Implementation pending; blocked on the AR design in module 10.
+**Status:** Design — scope reduced 2026-10-09 (see Decision below). Implementation pending; blocked on payment recording in module 10 (the ledger and posting have shipped).
 **External system:** [SaaSLogic](https://docs.saaslogic.io) — used here as a payment rail only
 **Entities:** new columns on `Customer` and `Bill`; `SaaslogicCallLog`, `PollCursor` retained from the prior design
 
@@ -17,7 +17,7 @@ This reverses the original scope of this module, which had SaaSLogic acting as t
 | Taxes and surcharges | **CIS** — rate components with `kindCode` `tax` / `credit` |
 | Per-agreement charge detail | **CIS** — `BillSegment` + `BillSegmentLine` |
 | Customer-facing bill and its total | **CIS** — `Bill` |
-| Amount receivable, payments applied, balance | **CIS** — see module 10 (to be designed) |
+| Amount receivable, payments applied, balance | **CIS** — ledger and posting shipped (module 10 slice 1); payment recording and allocation outstanding (module 10 slices 2–3) |
 | Card data, hosted payment page, settlement | **SaaSLogic** |
 
 CIS is the system of record for what is owed. SaaSLogic is told an amount and reports back whether it was paid.

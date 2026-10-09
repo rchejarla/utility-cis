@@ -111,7 +111,7 @@ Every significant CIS state change emits a domain event. ApptorFlow subscribes a
 
 ### 4.1 Entity Summary
 
-**36 entities** across 12 categories:
+**39 entities** across 13 categories:
 
 | Category | Entities |
 |----------|----------|
@@ -127,6 +127,7 @@ Every significant CIS state change emits a domain event. ApptorFlow subscribes a
 | **Notifications** | NotificationTemplate, Notification |
 | **Delinquency** | DelinquencyRule, DelinquencyAction |
 | **Service Requests** | ServiceRequest, Sla, ServiceRequestTypeDef (+ `service_request_counter` plumbing table for per-tenant/year `SR-YYYY-NNNNNN` numbering) |
+| **Accounts Receivable** | LedgerEntry, LedgerApplication, LedgerReasonDef |
 
 **Service Request enums (Phase 4 slice B):**
 - `ServiceRequestStatus`: NEW, ASSIGNED, IN_PROGRESS, PENDING_FIELD, COMPLETED, CANCELLED, FAILED

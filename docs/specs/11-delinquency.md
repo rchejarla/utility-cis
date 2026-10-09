@@ -18,7 +18,7 @@ Primary users: collections staff, billing supervisors, CSRs.
 
 | Column | Type | Notes |
 |---|---|---|
-| `balance` | DECIMAL(14,2) | Current outstanding balance. Default 0. Updated manually by CSR or by future SaaSLogic webhook. |
+| `balance` | DECIMAL(14,2) | Current outstanding balance. Default 0. A cache: recomputed from the AR ledger inside the posting transaction when a Bill posts (see module 10). |
 | `last_due_date` | DATE | Most recent invoice due date. Nullable. Used by the evaluation job to compute days past due. |
 | `is_protected` | BOOLEAN | Default false. Exempt from SHUT_OFF_ELIGIBLE and DISCONNECT actions. |
 | `protection_reason` | TEXT | Nullable. Why the account is protected (e.g., "life support equipment", "extreme weather moratorium"). |
@@ -199,7 +199,7 @@ New `delinquency` module added to MODULES constant. Permissions:
 ## Seed Data
 
 - 5 sample delinquency rules (tier 1–5 as described in the example chain)
-- Set balance and lastDueDate on a few seeded accounts so the evaluation job has something to process
+- Give a few seeded accounts issued Bills that auto-post to the ledger, so the evaluation job has ledger-backed balances to process. `balance` and `lastDueDate` are written by AR posting, not set directly by the seeder
 - 2–3 sample DelinquencyActions showing different statuses
 
 ## Business Rules
@@ -230,7 +230,7 @@ New `delinquency` module added to MODULES constant. Permissions:
 - RBAC module + permissions
 
 ### Phase 3.2 (After SaaSLogic billing)
-- Auto-update balance and lastDueDate from SaaSLogic invoice/payment webhooks
+- Payment-driven balance updates: recording a payment recomputes balance and lastDueDate from the ledger (module 10 slice 2), and SaaSLogic payment results feed the same path
 - Auto-resolve delinquency on payment confirmation
 - Reconnection fee as ad-hoc charge on resolution after disconnect
 
