@@ -406,8 +406,8 @@ A query asserting `account.balance` equals the ledger rollup for every account, 
 | Where | Change |
 |---|---|
 | `bill.service.ts` | `generateBillForAccount` calls `postBill` in its existing transaction when auto-post resolves true |
-| `delinquency.service.ts` | Days-past-due comes from the **oldest open debit's `dueDate`**, not `account.lastDueDate`. Two call sites (`:52` and `:202`) |
-| `Account.lastDueDate` | **Kept**, written as a display cache alongside `balance` |
+| `delinquency.service.ts` | Days-past-due comes from the **oldest open debit's `dueDate`**, not `account.lastDueDate`. Two call sites (`:52` and `:202`). **Half of this landed in slice 1:** `recomputeAccountCache` already writes the oldest open debit's due date into `lastDueDate`, so both call sites compute the right number today by reading the column. What remains for slice 5 is deciding whether they should read the ledger directly instead, and the rename below |
+| `Account.lastDueDate` | **Kept**, written as a display cache alongside `balance` — holding, since slice 1, the oldest open debit's due date. The name no longer says what it holds and fails rule 1 of the design rules; renaming it is a migration plus a call-site sweep, listed under slice 5 |
 | `portal-api.ts` | `/portal/api/dashboard` and `/portal/api/accounts/:id` gain amount due, open charges, payment history. The portal exposes **no balance at all** today |
 | Account detail UI | AR tab: ledger, aging summary, record-payment, adjust/waive actions |
 | Billing UI | Unposted-bills list for a cycle, with a Post action, when auto-post is off |
@@ -435,7 +435,7 @@ Too large for one implementation plan. **Slice 1 is the first plan's scope**; ea
 2. **Payments** — `recordPayment`, allocation, open-credit auto-apply, `reverseEntry` (NSF).
 3. **Fees and adjustments** — `LedgerReasonDef` + seeds, `assessFee`, waive/write-off/adjust, the two new RBAC modules.
 4. **Visibility** — statement view, aging query, account AR tab, portal amount due.
-5. **Delinquency rewire** — days-past-due from the oldest open debit.
+5. **Delinquency rewire** — days-past-due from the oldest open debit. The cache side shipped in slice 1 (`Account.lastDueDate` holds it), so what is left is the two reader call sites in `delinquency.service.ts` and the rename of `lastDueDate` to something that says what it holds.
 6. **Late-fee generation** — a fee amount on `DelinquencyRule`, and a `LATE_FEE` action type that calls `assessFee` (§6.4). Listed as a non-goal above because it is separable, but sequenced here deliberately: until fees exist in anger, three designed behaviours have no real exercise — the fee-before-bill allocation priority (§6.3), `assessedOnId`, and dependent-fee reversal (§6.6). It is also small.
 
 ---

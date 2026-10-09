@@ -1,7 +1,7 @@
 # SaaSLogic Payment Collection
 
 **Module:** 21 — SaaSLogic Payment Collection
-**Status:** Design — scope reduced 2026-10-09 (see Decision below). Implementation pending; blocked on payment recording in module 10 (the ledger and posting have shipped).
+**Status:** Design — scope reduced 2026-10-09 (see Decision below). Implementation pending; blocked on payment recording in module 23 (the ledger and posting have shipped).
 **External system:** [SaaSLogic](https://docs.saaslogic.io) — used here as a payment rail only
 **Entities:** new columns on `Customer` and `Bill`; `SaaslogicCallLog`, `PollCursor` retained from the prior design
 
@@ -17,7 +17,7 @@ This reverses the original scope of this module, which had SaaSLogic acting as t
 | Taxes and surcharges | **CIS** — rate components with `kindCode` `tax` / `credit` |
 | Per-agreement charge detail | **CIS** — `BillSegment` + `BillSegmentLine` |
 | Customer-facing bill and its total | **CIS** — `Bill` |
-| Amount receivable, payments applied, balance | **CIS** — ledger and posting shipped (module 10 slice 1); payment recording and allocation outstanding (module 10 slices 2–3) |
+| Amount receivable, payments applied, balance | **CIS** — ledger and posting shipped (module 23 slice 1); payment recording and allocation outstanding (module 23 slices 2–3) |
 | Card data, hosted payment page, settlement | **SaaSLogic** |
 
 CIS is the system of record for what is owed. SaaSLogic is told an amount and reports back whether it was paid.
@@ -62,7 +62,7 @@ AR posting writes `Account.balance` inside the same transaction that creates the
 
 So the order is:
 
-1. **Module 10 — AR and payments (ledger shipped; payments outstanding).** Still needed: a `Payment` entity, recording of money received, and allocation of payments against open ledger entries. The posting rule and the choice of a materialized `Account.balance` are already settled (see module 10 and the AR design doc). Payment plans and the collections workflow follow.
+1. **Module 23 — Accounts Receivable (ledger shipped; payments outstanding).** Still needed: a `Payment` entity, recording of money received, and allocation of payments against open ledger entries. The posting rule and the choice of a materialized `Account.balance` are already settled (see module 23 and the AR design doc). Payment plans and the collections workflow follow, in module 10.
 2. **This module.** Once CIS can record a payment, SaaSLogic becomes a thin adapter: register an amount, receive a result, call AR posting.
 
 Building the adapter before payments can be recorded would mean inventing AR semantics inside an integration, which is the wrong place for them.
@@ -79,7 +79,7 @@ Building the adapter before payments can be recorded would mean inventing AR sem
 
 - **`bill.saaslogic_charge_id`** — VARCHAR, null until the Bill is registered for collection. The idempotency anchor: registering the same Bill twice must not create two payable charges.
 
-Payment records themselves are **not** defined here — they belong to module 10, because CIS owns the ledger and payments may also arrive by cash, check or lockbox, which never touch SaaSLogic.
+Payment records themselves are **not** defined here — they belong to module 23, because CIS owns the ledger and payments may also arrive by cash, check or lockbox, which never touch SaaSLogic.
 
 ## Security and compliance
 

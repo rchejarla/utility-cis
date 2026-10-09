@@ -12,7 +12,7 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 
 ## Entity Summary
 
-**34 core domain entities** (curated; the Prisma schema defines 58 models, and type-def, plumbing and later-phase tables such as `Bill` and `ServicePoint` are not listed here) across 10 categories (RBAC category added in Phase 2; TenantConfig and SuspensionTypeDef added alongside Service Holds v1; CustomFieldSchema added in Custom Fields Phase 1; Notifications and Delinquency categories added in Phase 3; Service Requests category added in Phase 4 slice B; Accounts Receivable category added in Phase 3 AR slice 1):
+**34 core domain entities** (curated; the Prisma schema defines 58 models, and type-def, plumbing and later-phase tables such as `Bill` and `ServicePoint` are not listed here) across 12 categories (RBAC category added in Phase 2; TenantConfig and SuspensionTypeDef added alongside Service Holds v1; CustomFieldSchema added in Custom Fields Phase 1; Notifications and Delinquency categories added in Phase 3; Service Requests category added in Phase 4 slice B; Accounts Receivable category added in Phase 3 AR slice 1):
 
 | # | Entity | Table | Category | Phase Built | Key Relationships |
 |---|--------|-------|----------|-------------|-------------------|
@@ -47,9 +47,9 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 | 29 | ServiceRequestTypeDef | `service_request_type_def` | Service Requests | Phase 4 slice B | Per-tenant (or global, with `utility_id IS NULL`) reference table for service-request type codes. Mirrors SuspensionTypeDef — RLS allows globals to be visible across all tenants. 8 globals seeded (LEAK_REPORT, DISCONNECT, RECONNECT, START_SERVICE, STOP_SERVICE, BILLING_DISPUTE, METER_ISSUE, OTHER). See spec 14. |
 | 30 | Sla | `sla` | Service Requests | Phase 4 slice B | Per-tenant SLA policy keyed on `(request_type, priority)`; drives `sla_due_at` at SR creation and breach computation at completion. See spec 14. |
 | 31 | ServiceRequest | `service_request` | Service Requests | Phase 4 slice B | Core work item. Lifecycle NEW → ASSIGNED → IN_PROGRESS → PENDING_FIELD → COMPLETED / CANCELLED / FAILED. Per-tenant/year `SR-YYYY-NNNNNN` numbering via `service_request_counter` plumbing table. External-system, billing-action, delinquency, and attachments columns reserved but unused this slice. See spec 14. |
-| 32 | LedgerEntry | `ledger_entry` | Accounts Receivable | Phase 3 AR slice 1 | One financial event against an Account. Signed: positive increases what the customer owes. Optional FKs to Bill (`BILL_CHARGE`), to the entry a fee was assessed on, and to the entry a reversal negates. See the AR design doc. |
-| 33 | LedgerApplication | `ledger_application` | Accounts Receivable | Phase 3 AR slice 1 | Which credit paid down which debit, and by how much. Table created in slice 1; rows are written from slice 2 onward. |
-| 34 | LedgerReasonDef | `ledger_reason_def` | Accounts Receivable | Phase 3 AR slice 1 | Why a fee or adjustment was raised, in the utility's own words. Tenant-configurable, following the `*TypeDef` convention. Seeded in slice 3. |
+| 32 | LedgerEntry | `ledger_entry` | Accounts Receivable | Phase 3 AR slice 1 | One financial event against an Account. Signed: positive increases what the customer owes. Optional FKs to Bill (`BILL_CHARGE`), to the entry a fee was assessed on, and to the entry a reversal negates. See spec 23. |
+| 33 | LedgerApplication | `ledger_application` | Accounts Receivable | Phase 3 AR slice 1 | Which credit paid down which debit, and by how much. Table created in slice 1; rows are written from slice 2 onward. See spec 23. |
+| 34 | LedgerReasonDef | `ledger_reason_def` | Accounts Receivable | Phase 3 AR slice 1 | Why a fee or adjustment was raised, in the utility's own words. Tenant-configurable, following the `*TypeDef` convention. Seeded in slice 3. See spec 23. |
 
 ## ER Diagram
 

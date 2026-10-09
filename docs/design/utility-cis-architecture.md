@@ -23,7 +23,7 @@ The Utility CIS (Customer Information System) is a multi-tenant SaaS platform fo
 | **SaaSLogic** | Card data, hosted payment page, settlement | CIS (registers an amount due, receives the payment result) |
 | **ApptorFlow** | Workflow orchestration: start/stop service, collections, anomaly response, approvals | CIS (events), SaaSLogic (payment events) |
 
-**Built in Phase 3 AR slice 1:** an issued `Bill` posts a signed `LedgerEntry`, and `Account.balance` is recomputed from the ledger in the same transaction, so the receivable CIS owns now exists in code. **Not yet built:** payments, allocation and write-offs. See module 10.
+**Built in Phase 3 AR slice 1:** an issued `Bill` posts a signed `LedgerEntry`, and `Account.balance` is recomputed from the ledger in the same transaction, so the receivable CIS owns now exists in code. **Not yet built:** payments, allocation and write-offs. See module 23.
 
 ### Target Market
 
