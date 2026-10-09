@@ -1,7 +1,7 @@
 # Payments and Collections
 
 **Module:** 10 — Payments and Collections
-**Status:** Phase 3 — the ledger and posting shipped in the AR slice (module 23); payments, allocation, waivers, plans and the collections workflow are still outstanding here.
+**Status:** Phase 3 — the ledger, posting, payment recording, allocation and reversal all shipped in module 23 (slices 1–2); waivers, write-offs, payment plans and the collections workflow are still outstanding here.
 **Entities:** PaymentPlan (planned), AdhocCharge (planned), WriteOff (planned). The ledger itself — `LedgerEntry`, `LedgerApplication`, `LedgerReasonDef` — lives in module 23.
 
 ## Overview
@@ -16,7 +16,7 @@ Crucially, SaaSLogic is one tender among several — cash, check and lockbox pay
 
 ### Status of the gap
 
-Closed on the charge side. `Account.balance` is now written from the ledger inside the posting transaction and reconciled by `GET /api/v1/ar/reconciliation`; delinquency therefore sweeps real receivables rather than seeded values. Still outstanding here: recording payments of any tender, allocation, waivers and write-offs (module 23 slices 2–3), then payment plans and the collections workflow.
+Closed on both the charge and the payment side. `Account.balance` is written from the ledger inside the posting transaction and reconciled by `GET /api/v1/ar/reconciliation`; delinquency therefore sweeps real receivables rather than seeded values. Money received of any tender is recorded by `POST /api/v1/accounts/:id/payments`, allocated against open charges in the module 23 §6.3 order, and reversible for NSF via `POST /api/v1/ledger-entries/:id/reverse`. Still outstanding here: waivers and write-offs (module 23 slice 3), then payment plans, the collections workflow and write-off approval.
 
 Primary users: billing clerks, collections staff, finance managers, CSRs (for account inquiries).
 
