@@ -6,6 +6,11 @@ import {
   DEBIT_ALLOCATION_ORDER,
   recordPaymentSchema,
   reverseEntrySchema,
+  DEFAULT_REASON_CODES,
+  assessFeeSchema,
+  adjustSchema,
+  waiveSchema,
+  writeOffSchema,
 } from "../ledger";
 
 describe("ENTRY_SIGN", () => {
@@ -153,5 +158,118 @@ describe("reverseEntrySchema", () => {
   it("accepts a uuid reasonId and a memo", () => {
     const reasonId = "00000000-0000-4000-8000-00000000r001".replace("r", "a");
     expect(reverseEntrySchema.parse({ reasonId, memo: "NSF" })).toEqual({ reasonId, memo: "NSF" });
+  });
+});
+
+describe("DEFAULT_REASON_CODES", () => {
+  it("covers all four types that require a reason", () => {
+    const types = new Set(DEFAULT_REASON_CODES.map((r) => r.appliesToType));
+    expect([...types].sort()).toEqual(
+      ["ADJUSTMENT_CREDIT", "ADJUSTMENT_DEBIT", "FEE", "WRITE_OFF"].sort(),
+    );
+  });
+
+  it("has unique codes, since (utilityId, code) is unique in the table", () => {
+    const codes = DEFAULT_REASON_CODES.map((r) => r.code);
+    expect(new Set(codes).size).toBe(codes.length);
+  });
+
+  // seed.js's opening balances cite this one; without it the reason CHECK
+  // cannot be satisfied by a seeded database.
+  it("includes OPENING_BALANCE as an ADJUSTMENT_DEBIT reason", () => {
+    const r = DEFAULT_REASON_CODES.find((x) => x.code === "OPENING_BALANCE");
+    expect(r?.appliesToType).toBe("ADJUSTMENT_DEBIT");
+  });
+
+  it("keeps every code and label within the column widths", () => {
+    for (const r of DEFAULT_REASON_CODES) {
+      expect(r.code.length, r.code).toBeLessThanOrEqual(50);
+      expect(r.label.length, r.code).toBeLessThanOrEqual(255);
+    }
+  });
+
+  // §3.5: a concession and a bad debt are different facts, so the credit
+  // reasons must not all pile onto one type.
+  it("gives WRITE_OFF its own reasons, distinct from the waiver reasons", () => {
+    const writeOffs = DEFAULT_REASON_CODES.filter((r) => r.appliesToType === "WRITE_OFF");
+    const credits = DEFAULT_REASON_CODES.filter((r) => r.appliesToType === "ADJUSTMENT_CREDIT");
+    expect(writeOffs.length).toBeGreaterThan(0);
+    expect(credits.length).toBeGreaterThan(0);
+    expect(writeOffs.map((r) => r.code)).not.toEqual(credits.map((r) => r.code));
+  });
+});
+
+describe("assessFeeSchema", () => {
+  const reasonId = "00000000-0000-4000-8000-00000000aa01";
+
+  it("accepts a positive amount with a reason", () => {
+    expect(assessFeeSchema.parse({ amount: "25.00", reasonId })).toEqual({
+      amount: "25.00",
+      reasonId,
+    });
+  });
+
+  it("requires a reasonId — a fee with no reason is what this slice prevents", () => {
+    expect(() => assessFeeSchema.parse({ amount: "25.00" })).toThrow();
+  });
+
+  it("rejects a negative or zero amount", () => {
+    expect(() => assessFeeSchema.parse({ amount: "-25.00", reasonId })).toThrow();
+    expect(() => assessFeeSchema.parse({ amount: "0.00", reasonId })).toThrow();
+  });
+
+  // Review Focus: most fees are assessed on nothing.
+  it("leaves assessedOnId optional", () => {
+    expect(assessFeeSchema.parse({ amount: "25.00", reasonId }).assessedOnId).toBeUndefined();
+  });
+
+  it("rejects a dueDate that is not a real date", () => {
+    expect(() =>
+      assessFeeSchema.parse({ amount: "25.00", reasonId, dueDate: "2026-02-30" }),
+    ).toThrow();
+  });
+
+  it("rejects a reasonId or assessedOnId that is not a uuid", () => {
+    expect(() => assessFeeSchema.parse({ amount: "25.00", reasonId: "nope" })).toThrow();
+    expect(() =>
+      assessFeeSchema.parse({ amount: "25.00", reasonId, assessedOnId: "nope" }),
+    ).toThrow();
+  });
+});
+
+describe("adjustSchema", () => {
+  const reasonId = "00000000-0000-4000-8000-00000000aa01";
+
+  it("accepts a positive amount with a reason", () => {
+    expect(adjustSchema.parse({ amount: "40.00", reasonId })).toEqual({
+      amount: "40.00",
+      reasonId,
+    });
+  });
+
+  it("requires a reasonId", () => {
+    expect(() => adjustSchema.parse({ amount: "40.00" })).toThrow();
+  });
+});
+
+describe("waiveSchema and writeOffSchema", () => {
+  const reasonId = "00000000-0000-4000-8000-00000000aa01";
+  const debitId = "00000000-0000-4000-8000-00000000bb01";
+
+  it("require the debit they are applied to", () => {
+    for (const schema of [waiveSchema, writeOffSchema]) {
+      expect(() => schema.parse({ amount: "10.00", reasonId })).toThrow();
+      expect(schema.parse({ amount: "10.00", reasonId, debitId }).debitId).toBe(debitId);
+    }
+  });
+
+  it("reject a debitId that is not a uuid", () => {
+    expect(() => waiveSchema.parse({ amount: "10.00", reasonId, debitId: "nope" })).toThrow();
+  });
+
+  // §6.5: any amount, so a partial waiver is free and over-waiving is a
+  // refund due rather than a validation error.
+  it("accept an amount larger than any plausible debit", () => {
+    expect(waiveSchema.parse({ amount: "99999.99", reasonId, debitId }).amount).toBe("99999.99");
   });
 });

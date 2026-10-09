@@ -785,7 +785,7 @@ async function main() {
   // import the constant directly.
   const allModules = [
     "customers","premises","meters","meter_reads","meter_events",
-    "accounts","payments","agreements","commodities","rate_schedules","billing_cycles",
+    "accounts","payments","ar_adjustments","agreements","commodities","rate_schedules","billing_cycles",
     "containers","service_suspensions","service_events",
     "workflows","search",
     "audit_log","attachments","theme","settings",
@@ -827,6 +827,9 @@ async function main() {
         // A CSR is who takes a payment at the counter and reverses an NSF,
         // matching ROLE_PRESETS in packages/shared/src/modules/constants.ts.
         payments: ["VIEW","CREATE","EDIT"],
+        // Raising a charge and forgiving one are different authority
+        // (design §8); a CSR does both at the counter.
+        ar_adjustments: ["VIEW","CREATE","EDIT"],
         agreements: ["VIEW","CREATE","EDIT"], commodities: ["VIEW"],
         rate_schedules: ["VIEW"], billing_cycles: ["VIEW"],
         containers: ["VIEW","CREATE","EDIT"],
