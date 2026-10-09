@@ -34,6 +34,33 @@ function err(code: string, message: string, statusCode: number): Error {
 }
 
 /**
+ * Take the per-account row lock that every balance-changing path holds.
+ *
+ * Asserting a row came back matters twice over: `SELECT ... FOR UPDATE`
+ * takes no lock at all when it matches nothing, and proving the row is
+ * this tenant's is what makes the later `account.update` safe — Prisma's
+ * `where: { id }` carries no utilityId, and RLS does not currently
+ * enforce because the application role is a superuser.
+ *
+ * Re-locking a row this transaction already holds costs nothing, so
+ * every path that changes the balance takes it rather than assuming a
+ * caller did.
+ */
+export async function lockAccount(
+  tx: TxClient,
+  utilityId: string,
+  accountId: string,
+): Promise<void> {
+  const locked = await tx.$queryRaw<{ id: string }[]>`
+    SELECT id FROM account
+     WHERE id = ${accountId}::uuid AND utility_id = ${utilityId}::uuid
+       FOR UPDATE`;
+  if (locked.length === 0) {
+    throw err("ACCOUNT_NOT_FOUND", `Account ${accountId} not found`, 404);
+  }
+}
+
+/**
  * Recompute the cached Account.balance and lastDueDate from the ledger.
  *
  * balance is SUM(open_amount) — a plain sum, because both amount and
@@ -53,18 +80,7 @@ export async function recomputeAccountCache(
   utilityId: string,
   accountId: string,
 ): Promise<{ balance: string; lastDueDate: Date | null }> {
-  // Asserting a row came back matters twice over: SELECT ... FOR UPDATE
-  // takes no lock at all when it matches nothing, and proving the row is
-  // this tenant's is what makes the `tx.account.update` below safe —
-  // Prisma's `where: { id }` carries no utilityId, and RLS does not
-  // currently enforce because the application role is a superuser.
-  const locked = await tx.$queryRaw<{ id: string }[]>`
-    SELECT id FROM account
-     WHERE id = ${accountId}::uuid AND utility_id = ${utilityId}::uuid
-       FOR UPDATE`;
-  if (locked.length === 0) {
-    throw err("ACCOUNT_NOT_FOUND", `Account ${accountId} not found`, 404);
-  }
+  await lockAccount(tx, utilityId, accountId);
 
   const [agg] = await tx.$queryRaw<{ balance: Prisma.Decimal | null }[]>`
     SELECT COALESCE(SUM(open_amount), 0) AS balance
