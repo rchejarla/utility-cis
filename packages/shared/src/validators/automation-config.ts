@@ -28,6 +28,7 @@ export const AutomationConfigSchema = z.object({
   notificationQuietStart: z.string().regex(HHMM, "must be HH:mm 24-hour"),
   notificationQuietEnd: z.string().regex(HHMM, "must be HH:mm 24-hour"),
   schedulerAuditRetentionDays: z.number().int().min(30).max(2555),
+  autoPostBills: z.boolean(),
 });
 
 /**

@@ -182,3 +182,27 @@ export async function postBill(
 }
 
 export type { TxClient };
+
+/**
+ * Resolve whether a Bill posts automatically on generation.
+ *
+ * Tenant default, overridable per account. `??` not `||`, so an account
+ * override of `false` beats a tenant default of `true` — which is the
+ * entire point of having an override. Null on the account means inherit,
+ * so flipping the tenant setting moves every account that has not
+ * explicitly opted out.
+ *
+ * No tenant_config row means an unconfigured tenant, which takes the
+ * column default: auto-post on.
+ */
+export async function resolveAutoPostBills(
+  tx: TxClient,
+  utilityId: string,
+  accountId: string,
+): Promise<boolean> {
+  const [account, config] = await Promise.all([
+    tx.account.findUnique({ where: { id: accountId }, select: { autoPostBills: true } }),
+    tx.tenantConfig.findUnique({ where: { utilityId }, select: { autoPostBills: true } }),
+  ]);
+  return account?.autoPostBills ?? config?.autoPostBills ?? true;
+}

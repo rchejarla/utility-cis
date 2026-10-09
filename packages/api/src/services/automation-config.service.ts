@@ -33,6 +33,7 @@ interface AutomationConfigRow {
   notificationQuietStart: string;
   notificationQuietEnd: string;
   schedulerAuditRetentionDays: number;
+  autoPostBills: boolean;
 }
 
 function toDto(row: AutomationConfigRow): AutomationConfig {
@@ -49,6 +50,7 @@ function toDto(row: AutomationConfigRow): AutomationConfig {
     notificationQuietStart: row.notificationQuietStart,
     notificationQuietEnd: row.notificationQuietEnd,
     schedulerAuditRetentionDays: row.schedulerAuditRetentionDays,
+    autoPostBills: row.autoPostBills,
   };
 }
 
@@ -72,6 +74,7 @@ export async function getAutomationConfig(utilityId: string): Promise<Automation
       notificationQuietStart: true,
       notificationQuietEnd: true,
       schedulerAuditRetentionDays: true,
+      autoPostBills: true,
     },
   });
   if (row) return toDto(row);
@@ -94,6 +97,7 @@ export async function getAutomationConfig(utilityId: string): Promise<Automation
       notificationQuietStart: true,
       notificationQuietEnd: true,
       schedulerAuditRetentionDays: true,
+      autoPostBills: true,
     },
   });
   return toDto(created);
@@ -131,6 +135,7 @@ export async function patchAutomationConfig(
       notificationQuietStart: true,
       notificationQuietEnd: true,
       schedulerAuditRetentionDays: true,
+      autoPostBills: true,
     },
   });
   logger.info(

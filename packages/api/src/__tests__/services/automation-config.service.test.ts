@@ -33,6 +33,7 @@ function fixture(overrides: Partial<AutomationConfig> = {}): AutomationConfig {
     notificationQuietStart: "22:00",
     notificationQuietEnd: "07:00",
     schedulerAuditRetentionDays: 365,
+    autoPostBills: true,
     ...overrides,
   };
 }

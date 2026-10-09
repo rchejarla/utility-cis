@@ -252,6 +252,13 @@ export async function generateBillForAccount(
         data: { billId: bill.id },
       });
 
+      // Post to the ledger in THIS transaction when auto-post is on, so
+      // a Bill and its receivable commit together or not at all.
+      const { resolveAutoPostBills, postBill } = await import("./ar/posting.service.js");
+      if (await resolveAutoPostBills(tx, utilityId, accountId)) {
+        await postBill(utilityId, actorId, actorName, bill.id, {}, tx);
+      }
+
       return assembleBillWithSegments(tx, utilityId, bill.id);
     },
   );
