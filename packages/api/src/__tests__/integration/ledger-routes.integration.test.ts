@@ -11,6 +11,9 @@ import { bootPostgres } from "./_effective-dating-fixtures.js";
 const ACTOR = "00000000-0000-4000-8000-aaaa00000001";
 const VIEWER = "00000000-0000-4000-8000-aaaa00000002";
 const NO_PERMS = "00000000-0000-4000-8000-aaaa00000003";
+// Records and reverses payments; deliberately has no accounts:EDIT, so the
+// payment gate is tested on its own rather than riding on the posting one.
+const PAYER = "00000000-0000-4000-8000-aaaa00000004";
 const utilityId = "00000000-0000-4000-8000-0000000000aa";
 const otherUtilityId = "00000000-0000-4000-8000-0000000000bb";
 
@@ -62,6 +65,7 @@ beforeAll(async () => {
   });
   accountId = account.id;
   await prisma.tenantModule.create({ data: { utilityId, moduleKey: "accounts" } });
+  await prisma.tenantModule.create({ data: { utilityId, moduleKey: "payments" } });
 
   // A second tenant with its own account, to prove tenant scoping.
   const otherCycle = await prisma.billingCycle.create({
@@ -89,8 +93,9 @@ beforeAll(async () => {
   // Real users with real roles, so the permission gate actually runs
   // (a token with no cis_user row bypasses it).
   for (const [id, email, roleName, perms] of [
-    [VIEWER, "viewer@example.com", "Viewer", { accounts: ["VIEW"] }],
+    [VIEWER, "viewer@example.com", "Viewer", { accounts: ["VIEW"], payments: ["VIEW"] }],
     [NO_PERMS, "none@example.com", "NoPerms", { accounts: [] }],
+    [PAYER, "payer@example.com", "Payer", { accounts: ["VIEW"], payments: ["VIEW", "CREATE", "EDIT"] }],
   ] as const) {
     const role = await prisma.role.create({
       data: { utilityId, name: roleName, permissions: perms },
@@ -112,6 +117,9 @@ afterAll(async () => {
 
 beforeEach(async () => {
   const { prisma } = prismaImports;
+  // Applications first: they carry RESTRICT FKs onto ledger_entry, and
+  // since slice 2 the payment and reverse routes actually write them.
+  await prisma.ledgerApplication.deleteMany({});
   await prisma.ledgerEntry.deleteMany({});
   await prisma.bill.deleteMany({});
   await prisma.account.update({ where: { id: accountId }, data: { balance: 0, lastDueDate: null } });
@@ -359,5 +367,177 @@ describe("GET /api/v1/ar/reconciliation", () => {
       headers: headers(NO_PERMS),
     });
     expect(res.statusCode).toBe(403);
+  });
+});
+
+describe("POST /api/v1/accounts/:id/payments", () => {
+  it("records a payment and returns the new balance", async () => {
+    const billId = await makeBill("25.0000");
+    const posted = await app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/post`,
+      headers: headers(),
+      payload: {},
+    });
+    expect(posted.statusCode).toBe(201);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/payments`,
+      headers: headers(PAYER),
+      payload: { amount: "10.00", tender: "CHECK" },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = JSON.parse(res.body);
+    expect(body.amount).toBe("-10.00");
+    expect(body.balance).toBe("15.00");
+    expect(body.applied).toHaveLength(1);
+    expect(body.unapplied).toBe("0.00");
+  });
+
+  // Review Focus: a negative amount must not become a charge.
+  it("returns 400 for a negative or zero amount and records nothing", async () => {
+    for (const amount of ["-10.00", "0.00"]) {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/accounts/${accountId}/payments`,
+        headers: headers(PAYER),
+        payload: { amount, tender: "CHECK" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).error.code).toBe("VALIDATION_ERROR");
+    }
+    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  });
+
+  it("returns 403 without payments:CREATE and records nothing", async () => {
+    for (const sub of [VIEWER, NO_PERMS]) {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/accounts/${accountId}/payments`,
+        headers: headers(sub),
+        payload: { amount: "10.00", tender: "CHECK" },
+      });
+      expect(res.statusCode).toBe(403);
+    }
+    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  });
+
+  it("returns 404 for another tenant's account and records nothing", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${otherAccountId}/payments`,
+      headers: headers(PAYER),
+      payload: { amount: "10.00", tender: "CHECK" },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(JSON.parse(res.body).error.code).toBe("ACCOUNT_NOT_FOUND");
+    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  });
+});
+
+describe("POST /api/v1/ledger-entries/:id/reverse", () => {
+  async function postedEntryId(total = "25.0000"): Promise<string> {
+    const billId = await makeBill(total);
+    const posted = await app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/post`,
+      headers: headers(),
+      payload: {},
+    });
+    expect(posted.statusCode).toBe(201);
+    return JSON.parse(posted.body).entryId;
+  }
+
+  it("reverses a payment and reports no dependent fees", async () => {
+    await postedEntryId();
+    const paid = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/payments`,
+      headers: headers(PAYER),
+      payload: { amount: "25.00", tender: "CHECK" },
+    });
+    const { paymentId } = JSON.parse(paid.body);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/ledger-entries/${paymentId}/reverse`,
+      headers: headers(PAYER),
+      payload: {},
+    });
+    expect(res.statusCode).toBe(201);
+    const body = JSON.parse(res.body);
+    expect(body.amount).toBe("25.00");
+    expect(body.balance).toBe("25.00");
+    expect(body.dependentFees).toEqual([]);
+    expect(body.restored).toHaveLength(1);
+  });
+
+  it("returns 409 on a second reverse of the same entry", async () => {
+    const entryId = await postedEntryId();
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/v1/ledger-entries/${entryId}/reverse`,
+      headers: headers(PAYER),
+      payload: {},
+    });
+    expect(first.statusCode).toBe(201);
+
+    const second = await app.inject({
+      method: "POST",
+      url: `/api/v1/ledger-entries/${entryId}/reverse`,
+      headers: headers(PAYER),
+      payload: {},
+    });
+    expect(second.statusCode).toBe(409);
+    expect(JSON.parse(second.body).error.code).toBe("ENTRY_ALREADY_REVERSED");
+  });
+
+  it("returns 403 without payments:EDIT", async () => {
+    const entryId = await postedEntryId();
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/ledger-entries/${entryId}/reverse`,
+      headers: headers(VIEWER),
+      payload: {},
+    });
+    expect(res.statusCode).toBe(403);
+    expect(await prismaImports.prisma.ledgerEntry.count({ where: { type: "REVERSAL" } })).toBe(0);
+  });
+
+  it("returns 404 for an entry in another tenant", async () => {
+    const { prisma } = prismaImports;
+    const stray = await prisma.ledgerEntry.create({
+      data: {
+        utilityId: otherUtilityId,
+        accountId: otherAccountId,
+        type: "ADJUSTMENT_DEBIT",
+        amount: "10.00",
+        openAmount: "10.00",
+        dueDate: new Date("2026-06-14"),
+        effectiveDate: new Date("2026-06-14"),
+      },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/ledger-entries/${stray.id}/reverse`,
+      headers: headers(PAYER),
+      payload: {},
+    });
+    expect(res.statusCode).toBe(404);
+    expect(JSON.parse(res.body).error.code).toBe("ENTRY_NOT_FOUND");
+  });
+
+  it("returns 400 for a reasonId that is not a uuid", async () => {
+    const entryId = await postedEntryId();
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/ledger-entries/${entryId}/reverse`,
+      headers: headers(PAYER),
+      payload: { reasonId: "nope" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error.code).toBe("VALIDATION_ERROR");
   });
 });
