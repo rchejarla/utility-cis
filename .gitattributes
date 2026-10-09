@@ -1,0 +1,12 @@
+# Windows batch files must keep CRLF line endings. cmd.exe parses an
+# LF-only .bat unreliably: it drops the first characters of some lines,
+# producing errors like "'tlocal' is not recognized as an internal or
+# external command" from a `setlocal` it mangled. Without this rule,
+# core.autocrlf decides per clone and the scripts break on some machines
+# and not others.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Shell scripts run inside the Linux Postgres container (docker/) and must
+# keep LF, whatever the checkout platform does.
+*.sh text eol=lf
