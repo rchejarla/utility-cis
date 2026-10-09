@@ -166,4 +166,62 @@ describe("postBill", () => {
       posting.postBill(utilityId, ACTOR, "Tester", "00000000-0000-4000-8000-00000000dead"),
     ).rejects.toMatchObject({ code: "BILL_NOT_FOUND" });
   });
+
+  it("rejects posting the same bill twice", async () => {
+    const billId = await makeBill("10.0000");
+    await posting.postBill(utilityId, ACTOR, "Tester", billId);
+    await expect(posting.postBill(utilityId, ACTOR, "Tester", billId)).rejects.toMatchObject({
+      code: "BILL_ALREADY_POSTED",
+    });
+  });
+
+  it("nets a debit and a credit through the signed sum", async () => {
+    const { prisma } = prismaImports;
+    await posting.postBill(utilityId, ACTOR, "Tester", await makeBill("50.0000"));
+    await posting.postBill(utilityId, ACTOR, "Tester", await makeBill("-12.5000"));
+    const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
+    expect(account.balance.toFixed(2)).toBe("37.50");
+  });
+
+  it("keeps both bills in the balance when posted concurrently", async () => {
+    const { prisma } = prismaImports;
+    const a = await makeBill("30.0000");
+    const b = await makeBill("20.0000");
+    await Promise.all([
+      posting.postBill(utilityId, ACTOR, "Tester", a),
+      posting.postBill(utilityId, ACTOR, "Tester", b),
+    ]);
+    const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
+    expect(account.balance.toFixed(2)).toBe("50.00");
+  });
+
+  it("clears lastDueDate when no open debit remains", async () => {
+    const { prisma } = prismaImports;
+    const billId = await makeBill("10.0000");
+    await posting.postBill(utilityId, ACTOR, "Tester", billId);
+    await prisma.$executeRaw`UPDATE ledger_entry SET open_amount = 0 WHERE bill_id = ${billId}::uuid`;
+    const cache = await prisma.$transaction((tx) =>
+      posting.recomputeAccountCache(tx, utilityId, accountId),
+    );
+    expect(cache.lastDueDate).toBeNull();
+    expect(cache.balance).toBe("0.00");
+    const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
+    expect(account.lastDueDate).toBeNull();
+  });
+
+  it("leaves nothing behind when the caller's transaction rolls back", async () => {
+    const { prisma } = prismaImports;
+    const billId = await makeBill("10.0000");
+    await expect(
+      prisma.$transaction(async (tx) => {
+        await posting.postBill(utilityId, ACTOR, "Tester", billId, {}, tx);
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    expect(await prisma.ledgerEntry.count({ where: { accountId } })).toBe(0);
+    const bill = await prisma.bill.findUniqueOrThrow({ where: { id: billId } });
+    expect(bill.postedAt).toBeNull();
+    const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
+    expect(account.balance.toFixed(2)).toBe("0.00");
+  });
 });

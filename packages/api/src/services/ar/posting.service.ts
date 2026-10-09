@@ -71,9 +71,10 @@ export async function recomputeAccountCache(
 /**
  * Post an issued Bill to the ledger.
  *
- * Idempotency is structural: a partial unique index on
- * (utility_id, bill_id) WHERE type = 'BILL_CHARGE'. A second attempt
- * raises P2002, which the route maps to 409.
+ * Idempotency: the bill is claimed with an atomic
+ * UPDATE ... WHERE posted_at IS NULL, under a row lock on the account.
+ * A second attempt throws BILL_ALREADY_POSTED (409). The partial unique
+ * index on (utility_id, bill_id) WHERE type = 'BILL_CHARGE' is a backstop.
  *
  * A bill whose total rounds to 0.00 is marked posted and writes no
  * entry — CHECK (amount <> 0) would reject it, and a zero receivable
@@ -89,12 +90,34 @@ export async function postBill(
   existingTx?: TxClient,
 ): Promise<PostBillResult> {
   const run = async (tx: TxClient): Promise<PostBillResult> => {
+    // Find the account, then lock it BEFORE writing anything. Recomputing
+    // the cache is a read-then-write of SUM(open_amount); without a
+    // per-account lock, two concurrent posts on one account each miss the
+    // other's uncommitted entry and the later update overwrites with a
+    // stale sum. The lock also serializes double-posts of the same bill.
+    const owner = await tx.bill.findUnique({
+      where: { id: billId, utilityId },
+      select: { accountId: true },
+    });
+    if (!owner) throw err("BILL_NOT_FOUND", `Bill ${billId} not found`, 404);
+    await tx.$queryRaw`SELECT id FROM account
+                        WHERE id = ${owner.accountId}::uuid AND utility_id = ${utilityId}::uuid
+                          FOR UPDATE`;
+
+    // Re-read after the lock so we see any post that committed meanwhile.
     const bill = await tx.bill.findUnique({
       where: { id: billId, utilityId },
-      select: { id: true, accountId: true, total: true, dueDate: true, billDate: true, postedAt: true },
+      select: { id: true, accountId: true, total: true, dueDate: true, billDate: true },
     });
     if (!bill) throw err("BILL_NOT_FOUND", `Bill ${billId} not found`, 404);
-    if (bill.postedAt) {
+
+    // Claim the bill atomically rather than check-then-write: the credit
+    // path has no unique-index backstop, so this is its only double-post guard.
+    const claimed = await tx.bill.updateMany({
+      where: { id: billId, utilityId, postedAt: null },
+      data: { postedAt: new Date() },
+    });
+    if (claimed.count === 0) {
       throw err("BILL_ALREADY_POSTED", `Bill ${billId} was already posted`, 409);
     }
 
@@ -102,7 +125,6 @@ export async function postBill(
     const effectiveDate = new Date(input.effectiveDate ?? bill.billDate.toISOString().slice(0, 10));
 
     if (amount === "0.00") {
-      await tx.bill.update({ where: { id: billId }, data: { postedAt: new Date() } });
       const cache = await recomputeAccountCache(tx, utilityId, bill.accountId);
       return { billId, entryId: null, amount, balance: cache.balance, skippedZero: true };
     }
@@ -110,6 +132,11 @@ export async function postBill(
     // A bill that nets negative is a credit, not a debit with a negative
     // amount — keeps the type/sign constraint true and reads as what it is.
     const isCredit = amount.startsWith("-");
+    // Every debit must carry a due date: the aging/allocation partial index
+    // requires one, so a debit without it would be invisible to both.
+    if (!isCredit && !bill.dueDate) {
+      throw err("BILL_MISSING_DUE_DATE", `Bill ${billId} has no due date`, 422);
+    }
 
     const entry = await tx.ledgerEntry.create({
       data: {
@@ -127,7 +154,6 @@ export async function postBill(
       },
     });
 
-    await tx.bill.update({ where: { id: billId }, data: { postedAt: new Date() } });
     const cache = await recomputeAccountCache(tx, utilityId, bill.accountId);
 
     return { billId, entryId: entry.id, amount, balance: cache.balance, skippedZero: false };
