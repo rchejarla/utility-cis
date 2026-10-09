@@ -1110,6 +1110,33 @@ async function main() {
   const fifteenDaysAgo = new Date();
   fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
 
+  // AR reason codes (module 23 slice 3). Mirrors DEFAULT_REASON_CODES in
+  // packages/shared/src/validators/ledger.ts — seed.js runs as plain
+  // `node seed.js` and cannot import the TypeScript constant, so the list
+  // is duplicated here the same way allModules is.
+  const reasonCodes = [
+    ["LATE_FEE", "Late payment fee", "FEE"],
+    ["NSF_FEE", "Returned payment fee", "FEE"],
+    ["RECONNECT_FEE", "Reconnection fee", "FEE"],
+    ["TAP_FEE", "Tap fee", "FEE"],
+    ["METER_TEST_FEE", "Meter test fee", "FEE"],
+    ["OPENING_BALANCE", "Opening balance", "ADJUSTMENT_DEBIT"],
+    ["BILLING_CORRECTION_DEBIT", "Billing correction — charge", "ADJUSTMENT_DEBIT"],
+    ["COURTESY_WAIVER", "Courtesy waiver", "ADJUSTMENT_CREDIT"],
+    ["GOODWILL", "Goodwill credit", "ADJUSTMENT_CREDIT"],
+    ["BILLING_CORRECTION_CREDIT", "Billing correction — credit", "ADJUSTMENT_CREDIT"],
+    ["BAD_DEBT", "Written off — uncollectable", "WRITE_OFF"],
+    ["SMALL_BALANCE", "Written off — small balance", "WRITE_OFF"],
+  ];
+  const reasonByCode = {};
+  for (const [code, label, appliesToType] of reasonCodes) {
+    const r = await p.ledgerReasonDef.create({
+      data: { utilityId: UID, code, label, appliesToType },
+    });
+    reasonByCode[code] = r.id;
+  }
+  console.log("  " + reasonCodes.length + " AR reason codes");
+
   // Opening balances come from real ledger entries, not typed-in numbers.
   // GET /api/v1/ar/reconciliation compares account.balance against
   // SUM(ledger_entry.open_amount), so a balance with nothing behind it
@@ -1127,6 +1154,9 @@ async function main() {
         openAmount: amount,
         dueDate,
         effectiveDate: dueDate,
+        // ledger_entry_reason_required (slice 3): a reasoned type must
+        // cite a reason or name the bill it came from, and this has no bill.
+        reasonId: reasonByCode["OPENING_BALANCE"],
         memo: "Seeded opening balance for delinquency demo",
       },
     });

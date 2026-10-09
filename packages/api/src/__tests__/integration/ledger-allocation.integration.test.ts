@@ -21,6 +21,9 @@ let prismaImports: typeof import("../../lib/prisma.js");
 let allocation: typeof import("../../services/ar/allocation.service.js");
 
 let accountId: string;
+// Every reasoned type must cite a reason since slice 3's
+// ledger_entry_reason_required. One per type the fixtures write.
+const reasonIdFor: Record<string, string> = {};
 
 beforeAll(async () => {
   const booted = await bootPostgres();
@@ -42,6 +45,13 @@ beforeAll(async () => {
     },
   });
   accountId = account.id;
+
+  for (const appliesToType of ["FEE", "ADJUSTMENT_DEBIT"] as const) {
+    const r = await prisma.ledgerReasonDef.create({
+      data: { utilityId, code: `ALLOC-${appliesToType}`, label: appliesToType, appliesToType },
+    });
+    reasonIdFor[appliesToType] = r.id;
+  }
 }, 180_000);
 
 afterAll(async () => {
@@ -74,6 +84,7 @@ async function debit(
       openAmount: amount,
       dueDate: new Date(dueDate),
       effectiveDate: new Date(dueDate),
+      reasonId: reasonIdFor[type]!,
       createdBy: ACTOR,
     },
   });
@@ -272,6 +283,14 @@ describe("applyCreditToDebits", () => {
         billingCycleId: otherCycle.id,
       },
     });
+    const strayReason = await prisma.ledgerReasonDef.create({
+      data: {
+        utilityId: other,
+        code: "ALLOC-STRAY",
+        label: "Stray",
+        appliesToType: "ADJUSTMENT_DEBIT",
+      },
+    });
     const strayDebit = await prisma.ledgerEntry.create({
       data: {
         utilityId: other,
@@ -281,6 +300,7 @@ describe("applyCreditToDebits", () => {
         openAmount: "90.00",
         dueDate: new Date("2026-01-01"),
         effectiveDate: new Date("2026-01-01"),
+        reasonId: strayReason.id,
       },
     });
     const c = await credit("90.00");
@@ -294,6 +314,7 @@ describe("applyCreditToDebits", () => {
       expect(stray.openAmount.toFixed(2)).toBe("90.00");
     } finally {
       await prisma.ledgerEntry.delete({ where: { id: strayDebit.id } });
+      await prisma.ledgerReasonDef.delete({ where: { id: strayReason.id } });
       await prisma.account.delete({ where: { id: otherAccount.id } });
       await prisma.billingCycle.delete({ where: { id: otherCycle.id } });
     }

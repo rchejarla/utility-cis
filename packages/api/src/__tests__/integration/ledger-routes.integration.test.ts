@@ -508,6 +508,14 @@ describe("POST /api/v1/ledger-entries/:id/reverse", () => {
 
   it("returns 404 for an entry in another tenant", async () => {
     const { prisma } = prismaImports;
+    const strayReason = await prisma.ledgerReasonDef.create({
+      data: {
+        utilityId: otherUtilityId,
+        code: `ROUTES-STRAY-${Math.random().toString(36).slice(2, 7)}`,
+        label: "Stray",
+        appliesToType: "ADJUSTMENT_DEBIT",
+      },
+    });
     const stray = await prisma.ledgerEntry.create({
       data: {
         utilityId: otherUtilityId,
@@ -517,6 +525,7 @@ describe("POST /api/v1/ledger-entries/:id/reverse", () => {
         openAmount: "10.00",
         dueDate: new Date("2026-06-14"),
         effectiveDate: new Date("2026-06-14"),
+        reasonId: strayReason.id,
       },
     });
     const res = await app.inject({

@@ -128,13 +128,136 @@ describe("ledger schema", () => {
     );
   });
 
+  // Well-formed changed meaning in slice 3: an ADJUSTMENT_DEBIT is a
+  // reasoned type, so without a reason it is now refused. The case above
+  // this one pins that refusal; this one pins what valid looks like.
   it("accepts a well-formed debit", async () => {
     const { prisma } = prismaImports;
+    const reasonId = await makeShapeReason("ADJUSTMENT_DEBIT");
     const n = await prisma.$executeRawUnsafe(
-      `insert into ledger_entry (utility_id, account_id, type, amount, open_amount, effective_date)
-       values ('${utilityId}'::uuid, '${accountId}'::uuid, 'ADJUSTMENT_DEBIT', 10, 10, current_date)`,
+      `insert into ledger_entry (utility_id, account_id, type, amount, open_amount, effective_date, reason_id)
+       values ('${utilityId}'::uuid, '${accountId}'::uuid, 'ADJUSTMENT_DEBIT', 10, 10, current_date, '${reasonId}'::uuid)`,
     );
     expect(n).toBe(1);
+  });
+
+  // --- Slice 3: the two CHECKs deferred from slice 1 ---------------------
+
+  async function makeShapeReason(appliesToType: string): Promise<string> {
+    const { prisma } = prismaImports;
+    const r = await prisma.ledgerReasonDef.create({
+      data: {
+        utilityId,
+        code: `SHAPE-${Math.random().toString(36).slice(2, 8)}`,
+        label: "Shape fixture",
+        appliesToType: appliesToType as never,
+      },
+    });
+    return r.id;
+  }
+
+  async function makeShapeBill(): Promise<string> {
+    const { prisma } = prismaImports;
+    const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
+    const bill = await prisma.bill.create({
+      data: {
+        utilityId,
+        accountId,
+        billingCycleId: account.billingCycleId,
+        periodStart: new Date("2026-04-16"),
+        periodEnd: new Date("2026-05-15"),
+        billDate: new Date("2026-05-15"),
+        dueDate: new Date("2026-06-14"),
+        subtotal: "-10",
+        taxes: "0",
+        credits: "0",
+        total: "-10",
+        billNumber: `SHAPE-${Math.random().toString(36).slice(2, 8)}`,
+      },
+    });
+    return bill.id;
+  }
+
+  it("rejects a FEE with no reason and no bill", async () => {
+    await rejectsWith(
+      "ledger_entry_reason_required",
+      "type, amount, open_amount, due_date, effective_date",
+      `'FEE', 10, 10, current_date, current_date`,
+    );
+  });
+
+  it("rejects a WRITE_OFF with no reason", async () => {
+    await rejectsWith(
+      "ledger_entry_reason_required",
+      "type, amount, open_amount, effective_date",
+      `'WRITE_OFF', -10, -10, current_date`,
+    );
+  });
+
+  it("rejects an ADJUSTMENT_DEBIT with no reason", async () => {
+    await rejectsWith(
+      "ledger_entry_reason_required",
+      "type, amount, open_amount, due_date, effective_date",
+      `'ADJUSTMENT_DEBIT', 10, 10, current_date, current_date`,
+    );
+  });
+
+  it("accepts a FEE that cites a reason", async () => {
+    const { prisma } = prismaImports;
+    const reasonId = await makeShapeReason("FEE");
+    const n = await prisma.$executeRawUnsafe(
+      `insert into ledger_entry (utility_id, account_id, type, amount, open_amount, due_date, effective_date, reason_id)
+       values ('${utilityId}'::uuid, '${accountId}'::uuid, 'FEE', 10, 10, current_date, current_date, '${reasonId}'::uuid)`,
+    );
+    expect(n).toBe(1);
+  });
+
+  // The escape clause, and the only path that uses it: a credit derived
+  // from a bill that netted negative names the bill, which explains it.
+  // Requiring a reason there would couple posting a negative bill to a
+  // tenant having reason seeds.
+  it("accepts an ADJUSTMENT_CREDIT that names a bill instead of a reason", async () => {
+    const { prisma } = prismaImports;
+    const billId = await makeShapeBill();
+    const n = await prisma.$executeRawUnsafe(
+      `insert into ledger_entry (utility_id, account_id, type, amount, open_amount, effective_date, bill_id)
+       values ('${utilityId}'::uuid, '${accountId}'::uuid, 'ADJUSTMENT_CREDIT', -10, -10, current_date, '${billId}'::uuid)`,
+    );
+    expect(n).toBe(1);
+  });
+
+  // PAYMENT and REVERSAL are not reasoned types, so neither needs one.
+  it("accepts a PAYMENT with neither reason nor bill", async () => {
+    const { prisma } = prismaImports;
+    const n = await prisma.$executeRawUnsafe(
+      `insert into ledger_entry (utility_id, account_id, type, amount, open_amount, effective_date, tender)
+       values ('${utilityId}'::uuid, '${accountId}'::uuid, 'PAYMENT', -10, -10, current_date, 'CASH')`,
+    );
+    expect(n).toBe(1);
+  });
+
+  // Review Focus: a tap fee is assessed on nothing, so the constraint has
+  // to be the one-way implication rather than requiring assessed_on_id.
+  it("accepts a FEE with a reason and no assessed_on_id", async () => {
+    const { prisma } = prismaImports;
+    const reasonId = await makeShapeReason("FEE");
+    const n = await prisma.$executeRawUnsafe(
+      `insert into ledger_entry (utility_id, account_id, type, amount, open_amount, due_date, effective_date, reason_id, assessed_on_id)
+       values ('${utilityId}'::uuid, '${accountId}'::uuid, 'FEE', 10, 10, current_date, current_date, '${reasonId}'::uuid, null)`,
+    );
+    expect(n).toBe(1);
+  });
+
+  it("rejects a non-FEE that names an assessed_on_id", async () => {
+    const { prisma } = prismaImports;
+    const reasonId = await makeShapeReason("ADJUSTMENT_DEBIT");
+    const anchor = await prisma.ledgerEntry.findFirstOrThrow({ where: { utilityId } });
+    await expect(
+      prisma.$executeRawUnsafe(
+        `insert into ledger_entry (utility_id, account_id, type, amount, open_amount, due_date, effective_date, reason_id, assessed_on_id)
+         values ('${utilityId}'::uuid, '${accountId}'::uuid, 'ADJUSTMENT_DEBIT', 10, 10, current_date, current_date, '${reasonId}'::uuid, '${anchor.id}'::uuid)`,
+      ),
+    ).rejects.toThrow(/ledger_entry_assessed_on_only_fee/);
   });
 
   it("enables RLS on the new tables", async () => {
