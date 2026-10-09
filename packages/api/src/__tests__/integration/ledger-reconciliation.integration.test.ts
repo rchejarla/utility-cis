@@ -188,6 +188,7 @@ describe("reconcileBalances", () => {
     const model: { due: string; open: number }[] = []; // open debits
     let modelBalance = 0;
     let settlements = 0;
+    let fullSettlements = 0;
 
     for (let i = 0; i < 40; i++) {
       const cents = Math.floor(next() * 20_000) - 2_000; // -20.00 .. 180.00
@@ -205,7 +206,9 @@ describe("reconcileBalances", () => {
       if (i % 3 === 2 && model.length > 0) {
         model.sort((a, b) => a.due.localeCompare(b.due));
         const target = model[0]!;
-        const pay = Math.max(1, Math.floor(target.open * (0.2 + next() * 0.8)));
+        // Occasionally settle in full, so fully-settled debits (open = 0)
+        // are exercised by the oldest-due-date query too.
+        const pay = next() < 0.25 ? target.open : Math.max(1, Math.floor(target.open * (0.2 + next() * 0.8)));
         const debits = await prisma.ledgerEntry.findMany({
           where: { utilityId, accountId, type: "BILL_CHARGE", openAmount: { gt: 0 }, dueDate: new Date(target.due) },
         });
@@ -228,6 +231,7 @@ describe("reconcileBalances", () => {
           });
           await posting.recomputeAccountCache(tx, utilityId, accountId);
         });
+        if (pay === target.open) fullSettlements++;
         target.open -= pay;
         modelBalance -= pay;
         settlements++;
@@ -244,6 +248,7 @@ describe("reconcileBalances", () => {
     }
 
     expect(settlements).toBeGreaterThan(5);
+    expect(fullSettlements).toBeGreaterThan(0);
     const entries = await prisma.ledgerEntry.findMany({ where: { utilityId } });
     expect(entries.length).toBeGreaterThan(20);
     // The sign invariants must be exercised on genuinely part-settled rows.

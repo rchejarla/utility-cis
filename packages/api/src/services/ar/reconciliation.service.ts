@@ -1,4 +1,4 @@
-import { prisma } from "../../lib/prisma.js";
+import { withTenant } from "../../lib/prisma.js";
 
 /**
  * Proof that Account.balance equals the ledger.
@@ -7,6 +7,11 @@ import { prisma } from "../../lib/prisma.js";
  * background job, so it should never drift. "Should never" is not
  * evidence — this query is the evidence, and it runs both as an
  * integration test and as an admin endpoint.
+ *
+ * Runs inside withTenant so app.current_utility_id is set on the same
+ * connection. Without it, once RLS is enforced for the connecting role
+ * every account row would be filtered out and this check would report
+ * "no drift" because it could see nothing.
  */
 
 export interface BalanceDrift {
@@ -17,7 +22,7 @@ export interface BalanceDrift {
 }
 
 export async function reconcileBalances(utilityId: string): Promise<BalanceDrift[]> {
-  const rows = await prisma.$queryRaw<
+  const rows = await withTenant(utilityId, (tx) => tx.$queryRaw<
     { account_id: string; account_number: string; cached: string; ledger: string }[]
   >`
     SELECT a.id            AS account_id,
@@ -30,7 +35,7 @@ export async function reconcileBalances(utilityId: string): Promise<BalanceDrift
      WHERE a.utility_id = ${utilityId}::uuid
      GROUP BY a.id, a.account_number, a.balance
     HAVING a.balance <> COALESCE(SUM(e.open_amount), 0)
-     ORDER BY a.account_number`;
+     ORDER BY a.account_number`);
 
   return rows.map((r) => ({
     accountId: r.account_id,
