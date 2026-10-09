@@ -1,14 +1,26 @@
 # Payments and Collections
 
 **Module:** 10 — Payments and Collections
-**Status:** Stub (Phase 3)
-**Entities:** PaymentPlan (planned), AdhocCharge (planned), WriteOff (planned)
+**Status:** Stub (Phase 3) — **now on the critical path.** CIS owns the receivable as of 2026-10-09, and nothing writes `Account.balance` yet, so this module blocks billing from meaning anything. Needs a design.
+**Entities:** Payment (planned, new), PaymentPlan (planned), AdhocCharge (planned), WriteOff (planned)
 
 ## Overview
 
-The Payments and Collections module manages all post-billing financial activity: payment processing, payment allocation, late fees, payment plans for delinquent accounts, ad hoc charges and credits, and write-offs of uncollectable balances.
+The Payments and Collections module manages all post-billing financial activity: the receivable itself, payment recording and allocation, late fees, payment plans for delinquent accounts, ad hoc charges and credits, and write-offs of uncollectable balances.
 
-**Key architectural boundary:** Payment processing (PCI compliance, ACH, credit card, real-time posting, reversals) is owned entirely by SaaSLogic. CIS does not store payment card numbers, bank account numbers, or process transactions. CIS owns the business rules — allocation priorities, payment plan terms, write-off workflows — and receives payment events from SaaSLogic via webhook to update account standing.
+**Key architectural boundary (revised 2026-10-09):** **CIS owns the ledger.** An issued `Bill` increases what the account owes; a recorded payment reduces it. CIS owns the `Payment` record, allocation priorities, payment plan terms and write-off workflows.
+
+SaaSLogic owns only **card data, the hosted payment page, and settlement**. CIS stores no card or bank account numbers and stays out of PCI scope. When a SaaSLogic payment settles, CIS records a `Payment` and posts it.
+
+Crucially, SaaSLogic is one tender among several — cash, check and lockbox payments never touch it. That is why the ledger cannot live in the payment processor. This replaces the earlier boundary, under which SaaSLogic owned "all payment processing… and real-time posting" and CIS merely received webhooks to update account standing.
+
+### The gap this module has to close
+
+```
+rate() -> BillSegment -> Bill -> (nothing)
+```
+
+`Account.balance` exists as a column and is read by `delinquency.service.ts` to select accounts with `balance > 0`, but no code path ever writes it. So the delinquency module currently evaluates seeded values only. The first design decision here is whether `Account.balance` stays a materialized column or becomes derived from a ledger of charges and payments.
 
 Primary users: billing clerks, collections staff, finance managers, CSRs (for account inquiries).
 
@@ -169,13 +181,13 @@ All endpoints are planned for Phase 3.
 
 ## Business Rules
 
-1. **SaaSLogic owns all payment processing.** CIS does not accept payment data (card numbers, bank accounts). All payment entry, PCI compliance, ACH processing, and real-time posting happens in SaaSLogic. CIS receives payment events via signed webhook.
+1. **CIS owns the ledger; SaaSLogic owns the card rail.** CIS never stores card or bank account numbers — card entry and settlement stay on SaaSLogic's hosted page. But CIS records every `Payment` regardless of tender, because cash, check and lockbox payments never pass through SaaSLogic. Posting is CIS's.
 
-2. **Payment event handling:** On `payment-received` webhook, CIS: (a) updates Account.status from SUSPENDED if balance is resolved, (b) increments PaymentPlan.installments_paid and updates next_due_date if account is on a plan, (c) creates an AuditLog entry, (d) triggers a notification event (Module 13).
+2. **Payment posting:** when a payment is recorded — whether from a settled SaaSLogic transaction or entered at the counter — CIS: (a) reduces what the account owes, (b) clears Account.status from SUSPENDED if the balance is resolved, (c) increments PaymentPlan.installments_paid and advances next_due_date if the account is on a plan, (d) writes an AuditLog entry, (e) triggers a notification event (Module 13). All in one transaction, per the project's atomicity preference.
 
-3. **Payment allocation priority:** When a payment is received, SaaSLogic allocates to charges in this priority order (configurable per tenant): (1) reconnection fees, (2) late fees and penalties, (3) oldest unpaid invoices (FIFO by billing period). CIS communicates allocation rules to SaaSLogic during integration setup.
+3. **Payment allocation priority:** CIS allocates to charges in this priority order (configurable per tenant): (1) reconnection fees, (2) late fees and penalties, (3) oldest unpaid bills (FIFO by billing period). This is CIS logic now — previously it was described as rules communicated to SaaSLogic at integration setup.
 
-4. **Overpayments:** If payment exceeds outstanding balance, SaaSLogic records a credit balance on the account. CIS reflects this in account display. Credit application to future bills is handled by SaaSLogic.
+4. **Overpayments:** if a payment exceeds the outstanding balance, CIS records a credit on the account and applies it to future bills. Previously delegated to SaaSLogic.
 
 5. **Partial payments:** Allowed by default. Partial payment does not prevent continued late fee accrual on the remaining balance. Account status transitions to SUSPENDED only per delinquency rules (Module 11), not on partial payment alone.
 

@@ -1,22 +1,38 @@
 # Billing
 
 **Module:** 09 — Billing
-**Status:** Stub (Phase 3)
-**Entities:** BillingRecord (planned), BillDocument (planned), BillMessage (planned)
+**Status:** Partially shipped — `BillSegment`, `BillSegmentLine` and `Bill` are live (Rate Model v2 slices 5a–5b.2). Batch run, AR posting and bill rendering are outstanding.
+**Entities:** BillSegment (shipped), BillSegmentLine (shipped), Bill (shipped), BillDocument (planned), BillMessage (planned)
 
 ## Overview
 
-The Billing module is the core revenue engine of the CIS. It executes billing cycles — gathering validated meter reads, applying rate schedules, calculating charges, generating bill documents, and handing off structured billing instructions to SaaSLogic for invoicing and payment processing.
+The Billing module is the core revenue engine of the CIS. It executes billing cycles — gathering validated meter reads, applying rate schedules, calculating charges, and producing the customer-facing bill.
 
-**Key architectural principle:** CIS calculates what is owed and why. SaaSLogic owns the invoice, payment ledger, and financial records. The handoff is a structured billing instruction — a machine-readable charge breakdown per service agreement. This boundary is non-negotiable.
+**Key architectural principle (revised 2026-10-09):** CIS calculates what is owed and why, and owns the bill and the receivable. SaaSLogic is a payment rail only — it is told an amount and reports whether it was collected. See module 21.
+
+This supersedes the earlier boundary, under which SaaSLogic owned the invoice, the payment ledger and the financial records, and CIS handed it a machine-readable charge breakdown. Rate Model v2 built native rating in CIS, so that division no longer reflects the system.
 
 Primary users: billing administrators, finance staff, utility managers.
 
-## Planned Entities
+## Entities
 
-### BillingRecord (planned)
+### BillSegment / BillSegmentLine / Bill (shipped)
 
-One record per service agreement per billing cycle execution. Represents the charge calculation produced by the CIS rate engine before handoff to SaaSLogic.
+What actually shipped replaces the `BillingRecord` design below. The charge calculation per agreement is a **`BillSegment`** with one **`BillSegmentLine`** per fired rate component; an account-level **`Bill`** aggregates the segments for a period into the customer-facing document. See `docs/specs/07b-rate-model-v2-design.md` for the rating model and `docs/superpowers/specs/2026-05-08-rate-model-v2-slice-5b.md` for the aggregation design.
+
+Differences worth noting against the superseded design:
+
+- Line items are **rows** (`BillSegmentLine`), not a `charge_breakdown` JSONB blob, so a line can be traced to the exact `RateSchedule` version and `RateComponent` that produced it.
+- Amounts are `DECIMAL(14,4)`, not `DECIMAL(10,2)` — rating needs sub-cent precision before rounding.
+- There is no `saaslogic_invoice_id` on the charge record. CIS owns the bill; see module 21.
+- No status enum yet. A `Bill` existing means it was issued. `DRAFT`/`VOID` arrive when rendering and delivery need them.
+- Proration, bill holds, final-bill and correction/reprint versioning are **not** yet implemented. The fields below describe the intended eventual shape.
+
+### BillingRecord (superseded — retained for its field-level intent)
+
+> Superseded by `BillSegment` + `Bill`. Kept here because the proration, hold, final-bill and versioning fields have not been built yet and this remains the reference for what they should cover.
+
+One record per service agreement per billing cycle execution.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -168,7 +184,7 @@ All endpoints are planned for Phase 3.
 
 7. **Bill versioning / reprints:** A reprinted bill creates a new BillingRecord with `version = old.version + 1` and `replaces_id = old.id`. The SaaSLogic credit memo / adjustment process is triggered for the difference. The original record is retained for audit.
 
-8. **SaaSLogic handoff:** Billing instructions are POSTed to the SaaSLogic REST API per service agreement. Each instruction includes: account reference, billing period, charge breakdown, due date. SaaSLogic returns an invoice ID stored in `saaslogic_invoice_id`.
+8. **Collection handoff (revised 2026-10-09):** CIS issues the `Bill` and owns the receivable. The only thing sent to SaaSLogic is the amount due for an issued Bill, keyed on the Bill for idempotency, so the customer has something payable. No charge breakdown is sent for pricing — CIS has already priced it. Previously this step POSTed a per-agreement billing instruction and stored a returned `saaslogic_invoice_id`. See modules 10 and 21.
 
 9. **Final bill:** When a service agreement is terminated (status → FINAL), a final bill is generated for the period from the last regular bill to the final read date, prorated appropriately.
 
@@ -218,22 +234,27 @@ All pages are planned for Phase 3.
 
 - **Phase 1 (Complete):** RateSchedule and BillingCycle entities defined. No billing execution.
 
-- **Phase 2 (Planned):** MeterRead CRUD (prerequisite — Module 08). Consumption calculation finalized. Read freeze mechanism.
+- **Phase 2 (Complete):** MeterRead CRUD (Module 08). Consumption calculation.
 
-- **Phase 3 (Planned):**
-  - BillingRecord entity + rate engine for all 5 rate types
-  - Billing cycle execution (batch run)
-  - Proration logic
-  - WQA (wastewater as % of water, winter averaging, irrigation exclusions)
+- **Phase 3 — shipped:**
+  - Declarative rate engine (`lib/rate-engine`) — predicate / quantity-source / pricing grammar, topological component ordering, minimum-bill floors applied after the main pass
+  - WQA (wastewater as a share of water, winter averaging, irrigation exclusion) via `WqaValue` + the WQA loader
+  - Tax and surcharge lines as rate components (`kindCode` `tax` / `credit`) — no separate TaxRule entity was needed
+  - `BillSegment` + `BillSegmentLine` per agreement per period (slice 5a)
+  - Account-level `Bill` aggregating segments (slice 5b.2)
+  - Golden tests pinning the Bozeman water / sewer / stormwater / solid-waste tariffs and NorthWestern Energy residential electric
+
+- **Phase 3 — outstanding:**
+  - Batch billing run across a cycle's accounts (slice 5c)
+  - Rebill / corrections and reprint versioning (slice 5d)
+  - **AR posting — nothing currently writes `Account.balance`, so issued Bills do not become receivable and delinquency sweeps a column only the seeder sets. See module 10; this is the largest gap in the chain.**
+  - Proration for partial periods
   - Bill holds
-  - SaaSLogic integration (billing instruction POST, invoice ID storage)
-  - BillDocument entity + PDF generation
-  - Print vendor export
-  - BillMessage entity + bill message UI
-  - Bill reprints and versioning
-  - Final bill generation on account closure
-  - Charge validation against adopted rates
-  - Tax and surcharge line items (TaxRule, Surcharge from Module 07)
+  - Final bill on account closure
+  - `BillDocument` + PDF generation; print vendor export
+  - `BillMessage` + bill message UI
+  - `BIMONTHLY` / `QUARTERLY` cycle frequencies — `computeBillPeriod` throws `UNSUPPORTED_FREQUENCY` today
+  - Tenant-configurable due-date offset — hardcoded at bill date + 30 days
 
 - **Phase 4 (Planned):** Bill viewing in customer portal (Module 15). Multi-account billing views.
 
@@ -241,27 +262,27 @@ All pages are planned for Phase 3.
 
 | Req | Requirement | Coverage |
 |-----|-------------|----------|
-| 61 | Consolidated bill with service-level accounting | Phase 3: charge_breakdown per service agreement, consolidated by SaaSLogic |
-| 62 | Effective-dated enrollment with proration | Phase 3: proration logic in rate engine |
-| 63 | Regulatory fees and surcharges | Phase 3: Surcharge entity in charge_breakdown |
-| 64 | Configurable taxes and franchise fees | Phase 3: TaxRule entity |
-| 69 | Wastewater = % of water usage | Phase 3: WQA linked billing calculation |
-| 70 | Caps, mins, maxes for wastewater/WQA | Phase 3: rate_config extensions |
-| 71 | Configurable WQA calculations | Phase 3: WQA calculation module |
-| 72 | Winter averaging for wastewater | Phase 3: part of WQA module |
-| 73 | Exclude irrigation from wastewater | Phase 3: meter-type exclusion in WQA |
-| 74 | Minimum bills regardless of usage | minimum_bill enforcement in rate engine |
+| 61 | Consolidated bill with service-level accounting | **Shipped** — `Bill` aggregates one `BillSegment` per agreement; consolidated by CIS, not SaaSLogic |
+| 62 | Effective-dated enrollment with proration | Outstanding: proration logic in rate engine |
+| 63 | Regulatory fees and surcharges | **Shipped** — rate components; no separate Surcharge entity needed |
+| 64 | Configurable taxes and franchise fees | **Shipped** — rate components with `kindCode = tax`; no TaxRule entity needed |
+| 69 | Wastewater = % of water usage | **Shipped** — linked-commodity loader + WQA |
+| 70 | Caps, mins, maxes for wastewater/WQA | **Shipped** — pricing grammar + `minimum_bill` floors |
+| 71 | Configurable WQA calculations | **Shipped** — `WqaValue` with override, WQA loader |
+| 72 | Winter averaging for wastewater | **Shipped** — WQA source window |
+| 73 | Exclude irrigation from wastewater | **Shipped** — predicate on meter/commodity in the quantity source |
+| 74 | Minimum bills regardless of usage | **Shipped** — `minimum_bill` stage applied after main pricing |
 | 101–105 | Interval aggregation, partial periods, rebilling, reconciliation | Phase 3: rate engine scope |
 | 130 | PDF bill generation, historical images | Phase 3: BillDocument entity + PDF renderer |
 | 131 | Print vendor integration | Phase 3: print export file delivery |
-| 133 | Bill reprints, corrected bills with versioning | Phase 3: BillingRecord versioning with replaces_id |
+| 133 | Bill reprints, corrected bills with versioning | Outstanding: slice 5d, versioning via `replaces_id` on `Bill` |
 | 134 | Final bill at account closure | Phase 3: FINAL billing trigger |
 | 136 | Bill holds | Phase 3: hold_reason on BillingRecord |
 | 137 | Configurable bill messages by account type/service | Phase 3: BillMessage entity |
 | 138 | Prorate tier thresholds for partial periods | Phase 3: proration in rate engine |
-| 139 | Itemized charges on bills | charge_breakdown JSONB with line items |
-| 140 | Validate charges against adopted rates | Phase 3: charge validation before submission |
-| 141 | Reconciliation: water usage vs wastewater billing | Phase 3: WQA-related |
-| 142 | Rebill on read corrections | Phase 3: CORRECTED read → reprint flow |
-| 149–150 | Aging dashboard (real-time) | Phase 3: AR aging query surfaced in billing dashboard |
-| 157–164 | Payment processing (PCI, ACH, posting, reversals) | Phase 3: delegated to SaaSLogic |
+| 139 | Itemized charges on bills | **Shipped** — `BillSegmentLine` rows, each traceable to the `RateComponent` that produced it |
+| 140 | Validate charges against adopted rates | Outstanding: lines already carry `source_schedule_id` / `source_component_id`, so validation has what it needs |
+| 141 | Reconciliation: water usage vs wastewater billing | Outstanding: WQA-related |
+| 142 | Rebill on read corrections | Outstanding: slice 5d, CORRECTED read → rebill flow |
+| 149–150 | Aging dashboard (real-time) | **Blocked on AR** — needs module 10; no receivable exists yet |
+| 157–164 | Payment processing (PCI, ACH, posting, reversals) | Card handling and settlement delegated to SaaSLogic (module 21); **posting and reversals are CIS's own, via module 10** |

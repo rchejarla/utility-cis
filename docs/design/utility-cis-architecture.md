@@ -7,19 +7,23 @@
 
 ## 1. Overview
 
-The Utility CIS (Customer Information System) is a multi-tenant SaaS platform for small-to-mid-market utilities (5,000–100,000 accounts). It manages the utility domain — customers, premises, meters, accounts, service agreements, rate schedules, and billing — while integrating with SaaSLogic for financial operations and ApptorFlow for workflow orchestration.
+The Utility CIS (Customer Information System) is a multi-tenant SaaS platform for small-to-mid-market utilities (5,000–100,000 accounts). It manages the utility domain — customers, premises, meters, accounts, service agreements, rate schedules, rating and billing — using SaaSLogic as a payment rail and ApptorFlow for workflow orchestration.
 
 ### Key Principle
 
-**CIS owns the utility domain. SaaSLogic owns the money.** The handoff is a structured billing instruction. This boundary is non-negotiable.
+**CIS calculates and owns everything it bills. SaaSLogic only collects the amount.** CIS rates usage, applies taxes, produces the bill, and owns the receivable. SaaSLogic is told an amount and reports whether it was collected.
+
+> **Revised 2026-10-09.** This replaces the earlier principle — *"CIS owns the utility domain, SaaSLogic owns the money,"* with a structured billing instruction as the handoff, described as non-negotiable. Rate Model v2 built native rating, bill segments and account-level bills in CIS, so the earlier split no longer described the system. See `docs/specs/21-saaslogic-billing.md`.
 
 ### Service Boundaries
 
 | Service | Owns | Integrates With |
 |---------|------|-----------------|
-| **Utility CIS** | Customers, premises, meters, accounts, service agreements, rate schedules, meter reads, billing instructions | SaaSLogic (billing), ApptorFlow (workflows) |
-| **SaaSLogic** | Invoices, payments, payment plans, dunning, revenue recognition, financial ledger | CIS (receives billing instructions) |
+| **Utility CIS** | Customers, premises, meters, accounts, service agreements, rate schedules, meter reads, **rating, bill segments, bills, taxes, and the receivable** | SaaSLogic (payment collection), ApptorFlow (workflows) |
+| **SaaSLogic** | Card data, hosted payment page, settlement | CIS (registers an amount due, receives the payment result) |
 | **ApptorFlow** | Workflow orchestration: start/stop service, collections, anomaly response, approvals | CIS (events), SaaSLogic (payment events) |
+
+**Not yet built:** nothing currently writes `Account.balance`, so the receivable CIS now owns does not exist in code. See module 10.
 
 ### Target Market
 
@@ -89,11 +93,13 @@ CREATE POLICY tenant_isolation ON premise
 
 The API validates utility_id as UUID format before interpolation (SQL injection prevention) and sets RLS context per-request.
 
-### 3.4 Integration Contract: CIS → SaaSLogic
+### 3.4 Integration Contract: CIS ↔ SaaSLogic
 
-**Billing Instruction (CIS → SaaSLogic):** When billing cycle runs, CIS generates a billing instruction per service agreement and delivers to SaaSLogic via REST API.
+**Amount due (CIS → SaaSLogic):** when a `Bill` is issued, CIS registers its total with SaaSLogic so the customer has something payable, keyed on the Bill for idempotency. No usage, no rate configuration and no line detail is sent for pricing — CIS has already priced it.
 
-**Payment Event (SaaSLogic → CIS):** When payment received, SaaSLogic fires webhook to CIS to update account standing.
+**Payment result (SaaSLogic → CIS):** when a payment settles, CIS learns of it (webhook if available, polling otherwise) and posts it against the account's balance.
+
+This replaces the earlier "structured billing instruction per service agreement" contract, which assumed SaaSLogic did the rating. Note that payments may also arrive by cash, check or lockbox and never touch SaaSLogic, which is why the ledger is CIS's.
 
 ### 3.5 Event Bus: CIS ↔ ApptorFlow
 
@@ -832,31 +838,41 @@ Meter-read UX hardening (follow-up pass): the read-entry form rebuilt with a pre
 Still planned for Phase 2: GIS integration (deferred to Phase 3 as it depends on the map-tile integration and a service territory entity).
 
 ### Phase 3
-Billing integration + notifications + delinquency. **CIS does not calculate charges** — rating, invoicing, and delivery are owned by the external [SaaSLogic](https://docs.saaslogic.io) billing platform. CIS is the system of record for meters, premises, agreements, and interval reads, and acts as the integration shell that feeds SaaSLogic usage data and surfaces invoices back to end users.
+Rating + billing + notifications + delinquency. **CIS calculates charges natively.** The earlier plan — rating, invoicing and delivery owned by [SaaSLogic](https://docs.saaslogic.io), with CIS as an integration shell pushing usage — was dropped on 2026-10-09 after Rate Model v2 shipped a native engine.
 
-Architecture (see `docs/specs/21-saaslogic-billing.md` for the full spec):
+Rating and billing (shipped — Rate Model v2 slices 1–5b.2):
 
-- **SaaSLogic client package** (`@utility-cis/saaslogic`) — typed REST client with bearer-token auth, retry with backoff, idempotency keys on mutations, call-log emission.
-- **Customer and subscription mirroring** — lazy upsert. A SaaSLogic customer is created only when a ServiceAgreement first activates; subscription is provisioned with the `saaslogicPlanId` stored on the RateSchedule. IDs are mirrored on `customer.saaslogic_customer_id` and `service_agreement.saaslogic_subscription_id`.
-- **Resource reference table** (`saaslogic_resource`) — reusable resource definitions (e.g., `electric_kwh`) shared across meters. `Commodity.saaslogic_resource_id` FK binds a commodity to the resource used for usage push.
-- **Interval reads** — new TimescaleDB hypertable `meter_interval_read` partitioned by `ts`, separate from the existing low-frequency `MeterRead` entity. Ingested via `POST /api/v1/meters/:id/interval-reads`.
-- **Billing cycle close** — aggregates intervals per (agreement, commodity), writes `BillingLineItem` rows, batch-pushes via `POST /subscriptions/{id}/resources` with a per-line idempotency key. Line items move through `PENDING → SENT → ACKED` with `FAILED` retry.
-- **Invoice mirror** — `Invoice` table populated by a polling reconciler (`GET /invoices?updated_since=...`) running every 5 minutes per tenant. Webhook receiver can be added later without schema changes if SaaSLogic exposes events.
-- **Payment methods** — redirect-only. A button on the agreement detail page fetches a hosted portal URL from SaaSLogic and navigates the browser there. CIS holds no card data and is out of PCI scope entirely.
-- **Ad-hoc charges** — `POST /invoices/on-demand` exposed through a UI action for one-off fees (reconnection, deposits, adjustments) without waiting for the next cycle.
+- **Declarative rate engine** (`packages/api/src/lib/rate-engine`) — a `RateComponent` carries `predicate`, `quantitySource` and `pricing` as JSON validated by a shared Zod grammar, so tariffs are data rather than code. Components are topologically sorted, gated by predicate, priced, and `minimum_bill` floors apply as a separate stage after the main pass.
+- **Variable loaders** (`lib/rate-engine-loaders`) — account, meter, premise, tenant, index, WQA, linked-commodity and items loaders hydrate the rating context. This is how "wastewater as a share of winter-average water, excluding irrigation" becomes configuration.
+- **Versioned schedules** — `RateSchedule` carries an explicit publish state and a `supersedes`/`supersededBy` chain, with a visual component editor in the web app.
+- **Charges** — `BillSegment` + `BillSegmentLine` per agreement per period (slice 5a); account-level `Bill` aggregating segments (slice 5b.2). Each line is traceable to the exact schedule version and component that produced it.
+- **Golden tests** pin the Bozeman water / sewer / stormwater / solid-waste tariffs and NorthWestern Energy residential electric.
+
+SaaSLogic, reduced to a payment rail (see `docs/specs/21-saaslogic-billing.md`):
+
+- **Client package** (`@utility-cis/saaslogic`) — typed REST client, bearer-token auth, retry with backoff, idempotency keys, call-log emission. Still wanted.
+- **Payer mirroring** — lazy upsert of a SaaSLogic customer, `customer.saaslogic_customer_id`. Still wanted.
+- **Amount due** — register an issued `Bill`'s total for collection, keyed on the Bill. Replaces usage push.
+- **Payment result** — webhook if available, polling otherwise, feeding CIS's own AR posting.
+- **Payment methods** — redirect-only to a hosted page. CIS holds no card data and stays out of PCI scope.
+- **Dropped:** subscription provisioning, plan IDs on rate schedules, commodity/UOM resource mapping, `BillingLineItem`, usage push via `POST /subscriptions/{id}/resources`, and the authoritative `Invoice` mirror. All presupposed SaaSLogic doing the pricing.
+
+**Interval reads** (`meter_interval_read` hypertable) remain planned but belong to meter reading, not the payment integration — the rate engine consumes them directly.
+
+**Not built: AR posting.** Nothing writes `Account.balance`, so an issued `Bill` does not become a receivable and the delinquency sweep below reads a column only the seeder sets. Module 10 has to land before the payment integration is meaningful.
 
 Notifications (complete): NotificationTemplate + Notification entities. Template CRUD with channel (EMAIL/SMS/MAIL), Mustache body with variable interpolation, event-trigger binding. Notification send + list endpoints. RBAC module `notifications` with VIEW/CREATE/EDIT/DELETE permissions. See `docs/specs/13-notifications.md`.
 
 Delinquency (complete): DelinquencyRule + DelinquencyAction entities. Rule CRUD with configurable thresholds (days past due, minimum balance), escalation tiers, and linked notification templates. Action log tracks rule firings per account. RBAC module `delinquency` with VIEW/CREATE/EDIT/DELETE permissions. Account entity extended with `balance`, `lastDueDate`, and `isProtected` columns to support delinquency evaluation. See `docs/specs/11-delinquency.md`.
 
-Still planned for Phase 3: late fees and payment plans (as line items fed to SaaSLogic).
+Still planned for Phase 3: AR posting (module 10), batch billing run (slice 5c), rebill/corrections (slice 5d), bill rendering and delivery, and late fees and payment plans — the latter now as CIS-side charges and AR arrangements, not as line items fed to SaaSLogic.
 
 ### Phase 4
 Customer portal + service requests. See `docs/specs/15-customer-portal.md` for the full spec.
 
 Phase 4.1 (complete — portal MVP): Unified JWT auth with `CisUser.customerId` FK to `Customer` (no separate PortalUser entity). Portal Customer preset role with four portal-specific RBAC modules (`portal_accounts`, `portal_billing`, `portal_usage`, `portal_profile`). Portal is a route segment in the existing Next.js app (`/portal/*`) with its own layout (horizontal nav, avatar dropdown, no admin sidebar). Dev-mode registration (account number + email verification) and login via `POST /api/v1/auth/dev-login`. Token persistence in localStorage with 401→login and 403→portal redirects. Pages: dashboard (pending payments from mock invoice data, current usage from MeterRead, account cards), bills (invoice list with status badges), invoice detail (payment summary + disabled Pay Now), usage (premise/meter picker, MonthPicker date range, monthly bar chart with UOM), account detail (premises → agreements → meters hierarchy), profile (view + inline edit). All portal data endpoints are customer-scoped via `customerId` on the token.
 
-Phase 4.2 (planned, blocked on Phase 3): real invoice data from SaaSLogic mirror, Pay Now redirect, charge breakdown, autopay enrollment, paperless billing toggle.
+Phase 4.2 (planned, blocked on Phase 3): real bill data from CIS's own `Bill` / `BillSegmentLine` rows, Pay Now redirect to the hosted payment page, charge breakdown, autopay enrollment, paperless billing toggle.
 
 Phase 4.3 (planned, blocked on Modules 13+14): service request submission/tracking, start/stop/transfer wizards (ApptorFlow), communication preferences, solid waste vacation hold.
 

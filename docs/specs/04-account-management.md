@@ -147,7 +147,7 @@ Credit rating may influence deposit requirements (e.g., POOR rating = higher dep
 
 ### SaaSLogic Integration
 
-`saaslogic_account_id` stores the corresponding account identifier in SaaSLogic. CIS sends billing instructions keyed by this ID. Payment events from SaaSLogic reference this ID to update account standing in CIS. This field is nullable because new accounts may be created in CIS before the SaaSLogic account is provisioned.
+`saaslogic_account_id` stores the corresponding payer identifier in SaaSLogic. Settled payments reference this ID so CIS can post them to the right account. Nullable, because accounts exist in CIS before any SaaSLogic payer is provisioned — and accounts that only ever pay by cash or check never need one. Revised 2026-10-09: this previously keyed the outbound billing instructions that CIS no longer sends.
 
 ### Soft Delete Only
 

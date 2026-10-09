@@ -253,8 +253,8 @@ Note: There is no transition to or from INACTIVE. The INACTIVE status is not val
 
 - **Phase 1 (Complete):** Full ServiceAgreement CRUD (4 endpoints), ServiceAgreementMeter junction, status transition enforcement, meter assignment uniqueness constraint, meter-premise commodity match validation, read sequence, audit tab in UI.
 - **Phase 2 (Built):** Add/remove meter assignment endpoints (`POST /service-agreements/:id/meters`, `PATCH /service-agreements/:id/meters/:samId`). Agreement detail inline editing on overview. Status transition buttons (Activate, Close/Finalize) on Overview tab with confirmation dialogs — transitions corrected to PENDING→ACTIVE→FINAL→CLOSED (removed invalid INACTIVE transitions). Add/remove meter assignments directly from Meters tab. Add Agreement inline form on Premise detail Agreements tab. Attachments tab added to Agreement detail with Upload button in tab bar. Still planned for Phase 2: move-in/move-out workflow, landlord/tenant SA relationship, split-read consumption, SA search by address/account.
-- **Phase 3+:** Billing instruction generation per agreement (CIS → SaaSLogic). Final bill trigger on FINAL transition. Mid-cycle proration. Bill holds on agreements. Rate change mid-cycle handling. Retroactive billing after read corrections.
-- **Phase 3+:** Billing instruction generation per agreement (CIS → SaaSLogic). Final bill trigger on FINAL transition. Mid-cycle proration. Bill holds on agreements. Rate change mid-cycle handling. Retroactive billing after read corrections.
+- **Phase 3 (Built):** Rate schedule assignments per agreement (`SAScheduleAssignment` with role codes and effective dating). Native rating via the rate engine. `BillSegment` per agreement per period, shown on the agreement's Bills tab.
+- **Phase 3+:** Final bill trigger on FINAL transition. Mid-cycle proration. Bill holds on agreements. Rate change mid-cycle handling. Retroactive billing after read corrections. (Outbound billing-instruction generation is dropped — CIS prices and bills natively; see module 21.)
 
 ## Bozeman RFP Coverage
 

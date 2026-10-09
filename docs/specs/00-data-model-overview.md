@@ -98,7 +98,7 @@ The API validates `utility_id` as a UUID before interpolation and sets the RLS c
 ## Design Principles
 
 - **Soft deletes only.** No hard deletes. Entities move to status `INACTIVE`, `CLOSED`, `REMOVED`, or `CONDEMNED`.
-- **CIS owns utility domain; SaaSLogic owns money.** The integration boundary is a structured billing instruction.
+- **CIS calculates and owns what it bills; SaaSLogic only collects.** CIS owns rating, bills and the receivable; the integration boundary is an amount due and a payment result. Revised 2026-10-09 — previously "SaaSLogic owns money" with a structured billing instruction as the handoff.
 - **Configurable, not customizable.** All tenant-specific variation is driven by data (commodities, rate schedules, billing cycles), not code branches.
 - **Event-driven audit.** All state changes emit internal domain events that write to `audit_log` with before/after state.
 - **Defense in depth for data integrity.** Zod validators guard the API boundary, Prisma constrains the schema, and PostgreSQL CHECK constraints enforce invariants at the storage layer. A bug in any single layer can't produce data that breaks the others.
