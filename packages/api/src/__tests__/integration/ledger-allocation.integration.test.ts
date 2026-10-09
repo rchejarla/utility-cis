@@ -183,6 +183,35 @@ describe("applyCreditToDebits", () => {
     expect(await openOf(c)).toBe("0.00");
   });
 
+  // Class, dueDate and postedAt can all tie — two debits of one class
+  // raised on one date in the same instant — and the pair must still
+  // allocate the same way every run.
+  //
+  // Honest about what this test is: it pins the observed outcome, and it
+  // cannot on its own prove determinism. Removing the comparator's id
+  // tie-break leaves it passing, because `Array.prototype.sort` is stable
+  // and the rows happened to arrive in agreeing order. The actual
+  // guarantee is the ORDER BY on the fetch in allocation.service.ts; this
+  // case would start failing intermittently if that were dropped, which
+  // is the best a test can do against a free-running query planner.
+  it("resolves a total tie by entry id", async () => {
+    const { prisma } = prismaImports;
+    const a = await debit("ADJUSTMENT_DEBIT", "30.00", "2026-06-14");
+    const b = await debit("ADJUSTMENT_DEBIT", "30.00", "2026-06-14");
+    // Force postedAt equal as well, so id is the only thing left.
+    await prisma.$executeRaw`UPDATE ledger_entry SET posted_at = timestamptz '2026-06-02 12:00:00+00'
+                              WHERE id IN (${a}::uuid, ${b}::uuid)`;
+    const c = await credit("30.00");
+
+    await prisma.$transaction((tx) =>
+      allocation.applyCreditToDebits(tx, utilityId, accountId, c),
+    );
+
+    const [lower, higher] = [a, b].sort((x, y) => x.localeCompare(y));
+    expect(await openOf(lower!)).toBe("0.00");
+    expect(await openOf(higher!)).toBe("30.00");
+  });
+
   it("leaves the credit open when there is nothing to pay", async () => {
     const { prisma } = prismaImports;
     const c = await credit("25.00");

@@ -112,6 +112,13 @@ export async function applyCreditToDebits(
 
   const debits = await tx.ledgerEntry.findMany({
     where: { utilityId, accountId, openAmount: { gt: 0 } },
+    // Fetch in a TOTAL order. This, not the comparator, is what makes
+    // allocation deterministic: `Array.prototype.sort` is stable, so any
+    // tie the comparator cannot separate keeps the order it arrived in,
+    // and without an ORDER BY that order is whatever Postgres chose.
+    // The comparator still runs, because the type-class ranking in
+    // DEBIT_ALLOCATION_ORDER would need a CASE expression to do here.
+    orderBy: [{ dueDate: "asc" }, { postedAt: "asc" }, { id: "asc" }],
     select: { id: true, type: true, openAmount: true, dueDate: true, postedAt: true },
   });
   debits.sort(compareDebits);

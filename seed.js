@@ -776,9 +776,16 @@ async function main() {
   console.log("  theme");
 
   // Seed preset roles — MUST stay in sync with packages/shared/src/modules/constants.ts MODULES
+  // Must stay in step with MODULES in packages/shared/src/modules/constants.ts.
+  // A module missing here is enabled for no tenant, so its routes answer
+  // 403 MODULE_DISABLED on every seeded database while their own tests
+  // pass, because those create the tenant_module row themselves.
+  // packages/shared/src/modules/__tests__/constants.test.ts fails if the
+  // two lists drift. seed.js deliberately avoids tsx, so this cannot
+  // import the constant directly.
   const allModules = [
     "customers","premises","meters","meter_reads","meter_events",
-    "accounts","agreements","commodities","rate_schedules","billing_cycles",
+    "accounts","payments","agreements","commodities","rate_schedules","billing_cycles",
     "containers","service_suspensions","service_events",
     "workflows","search",
     "audit_log","attachments","theme","settings",
@@ -817,6 +824,9 @@ async function main() {
         customers: ["VIEW","CREATE","EDIT"], premises: ["VIEW","CREATE","EDIT"],
         meters: ["VIEW"], meter_reads: ["VIEW","CREATE"],
         accounts: ["VIEW","CREATE","EDIT"],
+        // A CSR is who takes a payment at the counter and reverses an NSF,
+        // matching ROLE_PRESETS in packages/shared/src/modules/constants.ts.
+        payments: ["VIEW","CREATE","EDIT"],
         agreements: ["VIEW","CREATE","EDIT"], commodities: ["VIEW"],
         rate_schedules: ["VIEW"], billing_cycles: ["VIEW"],
         containers: ["VIEW","CREATE","EDIT"],

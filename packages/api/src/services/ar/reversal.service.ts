@@ -101,9 +101,15 @@ export async function reverseEntry(
         type: "REVERSAL",
         amount,
         openAmount: amount,
-        // A positive reversal is owed again, and ages on the original's
-        // clock; a negative one has nothing to fall due.
-        dueDate: amount.gt(0) ? original.dueDate : null,
+        // No reversal ever ages, so it carries no due date. Two reasons,
+        // either sufficient: step 3 below closes it immediately, so it
+        // never has an open amount for the aging index to find; and a
+        // positive reversal can only come from reversing a credit, and
+        // every credit in this system is written with dueDate null
+        // (posting.service.ts for a negative bill, payment.service.ts for
+        // a payment). An earlier version inherited original.dueDate when
+        // the amount was positive, which was tautologically null.
+        dueDate: null,
         effectiveDate: new Date(new Date().toISOString().slice(0, 10)),
         reversesId: entryId,
         reasonId: input.reasonId ?? null,
