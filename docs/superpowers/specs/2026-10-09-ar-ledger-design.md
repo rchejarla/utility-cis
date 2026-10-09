@@ -55,7 +55,7 @@ Neither is answerable from one number per account, and retrofitting granularity 
 - **Refund processing.** An over-waived or overpaid account leaves an open credit, which *is* a refund due. The ledger represents the state; disbursing money is separate.
 - **Deposit application at closure.** `Account.depositAmount` sits outside the ledger. Bozeman reqs 23–24 want refund at closure and application to unpaid charges. Applying a deposit is just a credit entry, so the ledger accommodates it without schema change.
 - **Payment plans.** Module 10.
-- **Approval thresholds** ("waivers over $50 need a supervisor"). `LedgerReasonDef.requiresApproval` is the hook; the workflow is `docs/bozeman/13-workflow-approvals-action-queue.md`.
+- **Approval thresholds** ("waivers over $50 need a supervisor"). Not a column away — see §4.4. Posting is final, so a pending waiver cannot be a ledger entry; it needs a request object outside the ledger. `docs/bozeman/13-workflow-approvals-action-queue.md`, with `ServiceSuspension` as the shape to follow.
 - **Double-entry bookkeeping, chart of accounts, fund accounting.** Out, and deliberately. `docs/bozeman/12-corrections-and-reversals.md:459` establishes that CIS is the operational layer — which customer owes what — and the accounting layer lives elsewhere. `14-special-assessments.md:701` uses the same split for bond proceeds. This design is single-entry open-item AR.
 - **The SaaSLogic adapter.** Module 21, which is blocked on this.
 
@@ -244,8 +244,14 @@ Decimal(14,2), not the (14,4) the rate engine uses: rating needs sub-cent precis
 | code | VarChar(50) | `LATE_FEE`, `NSF_FEE`, `RECONNECT_FEE`, `COURTESY_WAIVER`, `BAD_DEBT` … |
 | label | VarChar(255) | What appears on the statement |
 | appliesToKind | LedgerEntryKind | Restricts which kind may cite it |
-| requiresApproval | Boolean | Hook for the approvals workflow; not enforced here |
 | isActive | Boolean | |
+
+**No `requiresApproval` column.** An earlier draft had one "as a hook for the approvals workflow." Dropped for two reasons:
+
+1. Nothing would read it until that workflow exists — a write-only column, the exact asymmetry the cross-layer auditor hunts for.
+2. More fundamentally, **approval cannot be a state on a ledger entry.** Posting is final by design: an entry exists, so it has moved the balance. A waiver awaiting approval must *not* reduce what the customer owes. So approval needs a request object outside the ledger that posts an entry once granted — a different design, and the reason it is out of scope rather than a column away.
+
+The precedent for the eventual shape is `ServiceSuspension`: `TenantConfig.requireHoldApproval` plus a `PENDING` status and `approvedBy`, gating an Approve action in the UI. That state lives on the suspension, not on a financial entry.
 
 **Unique:** `(utilityId, code)`. Seeded with defaults per tenant, following `PremiseTypeDef` / `MeasureTypeDef`.
 
@@ -401,6 +407,7 @@ Too large for one implementation plan. **Slice 1 is the first plan's scope**; ea
 3. **Fees and adjustments** — `LedgerReasonDef` + seeds, `assessFee`, waive/write-off/adjust, the two new RBAC modules.
 4. **Visibility** — statement view, aging query, account AR tab, portal amount due.
 5. **Delinquency rewire** — days-past-due from the oldest open debit.
+6. **Late-fee generation** — a fee amount on `DelinquencyRule`, and a `LATE_FEE` action type that calls `assessFee` (§6.4). Listed as a non-goal above because it is separable, but sequenced here deliberately: until fees exist in anger, three designed behaviours have no real exercise — the fee-before-bill allocation priority (§6.3), `assessedOnId`, and dependent-fee reversal (§6.6). It is also small.
 
 ---
 
@@ -409,5 +416,5 @@ Too large for one implementation plan. **Slice 1 is the first plan's scope**; ea
 1. **Module 10 needs rewriting again** to reflect §3.9 — it currently claims the ledger, the `Payment` entity and allocation, which move here.
 2. **`docs/bozeman/12-corrections-and-reversals.md:459`** still says the accounting layer is SaaSLogic's. Under the 2026-10-09 decision that should be the City's ERP, matching the pattern `14-special-assessments.md:701` already uses.
 3. **Fee amount on `DelinquencyRule`** — the blocker for late-fee generation.
-4. **Refunds** — an open credit means money is owed back; disbursement is undesigned.
+4. **Refunds — the credit lifecycle has no terminal state.** An open credit can be consumed by a future debit (the normal path, §6.1) or refunded. Refunding needs something for the credit to be applied *against*, and no current kind fits — the expected shape is a `REFUND` debit kind, meaning "paid back to the customer." So this is not purely additive: the enum will need a migration, which §3.3 accepts as the honest cost of a fixed enum. Worth knowing before the first account closes with a credit balance, since account closure already exists.
 5. **Backdated entries.** `effectiveDate` is separate from `postedAt` so a correction can land in a prior period, but nothing closes a period. If period close is ever needed, it constrains `effectiveDate` and belongs with it.
