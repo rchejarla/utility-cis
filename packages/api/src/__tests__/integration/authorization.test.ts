@@ -54,7 +54,6 @@ vi.mock("../../lib/prisma.js", async (importOriginal) => {
         upsert: vi.fn().mockResolvedValue({}),
       },
     },
-    setTenantContext: vi.fn().mockResolvedValue(undefined),
     withTenant: vi.fn((_utilityId: string, fn: any) => fn({})),
   };
 });

@@ -90,7 +90,6 @@ vi.mock("../lib/prisma.js", () => {
       serviceRequest: crud(),
       serviceRequestCounter: crud(),
     },
-    setTenantContext: vi.fn().mockResolvedValue(undefined),
     withTenant: vi.fn((_utilityId: string, fn: any) => fn({})),
   };
 });

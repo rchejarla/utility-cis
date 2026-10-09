@@ -69,4 +69,3 @@ export const prisma = {
   },
 };
 
-export const setTenantContext = vi.fn().mockResolvedValue(undefined);

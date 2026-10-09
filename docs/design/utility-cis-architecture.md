@@ -847,17 +847,29 @@ is wrong in two separate ways:
    non-owning application role. Note also that `prisma migrate dev` builds a
    shadow database, so a de-privileged role needs an explicit `CREATEDB`
    grant.
-2. **The tenant context is not reliably on the connection that runs the
-   query.** `setTenantContext` (`lib/prisma.ts`) issues
+2. **Tenant context has to be established per transaction, not per
+   request.** *(The leak described here is fixed; the consequence for
+   enabling RLS remains.)* `setTenantContext` used to issue
    `set_config('app.current_utility_id', …, false)` — *session*-scoped — as
-   its own statement against a pooled connection, and the service queries
-   that follow may be handed a different connection. Worse, a session-scoped
-   setting outlives the request on the connection that did receive it, so
-   once RLS is live a request whose middleware did not run can inherit the
-   previous request's tenant and read its rows without error. The supported
-   pattern is `withTenant`, which opens a transaction and uses
-   `set_config(…, true)` so the setting and the queries share one connection
-   and expire together; it currently has one caller.
+   its own statement against a pooled connection, from `tenantMiddleware`.
+   It failed twice over: the service queries that followed could be handed a
+   different connection and never see it, and the setting outlived the
+   request on the connection that did receive it, so the next request to be
+   handed that connection inherited the previous tenant's id. With RLS live
+   that is a cross-tenant read raising no error. Measured with the pool
+   pinned to one connection, the residue was still there after the request
+   and after an intervening `withTenant` transaction, which it shadowed.
+
+   `setTenantContext` is now removed and `tenantMiddleware` only rejects a
+   request that has no tenant. `withTenant` is the single supported way in:
+   one transaction, `set_config(…, true)`, so the setting and the queries
+   share a connection and expire together. Regression test:
+   `tenant-context.integration.test.ts`.
+
+   What this leaves for whoever enables RLS: tenant-scoped reads have to go
+   through `withTenant`, because middleware cannot pin a connection to a
+   request and so cannot set this safely. `withTenant` currently has one
+   caller, so that is a sweep, not a switch.
 
 The policies themselves also disagree about how to fail: most use
 `current_setting('app.current_utility_id')`, which raises when unset, while
