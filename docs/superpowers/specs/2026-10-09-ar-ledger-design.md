@@ -116,7 +116,7 @@ What genuinely varies per utility is the business reason behind a fee or adjustm
 | Situation | What is posted | Type |
 |---|---|---|
 | The charge was **wrong** | reverse it | `REVERSAL` |
-| The charge was **right**, we forgive it | credit it | `CREDIT` + reason |
+| The charge was **right**, we forgive it | credit it | `ADJUSTMENT_CREDIT` + reason |
 | The charge was **right**, uncollectable | write it off | `WRITE_OFF` + reason |
 
 Collapsing these loses three facts a finance department reports separately: **billing accuracy**, **concessions**, and **bad debt**. Once collapsed it is unrecoverable from history.
@@ -173,10 +173,10 @@ enum LedgerEntryType {
   BILL_CHARGE       // debit  — an issued Bill; provenance billId; idempotent
   FEE               // debit  — off-cycle (late, NSF, reconnection); assessedOnId
   ADJUSTMENT_DEBIT  // debit  — manual increase
-  PAYMENT           // credit — triggers allocation
-  CREDIT            // credit — manual (waiver, goodwill)
-  WRITE_OFF         // credit — uncollectable
-  REVERSAL          // negates a prior entry; sign derived from reversesId
+  PAYMENT            // credit — triggers allocation
+  ADJUSTMENT_CREDIT  // credit — manual (waiver, goodwill)
+  WRITE_OFF          // credit — uncollectable
+  REVERSAL           // negates a prior entry; direction taken from reversesId
 }
 
 enum PaymentTender {
@@ -189,19 +189,26 @@ enum PaymentTender {
 ```
 
 ```prisma
-enum LedgerDirection { DEBIT  CREDIT }
+enum LedgerDirection {
+  DEBIT    // increases what the customer owes the utility
+  CREDIT   // reduces what the customer owes the utility
+}
 ```
+
+**Both values are defined from one fixed viewpoint: the customer's obligation to the utility.** This matters because debit and credit in double-entry bookkeeping are relative to whichever account you are looking at — a charge is a debit to receivables and a credit to revenue, simultaneously. CIS is deliberately not double-entry (§2.2), so there is only one viewpoint here and it must be pinned, or every reader will silently pick their own. If this ledger is ever exported to the City's ERP, the mapping to GL debits and credits happens there.
+
+Note `ADJUSTMENT_CREDIT` as the entry type rather than `CREDIT`: the direction enum already uses `CREDIT`, and the same word meaning two things on one row ("a goodwill adjustment" vs "reduces the balance") is the kind of ambiguity that produces sign errors. It also pairs symmetrically with `ADJUSTMENT_DEBIT`.
 
 Direction is a column (§3.3a), not inferred from the type at read time. The expected pairing is still asserted, as a constant in `@utility-cis/shared` and as a DB constraint:
 
 ```ts
 export const ENTRY_DIRECTION: Record<Exclude<LedgerEntryType, "REVERSAL">, LedgerDirection> = {
-  BILL_CHARGE:      "DEBIT",
-  FEE:              "DEBIT",
-  ADJUSTMENT_DEBIT: "DEBIT",
-  PAYMENT:          "CREDIT",
-  CREDIT:           "CREDIT",
-  WRITE_OFF:        "CREDIT",
+  BILL_CHARGE:       "DEBIT",
+  FEE:               "DEBIT",
+  ADJUSTMENT_DEBIT:  "DEBIT",
+  PAYMENT:           "CREDIT",
+  ADJUSTMENT_CREDIT: "CREDIT",
+  WRITE_OFF:         "CREDIT",
 };
 // REVERSAL is excluded by construction: its direction is the opposite of
 // the entry it reverses, so there is no fixed mapping to assert.
@@ -236,7 +243,7 @@ export const ENTRY_DIRECTION: Record<Exclude<LedgerEntryType, "REVERSAL">, Ledge
 - `CHECK (amount > 0)` — a zero-amount entry is never meaningful, and a negative one is a direction error. This is also the constraint that stops a $0 late fee being posted; the *policy* question of a minimum fee amount belongs on `DelinquencyRule` (§10 slice 6), not here.
 - `CHECK (open_amount >= 0 AND open_amount <= amount)`
 - `CHECK` direction matches type, per the `ENTRY_DIRECTION` map in §4.1, **for every type except `REVERSAL`**, which instead requires `reverses_id IS NOT NULL`. Not an exemption from a rule it ought to follow — a reversal's direction is genuinely a property of its target, so there is no fixed pairing to assert.
-- `CHECK (reason_id IS NOT NULL)` for `FEE` / `ADJUSTMENT_DEBIT` / `CREDIT` / `WRITE_OFF`.
+- `CHECK (reason_id IS NOT NULL)` for `FEE` / `ADJUSTMENT_DEBIT` / `ADJUSTMENT_CREDIT` / `WRITE_OFF`.
 
 **Indexes**
 
@@ -330,7 +337,7 @@ All of these run in one transaction, wrapped in the existing `audit-wrap`, and u
 4. **Auto-apply open credits** against it — the inverse of §6.3's walk: given the new debit, consume open credits oldest-`postedAt` first, so a credit balance is absorbed by the next bill without a sweep job.
 5. Set `bill.postedAt`, recompute `account.balance` and `lastDueDate`.
 
-A Bill whose total is negative (credits exceeding charges) posts as `CREDIT`, not a negative debit, so `openAmount` stays non-negative everywhere.
+A Bill whose total is negative (credits exceeding charges) posts as `ADJUSTMENT_CREDIT`, not a debit with a negative amount, so `amount` stays positive everywhere.
 
 When auto-post is on, this runs **inside `generateBillForAccount`'s existing transaction**. When off, it is a separate operator action gated by the *same* permission as bill generation — the `agreements` module key, which is where bill routes currently sit (commit `69a559a`). Deliberately not one of the new AR module keys: if posting required a stronger permission than generating, switching auto-post on would let a user create receivables they are not allowed to create directly.
 
@@ -355,7 +362,7 @@ Insert `FEE`. `dueDate` defaults to the next bill's due date so it ages on its o
 
 ### 6.5 `adjust` / `waive` / `writeOff`
 
-All insert a credit (`CREDIT` or `WRITE_OFF`) with a required `reasonId`, applied to a nominated debit. Any amount, so partial waivers are free. Waiving more than is owed, or waiving an already-paid charge, leaves an open credit — a refund due.
+All insert a credit-direction entry (`ADJUSTMENT_CREDIT` or `WRITE_OFF`) with a required `reasonId`, applied to a nominated debit. Any amount, so partial waivers are free. Waiving more than is owed, or waiving an already-paid charge, leaves an open credit — a refund due.
 
 ### 6.6 `reverseEntry(id, reasonId)`
 
