@@ -1779,6 +1779,12 @@ enum PaymentTender {
 /// what the customer owes the utility, negative reduces it. `amount`,
 /// `type`, `dueDate` and `effectiveDate` are immutable once written;
 /// `openAmount` is maintained bookkeeping, like Account.balance.
+///
+/// Provenance columns differ in how hard they are held. The database
+/// enforces that a BILL_CHARGE names a bill and that only a PAYMENT
+/// carries a tender. It does NOT enforce `assessedOnId` on a FEE or
+/// `reasonId` on a fee/adjustment — those CHECKs are deferred to slice
+/// 3, when fees exist and LedgerReasonDef is seeded.
 model LedgerEntry {
   id            String          @id @default(uuid()) @db.Uuid
   utilityId     String          @map("utility_id") @db.Uuid
@@ -1818,6 +1824,9 @@ model LedgerEntry {
 /// Which credit paid down which debit, and by how much. `amount` is
 /// always positive; the parents' signs make it subtract from a debit
 /// and add to a credit, both converging on zero.
+///
+/// The table ships empty in slice 1: nothing writes or seeds it. Rows
+/// arrive in slice 2, when payment allocation lands.
 model LedgerApplication {
   id        String   @id @default(uuid()) @db.Uuid
   utilityId String   @map("utility_id") @db.Uuid
@@ -1836,6 +1845,10 @@ model LedgerApplication {
 
 /// Why a fee or adjustment was raised, in the utility's own words.
 /// Tenant-configurable, following the *TypeDef convention.
+///
+/// The table ships empty in slice 1: nothing writes it and the seeder
+/// does not populate it. The reason codes are seeded in slice 3,
+/// alongside the fees that reference them.
 model LedgerReasonDef {
   id            String          @id @default(uuid()) @db.Uuid
   utilityId     String          @map("utility_id") @db.Uuid

@@ -3,6 +3,14 @@
 -- Signed money: positive increases what the customer owes the utility.
 -- openAmount shares its parent's sign and never exceeds it in magnitude,
 -- so SUM(open_amount) over an account IS its balance.
+--
+-- The tenant_isolation policies at the foot of this file are inert as
+-- things stand: the application role `cis` is a SUPERUSER
+-- (docker/init-cis-user.sh) and superusers bypass RLS entirely. Tenant
+-- separation on these tables therefore rests on the utility_id
+-- predicates in application code, not on these policies. The policies
+-- are written now so they start working the day that role stops being a
+-- superuser; do not read them as protection that is in force today.
 
 CREATE TYPE "LedgerEntryType" AS ENUM (
   'BILL_CHARGE','FEE','ADJUSTMENT_DEBIT','PAYMENT','ADJUSTMENT_CREDIT','WRITE_OFF','REVERSAL'
@@ -73,8 +81,14 @@ CREATE TABLE "ledger_entry" (
     OR ("type" = 'REVERSAL' AND "reverses_id" IS NOT NULL)
   ),
 
-  -- Provenance rules: a bill charge names its bill, a fee names what it
-  -- was assessed on, a payment is the only thing with a tender.
+  -- Provenance rules enforced here: a bill charge names its bill, and a
+  -- payment is the only thing that can carry a tender.
+  --
+  -- NOT enforced here: that a FEE names the debit it was assessed on
+  -- (assessed_on_id), and that a fee or adjustment names a reason
+  -- (reason_id). Both are deliberately deferred to slice 3, which is
+  -- when fees exist and ledger_reason_def is seeded; until then no code
+  -- path writes either column and a CHECK would guard nothing.
   CONSTRAINT "ledger_entry_bill_charge_has_bill" CHECK (
     "type" <> 'BILL_CHARGE' OR "bill_id" IS NOT NULL
   ),
