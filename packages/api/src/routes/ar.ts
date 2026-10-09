@@ -18,6 +18,7 @@ import { reverseEntry } from "../services/ar/reversal.service.js";
 import { assessFee } from "../services/ar/fee.service.js";
 import { adjustDebit, waive, writeOff } from "../services/ar/adjustment.service.js";
 import { listReasons, seedDefaultReasons } from "../services/ar/reason.service.js";
+import { listLedger } from "../services/ar/ledger.service.js";
 
 /**
  * AR routes. Posting is gated on `accounts:EDIT`, the same permission as
@@ -81,6 +82,26 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
       return reply.send({
         data: bills.map((b) => ({ ...b, total: b.total.toFixed(4) })),
       });
+    },
+  );
+
+  /**
+   * The account's ledger, for the AR tab. On `accounts:VIEW` because it
+   * is account data — the same gate as the unposted-bills list — rather
+   * than on the modules that WRITE entries: a CSR who may not take a
+   * payment still needs to see what an account owes.
+   */
+  app.get(
+    "/api/v1/accounts/:id/ledger",
+    { config: { module: "accounts", permission: "VIEW" } },
+    async (request, reply) => {
+      const { id: accountId } = idParamSchema.parse(request.params);
+      const q = request.query as { limit?: string; openOnly?: string };
+      const page = await listLedger(request.user.utilityId, accountId, {
+        limit: q.limit ? Number(q.limit) : undefined,
+        openOnly: q.openOnly === "true",
+      });
+      return reply.send(page);
     },
   );
 
