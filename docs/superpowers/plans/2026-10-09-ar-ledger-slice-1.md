@@ -83,10 +83,30 @@ import { bootPostgres } from "./_effective-dating-fixtures.js";
 let pgContainer: StartedPostgreSqlContainer;
 let prismaImports: typeof import("../../lib/prisma.js");
 
+// A real account, so the constraint tests below cannot pass on a
+// foreign-key violation instead of the CHECK they target.
+const utilityId = "00000000-0000-4000-8000-0000000000aa";
+let accountId: string;
+
 beforeAll(async () => {
   const booted = await bootPostgres();
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
+
+  const { prisma } = prismaImports;
+  const cycle = await prisma.billingCycle.create({
+    data: { utilityId, name: "R1", cycleCode: "R01", billDayOfMonth: 15, frequency: "MONTHLY" },
+  });
+  const account = await prisma.account.create({
+    data: {
+      utilityId,
+      accountNumber: "SHAPE-001",
+      accountType: "RESIDENTIAL",
+      status: "ACTIVE",
+      billingCycleId: cycle.id,
+    },
+  });
+  accountId = account.id;
 }, 180_000);
 
 afterAll(async () => {
@@ -127,34 +147,67 @@ describe("ledger schema", () => {
     expect(Object.keys(await cols("bill"))).toContain("posted_at");
   });
 
-  it("rejects a zero amount", async () => {
+  // These three must insert against a REAL account. With a dangling
+  // account_id the FK fires first and the test passes even if the CHECK
+  // it claims to exercise does not exist. Asserting on the constraint
+  // name is the second guard: an FK violation names the FK, not the CHECK.
+  async function rejectsWith(constraint: string, cols: string, vals: string) {
     const { prisma } = prismaImports;
     await expect(
       prisma.$executeRawUnsafe(
-        `insert into ledger_entry (utility_id, account_id, type, amount, open_amount, effective_date, posted_at)
-         values ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000001','ADJUSTMENT_DEBIT',0,0,current_date,now())`,
+        `insert into ledger_entry (utility_id, account_id, ${cols})
+         values ('${utilityId}'::uuid, '${accountId}'::uuid, ${vals})`,
       ),
-    ).rejects.toThrow();
+    ).rejects.toThrow(new RegExp(constraint));
+  }
+
+  it("rejects a zero amount", async () => {
+    await rejectsWith(
+      "ledger_entry_amount_nonzero",
+      "type, amount, open_amount, effective_date",
+      `'ADJUSTMENT_DEBIT', 0, 0, current_date`,
+    );
   });
 
   it("rejects open_amount exceeding amount", async () => {
-    const { prisma } = prismaImports;
-    await expect(
-      prisma.$executeRawUnsafe(
-        `insert into ledger_entry (utility_id, account_id, type, amount, open_amount, effective_date, posted_at)
-         values ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000001','ADJUSTMENT_DEBIT',10,20,current_date,now())`,
-      ),
-    ).rejects.toThrow();
+    await rejectsWith(
+      "ledger_entry_open_within_amount",
+      "type, amount, open_amount, effective_date",
+      `'ADJUSTMENT_DEBIT', 10, 20, current_date`,
+    );
+  });
+
+  it("rejects open_amount on the opposite side of amount", async () => {
+    await rejectsWith(
+      "ledger_entry_open_sign",
+      "type, amount, open_amount, effective_date",
+      `'ADJUSTMENT_DEBIT', 10, -5, current_date`,
+    );
   });
 
   it("rejects a PAYMENT with a positive amount", async () => {
+    await rejectsWith(
+      "ledger_entry_type_sign",
+      "type, amount, open_amount, effective_date",
+      `'PAYMENT', 10, 10, current_date`,
+    );
+  });
+
+  it("rejects a BILL_CHARGE with no bill", async () => {
+    await rejectsWith(
+      "ledger_entry_bill_charge_has_bill",
+      "type, amount, open_amount, effective_date",
+      `'BILL_CHARGE', 10, 10, current_date`,
+    );
+  });
+
+  it("accepts a well-formed debit", async () => {
     const { prisma } = prismaImports;
-    await expect(
-      prisma.$executeRawUnsafe(
-        `insert into ledger_entry (utility_id, account_id, type, amount, open_amount, effective_date, posted_at)
-         values ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000001','PAYMENT',10,10,current_date,now())`,
-      ),
-    ).rejects.toThrow();
+    const n = await prisma.$executeRawUnsafe(
+      `insert into ledger_entry (utility_id, account_id, type, amount, open_amount, effective_date)
+       values ('${utilityId}'::uuid, '${accountId}'::uuid, 'ADJUSTMENT_DEBIT', 10, 10, current_date)`,
+    );
+    expect(n).toBe(1);
   });
 
   it("enables RLS on the new tables", async () => {
@@ -592,15 +645,26 @@ export const ENTRY_SIGN: Record<DebitType | CreditType, 1 | -1> = {
  * 47.3250 -> 47.33.
  */
 export function roundToCents(value: string | number): string {
-  const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n)) throw new Error(`roundToCents: not a finite number: ${value}`);
-  const scaled = Math.round(Math.abs(n) * 1000) / 1000; // kill float dust at 3dp
-  const cents = Math.floor(scaled * 100 + 0.5);
-  const signed = n < 0 ? -cents : cents;
-  const whole = Math.trunc(signed / 100);
-  const frac = Math.abs(signed % 100);
-  const sign = signed < 0 && whole === 0 ? "-" : "";
-  return `${sign}${whole}.${String(frac).padStart(2, "0")}`;
+  const s = (typeof value === "number" ? value.toString() : value).trim();
+  if (!/^-?\d+(\.\d+)?$/.test(s)) {
+    throw new Error(`roundToCents: not a decimal string: ${value}`);
+  }
+  const neg = s.startsWith("-");
+  const [intPart, fracPart = ""] = (neg ? s.slice(1) : s).split(".");
+
+  // Three decimals is enough to decide half-up at two: no digits beyond
+  // the third can flip a decision made there, because 0.0004999… is
+  // always < 0.0005. Everything is integer arithmetic via BigInt, so no
+  // float representation is involved in rounding money.
+  const frac = (fracPart + "000").slice(0, 3);
+  let cents = BigInt(intPart) * 100n + BigInt(frac.slice(0, 2));
+  if (Number(frac[2]) >= 5) cents += 1n;
+
+  const whole = cents / 100n;
+  const rem = cents % 100n;
+  const body = `${whole}.${rem.toString().padStart(2, "0")}`;
+  // Avoid "-0.00": a value that rounds to zero has no sign.
+  return neg && cents !== 0n ? `-${body}` : body;
 }
 
 /** Body for POST /api/v1/bills/:id/post. Both fields optional. */
@@ -1164,13 +1228,29 @@ export async function resolveAutoPostBills(
 }
 ```
 
-- [ ] **Step 4: Add the config field to the validator**
+- [ ] **Step 4: Add the config field to the validator and its service**
+
+Three places, not one. `AutomationConfigSchema` is the *full* config shape, and `automation-config.service.ts` builds that shape field-by-field from an explicit row interface — adding the Zod field alone fails `pnpm typecheck`.
 
 In `packages/shared/src/validators/automation-config.ts`, add to `AutomationConfigSchema`:
 
 ```ts
   autoPostBills: z.boolean(),
 ```
+
+In `packages/api/src/services/automation-config.service.ts`, add to the `AutomationConfigRow` interface (around line 35):
+
+```ts
+  autoPostBills: boolean;
+```
+
+and to the object `toDto` returns (around line 51):
+
+```ts
+    autoPostBills: row.autoPostBills,
+```
+
+Then check the `select` / `upsert` in `getAutomationConfig` further down the same file: if it names columns explicitly, add `autoPostBills: true` to the select and `autoPostBills: true` to the create defaults, so the shape stays complete for a tenant with no config row.
 
 - [ ] **Step 5: Wire posting into bill generation**
 
@@ -1417,7 +1497,7 @@ import { postBill } from "../services/ar/posting.service.js";
 export async function arRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>(
     "/api/v1/bills/:id/post",
-    { config: { module: "agreements", action: "CREATE" } },
+    { config: { module: "agreements", permission: "CREATE" } },
     async (request, reply) => {
       const input = postBillSchema.parse(request.body ?? {});
       const result = await postBill(
@@ -1433,7 +1513,7 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { id: string } }>(
     "/api/v1/accounts/:id/unposted-bills",
-    { config: { module: "agreements", action: "VIEW" } },
+    { config: { module: "agreements", permission: "VIEW" } },
     async (request, reply) => {
       const bills = await prisma.bill.findMany({
         where: {
@@ -1739,7 +1819,7 @@ Append inside `arRoutes` in `packages/api/src/routes/ar.ts`:
 ```ts
   app.get(
     "/api/v1/ar/reconciliation",
-    { config: { module: "tenant_profile", action: "VIEW" } },
+    { config: { module: "tenant_profile", permission: "VIEW" } },
     async (request, reply) => {
       const { reconcileBalances } = await import("../services/ar/reconciliation.service.js");
       const drift = await reconcileBalances(request.user.utilityId);
