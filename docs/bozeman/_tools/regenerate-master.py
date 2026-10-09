@@ -3,6 +3,9 @@
 Usage:
   python docs/bozeman/_tools/regenerate-master.py
 
+  Set BOZEMAN_RFP_XLSX if the source workbook isn't at the default
+  document-library location.
+
 The xlsx is private RFP content and stays outside the repo. This script
 copies it to a gitignored dotfile, parses it via openpyxl, applies the
 hand-curated Req->doc mapping in coverage(), and writes the master
@@ -14,6 +17,7 @@ and BZ_TITLES/BZ_FILES below; rerun the script to refresh the master.
 Required: openpyxl (pip install openpyxl).
 """
 import json
+import os
 import shutil
 import sys
 from collections import Counter, defaultdict
@@ -21,13 +25,25 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-# Source xlsx — update when it moves
-SRC_XLSX = (
-    r"C:\Users\RaoChejarla\Expeed Software\ExpeedSoftware - USA - Documents"
-    r"\Sales_ Business Development\Prospective client files\City of Bozeman, MT"
-    r"\Saaslogic RFP- Bozeman MT\bozeman-proposal\01_Functional_Requirements_Expeed.xlsx"
+# Source xlsx: private RFP content that stays outside the repo, so this one
+# path can't be repo-relative. Set BOZEMAN_RFP_XLSX to point at it; the
+# default assumes the standard Expeed document-library layout under
+# whichever user is running the script.
+_DEFAULT_SRC_XLSX = (
+    Path.home()
+    / "Expeed Software"
+    / "ExpeedSoftware - USA - Documents"
+    / "Sales_ Business Development"
+    / "Prospective client files"
+    / "City of Bozeman, MT"
+    / "Saaslogic RFP- Bozeman MT"
+    / "bozeman-proposal"
+    / "01_Functional_Requirements_Expeed.xlsx"
 )
-PROJECT_ROOT = Path(r"C:\development\claude-test")
+SRC_XLSX = Path(os.environ.get("BOZEMAN_RFP_XLSX") or _DEFAULT_SRC_XLSX)
+
+# Repo root, derived from this file's location (docs/bozeman/_tools/).
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 LOCAL_XLSX = PROJECT_ROOT / ".expeed_reqs.xlsx"
 LOCAL_JSON = PROJECT_ROOT / ".expeed_reqs.json"
 OUTPUT = PROJECT_ROOT / "docs" / "bozeman" / "00-requirements-master.md"
