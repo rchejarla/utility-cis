@@ -117,6 +117,23 @@
   color: var(--accent-primary);
 }
 
+/* ─── Interface scale ──────────────────────────────────────
+   One knob for overall UI size. Tune this single value.
+
+   Why zoom rather than a font-size bump: components hardcode px for
+   both type and spacing (~983 inline `fontSize` values and no Tailwind
+   text-* utilities anywhere), so growing text alone would crowd and
+   clip dense table rows, badges and buttons. zoom grows type and
+   spacing together.
+
+   Why on the root element rather than `body`: root-level zoom behaves
+   like browser zoom, so the many `position: fixed; inset: 0` modal
+   backdrops still cover the whole viewport. Under `body { zoom }` they
+   would fall short of the right and bottom edges. */
+html {
+  zoom: 1.25;
+}
+
 body {
   background: var(--bg-deep);
   color: var(--text-primary);

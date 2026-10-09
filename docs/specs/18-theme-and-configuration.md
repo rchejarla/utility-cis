@@ -84,6 +84,22 @@ All values are valid CSS custom property values. The admin UI applies these to t
 
 Font families must be available via the tenant's configured font source (Google Fonts or self-hosted).
 
+#### Interface scale
+
+Type **size** is not part of the theme. Components set it inline — roughly 983 `fontSize` declarations across `packages/web`, with no Tailwind `text-*` utilities anywhere — so there is no central type scale to theme.
+
+Overall interface size is therefore governed by a single declaration in `packages/web/app/globals.css`:
+
+```css
+html {
+  zoom: 1.25;
+}
+```
+
+Zoom rather than a font-size bump because spacing, row heights and badge dimensions are hardcoded in px alongside the type; growing text alone crowds and clips dense tables. Applied to the root element rather than `body` so it behaves like browser zoom and the `position: fixed; inset: 0` modal backdrops still cover the full viewport.
+
+Not tenant- or user-configurable today. If that is wanted, the hook is a `--ui-scale` custom property driven from `TenantTheme` or `UserPreference.preferences`, which would not require touching components. A real type scale replacing the inline sizes is the larger prerequisite for theming type properly.
+
 ---
 
 ### UserPreference
