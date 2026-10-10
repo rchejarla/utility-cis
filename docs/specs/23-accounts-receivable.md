@@ -155,7 +155,13 @@ It shipped in slice 1 as an orphan field: the service returned it and the patch 
 
 What it actually is: an integrity check on a denormalisation. `account.balance` is a cache written inside the posting transaction so delinquency sweeps and list screens need not sum the ledger on every read, and a cache drifts when something writes around it — a manual SQL fix, a bad import, a future code path that skips `recomputeAccountCache`. An admin runs it after a migration or a repair. That is why it now sits in **Settings** beside Retention & Audit rather than in a menu a CSR works.
 
-The endpoint keeps its path. `reconcileBalances` reconciling a cache against its source is accurate engineering English, the route is unambiguous inside `/api/v1/ar/`, and no API path is read by the CSR the old label misled. The nav entry is gated on `accounts:VIEW` to match the endpoint rather than on `settings` to match the section, because an entry visible to someone the endpoint then refuses is a dead menu item.
+The endpoint keeps its path. `reconcileBalances` reconciling a cache against its source is accurate engineering English, the route is unambiguous inside `/api/v1/ar/`, and no API path is read by the CSR the old label misled.
+
+**The nav entry and the endpoint are gated differently, on purpose.** The entry is on `settings`; the endpoint stays on `accounts:VIEW`.
+
+The endpoint cannot move. It was once gated on `tenant_profile`, and a tenant with the `accounts` module enabled but not that one lost the endpoint outright to `403 MODULE_DISABLED` — `ledger-routes.integration.test.ts` still carries that regression guard, and gating it on `settings` would reintroduce the same fault for any tenant without the settings module.
+
+The entry cannot stay on `accounts`. Every role but Portal Customer holds `accounts:VIEW` — CSR, Field Technician and Read-Only included — so the entry put an admin diagnostic in front of three roles that can do nothing about drift, and for a Field Technician it was the only Settings entry visible at all. Today `settings` holders are a strict subset of `accounts:VIEW` holders so nothing goes dead; a tenant granting `settings` without `accounts` would meet a 403, which is the lesser fault and the one that affects nobody today.
 
 The healthy result is the usual result, so the page is built around reassurance rather than as a work queue, and it has **three** outcomes, not two:
 

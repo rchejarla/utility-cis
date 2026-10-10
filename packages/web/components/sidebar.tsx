@@ -146,10 +146,23 @@ const navSections: NavSection[] = [
         href: "/settings/ledger-integrity",
         label: "Ledger Integrity",
         icon: faScaleBalanced,
-        // accounts:VIEW, matching the endpoint rather than the section it
-        // sits in. Gating the entry on `settings` would show it to admins
-        // the endpoint then refuses, which is a dead menu item.
-        module: "accounts",
+        // `settings`, matching the section rather than the endpoint.
+        //
+        // The endpoint is accounts:VIEW, which every role but Portal
+        // Customer holds -- so gating this on `accounts` put an admin
+        // diagnostic in front of CSRs, Read-Only users and Field
+        // Technicians, for whom it would be the only Settings entry they
+        // could see and the only one they can do nothing about.
+        //
+        // The endpoint deliberately keeps accounts:VIEW: it was once
+        // gated on tenant_profile and a tenant with the accounts module
+        // but not that one lost the endpoint outright, which
+        // ledger-routes.integration.test.ts still guards. So the two
+        // differ on purpose. Today `settings` holders are a subset of
+        // accounts:VIEW holders and nothing goes dead; a tenant that
+        // grants `settings` without `accounts` would see a 403 here,
+        // which is the lesser fault.
+        module: "settings",
         tooltip: "Proves every account's cached balance still equals the sum of its open ledger entries",
       },
       { href: "/settings/automation", label: "Automation", icon: faRobot, module: "tenant_profile" },

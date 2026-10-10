@@ -346,7 +346,11 @@ describe("GET /api/v1/ar/reconciliation", () => {
       headers: headers(VIEWER),
     });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body)).toEqual({ ok: true, drift: [] });
+    // `checked` rides on the response, not just the service return: an
+    // empty `drift` with no population is the same payload a check that
+    // could see nothing would send, so the route has to carry the count
+    // for the screen to tell those apart.
+    expect(JSON.parse(res.body)).toEqual({ ok: true, checked: 1, drift: [] });
   });
 
   it("reports the account whose cached balance was changed behind the ledger's back", async () => {
@@ -376,6 +380,7 @@ describe("GET /api/v1/ar/reconciliation", () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.ok).toBe(false);
+    expect(body.checked).toBe(1);
     expect(body.drift).toEqual([
       { accountId, accountNumber: "ROUTES-001", cached: "999.99", ledger: "25.00" },
     ]);
