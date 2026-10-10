@@ -61,12 +61,39 @@ export interface LedgerPage {
    * is due, and no reason given for why the two do not cancel.
    */
   depositHeld: string;
-  /** Entries still open, across the whole account rather than this page. */
+  /**
+   * Open **receivables**, across the whole account rather than this page.
+   *
+   * A deposit is not one. It carries a non-zero `openAmount` for as long
+   * as the utility holds it, so counting by sign alone made an account
+   * owing nothing report "1 open item" — a figure sitting beside
+   * "Nothing owed" and contradicting it. It is excluded here for the
+   * same reason it is excluded from `balance`: money held is not money
+   * owed, and this count answers the owed question.
+   */
   openCount: number;
 }
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
+
+/**
+ * What "still open" means, as one definition both the filter and the
+ * count read.
+ *
+ * Non-zero `openAmount` and not a deposit. The two have to agree: a
+ * header saying "3 open items" over a filtered list of four rows is a
+ * discrepancy the reader has to resolve, and the obvious resolution —
+ * that one of them is wrong — is correct. Declared once so they cannot
+ * drift apart.
+ *
+ * A deposit stays visible in the unfiltered ledger and in its own
+ * "Deposit held" figure. It is not hidden; it is just not outstanding.
+ */
+const OPEN_RECEIVABLE = {
+  NOT: { openAmount: 0 },
+  type: { not: "DEPOSIT" },
+} as const;
 
 export async function listLedger(
   utilityId: string,
@@ -89,7 +116,7 @@ export async function listLedger(
     where: {
       utilityId,
       accountId,
-      ...(opts.openOnly ? { NOT: { openAmount: 0 } } : {}),
+      ...(opts.openOnly ? OPEN_RECEIVABLE : {}),
     },
     // Newest first, with id as a total order so a page boundary is
     // stable between calls.
@@ -117,7 +144,7 @@ export async function listLedger(
   // Across the account, not the page — "3 open items" must not change
   // because the caller asked for 10 rows.
   const openCount = await prisma.ledgerEntry.count({
-    where: { utilityId, accountId, NOT: { openAmount: 0 } },
+    where: { utilityId, accountId, ...OPEN_RECEIVABLE },
   });
 
   return {
