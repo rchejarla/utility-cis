@@ -126,45 +126,41 @@ describe("ArTab actions — permissions", () => {
     expect(await screen.findByRole("button", { name: /^reverse$/i })).toBeInTheDocument();
   });
 
-  it("does not even ask for unposted bills without accounts:EDIT", async () => {
+  it("shows the unposted note to a read-only user", async () => {
+    // The endpoint is accounts:VIEW, and the note explains a balance that
+    // looks lower than the customer expects — which is exactly what a
+    // read-only CSR is looking at. The old accounts:EDIT gate here was
+    // copied from the Post button and hid it from them.
     grant({ accounts: ["VIEW"] });
+    routeGets();
+    renderTab();
+    expect(await screen.findByText(/not yet owed/i)).toBeInTheDocument();
+    const paths = mockedGet.mock.calls.map((c) => c[0] as string);
+    expect(paths.some((p) => p.includes("unposted-bills"))).toBe(true);
+  });
+
+  it("offers no Post action on this tab, at any permission", async () => {
+    // Posting moved to the Bills screen. A tab that lists what is owed
+    // cannot show an unposted bill among its rows, so the action did not
+    // belong on the one screen that cannot display its subject.
+    grant({ accounts: ["VIEW", "EDIT"] });
     routeGets();
     renderTab();
     expect(await screen.findByRole("table")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^post$/i })).not.toBeInTheDocument();
-    // A 403 in the console helps nobody; the call is simply not made.
-    const paths = mockedGet.mock.calls.map((c) => c[0] as string);
-    expect(paths.some((p) => p.includes("unposted-bills"))).toBe(false);
   });
 
-  it("shows the unposted strip and a Post button with accounts:EDIT", async () => {
-    grant({ accounts: ["VIEW", "EDIT"] });
+  it("points at Bills, filtered to what is waiting", async () => {
+    grant({ accounts: ["VIEW"] });
     routeGets();
     renderTab();
-    expect(await screen.findByText("BILL-202610-1")).toBeInTheDocument();
-    expect(screen.getByText(/not yet owed/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^post$/i })).toBeInTheDocument();
+    const link = await screen.findByRole("link", { name: /review in bills/i });
+    expect(link).toHaveAttribute("href", "/bills?posted=false");
   });
+
 });
 
 describe("ArTab actions — behaviour", () => {
-  it("posts a bill and reloads", async () => {
-    grant({ accounts: ["VIEW", "EDIT"] });
-    routeGets();
-    mockedPost.mockResolvedValue({ balance: "78.75", skippedZero: false } as never);
-    renderTab();
-
-    await userEvent.click(await screen.findByRole("button", { name: /^post$/i }));
-    await waitFor(() =>
-      expect(mockedPost).toHaveBeenCalledWith("/api/v1/bills/b1/post", {}),
-    );
-    // Reloaded: the ledger was fetched again after the post.
-    await waitFor(() => {
-      const ledgerCalls = mockedGet.mock.calls.filter((c) => (c[0] as string).includes("/ledger"));
-      expect(ledgerCalls.length).toBeGreaterThan(1);
-    });
-  });
-
   it("warns when a reversal leaves dependent fees standing", async () => {
     grant({ accounts: ["VIEW"], payments: ["VIEW", "EDIT"] });
     routeGets();
@@ -194,14 +190,4 @@ describe("ArTab actions — behaviour", () => {
     expect(screen.queryByRole("button", { name: /^reverse$/i })).not.toBeInTheDocument();
   });
 
-  it("surfaces a failed post without clearing the strip", async () => {
-    grant({ accounts: ["VIEW", "EDIT"] });
-    routeGets();
-    mockedPost.mockRejectedValue(new Error("Bill was already posted"));
-    renderTab();
-
-    await userEvent.click(await screen.findByRole("button", { name: /^post$/i }));
-    // The bill stays listed so the operator can see what happened.
-    await waitFor(() => expect(screen.getByText("BILL-202610-1")).toBeInTheDocument());
-  });
 });

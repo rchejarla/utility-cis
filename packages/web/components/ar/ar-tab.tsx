@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { useToast } from "@/components/ui/toast";
@@ -86,7 +87,6 @@ function describe(row: LedgerRow): string {
 export function ArTab({ accountId }: { accountId: string }) {
   const { toast } = useToast();
   const { canView } = usePermission("accounts");
-  const { canEdit: canPostBill } = usePermission("accounts");
   const { canCreate: canTakePayment, canEdit: canReverse } = usePermission("payments");
   const { canCreate: canRaiseFee, canEdit: canForgive } = usePermission("ar_adjustments");
 
@@ -94,7 +94,6 @@ export function ArTab({ accountId }: { accountId: string }) {
   const [unposted, setUnposted] = useState<UnpostedBill[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [busyBillId, setBusyBillId] = useState<string | null>(null);
   const [showPayment, setShowPayment] = useState(false);
   const [reverseRow, setReverseRow] = useState<LedgerRow | null>(null);
   const [reversing, setReversing] = useState(false);
@@ -104,14 +103,13 @@ export function ArTab({ accountId }: { accountId: string }) {
     setLoading(true);
     Promise.all([
       apiClient.get<LedgerPage>(`/api/v1/accounts/${accountId}/ledger`),
-      // An operator who cannot post does not need the list, and asking
-      // would 403 noisily in the console for no benefit.
-      canPostBill
-        ? apiClient
-            .get<{ data: UnpostedBill[] }>(`/api/v1/accounts/${accountId}/unposted-bills`)
-            .then((r) => r.data)
-            .catch(() => [] as UnpostedBill[])
-        : Promise.resolve([] as UnpostedBill[]),
+      // On accounts:VIEW, same as the ledger itself. The old gate here was
+      // accounts:EDIT, copied from the Post button it used to guard, which
+      // hid the note from the read-only users it is most useful to.
+      apiClient
+        .get<{ data: UnpostedBill[] }>(`/api/v1/accounts/${accountId}/unposted-bills`)
+        .then((r) => r.data)
+        .catch(() => [] as UnpostedBill[]),
     ])
       .then(([p, u]) => {
         setPage(p);
@@ -120,30 +118,9 @@ export function ArTab({ accountId }: { accountId: string }) {
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not load the ledger"))
       .finally(() => setLoading(false));
-  }, [accountId, canPostBill]);
+  }, [accountId]);
 
   useEffect(load, [load]);
-
-  async function postBill(bill: UnpostedBill) {
-    setBusyBillId(bill.id);
-    try {
-      const res = await apiClient.post<{ balance: string; skippedZero: boolean }>(
-        `/api/v1/bills/${bill.id}/post`,
-        {},
-      );
-      toast(
-        res.skippedZero
-          ? `${bill.billNumber} totals zero, so it was marked posted without a charge.`
-          : `${bill.billNumber} posted. Balance is now $${res.balance}.`,
-        "success",
-      );
-      load();
-    } catch (e: unknown) {
-      toast(e instanceof Error ? e.message : "Could not post the bill", "error");
-    } finally {
-      setBusyBillId(null);
-    }
-  }
 
   async function confirmReverse() {
     if (!reverseRow) return;
@@ -204,32 +181,24 @@ export function ArTab({ accountId }: { accountId: string }) {
         </div>
       )}
 
+      {/*
+        Why a note and not a work list: an unposted bill is a calculation,
+        not a debt, so it is context for the balance below — it explains a
+        balance lower than the customer expects — but it is not something
+        this tab can act on. A tab that lists what is owed cannot show an
+        unposted bill among its rows, so the Post action lives on Bills,
+        where the bill itself lives.
+      */}
       {unposted.length > 0 && (
         <div style={strip}>
-          <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "8px" }}>
+          <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
             {unposted.length === 1
-              ? "1 bill has been issued but not posted, so it is not yet owed."
-              : `${unposted.length} bills have been issued but not posted, so they are not yet owed.`}
-          </div>
-          {unposted.map((b) => (
-            <div key={b.id} style={stripRow}>
-              <span style={{ fontFamily: "monospace", fontSize: "12px" }}>{b.billNumber}</span>
-              <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>
-                {b.periodStart.slice(0, 10)} → {b.periodEnd.slice(0, 10)} · due{" "}
-                {b.dueDate.slice(0, 10)}
-              </span>
-              <span style={{ fontFamily: "monospace", fontWeight: 600 }}>
-                ${parseFloat(b.total).toFixed(2)}
-              </span>
-              <button
-                onClick={() => postBill(b)}
-                disabled={busyBillId === b.id}
-                style={primaryButton}
-              >
-                {busyBillId === b.id ? "Posting…" : "Post"}
-              </button>
-            </div>
-          ))}
+              ? "1 bill has been calculated but not posted, so it is not yet owed and is not counted below."
+              : `${unposted.length} bills have been calculated but not posted, so they are not yet owed and are not counted below.`}{" "}
+            <Link href="/bills?posted=false" style={stripLink}>
+              Review in Bills
+            </Link>
+          </span>
         </div>
       )}
 
@@ -448,19 +417,19 @@ const linkButton: React.CSSProperties = {
   fontFamily: "inherit",
   padding: 0,
 };
+const stripLink: React.CSSProperties = {
+  color: "var(--primary)",
+  fontWeight: 600,
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+};
+
 const strip: React.CSSProperties = {
   border: "1px solid var(--border)",
   borderRadius: "var(--radius)",
   padding: "12px 14px",
   marginBottom: "16px",
   background: "var(--bg-elevated)",
-};
-const stripRow: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: "12px",
-  flexWrap: "wrap",
-  padding: "6px 0",
 };
 const th: React.CSSProperties = {
   padding: "10px 12px",

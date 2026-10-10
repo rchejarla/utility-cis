@@ -66,6 +66,7 @@ account.balance   = SUM(openAmount) over the account's entries
 | POST | `/api/v1/accounts/:id/adjustments` | `ar_adjustments:CREATE` | A charge raised by hand. Same shape without `assessedOnId`. |
 | POST | `/api/v1/accounts/:id/waivers` | `ar_adjustments:EDIT` | Forgives part or all of one nominated charge. Requires `debitId`. The excess stays open as a refund due and does not spill onto other charges. |
 | POST | `/api/v1/accounts/:id/write-offs` | `ar_adjustments:EDIT` | Same mechanics, recorded as bad debt rather than a concession. |
+| GET | `/api/v1/bills` | `accounts:VIEW` | The tenant-wide bill list, added in slice 4b. Filters on `accountId`, `billingCycleId`, an inclusive `from`/`to` on `billDate`, and a tri-state `posted`; `search` matches the bill number. Returns the account number, customer name, cycle name and `postedAt` per row, because a list of bill numbers against account uuids cannot serve the lookup it exists for. Same gate as the account-scoped list it generalises. |
 | GET | `/api/v1/accounts/:id/ledger` | `accounts:VIEW` | The account's entries for display: the reason label, the bill number, the tender, and reversal links resolved in BOTH directions so a reader is not left pairing rows by amount. Returns the cached `balance` and an account-wide `openCount` alongside; capped at 500 rows, with `openOnly` and `limit`. On `accounts:VIEW` rather than a writing module, because a CSR who may not take a payment still needs to see what is owed. |
 | GET | `/api/v1/ar/reconciliation` | `accounts:VIEW` | Proof, not assertion: every account whose cached `balance` differs from `SUM(open_amount)`. Returns `{ ok, checked, drift }`. `checked` is the number of accounts examined, and it is what makes an empty `drift` mean anything — a check that could see no accounts returns the same empty list as a clean ledger, so `ok: true` on its own is not evidence. Both statements run inside one `withTenant`, on one connection, so the count cannot reassure about a population the drift query never saw. |
 
@@ -101,11 +102,10 @@ Posting is gated on the same permission as generating a bill (`POST /api/v1/acco
 | Charged and Still owed as separate columns | A $40 charge with $15 outstanding is not a $15 charge. A settled row shows a dash, not $0.00 |
 | A credit as `($25.00)` | The accounting convention, rather than a minus sign a reader must notice |
 | **reversed** / **reverses an earlier entry** markers | Both sides of a reversal stay on the ledger, so unmarked they read as a double charge |
-| Unposted-bills strip | Says the bills are "not yet owed" — an issued bill that is not posted has not moved the balance |
+| Unposted-bills note | An unposted bill is a calculation, not a debt, so it is context for the balance — it explains a figure lower than the customer expects — and says the bills are "not counted below". It carries no Post action: a tab listing what is owed cannot show an unposted bill among its rows, so posting belongs on Bills, where the bill lives. Links to `/bills?posted=false`. On `accounts:VIEW`, matching the endpoint — the earlier `accounts:EDIT` gate was copied from the Post button and hid the note from the read-only users it most helps |
 
 | Action | Gate |
 |---|---|
-| Post an unposted bill | `accounts:EDIT` |
 | Record Payment | `payments:CREATE` |
 | Reverse an entry | `payments:EDIT` |
 | Raise Fee | `ar_adjustments:CREATE` |
@@ -120,6 +120,19 @@ Waive and Write off appear only on an open charge — a credit cannot be forgive
 It shipped in slice 1 as an orphan field: the service returned it and the patch schema accepted it, but no screen drew a control, so manual posting was reachable only by SQL and the AR tab's unposted-bills strip described a state no tenant could enter. A drift guard now derives the editable key list from `AutomationConfigSchema` and fails if a setting is never rendered.
 
 **The per-account override has no UI yet** — `account.autoPostBills` is not on the account API's read or write surface, so an account cannot yet opt out of a tenant default.
+
+### Billing & AR → Bills
+
+`/bills` on `accounts:VIEW`, rendering `GET /api/v1/bills`. The tenant-wide list, and the answer to a CSR holding a bill number: search by bill number is the primary control, not a refinement.
+
+| Decision | Why |
+|---|---|
+| Clicking the bill number opens the bill (`BillDetailDialog`), not the account | A bill number is what a caller reads out. Landing on the account page would make the operator find the bill a second time. The account number beside it still links to the account |
+| Status column, and the **Post** action, live here | A bill is a calculation until posted; only then is it owed. This is the only screen that can show an unposted bill, so it is the only screen the action can sensibly sit on. Posting stays on `accounts:EDIT` |
+| `posted` filter is tri-state | Omitted means every bill. A boolean defaulting either way would silently hide half the list. "Not posted" is the posting queue a manual-post tenant works daily |
+| Dates rendered from the ISO string, not `new Date()` | `new Date("2026-06-30")` is UTC midnight, which is the 29th west of Greenwich, so a bill would appear dated a day early |
+
+`to` and `from` are inclusive. A plain `lte` is correct only because `bill.billDate` is `@db.Date` and carries no time; if that column becomes a timestamp it must become `lt` the following day, or every range query drops its final day.
 
 ### Billing & AR → Reconciliation
 

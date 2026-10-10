@@ -45,6 +45,7 @@ import {
   faHouse,
   faIdCard,
   faScaleBalanced,
+  faFileInvoiceDollar,
 } from "@fortawesome/pro-solid-svg-icons";
 
 interface NavItem {
@@ -100,6 +101,13 @@ const navSections: NavSection[] = [
   {
     title: "Billing & AR",
     items: [
+      {
+        href: "/bills",
+        label: "Bills",
+        icon: faFileInvoiceDollar,
+        module: "accounts",
+        tooltip: "Every bill across all accounts, searchable by bill number, with posting",
+      },
       {
         href: "/ar/reconciliation",
         label: "Reconciliation",
