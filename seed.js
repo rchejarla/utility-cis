@@ -1211,6 +1211,131 @@ async function main() {
   });
   console.log("  1 late fee, partially waived");
 
+  // Two bills, so both the Bills tab and the AR tab have something real
+  // to show and the Post action has something to act on. Written directly
+  // rather than generated: going through the rate engine would need
+  // meter reads and published schedules lined up for a specific period,
+  // which is the bill-creation integration test's job, not the seeder's.
+  //
+  //   - a POSTED bill on 0001001-00, with its BILL_CHARGE, so the AR tab
+  //     shows a charge that names its bill;
+  //   - an UNPOSTED bill on 0001002-00, so GET unposted-bills is not
+  //     always empty and the operator has something to post.
+  const billSaFor = (accountId) => saCreated.find((sa) => sa.accountId === accountId);
+  const billPeriodEnd = new Date();
+  billPeriodEnd.setDate(15);
+  const billPeriodStart = new Date(billPeriodEnd);
+  billPeriodStart.setMonth(billPeriodStart.getMonth() - 1);
+  billPeriodStart.setDate(16);
+  const billDue = new Date(billPeriodEnd);
+  billDue.setDate(billDue.getDate() + 30);
+
+  async function seedBill(account, total, { posted }) {
+    const sa = billSaFor(account.id);
+    if (!sa) return null;
+    const bill = await p.bill.create({
+      data: {
+        utilityId: UID,
+        accountId: account.id,
+        billingCycleId: account.billingCycleId,
+        periodStart: billPeriodStart,
+        periodEnd: billPeriodEnd,
+        billDate: billPeriodEnd,
+        dueDate: billDue,
+        subtotal: total,
+        taxes: "0.0000",
+        credits: "0.0000",
+        total,
+        billNumber: `BILL-${billPeriodEnd.getFullYear()}${String(billPeriodEnd.getMonth() + 1).padStart(2, "0")}-${account.accountNumber}`,
+        postedAt: posted ? new Date() : null,
+      },
+    });
+    await p.billSegment.create({
+      data: {
+        utilityId: UID,
+        serviceAgreementId: sa.id,
+        billId: bill.id,
+        periodStart: billPeriodStart,
+        periodEnd: billPeriodEnd,
+        subtotal: total,
+        taxes: "0.0000",
+        credits: "0.0000",
+        total,
+        minimumFloorApplied: false,
+        segmentNumber: `SEG-${account.accountNumber}-${billPeriodEnd.getFullYear()}${String(billPeriodEnd.getMonth() + 1).padStart(2, "0")}`,
+      },
+    });
+    if (posted) {
+      // The receivable the bill produced. Rounded to the ledger's 2dp,
+      // and naming the bill, which is what ledger_entry_bill_charge_has_bill
+      // requires and what lets the AR tab show a bill number.
+      // The ledger is Decimal(14,2) and bill.total is Decimal(14,4), so
+      // the charge is the total rounded to cents — half-up, matching
+      // roundToCents in @utility-cis/shared, which seed.js cannot import.
+      // This MUST be derived from the bill: an amount that disagrees with
+      // the bill it names still reconciles, because the balance is the sum
+      // of open amounts either way, and nothing would catch it.
+      const charge = (Math.round(parseFloat(total) * 100) / 100).toFixed(2);
+      await p.ledgerEntry.create({
+        data: {
+          utilityId: UID,
+          accountId: account.id,
+          type: "BILL_CHARGE",
+          amount: charge,
+          openAmount: charge,
+          dueDate: billDue,
+          effectiveDate: billPeriodEnd,
+          billId: bill.id,
+        },
+      });
+    }
+    return bill;
+  }
+
+  // Every account that has service gets a bill, so whichever account is
+  // opened first has something to show. The last one is left UNPOSTED on
+  // purpose: GET unposted-bills must not always be empty, or the Post
+  // action has nothing to act on.
+  const billableAccounts = aArr.filter((a) => billSaFor(a.id));
+  let postedBills = 0;
+  let unpostedBills = 0;
+  for (let i = 0; i < billableAccounts.length; i++) {
+    const account = billableAccounts[i];
+    const posted = i < billableAccounts.length - 1;
+    // Vary the amount so the screens do not look like test fixtures.
+    const cents = 4820 + i * 1137;
+    const total = (cents / 100).toFixed(4);
+    const bill = await seedBill(account, total, { posted });
+    if (!bill) continue;
+    if (posted) {
+      postedBills++;
+      // Fold the new receivable into the cached balance. Anything already
+      // open on the account stays open, so read it back rather than
+      // assuming — two of these accounts carry seeded opening balances.
+      const open = await p.ledgerEntry.aggregate({
+        where: { utilityId: UID, accountId: account.id },
+        _sum: { openAmount: true },
+      });
+      const oldest = await p.ledgerEntry.findFirst({
+        where: { utilityId: UID, accountId: account.id, openAmount: { gt: 0 }, dueDate: { not: null } },
+        orderBy: { dueDate: "asc" },
+        select: { dueDate: true },
+      });
+      await p.account.update({
+        where: { id: account.id },
+        data: {
+          balance: (open._sum.openAmount ?? 0).toString(),
+          lastDueDate: oldest?.dueDate ?? null,
+        },
+      });
+    } else {
+      unpostedBills++;
+    }
+  }
+  console.log(
+    "  " + postedBills + " posted bills with receivables, " + unpostedBills + " unposted"
+  );
+
   const testUsers = [
     { id: "00000000-0000-4000-8000-000000000091", email: "sysadmin@utility.com", name: "Sarah Mitchell", roleIdx: 0 },
     { id: "00000000-0000-4000-8000-000000000092", email: "admin@utility.com", name: "Michael Chen", roleIdx: 1 },
