@@ -320,6 +320,9 @@ model Account {
   accountType         String        @map("account_type") @db.VarChar(50)
   status              AccountStatus @map("status")
   creditRating        CreditRating  @default(UNRATED) @map("credit_rating")
+  /// Cache of SUM(open DEPOSIT ledger entries), like `balance` is a
+  /// cache of the receivable. Written only inside the transaction that
+  /// writes the entry, and proved by GET /api/v1/ar/reconciliation.
   depositAmount       Decimal       @default(0) @map("deposit_amount") @db.Decimal(10, 2)
   depositWaived       Boolean       @default(false) @map("deposit_waived")
   depositWaivedReason String?       @map("deposit_waived_reason") @db.VarChar(255)
@@ -1765,6 +1768,14 @@ enum LedgerEntryType {
   ADJUSTMENT_CREDIT
   WRITE_OFF
   REVERSAL
+  /// Money the utility HOLDS for the customer, not money the customer
+  /// owes. A credit, like a payment, but deliberately not one: a deposit
+  /// is excluded from allocation (the next bill must not spend it) and
+  /// from `Account.balance` (a customer owing $169 while the utility
+  /// holds their $500 is still $169 in arrears, and the delinquency
+  /// sweep must still see them). `Account.depositAmount` caches the sum
+  /// of the open ones.
+  DEPOSIT
 }
 
 enum PaymentTender {

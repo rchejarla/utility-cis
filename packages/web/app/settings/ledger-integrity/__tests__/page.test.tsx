@@ -54,8 +54,8 @@ describe("Ledger integrity page", () => {
       ok: false,
       checked: 50,
       drift: [
-        { accountId: "a1", accountNumber: "0001000-00", cached: "999.99", ledger: "31.41" },
-        { accountId: "a2", accountNumber: "0001001-00", cached: "10.00", ledger: "60.00" },
+        { accountId: "a1", accountNumber: "0001000-00", cached: "999.99", ledger: "31.41", field: "balance" },
+        { accountId: "a2", accountNumber: "0001001-00", cached: "10.00", ledger: "60.00", field: "balance" },
       ],
     });
     renderPage();
@@ -76,7 +76,7 @@ describe("Ledger integrity page", () => {
     get.mockResolvedValue({
       ok: false,
       checked: 3,
-      drift: [{ accountId: "a1", accountNumber: "0001000-00", cached: "5.00", ledger: "0.00" }],
+      drift: [{ accountId: "a1", accountNumber: "0001000-00", cached: "5.00", ledger: "0.00", field: "balance" }],
     });
     renderPage();
 
@@ -98,5 +98,23 @@ describe("Ledger integrity page", () => {
     get.mockResolvedValue({ ok: true, checked: 1, drift: [] });
     renderPage();
     await waitFor(() => expect(get).toHaveBeenCalledWith("/api/v1/ar/reconciliation"));
+  });
+
+  it("names which of the two caches drifted", async () => {
+    // Balance owed and deposit held are different figures with different
+    // meanings. A row that did not say which would leave the reader to
+    // guess -- and the deposit is the one holding thousands.
+    get.mockResolvedValue({
+      ok: false,
+      checked: 8,
+      drift: [
+        { accountId: "a1", accountNumber: "0001001-00", cached: "123.45", ledger: "500.00", field: "deposit" },
+        { accountId: "a2", accountNumber: "0001003-00", cached: "10.00", ledger: "0.00", field: "balance" },
+      ],
+    });
+    renderPage();
+
+    expect(await screen.findByText("Deposit held")).toBeInTheDocument();
+    expect(screen.getByText("Balance owed")).toBeInTheDocument();
   });
 });

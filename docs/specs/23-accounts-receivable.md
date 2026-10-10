@@ -151,6 +151,23 @@ It shipped in slice 1 as an orphan field: the service returned it and the patch 
 
 `to` and `from` are inclusive. A plain `lte` is correct only because `bill.billDate` is `@db.Date` and carries no time; if that column becomes a timestamp it must become `lt` the following day, or every range query drops its final day.
 
+### Deposits
+
+A security deposit is a `DEPOSIT` ledger entry, not a bare column. The money moved, so it is recorded where every other movement is — auditable, and refundable one day by the same mechanism as any credit. Spec 04 used to say deposits were "not managed in CIS financials"; that rested on a SaaSLogic boundary module 23 replaced, and spec 04 now carries the correction.
+
+It is a **credit by sign and a liability in meaning**, which is why it is excluded from two places:
+
+| Excluded from | Why |
+|---|---|
+| **Allocation** (`applyCreditsToDebit`) | A deposit is held until the account closes or the customer earns it back — next month's water bill must not spend it. The credit filter is on sign alone (`openAmount < 0`), so without an explicit `type: { not: "DEPOSIT" }` a deposit would be absorbed oldest-first, silently, on the next posting run |
+| **`Account.balance`** | A deposit is money the utility *holds*, not money the customer *owes*. Netting them gives a number that answers neither question — and `delinquency.service` sweeps `balance > 0`, so an account owing $169 against a $500 deposit would read as −$330 and never be chased. Deposits are taken from exactly the customers who need chasing |
+
+`balance` is therefore `SUM(open_amount) WHERE type <> 'DEPOSIT'`, a deliberate narrowing of the §5 invariant. `Account.depositAmount` becomes the second cache — `-SUM(open_amount) WHERE type = 'DEPOSIT'`, held positive because the column has a `>= 0` CHECK older than the ledger — and reconciliation proves both, reporting a `field` of `balance` or `deposit` so a drift row says which figure is wrong.
+
+`depositWaived` and `depositWaivedReason` stay on the account: they record whether a deposit was *required*, which is a decision, not money.
+
+**Still outstanding:** nothing takes or returns a deposit through the ledger yet. Account creation, move-in and the import handler still write `depositAmount` directly, and the backfill migration covers only what existed. Interest accrual and statutory return rules need account-level state that does not exist either.
+
 ### Billing → Payments
 
 `/payments` on `payments:VIEW`, rendering `GET /api/v1/payments`. Answers the question no screen could answer before — *what did we take, and does it agree with the bank* — because every payment view was scoped to one account, so counting a day's receipts meant visiting accounts one at a time.
