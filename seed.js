@@ -521,9 +521,26 @@ async function main() {
     { accountNumber: "0001007-00", accountType: "RESIDENTIAL", creditRating: "POOR",      status: "ACTIVE", depositAmount: 200,  billingCycleId: c1.id },
   ];
 
+  // Deterministic ids, like the test users below. Accounts are the thing
+  // a developer bookmarks and links to, and a random id per run means
+  // every reseed turns every open tab into a 404 "Record not found" from
+  // Prisma's P2025. The number in the account number is the suffix, so
+  // 0001000-00 is always ...-000000000a00.
   const aArr = [];
-  for (const ac of accountData) {
-    aArr.push(await p.account.create({ data: { utilityId: UID, ...ac } }));
+  for (let i = 0; i < accountData.length; i++) {
+    const ac = accountData[i];
+    aArr.push(
+      await p.account.create({
+        data: {
+          // "ac" for account, so these cannot be mistaken for the
+          // cis_user ids below, which already use ...0000a1 and ...0000a2
+          // for the two portal customers.
+          id: `00000000-0000-4000-8000-00000000ac0${i.toString(16)}`,
+          utilityId: UID,
+          ...ac,
+        },
+      }),
+    );
   }
   console.log("  " + aArr.length + " accounts");
 
@@ -1230,9 +1247,80 @@ async function main() {
   const billDue = new Date(billPeriodEnd);
   billDue.setDate(billDue.getDate() + 30);
 
-  async function seedBill(account, total, { posted }) {
-    const sa = billSaFor(account.id);
-    if (!sa) return null;
+  // One segment per service agreement, each with real line items, because
+  // that is what a bill actually is: generateBillForAccount aggregates the
+  // account's unbilled BillSegments, and the rate engine puts a line on
+  // each one per rate component it applied. A bill with one empty segment
+  // renders as a total with nothing behind it, which is exactly what the
+  // statement view (§7.1) exists to avoid.
+  //
+  // The amounts are plausible rather than computed: deriving them would
+  // mean running the rate engine, which needs meter reads aligned to the
+  // period and is the bill-creation integration test's job.
+  const componentsBySchedule = {};
+  for (const rc of await p.rateComponent.findMany({
+    where: { utilityId: UID },
+    select: { id: true, rateScheduleId: true, kindCode: true, label: true },
+  })) {
+    (componentsBySchedule[rc.rateScheduleId] ||= []).push(rc);
+  }
+
+  /** The lines one segment gets, keyed off what the schedule actually has. */
+  function linesFor(scheduleId, base) {
+    const available = componentsBySchedule[scheduleId] ?? [];
+    if (available.length === 0) return [];
+    // Prefer a fixed charge plus a usage charge, which is the shape of
+    // almost every utility bill line set.
+    const fixed = available.find((c) => c.kindCode === "service_charge");
+    const usage = available.find((c) =>
+      ["consumption", "derived_consumption", "item_price", "non_meter"].includes(c.kindCode),
+    );
+    const picked = [fixed, usage].filter(Boolean);
+    if (picked.length === 0) picked.push(available[0]);
+
+    // Split the segment total across the picked components: the fixed part
+    // first, the remainder on usage, so the lines sum to the segment.
+    const cents = Math.round(base * 100);
+    const out = [];
+    if (picked.length === 1) {
+      out.push({ c: picked[0], cents });
+    } else {
+      const fixedCents = Math.round(cents * 0.35);
+      out.push({ c: picked[0], cents: fixedCents });
+      out.push({ c: picked[1], cents: cents - fixedCents });
+    }
+    return out.map((x, i) => ({
+      component: x.c,
+      amount: (x.cents / 100).toFixed(4),
+      sortOrder: (i + 1) * 100,
+    }));
+  }
+
+  async function seedBill(account, { posted }) {
+    const agreements = saCreated.filter((sa) => sa.accountId === account.id);
+    if (agreements.length === 0) return null;
+
+    // Build the segments first so the bill's total is the sum of them,
+    // rather than a figure the segments are then forced to match.
+    const segments = [];
+    for (let i = 0; i < agreements.length; i++) {
+      const sa = agreements[i];
+      const assignment = await p.sAScheduleAssignment.findFirst({
+        where: { utilityId: UID, serviceAgreementId: sa.id },
+        select: { rateScheduleId: true },
+      });
+      if (!assignment) continue;
+      const base = 32.5 + i * 18.75 + (account.accountNumber.charCodeAt(6) % 7) * 2.25;
+      const lines = linesFor(assignment.rateScheduleId, base);
+      if (lines.length === 0) continue;
+      const total = lines.reduce((t, l) => t + Math.round(parseFloat(l.amount) * 100), 0);
+      segments.push({ sa, assignment, lines, cents: total });
+    }
+    if (segments.length === 0) return null;
+
+    const billCents = segments.reduce((t, sg) => t + sg.cents, 0);
+    const billTotal = (billCents / 100).toFixed(4);
+
     const bill = await p.bill.create({
       data: {
         utilityId: UID,
@@ -1242,40 +1330,52 @@ async function main() {
         periodEnd: billPeriodEnd,
         billDate: billPeriodEnd,
         dueDate: billDue,
-        subtotal: total,
+        subtotal: billTotal,
         taxes: "0.0000",
         credits: "0.0000",
-        total,
+        total: billTotal,
         billNumber: `BILL-${billPeriodEnd.getFullYear()}${String(billPeriodEnd.getMonth() + 1).padStart(2, "0")}-${account.accountNumber}`,
         postedAt: posted ? new Date() : null,
       },
     });
-    await p.billSegment.create({
-      data: {
-        utilityId: UID,
-        serviceAgreementId: sa.id,
-        billId: bill.id,
-        periodStart: billPeriodStart,
-        periodEnd: billPeriodEnd,
-        subtotal: total,
-        taxes: "0.0000",
-        credits: "0.0000",
-        total,
-        minimumFloorApplied: false,
-        segmentNumber: `SEG-${account.accountNumber}-${billPeriodEnd.getFullYear()}${String(billPeriodEnd.getMonth() + 1).padStart(2, "0")}`,
-      },
-    });
+
+    for (let i = 0; i < segments.length; i++) {
+      const sg = segments[i];
+      await p.billSegment.create({
+        data: {
+          utilityId: UID,
+          serviceAgreementId: sg.sa.id,
+          billId: bill.id,
+          periodStart: billPeriodStart,
+          periodEnd: billPeriodEnd,
+          subtotal: (sg.cents / 100).toFixed(4),
+          taxes: "0.0000",
+          credits: "0.0000",
+          total: (sg.cents / 100).toFixed(4),
+          minimumFloorApplied: false,
+          segmentNumber: `SEG-${account.accountNumber}-${i + 1}-${billPeriodEnd.getFullYear()}${String(billPeriodEnd.getMonth() + 1).padStart(2, "0")}`,
+          lines: {
+            create: sg.lines.map((l) => ({
+              utilityId: UID,
+              label: l.component.label ?? l.component.kindCode,
+              kindCode: l.component.kindCode,
+              amount: l.amount,
+              sourceScheduleId: sg.assignment.rateScheduleId,
+              sourceComponentId: l.component.id,
+              sortOrder: l.sortOrder,
+            })),
+          },
+        },
+      });
+    }
+
     if (posted) {
-      // The receivable the bill produced. Rounded to the ledger's 2dp,
-      // and naming the bill, which is what ledger_entry_bill_charge_has_bill
-      // requires and what lets the AR tab show a bill number.
-      // The ledger is Decimal(14,2) and bill.total is Decimal(14,4), so
-      // the charge is the total rounded to cents — half-up, matching
-      // roundToCents in @utility-cis/shared, which seed.js cannot import.
-      // This MUST be derived from the bill: an amount that disagrees with
-      // the bill it names still reconciles, because the balance is the sum
-      // of open amounts either way, and nothing would catch it.
-      const charge = (Math.round(parseFloat(total) * 100) / 100).toFixed(2);
+      // The ledger is Decimal(14,2) and bill.total is Decimal(14,4), so the
+      // charge is the total rounded to cents. It MUST be derived from the
+      // bill: an amount that disagrees with the bill it names still
+      // reconciles, because the balance is the sum of open amounts either
+      // way, and nothing would catch it.
+      const charge = (billCents / 100).toFixed(2);
       await p.ledgerEntry.create({
         data: {
           utilityId: UID,
@@ -1302,10 +1402,7 @@ async function main() {
   for (let i = 0; i < billableAccounts.length; i++) {
     const account = billableAccounts[i];
     const posted = i < billableAccounts.length - 1;
-    // Vary the amount so the screens do not look like test fixtures.
-    const cents = 4820 + i * 1137;
-    const total = (cents / 100).toFixed(4);
-    const bill = await seedBill(account, total, { posted });
+    const bill = await seedBill(account, { posted });
     if (!bill) continue;
     if (posted) {
       postedBills++;
