@@ -204,11 +204,11 @@ export default function BillsPage() {
               <thead>
                 <tr style={{ background: "var(--bg-elevated)" }}>
                   <Th>Bill #</Th>
-                  <Th>Account</Th>
+                  <Th className={HIDE_SM}>Account</Th>
                   <Th>Customer</Th>
-                  <Th>Period</Th>
-                  <Th>Due</Th>
-                  <Th style={{ textAlign: "right" }}>Total</Th>
+                  <Th className={HIDE_MD}>Period</Th>
+                  <Th className={HIDE_SM}>Due</Th>
+                  <Th className={HIDE_SM} style={{ textAlign: "right" }}>Total</Th>
                   <Th style={{ textAlign: "right" }}>Still owed</Th>
                   <Th>Status</Th>
                   {showActions && <Th>Actions</Th>}
@@ -233,17 +233,19 @@ export default function BillsPage() {
                         {b.billNumber}
                       </button>
                     </Td>
-                    <Td>
+                    <Td className={HIDE_SM}>
                       <Link href={`/accounts/${b.account.id}`} style={MONO_LINK}>
                         {b.account.accountNumber}
                       </Link>
                     </Td>
                     <Td>{b.account.customerName ?? "—"}</Td>
-                    <Td style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                    <Td className={HIDE_MD} style={{ fontSize: 12, color: "var(--text-muted)" }}>
                       {fmtDate(b.periodStart)} – {fmtDate(b.periodEnd)}
                     </Td>
-                    <Td style={{ fontSize: 12 }}>{fmtDate(b.dueDate)}</Td>
-                    <Td style={{ textAlign: "right" }}>
+                    <Td className={HIDE_SM} style={{ fontSize: 12 }}>
+                      {fmtDate(b.dueDate)}
+                    </Td>
+                    <Td className={HIDE_SM} style={{ textAlign: "right" }}>
                       <span style={MONEY}>
                         $
                         {Number(b.total).toLocaleString(undefined, {
@@ -509,6 +511,19 @@ function Pill({
   );
 }
 
+/*
+ * Which columns survive a narrow screen.
+ *
+ * Chosen by what a CSR cannot answer a call without, not by what fits:
+ * the bill number they were read, who it belongs to, what is STILL OWED
+ * -- not the original total, which is the question less often asked --
+ * whether it is posted, and the actions. Period, due date, the account
+ * number and the original total all remain one tap away in the bill
+ * dialog, so nothing is lost, only deferred.
+ */
+const HIDE_SM = "col-hide-sm";
+const HIDE_MD = "col-hide-md";
+
 const CARD: React.CSSProperties = {
   background: "var(--bg-card)",
   border: "1px solid var(--border)",
@@ -573,9 +588,18 @@ const PAGE_BTN = (disabled: boolean): React.CSSProperties => ({
   fontFamily: "inherit",
 });
 
-function Th({ children, style }: { children?: React.ReactNode; style?: React.CSSProperties }) {
+function Th({
+  children,
+  style,
+  className,
+}: {
+  children?: React.ReactNode;
+  style?: React.CSSProperties;
+  className?: string;
+}) {
   return (
     <th
+      className={className}
       style={{
         padding: "10px 16px",
         textAlign: "left",
@@ -594,9 +618,18 @@ function Th({ children, style }: { children?: React.ReactNode; style?: React.CSS
   );
 }
 
-function Td({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+function Td({
+  children,
+  style,
+  className,
+}: {
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+  className?: string;
+}) {
   return (
     <td
+      className={className}
       style={{
         padding: "12px 16px",
         fontSize: 13,

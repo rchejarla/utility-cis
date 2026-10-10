@@ -306,3 +306,53 @@ describe("Bills page", () => {
     );
   });
 });
+
+/**
+ * Hiding a column means hiding a <th> AND its <td> in every row. Hide
+ * one without the other and the header stops lining up with the body:
+ * every cell after the gap reads under the wrong heading, which is a
+ * silent misread and worse than the wide table it was meant to fix.
+ */
+describe("Bills page — narrow screens drop columns in matched pairs", () => {
+  it("hides the same columns in the header as in the body", async () => {
+    get.mockResolvedValue(
+      page([row({ postedAt: "2026-06-30", charge: { entryId: "e1", openAmount: "15.00", reversed: false } })]),
+    );
+    const { container } = renderPage();
+    await screen.findByText("BILL-0001");
+
+    for (const cls of ["col-hide-sm", "col-hide-md"]) {
+      const heads = container.querySelectorAll(`thead th.${cls}`).length;
+      const cells = container.querySelectorAll(`tbody tr:first-child td.${cls}`).length;
+      expect(heads, `${cls} headers`).toBeGreaterThan(0);
+      expect(cells, `${cls} cells must match its headers`).toBe(heads);
+    }
+  });
+
+  it("keeps the columns a CSR needs on a phone", async () => {
+    get.mockResolvedValue(
+      page([row({ postedAt: "2026-06-30", charge: { entryId: "e1", openAmount: "15.00", reversed: false } })]),
+    );
+    const { container } = renderPage();
+    await screen.findByText("BILL-0001");
+
+    const kept = Array.from(container.querySelectorAll("thead th"))
+      .filter((th) => !th.classList.contains("col-hide-sm") && !th.classList.contains("col-hide-md"))
+      .map((th) => th.textContent?.trim());
+
+    // Still owed survives and Total does not: on a call the question is
+    // what is outstanding, not what was originally charged.
+    expect(kept).toEqual(["Bill #", "Customer", "Still owed", "Status", "Actions"]);
+  });
+
+  it("every header cell is either kept or hidden exactly once", async () => {
+    get.mockResolvedValue(page([row({ postedAt: "2026-06-30" })]));
+    const { container } = renderPage();
+    await screen.findByText("BILL-0001");
+
+    for (const th of Array.from(container.querySelectorAll("thead th"))) {
+      const both = th.classList.contains("col-hide-sm") && th.classList.contains("col-hide-md");
+      expect(both, `${th.textContent} carries both hide classes`).toBe(false);
+    }
+  });
+});
