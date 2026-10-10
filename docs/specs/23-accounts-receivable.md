@@ -67,6 +67,7 @@ account.balance   = SUM(openAmount) over the account's entries
 | POST | `/api/v1/accounts/:id/waivers` | `ar_adjustments:EDIT` | Forgives part or all of one nominated charge. Requires `debitId`. The excess stays open as a refund due and does not spill onto other charges. |
 | POST | `/api/v1/accounts/:id/write-offs` | `ar_adjustments:EDIT` | Same mechanics, recorded as bad debt rather than a concession. |
 | GET | `/api/v1/bills` | `accounts:VIEW` | The tenant-wide bill list, added in slice 4b. Filters on `accountId`, `billingCycleId`, an inclusive `from`/`to` on `billDate`, and a tri-state `posted`; `search` matches the bill number. Returns the account number, customer name, cycle name and `postedAt` per row, because a list of bill numbers against account uuids cannot serve the lookup it exists for. Same gate as the account-scoped list it generalises. |
+| GET | `/api/v1/payments` | `payments:VIEW` | The tenant-wide payments list, added in slice 4b. Filters on `accountId`, `tender` and an inclusive `from`/`to` over `effectiveDate` — the day the money was taken, which is what a deposit is tied out against, not the day the row was written; `search` matches `externalRef`, the cheque or lockbox reference an operator holds. Amounts come back **positive** (stored negative, because a payment is a credit). Carries `totalReceived` for the whole filter, not the page. Reading receipts is `VIEW`; taking money stays `CREATE`. |
 | GET | `/api/v1/accounts/:id/ledger` | `accounts:VIEW` | The account's entries for display: the reason label, the bill number, the tender, and reversal links resolved in BOTH directions so a reader is not left pairing rows by amount. Returns the cached `balance` and an account-wide `openCount` alongside; capped at 500 rows, with `openOnly` and `limit`. On `accounts:VIEW` rather than a writing module, because a CSR who may not take a payment still needs to see what is owed. |
 | GET | `/api/v1/ar/reconciliation` | `accounts:VIEW` | Proof, not assertion: every account whose cached `balance` differs from `SUM(open_amount)`. Returns `{ ok, checked, drift }`. `checked` is the number of accounts examined, and it is what makes an empty `drift` mean anything — a check that could see no accounts returns the same empty list as a clean ledger, so `ok: true` on its own is not evidence. Both statements run inside one `withTenant`, on one connection, so the count cannot reassure about a population the drift query never saw. |
 
@@ -146,6 +147,20 @@ It shipped in slice 1 as an orphan field: the service returned it and the patch 
 | Dates rendered from the ISO string, not `new Date()` | `new Date("2026-06-30")` is UTC midnight, which is the 29th west of Greenwich, so a bill would appear dated a day early |
 
 `to` and `from` are inclusive. A plain `lte` is correct only because `bill.billDate` is `@db.Date` and carries no time; if that column becomes a timestamp it must become `lt` the following day, or every range query drops its final day.
+
+### Billing → Payments
+
+`/payments` on `payments:VIEW`, rendering `GET /api/v1/payments`. Answers the question no screen could answer before — *what did we take, and does it agree with the bank* — because every payment view was scoped to one account, so counting a day's receipts meant visiting accounts one at a time.
+
+| Decision | Why |
+|---|---|
+| Opens on **today** | That is the question being asked by anyone who comes here at all |
+| `totalReceived` covers the **filter**, not the page | A daily total that stopped at the page boundary would be wrong the moment a day ran past 25 rows, and silently so |
+| **A reversed payment stays in the total** | A cheque banked on Monday and returned on Wednesday was in Monday's deposit. Netting it out of Monday would stop the figure agreeing with the bank, which is the total's only job. The row is struck through and badged `reversed`, and the card says so in words, so nobody reads the total as money still held |
+| Amounts shown positive | Stored negative because a payment is a credit; a receipts list is read by someone counting cash. Negated once, in the service |
+| Dates rendered from the ISO string | `new Date("2026-06-30")` is UTC midnight — the 29th west of Greenwich — so a receipt would appear a day early |
+
+**Not built, and deliberately:** no `Payment`, `PaymentBatch`, `Deposit` or cash-drawer model. A list with a date range and a total answers the tie-out question without inventing a batch granularity nobody has chosen yet. Add the batch when someone needs to *close* one — per day, per user or per drawer — not before.
 
 ### Settings → Ledger Integrity
 

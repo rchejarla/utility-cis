@@ -99,7 +99,7 @@ const navSections: NavSection[] = [
     ],
   },
   {
-    title: "Billing & AR",
+    title: "Billing",
     items: [
       {
         href: "/bills",
@@ -107,6 +107,13 @@ const navSections: NavSection[] = [
         icon: faFileInvoiceDollar,
         module: "accounts",
         tooltip: "Every bill across all accounts, searchable by bill number, with posting",
+      },
+      {
+        href: "/payments",
+        label: "Payments",
+        icon: faMoneyBill,
+        module: "payments",
+        tooltip: "Money received across all accounts — a day's takings, for tying out against the deposit",
       },
     ],
   },

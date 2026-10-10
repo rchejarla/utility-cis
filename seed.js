@@ -1228,6 +1228,7 @@ async function main() {
   });
   console.log("  1 late fee, partially waived");
 
+
   // Two bills, so both the Bills tab and the AR tab have something real
   // to show and the Post action has something to act on. Written directly
   // rather than generated: going through the rate engine would need
@@ -1432,6 +1433,112 @@ async function main() {
   console.log(
     "  " + postedBills + " posted bills with receivables, " + unpostedBills + " unposted"
   );
+
+  // Payments, so the Payments screen opens on something real rather than
+  // an empty range, and so the AR tab shows a charge that has been part
+  // paid. Written directly for the same reason as everything above --
+  // seed.js does not import the TypeScript services -- and the cache is
+  // recomputed from the ledger afterwards, so Settings -> Ledger
+  // Integrity stays clean.
+  //
+  // Deliberately placed AFTER the bills: a payment wants a real charge to
+  // land on, and a PARTIAL one keeps the arithmetic honest. Paying more
+  // than a debit holds would drive its open_amount negative, which breaks
+  // the §5 invariant rather than modelling an overpayment -- allocation
+  // caps each application at what the debit still owes and leaves the
+  // excess open on the credit.
+  const payTarget = await p.ledgerEntry.findFirst({
+    where: { utilityId: UID, type: "BILL_CHARGE", openAmount: { gt: 20 } },
+    orderBy: { effectiveDate: "asc" },
+  });
+  if (payTarget) {
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const threeDaysAgo = new Date();
+    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+
+    // Half the charge, to the cent, so something stays owed on it.
+    const owed = Number(payTarget.openAmount);
+    const paid = (Math.round(owed * 50) / 100).toFixed(2);
+
+    const payment = await p.ledgerEntry.create({
+      data: {
+        utilityId: UID,
+        accountId: payTarget.accountId,
+        type: "PAYMENT",
+        amount: "-" + paid,
+        openAmount: "0.00", // fully applied to the charge below
+        dueDate: null, // a credit has nothing to fall due
+        effectiveDate: sevenDaysAgo,
+        tender: "CHECK",
+        externalRef: "CHQ-100417",
+        memo: "Seeded counter payment",
+      },
+    });
+    await p.ledgerApplication.create({
+      data: { utilityId: UID, creditId: payment.id, debitId: payTarget.id, amount: paid },
+    });
+    await p.ledgerEntry.update({
+      where: { id: payTarget.id },
+      data: { openAmount: (owed - Number(paid)).toFixed(2) },
+    });
+
+    // And one that bounced, so the reversed state is visible on the
+    // Payments screen. Modelled as received and returned before
+    // allocation touched it: the reversal consumes the payment in full,
+    // both open amounts land on zero, and the balance is therefore
+    // unmoved -- which is what an NSF on an unallocated payment does.
+    const bounced = await p.ledgerEntry.create({
+      data: {
+        utilityId: UID,
+        accountId: payTarget.accountId,
+        type: "PAYMENT",
+        amount: "-50.00",
+        openAmount: "0.00", // consumed by its reversal
+        dueDate: null,
+        effectiveDate: threeDaysAgo,
+        tender: "CHECK",
+        externalRef: "CHQ-100418",
+        memo: "Seeded payment, returned unpaid",
+      },
+    });
+    const nsf = await p.ledgerEntry.create({
+      data: {
+        utilityId: UID,
+        accountId: payTarget.accountId,
+        type: "REVERSAL",
+        amount: "50.00",
+        openAmount: "0.00", // settled against the payment it reverses
+        dueDate: null,
+        effectiveDate: new Date(),
+        reversesId: bounced.id,
+        memo: "Returned unpaid (NSF)",
+      },
+    });
+    await p.ledgerApplication.create({
+      data: { utilityId: UID, creditId: bounced.id, debitId: nsf.id, amount: "50.00" },
+    });
+
+    // Recompute from the ledger rather than adjusting by hand, exactly as
+    // the posting path does.
+    const open = await p.ledgerEntry.aggregate({
+      where: { utilityId: UID, accountId: payTarget.accountId },
+      _sum: { openAmount: true },
+    });
+    const oldest = await p.ledgerEntry.findFirst({
+      where: { utilityId: UID, accountId: payTarget.accountId, openAmount: { gt: 0 }, dueDate: { not: null } },
+      orderBy: { dueDate: "asc" },
+      select: { dueDate: true },
+    });
+    await p.account.update({
+      where: { id: payTarget.accountId },
+      data: {
+        balance: (open._sum.openAmount ?? 0).toString(),
+        lastDueDate: oldest?.dueDate ?? null,
+      },
+    });
+    console.log("  2 payments (one part-paying a bill, one reversed NSF)");
+  }
 
   const testUsers = [
     { id: "00000000-0000-4000-8000-000000000091", email: "sysadmin@utility.com", name: "Sarah Mitchell", roleIdx: 0 },

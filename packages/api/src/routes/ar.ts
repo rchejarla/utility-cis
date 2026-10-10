@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   postBillSchema,
   recordPaymentSchema,
+  paymentQuerySchema,
   reverseEntrySchema,
   assessFeeSchema,
   adjustSchema,
@@ -13,7 +14,7 @@ import { idParamSchema } from "../lib/route-schemas.js";
 import { prisma } from "../lib/prisma.js";
 import { postBill } from "../services/ar/posting.service.js";
 import { reconcileBalances } from "../services/ar/reconciliation.service.js";
-import { recordPayment } from "../services/ar/payment.service.js";
+import { recordPayment, listPayments } from "../services/ar/payment.service.js";
 import { reverseEntry } from "../services/ar/reversal.service.js";
 import { assessFee } from "../services/ar/fee.service.js";
 import { adjustDebit, waive, writeOff } from "../services/ar/adjustment.service.js";
@@ -111,6 +112,22 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const report = await reconcileBalances(request.user.utilityId);
       return reply.send({ ok: report.drift.length === 0, ...report });
+    },
+  );
+
+  /**
+   * The tenant-wide payments list.
+   *
+   * On `payments:VIEW` — reading what was taken is the same authority as
+   * seeing one account's payments, applied across accounts; taking money
+   * stays on CREATE.
+   */
+  app.get(
+    "/api/v1/payments",
+    { config: { module: "payments", permission: "VIEW" } },
+    async (request, reply) => {
+      const q = paymentQuerySchema.parse(request.query ?? {});
+      return reply.send(await listPayments(request.user.utilityId, q));
     },
   );
 
