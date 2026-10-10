@@ -87,7 +87,7 @@ All endpoints require JWT authentication with `utility_id` claim.
 | accountType | Yes | RESIDENTIAL, COMMERCIAL, INDUSTRIAL, MUNICIPAL |
 | status | No | Default ACTIVE |
 | creditRating | No | Default UNRATED |
-| depositAmount | No | min 0, default 0 |
+| depositAmount | No | min 0, default 0. **Create only** — omitted from the update schema, because it is a cache of the account's `DEPOSIT` ledger entries. A deposit changes by being taken or returned, not by editing the number. See spec 23, *Deposits* |
 | depositWaived | No | boolean, default false |
 | depositWaivedReason | No | max 255 chars |
 | languagePref | No | exactly 5 chars (e.g., `"en-US"`), default `"en-US"` |

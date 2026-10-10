@@ -20,6 +20,7 @@ let recon: typeof import("../../services/ar/reconciliation.service.js");
 let payment: typeof import("../../services/ar/payment.service.js");
 let reversal: typeof import("../../services/ar/reversal.service.js");
 let fee: typeof import("../../services/ar/fee.service.js");
+let deposit: typeof import("../../services/ar/deposit.service.js");
 
 let accountId: string;
 let billingCycleId: string;
@@ -34,6 +35,7 @@ beforeAll(async () => {
   payment = await import("../../services/ar/payment.service.js");
   reversal = await import("../../services/ar/reversal.service.js");
   fee = await import("../../services/ar/fee.service.js");
+  deposit = await import("../../services/ar/deposit.service.js");
 
   const { prisma } = prismaImports;
   const cycle = await prisma.billingCycle.create({
@@ -524,6 +526,47 @@ describe("deposits", () => {
     const billId = await makeBill("40.00", "2026-06-14");
     const res = await posting.postBill(utilityId, ACTOR, "Tester", billId);
     expect(res.applied).toHaveLength(1);
+  });
+
+  it("recordDeposit writes a credit and updates only the deposit cache", async () => {
+    const { prisma } = prismaImports;
+    const billId = await makeBill("40.00", "2026-06-14");
+    await posting.postBill(utilityId, ACTOR, "Tester", billId);
+
+    const res = await deposit.recordDeposit(utilityId, ACTOR, "Tester", accountId, {
+      amount: "500.00",
+      tender: "CHECK",
+      externalRef: "DEP-1",
+    });
+
+    expect(res.depositAmount).toBe("500.00");
+    // The receivable is untouched: the bill is still owed in full.
+    expect(res.balance).toBe("40.00");
+
+    const entry = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id: res.entryId } });
+    expect(entry.type).toBe("DEPOSIT");
+    expect(entry.amount.toFixed(2)).toBe("-500.00");
+    expect(entry.dueDate).toBeNull();
+    expect(entry.tender).toBe("CHECK");
+  });
+
+  it("recordDeposit refuses a zero or negative amount", async () => {
+    await expect(
+      deposit.recordDeposit(utilityId, ACTOR, "Tester", accountId, { amount: "0" }),
+    ).rejects.toThrow(/positive/i);
+  });
+
+  it("two deposits accumulate rather than replace", async () => {
+    await deposit.recordDeposit(utilityId, ACTOR, "Tester", accountId, { amount: "200.00" });
+    const second = await deposit.recordDeposit(utilityId, ACTOR, "Tester", accountId, {
+      amount: "300.00",
+    });
+    expect(second.depositAmount).toBe("500.00");
+  });
+
+  it("leaves no drift behind, on either cache", async () => {
+    await deposit.recordDeposit(utilityId, ACTOR, "Tester", accountId, { amount: "500.00" });
+    await expectReconciles(utilityId);
   });
 
   it("reports deposit drift separately from balance drift", async () => {

@@ -232,8 +232,8 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
       if (editForm.accountType !== account.accountType) changes.accountType = editForm.accountType;
       if (editForm.status !== account.status) changes.status = editForm.status;
       if (editForm.creditRating !== (account.creditRating ?? "")) changes.creditRating = editForm.creditRating || null;
-      const depositVal = editForm.depositAmount !== "" ? parseFloat(editForm.depositAmount as string) : null;
-      if (depositVal !== (account.depositAmount ?? null)) changes.depositAmount = depositVal;
+      // depositAmount is deliberately NOT sent: the API rejects it, because
+      // it is a ledger-derived cache rather than a field.
       if (editForm.depositWaived !== (account.depositWaived ?? false)) changes.depositWaived = editForm.depositWaived;
       if (editForm.depositWaivedReason !== (account.depositWaivedReason ?? "")) changes.depositWaivedReason = editForm.depositWaivedReason;
       if (editForm.languagePref !== (account.languagePref ?? "")) changes.languagePref = editForm.languagePref;
@@ -467,24 +467,27 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
               )}
             </div>
             <div style={fieldStyle}>
-              <span style={labelStyle}>Deposit Amount</span>
-              {editing ? (
-                <input
-                  style={inputStyle}
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={editForm.depositAmount as string}
-                  onChange={(e) => setEditForm((f) => ({ ...f, depositAmount: e.target.value }))}
-                  placeholder="0.00"
-                />
-              ) : (
-                <span style={valueStyle}>
-                  {account.depositAmount != null
-                    ? `$${Number(account.depositAmount).toFixed(2)}`
-                    : "—"}
-                </span>
-              )}
+              <span style={labelStyle}>Deposit Held</span>
+              {/*
+                Not editable, and not an oversight. This is a cache of the
+                account's DEPOSIT ledger entries, the same way `balance`
+                caches the receivable -- and nobody types over a balance
+                either. A deposit changes by taking one or returning one:
+                acts with a tender, a date and an audit row. Typing a new
+                number would leave the column disagreeing with the ledger
+                until a recompute silently overwrote it, and Ledger
+                Integrity would report the drift in between.
+              */}
+              <span style={valueStyle}>
+                {account.depositAmount != null
+                  ? `$${Number(account.depositAmount).toFixed(2)}`
+                  : "—"}
+                {editing && (
+                  <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+                    Held on the ledger — changed by taking or returning a deposit, not by editing
+                  </span>
+                )}
+              </span>
             </div>
             <div style={fieldStyle}>
               <span style={labelStyle}>Deposit Waived</span>

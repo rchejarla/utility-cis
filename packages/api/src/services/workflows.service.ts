@@ -299,9 +299,26 @@ export async function moveIn(
         accountType: data.accountType,
         status: "ACTIVE",
         billingCycleId: data.billingCycleId,
-        depositAmount: data.depositAmount ?? 0,
+        // Set by the ledger below, not here: it is a cache of the
+        // DEPOSIT entries, like `balance` is of the receivable.
+        depositAmount: 0,
       },
     });
+
+    // A deposit taken at move-in is money that moved, so it goes on the
+    // ledger. In THIS transaction, so the account and the deposit it was
+    // opened with commit together or not at all.
+    if (data.depositAmount && data.depositAmount > 0) {
+      const { recordDeposit } = await import("./ar/deposit.service.js");
+      await recordDeposit(
+        utilityId,
+        actorId,
+        actorName,
+        account.id,
+        { amount: data.depositAmount.toFixed(2), memo: "Deposit taken at move-in" },
+        tx,
+      );
+    }
 
     // Create service agreements with optional initial meter readings.
     // Each agreement's number is auto-generated if the caller omitted

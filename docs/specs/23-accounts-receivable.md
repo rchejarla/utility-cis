@@ -166,7 +166,11 @@ It is a **credit by sign and a liability in meaning**, which is why it is exclud
 
 `depositWaived` and `depositWaivedReason` stay on the account: they record whether a deposit was *required*, which is a decision, not money.
 
-**Still outstanding:** nothing takes or returns a deposit through the ledger yet. Account creation, move-in and the import handler still write `depositAmount` directly, and the backfill migration covers only what existed. Interest accrual and statutory return rules need account-level state that does not exist either.
+**Taking a deposit** goes through `recordDeposit`, which every path that used to write the column now calls inside its own transaction — account creation, move-in and the account importer — so an account and the deposit it was opened with commit together or not at all.
+
+**`depositAmount` is no longer editable.** It is omitted from `updateAccountSchema`, so `PATCH /api/v1/accounts/:id` answers `Unrecognized key(s) in object: 'depositAmount'`, and the account page shows it read-only. Nobody types over `balance` either. A deposit changes by taking one or returning one — acts with a tender, a date and an audit row — and editing the number would leave the column disagreeing with the ledger until a recompute silently overwrote it, with reconciliation reporting the drift in between. `depositWaived` and `depositWaivedReason` remain editable, being decisions rather than money.
+
+**Still outstanding:** nothing *returns* a deposit — that is refunds, and it is now unblocked, because returning a deposit is the same act as refunding any credit. Interest accrual and statutory return rules need account-level state that does not exist yet.
 
 ### Billing → Payments
 

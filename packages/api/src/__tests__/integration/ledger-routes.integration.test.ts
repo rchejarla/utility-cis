@@ -382,7 +382,15 @@ describe("GET /api/v1/ar/reconciliation", () => {
     expect(body.ok).toBe(false);
     expect(body.checked).toBe(1);
     expect(body.drift).toEqual([
-      { accountId, accountNumber: "ROUTES-001", cached: "999.99", ledger: "25.00" },
+      {
+        accountId,
+        accountNumber: "ROUTES-001",
+        cached: "999.99",
+        ledger: "25.00",
+        // Names which cache drifted. There are two -- the receivable and
+        // the deposit held -- and they mean different things.
+        field: "balance",
+      },
     ]);
   });
 

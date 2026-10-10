@@ -35,9 +35,23 @@ export const createAccountSchema = z.object({
   customFields: z.record(z.unknown()).optional(),
 }).strict();
 
-// Update schemas intentionally strip unknown keys (forgiving PATCH semantics).
+/**
+ * Update schemas intentionally strip unknown keys (forgiving PATCH
+ * semantics).
+ *
+ * `depositAmount` is omitted because it is a cache of the DEPOSIT ledger
+ * entries, exactly as `balance` caches the receivable — and nobody edits
+ * `balance` by hand either. A deposit changes by taking one or returning
+ * one, which are acts with a tender, a date and an audit row behind
+ * them. Typing a new number would leave the column disagreeing with the
+ * ledger until the next recompute silently overwrote it, and
+ * reconciliation would report the drift in between.
+ *
+ * `depositWaived` and `depositWaivedReason` stay editable: they record
+ * whether a deposit was REQUIRED, which is a decision, not money.
+ */
 export const updateAccountSchema = createAccountSchema
-  .omit({ accountNumber: true })
+  .omit({ accountNumber: true, depositAmount: true })
   .partial();
 
 export const accountQuerySchema = z.object({

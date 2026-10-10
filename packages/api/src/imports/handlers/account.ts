@@ -345,12 +345,29 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
           customerId,
           billingCycleId,
           creditRating: row.creditRating ?? "UNRATED",
-          depositAmount: row.depositAmount ?? 0,
+          // Cache of the DEPOSIT ledger entries; the entry is written
+          // below and the column follows from it.
+          depositAmount: 0,
           languagePref: row.languagePref ?? "en-US",
           paperlessBilling: row.paperlessBilling ?? false,
           budgetBilling: row.budgetBilling ?? false,
         },
       });
+
+      // An imported deposit is money the utility already holds, so it
+      // gets a ledger entry like any other. Same transaction as the
+      // account, so a half-imported account cannot exist.
+      if (row.depositAmount && row.depositAmount > 0) {
+        const { recordDeposit } = await import("../../services/ar/deposit.service.js");
+        await recordDeposit(
+          ctx.utilityId,
+          ctx.actorId,
+          ctx.actorName,
+          created.id,
+          { amount: row.depositAmount.toFixed(2), memo: "Deposit imported with the account" },
+          ctx.tx,
+        );
+      }
 
       await writeAuditRow(
         ctx.tx,
