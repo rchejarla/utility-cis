@@ -21,6 +21,18 @@ So the smallest honest increment is: the ledger read, and the tab that makes the
 - **Portal amount due** — a different app surface, different auth, and the portal exposes no balance at all today.
 - **Reason-code CRUD** — surfaced by slice 3's review; §3.4 says a utility adds its own codes without a code change, and today it can only take the 12 defaults.
 
+**Sidebar screens are 4b too**, decided deliberately to keep 4a tight. The per-account ledger is a tab and should be — AR work is done on an account. But three AR views are tenant-wide and have no home in the navigation at all:
+
+| Screen | Sidebar group | Gate | Note |
+|---|---|---|---|
+| Reconciliation | Settings, beside Retention & Audit | `accounts:VIEW` | Endpoint shipped in slice 1 and invisible ever since |
+| Reason Codes | Configuration, beside Account Types | `ar_adjustments:VIEW` | Needs the CRUD above; §3.4's claim fails without it |
+| Aging | Collections, beside Delinquency | `accounts:VIEW` | Needs §7.2's query; answers reqs 149–150 |
+
+A fourth from §8 — the **cycle-wide** unposted-bills list with a Post action — is a billing screen, and there is no `/billing` page at all today. 4a puts an unposted-bills strip *inside* the AR tab, which covers the per-account case and not the cycle-wide one.
+
+Already done without being planned: `permission-matrix.tsx` iterates `MODULES` and `MODULE_META`, so **Payments** and **AR Adjustments** are already rows in Settings → Users & Roles. Adding those keys in slices 2 and 3 put them in the UI by itself.
+
 ## Global Constraints
 
 - Money is `Decimal(14,2)` in the ledger. The API returns money as **strings** already formatted to 2dp, and the UI never does arithmetic on it. Every existing AR endpoint does this; the UI's job is to display, not to compute.
