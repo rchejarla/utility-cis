@@ -11,6 +11,16 @@ export interface Column<T> {
   /** Allow the cell to wrap long content. Default false — most lists need
    * single-line rows, but error tables with long messages opt in. */
   wrap?: boolean;
+  /**
+   * Hide this column below this screen size. Omitted means always shown.
+   *
+   * Say it by what the reader cannot answer the question without, not by
+   * what fits: a bill list that drops "still owed" to make room has kept
+   * its columns and lost its point. Whatever is hidden must stay
+   * reachable some other way -- the row's detail view -- because this
+   * removes data rather than reflowing it.
+   */
+  hideBelow?: "tablet" | "desktop";
 }
 
 export interface DataTableMeta {
@@ -59,7 +69,35 @@ export function DataTable<T extends Record<string, unknown>>({
   onRowClick,
   loading = false,
 }: DataTableProps<T>) {
-  const { isMobile } = useBreakpoint();
+  const { isMobile, isTablet } = useBreakpoint();
+
+  /**
+   * The columns this screen width earns.
+   *
+   * One list, used by the header, the body, the loading skeleton and the
+   * empty row's colSpan alike. Deriving it once is the point: the
+   * class-per-cell approach this replaces could hide a <th> and leave its
+   * <td>, which slides every later cell under the wrong heading -- a
+   * silent misread that a single source cannot produce.
+   */
+  const visibleColumns = columns.filter((c) => {
+    if (!c.hideBelow) return true;
+    if (c.hideBelow === "desktop") return !isMobile && !isTablet;
+    return !isMobile;
+  });
+
+  /**
+   * What a phone card shows.
+   *
+   * Prefer what the author marked as surviving a phone. Only when a table
+   * has said nothing at all does this fall back to the first four columns
+   * -- which is a guess by position, not importance, and was the whole
+   * behaviour before `hideBelow` existed. Keeping it means none of the
+   * callers that have not declared anything change.
+   */
+  const declaresMobile = columns.some((c) => c.hideBelow);
+  const cardColumns = declaresMobile ? visibleColumns : columns.slice(0, 4);
+
   const startItem = meta ? (meta.page - 1) * meta.limit + 1 : 1;
   const endItem = meta ? Math.min(meta.page * meta.limit, meta.total) : data.length;
 
@@ -146,7 +184,7 @@ export function DataTable<T extends Record<string, unknown>>({
                     cursor: onRowClick ? "pointer" : "default",
                   }}
                 >
-                  {columns.slice(0, 4).map((col) => (
+                  {cardColumns.map((col) => (
                     <div
                       key={col.key}
                       style={{
@@ -189,7 +227,7 @@ export function DataTable<T extends Record<string, unknown>>({
           <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
             <thead>
               <tr style={{ background: "var(--bg-elevated)" }}>
-                {columns.map((col) => (
+                {visibleColumns.map((col) => (
                   <th
                     key={col.key}
                     scope="col"
@@ -213,12 +251,12 @@ export function DataTable<T extends Record<string, unknown>>({
             <tbody>
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
-                  <SkeletonRow key={i} cols={columns.length} rowIndex={i} />
+                  <SkeletonRow key={i} cols={visibleColumns.length} rowIndex={i} />
                 ))
               ) : data.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={columns.length}
+                    colSpan={visibleColumns.length}
                     style={{
                       padding: "48px 16px",
                       textAlign: "center",
@@ -272,7 +310,7 @@ export function DataTable<T extends Record<string, unknown>>({
                       (e.currentTarget as HTMLTableRowElement).style.outline = "none";
                     }}
                   >
-                    {columns.map((col) => (
+                    {visibleColumns.map((col) => (
                       <td
                         key={col.key}
                         style={{

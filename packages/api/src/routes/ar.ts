@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   postBillSchema,
   recordPaymentSchema,
+  paymentQuerySchema,
   reverseEntrySchema,
   assessFeeSchema,
   adjustSchema,
@@ -13,11 +14,12 @@ import { idParamSchema } from "../lib/route-schemas.js";
 import { prisma } from "../lib/prisma.js";
 import { postBill } from "../services/ar/posting.service.js";
 import { reconcileBalances } from "../services/ar/reconciliation.service.js";
-import { recordPayment } from "../services/ar/payment.service.js";
+import { recordPayment, listPayments } from "../services/ar/payment.service.js";
 import { reverseEntry } from "../services/ar/reversal.service.js";
 import { assessFee } from "../services/ar/fee.service.js";
 import { adjustDebit, waive, writeOff } from "../services/ar/adjustment.service.js";
 import { listReasons, seedDefaultReasons } from "../services/ar/reason.service.js";
+import { listLedger } from "../services/ar/ledger.service.js";
 
 /**
  * AR routes. Posting is gated on `accounts:EDIT`, the same permission as
@@ -84,12 +86,48 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  /**
+   * The account's ledger, for the AR tab. On `accounts:VIEW` because it
+   * is account data — the same gate as the unposted-bills list — rather
+   * than on the modules that WRITE entries: a CSR who may not take a
+   * payment still needs to see what an account owes.
+   */
+  app.get(
+    "/api/v1/accounts/:id/ledger",
+    { config: { module: "accounts", permission: "VIEW" } },
+    async (request, reply) => {
+      const { id: accountId } = idParamSchema.parse(request.params);
+      const q = request.query as { limit?: string; openOnly?: string };
+      const page = await listLedger(request.user.utilityId, accountId, {
+        limit: q.limit ? Number(q.limit) : undefined,
+        openOnly: q.openOnly === "true",
+      });
+      return reply.send(page);
+    },
+  );
+
   app.get(
     "/api/v1/ar/reconciliation",
     { config: { module: "accounts", permission: "VIEW" } },
     async (request, reply) => {
-      const drift = await reconcileBalances(request.user.utilityId);
-      return reply.send({ ok: drift.length === 0, drift });
+      const report = await reconcileBalances(request.user.utilityId);
+      return reply.send({ ok: report.drift.length === 0, ...report });
+    },
+  );
+
+  /**
+   * The tenant-wide payments list.
+   *
+   * On `payments:VIEW` — reading what was taken is the same authority as
+   * seeing one account's payments, applied across accounts; taking money
+   * stays on CREATE.
+   */
+  app.get(
+    "/api/v1/payments",
+    { config: { module: "payments", permission: "VIEW" } },
+    async (request, reply) => {
+      const q = paymentQuerySchema.parse(request.query ?? {});
+      return reply.send(await listPayments(request.user.utilityId, q));
     },
   );
 

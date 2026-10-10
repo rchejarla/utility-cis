@@ -240,6 +240,25 @@ export default function AutomationSettingsPage() {
       </SettingsSection>
 
       <SettingsSection
+        title="Billing"
+        description="How generating a bill behaves. Unlike the schedulers above, this is not a background job — it happens inside the same transaction that creates the bill."
+      >
+        <SettingsCard>
+          <SettingRow
+            label="Post bills to the ledger automatically"
+            description="On: generating a bill immediately makes it owed, and it appears on the customer's balance. Off: a bill is calculated but owes nothing until someone posts it, so staff must post it from the account's Bills tab. Individual accounts can override this."
+            control={
+              <ToggleSwitch
+                checked={draft.autoPostBills}
+                disabled={!canEdit}
+                onChange={(v) => setField("autoPostBills", v)}
+              />
+            }
+          />
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection
         title="Quiet hours"
         description="SMS messages are held when the tenant-local time falls within this window. Email is always eligible. Set start equal to end to disable quiet hours."
       >

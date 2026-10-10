@@ -199,6 +199,7 @@ New `delinquency` module added to MODULES constant. Permissions:
 ## Seed Data
 
 - 5 sample delinquency rules (tier 1–5 as described in the example chain)
+- The seeded payments deliberately land on a billed account rather than on either delinquent one, so the two opening balances this module's demo depends on stay untouched.
 - Two seeded accounts get an opening-balance `ADJUSTMENT_DEBIT` written straight into the ledger, with `balance` and `lastDueDate` written to match on the account row, so the evaluation job has ledger-backed balances and `GET /api/v1/ar/reconciliation` reports no drift on a fresh seed. The seeder deliberately does not go through `generateBillForAccount` or `postBill` — that would drag rate schedules and meter reads into seeding a balance
 - 2–3 sample DelinquencyActions showing different statuses
 

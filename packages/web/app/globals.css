@@ -45,9 +45,19 @@
   --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #22d3ee 100%);
 
   --radius: 10px;
+
+  /* Tells the browser to render native controls -- the <option> popup a
+     <select> opens, date pickers, scrollbars -- in dark. Without it
+     Chrome paints that popup light while our options inherit the near
+     white --text-primary, so every dropdown in the app opens looking
+     empty: the entries are there and you cannot read them. The popup is
+     drawn by the browser outside the page, so no amount of styling on
+     the <select> itself reaches it. */
+  color-scheme: dark;
 }
 
 [data-theme="light"] {
+  color-scheme: light;
   /* ─── Light theme — "indigo-washed" ────────────────────────
      Surfaces use the indigo family (50/100/200) instead of slate.
      Cards stay pure white so they float above the tinted page.
@@ -175,11 +185,52 @@ textarea::placeholder {
 
 /* Responsive layout helpers */
 
-/* Tablet: horizontal scroll for tables */
+/* Tablet: horizontal scroll for tables.
+   This is the fallback for a table that has not said which of its
+   columns matter. Scrolling sideways to reach a total is poor, so a wide
+   table should drop columns with the classes below rather than rely on
+   it. */
 @media (max-width: 1199px) {
   table {
     display: block;
     overflow-x: auto;
+  }
+}
+
+/*
+ * Dropping columns on narrow screens.
+ *
+ * Put the class on BOTH the <th> and every matching <td>, or the header
+ * and body fall out of step and every cell after it shifts one column
+ * left -- a silent misread, which is worse than a wide table.
+ *
+ *   .col-hide-md  gone below 1200px  (tablet and phone)
+ *   .col-hide-sm  gone below  768px  (phone only)
+ *
+ * These are the escape hatch for a hand-rolled <table>. A table built on
+ * the shared DataTable says the same thing in its column config instead,
+ * where it cannot fall out of step with itself:
+ *
+ *   .col-hide-sm  ==  hideBelow: "tablet"
+ *   .col-hide-md  ==  hideBelow: "desktop"
+ *
+ * Prefer the component. Keep these two in step with it if either moves.
+ *
+ * Choose by what the reader cannot answer the question without, not by
+ * what fits. A bill list that drops "still owed" to fit has kept the
+ * columns and lost the point. Anything hidden must stay reachable --
+ * open the row, or a detail view -- because this hides data rather than
+ * reflowing it.
+ */
+@media (max-width: 1199px) {
+  .col-hide-md {
+    display: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .col-hide-sm {
+    display: none;
   }
 }
 
@@ -211,4 +262,20 @@ textarea::placeholder {
 }
 .mapboxgl-popup-tip {
   display: none;
+}
+
+
+/*
+ * Native select popups.
+ *
+ * `color-scheme` above is what actually fixes these, but an explicit
+ * pair is cheap insurance: some platforms ignore the hint for the popup
+ * and fall back to the element's own colors. An <option> inheriting a
+ * near-white foreground onto a white popup is invisible, which reads as
+ * "this dropdown has no entries" rather than as a styling fault -- the
+ * failure costs far more to diagnose than the rule costs to keep.
+ */
+select option {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
 }

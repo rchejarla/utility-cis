@@ -346,7 +346,11 @@ describe("GET /api/v1/ar/reconciliation", () => {
       headers: headers(VIEWER),
     });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body)).toEqual({ ok: true, drift: [] });
+    // `checked` rides on the response, not just the service return: an
+    // empty `drift` with no population is the same payload a check that
+    // could see nothing would send, so the route has to carry the count
+    // for the screen to tell those apart.
+    expect(JSON.parse(res.body)).toEqual({ ok: true, checked: 1, drift: [] });
   });
 
   it("reports the account whose cached balance was changed behind the ledger's back", async () => {
@@ -376,6 +380,7 @@ describe("GET /api/v1/ar/reconciliation", () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.ok).toBe(false);
+    expect(body.checked).toBe(1);
     expect(body.drift).toEqual([
       { accountId, accountNumber: "ROUTES-001", cached: "999.99", ledger: "25.00" },
     ]);
@@ -821,5 +826,90 @@ describe("POST /api/v1/ar/reasons/seed-defaults", () => {
       payload: {},
     });
     expect(res.statusCode).toBe(403);
+  });
+});
+
+describe("GET /api/v1/accounts/:id/ledger", () => {
+  it("returns the ledger with the balance and open count", async () => {
+    const billId = await makeBill("25.0000");
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/post`,
+      headers: headers(),
+      payload: {},
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/accounts/${accountId}/ledger`,
+      headers: headers(VIEWER),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.balance).toBe("25.00");
+    expect(body.openCount).toBe(1);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].type).toBe("BILL_CHARGE");
+    expect(body.data[0].openAmount).toBe("25.00");
+    expect(body.data[0].settled).toBe(false);
+  });
+
+  it("honours openOnly", async () => {
+    const billId = await makeBill("25.0000");
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/post`,
+      headers: headers(),
+      payload: {},
+    });
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/payments`,
+      headers: headers(PAYER),
+      payload: { amount: "25.00", tender: "CHECK" },
+    });
+
+    const all = await app.inject({
+      method: "GET",
+      url: `/api/v1/accounts/${accountId}/ledger`,
+      headers: headers(VIEWER),
+    });
+    expect(JSON.parse(all.body).data).toHaveLength(2);
+
+    const open = await app.inject({
+      method: "GET",
+      url: `/api/v1/accounts/${accountId}/ledger?openOnly=true`,
+      headers: headers(VIEWER),
+    });
+    expect(JSON.parse(open.body).data).toEqual([]);
+    expect(JSON.parse(open.body).balance).toBe("0.00");
+  });
+
+  // A CSR who may not take a payment still needs to see what is owed, so
+  // this is accounts:VIEW and not one of the writing modules.
+  it("returns 403 only when the user lacks accounts:VIEW", async () => {
+    const allowed = await app.inject({
+      method: "GET",
+      url: `/api/v1/accounts/${accountId}/ledger`,
+      headers: headers(ADJUSTER),
+    });
+    expect(allowed.statusCode).toBe(200);
+
+    const denied = await app.inject({
+      method: "GET",
+      url: `/api/v1/accounts/${accountId}/ledger`,
+      headers: headers(NO_PERMS),
+    });
+    expect(denied.statusCode).toBe(403);
+  });
+
+  it("returns 404 for another tenant's account", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/accounts/${otherAccountId}/ledger`,
+      headers: headers(VIEWER),
+    });
+    expect(res.statusCode).toBe(404);
+    expect(JSON.parse(res.body).error.code).toBe("ACCOUNT_NOT_FOUND");
   });
 });

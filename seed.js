@@ -521,9 +521,26 @@ async function main() {
     { accountNumber: "0001007-00", accountType: "RESIDENTIAL", creditRating: "POOR",      status: "ACTIVE", depositAmount: 200,  billingCycleId: c1.id },
   ];
 
+  // Deterministic ids, like the test users below. Accounts are the thing
+  // a developer bookmarks and links to, and a random id per run means
+  // every reseed turns every open tab into a 404 "Record not found" from
+  // Prisma's P2025. The number in the account number is the suffix, so
+  // 0001000-00 is always ...-000000000a00.
   const aArr = [];
-  for (const ac of accountData) {
-    aArr.push(await p.account.create({ data: { utilityId: UID, ...ac } }));
+  for (let i = 0; i < accountData.length; i++) {
+    const ac = accountData[i];
+    aArr.push(
+      await p.account.create({
+        data: {
+          // "ac" for account, so these cannot be mistaken for the
+          // cis_user ids below, which already use ...0000a1 and ...0000a2
+          // for the two portal customers.
+          id: `00000000-0000-4000-8000-00000000ac0${i.toString(16)}`,
+          utilityId: UID,
+          ...ac,
+        },
+      }),
+    );
   }
   console.log("  " + aArr.length + " accounts");
 
@@ -1210,6 +1227,318 @@ async function main() {
     data: { balance: "422.80", lastDueDate: thirtyDaysAgo },
   });
   console.log("  1 late fee, partially waived");
+
+
+  // Two bills, so both the Bills tab and the AR tab have something real
+  // to show and the Post action has something to act on. Written directly
+  // rather than generated: going through the rate engine would need
+  // meter reads and published schedules lined up for a specific period,
+  // which is the bill-creation integration test's job, not the seeder's.
+  //
+  //   - a POSTED bill on 0001001-00, with its BILL_CHARGE, so the AR tab
+  //     shows a charge that names its bill;
+  //   - an UNPOSTED bill on 0001002-00, so GET unposted-bills is not
+  //     always empty and the operator has something to post.
+  const billSaFor = (accountId) => saCreated.find((sa) => sa.accountId === accountId);
+  const billPeriodEnd = new Date();
+  billPeriodEnd.setDate(15);
+  const billPeriodStart = new Date(billPeriodEnd);
+  billPeriodStart.setMonth(billPeriodStart.getMonth() - 1);
+  billPeriodStart.setDate(16);
+  const billDue = new Date(billPeriodEnd);
+  billDue.setDate(billDue.getDate() + 30);
+
+  // One segment per service agreement, each with real line items, because
+  // that is what a bill actually is: generateBillForAccount aggregates the
+  // account's unbilled BillSegments, and the rate engine puts a line on
+  // each one per rate component it applied. A bill with one empty segment
+  // renders as a total with nothing behind it, which is exactly what the
+  // statement view (§7.1) exists to avoid.
+  //
+  // The amounts are plausible rather than computed: deriving them would
+  // mean running the rate engine, which needs meter reads aligned to the
+  // period and is the bill-creation integration test's job.
+  const componentsBySchedule = {};
+  for (const rc of await p.rateComponent.findMany({
+    where: { utilityId: UID },
+    select: { id: true, rateScheduleId: true, kindCode: true, label: true },
+  })) {
+    (componentsBySchedule[rc.rateScheduleId] ||= []).push(rc);
+  }
+
+  /** The lines one segment gets, keyed off what the schedule actually has. */
+  function linesFor(scheduleId, base) {
+    const available = componentsBySchedule[scheduleId] ?? [];
+    if (available.length === 0) return [];
+    // Prefer a fixed charge plus a usage charge, which is the shape of
+    // almost every utility bill line set.
+    const fixed = available.find((c) => c.kindCode === "service_charge");
+    const usage = available.find((c) =>
+      ["consumption", "derived_consumption", "item_price", "non_meter"].includes(c.kindCode),
+    );
+    const picked = [fixed, usage].filter(Boolean);
+    if (picked.length === 0) picked.push(available[0]);
+
+    // Split the segment total across the picked components: the fixed part
+    // first, the remainder on usage, so the lines sum to the segment.
+    const cents = Math.round(base * 100);
+    const out = [];
+    if (picked.length === 1) {
+      out.push({ c: picked[0], cents });
+    } else {
+      const fixedCents = Math.round(cents * 0.35);
+      out.push({ c: picked[0], cents: fixedCents });
+      out.push({ c: picked[1], cents: cents - fixedCents });
+    }
+    return out.map((x, i) => ({
+      component: x.c,
+      amount: (x.cents / 100).toFixed(4),
+      sortOrder: (i + 1) * 100,
+    }));
+  }
+
+  async function seedBill(account, { posted }) {
+    const agreements = saCreated.filter((sa) => sa.accountId === account.id);
+    if (agreements.length === 0) return null;
+
+    // Build the segments first so the bill's total is the sum of them,
+    // rather than a figure the segments are then forced to match.
+    const segments = [];
+    for (let i = 0; i < agreements.length; i++) {
+      const sa = agreements[i];
+      const assignment = await p.sAScheduleAssignment.findFirst({
+        where: { utilityId: UID, serviceAgreementId: sa.id },
+        select: { rateScheduleId: true },
+      });
+      if (!assignment) continue;
+      const base = 32.5 + i * 18.75 + (account.accountNumber.charCodeAt(6) % 7) * 2.25;
+      const lines = linesFor(assignment.rateScheduleId, base);
+      if (lines.length === 0) continue;
+      const total = lines.reduce((t, l) => t + Math.round(parseFloat(l.amount) * 100), 0);
+      segments.push({ sa, assignment, lines, cents: total });
+    }
+    if (segments.length === 0) return null;
+
+    const billCents = segments.reduce((t, sg) => t + sg.cents, 0);
+    const billTotal = (billCents / 100).toFixed(4);
+
+    const bill = await p.bill.create({
+      data: {
+        utilityId: UID,
+        accountId: account.id,
+        billingCycleId: account.billingCycleId,
+        periodStart: billPeriodStart,
+        periodEnd: billPeriodEnd,
+        billDate: billPeriodEnd,
+        dueDate: billDue,
+        subtotal: billTotal,
+        taxes: "0.0000",
+        credits: "0.0000",
+        total: billTotal,
+        billNumber: `BILL-${billPeriodEnd.getFullYear()}${String(billPeriodEnd.getMonth() + 1).padStart(2, "0")}-${account.accountNumber}`,
+        postedAt: posted ? new Date() : null,
+      },
+    });
+
+    for (let i = 0; i < segments.length; i++) {
+      const sg = segments[i];
+      await p.billSegment.create({
+        data: {
+          utilityId: UID,
+          serviceAgreementId: sg.sa.id,
+          billId: bill.id,
+          periodStart: billPeriodStart,
+          periodEnd: billPeriodEnd,
+          subtotal: (sg.cents / 100).toFixed(4),
+          taxes: "0.0000",
+          credits: "0.0000",
+          total: (sg.cents / 100).toFixed(4),
+          minimumFloorApplied: false,
+          segmentNumber: `SEG-${account.accountNumber}-${i + 1}-${billPeriodEnd.getFullYear()}${String(billPeriodEnd.getMonth() + 1).padStart(2, "0")}`,
+          lines: {
+            create: sg.lines.map((l) => ({
+              utilityId: UID,
+              label: l.component.label ?? l.component.kindCode,
+              kindCode: l.component.kindCode,
+              amount: l.amount,
+              sourceScheduleId: sg.assignment.rateScheduleId,
+              sourceComponentId: l.component.id,
+              sortOrder: l.sortOrder,
+            })),
+          },
+        },
+      });
+    }
+
+    if (posted) {
+      // The ledger is Decimal(14,2) and bill.total is Decimal(14,4), so the
+      // charge is the total rounded to cents. It MUST be derived from the
+      // bill: an amount that disagrees with the bill it names still
+      // reconciles, because the balance is the sum of open amounts either
+      // way, and nothing would catch it.
+      const charge = (billCents / 100).toFixed(2);
+      await p.ledgerEntry.create({
+        data: {
+          utilityId: UID,
+          accountId: account.id,
+          type: "BILL_CHARGE",
+          amount: charge,
+          openAmount: charge,
+          dueDate: billDue,
+          effectiveDate: billPeriodEnd,
+          billId: bill.id,
+        },
+      });
+    }
+    return bill;
+  }
+
+  // Every account that has service gets a bill, so whichever account is
+  // opened first has something to show. The last one is left UNPOSTED on
+  // purpose: GET unposted-bills must not always be empty, or the Post
+  // action has nothing to act on.
+  const billableAccounts = aArr.filter((a) => billSaFor(a.id));
+  let postedBills = 0;
+  let unpostedBills = 0;
+  for (let i = 0; i < billableAccounts.length; i++) {
+    const account = billableAccounts[i];
+    const posted = i < billableAccounts.length - 1;
+    const bill = await seedBill(account, { posted });
+    if (!bill) continue;
+    if (posted) {
+      postedBills++;
+      // Fold the new receivable into the cached balance. Anything already
+      // open on the account stays open, so read it back rather than
+      // assuming — two of these accounts carry seeded opening balances.
+      const open = await p.ledgerEntry.aggregate({
+        where: { utilityId: UID, accountId: account.id },
+        _sum: { openAmount: true },
+      });
+      const oldest = await p.ledgerEntry.findFirst({
+        where: { utilityId: UID, accountId: account.id, openAmount: { gt: 0 }, dueDate: { not: null } },
+        orderBy: { dueDate: "asc" },
+        select: { dueDate: true },
+      });
+      await p.account.update({
+        where: { id: account.id },
+        data: {
+          balance: (open._sum.openAmount ?? 0).toString(),
+          lastDueDate: oldest?.dueDate ?? null,
+        },
+      });
+    } else {
+      unpostedBills++;
+    }
+  }
+  console.log(
+    "  " + postedBills + " posted bills with receivables, " + unpostedBills + " unposted"
+  );
+
+  // Payments, so the Payments screen opens on something real rather than
+  // an empty range, and so the AR tab shows a charge that has been part
+  // paid. Written directly for the same reason as everything above --
+  // seed.js does not import the TypeScript services -- and the cache is
+  // recomputed from the ledger afterwards, so Settings -> Ledger
+  // Integrity stays clean.
+  //
+  // Deliberately placed AFTER the bills: a payment wants a real charge to
+  // land on, and a PARTIAL one keeps the arithmetic honest. Paying more
+  // than a debit holds would drive its open_amount negative, which breaks
+  // the §5 invariant rather than modelling an overpayment -- allocation
+  // caps each application at what the debit still owes and leaves the
+  // excess open on the credit.
+  const payTarget = await p.ledgerEntry.findFirst({
+    where: { utilityId: UID, type: "BILL_CHARGE", openAmount: { gt: 20 } },
+    orderBy: { effectiveDate: "asc" },
+  });
+  if (payTarget) {
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const threeDaysAgo = new Date();
+    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+
+    // Half the charge, to the cent, so something stays owed on it.
+    const owed = Number(payTarget.openAmount);
+    const paid = (Math.round(owed * 50) / 100).toFixed(2);
+
+    const payment = await p.ledgerEntry.create({
+      data: {
+        utilityId: UID,
+        accountId: payTarget.accountId,
+        type: "PAYMENT",
+        amount: "-" + paid,
+        openAmount: "0.00", // fully applied to the charge below
+        dueDate: null, // a credit has nothing to fall due
+        effectiveDate: sevenDaysAgo,
+        tender: "CHECK",
+        externalRef: "CHQ-100417",
+        memo: "Seeded counter payment",
+      },
+    });
+    await p.ledgerApplication.create({
+      data: { utilityId: UID, creditId: payment.id, debitId: payTarget.id, amount: paid },
+    });
+    await p.ledgerEntry.update({
+      where: { id: payTarget.id },
+      data: { openAmount: (owed - Number(paid)).toFixed(2) },
+    });
+
+    // And one that bounced, so the reversed state is visible on the
+    // Payments screen. Modelled as received and returned before
+    // allocation touched it: the reversal consumes the payment in full,
+    // both open amounts land on zero, and the balance is therefore
+    // unmoved -- which is what an NSF on an unallocated payment does.
+    const bounced = await p.ledgerEntry.create({
+      data: {
+        utilityId: UID,
+        accountId: payTarget.accountId,
+        type: "PAYMENT",
+        amount: "-50.00",
+        openAmount: "0.00", // consumed by its reversal
+        dueDate: null,
+        effectiveDate: threeDaysAgo,
+        tender: "CHECK",
+        externalRef: "CHQ-100418",
+        memo: "Seeded payment, returned unpaid",
+      },
+    });
+    const nsf = await p.ledgerEntry.create({
+      data: {
+        utilityId: UID,
+        accountId: payTarget.accountId,
+        type: "REVERSAL",
+        amount: "50.00",
+        openAmount: "0.00", // settled against the payment it reverses
+        dueDate: null,
+        effectiveDate: new Date(),
+        reversesId: bounced.id,
+        memo: "Returned unpaid (NSF)",
+      },
+    });
+    await p.ledgerApplication.create({
+      data: { utilityId: UID, creditId: bounced.id, debitId: nsf.id, amount: "50.00" },
+    });
+
+    // Recompute from the ledger rather than adjusting by hand, exactly as
+    // the posting path does.
+    const open = await p.ledgerEntry.aggregate({
+      where: { utilityId: UID, accountId: payTarget.accountId },
+      _sum: { openAmount: true },
+    });
+    const oldest = await p.ledgerEntry.findFirst({
+      where: { utilityId: UID, accountId: payTarget.accountId, openAmount: { gt: 0 }, dueDate: { not: null } },
+      orderBy: { dueDate: "asc" },
+      select: { dueDate: true },
+    });
+    await p.account.update({
+      where: { id: payTarget.accountId },
+      data: {
+        balance: (open._sum.openAmount ?? 0).toString(),
+        lastDueDate: oldest?.dueDate ?? null,
+      },
+    });
+    console.log("  2 payments (one part-paying a bill, one reversed NSF)");
+  }
 
   const testUsers = [
     { id: "00000000-0000-4000-8000-000000000091", email: "sysadmin@utility.com", name: "Sarah Mitchell", roleIdx: 0 },

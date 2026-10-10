@@ -1,7 +1,13 @@
 import { Prisma } from "@utility-cis/shared/src/generated/prisma";
 import { prisma } from "../lib/prisma.js";
 import { auditCreate } from "../lib/audit-wrap.js";
-import { EVENT_TYPES } from "@utility-cis/shared";
+import { paginatedTenantList } from "../lib/pagination.js";
+import {
+  EVENT_TYPES,
+  billSortFields,
+  type BillQuery,
+  type PaginatedResponse,
+} from "@utility-cis/shared";
 
 /**
  * Slice 5b.2 — per-Account Bill aggregation.
@@ -60,6 +66,13 @@ export interface BillSummary {
   total: string;
   billNumber: string;
   createdAt: Date;
+  /**
+   * When this bill became a receivable, or null if it has not. A bill is
+   * a calculation until it is posted; only then does it move a balance.
+   * Every consumer of a bill needs to tell those apart, so it belongs on
+   * the summary rather than being fetched separately.
+   */
+  postedAt: Date | null;
 }
 
 export interface BillWithSegments extends BillSummary {
@@ -293,6 +306,7 @@ async function assembleBillWithSegments(
     total: bill.total.toFixed(4),
     billNumber: bill.billNumber,
     createdAt: bill.createdAt,
+    postedAt: bill.postedAt,
     segments: bill.segments.map((s) => ({
       id: s.id,
       segmentNumber: s.segmentNumber,
@@ -313,6 +327,186 @@ async function assembleBillWithSegments(
       })),
     })),
   };
+}
+
+/** A bill in the tenant-wide list, carrying who it belongs to. */
+export interface BillListRow extends BillSummary {
+  account: {
+    id: string;
+    accountNumber: string;
+    customerName: string | null;
+  };
+  billingCycleName: string | null;
+  /**
+   * The receivable this bill became, or null while it is unposted.
+   *
+   * `openAmount` is what is still owed on this charge, which is not
+   * `total` — §4.6 keeps the two authoritative for different things, and
+   * a part-paid bill of $64.20 with $15 left is not a $15 bill. The entry
+   * id is here because reversal is entry-level, not bill-level: a caller
+   * cannot reverse a bill, only the charge it raised.
+   */
+  charge: { entryId: string; openAmount: string; reversed: boolean } | null;
+}
+
+/**
+ * The tenant-wide bill list.
+ *
+ * Exists because every other bill route is account-scoped or single-id,
+ * so a bill number could not be looked up without already knowing which
+ * account it belonged to — the one thing a caller reading a bill aloud
+ * does not know.
+ *
+ * Returns the account number and customer name per row rather than ids
+ * alone: a list of bill numbers against account uuids is unusable for the
+ * lookup this list exists to serve.
+ */
+export async function listBills(
+  utilityId: string,
+  query: BillQuery,
+): Promise<PaginatedResponse<BillListRow>> {
+  const where: Record<string, unknown> = { utilityId };
+
+  if (query.accountId) where.accountId = query.accountId;
+  if (query.billingCycleId) where.billingCycleId = query.billingCycleId;
+
+  // Tri-state. `undefined` must not collapse to either branch, or the
+  // list silently hides half the bills.
+  if (query.posted !== undefined) {
+    where.postedAt = query.posted ? { not: null } : null;
+  }
+
+  if (query.from || query.to) {
+    const range: Record<string, Date> = {};
+    if (query.from) range.gte = new Date(query.from);
+    // Both bounds are inclusive. A plain `lte` is correct here only
+    // because `bill.billDate` is `@db.Date` — it carries no time, so
+    // midnight on the 30th is the whole of the 30th. If that column ever
+    // becomes a timestamp this has to become `lt` the following day, or
+    // the final day's bills drop out of every range query.
+    if (query.to) range.lte = new Date(query.to);
+    where.billDate = range;
+  }
+
+  if (query.search) {
+    where.billNumber = { contains: query.search, mode: "insensitive" };
+  }
+
+  const page = await paginatedTenantList<
+    Prisma.BillGetPayload<{
+      include: {
+        account: {
+          select: {
+            id: true;
+            accountNumber: true;
+            customer: {
+              select: {
+                customerType: true;
+                firstName: true;
+                lastName: true;
+                organizationName: true;
+              };
+            };
+          };
+        };
+        billingCycle: { select: { name: true } };
+        ledgerEntries: {
+          select: {
+            id: true;
+            openAmount: true;
+            _count: { select: { reversedBy: true } };
+          };
+        };
+      };
+    }>
+  >(prisma.bill, where, query, {
+    allowedSorts: billSortFields,
+    include: {
+      account: {
+        select: {
+          id: true,
+          accountNumber: true,
+          customer: {
+            select: {
+              customerType: true,
+              firstName: true,
+              lastName: true,
+              organizationName: true,
+            },
+          },
+        },
+      },
+      billingCycle: { select: { name: true } },
+      // Only BILL_CHARGE. A bill that netted negative posted an
+      // ADJUSTMENT_CREDIT instead, and waiver credits can also carry a
+      // billId, so widening this would let an unrelated credit be
+      // mistaken for the bill's own charge.
+      ledgerEntries: {
+        where: { type: "BILL_CHARGE" },
+        select: {
+          id: true,
+          openAmount: true,
+          _count: { select: { reversedBy: true } },
+        },
+        take: 1,
+      },
+    },
+  });
+
+  return {
+    ...page,
+    data: page.data.map((b) => ({
+      id: b.id,
+      utilityId: b.utilityId,
+      accountId: b.accountId,
+      billingCycleId: b.billingCycleId,
+      periodStart: b.periodStart,
+      periodEnd: b.periodEnd,
+      billDate: b.billDate,
+      dueDate: b.dueDate,
+      subtotal: b.subtotal.toFixed(4),
+      taxes: b.taxes.toFixed(4),
+      credits: b.credits.toFixed(4),
+      total: b.total.toFixed(4),
+      billNumber: b.billNumber,
+      createdAt: b.createdAt,
+      postedAt: b.postedAt,
+      account: {
+        id: b.account.id,
+        accountNumber: b.account.accountNumber,
+        customerName: displayCustomerName(b.account.customer),
+      },
+      billingCycleName: b.billingCycle?.name ?? null,
+      charge: b.ledgerEntries[0]
+        ? {
+            entryId: b.ledgerEntries[0].id,
+            openAmount: b.ledgerEntries[0].openAmount.toFixed(2),
+            reversed: b.ledgerEntries[0]._count.reversedBy > 0,
+          }
+        : null,
+    })),
+  };
+}
+
+/**
+ * One name for a customer who is either a person or an organisation.
+ * Returns null rather than an empty string when neither is usable, so the
+ * caller decides how to render "unknown" instead of inheriting a blank.
+ */
+function displayCustomerName(
+  customer: {
+    customerType: string;
+    firstName: string | null;
+    lastName: string | null;
+    organizationName: string | null;
+  } | null,
+): string | null {
+  if (!customer) return null;
+  if (customer.customerType === "ORGANIZATION") {
+    return customer.organizationName ?? null;
+  }
+  const name = `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim();
+  return name === "" ? null : name;
 }
 
 export async function listBillsForAccount(
@@ -338,6 +532,7 @@ export async function listBillsForAccount(
     total: b.total.toFixed(4),
     billNumber: b.billNumber,
     createdAt: b.createdAt,
+    postedAt: b.postedAt,
   }));
 }
 

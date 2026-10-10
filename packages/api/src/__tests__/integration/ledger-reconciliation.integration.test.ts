@@ -97,11 +97,43 @@ async function makeBill(total: string, dueDate: string): Promise<string> {
   return bill.id;
 }
 
+/**
+ * Assert the books balance AND that the check actually looked at something.
+ *
+ * `drift: []` on its own is the ambiguous result: it is what a clean
+ * ledger returns, and also what a check that could see no accounts at all
+ * returns. Pinning `checked` separates the two, so a regression that
+ * blinds the query — a dropped tenant context, a WHERE that matches
+ * nothing — fails here instead of reporting healthy books.
+ */
+async function expectReconciles(utility: string): Promise<void> {
+  const report = await recon.reconcileBalances(utility);
+  expect(report.drift).toEqual([]);
+  expect(report.checked).toBeGreaterThan(0);
+}
+
 describe("reconcileBalances", () => {
+  it("counts every account it examined, drift or not", async () => {
+    const { prisma } = prismaImports;
+    const real = await prisma.account.count({ where: { utilityId } });
+    const report = await recon.reconcileBalances(utilityId);
+    // Not >0: the count has to be the true population, or a query that
+    // examined one account out of hundreds would still look reassuring.
+    expect(report.checked).toBe(real);
+    expect(report.checked).toBeGreaterThan(0);
+  });
+
+  it("reports checked: 0 for a tenant with no accounts rather than implying health", async () => {
+    const barren = "00000000-0000-4000-8000-0000000000cc";
+    const report = await recon.reconcileBalances(barren);
+    expect(report.drift).toEqual([]);
+    expect(report.checked).toBe(0);
+  });
+
   it("reports no drift after a posting", async () => {
     const billId = await makeBill("31.4100", "2026-06-14");
     await posting.postBill(utilityId, ACTOR, "Tester", billId);
-    await expect(recon.reconcileBalances(utilityId)).resolves.toEqual([]);
+    await expectReconciles(utilityId);
   });
 
   it("detects a hand-corrupted cache", async () => {
@@ -110,7 +142,7 @@ describe("reconcileBalances", () => {
     await posting.postBill(utilityId, ACTOR, "Tester", billId);
     await prisma.account.update({ where: { id: accountId }, data: { balance: "999.99" } });
 
-    const drift = await recon.reconcileBalances(utilityId);
+    const { drift } = await recon.reconcileBalances(utilityId);
     expect(drift).toHaveLength(1);
     expect(drift[0]!.cached).toBe("999.99");
     expect(drift[0]!.ledger).toBe("31.41");
@@ -150,11 +182,11 @@ describe("reconcileBalances", () => {
     const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
     expect(account.balance.toFixed(2)).toBe("0.00");
     expect(account.lastDueDate).toBeNull();
-    await expect(recon.reconcileBalances(utilityId)).resolves.toEqual([]);
+    await expectReconciles(utilityId);
   });
 
   it("does not report an account with no entries and a zero balance", async () => {
-    const drift = await recon.reconcileBalances(utilityId);
+    const { drift } = await recon.reconcileBalances(utilityId);
     expect(drift.map((d) => d.accountNumber)).not.toContain("RECON-EMPTY");
     expect(drift).toEqual([]);
   });
@@ -164,7 +196,7 @@ describe("reconcileBalances", () => {
     const empty = await prisma.account.findFirstOrThrow({ where: { utilityId, accountNumber: "RECON-EMPTY" } });
     await prisma.account.update({ where: { id: empty.id }, data: { balance: "412.80" } });
     try {
-      const drift = await recon.reconcileBalances(utilityId);
+      const { drift } = await recon.reconcileBalances(utilityId);
       expect(drift).toEqual([
         { accountId: empty.id, accountNumber: "RECON-EMPTY", cached: "412.80", ledger: "0.00" },
       ]);
@@ -180,8 +212,8 @@ describe("reconcileBalances", () => {
       data: { utilityId: other, accountNumber: "RECON-OTHER", accountType: "RESIDENTIAL", status: "ACTIVE", billingCycleId, balance: "5.00" },
     });
     try {
-      await expect(recon.reconcileBalances(utilityId)).resolves.toEqual([]);
-      const drift = await recon.reconcileBalances(other);
+      await expectReconciles(utilityId);
+      const { drift } = await recon.reconcileBalances(other);
       expect(drift.map((d) => d.accountId)).toEqual([stray.id]);
     } finally {
       await prisma.account.delete({ where: { id: stray.id } });
@@ -354,7 +386,7 @@ describe("reconcileBalances", () => {
       }
 
       // Reconciliation holds throughout...
-      await expect(recon.reconcileBalances(utilityId)).resolves.toEqual([]);
+      await expectReconciles(utilityId);
       // ...and the cache equals the independent model, not just the ledger.
       const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
       expect(Math.round(Number(account.balance) * 100)).toBe(modelBalance);

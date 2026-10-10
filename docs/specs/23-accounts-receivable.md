@@ -1,7 +1,7 @@
 # Accounts Receivable
 
 **Module:** 23 — Accounts Receivable
-**Status:** Phase 3 — slices 1 (ledger and posting), 2 (payments, allocation, reversal) and 3 (fees, adjustments, reason codes) shipped; slices 4–6 outstanding. No UI yet: the surface is ten API endpoints, and the operator screens land in slice 4.
+**Status:** Phase 3 — slices 1 (ledger and posting), 2 (payments, allocation, reversal), 3 (fees, adjustments, reason codes) and 4a (the account AR tab) shipped; 4b and slices 5–6 outstanding. Twelve API endpoints, and the account AR tab is the first user interface.
 **Entities:** `LedgerEntry`, `LedgerApplication`, `LedgerReasonDef`, plus columns on existing entities (`Bill.postedAt`, `Account.balance`, `Account.lastDueDate`, `Account.autoPostBills`, `TenantConfig.autoPostBills`).
 
 ## Authority
@@ -66,7 +66,10 @@ account.balance   = SUM(openAmount) over the account's entries
 | POST | `/api/v1/accounts/:id/adjustments` | `ar_adjustments:CREATE` | A charge raised by hand. Same shape without `assessedOnId`. |
 | POST | `/api/v1/accounts/:id/waivers` | `ar_adjustments:EDIT` | Forgives part or all of one nominated charge. Requires `debitId`. The excess stays open as a refund due and does not spill onto other charges. |
 | POST | `/api/v1/accounts/:id/write-offs` | `ar_adjustments:EDIT` | Same mechanics, recorded as bad debt rather than a concession. |
-| GET | `/api/v1/ar/reconciliation` | `accounts:VIEW` | Proof, not assertion: every account whose cached `balance` differs from `SUM(open_amount)`. `{ ok: true, drift: [] }` when the cache is correct. |
+| GET | `/api/v1/bills` | `accounts:VIEW` | The tenant-wide bill list, added in slice 4b. Filters on `accountId`, `billingCycleId`, an inclusive `from`/`to` on `billDate`, and a tri-state `posted`; `search` matches the bill number. Returns the account number, customer name, cycle name and `postedAt` per row, because a list of bill numbers against account uuids cannot serve the lookup it exists for. Same gate as the account-scoped list it generalises. |
+| GET | `/api/v1/payments` | `payments:VIEW` | The tenant-wide payments list, added in slice 4b. Filters on `accountId`, `tender` and an inclusive `from`/`to` over `effectiveDate` — the day the money was taken, which is what a deposit is tied out against, not the day the row was written; `search` matches `externalRef`, the cheque or lockbox reference an operator holds. Amounts come back **positive** (stored negative, because a payment is a credit). Carries `totalReceived` for the whole filter, not the page. Reading receipts is `VIEW`; taking money stays `CREATE`. |
+| GET | `/api/v1/accounts/:id/ledger` | `accounts:VIEW` | The account's entries for display: the reason label, the bill number, the tender, and reversal links resolved in BOTH directions so a reader is not left pairing rows by amount. Returns the cached `balance` and an account-wide `openCount` alongside; capped at 500 rows, with `openOnly` and `limit`. On `accounts:VIEW` rather than a writing module, because a CSR who may not take a payment still needs to see what is owed. |
+| GET | `/api/v1/ar/reconciliation` | `accounts:VIEW` | Proof, not assertion: every account whose cached `balance` differs from `SUM(open_amount)`. Returns `{ ok, checked, drift }`. `checked` is the number of accounts examined, and it is what makes an empty `drift` mean anything — a check that could see no accounts returns the same empty list as a clean ledger, so `ok: true` on its own is not evidence. Both statements run inside one `withTenant`, on one connection, so the count cannot reassure about a population the drift query never saw. |
 
 Posting is gated on the same permission as generating a bill (`POST /api/v1/accounts/:id/bills`): generation already posts when auto-post is on, so posting must require no more authority than generating. The two reads are account data, not tenant configuration, so they sit on `accounts:VIEW`. The two money-moving routes sit on the `payments` module instead: taking money and reversing it is a different authority from reading or generating against an account, which is the line design §8 draws. Reversal is EDIT rather than CREATE because it changes the standing of an entry that already exists. `ar_adjustments` arrives in slice 3 with the credits, waivers and write-offs it gates.
 
@@ -92,7 +95,105 @@ Posting is gated on the same permission as generating a bill (`POST /api/v1/acco
 
 ## UI
 
-Still nothing after slice 3 — the surface is the eleven API routes above, and every one of them is reachable only by HTTP today. The account AR tab (ledger, aging summary, record-payment, adjust/waive) and the unposted-bills list with a Post action land in slice 4, per design §8. Worth stating plainly: an operator cannot record a payment or reverse one from the application yet.
+**The account AR tab ships in slice 4a.** `/accounts/[id]` gains an **AR** tab beside Bills showing what the account owes and every entry behind it:
+
+| Shown | Why it is rendered that way |
+|---|---|
+| Amount due / In credit / Nothing owed | A negative balance is never shown as "Amount due −$20.00"; the words carry the sign and the figure is unsigned |
+| Charged and Still owed as separate columns | A $40 charge with $15 outstanding is not a $15 charge. A settled row shows a dash, not $0.00 |
+| A credit as `($25.00)` | The accounting convention, rather than a minus sign a reader must notice |
+| **reversed** / **reverses an earlier entry** markers | Both sides of a reversal stay on the ledger, so unmarked they read as a double charge |
+| Unposted-bills note | An unposted bill is a calculation, not a debt, so it is context for the balance — it explains a figure lower than the customer expects — and says the bills are "not counted below". It carries no Post action: a tab listing what is owed cannot show an unposted bill among its rows, so posting belongs on Bills, where the bill lives. Links to `/bills?posted=false`. On `accounts:VIEW`, matching the endpoint — the earlier `accounts:EDIT` gate was copied from the Post button and hid the note from the read-only users it most helps |
+
+| Action | Gate |
+|---|---|
+| Record Payment | `payments:CREATE` |
+| Reverse an entry | `payments:EDIT` |
+| Raise Fee | `ar_adjustments:CREATE` |
+| Raise Charge | `ar_adjustments:CREATE` |
+| Waive / Write off a charge | `ar_adjustments:EDIT` |
+
+The reason dropdown was unreadable before any of this mattered: the app declared no `color-scheme`, so Chrome painted the native `<option>` popup light while the options inherited the dark theme's near-white `--text-primary`. Every `<select>` in the app — 38 files' worth — opened looking empty, with the entries present and invisible. The popup is drawn by the browser outside the page, so nothing applied to the `<select>` itself could reach it. Fixed in `globals.css` with `color-scheme: dark` on `:root` and `light` under `[data-theme="light"]`, plus an explicit `select option` colour pair as insurance on platforms that ignore the hint.
+
+An empty reason dropdown distinguishes two facts that the dialog previously conflated: a tenant with no reason codes, and a lookup that failed. Swallowing the error into an empty list made a failed request read as "this utility has no reason codes", which sent anyone diagnosing it looking for missing data when the call had never succeeded. The genuinely-empty case now offers a button that calls `POST /api/v1/ar/reasons/seed-defaults` — the endpoint's first UI; the message used to instruct the operator to POST to it themselves — and the failure case offers a retry instead, since seeding would not fix it.
+
+`AdjustDialog` takes an `AdjustTarget` — id, both amounts, and a label — rather than a whole `LedgerRow`. The bill list is the second caller and the charge arrives there as four fields, so the wider type would have forced it to invent eleven nulls for a shape the dialog does not read.
+
+**Raise Charge** is separate from **Raise Fee** on purpose, and was an orphan endpoint until slice 4b: `POST /api/v1/accounts/:id/adjustments` shipped in slice 3 with no caller. The two stay apart because the ledger keeps them apart — a `FEE` ages on its own due date and is collected *before* bills in the §6.3 order, while an `ADJUSTMENT_DEBIT` is a correction to what was billed and is paid after fees and before bill charges. One button for both would let the operator's choice of words set an allocation order they cannot see, and each cites its own reason type so the dropdown already refuses to mix them.
+
+Waive and Write off appear only on an open charge — a credit cannot be forgiven and a settled charge has nothing left to forgive — and the reason dropdown is filtered per act, so a waiver is never offered a write-off reason. Reverse is offered only where it can succeed: not on an entry already reversed, and not on a `REVERSAL`.
+
+### Settings → Automation: auto-post
+
+`autoPostBills` is exposed as a toggle in its own **Billing** section on `/settings/automation`, not in the Schedulers card, because it is not a background job — it runs inside the bill-generation transaction, which is why a bill and its receivable commit together or not at all. It resolves `account.autoPostBills ?? tenantConfig.autoPostBills ?? true`, so the tenant toggle moves every account that has not explicitly opted out.
+
+It shipped in slice 1 as an orphan field: the service returned it and the patch schema accepted it, but no screen drew a control, so manual posting was reachable only by SQL and the AR tab's unposted-bills strip described a state no tenant could enter. A drift guard now derives the editable key list from `AutomationConfigSchema` and fails if a setting is never rendered.
+
+**The per-account override has no UI yet** — `account.autoPostBills` is not on the account API's read or write surface, so an account cannot yet opt out of a tenant default.
+
+### Billing & AR → Bills
+
+`/bills` on `accounts:VIEW`, rendering `GET /api/v1/bills`. The tenant-wide list, and the answer to a CSR holding a bill number: search by bill number is the primary control, not a refinement.
+
+| Decision | Why |
+|---|---|
+| Clicking the bill number opens the bill (`BillDetailDialog`), not the account | A bill number is what a caller reads out. Landing on the account page would make the operator find the bill a second time. The account number beside it still links to the account |
+| Status column, and the **Post** action, live here | A bill is a calculation until posted; only then is it owed. This is the only screen that can show an unposted bill, so it is the only screen the action can sensibly sit on. Posting stays on `accounts:EDIT` |
+| **Still owed** shown beside **Total** | A $64.20 bill with $15 left is not a $15 bill. §4.6 keeps `bill.total` and the ledger authoritative for different things, and a CSR on a call needs the second figure without doing arithmetic. A dash where no charge exists, never $0.00, which reads as settled |
+| **Take payment** is labelled against the account | `recordPayment` takes an `accountId` and `recordPaymentSchema` carries no `billId`. §6.3 allocates oldest-first across FEE → ADJUSTMENT_DEBIT → BILL_CHARGE, so money taken here may land on an older fee. A per-bill "pay this bill" button would misstate where it goes |
+| **Reverse**, not Void | There is no void and no unpost. §3.5: a wrong charge is reversed, both sides stay on the ledger, and the bill itself is unchanged. Reversal is entry-level, so the list returns the bill's `BILL_CHARGE` entry id. The confirm names the alternative — waive a charge that was correct — so the three acts stay distinct at the point of action |
+| **Waive** and **Write off** on the bill's charge | Both take a `debitId`, and the bill's `BILL_CHARGE` entry is one. Scoped to what is still open, not the bill total, and the reason list is filtered per act so a waiver is never offered a write-off reason |
+| Actions offered only where they can succeed | Post before posting; payment, reverse, waive and write off only after. Nothing is owed on an unposted bill. No Reverse on a charge already reversed; no Waive or Write off unless the charge is open — a settled charge has nothing left to forgive, a reversed one no longer stands |
+| `charge` is `BILL_CHARGE` only | A bill that netted negative posted an `ADJUSTMENT_CREDIT`, and waiver credits can also carry a `billId`, so widening the filter would let an unrelated credit be read as the bill's own charge |
+| Columns drop on narrow screens | Below 768px the table keeps Bill #, Customer, Still owed, Status and Actions; Account, Due and Total go, and Period goes below 1200px. Chosen by what a CSR cannot answer a call without — **Still owed survives and Total does not**, because the question on a call is what is outstanding, not what was first charged. Everything hidden stays one tap away in the bill dialog. This table is hand-rolled, so it uses the `col-hide-*` classes; a table on the shared `DataTable` declares the same thing as `hideBelow` on its column |
+| `posted` filter is tri-state | Omitted means every bill. A boolean defaulting either way would silently hide half the list. "Not posted" is the posting queue a manual-post tenant works daily |
+| Dates rendered from the ISO string, not `new Date()` | `new Date("2026-06-30")` is UTC midnight, which is the 29th west of Greenwich, so a bill would appear dated a day early |
+
+`to` and `from` are inclusive. A plain `lte` is correct only because `bill.billDate` is `@db.Date` and carries no time; if that column becomes a timestamp it must become `lt` the following day, or every range query drops its final day.
+
+### Billing → Payments
+
+`/payments` on `payments:VIEW`, rendering `GET /api/v1/payments`. Answers the question no screen could answer before — *what did we take, and does it agree with the bank* — because every payment view was scoped to one account, so counting a day's receipts meant visiting accounts one at a time.
+
+| Decision | Why |
+|---|---|
+| Opens on **today** | That is the question being asked by anyone who comes here at all |
+| `totalReceived` covers the **filter**, not the page | A daily total that stopped at the page boundary would be wrong the moment a day ran past 25 rows, and silently so |
+| **A reversed payment stays in the total** | A cheque banked on Monday and returned on Wednesday was in Monday's deposit. Netting it out of Monday would stop the figure agreeing with the bank, which is the total's only job. The row is struck through and badged `reversed`, and the card says so in words, so nobody reads the total as money still held |
+| Amounts shown positive | Stored negative because a payment is a credit; a receipts list is read by someone counting cash. Negated once, in the service |
+| Dates rendered from the ISO string | `new Date("2026-06-30")` is UTC midnight — the 29th west of Greenwich — so a receipt would appear a day early |
+
+**Not built, and deliberately:** no `Payment`, `PaymentBatch`, `Deposit` or cash-drawer model. A list with a date range and a total answers the tie-out question without inventing a batch granularity nobody has chosen yet. Add the batch when someone needs to *close* one — per day, per user or per drawer — not before.
+
+### Settings → Ledger Integrity
+
+`/settings/ledger-integrity` on `accounts:VIEW`, rendering `GET /api/v1/ar/reconciliation`.
+
+**It is not reconciliation, and it was wrongly named and wrongly placed when it shipped.** In utility billing that word means tying receipts to a bank deposit, or the AR subledger to a GL control account; this does neither, and the word is already carrying five other meanings in these specs — budget-billing true-up (07, 09), meter-read imports (08), water versus wastewater (09, Bozeman 141) and RAMS container inventory (12). Sitting in a **Billing & AR** menu under that label, it promised a CSR something the product does not have.
+
+What it actually is: an integrity check on a denormalisation. `account.balance` is a cache written inside the posting transaction so delinquency sweeps and list screens need not sum the ledger on every read, and a cache drifts when something writes around it — a manual SQL fix, a bad import, a future code path that skips `recomputeAccountCache`. An admin runs it after a migration or a repair. That is why it now sits in **Settings** beside Retention & Audit rather than in a menu a CSR works.
+
+The endpoint keeps its path. `reconcileBalances` reconciling a cache against its source is accurate engineering English, the route is unambiguous inside `/api/v1/ar/`, and no API path is read by the CSR the old label misled.
+
+**The nav entry and the endpoint are gated differently, on purpose.** The entry is on `settings`; the endpoint stays on `accounts:VIEW`.
+
+The endpoint cannot move. It was once gated on `tenant_profile`, and a tenant with the `accounts` module enabled but not that one lost the endpoint outright to `403 MODULE_DISABLED` — `ledger-routes.integration.test.ts` still carries that regression guard, and gating it on `settings` would reintroduce the same fault for any tenant without the settings module.
+
+The entry cannot stay on `accounts`. Every role but Portal Customer holds `accounts:VIEW` — CSR, Field Technician and Read-Only included — so the entry put an admin diagnostic in front of three roles that can do nothing about drift, and for a Field Technician it was the only Settings entry visible at all. Today `settings` holders are a strict subset of `accounts:VIEW` holders so nothing goes dead; a tenant granting `settings` without `accounts` would meet a 403, which is the lesser fault and the one that affects nobody today.
+
+The healthy result is the usual result, so the page is built around reassurance rather than as a work queue, and it has **three** outcomes, not two:
+
+| Outcome | Rendered as | Why it is separate |
+|---|---|---|
+| `checked > 0`, no drift | **In balance**, "All N accounts match the ledger" | The count is the evidence. "No drift" without a population is not a claim. The copy says *match the ledger*, not *reconcile* — renaming the page while the body still said "reconcile" would have left the misleading word exactly where a reader looks |
+| `checked === 0` | **Inconclusive**, not green | An empty drift list is also what a check that could see no accounts returns. Reported as proving nothing, so a blinded check cannot read as a clean bill of health |
+| drift present | **Out of balance**, "N of M accounts do not match the ledger", with stored / ledger / signed difference per account | Linked to the account's AR tab. Signed with an explicit `+`/`−`, not the brackets the AR tab uses for credits, because this is a discrepancy and not a credit |
+
+**Refunds do not exist.** `LedgerEntryType` has seven values and none of them is a refund, and there is no endpoint. "Refund due" is only a *state* — an open credit, from an overpayment or from a waiver exceeding the charge it named (§6.5). Nothing disburses it, so an account can sit in credit indefinitely. Closing this needs a decision rather than code: a `REFUND` debit that consumes open credits would keep `balance = SUM(open_amount)` true, but money leaving the building also wants a disbursement record — tender, cheque number, issued date — to reconcile against a bank.
+
+**Still outstanding, deferred to slice 4b with reasons:** the statement view (§7.1, needs bill-period boundaries), the aging summary (§7.2, belongs with the dashboard widget that consumes it, and sits under Collections rather than here because collections staff are who use it), the portal amount due, reason-code CRUD (belongs in Configuration beside Account Types, not in a work-queue section), and the per-account auto-post override. Design §8 lists the aging summary as part of the AR tab; it is not in 4a, and that is a known gap rather than an oversight.
+
+**Cross-account gap, found while placing the nav:** every bill and ledger route except reconciliation is account-scoped or single-id — `routes/bills.ts` holds exactly one route, `GET /api/v1/bills/:id` — so there is no tenant-wide list of bills or ledger entries, and `billNumber` is searchable from no endpoint. A CSR holding a bill number cannot find that bill, and with auto-post off, finding unposted bills means visiting accounts one at a time. A **Bills** list with bill-number search and a **Posting Queue** are the next two entries in this section, and both need new endpoints.
 
 ## Slice roadmap (design §10)
 
