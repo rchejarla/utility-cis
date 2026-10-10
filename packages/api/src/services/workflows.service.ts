@@ -527,6 +527,69 @@ export async function moveOut(
       });
     }
 
+    /**
+     * Return the deposit, if asked.
+     *
+     * `refundDeposit` has been on this payload and on the move-out form
+     * since the workflow shipped, and nothing read it — an operator
+     * ticked a box and no money moved. This is where it starts meaning
+     * something, and it has to be here rather than as a follow-up step
+     * because closing an account is exactly what strands a deposit: the
+     * absorb-into-next-charge mechanism that makes a credit harmless on
+     * an active account has no next charge to work with.
+     *
+     * In THIS transaction, so a move-out that fails does not leave a
+     * cheque recorded against an account that was never closed.
+     *
+     * Deliberately NOT applied to the final bill first. The deposit pool
+     * is excluded from allocation on purpose, and deciding to withhold
+     * against what is owed is a policy judgement nobody has made here —
+     * so the full amount is returned and what the account still owes is
+     * reported back, for the operator to see rather than discover.
+     */
+    let depositReturn: {
+      refunded: string;
+      entryId: string | null;
+      stillOwed: string;
+    } | null = null;
+    if (data.refundDeposit) {
+      const { recordRefund, availableToRefund } = await import("./ar/refund.service.js");
+      const held = await availableToRefund(tx, utilityId, data.accountId, "DEPOSIT");
+      if (held.gt(0)) {
+        const issued = await recordRefund(
+          utilityId,
+          actorId,
+          actorName,
+          data.accountId,
+          {
+            amount: held.toFixed(2),
+            source: "DEPOSIT",
+            tender: data.depositTender,
+            memo: `Deposit returned at move-out from premise ${data.premiseId}`,
+            issuedOn: data.moveOutDate,
+          },
+          tx,
+        );
+        depositReturn = {
+          refunded: issued.amount,
+          entryId: issued.entryId,
+          stillOwed: issued.balance,
+        };
+      } else {
+        // Asked for, nothing held. Reported rather than silent, so the
+        // operator is not left believing a cheque is coming.
+        const current = await tx.account.findFirstOrThrow({
+          where: { id: data.accountId, utilityId },
+          select: { balance: true },
+        });
+        depositReturn = {
+          refunded: "0.00",
+          entryId: null,
+          stillOwed: current.balance.toFixed(2),
+        };
+      }
+    }
+
     await writeAuditRow(
       tx,
       { utilityId, actorId, actorName, entityType: "Workflow" },
@@ -539,10 +602,16 @@ export async function moveOut(
         moveOutDate: data.moveOutDate,
         closedAgreementIds: activeAgreements.map((a) => a.id),
         accountClosed: Boolean(account),
+        depositReturned: depositReturn?.refunded ?? null,
       },
     );
 
-    return { accountId: data.accountId, finalizedAgreements: activeAgreements, account };
+    return {
+      accountId: data.accountId,
+      finalizedAgreements: activeAgreements,
+      account,
+      depositReturn,
+    };
   });
 
   return result;

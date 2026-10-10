@@ -257,6 +257,43 @@ export const writeOffSchema = creditAgainstDebit;
 export type WaiveInput = z.infer<typeof waiveSchema>;
 export type WriteOffInput = z.infer<typeof writeOffSchema>;
 
+/**
+ * Issuing a refund.
+ *
+ * `source` has no default on purpose. Returning an overpayment and
+ * releasing a security deposit are different acts with different
+ * triggers, and the two pools are kept apart everywhere else in this
+ * module; a default would quietly pick one and spend the wrong money.
+ *
+ * `amount` is a positive string, like a payment's. The service stores it
+ * positive, because a refund is a debit that discharges a credit the
+ * customer already held rather than granting a new one.
+ */
+export const refundSchema = z
+  .object({
+    amount: z
+      .string()
+      .regex(/^\d+(\.\d{1,2})?$/, "amount must be a positive number with at most 2 decimals")
+      .refine((s) => parseFloat(s) > 0, "amount must be greater than zero"),
+    source: z.enum(["CREDIT", "DEPOSIT"]),
+    tender: z.enum(["CARD", "ACH", "CASH", "CHECK", "LOCKBOX"]).optional(),
+    /** Cheque number, ACH trace or card refund reference. */
+    externalRef: z.string().min(1).max(100).optional(),
+    /** The day the money left. Defaults to today in the service. */
+    issuedOn: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD")
+      .refine(
+        (s) => !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0, 10) === s,
+        "issuedOn is not a real date",
+      )
+      .optional(),
+    memo: z.string().max(500).optional(),
+  })
+  .strict();
+
+export type RefundInput = z.infer<typeof refundSchema>;
+
 export const receiptSortFields = ["effectiveDate", "amount", "tender", "postedAt"] as const;
 
 /** The two kinds of money that arrive. Both are receipts; neither is the other. */
