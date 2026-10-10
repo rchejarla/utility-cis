@@ -4,6 +4,7 @@ import {
   recordPaymentSchema,
   receiptQuerySchema,
   refundSchema,
+  disbursementQuerySchema,
   reverseEntrySchema,
   assessFeeSchema,
   adjustSchema,
@@ -16,7 +17,7 @@ import { prisma } from "../lib/prisma.js";
 import { postBill } from "../services/ar/posting.service.js";
 import { reconcileBalances } from "../services/ar/reconciliation.service.js";
 import { recordPayment, listReceipts } from "../services/ar/payment.service.js";
-import { recordRefund } from "../services/ar/refund.service.js";
+import { recordRefund, listDisbursements } from "../services/ar/refund.service.js";
 import { reverseEntry } from "../services/ar/reversal.service.js";
 import { assessFee } from "../services/ar/fee.service.js";
 import { adjustDebit, waive, writeOff } from "../services/ar/adjustment.service.js";
@@ -160,6 +161,27 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
    * ledger in a request object — spec 10 records that reasoning for
    * waivers, and posting here is just as final.
    */
+  /**
+   * The tenant-wide disbursements list — money that LEFT.
+   *
+   * On `payments:VIEW`, the same authority as reading what came in.
+   * Reading is reading; issuing a refund stays on CREATE.
+   *
+   * A separate path from `/receipts` rather than a direction flag on it,
+   * because the two totals are tied out against different things: a
+   * bank deposit slip only contains money in, a cheque run only money
+   * out. One endpoint serving both would invite one screen netting them,
+   * which destroys both reconciliations.
+   */
+  app.get(
+    "/api/v1/disbursements",
+    { config: { module: "payments", permission: "VIEW" } },
+    async (request, reply) => {
+      const q = disbursementQuerySchema.parse(request.query ?? {});
+      return reply.send(await listDisbursements(request.user.utilityId, q));
+    },
+  );
+
   app.post(
     "/api/v1/accounts/:id/refunds",
     { config: { module: "payments", permission: "CREATE" } },

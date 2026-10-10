@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
+import * as permModule from "@/lib/use-permission";
 import ReceiptsPage from "../page";
 
 /**
@@ -213,5 +214,92 @@ describe("Receipts page", () => {
     get.mockResolvedValue(payload([], "0.00", { PAYMENT: "0.00", DEPOSIT: "0.00" }));
     renderPage();
     expect(await screen.findByText(/No money received in this range/)).toBeInTheDocument();
+  });
+});
+
+/**
+ * Reversing from the receipts row.
+ *
+ * Tying out a day is when an NSF cheque or a keying error surfaces, and
+ * the screen marked reversed rows while offering no way to make one.
+ *
+ * Reverse, not refund: §3.5 keeps the acts apart, and the dialog says so
+ * in words, because the two are easy to confuse at exactly this moment.
+ */
+describe("Receipts page — reversing a receipt", () => {
+  const post = apiClient.post as unknown as ReturnType<typeof vi.fn>;
+
+  it("offers Reverse on a receipt that has not been reversed", async () => {
+    get.mockResolvedValue(payload([row()]));
+    renderPage();
+    expect(await screen.findByRole("button", { name: /^reverse$/i })).toBeInTheDocument();
+  });
+
+  it("offers no Reverse on an already-reversed receipt", async () => {
+    // reverseEntry refuses a second reversal, so a button could only
+    // produce an error.
+    get.mockResolvedValue(payload([row({ reversed: true })]));
+    renderPage();
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^reverse$/i })).toBeNull();
+  });
+
+  it("names the act and says what it is not, before doing it", async () => {
+    get.mockResolvedValue(payload([row()]));
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /^reverse$/i }));
+    expect(screen.getByText(/nothing is deleted/i)).toBeInTheDocument();
+    // The distinction that matters at this moment.
+    expect(screen.getByText(/not to give money back, which is a refund/i)).toBeInTheDocument();
+  });
+
+  it("posts the reversal against the entry, not the account", async () => {
+    get.mockResolvedValue(payload([row()]));
+    post.mockResolvedValue({ balance: "25.00", dependentFees: [] } as never);
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^reverse$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /reverse entry/i }));
+
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    expect(post.mock.calls[0]![0]).toBe("/api/v1/ledger-entries/p1/reverse");
+  });
+
+  /**
+   * The gate, which the rest of this file cannot see: vitest.setup.ts
+   * mocks usePermission to all-allowed, so every case above would pass
+   * with no gate at all. Narrowed here to VIEW only.
+   */
+  it("hides Reverse from a subject without payments:EDIT", async () => {
+    vi.spyOn(permModule, "usePermission").mockReturnValue({
+      canView: true,
+      canCreate: false,
+      canEdit: false,
+      canDelete: false,
+    });
+    try {
+      get.mockResolvedValue(payload([row()]));
+      renderPage();
+      expect(await screen.findByRole("table")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^reverse$/i })).toBeNull();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  /**
+   * §6.6: a fee assessed on a reversed entry is reported and never
+   * reversed with it. If the toast does not say so, the operator assumes
+   * the NSF fee went too.
+   */
+  it("says dependent fees still stand", async () => {
+    get.mockResolvedValue(payload([row()]));
+    post.mockResolvedValue({ balance: "40.00", dependentFees: [{ id: "f1" }] } as never);
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^reverse$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /reverse entry/i }));
+
+    expect(await screen.findByText(/1 fee assessed on this entry still stands/i)).toBeInTheDocument();
   });
 });

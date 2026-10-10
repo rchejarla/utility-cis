@@ -1204,3 +1204,58 @@ describe("POST /api/v1/accounts/:id/refunds", () => {
     expect(JSON.parse(res.body).error.code).toBe("ACCOUNT_NOT_FOUND");
   });
 });
+
+/**
+ * The tenant-wide disbursements list, at the HTTP boundary.
+ *
+ * `listDisbursements` is covered in disbursement-list.integration.test.ts.
+ * Only the wiring is testable here: the path, the strict query schema,
+ * and that reading what left is `payments:VIEW` — the same authority as
+ * reading what came in, while issuing stays on CREATE.
+ */
+describe("GET /api/v1/disbursements", () => {
+  it("returns the list and its total on payments:VIEW", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/disbursements",
+      headers: headers(VIEWER),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body).toHaveProperty("totalPaidOut");
+    // Both pools spelled out even when nothing was paid out.
+    expect(body.subtotals).toEqual({ CREDIT: "0.00", DEPOSIT: "0.00" });
+  });
+
+  it("refuses an unknown query key rather than ignoring it", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/disbursements?tendr=CHECK",
+      headers: headers(VIEWER),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  // There is no `type` here: REFUND is the only thing that leaves, and
+  // the pool is derived rather than filtered. A `type` that silently did
+  // nothing would be worse than its absence.
+  it("has no type filter to mistake for the receipts one", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/disbursements?type=REFUND",
+      headers: headers(VIEWER),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("is gated on payments:VIEW, not on accounts", async () => {
+    for (const sub of [ADJUSTER, NO_PERMS]) {
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/v1/disbursements",
+        headers: headers(sub),
+      });
+      expect(res.statusCode, `subject ${sub} must not reach disbursements`).toBe(403);
+    }
+  });
+});
