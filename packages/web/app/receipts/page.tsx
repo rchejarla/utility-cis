@@ -8,6 +8,7 @@ import { FilterBar } from "@/components/ui/filter-bar";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { useToast } from "@/components/ui/toast";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 /**
  * The tenant-wide receipts list.
@@ -65,8 +66,25 @@ const money = (s: string) =>
   Number(s).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export default function ReceiptsPage() {
-  const { canView } = usePermission("payments");
+  const { canView, canEdit: canReverse } = usePermission("payments");
   const { toast } = useToast();
+
+  /**
+   * Reversing from this row, because this is where an NSF is found.
+   *
+   * Tying out a day's takings is exactly when a returned cheque or a
+   * keying error surfaces, and the screen already MARKED reversed rows
+   * while offering no way to make one — so the operator had to go and
+   * find the account.
+   *
+   * Reverse, not refund. A payment taken in error is negated with both
+   * sides left on the ledger (§3.5); a refund discharges a credit the
+   * customer holds, which is a different act with a cheque attached. A
+   * Refund button here would invite the wrong one for the commonest
+   * case on this page.
+   */
+  const [reverseRow, setReverseRow] = useState<ReceiptRow | null>(null);
+  const [reversing, setReversing] = useState(false);
 
   const [page, setPage] = useState<ReceiptPage | null>(null);
   const [loading, setLoading] = useState(true);
@@ -114,6 +132,33 @@ export default function ReceiptsPage() {
   useEffect(() => {
     if (canView) void load();
   }, [canView, load]);
+
+  async function confirmReverse() {
+    if (!reverseRow) return;
+    setReversing(true);
+    try {
+      const res = await apiClient.post<{
+        balance: string;
+        dependentFees: { id: string }[];
+      }>(`/api/v1/ledger-entries/${reverseRow.id}/reverse`, {});
+      // Dependent fees are reported and never reversed automatically
+      // (§6.6), so say so — otherwise the operator assumes an NSF fee
+      // raised on this payment went with it.
+      const fees = res.dependentFees?.length ?? 0;
+      toast(
+        fees > 0
+          ? `Reversed. The account balance is now $${res.balance}. ${fees} fee${fees === 1 ? "" : "s"} assessed on this entry still stand${fees === 1 ? "s" : ""} — reverse them separately if they should go.`
+          : `Reversed. The account balance is now $${res.balance}.`,
+        "success",
+      );
+      setReverseRow(null);
+      void load();
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : "Could not reverse the entry", "error");
+    } finally {
+      setReversing(false);
+    }
+  }
 
   if (!canView) return <AccessDenied />;
 
@@ -237,6 +282,7 @@ export default function ReceiptsPage() {
                   <Th>Tender</Th>
                   <Th className="col-hide-sm">Reference</Th>
                   <Th style={{ textAlign: "right" }}>Amount</Th>
+                  {canReverse && <Th aria-label="Actions" />}
                 </tr>
               </thead>
               <tbody>
@@ -280,11 +326,39 @@ export default function ReceiptsPage() {
                         </span>
                       )}
                     </Td>
+                    {canReverse && (
+                      <Td style={{ textAlign: "right" }}>
+                        {/* Nothing offered on an already-reversed row:
+                            reverseEntry refuses a second reversal, so a
+                            button here could only produce an error. */}
+                        {!p.reversed && (
+                          <button onClick={() => setReverseRow(p)} style={ROW_BTN}>
+                            Reverse
+                          </button>
+                        )}
+                      </Td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+
+          {reverseRow && (
+            <ConfirmDialog
+              title="Reverse this receipt"
+              message={`${
+                reverseRow.type === "DEPOSIT" ? "Deposit" : "Payment"
+              } of $${money(reverseRow.amount)} on ${
+                reverseRow.account.accountNumber
+              } will be negated by a new entry. Nothing is deleted: both stay on the ledger, and anything this entry paid off becomes owed again. Use this for a returned cheque or a keying error — not to give money back, which is a refund.`}
+              confirmLabel={reversing ? "Reversing…" : "Reverse entry"}
+              confirmDisabled={reversing}
+              destructive
+              onConfirm={confirmReverse}
+              onCancel={() => setReverseRow(null)}
+            />
+          )}
 
           {page.meta.pages > 1 && (
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 14 }}>
@@ -404,6 +478,17 @@ const REVERSED: React.CSSProperties = {
   background: "var(--danger)18",
   border: "1px solid var(--border)",
   borderRadius: 999,
+};
+const ROW_BTN: React.CSSProperties = {
+  padding: "3px 10px",
+  fontSize: 11,
+  fontWeight: 600,
+  background: "var(--bg-elevated)",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius)",
+  cursor: "pointer",
+  fontFamily: "inherit",
 };
 const PAGE_BTN = (disabled: boolean): React.CSSProperties => ({
   padding: "5px 12px",

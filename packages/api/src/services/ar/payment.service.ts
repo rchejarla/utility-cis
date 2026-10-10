@@ -10,6 +10,7 @@ import { prisma } from "../../lib/prisma.js";
 import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { lockAccount, recomputeAccountCache, type TxClient } from "./posting.service.js";
 import { applyCreditToDebits, type Application } from "./allocation.service.js";
+import { displayCustomerName } from "./customer-name.js";
 
 /**
  * Recording money received against an account.
@@ -274,21 +275,7 @@ export async function listReceipts(
   };
 }
 
-/**
- * One name for a customer who is either a person or an organisation.
- * Null rather than an empty string when neither is usable, so the caller
- * decides how to render "unknown" instead of inheriting a blank.
- */
-function displayCustomerName(
-  customer: {
-    customerType: string;
-    firstName: string | null;
-    lastName: string | null;
-    organizationName: string | null;
-  } | null,
-): string | null {
-  if (!customer) return null;
-  if (customer.customerType === "ORGANIZATION") return customer.organizationName ?? null;
-  const name = `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim();
-  return name === "" ? null : name;
-}
+// `displayCustomerName` moved to ./customer-name.ts when the
+// disbursements list needed it too: one list service importing a display
+// helper out of the other would say something untrue about how they
+// relate.

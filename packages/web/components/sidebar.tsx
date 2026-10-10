@@ -13,6 +13,7 @@ import {
   faUsers,
   faFileContract,
   faMoneyBill,
+  faMoneyBillTransfer,
   faCalendarDays,
   faDroplet,
   faClipboardList,
@@ -120,6 +121,18 @@ const navSections: NavSection[] = [
         // question.
         tooltip:
           "Payments and security deposits received across all accounts — a day's takings, for tying out against the bank",
+      },
+      {
+        href: "/disbursements",
+        label: "Disbursements",
+        icon: faMoneyBillTransfer,
+        module: "payments",
+        // The mirror of Receipts, and its own entry rather than a filter
+        // there: a receipts total ties out against a bank deposit slip,
+        // which holds only money in, and this one against a cheque run.
+        // One screen netting the two would break both reconciliations.
+        tooltip:
+          "Refunds and deposit returns across all accounts — what left the building, for tying out against the cheque run",
       },
     ],
   },

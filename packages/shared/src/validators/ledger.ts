@@ -343,3 +343,36 @@ export const receiptQuerySchema = z
 
 export type ReceiptQuery = z.infer<typeof receiptQuerySchema>;
 export type ReceiptType = (typeof receiptTypes)[number];
+
+/**
+ * Query for the tenant-wide disbursements list — money that LEFT.
+ *
+ * The mirror of `receiptQuerySchema`, with no `type`: `REFUND` is the
+ * only thing that leaves today, and the pool it drew from is derived
+ * from the credits it discharged rather than filtered on here. If a
+ * second outbound type ever exists it joins this list and gains a
+ * `type`, rather than getting a third screen.
+ *
+ * `from`/`to` bound `effectiveDate` — the day the money left, which is
+ * what a cheque run is tied out against, not the day the row was
+ * written.
+ */
+export const disbursementQuerySchema = z
+  .object({
+    page: z.coerce.number().int().positive().default(1),
+    limit: z.coerce.number().int().positive().max(500).default(25),
+    sort: z.enum(receiptSortFields).default("effectiveDate"),
+    order: z.enum(["asc", "desc"]).default("desc"),
+    accountId: z.string().uuid().optional(),
+    tender: z.enum(["CARD", "ACH", "CASH", "CHECK", "LOCKBOX"]).optional(),
+    from: z.string().date().optional(),
+    to: z.string().date().optional(),
+    search: z.string().min(1).max(100).optional(),
+  })
+  .strict()
+  .refine((q) => !q.from || !q.to || q.from <= q.to, {
+    message: "from must not be after to",
+    path: ["from"],
+  });
+
+export type DisbursementQuery = z.infer<typeof disbursementQuerySchema>;
