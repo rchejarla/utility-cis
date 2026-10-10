@@ -78,6 +78,15 @@ const TYPE_LABEL: Record<string, string> = {
   ADJUSTMENT_CREDIT: "Credit",
   WRITE_OFF: "Written off",
   REVERSAL: "Reversal",
+  // Missing, so `describe()` fell through to `row.type` and printed the
+  // raw enum in capitals beside rows reading "Bill charge" and
+  // "Payment". A DEPOSIT row has been on this tab since deposits moved
+  // onto the ledger.
+  //
+  // Named for the ACT, not the state: a ledger row is something that
+  // happened on a date. "Deposit taken" is the event; "Deposit held" is
+  // the standing figure, which is what the card above reports.
+  DEPOSIT: "Deposit taken",
 };
 
 function describe(row: LedgerRow): string {
@@ -300,7 +309,19 @@ export function ArTab({ accountId }: { accountId: string }) {
                       color: row.settled ? "var(--text-muted)" : "var(--text-primary)",
                     }}
                   >
-                    {row.settled ? "—" : money(row.openAmount)}
+                    {/* Brackets here too, and for the same reason they
+                        are used two columns left: a credit's open amount
+                        is NOT owed. A deposit's is -750.00, and printing
+                        it bare under a heading reading "Still owed" says
+                        the customer owes $750 when the utility is
+                        holding $750 of theirs. The abs() in `money`
+                        hides the sign, so the convention has to carry
+                        it. */}
+                    {row.settled
+                      ? "—"
+                      : isCredit
+                        ? `(${money(row.openAmount)})`
+                        : money(row.openAmount)}
                   </td>
                   <td style={{ ...td, color: "var(--text-muted)", fontSize: "12px" }}>
                     {[

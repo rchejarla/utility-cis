@@ -167,7 +167,12 @@ describe("ArTab", () => {
     );
     renderTab();
 
-    expect(await screen.findByText("($25.00)")).toBeInTheDocument();
+    // Both money columns, not just the charged one: an unapplied credit
+    // is not owed either, and a bare figure under "Still owed" says it
+    // is. This asserted one match before the open-amount column picked
+    // up the convention.
+    const table = await screen.findByRole("table");
+    expect(within(table).getAllByText("($25.00)")).toHaveLength(2);
   });
 
   it("prefers the reason's own label over the type name", async () => {
@@ -227,5 +232,50 @@ describe("ArTab — a deposit is shown beside what is owed, not inside it", () =
     renderTab();
     expect(await screen.findByText("Amount due")).toBeInTheDocument();
     expect(screen.queryByText("Deposit held")).toBeNull();
+  });
+});
+
+/**
+ * A deposit row, which is where the open-item columns are easiest to
+ * misread. The utility HOLDS the money; nothing about it is owed.
+ */
+describe("ArTab — a deposit row does not read as a debt", () => {
+  const DEPOSIT_ROW = row({
+    id: "d1",
+    type: "DEPOSIT",
+    amount: "-750.00",
+    openAmount: "-750.00",
+    settled: false,
+    dueDate: null,
+    billNumber: null,
+    tender: "CHECK",
+  });
+
+  it("shows the still-owed figure in brackets, not as a bare amount", async () => {
+    routeGets(page({ balance: "0.00", openCount: 0, depositHeld: "750.00", data: [DEPOSIT_ROW] }));
+    renderTab();
+    const table = await screen.findByRole("table");
+    // Both columns bracketed: ($750.00) charged, ($750.00) still owed.
+    // Bare "$750.00" in the second column reads as the customer owing
+    // it, which is the opposite of what a deposit is.
+    expect(within(table).getAllByText("($750.00)")).toHaveLength(2);
+    expect(within(table).queryByText("$750.00")).toBeNull();
+  });
+
+  it("names the act instead of printing the raw enum", async () => {
+    routeGets(page({ balance: "0.00", openCount: 0, depositHeld: "750.00", data: [DEPOSIT_ROW] }));
+    renderTab();
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("Deposit taken")).toBeInTheDocument();
+    expect(within(table).queryByText("DEPOSIT")).toBeNull();
+  });
+
+  it("still shows a real debit as owed, unbracketed", async () => {
+    routeGets(page({ balance: "40.00", openCount: 1, depositHeld: "0.00", data: [row()] }));
+    renderTab();
+    const table = await screen.findByRole("table");
+    // A charge IS owed, so it must not pick up the credit convention.
+    expect(within(table).getAllByText("$40.00")).toHaveLength(2);
+    expect(within(table).queryByText("($40.00)")).toBeNull();
   });
 });
