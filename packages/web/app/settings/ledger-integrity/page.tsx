@@ -9,8 +9,18 @@ import { usePermission } from "@/lib/use-permission";
 import { useToast } from "@/components/ui/toast";
 
 /**
- * AR reconciliation — proof that `account.balance` still equals the sum of
+ * Ledger integrity — proof that `account.balance` still equals the sum of
  * that account's open ledger entries.
+ *
+ * Not "reconciliation", though that is what the endpoint is still called.
+ * In utility billing that word means tying receipts to a bank deposit, or
+ * the AR subledger to a GL control account, and this does neither. It is
+ * an integrity check on a denormalisation: `balance` is a cache written
+ * inside the posting transaction so delinquency sweeps and list screens
+ * need not sum the ledger on every read, and a cache drifts when
+ * something writes around it. It lives under Settings for the same
+ * reason -- an admin runs it after a migration or a data repair, not a
+ * CSR during a call.
  *
  * The healthy result is the usual result, so this page is written around
  * reassurance rather than around a work queue: the common case has to say
@@ -35,7 +45,7 @@ interface ReconciliationReport {
   drift: BalanceDrift[];
 }
 
-export default function ArReconciliationPage() {
+export default function LedgerIntegrityPage() {
   const { canView } = usePermission("accounts");
   const { toast } = useToast();
 
@@ -50,7 +60,7 @@ export default function ArReconciliationPage() {
       setReport(res);
       setRanAt(new Date());
     } catch (err) {
-      toast(err instanceof Error ? err.message : "Reconciliation check failed", "error");
+      toast(err instanceof Error ? err.message : "The integrity check failed to run", "error");
     } finally {
       setLoading(false);
     }
@@ -65,7 +75,7 @@ export default function ArReconciliationPage() {
   return (
     <div>
       <PageHeader
-        title="AR Reconciliation"
+        title="Ledger Integrity"
         subtitle="Checks every account's stored balance against the sum of its open ledger entries"
         actions={
           <button onClick={() => void run()} disabled={loading} style={BTN(loading)}>
@@ -75,10 +85,12 @@ export default function ArReconciliationPage() {
       />
 
       <p style={{ color: "var(--text-muted)", fontSize: 13, maxWidth: 760, marginBottom: 20 }}>
-        An account&apos;s balance is stored once and updated inside the same transaction that
-        writes a ledger entry, so the two should never disagree. This check is the proof. A
-        difference means a balance was changed by something outside that path and the account
-        needs looking at by hand.
+        An account&apos;s balance is <strong>stored</strong>, not worked out each time it is
+        shown — it is written inside the same transaction that writes a ledger entry, so that
+        account lists, the delinquency sweep and the portal do not have to add up the ledger
+        on every read. The two should therefore never disagree. This check is the proof. A
+        difference means something changed a balance outside that path — a hand-edit, an
+        import, a code path that skipped the recompute — and that account needs looking at.
       </p>
 
       {loading && !report ? (
@@ -96,15 +108,18 @@ export default function ArReconciliationPage() {
           at the check itself rather than at the books.
         </Panel>
       ) : report.ok ? (
-        <Panel tone="ok" title={`All ${report.checked.toLocaleString()} accounts reconcile`}>
-          Every stored balance matches the sum of its open ledger entries exactly.
+        <Panel tone="ok" title={`All ${report.checked.toLocaleString()} accounts match the ledger`}>
+          For each of them the balance stored on the account is exactly the sum of what is
+          still outstanding on its ledger entries. Nothing has changed a balance outside the
+          posting path, so the figures shown on account pages, in the delinquency sweep and
+          on the portal are the real ones.
           {ranAt && <Ran at={ranAt} />}
         </Panel>
       ) : (
         <>
           <Panel
             tone="bad"
-            title={`${report.drift.length.toLocaleString()} of ${report.checked.toLocaleString()} accounts do not reconcile`}
+            title={`${report.drift.length.toLocaleString()} of ${report.checked.toLocaleString()} accounts do not match the ledger`}
           >
             The stored balance disagrees with the ledger on the accounts below. The ledger is
             authoritative for what is owed, so treat the stored balance as the wrong number and
@@ -195,7 +210,7 @@ function Money({
 }
 
 const TONES = {
-  ok: { fg: "var(--success)", label: "Reconciled" },
+  ok: { fg: "var(--success)", label: "In balance" },
   warn: { fg: "var(--warning)", label: "Inconclusive" },
   bad: { fg: "var(--danger)", label: "Out of balance" },
 } as const;

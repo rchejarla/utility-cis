@@ -147,17 +147,23 @@ It shipped in slice 1 as an orphan field: the service returned it and the patch 
 
 `to` and `from` are inclusive. A plain `lte` is correct only because `bill.billDate` is `@db.Date` and carries no time; if that column becomes a timestamp it must become `lt` the following day, or every range query drops its final day.
 
-### Billing & AR → Reconciliation
+### Settings → Ledger Integrity
 
-A sidebar section **Billing & AR** holds the tenant-wide views. Its first entry is `/ar/reconciliation` on `accounts:VIEW`, which renders `GET /api/v1/ar/reconciliation`.
+`/settings/ledger-integrity` on `accounts:VIEW`, rendering `GET /api/v1/ar/reconciliation`.
+
+**It is not reconciliation, and it was wrongly named and wrongly placed when it shipped.** In utility billing that word means tying receipts to a bank deposit, or the AR subledger to a GL control account; this does neither, and the word is already carrying five other meanings in these specs — budget-billing true-up (07, 09), meter-read imports (08), water versus wastewater (09, Bozeman 141) and RAMS container inventory (12). Sitting in a **Billing & AR** menu under that label, it promised a CSR something the product does not have.
+
+What it actually is: an integrity check on a denormalisation. `account.balance` is a cache written inside the posting transaction so delinquency sweeps and list screens need not sum the ledger on every read, and a cache drifts when something writes around it — a manual SQL fix, a bad import, a future code path that skips `recomputeAccountCache`. An admin runs it after a migration or a repair. That is why it now sits in **Settings** beside Retention & Audit rather than in a menu a CSR works.
+
+The endpoint keeps its path. `reconcileBalances` reconciling a cache against its source is accurate engineering English, the route is unambiguous inside `/api/v1/ar/`, and no API path is read by the CSR the old label misled. The nav entry is gated on `accounts:VIEW` to match the endpoint rather than on `settings` to match the section, because an entry visible to someone the endpoint then refuses is a dead menu item.
 
 The healthy result is the usual result, so the page is built around reassurance rather than as a work queue, and it has **three** outcomes, not two:
 
 | Outcome | Rendered as | Why it is separate |
 |---|---|---|
-| `checked > 0`, no drift | Reconciled, "All N accounts reconcile" | The count is the evidence. "No drift" without a population is not a claim |
+| `checked > 0`, no drift | **In balance**, "All N accounts match the ledger" | The count is the evidence. "No drift" without a population is not a claim. The copy says *match the ledger*, not *reconcile* — renaming the page while the body still said "reconcile" would have left the misleading word exactly where a reader looks |
 | `checked === 0` | **Inconclusive**, not green | An empty drift list is also what a check that could see no accounts returns. Reported as proving nothing, so a blinded check cannot read as a clean bill of health |
-| drift present | Out of balance, with stored / ledger / signed difference per account | Linked to the account's AR tab. Signed with an explicit `+`/`−`, not the brackets the AR tab uses for credits, because this is a discrepancy and not a credit |
+| drift present | **Out of balance**, "N of M accounts do not match the ledger", with stored / ledger / signed difference per account | Linked to the account's AR tab. Signed with an explicit `+`/`−`, not the brackets the AR tab uses for credits, because this is a discrepancy and not a credit |
 
 **Refunds do not exist.** `LedgerEntryType` has seven values and none of them is a refund, and there is no endpoint. "Refund due" is only a *state* — an open credit, from an overpayment or from a waiver exceeding the charge it named (§6.5). Nothing disburses it, so an account can sit in credit indefinitely. Closing this needs a decision rather than code: a `REFUND` debit that consumes open credits would keep `balance = SUM(open_amount)` true, but money leaving the building also wants a disbursement record — tender, cheque number, issued date — to reconcile against a bank.
 

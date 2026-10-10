@@ -108,13 +108,6 @@ const navSections: NavSection[] = [
         module: "accounts",
         tooltip: "Every bill across all accounts, searchable by bill number, with posting",
       },
-      {
-        href: "/ar/reconciliation",
-        label: "Reconciliation",
-        icon: faScaleBalanced,
-        module: "accounts",
-        tooltip: "Proves every account's cached balance still equals the sum of its open ledger entries",
-      },
     ],
   },
   {
@@ -149,6 +142,16 @@ const navSections: NavSection[] = [
       { href: "/settings/notifications", label: "Notifications", icon: faBell, module: "tenant_profile" },
       { href: "/settings/slas", label: "Service Request SLAs", icon: faStopwatch, module: "service_request_slas" },
       { href: "/settings/retention", label: "Retention & Audit", icon: faBoxArchive, module: "settings" },
+      {
+        href: "/settings/ledger-integrity",
+        label: "Ledger Integrity",
+        icon: faScaleBalanced,
+        // accounts:VIEW, matching the endpoint rather than the section it
+        // sits in. Gating the entry on `settings` would show it to admins
+        // the endpoint then refuses, which is a dead menu item.
+        module: "accounts",
+        tooltip: "Proves every account's cached balance still equals the sum of its open ledger entries",
+      },
       { href: "/settings/automation", label: "Automation", icon: faRobot, module: "tenant_profile" },
       { href: "/settings/api-keys", label: "API Keys & Webhooks", icon: faKey, module: "settings" },
       { href: "/users-roles", label: "Users & Roles", icon: faUserShield, module: "tenant_users" },

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
-import ArReconciliationPage from "../page";
+import LedgerIntegrityPage from "../page";
 
 /**
  * The value of this page is that its three outcomes are distinguishable.
@@ -14,7 +14,7 @@ import ArReconciliationPage from "../page";
 function renderPage() {
   return render(
     <ToastProvider>
-      <ArReconciliationPage />
+      <LedgerIntegrityPage />
     </ToastProvider>,
   );
 }
@@ -25,20 +25,20 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("AR reconciliation page", () => {
+describe("Ledger integrity page", () => {
   it("reports health with the number of accounts it examined", async () => {
     get.mockResolvedValue({ ok: true, checked: 1234, drift: [] });
     renderPage();
 
     const panel = await screen.findByRole("status");
-    expect(panel).toHaveTextContent("Reconciled");
+    expect(panel).toHaveTextContent("In balance");
     // The count is the evidence, so it has to be on screen — not just "ok".
-    expect(panel).toHaveTextContent("All 1,234 accounts reconcile");
+    expect(panel).toHaveTextContent("All 1,234 accounts match the ledger");
   });
 
   it("does NOT report health when nothing was checked", async () => {
     // Same empty drift list, same ok flag the API would send; only the
-    // population differs. This must not read as reconciled.
+    // population differs. This must not read as healthy.
     get.mockResolvedValue({ ok: true, checked: 0, drift: [] });
     renderPage();
 
@@ -46,7 +46,7 @@ describe("AR reconciliation page", () => {
     expect(panel).toHaveTextContent("Inconclusive");
     expect(panel).toHaveTextContent("No accounts were checked");
     expect(screen.queryByRole("status")).toBeNull();
-    expect(screen.queryByText(/accounts reconcile/)).toBeNull();
+    expect(screen.queryByText(/accounts match the ledger/)).toBeNull();
   });
 
   it("lists each drifting account with stored, ledger and signed difference", async () => {
@@ -61,7 +61,7 @@ describe("AR reconciliation page", () => {
     renderPage();
 
     const panel = await screen.findByRole("alert");
-    expect(panel).toHaveTextContent("2 of 50 accounts do not reconcile");
+    expect(panel).toHaveTextContent("2 of 50 accounts do not match the ledger");
 
     expect(screen.getByText("0001000-00")).toBeInTheDocument();
     expect(screen.getByText("$999.99")).toBeInTheDocument();
