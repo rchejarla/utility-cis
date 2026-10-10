@@ -37,6 +37,8 @@ interface BalanceDrift {
   accountNumber: string;
   cached: string;
   ledger: string;
+  /** Which cache disagreed: the receivable, or the deposit held. */
+  field: "balance" | "deposit";
 }
 
 interface ReconciliationReport {
@@ -85,8 +87,8 @@ export default function LedgerIntegrityPage() {
       />
 
       <p style={{ color: "var(--text-muted)", fontSize: 13, maxWidth: 760, marginBottom: 20 }}>
-        An account&apos;s balance is <strong>stored</strong>, not worked out each time it is
-        shown — it is written inside the same transaction that writes a ledger entry, so that
+        Two figures on every account are <strong>stored</strong> rather than worked out each
+        time they are shown — the balance owed, and the deposit held. Each is — it is written inside the same transaction that writes a ledger entry, so that
         account lists, the delinquency sweep and the portal do not have to add up the ledger
         on every read. The two should therefore never disagree. This check is the proof. A
         difference means something changed a balance outside that path — a hand-edit, an
@@ -132,7 +134,8 @@ export default function LedgerIntegrityPage() {
               <thead>
                 <tr style={{ background: "var(--bg-elevated)" }}>
                   <Th>Account</Th>
-                  <Th style={{ textAlign: "right" }}>Stored balance</Th>
+                  <Th>Figure</Th>
+                  <Th style={{ textAlign: "right" }}>Stored</Th>
                   <Th style={{ textAlign: "right" }}>Ledger total</Th>
                   <Th style={{ textAlign: "right" }}>Difference</Th>
                 </tr>
@@ -145,11 +148,20 @@ export default function LedgerIntegrityPage() {
                   // for credits, because this is a discrepancy, not a credit.
                   const diff = Number(d.cached) - Number(d.ledger);
                   return (
-                    <tr key={d.accountId}>
+                    <tr key={`${d.accountId}-${d.field}`}>
                       <Td>
                         <Link href={`/accounts/${d.accountId}?tab=ar`} style={LINK}>
                           {d.accountNumber}
                         </Link>
+                      </Td>
+                      {/*
+                        Named, because there are two caches and they mean
+                        different things: the receivable, and the money
+                        held on the customer's behalf. An unlabelled row
+                        would leave the reader to guess which is wrong.
+                      */}
+                      <Td style={{ fontSize: 12 }}>
+                        {d.field === "deposit" ? "Deposit held" : "Balance owed"}
                       </Td>
                       <Td style={{ textAlign: "right" }}>
                         <Money value={d.cached} />

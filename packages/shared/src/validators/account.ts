@@ -23,6 +23,13 @@ export const createAccountSchema = z.object({
   creditRating: creditRatingEnum.default("UNRATED"),
   billingCycleId: z.string().uuid(),
   depositAmount: z.number().min(0).default(0),
+  /**
+   * How the opening deposit arrived — cash at the counter, a cheque, a
+   * card. Optional, because a deposit may be recorded without anyone
+   * knowing, but a tie-out groups receipts by tender, so a deposit with
+   * none cannot be matched against the bank slip it was part of.
+   */
+  depositTender: z.enum(["CARD", "ACH", "CASH", "CHECK", "LOCKBOX"]).optional(),
   depositWaived: z.boolean().default(false),
   depositWaivedReason: z.string().max(255).optional(),
   languagePref: z.string().length(5).default("en-US"),
@@ -35,9 +42,27 @@ export const createAccountSchema = z.object({
   customFields: z.record(z.unknown()).optional(),
 }).strict();
 
-// Update schemas intentionally strip unknown keys (forgiving PATCH semantics).
+/**
+ * Update schemas intentionally strip unknown keys (forgiving PATCH
+ * semantics).
+ *
+ * `depositAmount` is omitted because it is a cache of the DEPOSIT ledger
+ * entries, exactly as `balance` caches the receivable — and nobody edits
+ * `balance` by hand either. A deposit changes by taking one or returning
+ * one, which are acts with a tender, a date and an audit row behind
+ * them. Typing a new number would leave the column disagreeing with the
+ * ledger until the next recompute silently overwrote it, and
+ * reconciliation would report the drift in between.
+ *
+ * `depositWaived` and `depositWaivedReason` stay editable: they record
+ * whether a deposit was REQUIRED, which is a decision, not money.
+ *
+ * `depositTender` goes with the amount for the same reason: it describes
+ * how one particular deposit arrived, so it is part of the act of taking
+ * it, not a property of the account that can later be revised.
+ */
 export const updateAccountSchema = createAccountSchema
-  .omit({ accountNumber: true })
+  .omit({ accountNumber: true, depositAmount: true, depositTender: true })
   .partial();
 
 export const accountQuerySchema = z.object({

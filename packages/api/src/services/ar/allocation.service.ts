@@ -195,7 +195,13 @@ export async function applyCreditsToDebit(
   if (remaining.lte(0)) return [];
 
   const credits = await tx.ledgerEntry.findMany({
-    where: { utilityId, accountId, openAmount: { lt: 0 } },
+    // A DEPOSIT is a credit by sign but must never be spent here. It is
+    // money the utility holds until the account closes or the customer
+    // earns it back -- not something next month's water bill may consume.
+    // Without this clause the exclusion is invisible: the filter is on
+    // sign alone, so a deposit would be absorbed oldest-first like any
+    // other credit, silently, on the next posting run.
+    where: { utilityId, accountId, openAmount: { lt: 0 }, type: { not: "DEPOSIT" } },
     orderBy: [{ postedAt: "asc" }, { id: "asc" }],
     select: { id: true, openAmount: true },
   });

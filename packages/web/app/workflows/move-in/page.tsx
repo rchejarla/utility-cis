@@ -81,6 +81,7 @@ export default function MoveInWizardPage() {
   const [accountType, setAccountType] = useState("RESIDENTIAL");
   const [billingCycleId, setBillingCycleId] = useState("");
   const [depositAmount, setDepositAmount] = useState("");
+  const [depositTender, setDepositTender] = useState("");
 
   // Step 3: service agreements
   interface AgreementDraft {
@@ -173,6 +174,7 @@ export default function MoveInWizardPage() {
         })),
       };
       if (depositAmount) body.depositAmount = parseFloat(depositAmount);
+      if (depositAmount && depositTender) body.depositTender = depositTender;
       if (customerMode === "EXISTING") {
         body.existingCustomerId = existingCustomerId;
       } else {
@@ -491,6 +493,34 @@ export default function MoveInWizardPage() {
                   style={fieldStyle}
                 />
               </div>
+              {/*
+                Shown only once there is a deposit to describe. A tender
+                on a zero deposit is a fact about money that never moved,
+                and an always-visible select invites one.
+
+                It matters because the day's receipts are tied out
+                against the bank by tender: a deposit taken at the
+                counter with no tender recorded is in the till and
+                unmatchable.
+              */}
+              {depositAmount !== "" && parseFloat(depositAmount) > 0 && (
+                <div>
+                  <label style={labelStyle}>DEPOSIT TENDER</label>
+                  <select
+                    value={depositTender}
+                    onChange={(e) => setDepositTender(e.target.value)}
+                    aria-label="Deposit tender"
+                    style={fieldStyle}
+                  >
+                    <option value="">Unknown</option>
+                    <option value="CASH">Cash</option>
+                    <option value="CHECK">Check</option>
+                    <option value="CARD">Card</option>
+                    <option value="ACH">ACH</option>
+                    <option value="LOCKBOX">Lockbox</option>
+                  </select>
+                </div>
+              )}
             </div>
           </div>
         </div>

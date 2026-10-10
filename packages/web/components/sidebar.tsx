@@ -109,11 +109,17 @@ const navSections: NavSection[] = [
         tooltip: "Every bill across all accounts, searchable by bill number, with posting",
       },
       {
-        href: "/payments",
-        label: "Payments",
+        href: "/receipts",
+        label: "Receipts",
         icon: faMoneyBill,
         module: "payments",
-        tooltip: "Money received across all accounts — a day's takings, for tying out against the deposit",
+        // Not "Payments": the list holds deposits too, because a deposit
+        // taken at the counter is on the same bank slip as a cheque
+        // settling a bill. A label saying "Payments" over a total that
+        // includes deposits is the kind that gets trusted for the wrong
+        // question.
+        tooltip:
+          "Payments and security deposits received across all accounts — a day's takings, for tying out against the bank",
       },
     ],
   },

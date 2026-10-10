@@ -37,7 +37,7 @@ function row(over: Partial<LedgerRow> = {}): LedgerRow {
 }
 
 function page(over: Partial<LedgerPage> = {}): LedgerPage {
-  return { data: [], balance: "0.00", openCount: 0, ...over };
+  return { data: [], balance: "0.00", openCount: 0, depositHeld: "0.00", ...over };
 }
 
 /**
@@ -204,5 +204,28 @@ describe("ArTab", () => {
     expect(await screen.findByText("Service unavailable")).toBeInTheDocument();
     // Crucially NOT the empty state, which would read as "nothing owed".
     expect(screen.queryByText(/nothing owed/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("ArTab — a deposit is shown beside what is owed, not inside it", () => {
+  it("shows the deposit held as its own figure", async () => {
+    routeGets(page({ balance: "169.25", openCount: 1, depositHeld: "500.00", data: [row()] }));
+    renderTab();
+
+    // Both are true at once: they owe 169.25, the utility holds 500.
+    expect(await screen.findByText("Amount due")).toBeInTheDocument();
+    expect(screen.getByText("$169.25")).toBeInTheDocument();
+    expect(screen.getByText("Deposit held")).toBeInTheDocument();
+    expect(screen.getByText("$500.00")).toBeInTheDocument();
+    // Said in words, because a reader seeing a $500 credit above a
+    // $169.25 amount due will otherwise assume one should cancel the other.
+    expect(screen.getByText(/Not counted against what is owed/i)).toBeInTheDocument();
+  });
+
+  it("says nothing about deposits on an account that holds none", async () => {
+    routeGets(page({ balance: "40.00", openCount: 1, depositHeld: "0.00", data: [row()] }));
+    renderTab();
+    expect(await screen.findByText("Amount due")).toBeInTheDocument();
+    expect(screen.queryByText("Deposit held")).toBeNull();
   });
 });

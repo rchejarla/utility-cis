@@ -54,6 +54,7 @@ export interface LedgerPage {
   data: LedgerRow[];
   balance: string;
   openCount: number;
+  depositHeld: string;
 }
 
 interface UnpostedBill {
@@ -229,6 +230,23 @@ export function ArTab({ accountId }: { accountId: string }) {
           <div style={cardValue}>{page.openCount}</div>
           <div style={cardLabel}>{page.openCount === 1 ? "Open item" : "Open items"}</div>
         </div>
+        {/*
+          Shown beside the balance, never inside it. A deposit is money
+          the utility holds, not money owed -- so an account can owe
+          $169.25 and hold $500 at the same time, and both figures are
+          true. Without this card the DEPOSIT row in the table below
+          reads as a credit that inexplicably fails to reduce the amount
+          due.
+        */}
+        {parseFloat(page.depositHeld) > 0 && (
+          <div style={card}>
+            <div style={cardValue}>{money(page.depositHeld)}</div>
+            <div style={cardLabel}>Deposit held</div>
+            <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
+              Not counted against what is owed
+            </div>
+          </div>
+        )}
       </div>
 
       {page.data.length === 0 ? (

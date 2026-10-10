@@ -3,14 +3,19 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
-import PaymentsPage from "../page";
+import ReceiptsPage from "../page";
 
 /**
  * The page exists to answer "what did we take, and does it match the
- * deposit". So the cases that matter are the ones about that figure:
- * it opens on today, it reflects the filter rather than the page, and it
- * still counts a payment that was later reversed — because the money was
- * in that day's deposit even though the cheque bounced later.
+ * bank". So the cases that matter are the ones about that figure: it
+ * opens on today, it reflects the filter rather than the page, it counts
+ * a payment that was later reversed — because the money was in that
+ * day's deposit even though the cheque bounced later — and it counts a
+ * security deposit, because that was in the same till.
+ *
+ * The one a reader must never get wrong is the kind of each row. A
+ * deposit shown as a payment is a wrong answer to "have they paid?", so
+ * the Kind column is never hidden and a deposit is tagged.
  */
 
 const get = apiClient.get as unknown as ReturnType<typeof vi.fn>;
@@ -18,6 +23,7 @@ const get = apiClient.get as unknown as ReturnType<typeof vi.fn>;
 function row(over: Partial<Record<string, unknown>> = {}) {
   return {
     id: "p1",
+    type: "PAYMENT",
     amount: "41.50",
     tender: "CHECK",
     effectiveDate: "2026-06-30",
@@ -29,18 +35,23 @@ function row(over: Partial<Record<string, unknown>> = {}) {
   };
 }
 
-function payload(rows: unknown[], totalReceived = "41.50") {
+function payload(
+  rows: unknown[],
+  totalReceived = "41.50",
+  subtotals: Record<string, string> = { PAYMENT: totalReceived, DEPOSIT: "0.00" },
+) {
   return {
     data: rows,
     meta: { total: rows.length, page: 1, limit: 25, pages: 1 },
     totalReceived,
+    subtotals,
   };
 }
 
 function renderPage() {
   return render(
     <ToastProvider>
-      <PaymentsPage />
+      <ReceiptsPage />
     </ToastProvider>,
   );
 }
@@ -51,7 +62,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("Payments page", () => {
+describe("Receipts page", () => {
   it("opens on today, because that is the question being asked", async () => {
     get.mockResolvedValue(payload([]));
     renderPage();
@@ -63,10 +74,65 @@ describe("Payments page", () => {
     );
   });
 
+  it("reads from the receipts endpoint, not the payments one", async () => {
+    get.mockResolvedValue(payload([]));
+    renderPage();
+    await waitFor(() => expect(urls().some((u) => u.startsWith("/api/v1/receipts?"))).toBe(true));
+    expect(urls().some((u) => u.startsWith("/api/v1/payments"))).toBe(false);
+  });
+
   it("shows the amount taken as the headline figure", async () => {
     get.mockResolvedValue(payload([row()], "1234.50"));
     renderPage();
-    expect(await screen.findByText("$1,234.50")).toBeInTheDocument();
+    // By testid, not by text: on a day of payments only, the combined
+    // total and the "Payments" subtotal are the same string, and an
+    // assertion that cannot tell them apart would pass on either.
+    expect(await screen.findByTestId("receipt-total")).toHaveTextContent("$1,234.50");
+  });
+
+  /**
+   * The reason the screen was renamed. A deposit taken at the counter
+   * went into the same till and onto the same bank slip, so the headline
+   * figure has to contain it or it cannot be tied out.
+   */
+  it("counts a deposit in the headline figure, and splits it out beneath", async () => {
+    get.mockResolvedValue(
+      payload(
+        [row(), row({ id: "d1", type: "DEPOSIT", amount: "750.00", externalRef: "DEP-1" })],
+        "791.50",
+        { PAYMENT: "41.50", DEPOSIT: "750.00" },
+      ),
+    );
+    renderPage();
+
+    expect(await screen.findByTestId("receipt-total")).toHaveTextContent("$791.50");
+    const split = screen.getByTestId("receipt-split");
+    expect(split).toHaveTextContent("Payments $41.50");
+    expect(split).toHaveTextContent("Deposits $750.00");
+  });
+
+  it("tags a deposit row, so it is not read as a bill paid", async () => {
+    get.mockResolvedValue(
+      payload([row({ id: "d1", type: "DEPOSIT", amount: "750.00" })], "750.00", {
+        PAYMENT: "0.00",
+        DEPOSIT: "750.00",
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText("Deposit")).toBeInTheDocument();
+  });
+
+  /**
+   * A day with no deposits must say so. If the line vanished at zero, a
+   * reader could not tell "we took none" from a screen that never looked
+   * — the same failure as a reconciliation reporting clean because it
+   * saw nothing.
+   */
+  it("states a zero for the kind that took nothing, rather than hiding it", async () => {
+    get.mockResolvedValue(payload([row()], "41.50", { PAYMENT: "41.50", DEPOSIT: "0.00" }));
+    renderPage();
+    const split = await screen.findByTestId("receipt-split");
+    expect(split).toHaveTextContent("Deposits $0.00");
   });
 
   it("still counts a reversed payment, and marks the row", async () => {
@@ -82,12 +148,12 @@ describe("Payments page", () => {
     );
     renderPage();
 
-    expect(await screen.findByText("$61.50")).toBeInTheDocument();
+    expect(await screen.findByTestId("receipt-total")).toHaveTextContent("$61.50");
     expect(screen.getByText("reversed")).toBeInTheDocument();
     expect(screen.getByText(/still counted here/i)).toBeInTheDocument();
   });
 
-  it("shows a payment's account, tender and reference", async () => {
+  it("shows a receipt's account, tender and reference", async () => {
     get.mockResolvedValue(payload([row()]));
     renderPage();
     expect(await screen.findByText("0001000-00")).toBeInTheDocument();
@@ -96,7 +162,7 @@ describe("Payments page", () => {
     expect(screen.getByText("CHQ-8841")).toBeInTheDocument();
   });
 
-  it("links a payment to the account's AR tab, where the entry lives", async () => {
+  it("links a receipt to the account's AR tab, where the entry lives", async () => {
     get.mockResolvedValue(payload([row()]));
     renderPage();
     const link = await screen.findByRole("link", { name: "0001000-00" });
@@ -112,6 +178,17 @@ describe("Payments page", () => {
     await userEvent.click(screen.getByText("Cash"));
 
     await waitFor(() => expect(urls().some((u) => u.includes("tender=CASH"))).toBe(true));
+  });
+
+  it("sends the kind filter, so one type can be read alone", async () => {
+    get.mockResolvedValue(payload([]));
+    renderPage();
+    await waitFor(() => expect(get).toHaveBeenCalled());
+
+    await userEvent.click(screen.getByRole("button", { name: /Kind/ }));
+    await userEvent.click(screen.getByText("Deposit"));
+
+    await waitFor(() => expect(urls().some((u) => u.includes("type=DEPOSIT"))).toBe(true));
   });
 
   it("searches by cheque or reference", async () => {
@@ -133,8 +210,8 @@ describe("Payments page", () => {
   });
 
   it("says the range is empty rather than showing a bare table", async () => {
-    get.mockResolvedValue(payload([], "0.00"));
+    get.mockResolvedValue(payload([], "0.00", { PAYMENT: "0.00", DEPOSIT: "0.00" }));
     renderPage();
-    expect(await screen.findByText(/No payments in this range/)).toBeInTheDocument();
+    expect(await screen.findByText(/No money received in this range/)).toBeInTheDocument();
   });
 });

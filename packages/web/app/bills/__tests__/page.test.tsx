@@ -33,6 +33,51 @@ function row(over: Partial<Record<string, unknown>> = {}) {
   };
 }
 
+/**
+ * What `GET /api/v1/bills/:id` returns — one bill with its segments, not
+ * a page. The detail dialog reads `periodStart`, `periodEnd` and
+ * `dueDate` straight into `s.slice(0, 10)`, so a fixture missing any of
+ * them throws during render rather than rendering an empty dialog.
+ */
+function billDetail(over: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: "b1",
+    billNumber: "BILL-0001",
+    periodStart: "2026-06-01",
+    periodEnd: "2026-06-30",
+    billDate: "2026-06-30",
+    dueDate: "2026-07-30",
+    subtotal: "60.00",
+    taxes: "4.20",
+    credits: "0.00",
+    total: "64.20",
+    segments: [
+      {
+        id: "s1",
+        segmentNumber: "SEG-1",
+        serviceAgreementId: "sa1",
+        periodStart: "2026-06-01",
+        periodEnd: "2026-06-30",
+        subtotal: "60.00",
+        taxes: "4.20",
+        credits: "0.00",
+        total: "64.20",
+        lines: [
+          {
+            id: "l1",
+            label: "Water usage",
+            kindCode: "USAGE",
+            amount: "60.00",
+            quantity: "12.000",
+            sortOrder: 1,
+          },
+        ],
+      },
+    ],
+    ...over,
+  };
+}
+
 function page(rows: unknown[], meta?: Partial<Record<string, number>>) {
   return {
     data: rows,
@@ -67,13 +112,30 @@ describe("Bills page", () => {
     // A bill number is what a caller reads out, so the lookup has to land
     // on the bill. Linking to the account page would make the operator
     // find the bill a second time.
-    get.mockResolvedValue(page([row({ postedAt: "2026-06-30" })]));
+    //
+    // The mock dispatches on URL because the dialog fetches a single
+    // bill, not a page of them. Answering every GET with the list
+    // envelope used to leave `bill.periodStart` undefined, and the
+    // dialog threw inside render -- vitest reported an unhandled error
+    // while this test still passed, because asserting the fetch
+    // happened says nothing about what came back being usable.
+    get.mockImplementation((url: string) =>
+      Promise.resolve(
+        String(url).startsWith("/api/v1/bills/")
+          ? billDetail()
+          : page([row({ postedAt: "2026-06-30" })]),
+      ),
+    );
     renderPage();
 
     await userEvent.click(await screen.findByRole("button", { name: "BILL-0001" }));
     await waitFor(() =>
       expect(get.mock.calls.some(([url]) => String(url) === "/api/v1/bills/b1")).toBe(true),
     );
+    // And the dialog renders what came back, rather than throwing on it.
+    expect(await screen.findByRole("heading", { name: "BILL-0001" })).toBeInTheDocument();
+    expect(screen.getByText(/2026-06-01 → 2026-06-30 · Due 2026-07-30/)).toBeInTheDocument();
+    expect(screen.getByText("Water usage")).toBeInTheDocument();
   });
 
   it("still links the account number to the account", async () => {

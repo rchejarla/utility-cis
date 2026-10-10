@@ -1,5 +1,11 @@
 import { Prisma } from "@utility-cis/shared/src/generated/prisma";
-import { EVENT_TYPES, type RecordPaymentInput, type PaymentQuery } from "@utility-cis/shared";
+import {
+  EVENT_TYPES,
+  receiptTypes,
+  type RecordPaymentInput,
+  type ReceiptQuery,
+  type ReceiptType,
+} from "@utility-cis/shared";
 import { prisma } from "../../lib/prisma.js";
 import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { lockAccount, recomputeAccountCache, type TxClient } from "./posting.service.js";
@@ -103,10 +109,19 @@ export async function recordPayment(
   return prisma.$transaction(runWithAudit);
 }
 
-/** A payment in the tenant-wide list. */
-export interface PaymentListRow {
+/** One receipt — money that arrived — in the tenant-wide list. */
+export interface ReceiptListRow {
   id: string;
-  /** Positive. Stored negative, because a payment is a credit. */
+  /**
+   * Which kind of money this is.
+   *
+   * Both land on the same bank slip, and neither is the other: a payment
+   * retires a receivable, a deposit creates a liability the utility will
+   * one day hand back. The list shows both and says which, so nobody
+   * reads a deposit as a bill having been paid.
+   */
+  type: ReceiptType;
+  /** Positive. Stored negative, because money received is a credit. */
   amount: string;
   tender: string | null;
   effectiveDate: Date;
@@ -118,11 +133,16 @@ export interface PaymentListRow {
   account: { id: string; accountNumber: string; customerName: string | null };
 }
 
-export interface PaymentListPage {
-  data: PaymentListRow[];
+export interface ReceiptListPage {
+  data: ReceiptListRow[];
   meta: { total: number; page: number; limit: number; pages: number };
   /**
-   * Gross taken in the filtered range, as recorded.
+   * Gross taken in the filtered range, as recorded — payments and
+   * deposits together.
+   *
+   * One figure, because a bank slip is one figure. The split lives in
+   * `subtotals` for the accounting question, which is a different
+   * question from "does the till agree".
    *
    * Reversed payments are INCLUDED. A payment taken on Monday and
    * bounced on Wednesday was still in Monday's deposit, so netting it
@@ -132,20 +152,40 @@ export interface PaymentListPage {
    * as money still held.
    */
   totalReceived: string;
+  /**
+   * The same money split by kind, every type present as "0.00" rather
+   * than absent.
+   *
+   * A missing key and a genuine zero are the same thing to a reader, and
+   * they are not the same fact: "no deposits were taken today" is an
+   * answer, while a gap in an object is a question about whether the
+   * query ran. Spelling both out is the same reason the reconciliation
+   * report carries `checked`.
+   */
+  subtotals: Record<ReceiptType, string>;
 }
 
 /**
- * The tenant-wide payments list.
+ * The tenant-wide receipts list.
  *
- * Answers "what did we take, and does it match the deposit" — a question
- * no screen could answer before, because every payment view was scoped
- * to one account.
+ * Answers "what did we take, and does it match the bank slip" — a
+ * question no screen could answer before, because every view of money
+ * received was scoped to one account.
+ *
+ * Both receipt types are in scope unless `type` narrows it. The test for
+ * inclusion is "did this money arrive", not "was this a payment": a
+ * security deposit taken at the counter is in the till and will be in
+ * the bank deposit, so a total that omitted it would under-report the
+ * day and look complete doing so.
  */
-export async function listPayments(
+export async function listReceipts(
   utilityId: string,
-  query: PaymentQuery,
-): Promise<PaymentListPage> {
-  const where: Prisma.LedgerEntryWhereInput = { utilityId, type: "PAYMENT" };
+  query: ReceiptQuery,
+): Promise<ReceiptListPage> {
+  const where: Prisma.LedgerEntryWhereInput = {
+    utilityId,
+    type: query.type ?? { in: [...receiptTypes] },
+  };
 
   if (query.accountId) where.accountId = query.accountId;
   if (query.tender) where.tender = query.tender;
@@ -160,7 +200,7 @@ export async function listPayments(
     where.effectiveDate = range;
   }
 
-  const [rows, total, sum] = await Promise.all([
+  const [rows, total, sum, byType] = await Promise.all([
     prisma.ledgerEntry.findMany({
       where,
       orderBy: { [query.sort]: query.order },
@@ -189,13 +229,27 @@ export async function listPayments(
     // only covered the rows on screen would be wrong the moment the day
     // ran past one page, and silently so.
     prisma.ledgerEntry.aggregate({ where, _sum: { amount: true } }),
+    // Split by kind over the same filter. Grouping in the database
+    // rather than adding up `rows` for the same reason the total is a
+    // SUM: the page is 25 rows and the day may be more.
+    prisma.ledgerEntry.groupBy({ by: ["type"], where, _sum: { amount: true } }),
   ]);
+
+  // Every type spelled out, so "no deposits today" reads as 0.00 instead
+  // of as a missing key.
+  const subtotals = Object.fromEntries(
+    receiptTypes.map((t) => [
+      t,
+      new Prisma.Decimal(byType.find((g) => g.type === t)?._sum.amount ?? 0).negated().toFixed(2),
+    ]),
+  ) as Record<ReceiptType, string>;
 
   return {
     data: rows.map((r) => ({
       id: r.id,
-      // Negated once, here. A payment is stored negative because it is a
-      // credit; an operator reading a receipts list wants "41.50".
+      type: r.type as ReceiptType,
+      // Negated once, here. Money received is stored negative because it
+      // is a credit; an operator reading a receipts list wants "41.50".
       amount: r.amount.negated().toFixed(2),
       tender: r.tender,
       effectiveDate: r.effectiveDate,
@@ -216,6 +270,7 @@ export async function listPayments(
       pages: Math.ceil(total / query.limit),
     },
     totalReceived: new Prisma.Decimal(sum._sum.amount ?? 0).negated().toFixed(2),
+    subtotals,
   };
 }
 

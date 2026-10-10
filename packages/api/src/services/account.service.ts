@@ -122,7 +122,11 @@ export async function createAccount(
   // touches Prisma-modeled columns; customFields gets validated
   // against the tenant's custom_field_schema before being merged
   // into the jsonb column on the same row.
-  const { customFields: rawCustom, ...core } = data;
+  // `depositTender` comes off here with customFields: both describe
+  // something other than a column on this row, and `core` is spread
+  // straight into account.create(), which rejects a field it has no
+  // column for. The tender belongs to the ledger entry written below.
+  const { customFields: rawCustom, depositTender, ...core } = data;
   const validatedCustom = await validateCustomFields(
     utilityId,
     "account",
@@ -145,14 +149,42 @@ export async function createAccount(
           columnName: "account_number",
           db: tx,
         }));
-      return tx.account.create({
+      const account = await tx.account.create({
         data: {
           ...core,
           accountNumber,
           utilityId,
           customFields: validatedCustom as object,
+          // Set by the ledger below, not from the payload: it is a cache
+          // of the DEPOSIT entries, like `balance` is of the receivable.
+          depositAmount: 0,
         },
       });
+
+      // A deposit taken at opening is money that moved, so it goes on the
+      // ledger and the column follows from it. Written in THIS
+      // transaction so an account and the deposit it was opened with
+      // commit together or not at all.
+      if (core.depositAmount && core.depositAmount > 0) {
+        const { recordDeposit } = await import("./ar/deposit.service.js");
+        await recordDeposit(
+          utilityId,
+          actorId,
+          actorName,
+          account.id,
+          {
+            amount: core.depositAmount.toFixed(2),
+            // Carried through so the deposit can be tied out against the
+            // bank slip it arrived on. Absent is allowed and means
+            // unknown, which is honest but unmatchable.
+            tender: depositTender,
+            memo: "Deposit taken at account opening",
+          },
+          tx,
+        );
+        return tx.account.findUniqueOrThrow({ where: { id: account.id } });
+      }
+      return account;
     },
   );
 }

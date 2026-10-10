@@ -1184,6 +1184,36 @@ async function main() {
   }
   console.log("  2 accounts with delinquent balances");
 
+  // Deposits are ledger entries now, not a bare column. account.deposit_amount
+  // survives as their cache, the way balance caches the receivable, and
+  // GET /api/v1/ar/reconciliation proves both -- so a seeded deposit
+  // without an entry behind it would show as drift on every fresh seed.
+  //
+  // Stored as a CREDIT and kept out of `balance`: the utility holds this
+  // money, the customer does not owe it. Netting it in would take an
+  // account owing $169 against a $500 deposit down to -$330 and hide it
+  // from the delinquency sweep, which looks for balance > 0.
+  let depositCount = 0;
+  for (const acct of aArr) {
+    const held = Number(acct.depositAmount ?? 0);
+    if (held <= 0) continue;
+    await p.ledgerEntry.create({
+      data: {
+        utilityId: UID,
+        accountId: acct.id,
+        type: "DEPOSIT",
+        amount: (-held).toFixed(2),
+        openAmount: (-held).toFixed(2),
+        dueDate: null, // a credit has nothing to fall due
+        effectiveDate: acct.createdAt ?? new Date(),
+        tender: "CHECK",
+        memo: "Security deposit taken at account opening",
+      },
+    });
+    depositCount++;
+  }
+  console.log("  " + depositCount + " security deposits");
+
   // A late fee and a partial courtesy waiver on the first delinquent
   // account, so the slice 3 acts are visible in a fresh database rather
   // than only reachable by HTTP. Written directly, like the opening
@@ -1411,7 +1441,10 @@ async function main() {
       // open on the account stays open, so read it back rather than
       // assuming — two of these accounts carry seeded opening balances.
       const open = await p.ledgerEntry.aggregate({
-        where: { utilityId: UID, accountId: account.id },
+        // NOT NOT a deposit: `balance` is the receivable. A deposit is
+        // money held, and netting it in would hide arrears from the
+        // delinquency sweep, which looks for balance > 0.
+        where: { utilityId: UID, accountId: account.id, type: { not: "DEPOSIT" } },
         _sum: { openAmount: true },
       });
       const oldest = await p.ledgerEntry.findFirst({
@@ -1522,7 +1555,8 @@ async function main() {
     // Recompute from the ledger rather than adjusting by hand, exactly as
     // the posting path does.
     const open = await p.ledgerEntry.aggregate({
-      where: { utilityId: UID, accountId: payTarget.accountId },
+      // Excludes deposits, for the same reason as the bills loop above.
+      where: { utilityId: UID, accountId: payTarget.accountId, type: { not: "DEPOSIT" } },
       _sum: { openAmount: true },
     });
     const oldest = await p.ledgerEntry.findFirst({

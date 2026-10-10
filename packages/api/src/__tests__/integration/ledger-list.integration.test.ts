@@ -246,6 +246,46 @@ describe("listLedger", () => {
     expect(page.balance).toBe("0.00");
   });
 
+  /**
+   * A deposit is open for as long as the utility holds it, so counting
+   * open items by sign alone made an account owing nothing report
+   * "1 open item" — directly beside a header reading "Nothing owed".
+   *
+   * The count and the filter have to agree, or a header saying three
+   * sits over a list of four. Both exclude a deposit; the row itself
+   * stays visible in the unfiltered ledger and in `depositHeld`, so
+   * nothing becomes unreachable.
+   *
+   * Taken through `recordDeposit` rather than inserted directly, so the
+   * `depositAmount` cache is maintained the way production maintains it
+   * — an entry written behind the service's back would leave the column
+   * at zero and the assertion below would be testing the fixture.
+   */
+  it("does not count a deposit as an open item, nor show it among them", async () => {
+    const { prisma } = prismaImports;
+    const { recordDeposit } = await import("../../services/ar/deposit.service.js");
+    const taken = await recordDeposit(utilityId, ACTOR, "T", accountId, {
+      amount: "500.00",
+      tender: "CHECK",
+    });
+    try {
+      const all = await ledger.listLedger(utilityId, accountId);
+      // Visible, and the utility is holding it.
+      expect(all.data.some((e) => e.type === "DEPOSIT")).toBe(true);
+      expect(all.depositHeld).toBe("500.00");
+      // But it is not something owed, in either place.
+      expect(all.openCount).toBe(0);
+      expect(all.balance).toBe("0.00");
+
+      const open = await ledger.listLedger(utilityId, accountId, { openOnly: true });
+      expect(open.data).toEqual([]);
+      expect(open.openCount).toBe(0);
+    } finally {
+      await prisma.ledgerEntry.delete({ where: { id: taken.entryId } });
+      await posting.recomputeAccountCache(prisma, utilityId, accountId);
+    }
+  });
+
   it("keeps openCount independent of the page size", async () => {
     for (let i = 0; i < 4; i++) await debit("10.00");
     const page = await ledger.listLedger(utilityId, accountId, { limit: 2 });

@@ -20,6 +20,7 @@ let recon: typeof import("../../services/ar/reconciliation.service.js");
 let payment: typeof import("../../services/ar/payment.service.js");
 let reversal: typeof import("../../services/ar/reversal.service.js");
 let fee: typeof import("../../services/ar/fee.service.js");
+let deposit: typeof import("../../services/ar/deposit.service.js");
 
 let accountId: string;
 let billingCycleId: string;
@@ -34,6 +35,7 @@ beforeAll(async () => {
   payment = await import("../../services/ar/payment.service.js");
   reversal = await import("../../services/ar/reversal.service.js");
   fee = await import("../../services/ar/fee.service.js");
+  deposit = await import("../../services/ar/deposit.service.js");
 
   const { prisma } = prismaImports;
   const cycle = await prisma.billingCycle.create({
@@ -198,7 +200,15 @@ describe("reconcileBalances", () => {
     try {
       const { drift } = await recon.reconcileBalances(utilityId);
       expect(drift).toEqual([
-        { accountId: empty.id, accountNumber: "RECON-EMPTY", cached: "412.80", ledger: "0.00" },
+        {
+          accountId: empty.id,
+          accountNumber: "RECON-EMPTY",
+          cached: "412.80",
+          ledger: "0.00",
+          // Names which cache disagreed: there are two now, and a row
+          // that did not say would leave the reader guessing.
+          field: "balance",
+        },
       ]);
     } finally {
       await prisma.account.update({ where: { id: empty.id }, data: { balance: 0 } });
@@ -442,4 +452,136 @@ describe("reconcileBalances", () => {
       expect(Number(e.openAmount)).toBeCloseTo(Number(e.amount) - asDebit + asCredit, 2);
     }
   }, 180_000);
+});
+
+/**
+ * A deposit is money the utility HOLDS, not money the customer owes.
+ *
+ * Two rules follow, and both are the kind that fail silently if they
+ * regress: allocation must never spend a deposit, and `balance` must
+ * never net it off. The second matters because delinquency sweeps
+ * `balance > 0` -- an account owing $169 while the utility holds their
+ * $500 would read as -$330 and stop being chased, and deposits are taken
+ * from precisely the customers who need chasing.
+ */
+describe("deposits", () => {
+  async function makeDeposit(amount: string) {
+    const { prisma } = prismaImports;
+    return prisma.ledgerEntry.create({
+      data: {
+        utilityId,
+        accountId,
+        type: "DEPOSIT",
+        amount: `-${amount}`,
+        openAmount: `-${amount}`,
+        dueDate: null,
+        effectiveDate: new Date("2026-01-01"),
+        tender: "CASH",
+      },
+    });
+  }
+
+  it("is excluded from balance, so arrears stay visible to delinquency", async () => {
+    const { prisma } = prismaImports;
+    const billId = await makeBill("169.25", "2026-06-14");
+    await posting.postBill(utilityId, ACTOR, "Tester", billId);
+    await makeDeposit("500.00");
+
+    await prisma.$transaction((tx) => posting.recomputeAccountCache(tx, utilityId, accountId));
+    const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
+
+    // Owed, not netted. -330.75 would hide them from `balance > 0`.
+    expect(account.balance.toFixed(2)).toBe("169.25");
+    expect(account.depositAmount.toFixed(2)).toBe("500.00");
+  });
+
+  it("is never spent by a later charge", async () => {
+    const { prisma } = prismaImports;
+    await makeDeposit("500.00");
+
+    // Post a bill. §6.1 step 4 absorbs open credits into a new debit --
+    // and must find none, because the only credit here is a deposit.
+    const billId = await makeBill("40.00", "2026-06-14");
+    const res = await posting.postBill(utilityId, ACTOR, "Tester", billId);
+    expect(res.applied).toEqual([]);
+
+    const charge = await prisma.ledgerEntry.findFirstOrThrow({ where: { billId } });
+    expect(charge.openAmount.toFixed(2)).toBe("40.00");
+    const deposit = await prisma.ledgerEntry.findFirstOrThrow({
+      where: { utilityId, accountId, type: "DEPOSIT" },
+    });
+    expect(deposit.openAmount.toFixed(2)).toBe("-500.00");
+  });
+
+  it("an ordinary credit IS still absorbed, so the exclusion is not blanket", async () => {
+    // Guards the guard: if the filter accidentally excluded every credit,
+    // the case above would pass for the wrong reason.
+    const { prisma } = prismaImports;
+    await prisma.ledgerEntry.create({
+      data: {
+        utilityId, accountId, type: "PAYMENT", amount: "-30.00", openAmount: "-30.00",
+        dueDate: null, effectiveDate: new Date("2026-01-02"), tender: "CASH",
+      },
+    });
+    const billId = await makeBill("40.00", "2026-06-14");
+    const res = await posting.postBill(utilityId, ACTOR, "Tester", billId);
+    expect(res.applied).toHaveLength(1);
+  });
+
+  it("recordDeposit writes a credit and updates only the deposit cache", async () => {
+    const { prisma } = prismaImports;
+    const billId = await makeBill("40.00", "2026-06-14");
+    await posting.postBill(utilityId, ACTOR, "Tester", billId);
+
+    const res = await deposit.recordDeposit(utilityId, ACTOR, "Tester", accountId, {
+      amount: "500.00",
+      tender: "CHECK",
+      externalRef: "DEP-1",
+    });
+
+    expect(res.depositAmount).toBe("500.00");
+    // The receivable is untouched: the bill is still owed in full.
+    expect(res.balance).toBe("40.00");
+
+    const entry = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id: res.entryId } });
+    expect(entry.type).toBe("DEPOSIT");
+    expect(entry.amount.toFixed(2)).toBe("-500.00");
+    expect(entry.dueDate).toBeNull();
+    expect(entry.tender).toBe("CHECK");
+  });
+
+  it("recordDeposit refuses a zero or negative amount", async () => {
+    await expect(
+      deposit.recordDeposit(utilityId, ACTOR, "Tester", accountId, { amount: "0" }),
+    ).rejects.toThrow(/positive/i);
+  });
+
+  it("two deposits accumulate rather than replace", async () => {
+    await deposit.recordDeposit(utilityId, ACTOR, "Tester", accountId, { amount: "200.00" });
+    const second = await deposit.recordDeposit(utilityId, ACTOR, "Tester", accountId, {
+      amount: "300.00",
+    });
+    expect(second.depositAmount).toBe("500.00");
+  });
+
+  it("leaves no drift behind, on either cache", async () => {
+    await deposit.recordDeposit(utilityId, ACTOR, "Tester", accountId, { amount: "500.00" });
+    await expectReconciles(utilityId);
+  });
+
+  it("reports deposit drift separately from balance drift", async () => {
+    const { prisma } = prismaImports;
+    await makeDeposit("500.00");
+    await prisma.$transaction((tx) => posting.recomputeAccountCache(tx, utilityId, accountId));
+
+    await prisma.account.update({ where: { id: accountId }, data: { depositAmount: "123.45" } });
+    const report = await recon.reconcileBalances(utilityId);
+
+    const dep = report.drift.filter((d) => d.field === "deposit");
+    expect(dep).toHaveLength(1);
+    expect(dep[0]!.cached).toBe("123.45");
+    expect(dep[0]!.ledger).toBe("500.00");
+    // The receivable is untouched, so it must not be reported.
+    expect(report.drift.some((d) => d.field === "balance")).toBe(false);
+  });
 });

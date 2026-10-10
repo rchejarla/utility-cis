@@ -64,10 +64,22 @@ export async function lockAccount(
 }
 
 /**
- * Recompute the cached Account.balance and lastDueDate from the ledger.
+ * Recompute the cached Account.balance, lastDueDate and depositAmount
+ * from the ledger.
  *
- * balance is SUM(open_amount) — a plain sum, because both amount and
- * openAmount are signed. lastDueDate is the oldest open debit's due
+ * balance is SUM(open_amount) over everything EXCEPT a deposit — a plain
+ * sum otherwise, because both amount and openAmount are signed.
+ *
+ * Why a deposit is excluded rather than netted. A deposit is money the
+ * utility HOLDS, not money the customer owes; it is a liability, not a
+ * negative receivable. Netting them gives one number that answers
+ * neither question — and worse, `delinquency.service` sweeps
+ * `balance > 0` to find arrears, so an account owing $169 while the
+ * utility holds their $500 would read as −$330 and never be chased.
+ * Deposits are taken from exactly the customers who most need chasing.
+ *
+ * `depositAmount` is the second cache, the sum of the open deposits, and
+ * reconciliation proves both. lastDueDate is the oldest open debit's due
  * date, and clears to null when nothing is open, so the delinquency
  * sweep stops seeing an account that owes nothing.
  *
@@ -82,14 +94,19 @@ export async function recomputeAccountCache(
   tx: TxClient,
   utilityId: string,
   accountId: string,
-): Promise<{ balance: string; lastDueDate: Date | null }> {
+): Promise<{ balance: string; lastDueDate: Date | null; depositAmount: string }> {
   await lockAccount(tx, utilityId, accountId);
 
-  const [agg] = await tx.$queryRaw<{ balance: Prisma.Decimal | null }[]>`
-    SELECT COALESCE(SUM(open_amount), 0) AS balance
+  const [agg] = await tx.$queryRaw<{ balance: Prisma.Decimal | null; deposit: Prisma.Decimal | null }[]>`
+    SELECT COALESCE(SUM(open_amount) FILTER (WHERE type <> 'DEPOSIT'), 0) AS balance,
+           COALESCE(SUM(open_amount) FILTER (WHERE type =  'DEPOSIT'), 0) AS deposit
       FROM ledger_entry
      WHERE utility_id = ${utilityId}::uuid AND account_id = ${accountId}::uuid`;
   const balance = new Prisma.Decimal(agg?.balance ?? 0).toFixed(2);
+  // Held as a positive figure on the account, though the entries are
+  // credits: "we hold $500 of theirs" reads better than "-500.00", and
+  // the column has a >= 0 CHECK from spec 04 that predates the ledger.
+  const depositAmount = new Prisma.Decimal(agg?.deposit ?? 0).negated().toFixed(2);
 
   const [oldest] = await tx.$queryRaw<{ due_date: Date | null }[]>`
     SELECT due_date
@@ -102,9 +119,9 @@ export async function recomputeAccountCache(
 
   await tx.account.update({
     where: { id: accountId },
-    data: { balance, lastDueDate },
+    data: { balance, lastDueDate, depositAmount },
   });
-  return { balance, lastDueDate };
+  return { balance, lastDueDate, depositAmount };
 }
 
 /**
