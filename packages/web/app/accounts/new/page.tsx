@@ -13,6 +13,7 @@ interface AccountForm extends Record<string, unknown> {
   creditRating: string;
   billingCycleId: string;
   depositAmount: string;
+  depositTender: string;
   languagePref: string;
   customFields: Record<string, unknown>;
 }
@@ -29,6 +30,21 @@ const CREDIT_RATINGS = [
   { value: "FAIR", label: "FAIR" },
   { value: "POOR", label: "POOR" },
   { value: "UNRATED", label: "UNRATED" },
+];
+
+/**
+ * How an opening deposit arrived.
+ *
+ * A receipts tie-out groups the day's takings by tender, so a deposit
+ * recorded without one cannot be matched against the bank slip it was
+ * part of. Optional, because "unknown" is sometimes the truth.
+ */
+const DEPOSIT_TENDERS = [
+  { value: "CASH", label: "Cash" },
+  { value: "CHECK", label: "Check" },
+  { value: "CARD", label: "Card" },
+  { value: "ACH", label: "ACH" },
+  { value: "LOCKBOX", label: "Lockbox" },
 ];
 
 const LANGUAGE_PREFS = [
@@ -84,6 +100,7 @@ export default function NewAccountPage() {
         creditRating: "",
         billingCycleId: "",
         depositAmount: "",
+        depositTender: "",
         languagePref: "en-US",
         customFields: {},
       }}
@@ -132,6 +149,14 @@ export default function NewAccountPage() {
               tooltip: "May be required for certain account types (e.g., renters)",
               tooltipRuleId: "BR-AC-008",
             },
+            {
+              key: "depositTender",
+              label: "Deposit Tender",
+              type: "select",
+              options: DEPOSIT_TENDERS,
+              emptyOption: "Unknown",
+              hint: "How it arrived — needed to tie the day's receipts to the bank",
+            },
           ],
         },
         {
@@ -167,6 +192,9 @@ export default function NewAccountPage() {
         if (form.accountNumber) body.accountNumber = form.accountNumber;
         if (form.creditRating) body.creditRating = form.creditRating;
         if (form.depositAmount) body.depositAmount = parseFloat(form.depositAmount);
+        // Only when there is a deposit for it to describe: a tender on a
+        // zero deposit would be a fact about money that never moved.
+        if (form.depositAmount && form.depositTender) body.depositTender = form.depositTender;
         if (form.customFields && Object.keys(form.customFields).length > 0) {
           body.customFields = form.customFields;
         }

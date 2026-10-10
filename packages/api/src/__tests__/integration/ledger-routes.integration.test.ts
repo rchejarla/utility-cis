@@ -921,3 +921,158 @@ describe("GET /api/v1/accounts/:id/ledger", () => {
     expect(JSON.parse(res.body).error.code).toBe("ACCOUNT_NOT_FOUND");
   });
 });
+
+/**
+ * The tenant-wide receipts list, at the HTTP boundary.
+ *
+ * `listReceipts` is covered directly in receipt-list.integration.test.ts;
+ * what is only testable here is the wiring — the path, the permission
+ * gate and the strict query schema. A rename that moved the route
+ * without moving the caller, or a query key the schema silently
+ * swallowed, would leave every service test green.
+ *
+ * Every case pins itself to a date nothing else in this file uses, so
+ * the totals stay deterministic however many entries earlier tests have
+ * left on the shared account.
+ */
+describe("GET /api/v1/receipts", () => {
+  const DAY = "2027-03-01";
+
+  async function seedReceiptsDay(): Promise<void> {
+    const { prisma } = prismaImports;
+    await prisma.ledgerEntry.deleteMany({ where: { utilityId, effectiveDate: new Date(DAY) } });
+    await prisma.ledgerEntry.create({
+      data: {
+        utilityId,
+        accountId,
+        type: "PAYMENT",
+        amount: "-30.00",
+        openAmount: "0.00",
+        effectiveDate: new Date(DAY),
+        tender: "CASH",
+        externalRef: "RCPT-PAY",
+      },
+    });
+    await prisma.ledgerEntry.create({
+      data: {
+        utilityId,
+        accountId,
+        type: "DEPOSIT",
+        amount: "-120.00",
+        openAmount: "-120.00",
+        effectiveDate: new Date(DAY),
+        tender: "CHECK",
+        externalRef: "RCPT-DEP",
+      },
+    });
+  }
+
+  it("returns payments and deposits together, with the split beside the total", async () => {
+    await seedReceiptsDay();
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/receipts?from=${DAY}&to=${DAY}`,
+      headers: headers(PAYER),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.meta.total).toBe(2);
+    // 30.00 taken plus the 120.00 deposit, as the bank saw the day.
+    expect(body.totalReceived).toBe("150.00");
+    expect(body.subtotals).toEqual({ PAYMENT: "30.00", DEPOSIT: "120.00" });
+    expect([...body.data].map((r: { type: string }) => r.type).sort()).toEqual([
+      "DEPOSIT",
+      "PAYMENT",
+    ]);
+  });
+
+  it("narrows to one kind when asked", async () => {
+    await seedReceiptsDay();
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/receipts?from=${DAY}&to=${DAY}&type=DEPOSIT`,
+      headers: headers(PAYER),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.meta.total).toBe(1);
+    expect(body.data[0].externalRef).toBe("RCPT-DEP");
+    expect(body.totalReceived).toBe("120.00");
+  });
+
+  // The schema is `.strict()`. A mistyped filter must be refused rather
+  // than ignored: a query that silently drops `tendr=CASH` answers a
+  // different question than the one asked, and looks authoritative.
+  it("refuses an unknown query key rather than ignoring it", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/receipts?tendr=CASH`,
+      headers: headers(PAYER),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("refuses a kind that is not a receipt", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/receipts?type=BILL_CHARGE`,
+      headers: headers(PAYER),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  /**
+   * ADJUSTER is the subject that makes this test say anything: it holds
+   * `accounts:VIEW` and no payments permission at all. If the route were
+   * gated on `accounts` — the module its neighbours in this file use —
+   * ADJUSTER would be let in. VIEWER proves the gate is not stricter
+   * than it should be, holding `payments:VIEW` and nothing more.
+   */
+  it("is gated on payments:VIEW, not on accounts", async () => {
+    for (const sub of [ADJUSTER, NO_PERMS]) {
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/v1/receipts",
+        headers: headers(sub),
+      });
+      expect(res.statusCode, `subject ${sub} must not reach receipts`).toBe(403);
+    }
+
+    const allowed = await app.inject({
+      method: "GET",
+      url: "/api/v1/receipts",
+      headers: headers(VIEWER),
+    });
+    expect(allowed.statusCode, "payments:VIEW alone must suffice").toBe(200);
+  });
+
+  it("never returns another tenant's receipts", async () => {
+    const { prisma } = prismaImports;
+    await seedReceiptsDay();
+    const theirs = await prisma.ledgerEntry.create({
+      data: {
+        utilityId: otherUtilityId,
+        accountId: otherAccountId,
+        type: "PAYMENT",
+        amount: "-999.00",
+        openAmount: "0.00",
+        effectiveDate: new Date(DAY),
+        tender: "CASH",
+        externalRef: "THEIRS",
+      },
+    });
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/receipts?from=${DAY}&to=${DAY}`,
+        headers: headers(PAYER),
+      });
+      const body = JSON.parse(res.body);
+      expect(body.meta.total).toBe(2);
+      expect(body.totalReceived).toBe("150.00");
+      expect(JSON.stringify(body)).not.toContain("THEIRS");
+    } finally {
+      await prisma.ledgerEntry.delete({ where: { id: theirs.id } });
+    }
+  });
+});

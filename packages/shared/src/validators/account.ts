@@ -23,6 +23,13 @@ export const createAccountSchema = z.object({
   creditRating: creditRatingEnum.default("UNRATED"),
   billingCycleId: z.string().uuid(),
   depositAmount: z.number().min(0).default(0),
+  /**
+   * How the opening deposit arrived — cash at the counter, a cheque, a
+   * card. Optional, because a deposit may be recorded without anyone
+   * knowing, but a tie-out groups receipts by tender, so a deposit with
+   * none cannot be matched against the bank slip it was part of.
+   */
+  depositTender: z.enum(["CARD", "ACH", "CASH", "CHECK", "LOCKBOX"]).optional(),
   depositWaived: z.boolean().default(false),
   depositWaivedReason: z.string().max(255).optional(),
   languagePref: z.string().length(5).default("en-US"),
@@ -49,9 +56,13 @@ export const createAccountSchema = z.object({
  *
  * `depositWaived` and `depositWaivedReason` stay editable: they record
  * whether a deposit was REQUIRED, which is a decision, not money.
+ *
+ * `depositTender` goes with the amount for the same reason: it describes
+ * how one particular deposit arrived, so it is part of the act of taking
+ * it, not a property of the account that can later be revised.
  */
 export const updateAccountSchema = createAccountSchema
-  .omit({ accountNumber: true, depositAmount: true })
+  .omit({ accountNumber: true, depositAmount: true, depositTender: true })
   .partial();
 
 export const accountQuerySchema = z.object({

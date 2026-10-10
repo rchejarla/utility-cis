@@ -10,19 +10,32 @@ import { usePermission } from "@/lib/use-permission";
 import { useToast } from "@/components/ui/toast";
 
 /**
- * The tenant-wide payments list.
+ * The tenant-wide receipts list.
  *
  * Answers the question no screen could answer before: what did we take,
- * and does it agree with the bank. Every payment view was scoped to one
- * account, so counting a day's receipts meant visiting accounts one at a
- * time.
+ * and does it agree with the bank. Every view of money received was
+ * scoped to one account, so counting a day's takings meant visiting
+ * accounts one at a time.
+ *
+ * "Receipts", not "Payments", because a security deposit taken at the
+ * counter is in the same till and on the same bank slip as a cheque that
+ * settled a bill. The test for being on this page is "did this money
+ * arrive", not "was this a payment" — and a total that omitted deposits
+ * would under-report the day while looking like a complete one.
+ *
+ * Money LEAVING is deliberately absent. A bank slip is one-directional,
+ * so a refund belongs on its own screen with its own tie-out rather than
+ * netted into this figure.
  *
  * It opens on today, because that is the question being asked when
  * somebody comes here at all.
  */
 
-interface PaymentRow {
+type ReceiptType = "PAYMENT" | "DEPOSIT";
+
+interface ReceiptRow {
   id: string;
+  type: ReceiptType;
   amount: string;
   tender: string | null;
   effectiveDate: string;
@@ -32,13 +45,15 @@ interface PaymentRow {
   account: { id: string; accountNumber: string; customerName: string | null };
 }
 
-interface PaymentPage {
-  data: PaymentRow[];
+interface ReceiptPage {
+  data: ReceiptRow[];
   meta: { total: number; page: number; limit: number; pages: number };
   totalReceived: string;
+  subtotals: Record<ReceiptType, string>;
 }
 
 const TENDERS = ["CASH", "CHECK", "CARD", "ACH", "LOCKBOX"];
+const TYPES: ReceiptType[] = ["PAYMENT", "DEPOSIT"];
 
 /** Today in the browser's own date, not UTC — "today's takings" is local. */
 function today(): string {
@@ -46,16 +61,20 @@ function today(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-export default function PaymentsPage() {
+const money = (s: string) =>
+  Number(s).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+export default function ReceiptsPage() {
   const { canView } = usePermission("payments");
   const { toast } = useToast();
 
-  const [page, setPage] = useState<PaymentPage | null>(null);
+  const [page, setPage] = useState<ReceiptPage | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
   const [tender, setTender] = useState<string | undefined>();
+  const [type, setType] = useState<string | undefined>();
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
   const [pageNo, setPageNo] = useState(1);
@@ -66,26 +85,27 @@ export default function PaymentsPage() {
   }, [search]);
 
   // A filter change invalidates the page number: staying on page 3 of a
-  // narrower result shows an empty table that reads as "no payments".
+  // narrower result shows an empty table that reads as "no receipts".
   useEffect(() => {
     setPageNo(1);
-  }, [debounced, tender, from, to]);
+  }, [debounced, tender, type, from, to]);
 
   const query = useMemo(() => {
     const p = new URLSearchParams({ page: String(pageNo), limit: "25" });
     if (from) p.set("from", from);
     if (to) p.set("to", to);
     if (tender) p.set("tender", tender);
+    if (type) p.set("type", type);
     if (debounced) p.set("search", debounced);
     return p.toString();
-  }, [pageNo, from, to, tender, debounced]);
+  }, [pageNo, from, to, tender, type, debounced]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setPage(await apiClient.get<PaymentPage>(`/api/v1/payments?${query}`));
+      setPage(await apiClient.get<ReceiptPage>(`/api/v1/receipts?${query}`));
     } catch (err) {
-      toast(err instanceof Error ? err.message : "Failed to load payments", "error");
+      toast(err instanceof Error ? err.message : "Failed to load receipts", "error");
     } finally {
       setLoading(false);
     }
@@ -101,7 +121,10 @@ export default function PaymentsPage() {
 
   return (
     <div>
-      <PageHeader title="Payments" subtitle="Money received across all accounts" />
+      <PageHeader
+        title="Money received"
+        subtitle="Payments and deposits across all accounts, for tying out against the bank"
+      />
 
       <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 16 }}>
         <label style={FIELD}>
@@ -122,6 +145,13 @@ export default function PaymentsPage() {
         <FilterBar
           filters={[
             {
+              key: "type",
+              label: "Kind",
+              value: type,
+              options: TYPES.map((t) => ({ label: title(t), value: t })),
+              onChange: (v) => setType(v),
+            },
+            {
               key: "tender",
               label: "Tender",
               value: tender,
@@ -138,24 +168,49 @@ export default function PaymentsPage() {
         it -- a cheque banked on Monday and bounced on Wednesday was in
         Monday's deposit, and netting it out would stop this agreeing with
         the bank, which is its only job.
+
+        One combined figure because a bank slip is one figure, with the
+        split beneath it because the accounting is two: a payment retires
+        a receivable, a deposit creates a liability to hand back later.
       */}
       {page && (
         <div style={TOTAL_CARD}>
-          <div style={{ fontSize: 26, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
-            $
-            {Number(page.totalReceived).toLocaleString(undefined, {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
+          {/*
+            Addressable on its own: on a day with no deposits this
+            figure and the "Payments" subtotal below are the same
+            string, so anything reading the page by text alone cannot
+            tell the combined total from one of its parts.
+          */}
+          <div
+            data-testid="receipt-total"
+            style={{ fontSize: 26, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}
+          >
+            ${money(page.totalReceived)}
           </div>
           <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
             Taken {sameDay ? `on ${fmtDate(from)}` : from && to ? `between ${fmtDate(from)} and ${fmtDate(to)}` : "in total"}
             {tender ? ` by ${title(tender).toLowerCase()}` : ""} · {page.meta.total}{" "}
-            {page.meta.total === 1 ? "payment" : "payments"}
+            {page.meta.total === 1 ? "receipt" : "receipts"}
           </div>
-          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6, maxWidth: 560 }}>
+          {/*
+            Both kinds always stated, including a zero. "No deposits
+            today" is an answer; a line that disappears when the figure
+            is zero leaves the reader unable to tell it from a screen
+            that never looked.
+          */}
+          <div style={SPLIT} data-testid="receipt-split">
+            <span>
+              Payments <strong style={SPLIT_FIG}>${money(page.subtotals.PAYMENT)}</strong>
+            </span>
+            <span style={{ color: "var(--border)" }}>|</span>
+            <span>
+              Deposits <strong style={SPLIT_FIG}>${money(page.subtotals.DEPOSIT)}</strong>
+            </span>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6, maxWidth: 580 }}>
             As recorded on the day. A payment later reversed is still counted here, because the
-            money was in that day&apos;s deposit — reversed rows are marked below.
+            money was in that day&apos;s deposit — reversed rows are marked below. Deposits are
+            included because they were in the same till; they are money held, not a bill paid.
           </div>
         </div>
       )}
@@ -164,7 +219,7 @@ export default function PaymentsPage() {
         <p style={{ color: "var(--text-muted)" }}>Loading…</p>
       ) : !page || page.data.length === 0 ? (
         <div style={EMPTY}>
-          {debounced ? `No payment matches “${debounced}”` : "No payments in this range."}
+          {debounced ? `No receipt matches “${debounced}”` : "No money received in this range."}
         </div>
       ) : (
         <>
@@ -175,6 +230,10 @@ export default function PaymentsPage() {
                   <Th>Received</Th>
                   <Th>Account</Th>
                   <Th className="col-hide-sm">Customer</Th>
+                  {/* Never hidden: a deposit read as a payment is a
+                      wrong answer to "have they paid?", and no width
+                      saving is worth that. */}
+                  <Th>Kind</Th>
                   <Th>Tender</Th>
                   <Th className="col-hide-sm">Reference</Th>
                   <Th style={{ textAlign: "right" }}>Amount</Th>
@@ -190,6 +249,15 @@ export default function PaymentsPage() {
                       </Link>
                     </Td>
                     <Td className="col-hide-sm">{p.account.customerName ?? "—"}</Td>
+                    <Td>
+                      {p.type === "DEPOSIT" ? (
+                        <span style={DEPOSIT_TAG} title="Money held for the customer, not a bill paid">
+                          Deposit
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Payment</span>
+                      )}
+                    </Td>
                     <Td style={{ fontSize: 12 }}>{p.tender ? title(p.tender) : "—"}</Td>
                     <Td className="col-hide-sm" style={{ fontSize: 12, color: "var(--text-muted)" }}>
                       {p.externalRef ?? "—"}
@@ -204,11 +272,7 @@ export default function PaymentsPage() {
                           color: p.reversed ? "var(--text-muted)" : "var(--text-primary)",
                         }}
                       >
-                        $
-                        {Number(p.amount).toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
+                        ${money(p.amount)}
                       </span>
                       {p.reversed && (
                         <span style={REVERSED} title="Reversed — NSF or a correction">
@@ -282,6 +346,20 @@ const TOTAL_CARD: React.CSSProperties = {
   padding: "14px 18px",
   marginBottom: 18,
 };
+const SPLIT: React.CSSProperties = {
+  display: "flex",
+  gap: 10,
+  alignItems: "center",
+  flexWrap: "wrap",
+  marginTop: 8,
+  fontSize: 12,
+  color: "var(--text-muted)",
+};
+const SPLIT_FIG: React.CSSProperties = {
+  fontFamily: "'JetBrains Mono', monospace",
+  fontWeight: 600,
+  color: "var(--text-primary)",
+};
 const CARD: React.CSSProperties = {
   background: "var(--bg-card)",
   border: "1px solid var(--border)",
@@ -302,6 +380,17 @@ const MONO_LINK: React.CSSProperties = {
   fontWeight: 600,
   color: "var(--primary)",
   textDecoration: "none",
+};
+const DEPOSIT_TAG: React.CSSProperties = {
+  display: "inline-block",
+  padding: "1px 7px",
+  fontSize: 10,
+  fontWeight: 700,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+  color: "var(--primary)",
+  border: "1px solid var(--border)",
+  borderRadius: 999,
 };
 const REVERSED: React.CSSProperties = {
   display: "inline-block",

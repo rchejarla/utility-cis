@@ -57,6 +57,8 @@ export const moveInSchema = z.object({
     })).optional(),
   })).min(1),
   depositAmount: z.number().nonnegative().optional(),
+  /** How the deposit arrived. A receipts tie-out groups by tender. */
+  depositTender: z.enum(["CARD", "ACH", "CASH", "CHECK", "LOCKBOX"]).optional(),
 })
   .strict()
   .refine(

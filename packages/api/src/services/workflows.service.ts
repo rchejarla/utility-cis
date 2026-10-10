@@ -315,7 +315,13 @@ export async function moveIn(
         actorId,
         actorName,
         account.id,
-        { amount: data.depositAmount.toFixed(2), memo: "Deposit taken at move-in" },
+        {
+          amount: data.depositAmount.toFixed(2),
+          // So the deposit can be tied out against the bank slip it
+          // arrived on; absent means unknown rather than zero.
+          tender: data.depositTender,
+          memo: "Deposit taken at move-in",
+        },
         tx,
       );
     }

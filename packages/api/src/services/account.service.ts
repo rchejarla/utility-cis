@@ -122,7 +122,11 @@ export async function createAccount(
   // touches Prisma-modeled columns; customFields gets validated
   // against the tenant's custom_field_schema before being merged
   // into the jsonb column on the same row.
-  const { customFields: rawCustom, ...core } = data;
+  // `depositTender` comes off here with customFields: both describe
+  // something other than a column on this row, and `core` is spread
+  // straight into account.create(), which rejects a field it has no
+  // column for. The tender belongs to the ledger entry written below.
+  const { customFields: rawCustom, depositTender, ...core } = data;
   const validatedCustom = await validateCustomFields(
     utilityId,
     "account",
@@ -168,7 +172,14 @@ export async function createAccount(
           actorId,
           actorName,
           account.id,
-          { amount: core.depositAmount.toFixed(2), memo: "Deposit taken at account opening" },
+          {
+            amount: core.depositAmount.toFixed(2),
+            // Carried through so the deposit can be tied out against the
+            // bank slip it arrived on. Absent is allowed and means
+            // unknown, which is honest but unmatchable.
+            tender: depositTender,
+            memo: "Deposit taken at account opening",
+          },
           tx,
         );
         return tx.account.findUniqueOrThrow({ where: { id: account.id } });

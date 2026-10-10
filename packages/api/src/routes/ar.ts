@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   postBillSchema,
   recordPaymentSchema,
-  paymentQuerySchema,
+  receiptQuerySchema,
   reverseEntrySchema,
   assessFeeSchema,
   adjustSchema,
@@ -14,7 +14,7 @@ import { idParamSchema } from "../lib/route-schemas.js";
 import { prisma } from "../lib/prisma.js";
 import { postBill } from "../services/ar/posting.service.js";
 import { reconcileBalances } from "../services/ar/reconciliation.service.js";
-import { recordPayment, listPayments } from "../services/ar/payment.service.js";
+import { recordPayment, listReceipts } from "../services/ar/payment.service.js";
 import { reverseEntry } from "../services/ar/reversal.service.js";
 import { assessFee } from "../services/ar/fee.service.js";
 import { adjustDebit, waive, writeOff } from "../services/ar/adjustment.service.js";
@@ -116,18 +116,23 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
   );
 
   /**
-   * The tenant-wide payments list.
+   * The tenant-wide receipts list — payments and deposits together.
    *
    * On `payments:VIEW` — reading what was taken is the same authority as
    * seeing one account's payments, applied across accounts; taking money
-   * stays on CREATE.
+   * stays on CREATE. A deposit is money received, so it needs no
+   * separate permission to read.
+   *
+   * Named `receipts`, not `payments`, because it returns both: a path
+   * saying `payments` while serving deposits would mislead the next
+   * person to read it.
    */
   app.get(
-    "/api/v1/payments",
+    "/api/v1/receipts",
     { config: { module: "payments", permission: "VIEW" } },
     async (request, reply) => {
-      const q = paymentQuerySchema.parse(request.query ?? {});
-      return reply.send(await listPayments(request.user.utilityId, q));
+      const q = receiptQuerySchema.parse(request.query ?? {});
+      return reply.send(await listReceipts(request.user.utilityId, q));
     },
   );
 

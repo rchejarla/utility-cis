@@ -257,27 +257,42 @@ export const writeOffSchema = creditAgainstDebit;
 export type WaiveInput = z.infer<typeof waiveSchema>;
 export type WriteOffInput = z.infer<typeof writeOffSchema>;
 
-export const paymentSortFields = ["effectiveDate", "amount", "tender", "postedAt"] as const;
+export const receiptSortFields = ["effectiveDate", "amount", "tender", "postedAt"] as const;
+
+/** The two kinds of money that arrive. Both are receipts; neither is the other. */
+export const receiptTypes = ["PAYMENT", "DEPOSIT"] as const;
 
 /**
- * Query for the tenant-wide payments list.
+ * Query for the tenant-wide receipts list.
+ *
+ * A receipt is money that ARRIVED, which is a different question from
+ * "was this a payment". A security deposit taken at the counter is on
+ * the same bank slip as the cheque that settled a bill, so both types
+ * are in scope by default and `type` narrows to one. Omitting a deposit
+ * from a day's takings makes the total disagree with the bank, which is
+ * the one job it has.
+ *
+ * Money LEAVING is deliberately not here. A bank slip is
+ * one-directional, so a refund or other disbursement belongs on its own
+ * screen with its own tie-out, not netted into this total.
  *
  * `from`/`to` bound `effectiveDate` — the day the money was taken, which
- * is what a deposit is tied out against, not the day the row was written.
- * Both bounds are inclusive; a plain `lte` is correct only because
- * `effective_date` is `@db.Date` and carries no time.
+ * is what a bank deposit is tied out against, not the day the row was
+ * written. Both bounds are inclusive; a plain `lte` is correct only
+ * because `effective_date` is `@db.Date` and carries no time.
  *
  * `search` matches `externalRef`: the cheque number, lockbox reference or
- * processor id an operator has in front of them when a payment is
+ * processor id an operator has in front of them when a receipt is
  * queried.
  */
-export const paymentQuerySchema = z
+export const receiptQuerySchema = z
   .object({
     page: z.coerce.number().int().positive().default(1),
     limit: z.coerce.number().int().positive().max(500).default(25),
-    sort: z.enum(paymentSortFields).default("effectiveDate"),
+    sort: z.enum(receiptSortFields).default("effectiveDate"),
     order: z.enum(["asc", "desc"]).default("desc"),
     accountId: z.string().uuid().optional(),
+    type: z.enum(receiptTypes).optional(),
     tender: z.enum(["CARD", "ACH", "CASH", "CHECK", "LOCKBOX"]).optional(),
     from: z.string().date().optional(),
     to: z.string().date().optional(),
@@ -289,4 +304,5 @@ export const paymentQuerySchema = z
     path: ["from"],
   });
 
-export type PaymentQuery = z.infer<typeof paymentQuerySchema>;
+export type ReceiptQuery = z.infer<typeof receiptQuerySchema>;
+export type ReceiptType = (typeof receiptTypes)[number];
