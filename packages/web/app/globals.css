@@ -207,6 +207,15 @@ textarea::placeholder {
  *   .col-hide-md  gone below 1200px  (tablet and phone)
  *   .col-hide-sm  gone below  768px  (phone only)
  *
+ * These are the escape hatch for a hand-rolled <table>. A table built on
+ * the shared DataTable says the same thing in its column config instead,
+ * where it cannot fall out of step with itself:
+ *
+ *   .col-hide-sm  ==  hideBelow: "tablet"
+ *   .col-hide-md  ==  hideBelow: "desktop"
+ *
+ * Prefer the component. Keep these two in step with it if either moves.
+ *
  * Choose by what the reader cannot answer the question without, not by
  * what fits. A bill list that drops "still owed" to fit has kept the
  * columns and lost the point. Anything hidden must stay reachable --
