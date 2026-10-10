@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
+import { usePermission } from "@/lib/use-permission";
 
 /**
  * Raise a fee, forgive a charge, or write one off.
@@ -109,6 +110,9 @@ export function AdjustDialog({
   onDone: () => void;
 }) {
   const { toast } = useToast();
+  // Seeding writes rows, so it needs CREATE rather than the EDIT that got
+  // the operator into this dialog.
+  const { canCreate: canSeed } = usePermission("ar_adjustments");
   const cfg = MODES[mode];
   const [reasons, setReasons] = useState<Reason[] | null>(null);
   const [reasonId, setReasonId] = useState("");
@@ -119,16 +123,46 @@ export function AdjustDialog({
   const [memo, setMemo] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Why this is separate from `reasons: []`.
+   *
+   * Swallowing the error into an empty list made a failed request render
+   * as "this utility has no reason codes" — telling the operator the data
+   * is missing when in truth we never managed to ask. The two need
+   * different words because they need different actions: seed the
+   * defaults, versus find out why the call failed.
+   */
+  const [loadFailed, setLoadFailed] = useState<string | null>(null);
+  const [seeding, setSeeding] = useState(false);
 
-  useEffect(() => {
+  const loadReasons = useCallback(() => {
+    setLoadFailed(null);
     apiClient
       .get<{ data: Reason[] }>(`/api/v1/ar/reasons?appliesToType=${cfg.appliesToType}`)
       .then((r) => {
         setReasons(r.data);
         if (r.data.length === 1) setReasonId(r.data[0]!.id);
       })
-      .catch(() => setReasons([]));
+      .catch((e: unknown) => {
+        setReasons([]);
+        setLoadFailed(e instanceof Error ? e.message : "The reason codes could not be loaded");
+      });
   }, [cfg.appliesToType]);
+
+  useEffect(loadReasons, [loadReasons]);
+
+  async function seedDefaults() {
+    setSeeding(true);
+    try {
+      await apiClient.post("/api/v1/ar/reasons/seed-defaults", {});
+      toast("Default reason codes added", "success");
+      loadReasons();
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : "Could not add the default reason codes", "error");
+    } finally {
+      setSeeding(false);
+    }
+  }
 
   const parsed = parseFloat(amount);
   const amountOk = /^\d+(\.\d{1,2})?$/.test(amount) && parsed > 0;
@@ -136,7 +170,7 @@ export function AdjustDialog({
 
   // A tenant that never seeded reason codes cannot do any of this, and an
   // empty dropdown with a dead button says nothing about why.
-  const noReasons = reasons !== null && reasons.length === 0;
+  const noReasons = reasons !== null && reasons.length === 0 && loadFailed === null;
 
   async function submit() {
     if (!valid || saving) return;
@@ -187,11 +221,28 @@ export function AdjustDialog({
           </div>
         )}
 
-        {noReasons ? (
+        {loadFailed ? (
+          <div style={hintError}>
+            The reason codes could not be loaded, so this cannot be filled in yet — this is not the
+            same as the utility having none. {loadFailed}
+            <button type="button" onClick={loadReasons} style={inlineAction}>
+              Try again
+            </button>
+          </div>
+        ) : noReasons ? (
           <div style={hintError}>
             This utility has no {cfg.appliesToType.toLowerCase().replace(/_/g, " ")} reason codes
-            yet, so there is nothing to cite. An administrator can add the defaults from Settings,
-            or POST to /api/v1/ar/reasons/seed-defaults.
+            yet, so there is nothing to cite.
+            {canSeed && (
+              <button
+                type="button"
+                onClick={() => void seedDefaults()}
+                disabled={seeding}
+                style={inlineAction}
+              >
+                {seeding ? "Adding…" : "Add the default reason codes"}
+              </button>
+            )}
           </div>
         ) : (
           <label style={label}>
@@ -264,6 +315,20 @@ const input: React.CSSProperties = {
   border: "1px solid var(--border)",
   borderRadius: "var(--radius)",
 };
+const inlineAction: React.CSSProperties = {
+  display: "block",
+  marginTop: "8px",
+  padding: "4px 10px",
+  fontSize: "11px",
+  fontWeight: 600,
+  background: "var(--bg-card)",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius)",
+  cursor: "pointer",
+  fontFamily: "inherit",
+};
+
 const hintError: React.CSSProperties = {
   fontSize: "12px",
   textTransform: "none",

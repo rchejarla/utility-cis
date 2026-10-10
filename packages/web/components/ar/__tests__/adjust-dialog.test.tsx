@@ -104,7 +104,10 @@ describe("AdjustDialog reason filtering", () => {
     routeReasons({});
     renderDialog({ mode: "fee" });
     expect(await screen.findByText(/no fee reason codes yet/i)).toBeInTheDocument();
-    expect(screen.getByText(/seed-defaults/i)).toBeInTheDocument();
+    // An operator gets a button, not an instruction to POST to an endpoint.
+    expect(
+      screen.getByRole("button", { name: /add the default reason codes/i }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /raise fee/i })).toBeDisabled();
   });
@@ -187,5 +190,54 @@ describe("AdjustDialog behaviour", () => {
     renderDialog({ mode: "writeOff", target: charge });
     expect(await screen.findByText(/never be collected/i)).toBeInTheDocument();
     expect(screen.getByText(/waive it instead/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * A failed reason lookup and a tenant with no reason codes are different
+ * facts, and the old code reported both as the second one. That sent
+ * anyone diagnosing an empty dropdown looking for missing data when the
+ * request had actually failed.
+ */
+describe("AdjustDialog — why the reason list is empty", () => {
+  it("says the lookup failed, and does NOT claim the utility has no codes", async () => {
+    mockedGet.mockRejectedValue(new Error("403 MODULE_DISABLED"));
+    renderDialog({ mode: "waive", target: charge });
+
+    expect(await screen.findByText(/could not be loaded/i)).toBeInTheDocument();
+    expect(screen.getByText(/403 MODULE_DISABLED/)).toBeInTheDocument();
+    expect(screen.queryByText(/has no adjustment credit reason codes/i)).toBeNull();
+    // Seeding defaults would not fix a failed request, so it is not offered.
+    expect(screen.queryByRole("button", { name: /add the default reason codes/i })).toBeNull();
+  });
+
+  it("retries the lookup on demand", async () => {
+    mockedGet.mockRejectedValueOnce(new Error("boom"));
+    renderDialog({ mode: "waive", target: charge });
+    await screen.findByText(/could not be loaded/i);
+
+    routeReasons();
+    await userEvent.click(screen.getByRole("button", { name: /try again/i }));
+    const select = await screen.findByRole("combobox");
+    expect(within(select).getByRole("option", { name: "Courtesy waiver" })).toBeInTheDocument();
+  });
+
+  it("offers to seed the defaults when the utility genuinely has none", async () => {
+    routeReasons({});
+    renderDialog({ mode: "waive", target: charge });
+
+    expect(await screen.findByText(/has no adjustment credit reason codes/i)).toBeInTheDocument();
+    const seed = screen.getByRole("button", { name: /add the default reason codes/i });
+
+    mockedPost.mockResolvedValue({ created: 12 } as never);
+    routeReasons();
+    await userEvent.click(seed);
+
+    await waitFor(() =>
+      expect(mockedPost).toHaveBeenCalledWith("/api/v1/ar/reasons/seed-defaults", {}),
+    );
+    // Reloaded, so the operator can carry on without reopening.
+    const select = await screen.findByRole("combobox");
+    expect(within(select).getByRole("option", { name: "Courtesy waiver" })).toBeInTheDocument();
   });
 });

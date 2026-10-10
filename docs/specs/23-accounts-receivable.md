@@ -111,6 +111,8 @@ Posting is gated on the same permission as generating a bill (`POST /api/v1/acco
 | Raise Fee | `ar_adjustments:CREATE` |
 | Waive / Write off a charge | `ar_adjustments:EDIT` |
 
+An empty reason dropdown distinguishes two facts that the dialog previously conflated: a tenant with no reason codes, and a lookup that failed. Swallowing the error into an empty list made a failed request read as "this utility has no reason codes", which sent anyone diagnosing it looking for missing data when the call had never succeeded. The genuinely-empty case now offers a button that calls `POST /api/v1/ar/reasons/seed-defaults` — the endpoint's first UI; the message used to instruct the operator to POST to it themselves — and the failure case offers a retry instead, since seeding would not fix it.
+
 `AdjustDialog` takes an `AdjustTarget` — id, both amounts, and a label — rather than a whole `LedgerRow`. The bill list is the second caller and the charge arrives there as four fields, so the wider type would have forced it to invent eleven nulls for a shape the dialog does not read.
 
 Waive and Write off appear only on an open charge — a credit cannot be forgiven and a settled charge has nothing left to forgive — and the reason dropdown is filtered per act, so a waiver is never offered a write-off reason. Reverse is offered only where it can succeed: not on an entry already reversed, and not on a `REVERSAL`.
