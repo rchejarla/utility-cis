@@ -11,6 +11,7 @@ import { useToast } from "@/components/ui/toast";
 import { BillDetailDialog } from "@/components/bills/bill-detail-dialog";
 import { RecordPaymentDialog } from "@/components/ar/record-payment-dialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { AdjustDialog, type AdjustMode } from "@/components/ar/adjust-dialog";
 
 /**
  * The tenant-wide bill list.
@@ -51,6 +52,7 @@ type PostedFilter = "all" | "unposted" | "posted";
 export default function BillsPage() {
   const { canView, canEdit } = usePermission("accounts");
   const { canCreate: canTakePayment, canEdit: canReverse } = usePermission("payments");
+  const { canEdit: canForgive } = usePermission("ar_adjustments");
   const { toast } = useToast();
 
   const [rows, setRows] = useState<BillRow[]>([]);
@@ -61,6 +63,7 @@ export default function BillsPage() {
   const [payFor, setPayFor] = useState<BillRow | null>(null);
   const [voidRow, setVoidRow] = useState<BillRow | null>(null);
   const [voiding, setVoiding] = useState(false);
+  const [adjust, setAdjust] = useState<{ mode: AdjustMode; bill: BillRow } | null>(null);
 
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -107,7 +110,7 @@ export default function BillsPage() {
 
   // One column for every act a CSR can perform here, so the header does
   // not appear for a user who can do none of them.
-  const showActions = canEdit || canTakePayment || canReverse;
+  const showActions = canEdit || canTakePayment || canReverse || canForgive;
 
   if (!canView) return <AccessDenied />;
 
@@ -332,6 +335,32 @@ export default function BillsPage() {
                               Reverse
                             </SmallBtn>
                           )}
+                          {/*
+                            Waive and write off need something left to
+                            forgive, so they are offered only while the
+                            charge is still open. A settled charge has
+                            nothing outstanding; a reversed one no longer
+                            stands at all.
+                          */}
+                          {canForgive &&
+                            b.charge &&
+                            !b.charge.reversed &&
+                            Number(b.charge.openAmount) > 0 && (
+                              <>
+                                <SmallBtn
+                                  tone="var(--warning)"
+                                  onClick={() => setAdjust({ mode: "waive", bill: b })}
+                                >
+                                  Waive
+                                </SmallBtn>
+                                <SmallBtn
+                                  tone="var(--text-muted)"
+                                  onClick={() => setAdjust({ mode: "writeOff", bill: b })}
+                                >
+                                  Write off
+                                </SmallBtn>
+                              </>
+                            )}
                         </div>
                       </Td>
                     )}
@@ -369,6 +398,24 @@ export default function BillsPage() {
           onClose={() => setPayFor(null)}
           onRecorded={() => {
             setPayFor(null);
+            void load();
+          }}
+        />
+      )}
+
+      {adjust?.bill.charge && (
+        <AdjustDialog
+          mode={adjust.mode}
+          accountId={adjust.bill.account.id}
+          target={{
+            id: adjust.bill.charge.entryId,
+            amount: adjust.bill.total,
+            openAmount: adjust.bill.charge.openAmount,
+            label: `Bill ${adjust.bill.billNumber}`,
+          }}
+          onClose={() => setAdjust(null)}
+          onDone={() => {
+            setAdjust(null);
             void load();
           }}
         />

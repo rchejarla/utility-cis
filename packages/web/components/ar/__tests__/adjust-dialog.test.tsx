@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { AdjustDialog } from "../adjust-dialog";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
-import type { LedgerRow } from "../ar-tab";
+import type { AdjustTarget } from "../adjust-dialog";
 
 /**
  * The thing these cases defend is §3.5: a concession and a bad debt are
@@ -42,22 +42,11 @@ function routeReasons(byType: Partial<Record<string, unknown[]>> = REASONS) {
   });
 }
 
-const charge: LedgerRow = {
+const charge: AdjustTarget = {
   id: "e1",
-  type: "BILL_CHARGE",
   amount: "40.00",
   openAmount: "10.00",
-  settled: false,
-  effectiveDate: "2026-05-15",
-  dueDate: "2026-06-14",
-  postedAt: "2026-05-15T00:00:00.000Z",
-  reasonCode: null,
-  reasonLabel: null,
-  billNumber: "BILL-202605-1",
-  tender: null,
-  memo: null,
-  reversedByEntryId: null,
-  reversesEntryId: null,
+  label: "BILL_CHARGE (BILL-202605-1)",
 };
 
 function renderDialog(props: Partial<Parameters<typeof AdjustDialog>[0]> = {}) {

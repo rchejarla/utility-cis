@@ -231,6 +231,68 @@ describe("Bills page", () => {
     expect(screen.queryByRole("button", { name: /^reverse$/i })).toBeNull();
   });
 
+  it("offers Waive and Write off on an open charge", async () => {
+    get.mockResolvedValue(
+      page([row({ postedAt: "2026-06-30", charge: { entryId: "e1", openAmount: "15.00", reversed: false } })]),
+    );
+    renderPage();
+    expect(await screen.findByRole("button", { name: /^waive$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^write off$/i })).toBeInTheDocument();
+  });
+
+  it("offers neither on a charge with nothing left to forgive", async () => {
+    // A settled charge has no outstanding amount, so there is nothing a
+    // concession or a bad-debt entry could act on.
+    get.mockResolvedValue(
+      page([row({ postedAt: "2026-06-30", charge: { entryId: "e1", openAmount: "0.00", reversed: false } })]),
+    );
+    renderPage();
+    expect(await screen.findByRole("button", { name: /take payment/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^waive$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^write off$/i })).toBeNull();
+  });
+
+  it("offers neither on a reversed charge", async () => {
+    get.mockResolvedValue(
+      page([row({ postedAt: "2026-06-30", charge: { entryId: "e1", openAmount: "15.00", reversed: true } })]),
+    );
+    renderPage();
+    expect(await screen.findByText("Reversed")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^waive$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^write off$/i })).toBeNull();
+  });
+
+  it("waives against the bill's charge entry, asking only for waiver reasons", async () => {
+    // §3.5 keeps the three acts distinct, and the dialog enforces it by
+    // never fetching a reason the API would refuse for this act.
+    get.mockImplementation((url: string) => {
+      if (String(url).includes("/ar/reasons")) {
+        return Promise.resolve({
+          data: [
+            { id: "r1", code: "COURTESY", label: "Courtesy waiver", appliesToType: "ADJUSTMENT_CREDIT" },
+          ],
+        });
+      }
+      return Promise.resolve(
+        page([row({ postedAt: "2026-06-30", total: "64.20", charge: { entryId: "e1", openAmount: "15.00", reversed: false } })]),
+      );
+    });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^waive$/i }));
+
+    await waitFor(() =>
+      expect(
+        get.mock.calls.some(([u]) =>
+          String(u).includes("appliesToType=ADJUSTMENT_CREDIT"),
+        ),
+      ).toBe(true),
+    );
+    // Scoped to what is left, not the bill total.
+    expect(screen.getByText(/15\.00 still owed of \$64\.20/i)).toBeInTheDocument();
+    expect(screen.getByText(/Bill BILL-0001/)).toBeInTheDocument();
+  });
+
   it("says the queue is clear rather than showing a bare empty state", async () => {
     get.mockResolvedValue(page([]));
     renderPage();

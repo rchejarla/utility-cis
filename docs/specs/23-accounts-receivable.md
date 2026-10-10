@@ -111,6 +111,8 @@ Posting is gated on the same permission as generating a bill (`POST /api/v1/acco
 | Raise Fee | `ar_adjustments:CREATE` |
 | Waive / Write off a charge | `ar_adjustments:EDIT` |
 
+`AdjustDialog` takes an `AdjustTarget` — id, both amounts, and a label — rather than a whole `LedgerRow`. The bill list is the second caller and the charge arrives there as four fields, so the wider type would have forced it to invent eleven nulls for a shape the dialog does not read.
+
 Waive and Write off appear only on an open charge — a credit cannot be forgiven and a settled charge has nothing left to forgive — and the reason dropdown is filtered per act, so a waiver is never offered a write-off reason. Reverse is offered only where it can succeed: not on an entry already reversed, and not on a `REVERSAL`.
 
 ### Settings → Automation: auto-post
@@ -132,7 +134,8 @@ It shipped in slice 1 as an orphan field: the service returned it and the patch 
 | **Still owed** shown beside **Total** | A $64.20 bill with $15 left is not a $15 bill. §4.6 keeps `bill.total` and the ledger authoritative for different things, and a CSR on a call needs the second figure without doing arithmetic. A dash where no charge exists, never $0.00, which reads as settled |
 | **Take payment** is labelled against the account | `recordPayment` takes an `accountId` and `recordPaymentSchema` carries no `billId`. §6.3 allocates oldest-first across FEE → ADJUSTMENT_DEBIT → BILL_CHARGE, so money taken here may land on an older fee. A per-bill "pay this bill" button would misstate where it goes |
 | **Reverse**, not Void | There is no void and no unpost. §3.5: a wrong charge is reversed, both sides stay on the ledger, and the bill itself is unchanged. Reversal is entry-level, so the list returns the bill's `BILL_CHARGE` entry id. The confirm names the alternative — waive a charge that was correct — so the three acts stay distinct at the point of action |
-| Actions offered only where they can succeed | Post before posting; payment and reverse only after. Nothing is owed on an unposted bill, so neither applies. No Reverse on a charge already reversed |
+| **Waive** and **Write off** on the bill's charge | Both take a `debitId`, and the bill's `BILL_CHARGE` entry is one. Scoped to what is still open, not the bill total, and the reason list is filtered per act so a waiver is never offered a write-off reason |
+| Actions offered only where they can succeed | Post before posting; payment, reverse, waive and write off only after. Nothing is owed on an unposted bill. No Reverse on a charge already reversed; no Waive or Write off unless the charge is open — a settled charge has nothing left to forgive, a reversed one no longer stands |
 | `charge` is `BILL_CHARGE` only | A bill that netted negative posted an `ADJUSTMENT_CREDIT`, and waiver credits can also carry a `billId`, so widening the filter would let an unrelated credit be read as the bill's own charge |
 | `posted` filter is tri-state | Omitted means every bill. A boolean defaulting either way would silently hide half the list. "Not posted" is the posting queue a manual-post tenant works daily |
 | Dates rendered from the ISO string, not `new Date()` | `new Date("2026-06-30")` is UTC midnight, which is the 29th west of Greenwich, so a bill would appear dated a day early |

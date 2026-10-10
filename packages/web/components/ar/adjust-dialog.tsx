@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
-import type { LedgerRow } from "./ar-tab";
 
 /**
  * Raise a fee, forgive a charge, or write one off.
@@ -27,6 +26,26 @@ import type { LedgerRow } from "./ar-tab";
  */
 
 export type AdjustMode = "fee" | "waive" | "writeOff";
+
+/**
+ * The charge a waiver or write-off applies to.
+ *
+ * Deliberately narrower than a ledger row: this dialog needs an id to
+ * send as `debitId`, the two amounts to show what is left of what, and
+ * something to call it. Taking a whole `LedgerRow` meant the only other
+ * screen that can offer these acts -- the bill list, where the charge
+ * arrives as four fields -- would have had to invent eleven nulls to
+ * satisfy a type it does not use.
+ */
+export interface AdjustTarget {
+  /** Sent as `debitId`. Must be a debit; a credit cannot be forgiven. */
+  id: string;
+  /** Signed original amount, for "$X still owed of $Y". */
+  amount: string;
+  openAmount: string;
+  /** What to call it in the confirmation line. */
+  label: string;
+}
 
 interface Reason {
   id: string;
@@ -85,7 +104,7 @@ export function AdjustDialog({
   mode: AdjustMode;
   accountId: string;
   /** The charge being waived or written off. Unused in fee mode. */
-  target?: LedgerRow | null;
+  target?: AdjustTarget | null;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -162,8 +181,7 @@ export function AdjustDialog({
       <div style={{ display: "grid", gap: "12px", marginTop: "4px" }}>
         {cfg.needsTarget && target && (
           <div style={targetBox}>
-            Applying to <b>{target.reasonLabel ?? target.type}</b>
-            {target.billNumber ? ` (${target.billNumber})` : ""} — $
+            Applying to <b>{target.label}</b> — $
             {Math.abs(parseFloat(target.openAmount)).toFixed(2)} still owed of $
             {Math.abs(parseFloat(target.amount)).toFixed(2)}.
           </div>

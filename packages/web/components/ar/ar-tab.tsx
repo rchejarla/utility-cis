@@ -331,7 +331,18 @@ export function ArTab({ accountId }: { accountId: string }) {
         <AdjustDialog
           mode={adjust.mode}
           accountId={accountId}
-          target={adjust.target}
+          target={
+            adjust.target
+              ? {
+                  id: adjust.target.id,
+                  amount: adjust.target.amount,
+                  openAmount: adjust.target.openAmount,
+                  label:
+                    (adjust.target.reasonLabel ?? adjust.target.type) +
+                    (adjust.target.billNumber ? ` (${adjust.target.billNumber})` : ""),
+                }
+              : null
+          }
           onClose={() => setAdjust(null)}
           onDone={load}
         />
