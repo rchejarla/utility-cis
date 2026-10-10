@@ -88,6 +88,7 @@ Single overarching architecture and data model reference for the entire system (
 - `setup_db.bat` — First-time DB setup (start containers + push schema + apply RLS)
 - `start_db.bat` — Start PostgreSQL + Redis containers
 - `stop_db.bat` — Stop containers (data preserved)
+- `migrate_db.bat` — Apply pending Prisma migrations to the dev DB (forward-only; some add enum values PostgreSQL cannot remove)
 - `seed_db.bat` — Seed test data
 - `node seed.js` — Alternative seed (no tsx needed)
 - `start_prod.bat` — Build + run in production mode
