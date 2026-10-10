@@ -110,6 +110,7 @@ Posting is gated on the same permission as generating a bill (`POST /api/v1/acco
 | Record Payment | `payments:CREATE` |
 | Reverse an entry | `payments:EDIT` |
 | Raise Fee | `ar_adjustments:CREATE` |
+| Raise Charge | `ar_adjustments:CREATE` |
 | Waive / Write off a charge | `ar_adjustments:EDIT` |
 
 The reason dropdown was unreadable before any of this mattered: the app declared no `color-scheme`, so Chrome painted the native `<option>` popup light while the options inherited the dark theme's near-white `--text-primary`. Every `<select>` in the app — 38 files' worth — opened looking empty, with the entries present and invisible. The popup is drawn by the browser outside the page, so nothing applied to the `<select>` itself could reach it. Fixed in `globals.css` with `color-scheme: dark` on `:root` and `light` under `[data-theme="light"]`, plus an explicit `select option` colour pair as insurance on platforms that ignore the hint.
@@ -117,6 +118,8 @@ The reason dropdown was unreadable before any of this mattered: the app declared
 An empty reason dropdown distinguishes two facts that the dialog previously conflated: a tenant with no reason codes, and a lookup that failed. Swallowing the error into an empty list made a failed request read as "this utility has no reason codes", which sent anyone diagnosing it looking for missing data when the call had never succeeded. The genuinely-empty case now offers a button that calls `POST /api/v1/ar/reasons/seed-defaults` — the endpoint's first UI; the message used to instruct the operator to POST to it themselves — and the failure case offers a retry instead, since seeding would not fix it.
 
 `AdjustDialog` takes an `AdjustTarget` — id, both amounts, and a label — rather than a whole `LedgerRow`. The bill list is the second caller and the charge arrives there as four fields, so the wider type would have forced it to invent eleven nulls for a shape the dialog does not read.
+
+**Raise Charge** is separate from **Raise Fee** on purpose, and was an orphan endpoint until slice 4b: `POST /api/v1/accounts/:id/adjustments` shipped in slice 3 with no caller. The two stay apart because the ledger keeps them apart — a `FEE` ages on its own due date and is collected *before* bills in the §6.3 order, while an `ADJUSTMENT_DEBIT` is a correction to what was billed and is paid after fees and before bill charges. One button for both would let the operator's choice of words set an allocation order they cannot see, and each cites its own reason type so the dropdown already refuses to mix them.
 
 Waive and Write off appear only on an open charge — a credit cannot be forgiven and a settled charge has nothing left to forgive — and the reason dropdown is filtered per act, so a waiver is never offered a write-off reason. Reverse is offered only where it can succeed: not on an entry already reversed, and not on a `REVERSAL`.
 

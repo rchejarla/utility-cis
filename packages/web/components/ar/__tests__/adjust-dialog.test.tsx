@@ -266,3 +266,56 @@ describe("AdjustDialog — a pending lookup is not an empty one", () => {
     expect(within(select).queryByRole("option", { name: /loading/i })).toBeNull();
   });
 });
+
+/**
+ * A hand-raised charge. The endpoint shipped in slice 3 and nothing
+ * called it -- the third orphan found this session, after autoPostBills
+ * and seed-defaults. What matters is that it stays distinct from a fee:
+ * the two are collected in a different order (§6.3) and cite different
+ * reason types, so a single button would let the operator's wording
+ * decide an allocation order they cannot see.
+ */
+describe("AdjustDialog — raising a charge that is not a fee", () => {
+  it("posts to adjustments, not fees", async () => {
+    routeReasons({
+      ADJUSTMENT_DEBIT: [
+        { id: "r-corr", code: "BILLING_CORRECTION_DEBIT", label: "Billing correction", appliesToType: "ADJUSTMENT_DEBIT" },
+      ],
+    });
+    mockedPost.mockResolvedValue({ entryId: "e9", balance: "60.00" } as never);
+    renderDialog({ mode: "charge" });
+
+    await userEvent.type(await screen.findByLabelText(/amount/i), "20.00");
+    await userEvent.click(screen.getByRole("button", { name: /raise charge/i }));
+
+    await waitFor(() =>
+      expect(mockedPost).toHaveBeenCalledWith(
+        "/api/v1/accounts/a1/adjustments",
+        expect.objectContaining({ amount: "20.00", reasonId: "r-corr" }),
+      ),
+    );
+    // No debitId: a correction stands on its own, it does not name a
+    // charge the way a waiver must.
+    const body = mockedPost.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty("debitId");
+  });
+
+  it("asks only for ADJUSTMENT_DEBIT reasons, never fee reasons", async () => {
+    routeReasons();
+    renderDialog({ mode: "charge" });
+    await waitFor(() =>
+      expect(
+        mockedGet.mock.calls.some(([u]) => String(u).includes("appliesToType=ADJUSTMENT_DEBIT")),
+      ).toBe(true),
+    );
+    expect(
+      mockedGet.mock.calls.some(([u]) => String(u).includes("appliesToType=FEE")),
+    ).toBe(false);
+  });
+
+  it("says how it differs from a fee, where the operator is choosing", async () => {
+    routeReasons();
+    renderDialog({ mode: "charge" });
+    expect(await screen.findByText(/It is not a fee/i)).toBeInTheDocument();
+  });
+});

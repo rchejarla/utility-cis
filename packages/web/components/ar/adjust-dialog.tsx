@@ -26,7 +26,7 @@ import { usePermission } from "@/lib/use-permission";
  * reasonable thing to do by accident.
  */
 
-export type AdjustMode = "fee" | "waive" | "writeOff";
+export type AdjustMode = "fee" | "charge" | "waive" | "writeOff";
 
 /**
  * The charge a waiver or write-off applies to.
@@ -73,6 +73,25 @@ const MODES: Record<
     confirm: "Raise fee",
     path: (a) => `/api/v1/accounts/${a}/fees`,
     appliesToType: "FEE",
+    needsTarget: false,
+  },
+  /**
+   * A charge that is not a fee.
+   *
+   * Separate from `fee` because the ledger keeps them apart: a FEE ages
+   * on its own due date and is paid BEFORE bills in the §6.3 order,
+   * whereas an ADJUSTMENT_DEBIT is a correction to what was billed and
+   * sits between fees and bill charges. Folding them into one button
+   * would make the operator's wording decide an allocation order they
+   * cannot see.
+   */
+  charge: {
+    title: "Raise a charge",
+    message:
+      "A correction to what this account was billed — an under-billing, a transferred balance, a charge that belongs here. It is not a fee: a fee ages on its own and is collected first, while a correction is paid after fees and before bills.",
+    confirm: "Raise charge",
+    path: (a) => `/api/v1/accounts/${a}/adjustments`,
+    appliesToType: "ADJUSTMENT_DEBIT",
     needsTarget: false,
   },
   waive: {

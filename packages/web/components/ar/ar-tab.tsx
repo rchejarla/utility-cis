@@ -173,6 +173,21 @@ export function ArTab({ accountId }: { accountId: string }) {
               Raise Fee
             </button>
           )}
+          {/*
+            Separate from Raise Fee because the ledger separates them: a
+            FEE is collected before bills in the §6.3 order, a correction
+            after fees and before bills. One button would let the
+            operator's choice of words set an allocation order they
+            cannot see.
+          */}
+          {canRaiseFee && (
+            <button
+              onClick={() => setAdjust({ mode: "charge", target: null })}
+              style={secondaryButton}
+            >
+              Raise Charge
+            </button>
+          )}
           {canTakePayment && (
             <button onClick={() => setShowPayment(true)} style={primaryButton}>
               Record Payment
