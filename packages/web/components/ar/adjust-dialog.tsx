@@ -171,6 +171,15 @@ export function AdjustDialog({
   // A tenant that never seeded reason codes cannot do any of this, and an
   // empty dropdown with a dead button says nothing about why.
   const noReasons = reasons !== null && reasons.length === 0 && loadFailed === null;
+  /**
+   * The third state, and the one that caused a real support round-trip.
+   *
+   * While this is true the dropdown has nothing in it but its placeholder,
+   * which looks exactly like a tenant with no reason codes. A request that
+   * is merely slow, or that never settles at all, is therefore
+   * indistinguishable from missing data unless the UI says which it is.
+   */
+  const loadingReasons = reasons === null && loadFailed === null;
 
   async function submit() {
     if (!valid || saving) return;
@@ -247,8 +256,15 @@ export function AdjustDialog({
         ) : (
           <label style={label}>
             Reason
-            <select value={reasonId} onChange={(e) => setReasonId(e.target.value)} style={input}>
-              <option value="">Choose a reason…</option>
+            <select
+              value={reasonId}
+              onChange={(e) => setReasonId(e.target.value)}
+              style={input}
+              disabled={loadingReasons}
+            >
+              <option value="">
+                {loadingReasons ? "Loading reason codes…" : "Choose a reason…"}
+              </option>
               {(reasons ?? []).map((r) => (
                 <option key={r.id} value={r.id}>
                   {r.label}

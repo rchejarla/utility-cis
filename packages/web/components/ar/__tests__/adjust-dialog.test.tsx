@@ -241,3 +241,28 @@ describe("AdjustDialog — why the reason list is empty", () => {
     expect(within(select).getByRole("option", { name: "Courtesy waiver" })).toBeInTheDocument();
   });
 });
+
+describe("AdjustDialog — a pending lookup is not an empty one", () => {
+  it("says it is loading rather than showing a bare placeholder", async () => {
+    // A request that never settles. Before this, the dropdown held only
+    // "Choose a reason…", which reads as "this utility has no reasons" —
+    // the exact confusion that sent someone hunting for missing data.
+    mockedGet.mockReturnValue(new Promise(() => {}) as never);
+    renderDialog({ mode: "waive", target: charge });
+
+    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    expect(within(select).getByRole("option", { name: /loading reason codes/i })).toBeInTheDocument();
+    expect(select).toBeDisabled();
+    // And it must not assert the tenant has none, which is not yet known.
+    expect(screen.queryByText(/has no adjustment credit reason codes/i)).toBeNull();
+  });
+
+  it("enables the select once the reasons arrive", async () => {
+    routeReasons();
+    renderDialog({ mode: "waive", target: charge });
+    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    await waitFor(() => expect(select).not.toBeDisabled());
+    expect(within(select).getByRole("option", { name: "Courtesy waiver" })).toBeInTheDocument();
+    expect(within(select).queryByRole("option", { name: /loading/i })).toBeNull();
+  });
+});
