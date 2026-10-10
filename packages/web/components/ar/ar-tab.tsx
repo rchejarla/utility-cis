@@ -6,6 +6,7 @@ import { usePermission } from "@/lib/use-permission";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { RecordPaymentDialog } from "./record-payment-dialog";
+import { AdjustDialog, type AdjustMode } from "./adjust-dialog";
 
 /**
  * The account's receivable: what it owes, and every entry behind that
@@ -87,6 +88,7 @@ export function ArTab({ accountId }: { accountId: string }) {
   const { canView } = usePermission("accounts");
   const { canEdit: canPostBill } = usePermission("accounts");
   const { canCreate: canTakePayment, canEdit: canReverse } = usePermission("payments");
+  const { canCreate: canRaiseFee, canEdit: canForgive } = usePermission("ar_adjustments");
 
   const [page, setPage] = useState<LedgerPage | null>(null);
   const [unposted, setUnposted] = useState<UnpostedBill[]>([]);
@@ -96,6 +98,7 @@ export function ArTab({ accountId }: { accountId: string }) {
   const [showPayment, setShowPayment] = useState(false);
   const [reverseRow, setReverseRow] = useState<LedgerRow | null>(null);
   const [reversing, setReversing] = useState(false);
+  const [adjust, setAdjust] = useState<{ mode: AdjustMode; target: LedgerRow | null } | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -181,11 +184,23 @@ export function ArTab({ accountId }: { accountId: string }) {
 
   return (
     <div>
-      {canTakePayment && (
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px" }}>
-          <button onClick={() => setShowPayment(true)} style={primaryButton}>
-            Record Payment
-          </button>
+      {(canTakePayment || canRaiseFee) && (
+        <div
+          style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginBottom: "12px" }}
+        >
+          {canRaiseFee && (
+            <button
+              onClick={() => setAdjust({ mode: "fee", target: null })}
+              style={secondaryButton}
+            >
+              Raise Fee
+            </button>
+          )}
+          {canTakePayment && (
+            <button onClick={() => setShowPayment(true)} style={primaryButton}>
+              Record Payment
+            </button>
+          )}
         </div>
       )}
 
@@ -253,7 +268,7 @@ export function ArTab({ accountId }: { accountId: string }) {
               <th style={{ ...th, textAlign: "right" }}>Charged</th>
               <th style={{ ...th, textAlign: "right" }}>Still owed</th>
               <th style={th}>Detail</th>
-              {canReverse && <th style={th} aria-label="Actions" />}
+              {(canReverse || canForgive) && <th style={th} aria-label="Actions" />}
             </tr>
           </thead>
           <tbody>
@@ -295,12 +310,34 @@ export function ArTab({ accountId }: { accountId: string }) {
                       .filter(Boolean)
                       .join(" · ") || "—"}
                   </td>
-                  {canReverse && (
-                    <td style={{ ...td, textAlign: "right" }}>
+                  {(canReverse || canForgive) && (
+                    <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                      {/* Forgiving only makes sense on a charge that is
+                          still owed: a credit cannot be waived, and a
+                          settled charge has nothing left to forgive. */}
+                      {canForgive && !reversed && !isCredit && !row.settled && (
+                        <>
+                          <button
+                            onClick={() => setAdjust({ mode: "waive", target: row })}
+                            style={linkButton}
+                          >
+                            Waive
+                          </button>
+                          <button
+                            onClick={() => setAdjust({ mode: "writeOff", target: row })}
+                            style={{ ...linkButton, marginLeft: "10px" }}
+                          >
+                            Write off
+                          </button>
+                        </>
+                      )}
                       {/* A reversal is itself irreversible, and an entry
                           already reversed cannot be reversed again. */}
-                      {!reversed && row.type !== "REVERSAL" && (
-                        <button onClick={() => setReverseRow(row)} style={linkButton}>
+                      {canReverse && !reversed && row.type !== "REVERSAL" && (
+                        <button
+                          onClick={() => setReverseRow(row)}
+                          style={{ ...linkButton, marginLeft: "10px" }}
+                        >
                           Reverse
                         </button>
                       )}
@@ -318,6 +355,16 @@ export function ArTab({ accountId }: { accountId: string }) {
           accountId={accountId}
           onClose={() => setShowPayment(false)}
           onRecorded={load}
+        />
+      )}
+
+      {adjust && (
+        <AdjustDialog
+          mode={adjust.mode}
+          accountId={accountId}
+          target={adjust.target}
+          onClose={() => setAdjust(null)}
+          onDone={load}
         />
       )}
 
@@ -376,6 +423,17 @@ const primaryButton: React.CSSProperties = {
   border: "none",
   background: "var(--accent-primary)",
   color: "#fff",
+  fontSize: "12px",
+  fontWeight: 500,
+  cursor: "pointer",
+  fontFamily: "inherit",
+};
+const secondaryButton: React.CSSProperties = {
+  padding: "7px 16px",
+  borderRadius: "var(--radius)",
+  border: "1px solid var(--border)",
+  background: "transparent",
+  color: "var(--text-secondary)",
   fontSize: "12px",
   fontWeight: 500,
   cursor: "pointer",

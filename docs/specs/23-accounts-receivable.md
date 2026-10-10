@@ -1,7 +1,7 @@
 # Accounts Receivable
 
 **Module:** 23 — Accounts Receivable
-**Status:** Phase 3 — slices 1 (ledger and posting), 2 (payments, allocation, reversal) and 3 (fees, adjustments, reason codes) shipped; slices 4–6 outstanding. No UI yet: the surface is ten API endpoints, and the operator screens land in slice 4.
+**Status:** Phase 3 — slices 1 (ledger and posting), 2 (payments, allocation, reversal), 3 (fees, adjustments, reason codes) and 4a (the account AR tab) shipped; 4b and slices 5–6 outstanding. Twelve API endpoints, and the account AR tab is the first user interface.
 **Entities:** `LedgerEntry`, `LedgerApplication`, `LedgerReasonDef`, plus columns on existing entities (`Bill.postedAt`, `Account.balance`, `Account.lastDueDate`, `Account.autoPostBills`, `TenantConfig.autoPostBills`).
 
 ## Authority
@@ -66,6 +66,7 @@ account.balance   = SUM(openAmount) over the account's entries
 | POST | `/api/v1/accounts/:id/adjustments` | `ar_adjustments:CREATE` | A charge raised by hand. Same shape without `assessedOnId`. |
 | POST | `/api/v1/accounts/:id/waivers` | `ar_adjustments:EDIT` | Forgives part or all of one nominated charge. Requires `debitId`. The excess stays open as a refund due and does not spill onto other charges. |
 | POST | `/api/v1/accounts/:id/write-offs` | `ar_adjustments:EDIT` | Same mechanics, recorded as bad debt rather than a concession. |
+| GET | `/api/v1/accounts/:id/ledger` | `accounts:VIEW` | The account's entries for display: the reason label, the bill number, the tender, and reversal links resolved in BOTH directions so a reader is not left pairing rows by amount. Returns the cached `balance` and an account-wide `openCount` alongside; capped at 500 rows, with `openOnly` and `limit`. On `accounts:VIEW` rather than a writing module, because a CSR who may not take a payment still needs to see what is owed. |
 | GET | `/api/v1/ar/reconciliation` | `accounts:VIEW` | Proof, not assertion: every account whose cached `balance` differs from `SUM(open_amount)`. `{ ok: true, drift: [] }` when the cache is correct. |
 
 Posting is gated on the same permission as generating a bill (`POST /api/v1/accounts/:id/bills`): generation already posts when auto-post is on, so posting must require no more authority than generating. The two reads are account data, not tenant configuration, so they sit on `accounts:VIEW`. The two money-moving routes sit on the `payments` module instead: taking money and reversing it is a different authority from reading or generating against an account, which is the line design §8 draws. Reversal is EDIT rather than CREATE because it changes the standing of an entry that already exists. `ar_adjustments` arrives in slice 3 with the credits, waivers and write-offs it gates.
@@ -92,7 +93,27 @@ Posting is gated on the same permission as generating a bill (`POST /api/v1/acco
 
 ## UI
 
-Still nothing after slice 3 — the surface is the eleven API routes above, and every one of them is reachable only by HTTP today. The account AR tab (ledger, aging summary, record-payment, adjust/waive) and the unposted-bills list with a Post action land in slice 4, per design §8. Worth stating plainly: an operator cannot record a payment or reverse one from the application yet.
+**The account AR tab ships in slice 4a.** `/accounts/[id]` gains an **AR** tab beside Bills showing what the account owes and every entry behind it:
+
+| Shown | Why it is rendered that way |
+|---|---|
+| Amount due / In credit / Nothing owed | A negative balance is never shown as "Amount due −$20.00"; the words carry the sign and the figure is unsigned |
+| Charged and Still owed as separate columns | A $40 charge with $15 outstanding is not a $15 charge. A settled row shows a dash, not $0.00 |
+| A credit as `($25.00)` | The accounting convention, rather than a minus sign a reader must notice |
+| **reversed** / **reverses an earlier entry** markers | Both sides of a reversal stay on the ledger, so unmarked they read as a double charge |
+| Unposted-bills strip | Says the bills are "not yet owed" — an issued bill that is not posted has not moved the balance |
+
+| Action | Gate |
+|---|---|
+| Post an unposted bill | `accounts:EDIT` |
+| Record Payment | `payments:CREATE` |
+| Reverse an entry | `payments:EDIT` |
+| Raise Fee | `ar_adjustments:CREATE` |
+| Waive / Write off a charge | `ar_adjustments:EDIT` |
+
+Waive and Write off appear only on an open charge — a credit cannot be forgiven and a settled charge has nothing left to forgive — and the reason dropdown is filtered per act, so a waiver is never offered a write-off reason. Reverse is offered only where it can succeed: not on an entry already reversed, and not on a `REVERSAL`.
+
+**Still outstanding, deferred to slice 4b with reasons:** the statement view (§7.1, needs bill-period boundaries), the aging summary (§7.2, belongs with the dashboard widget that consumes it), the portal amount due, reason-code CRUD, and sidebar screens for the tenant-wide views — reconciliation, reason codes and aging — none of which has a home in the navigation yet. Design §8 lists the aging summary as part of the AR tab; it is not in 4a, and that is a known gap rather than an oversight.
 
 ## Slice roadmap (design §10)
 
