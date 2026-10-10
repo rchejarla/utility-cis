@@ -67,7 +67,7 @@ account.balance   = SUM(openAmount) over the account's entries
 | POST | `/api/v1/accounts/:id/waivers` | `ar_adjustments:EDIT` | Forgives part or all of one nominated charge. Requires `debitId`. The excess stays open as a refund due and does not spill onto other charges. |
 | POST | `/api/v1/accounts/:id/write-offs` | `ar_adjustments:EDIT` | Same mechanics, recorded as bad debt rather than a concession. |
 | GET | `/api/v1/accounts/:id/ledger` | `accounts:VIEW` | The account's entries for display: the reason label, the bill number, the tender, and reversal links resolved in BOTH directions so a reader is not left pairing rows by amount. Returns the cached `balance` and an account-wide `openCount` alongside; capped at 500 rows, with `openOnly` and `limit`. On `accounts:VIEW` rather than a writing module, because a CSR who may not take a payment still needs to see what is owed. |
-| GET | `/api/v1/ar/reconciliation` | `accounts:VIEW` | Proof, not assertion: every account whose cached `balance` differs from `SUM(open_amount)`. `{ ok: true, drift: [] }` when the cache is correct. |
+| GET | `/api/v1/ar/reconciliation` | `accounts:VIEW` | Proof, not assertion: every account whose cached `balance` differs from `SUM(open_amount)`. Returns `{ ok, checked, drift }`. `checked` is the number of accounts examined, and it is what makes an empty `drift` mean anything — a check that could see no accounts returns the same empty list as a clean ledger, so `ok: true` on its own is not evidence. Both statements run inside one `withTenant`, on one connection, so the count cannot reassure about a population the drift query never saw. |
 
 Posting is gated on the same permission as generating a bill (`POST /api/v1/accounts/:id/bills`): generation already posts when auto-post is on, so posting must require no more authority than generating. The two reads are account data, not tenant configuration, so they sit on `accounts:VIEW`. The two money-moving routes sit on the `payments` module instead: taking money and reversing it is a different authority from reading or generating against an account, which is the line design §8 draws. Reversal is EDIT rather than CREATE because it changes the standing of an entry that already exists. `ar_adjustments` arrives in slice 3 with the credits, waivers and write-offs it gates.
 
@@ -113,7 +113,29 @@ Posting is gated on the same permission as generating a bill (`POST /api/v1/acco
 
 Waive and Write off appear only on an open charge — a credit cannot be forgiven and a settled charge has nothing left to forgive — and the reason dropdown is filtered per act, so a waiver is never offered a write-off reason. Reverse is offered only where it can succeed: not on an entry already reversed, and not on a `REVERSAL`.
 
-**Still outstanding, deferred to slice 4b with reasons:** the statement view (§7.1, needs bill-period boundaries), the aging summary (§7.2, belongs with the dashboard widget that consumes it), the portal amount due, reason-code CRUD, and sidebar screens for the tenant-wide views — reconciliation, reason codes and aging — none of which has a home in the navigation yet. Design §8 lists the aging summary as part of the AR tab; it is not in 4a, and that is a known gap rather than an oversight.
+### Settings → Automation: auto-post
+
+`autoPostBills` is exposed as a toggle in its own **Billing** section on `/settings/automation`, not in the Schedulers card, because it is not a background job — it runs inside the bill-generation transaction, which is why a bill and its receivable commit together or not at all. It resolves `account.autoPostBills ?? tenantConfig.autoPostBills ?? true`, so the tenant toggle moves every account that has not explicitly opted out.
+
+It shipped in slice 1 as an orphan field: the service returned it and the patch schema accepted it, but no screen drew a control, so manual posting was reachable only by SQL and the AR tab's unposted-bills strip described a state no tenant could enter. A drift guard now derives the editable key list from `AutomationConfigSchema` and fails if a setting is never rendered.
+
+**The per-account override has no UI yet** — `account.autoPostBills` is not on the account API's read or write surface, so an account cannot yet opt out of a tenant default.
+
+### Billing & AR → Reconciliation
+
+A sidebar section **Billing & AR** holds the tenant-wide views. Its first entry is `/ar/reconciliation` on `accounts:VIEW`, which renders `GET /api/v1/ar/reconciliation`.
+
+The healthy result is the usual result, so the page is built around reassurance rather than as a work queue, and it has **three** outcomes, not two:
+
+| Outcome | Rendered as | Why it is separate |
+|---|---|---|
+| `checked > 0`, no drift | Reconciled, "All N accounts reconcile" | The count is the evidence. "No drift" without a population is not a claim |
+| `checked === 0` | **Inconclusive**, not green | An empty drift list is also what a check that could see no accounts returns. Reported as proving nothing, so a blinded check cannot read as a clean bill of health |
+| drift present | Out of balance, with stored / ledger / signed difference per account | Linked to the account's AR tab. Signed with an explicit `+`/`−`, not the brackets the AR tab uses for credits, because this is a discrepancy and not a credit |
+
+**Still outstanding, deferred to slice 4b with reasons:** the statement view (§7.1, needs bill-period boundaries), the aging summary (§7.2, belongs with the dashboard widget that consumes it, and sits under Collections rather than here because collections staff are who use it), the portal amount due, reason-code CRUD (belongs in Configuration beside Account Types, not in a work-queue section), and the per-account auto-post override. Design §8 lists the aging summary as part of the AR tab; it is not in 4a, and that is a known gap rather than an oversight.
+
+**Cross-account gap, found while placing the nav:** every bill and ledger route except reconciliation is account-scoped or single-id — `routes/bills.ts` holds exactly one route, `GET /api/v1/bills/:id` — so there is no tenant-wide list of bills or ledger entries, and `billNumber` is searchable from no endpoint. A CSR holding a bill number cannot find that bill, and with auto-post off, finding unposted bills means visiting accounts one at a time. A **Bills** list with bill-number search and a **Posting Queue** are the next two entries in this section, and both need new endpoints.
 
 ## Slice roadmap (design §10)
 

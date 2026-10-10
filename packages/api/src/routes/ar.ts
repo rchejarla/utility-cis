@@ -109,8 +109,8 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
     "/api/v1/ar/reconciliation",
     { config: { module: "accounts", permission: "VIEW" } },
     async (request, reply) => {
-      const drift = await reconcileBalances(request.user.utilityId);
-      return reply.send({ ok: drift.length === 0, drift });
+      const report = await reconcileBalances(request.user.utilityId);
+      return reply.send({ ok: report.drift.length === 0, ...report });
     },
   );
 

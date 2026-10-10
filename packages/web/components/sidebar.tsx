@@ -44,6 +44,7 @@ import {
   faFileImport,
   faHouse,
   faIdCard,
+  faScaleBalanced,
 } from "@fortawesome/pro-solid-svg-icons";
 
 interface NavItem {
@@ -94,6 +95,18 @@ const navSections: NavSection[] = [
       { href: "/containers", label: "Containers", icon: faDumpster, module: "containers" },
       { href: "/service-suspensions", label: "Service Holds", icon: faPauseCircle, module: "service_suspensions" },
       { href: "/service-events", label: "RAMS Events", icon: faTruck, module: "service_events", tooltip: "Route and Asset Management System — field events from solid-waste collection crews" },
+    ],
+  },
+  {
+    title: "Billing & AR",
+    items: [
+      {
+        href: "/ar/reconciliation",
+        label: "Reconciliation",
+        icon: faScaleBalanced,
+        module: "accounts",
+        tooltip: "Proves every account's cached balance still equals the sum of its open ledger entries",
+      },
     ],
   },
   {
