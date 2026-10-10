@@ -9,6 +9,8 @@ import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { useToast } from "@/components/ui/toast";
 import { BillDetailDialog } from "@/components/bills/bill-detail-dialog";
+import { RecordPaymentDialog } from "@/components/ar/record-payment-dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 /**
  * The tenant-wide bill list.
@@ -36,6 +38,7 @@ interface BillRow {
   postedAt: string | null;
   billingCycleName: string | null;
   account: { id: string; accountNumber: string; customerName: string | null };
+  charge: { entryId: string; openAmount: string; reversed: boolean } | null;
 }
 
 interface BillPage {
@@ -47,6 +50,7 @@ type PostedFilter = "all" | "unposted" | "posted";
 
 export default function BillsPage() {
   const { canView, canEdit } = usePermission("accounts");
+  const { canCreate: canTakePayment, canEdit: canReverse } = usePermission("payments");
   const { toast } = useToast();
 
   const [rows, setRows] = useState<BillRow[]>([]);
@@ -54,6 +58,9 @@ export default function BillsPage() {
   const [loading, setLoading] = useState(true);
   const [posting, setPosting] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [payFor, setPayFor] = useState<BillRow | null>(null);
+  const [voidRow, setVoidRow] = useState<BillRow | null>(null);
+  const [voiding, setVoiding] = useState(false);
 
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -98,6 +105,10 @@ export default function BillsPage() {
     if (canView) void load();
   }, [canView, load]);
 
+  // One column for every act a CSR can perform here, so the header does
+  // not appear for a user who can do none of them.
+  const showActions = canEdit || canTakePayment || canReverse;
+
   if (!canView) return <AccessDenied />;
 
   async function post(bill: BillRow) {
@@ -110,6 +121,21 @@ export default function BillsPage() {
       toast(err instanceof Error ? err.message : "Failed to post bill", "error");
     } finally {
       setPosting(null);
+    }
+  }
+
+  async function reverseCharge() {
+    if (!voidRow?.charge) return;
+    setVoiding(true);
+    try {
+      await apiClient.post(`/api/v1/ledger-entries/${voidRow.charge.entryId}/reverse`, {});
+      toast(`${voidRow.billNumber} reversed — the charge no longer stands`, "success");
+      setVoidRow(null);
+      await load();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not reverse the charge", "error");
+    } finally {
+      setVoiding(false);
     }
   }
 
@@ -180,8 +206,9 @@ export default function BillsPage() {
                   <Th>Period</Th>
                   <Th>Due</Th>
                   <Th style={{ textAlign: "right" }}>Total</Th>
+                  <Th style={{ textAlign: "right" }}>Still owed</Th>
                   <Th>Status</Th>
-                  {canEdit && <Th />}
+                  {showActions && <Th>Actions</Th>}
                 </tr>
               </thead>
               <tbody>
@@ -222,8 +249,41 @@ export default function BillsPage() {
                         })}
                       </span>
                     </Td>
+                    {/*
+                      Still owed is not the total. A $64.20 bill with $15
+                      left is not a $15 bill, and a CSR on a call needs the
+                      second number without doing arithmetic. A dash where
+                      there is no charge yet, rather than $0.00, which
+                      would read as settled.
+                    */}
+                    <Td style={{ textAlign: "right" }}>
+                      {b.charge ? (
+                        <span
+                          style={{
+                            ...MONEY,
+                            color:
+                              Number(b.charge.openAmount) > 0
+                                ? "var(--text-primary)"
+                                : "var(--text-muted)",
+                          }}
+                        >
+                          {Number(b.charge.openAmount) === 0
+                            ? "—"
+                            : `$${Number(b.charge.openAmount).toLocaleString(undefined, {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}`}
+                        </span>
+                      ) : (
+                        <span style={{ color: "var(--text-muted)" }}>—</span>
+                      )}
+                    </Td>
                     <Td>
-                      {b.postedAt ? (
+                      {b.charge?.reversed ? (
+                        <Pill tone="var(--text-muted)" title="The charge was reversed, so it no longer stands">
+                          Reversed
+                        </Pill>
+                      ) : b.postedAt ? (
                         <Pill tone="var(--success)" title={`Posted ${fmtDate(b.postedAt)}`}>
                           Posted
                         </Pill>
@@ -236,17 +296,43 @@ export default function BillsPage() {
                         </Pill>
                       )}
                     </Td>
-                    {canEdit && (
+                    {showActions && (
                       <Td>
-                        {!b.postedAt && (
-                          <button
-                            onClick={() => void post(b)}
-                            disabled={posting === b.id}
-                            style={POST_BTN(posting === b.id)}
-                          >
-                            {posting === b.id ? "Posting…" : "Post"}
-                          </button>
-                        )}
+                        <div style={{ display: "flex", gap: 6 }}>
+                          {/* Post only exists before posting; the rest only after. */}
+                          {canEdit && !b.postedAt && (
+                            <button
+                              onClick={() => void post(b)}
+                              disabled={posting === b.id}
+                              style={POST_BTN(posting === b.id)}
+                            >
+                              {posting === b.id ? "Posting…" : "Post"}
+                            </button>
+                          )}
+                          {/*
+                            Payment is account-scoped, not bill-scoped:
+                            recordPayment takes an accountId and §6.3
+                            allocates oldest-first across fees, manual
+                            debits and then bills. The label says "account"
+                            so nobody reads this as paying off this bill.
+                          */}
+                          {canTakePayment && b.postedAt && (
+                            <SmallBtn tone="var(--info)" onClick={() => setPayFor(b)}>
+                              Take payment
+                            </SmallBtn>
+                          )}
+                          {/*
+                            There is no void. §3.5: a wrong charge is
+                            reversed, and both sides stay on the ledger.
+                            Offered only where it can succeed — a posted
+                            bill with its own charge, not already reversed.
+                          */}
+                          {canReverse && b.charge && !b.charge.reversed && (
+                            <SmallBtn tone="var(--danger)" onClick={() => setVoidRow(b)}>
+                              Reverse
+                            </SmallBtn>
+                          )}
+                        </div>
                       </Td>
                     )}
                   </tr>
@@ -276,6 +362,31 @@ export default function BillsPage() {
       )}
 
       {detailId && <BillDetailDialog billId={detailId} onClose={() => setDetailId(null)} />}
+
+      {payFor && (
+        <RecordPaymentDialog
+          accountId={payFor.account.id}
+          onClose={() => setPayFor(null)}
+          onRecorded={() => {
+            setPayFor(null);
+            void load();
+          }}
+        />
+      )}
+
+      {voidRow && (
+        <ConfirmDialog
+          title={`Reverse ${voidRow.billNumber}?`}
+          message={
+            `This reverses the $${Number(voidRow.total).toFixed(2)} charge this bill raised, so it is no longer owed. ` +
+            "Both the charge and its reversal stay on the ledger — nothing is deleted, and the bill itself is unchanged. " +
+            "Use this when the charge was wrong. To forgive a charge that was correct, waive it instead."
+          }
+          confirmLabel={voiding ? "Reversing…" : "Reverse charge"}
+          onConfirm={() => void reverseCharge()}
+          onCancel={() => setVoidRow(null)}
+        />
+      )}
     </div>
   );
 }
@@ -288,6 +399,36 @@ export default function BillsPage() {
 function fmtDate(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split("-");
   return `${m}/${d}/${y}`;
+}
+
+function SmallBtn({
+  children,
+  tone,
+  onClick,
+}: {
+  children: React.ReactNode;
+  tone: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: "3px 8px",
+        fontSize: 10,
+        fontWeight: 600,
+        background: `${tone}18`,
+        color: tone,
+        border: `1px solid ${tone}40`,
+        borderRadius: "var(--radius)",
+        cursor: "pointer",
+        fontFamily: "inherit",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {children}
+    </button>
+  );
 }
 
 function Pill({

@@ -28,6 +28,7 @@ function row(over: Partial<Record<string, unknown>> = {}) {
     postedAt: null,
     billingCycleName: "Residential 1",
     account: { id: "acc1", accountNumber: "0001000-00", customerName: "Ada Lovelace" },
+    charge: null,
     ...over,
   };
 }
@@ -153,6 +154,81 @@ describe("Bills page", () => {
     // Not 07/29: parsing as UTC midnight and formatting locally would
     // move the date back a day west of Greenwich.
     expect(await screen.findByText("07/30/2026")).toBeInTheDocument();
+  });
+
+  it("shows what is still owed on the bill, which is not its total", async () => {
+    get.mockResolvedValue(
+      page([
+        row({
+          postedAt: "2026-06-30",
+          total: "64.20",
+          charge: { entryId: "e1", openAmount: "15.00", reversed: false },
+        }),
+      ]),
+    );
+    renderPage();
+    expect(await screen.findByText("$64.20")).toBeInTheDocument();
+    expect(screen.getByText("$15.00")).toBeInTheDocument();
+  });
+
+  it("takes a payment against the ACCOUNT, not the bill", async () => {
+    // recordPayment is account-scoped and §6.3 allocates oldest-first, so
+    // the request must carry the account id and no bill id at all.
+    get.mockResolvedValue(
+      page([row({ postedAt: "2026-06-30", charge: { entryId: "e1", openAmount: "15.00", reversed: false } })]),
+    );
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /take payment/i }));
+    const amount = await screen.findByLabelText(/amount/i);
+    await userEvent.type(amount, "15.00");
+    await userEvent.click(screen.getByRole("button", { name: /record payment/i }));
+
+    await waitFor(() =>
+      expect(
+        post.mock.calls.some(([url]) => String(url) === "/api/v1/accounts/acc1/payments"),
+      ).toBe(true),
+    );
+    const body = post.mock.calls.find(([u]) => String(u).includes("/payments"))?.[1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty("billId");
+  });
+
+  it("reverses the bill's charge entry, not the bill", async () => {
+    // Reversal is entry-level. There is no void and no unpost.
+    get.mockResolvedValue(
+      page([row({ postedAt: "2026-06-30", charge: { entryId: "e1", openAmount: "64.20", reversed: false } })]),
+    );
+    post.mockResolvedValue({});
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^reverse$/i }));
+    // The confirm has to separate the three acts of §3.5, or an operator
+    // reverses a charge they merely meant to forgive.
+    expect(screen.getByText(/nothing is deleted/i)).toBeInTheDocument();
+    expect(screen.getByText(/waive it instead/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /reverse charge/i }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/api/v1/ledger-entries/e1/reverse", {}),
+    );
+  });
+
+  it("offers no Reverse on a charge already reversed", async () => {
+    get.mockResolvedValue(
+      page([row({ postedAt: "2026-06-30", charge: { entryId: "e1", openAmount: "0.00", reversed: true } })]),
+    );
+    renderPage();
+    expect(await screen.findByText("Reversed")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^reverse$/i })).toBeNull();
+  });
+
+  it("offers neither payment nor reverse on an unposted bill", async () => {
+    // Nothing is owed yet, so there is nothing to pay or reverse.
+    get.mockResolvedValue(page([row({ postedAt: null, charge: null })]));
+    renderPage();
+    expect(await screen.findByRole("button", { name: "Post" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /take payment/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^reverse$/i })).toBeNull();
   });
 
   it("says the queue is clear rather than showing a bare empty state", async () => {

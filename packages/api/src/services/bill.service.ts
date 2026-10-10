@@ -337,6 +337,16 @@ export interface BillListRow extends BillSummary {
     customerName: string | null;
   };
   billingCycleName: string | null;
+  /**
+   * The receivable this bill became, or null while it is unposted.
+   *
+   * `openAmount` is what is still owed on this charge, which is not
+   * `total` — §4.6 keeps the two authoritative for different things, and
+   * a part-paid bill of $64.20 with $15 left is not a $15 bill. The entry
+   * id is here because reversal is entry-level, not bill-level: a caller
+   * cannot reverse a bill, only the charge it raised.
+   */
+  charge: { entryId: string; openAmount: string; reversed: boolean } | null;
 }
 
 /**
@@ -400,6 +410,13 @@ export async function listBills(
           };
         };
         billingCycle: { select: { name: true } };
+        ledgerEntries: {
+          select: {
+            id: true;
+            openAmount: true;
+            _count: { select: { reversedBy: true } };
+          };
+        };
       };
     }>
   >(prisma.bill, where, query, {
@@ -420,6 +437,19 @@ export async function listBills(
         },
       },
       billingCycle: { select: { name: true } },
+      // Only BILL_CHARGE. A bill that netted negative posted an
+      // ADJUSTMENT_CREDIT instead, and waiver credits can also carry a
+      // billId, so widening this would let an unrelated credit be
+      // mistaken for the bill's own charge.
+      ledgerEntries: {
+        where: { type: "BILL_CHARGE" },
+        select: {
+          id: true,
+          openAmount: true,
+          _count: { select: { reversedBy: true } },
+        },
+        take: 1,
+      },
     },
   });
 
@@ -447,6 +477,13 @@ export async function listBills(
         customerName: displayCustomerName(b.account.customer),
       },
       billingCycleName: b.billingCycle?.name ?? null,
+      charge: b.ledgerEntries[0]
+        ? {
+            entryId: b.ledgerEntries[0].id,
+            openAmount: b.ledgerEntries[0].openAmount.toFixed(2),
+            reversed: b.ledgerEntries[0]._count.reversedBy > 0,
+          }
+        : null,
     })),
   };
 }

@@ -186,6 +186,87 @@ describe("listBills", () => {
     expect(unposted.data[0]!.postedAt).toBeNull();
   });
 
+  it("carries the bill's own charge entry: what is still owed, and its id", async () => {
+    const { prisma } = prismaImports;
+    const bill = await prisma.bill.findFirstOrThrow({ where: { utilityId, billNumber: "B-JAN" } });
+    // A $10 charge with $4 paid off leaves $6 owed on THIS bill, which is
+    // not the bill total -- the two are authoritative for different
+    // things (ss4.6), and a CSR on a call needs the second number.
+    const entry = await prisma.ledgerEntry.create({
+      data: {
+        utilityId,
+        accountId,
+        type: "BILL_CHARGE",
+        amount: "10.00",
+        openAmount: "6.00",
+        dueDate: new Date("2026-02-10"),
+        effectiveDate: new Date("2026-01-10"),
+        billId: bill.id,
+      },
+    });
+    try {
+      const res = await bills.listBills(utilityId, { ...Q, search: "B-JAN" });
+      expect(res.data[0]!.charge).toEqual({
+        entryId: entry.id,
+        openAmount: "6.00",
+        reversed: false,
+      });
+      // The bill total is untouched by what has been paid against it.
+      expect(res.data[0]!.total).toBe("10.0000");
+    } finally {
+      await prisma.ledgerEntry.delete({ where: { id: entry.id } });
+    }
+  });
+
+  it("reports a reversed charge, so a bill cannot be voided twice", async () => {
+    const { prisma } = prismaImports;
+    const bill = await prisma.bill.findFirstOrThrow({ where: { utilityId, billNumber: "B-JAN" } });
+    const charge = await prisma.ledgerEntry.create({
+      data: {
+        utilityId, accountId, type: "BILL_CHARGE", amount: "10.00", openAmount: "0.00",
+        dueDate: new Date("2026-02-10"), effectiveDate: new Date("2026-01-10"), billId: bill.id,
+      },
+    });
+    const rev = await prisma.ledgerEntry.create({
+      data: {
+        utilityId, accountId, type: "REVERSAL", amount: "-10.00", openAmount: "0.00",
+        effectiveDate: new Date("2026-01-11"), reversesId: charge.id,
+      },
+    });
+    try {
+      const res = await bills.listBills(utilityId, { ...Q, search: "B-JAN" });
+      expect(res.data[0]!.charge!.reversed).toBe(true);
+    } finally {
+      await prisma.ledgerEntry.delete({ where: { id: rev.id } });
+      await prisma.ledgerEntry.delete({ where: { id: charge.id } });
+    }
+  });
+
+  it("reports charge: null while a bill is unposted", async () => {
+    const res = await bills.listBills(utilityId, { ...Q, search: "B-JUL" });
+    expect(res.data[0]!.postedAt).toBeNull();
+    expect(res.data[0]!.charge).toBeNull();
+  });
+
+  it("does not mistake a waiver credit for the bill's charge", async () => {
+    // Waiver credits can carry a billId. Only BILL_CHARGE is the bill's
+    // own receivable, so a credit against the bill must not surface here.
+    const { prisma } = prismaImports;
+    const bill = await prisma.bill.findFirstOrThrow({ where: { utilityId, billNumber: "B-JUN-30" } });
+    const credit = await prisma.ledgerEntry.create({
+      data: {
+        utilityId, accountId, type: "ADJUSTMENT_CREDIT", amount: "-5.00", openAmount: "0.00",
+        effectiveDate: new Date("2026-07-01"), billId: bill.id,
+      },
+    });
+    try {
+      const res = await bills.listBills(utilityId, { ...Q, search: "B-JUN-30" });
+      expect(res.data[0]!.charge).toBeNull();
+    } finally {
+      await prisma.ledgerEntry.delete({ where: { id: credit.id } });
+    }
+  });
+
   it("never returns another utility's bills", async () => {
     const res = await bills.listBills(utilityId, Q);
     expect(numbers(res)).not.toContain("B-OTHER");
