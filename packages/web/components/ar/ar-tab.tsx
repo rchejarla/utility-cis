@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
+import { useToast } from "@/components/ui/toast";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { RecordPaymentDialog } from "./record-payment-dialog";
 
 /**
  * The account's receivable: what it owes, and every entry behind that
@@ -19,6 +22,12 @@ import { usePermission } from "@/lib/use-permission";
  *  3. A reversed entry and its reversal both appear — they are history
  *     and nothing is ever deleted — so both are marked, or a reader
  *     concludes they were charged twice.
+ *
+ * Actions follow the module that owns them, not one blanket "can edit":
+ * posting a bill is `accounts:EDIT`, taking a payment is
+ * `payments:CREATE`, reversing one is `payments:EDIT`. A button the user
+ * cannot use is not rendered — and the API refuses it regardless, so the
+ * hiding is courtesy rather than security.
  */
 
 export interface LedgerRow {
@@ -45,6 +54,15 @@ export interface LedgerPage {
   openCount: number;
 }
 
+interface UnpostedBill {
+  id: string;
+  billNumber: string;
+  periodStart: string;
+  periodEnd: string;
+  dueDate: string;
+  total: string;
+}
+
 /** Money for display. The sign is carried by the label, not the digits. */
 const money = (s: string) => `$${Math.abs(parseFloat(s)).toFixed(2)}`;
 
@@ -65,24 +83,90 @@ function describe(row: LedgerRow): string {
 }
 
 export function ArTab({ accountId }: { accountId: string }) {
+  const { toast } = useToast();
   const { canView } = usePermission("accounts");
+  const { canEdit: canPostBill } = usePermission("accounts");
+  const { canCreate: canTakePayment, canEdit: canReverse } = usePermission("payments");
+
   const [page, setPage] = useState<LedgerPage | null>(null);
+  const [unposted, setUnposted] = useState<UnpostedBill[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [busyBillId, setBusyBillId] = useState<string | null>(null);
+  const [showPayment, setShowPayment] = useState(false);
+  const [reverseRow, setReverseRow] = useState<LedgerRow | null>(null);
+  const [reversing, setReversing] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
-    apiClient
-      .get<LedgerPage>(`/api/v1/accounts/${accountId}/ledger`)
-      .then((p) => {
+    Promise.all([
+      apiClient.get<LedgerPage>(`/api/v1/accounts/${accountId}/ledger`),
+      // An operator who cannot post does not need the list, and asking
+      // would 403 noisily in the console for no benefit.
+      canPostBill
+        ? apiClient
+            .get<{ data: UnpostedBill[] }>(`/api/v1/accounts/${accountId}/unposted-bills`)
+            .then((r) => r.data)
+            .catch(() => [] as UnpostedBill[])
+        : Promise.resolve([] as UnpostedBill[]),
+    ])
+      .then(([p, u]) => {
         setPage(p);
+        setUnposted(u);
         setError(null);
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not load the ledger"))
       .finally(() => setLoading(false));
-  }, [accountId]);
+  }, [accountId, canPostBill]);
 
   useEffect(load, [load]);
+
+  async function postBill(bill: UnpostedBill) {
+    setBusyBillId(bill.id);
+    try {
+      const res = await apiClient.post<{ balance: string; skippedZero: boolean }>(
+        `/api/v1/bills/${bill.id}/post`,
+        {},
+      );
+      toast(
+        res.skippedZero
+          ? `${bill.billNumber} totals zero, so it was marked posted without a charge.`
+          : `${bill.billNumber} posted. Balance is now $${res.balance}.`,
+        "success",
+      );
+      load();
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : "Could not post the bill", "error");
+    } finally {
+      setBusyBillId(null);
+    }
+  }
+
+  async function confirmReverse() {
+    if (!reverseRow) return;
+    setReversing(true);
+    try {
+      const res = await apiClient.post<{ balance: string; dependentFees: { id: string }[] }>(
+        `/api/v1/ledger-entries/${reverseRow.id}/reverse`,
+        {},
+      );
+      // Dependent fees are reported and never reversed automatically
+      // (§6.6) — so say so, or the operator assumes it was handled.
+      const fees = res.dependentFees?.length ?? 0;
+      toast(
+        fees > 0
+          ? `Reversed. Balance is now $${res.balance}. ${fees} fee${fees === 1 ? "" : "s"} assessed on this entry still stand${fees === 1 ? "s" : ""} — reverse them separately if they should go.`
+          : `Reversed. Balance is now $${res.balance}.`,
+        "success",
+      );
+      setReverseRow(null);
+      load();
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : "Could not reverse the entry", "error");
+    } finally {
+      setReversing(false);
+    }
+  }
 
   if (!canView) {
     return <div style={muted}>You do not have permission to view this account&apos;s ledger.</div>;
@@ -97,6 +181,43 @@ export function ArTab({ accountId }: { accountId: string }) {
 
   return (
     <div>
+      {canTakePayment && (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px" }}>
+          <button onClick={() => setShowPayment(true)} style={primaryButton}>
+            Record Payment
+          </button>
+        </div>
+      )}
+
+      {unposted.length > 0 && (
+        <div style={strip}>
+          <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "8px" }}>
+            {unposted.length === 1
+              ? "1 bill has been issued but not posted, so it is not yet owed."
+              : `${unposted.length} bills have been issued but not posted, so they are not yet owed.`}
+          </div>
+          {unposted.map((b) => (
+            <div key={b.id} style={stripRow}>
+              <span style={{ fontFamily: "monospace", fontSize: "12px" }}>{b.billNumber}</span>
+              <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>
+                {b.periodStart.slice(0, 10)} → {b.periodEnd.slice(0, 10)} · due{" "}
+                {b.dueDate.slice(0, 10)}
+              </span>
+              <span style={{ fontFamily: "monospace", fontWeight: 600 }}>
+                ${parseFloat(b.total).toFixed(2)}
+              </span>
+              <button
+                onClick={() => postBill(b)}
+                disabled={busyBillId === b.id}
+                style={primaryButton}
+              >
+                {busyBillId === b.id ? "Posting…" : "Post"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* What the account owes, in words that are true for every sign. */}
       <div style={{ display: "flex", gap: "16px", marginBottom: "20px", flexWrap: "wrap" }}>
         <div style={card}>
@@ -132,6 +253,7 @@ export function ArTab({ accountId }: { accountId: string }) {
               <th style={{ ...th, textAlign: "right" }}>Charged</th>
               <th style={{ ...th, textAlign: "right" }}>Still owed</th>
               <th style={th}>Detail</th>
+              {canReverse && <th style={th} aria-label="Actions" />}
             </tr>
           </thead>
           <tbody>
@@ -173,11 +295,41 @@ export function ArTab({ accountId }: { accountId: string }) {
                       .filter(Boolean)
                       .join(" · ") || "—"}
                   </td>
+                  {canReverse && (
+                    <td style={{ ...td, textAlign: "right" }}>
+                      {/* A reversal is itself irreversible, and an entry
+                          already reversed cannot be reversed again. */}
+                      {!reversed && row.type !== "REVERSAL" && (
+                        <button onClick={() => setReverseRow(row)} style={linkButton}>
+                          Reverse
+                        </button>
+                      )}
+                    </td>
+                  )}
                 </tr>
               );
             })}
           </tbody>
         </table>
+      )}
+
+      {showPayment && (
+        <RecordPaymentDialog
+          accountId={accountId}
+          onClose={() => setShowPayment(false)}
+          onRecorded={load}
+        />
+      )}
+
+      {reverseRow && (
+        <ConfirmDialog
+          title="Reverse this entry?"
+          message={`${describe(reverseRow)} of ${money(reverseRow.amount)} will be negated by a new entry. Nothing is deleted: both remain on the ledger, and anything this entry paid off becomes owed again.`}
+          confirmLabel={reversing ? "Reversing…" : "Reverse entry"}
+          confirmDisabled={reversing}
+          onConfirm={confirmReverse}
+          onCancel={() => setReverseRow(null)}
+        />
       )}
     </div>
   );
@@ -217,6 +369,40 @@ const marker: React.CSSProperties = {
   border: "1px solid var(--border)",
   borderRadius: "3px",
   padding: "1px 5px",
+};
+const primaryButton: React.CSSProperties = {
+  padding: "7px 16px",
+  borderRadius: "var(--radius)",
+  border: "none",
+  background: "var(--accent-primary)",
+  color: "#fff",
+  fontSize: "12px",
+  fontWeight: 500,
+  cursor: "pointer",
+  fontFamily: "inherit",
+};
+const linkButton: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  color: "var(--accent-primary)",
+  fontSize: "12px",
+  cursor: "pointer",
+  fontFamily: "inherit",
+  padding: 0,
+};
+const strip: React.CSSProperties = {
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius)",
+  padding: "12px 14px",
+  marginBottom: "16px",
+  background: "var(--bg-elevated)",
+};
+const stripRow: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "12px",
+  flexWrap: "wrap",
+  padding: "6px 0",
 };
 const th: React.CSSProperties = {
   padding: "10px 12px",

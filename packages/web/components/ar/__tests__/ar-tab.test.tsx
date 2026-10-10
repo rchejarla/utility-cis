@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { ArTab } from "../ar-tab";
+import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
 import type { LedgerPage, LedgerRow } from "../ar-tab";
 
@@ -39,15 +40,42 @@ function page(over: Partial<LedgerPage> = {}): LedgerPage {
   return { data: [], balance: "0.00", openCount: 0, ...over };
 }
 
+/**
+ * The tab fetches two things: the ledger, and (when the user may post)
+ * the unposted bills. Stubbing both with one value would hand ledger rows
+ * to the bills strip, so route by path and default the bills to empty —
+ * these cases are about rendering the ledger.
+ */
+function routeGets(p: LedgerPage, unposted: unknown[] = []) {
+  mockedGet.mockImplementation((path: string) => {
+    if (path.includes("/unposted-bills")) return Promise.resolve({ data: unposted } as never);
+    return Promise.resolve(p as never);
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
+/**
+ * The tab calls useToast, which throws outside a provider. In the app it
+ * always renders inside the ToastProvider from layout.tsx, so the tests
+ * supply the real one — mocking useToast globally would change shared
+ * setup for every other suite to suit this file.
+ */
+function renderTab(accountId = "a1") {
+  return render(
+    <ToastProvider>
+      <ArTab accountId={accountId} />
+    </ToastProvider>,
+  );
+}
+
 describe("ArTab", () => {
   // Review Focus: the common case for a new account.
   it("says nothing is owed when the ledger is empty, without drawing a table", async () => {
-    mockedGet.mockResolvedValue(page());
-    render(<ArTab accountId="a1" />);
+    routeGets(page());
+    renderTab();
 
     expect(await screen.findByText(/no ledger activity yet/i)).toBeInTheDocument();
     // The balance card says "Nothing owed"; the body must not draw an
@@ -59,8 +87,7 @@ describe("ArTab", () => {
 
   // Review Focus: "Amount due -$20.00" is not English.
   it("says the customer is in credit rather than showing a negative amount due", async () => {
-    mockedGet.mockResolvedValue(
-      page({
+    routeGets(page({
         balance: "-20.00",
         openCount: 1,
         data: [
@@ -68,7 +95,7 @@ describe("ArTab", () => {
         ],
       }),
     );
-    render(<ArTab accountId="a1" />);
+    renderTab();
 
     expect(await screen.findByText(/in credit/i)).toBeInTheDocument();
     expect(screen.queryByText(/amount due/i)).not.toBeInTheDocument();
@@ -77,8 +104,8 @@ describe("ArTab", () => {
   });
 
   it("says amount due when the balance is positive", async () => {
-    mockedGet.mockResolvedValue(page({ balance: "40.00", openCount: 1, data: [row()] }));
-    render(<ArTab accountId="a1" />);
+    routeGets(page({ balance: "40.00", openCount: 1, data: [row()] }));
+    renderTab();
 
     expect(await screen.findByText(/amount due/i)).toBeInTheDocument();
     expect(screen.queryByText(/in credit/i)).not.toBeInTheDocument();
@@ -86,14 +113,13 @@ describe("ArTab", () => {
 
   // Review Focus: charged and still owed are different facts.
   it("shows what was charged separately from what is still owed", async () => {
-    mockedGet.mockResolvedValue(
-      page({
+    routeGets(page({
         balance: "15.00",
         openCount: 1,
         data: [row({ amount: "40.00", openAmount: "15.00" })],
       }),
     );
-    render(<ArTab accountId="a1" />);
+    renderTab();
 
     // The balance card legitimately shows 15.00 too, so scope to the row.
     const table = await screen.findByRole("table");
@@ -102,14 +128,13 @@ describe("ArTab", () => {
   });
 
   it("shows a dash rather than zero for a settled entry", async () => {
-    mockedGet.mockResolvedValue(
-      page({
+    routeGets(page({
         balance: "0.00",
         openCount: 0,
         data: [row({ amount: "40.00", openAmount: "0.00", settled: true })],
       }),
     );
-    render(<ArTab accountId="a1" />);
+    renderTab();
 
     expect(await screen.findByText("$40.00")).toBeInTheDocument();
     expect(screen.getByText("—")).toBeInTheDocument();
@@ -118,8 +143,7 @@ describe("ArTab", () => {
 
   // Review Focus: a reversed pair must not read as a double charge.
   it("marks both sides of a reversal", async () => {
-    mockedGet.mockResolvedValue(
-      page({
+    routeGets(page({
         balance: "0.00",
         openCount: 0,
         data: [
@@ -128,28 +152,26 @@ describe("ArTab", () => {
         ],
       }),
     );
-    render(<ArTab accountId="a1" />);
+    renderTab();
 
     expect(await screen.findByText(/^reversed$/i)).toBeInTheDocument();
     expect(screen.getByText(/reverses an earlier entry/i)).toBeInTheDocument();
   });
 
   it("shows a credit in brackets, the accounting convention", async () => {
-    mockedGet.mockResolvedValue(
-      page({
+    routeGets(page({
         balance: "-25.00",
         openCount: 1,
         data: [row({ type: "PAYMENT", amount: "-25.00", openAmount: "-25.00", tender: "CHECK" })],
       }),
     );
-    render(<ArTab accountId="a1" />);
+    renderTab();
 
     expect(await screen.findByText("($25.00)")).toBeInTheDocument();
   });
 
   it("prefers the reason's own label over the type name", async () => {
-    mockedGet.mockResolvedValue(
-      page({
+    routeGets(page({
         balance: "25.00",
         openCount: 1,
         data: [
@@ -163,21 +185,21 @@ describe("ArTab", () => {
         ],
       }),
     );
-    render(<ArTab accountId="a1" />);
+    renderTab();
 
     expect(await screen.findByText("Late payment fee")).toBeInTheDocument();
     expect(screen.queryByText("Fee")).not.toBeInTheDocument();
   });
 
   it("pluralises the open-item count", async () => {
-    mockedGet.mockResolvedValue(page({ balance: "40.00", openCount: 1, data: [row()] }));
-    render(<ArTab accountId="a1" />);
+    routeGets(page({ balance: "40.00", openCount: 1, data: [row()] }));
+    renderTab();
     expect(await screen.findByText("Open item")).toBeInTheDocument();
   });
 
   it("surfaces a load failure instead of rendering an empty ledger", async () => {
     mockedGet.mockRejectedValue(new Error("Service unavailable"));
-    render(<ArTab accountId="a1" />);
+    renderTab();
 
     expect(await screen.findByText("Service unavailable")).toBeInTheDocument();
     // Crucially NOT the empty state, which would read as "nothing owed".
