@@ -7,6 +7,7 @@ import { usePermission } from "@/lib/use-permission";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { RecordPaymentDialog } from "./record-payment-dialog";
+import { RefundDialog } from "./refund-dialog";
 import { AdjustDialog, type AdjustMode } from "./adjust-dialog";
 
 /**
@@ -87,6 +88,7 @@ const TYPE_LABEL: Record<string, string> = {
   // happened on a date. "Deposit taken" is the event; "Deposit held" is
   // the standing figure, which is what the card above reports.
   DEPOSIT: "Deposit taken",
+  REFUND: "Refund issued",
 };
 
 function describe(row: LedgerRow): string {
@@ -105,6 +107,7 @@ export function ArTab({ accountId }: { accountId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showPayment, setShowPayment] = useState(false);
+  const [showRefund, setShowRefund] = useState(false);
   const [reverseRow, setReverseRow] = useState<LedgerRow | null>(null);
   const [reversing, setReversing] = useState(false);
   const [adjust, setAdjust] = useState<{ mode: AdjustMode; target: LedgerRow | null } | null>(null);
@@ -168,6 +171,11 @@ export function ArTab({ accountId }: { accountId: string }) {
   const balance = parseFloat(page.balance);
   const inCredit = balance < 0;
   const settledUp = balance === 0;
+  const depositHeld = parseFloat(page.depositHeld);
+  // A floor, not the authority: `balance` is net, so an account with an
+  // open credit and an open charge understates its refundable credit.
+  // The server sums the open credits and refuses with the true figure.
+  const creditAvailable = inCredit ? (-balance).toFixed(2) : "0.00";
 
   return (
     <div>
@@ -196,6 +204,22 @@ export function ArTab({ accountId }: { accountId: string }) {
               style={secondaryButton}
             >
               Raise Charge
+            </button>
+          )}
+          {/*
+            Offered only when there is something to give back, and on
+            `payments:CREATE` — the same authority as taking money, since
+            money moving either way is the cashier's act.
+
+            Hidden rather than disabled when both pools are empty: a
+            Refund button on an account that owes money invites the
+            operator to find out by clicking, and what they would get is
+            a 422. The two figures it needs are already on this screen,
+            so there is nothing to discover by opening it.
+          */}
+          {canTakePayment && (inCredit || depositHeld > 0) && (
+            <button onClick={() => setShowRefund(true)} style={secondaryButton}>
+              Refund
             </button>
           )}
           {canTakePayment && (
@@ -378,6 +402,16 @@ export function ArTab({ accountId }: { accountId: string }) {
           accountId={accountId}
           onClose={() => setShowPayment(false)}
           onRecorded={load}
+        />
+      )}
+
+      {showRefund && (
+        <RefundDialog
+          accountId={accountId}
+          creditAvailable={creditAvailable}
+          depositHeld={page.depositHeld}
+          onClose={() => setShowRefund(false)}
+          onRefunded={load}
         />
       )}
 

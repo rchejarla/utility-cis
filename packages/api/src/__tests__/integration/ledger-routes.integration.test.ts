@@ -1076,3 +1076,131 @@ describe("GET /api/v1/receipts", () => {
     }
   });
 });
+
+/**
+ * Issuing a refund, at the HTTP boundary.
+ *
+ * `recordRefund` is covered directly in refund.integration.test.ts. What
+ * is only testable here is the wiring: the path, the strict body schema,
+ * and that the gate is `payments:CREATE` — the same authority as taking
+ * money, because money moving either way is the cashier's act.
+ *
+ * On its own account, because a refund needs a credit balance and the
+ * shared one accumulates debits from every test above.
+ */
+describe("POST /api/v1/accounts/:id/refunds", () => {
+  let refundAccountId: string;
+
+  beforeEach(async () => {
+    const { prisma } = prismaImports;
+    const account = await prisma.account.create({
+      data: {
+        utilityId,
+        accountNumber: `REFUND-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+        accountType: "RESIDENTIAL",
+        status: "ACTIVE",
+        billingCycleId,
+      },
+    });
+    refundAccountId = account.id;
+    // A payment with nothing to apply to IS a credit balance.
+    await prisma.ledgerEntry.create({
+      data: {
+        utilityId,
+        accountId: refundAccountId,
+        type: "PAYMENT",
+        amount: "-80.00",
+        openAmount: "-80.00",
+        effectiveDate: new Date("2026-06-01"),
+        tender: "CASH",
+      },
+    });
+    await prisma.account.update({
+      where: { id: refundAccountId },
+      data: { balance: "-80.00" },
+    });
+  });
+
+  it("issues a refund and returns the new balance", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${refundAccountId}/refunds`,
+      headers: headers(PAYER),
+      payload: { amount: "80.00", source: "CREDIT", tender: "CHECK", externalRef: "CHQ-9001" },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = JSON.parse(res.body);
+    expect(body.amount).toBe("80.00");
+    expect(body.source).toBe("CREDIT");
+    expect(body.balance).toBe("0.00");
+    expect(body.applied).toHaveLength(1);
+  });
+
+  it("returns 422 naming the available figure, and writes nothing", async () => {
+    const { prisma } = prismaImports;
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${refundAccountId}/refunds`,
+      headers: headers(PAYER),
+      payload: { amount: "100.00", source: "CREDIT" },
+    });
+    expect(res.statusCode).toBe(422);
+    const body = JSON.parse(res.body);
+    expect(body.error.code).toBe("REFUND_EXCEEDS_AVAILABLE");
+    expect(body.error.message).toContain("80.00");
+    expect(
+      await prisma.ledgerEntry.count({ where: { accountId: refundAccountId, type: "REFUND" } }),
+    ).toBe(0);
+  });
+
+  // `source` has no default on purpose: returning an overpayment and
+  // releasing a deposit are different acts, and a default would pick one.
+  it("requires source, and refuses one that is not a pool", async () => {
+    for (const payload of [{ amount: "10.00" }, { amount: "10.00", source: "WHATEVER" }]) {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/accounts/${refundAccountId}/refunds`,
+        headers: headers(PAYER),
+        payload,
+      });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+    }
+  });
+
+  it("refuses an unknown body key rather than ignoring it", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${refundAccountId}/refunds`,
+      headers: headers(PAYER),
+      payload: { amount: "10.00", source: "CREDIT", chequeNo: "9001" },
+    });
+    // `chequeNo` is not `externalRef`. Silently dropping it would lose
+    // the cheque number off a disbursement record.
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("is gated on payments:CREATE", async () => {
+    // VIEWER holds payments:VIEW and ADJUSTER holds none; neither may
+    // send money out of the building.
+    for (const sub of [VIEWER, ADJUSTER, NO_PERMS]) {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/accounts/${refundAccountId}/refunds`,
+        headers: headers(sub),
+        payload: { amount: "10.00", source: "CREDIT" },
+      });
+      expect(res.statusCode, `subject ${sub}`).toBe(403);
+    }
+  });
+
+  it("returns 404 for another tenant's account", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${otherAccountId}/refunds`,
+      headers: headers(PAYER),
+      payload: { amount: "10.00", source: "CREDIT" },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(JSON.parse(res.body).error.code).toBe("ACCOUNT_NOT_FOUND");
+  });
+});

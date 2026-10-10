@@ -38,6 +38,7 @@ export const EVENT_TYPES = {
   LEDGER_ADJUSTMENT_CREATED: "ledger_adjustment.created",
   LEDGER_REASON_CREATED: "ledger_reason.created",
   LEDGER_DEPOSIT_RECORDED: "ledger_deposit.recorded",
+  LEDGER_REFUND_ISSUED: "ledger_refund.issued",
   CUSTOMER_CREATED: "customer.created",
   CUSTOMER_UPDATED: "customer.updated",
   CONTACT_CREATED: "contact.created",

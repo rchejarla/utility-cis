@@ -1776,6 +1776,14 @@ enum LedgerEntryType {
   /// sweep must still see them). `Account.depositAmount` caches the sum
   /// of the open ones.
   DEPOSIT
+  /// Money given back: an overpayment returned, or a deposit released.
+  /// A DEBIT, positive like a charge, because it discharges a credit the
+  /// customer already held rather than granting them a new one. Carries
+  /// `tender`, `externalRef` and `effectiveDate` as its disbursement
+  /// record — how the money left, the cheque number, the day it issued.
+  /// Says which pool it drew from by which credits it consumes, since a
+  /// deposit must never be spent by an act that did not ask for one.
+  REFUND
 }
 
 enum PaymentTender {

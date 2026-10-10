@@ -3,6 +3,7 @@ import {
   postBillSchema,
   recordPaymentSchema,
   receiptQuerySchema,
+  refundSchema,
   reverseEntrySchema,
   assessFeeSchema,
   adjustSchema,
@@ -15,6 +16,7 @@ import { prisma } from "../lib/prisma.js";
 import { postBill } from "../services/ar/posting.service.js";
 import { reconcileBalances } from "../services/ar/reconciliation.service.js";
 import { recordPayment, listReceipts } from "../services/ar/payment.service.js";
+import { recordRefund } from "../services/ar/refund.service.js";
 import { reverseEntry } from "../services/ar/reversal.service.js";
 import { assessFee } from "../services/ar/fee.service.js";
 import { adjustDebit, waive, writeOff } from "../services/ar/adjustment.service.js";
@@ -144,6 +146,28 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
       const { id: accountId } = idParamSchema.parse(request.params);
       const input = recordPaymentSchema.parse(request.body ?? {});
       const result = await recordPayment(utilityId, actorId, actorName, accountId, input);
+      return reply.status(201).send(result);
+    },
+  );
+
+  /**
+   * Issue a refund — return an overpayment, or release a deposit.
+   *
+   * On `payments:CREATE`, the same authority as taking money. Money
+   * moving either way is the cashier's act, and the two are symmetric;
+   * a separate permission would be a new module nobody has asked for.
+   * Approval of a refund, if it is ever wanted, belongs outside the
+   * ledger in a request object — spec 10 records that reasoning for
+   * waivers, and posting here is just as final.
+   */
+  app.post(
+    "/api/v1/accounts/:id/refunds",
+    { config: { module: "payments", permission: "CREATE" } },
+    async (request, reply) => {
+      const { utilityId, id: actorId, name: actorName } = request.user;
+      const { id: accountId } = idParamSchema.parse(request.params);
+      const input = refundSchema.parse(request.body ?? {});
+      const result = await recordRefund(utilityId, actorId, actorName, accountId, input);
       return reply.status(201).send(result);
     },
   );

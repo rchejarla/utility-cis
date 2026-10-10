@@ -175,15 +175,36 @@ export async function applyCreditToOneDebit(
 }
 
 /**
+ * Which pool of credits an allocation may spend.
+ *
+ * The two are deliberately not interchangeable. `CREDIT` is the
+ * receivable side — overpayments, adjustment credits, reversals — money
+ * the customer has already handed over against what they owe. `DEPOSIT`
+ * is money the utility HOLDS, released when the account closes or the
+ * customer earns it back.
+ *
+ * Nothing may spend a deposit except an act that explicitly says it is
+ * returning one, which today means a refund. A bill passing `CREDIT` and
+ * a deposit return passing `DEPOSIT` is the whole point: the filter is
+ * otherwise on sign alone, and both pools are negative.
+ */
+export type CreditPool = "CREDIT" | "DEPOSIT";
+
+/**
  * Consume this account's open credits against one open debit, oldest
  * `postedAt` first, so a credit balance is absorbed by the next charge
  * without a sweep job. Spec §6.1 step 4.
+ *
+ * `pool` defaults to `CREDIT`, so a caller that has not thought about
+ * deposits cannot accidentally spend one. Getting this wrong silently
+ * pays next month's water bill out of a security deposit.
  */
 export async function applyCreditsToDebit(
   tx: TxClient,
   utilityId: string,
   accountId: string,
   debitId: string,
+  pool: CreditPool = "CREDIT",
 ): Promise<Application[]> {
   await lockAccount(tx, utilityId, accountId);
 
@@ -195,13 +216,17 @@ export async function applyCreditsToDebit(
   if (remaining.lte(0)) return [];
 
   const credits = await tx.ledgerEntry.findMany({
-    // A DEPOSIT is a credit by sign but must never be spent here. It is
-    // money the utility holds until the account closes or the customer
-    // earns it back -- not something next month's water bill may consume.
-    // Without this clause the exclusion is invisible: the filter is on
-    // sign alone, so a deposit would be absorbed oldest-first like any
-    // other credit, silently, on the next posting run.
-    where: { utilityId, accountId, openAmount: { lt: 0 }, type: { not: "DEPOSIT" } },
+    where: {
+      utilityId,
+      accountId,
+      openAmount: { lt: 0 },
+      // Exactly one pool, never both. `DEPOSIT` is a credit by sign and
+      // must not be spent by anything that did not ask for it: without
+      // this clause the filter is on sign alone, so a deposit would be
+      // absorbed oldest-first like any other credit, silently, on the
+      // next posting run.
+      ...(pool === "DEPOSIT" ? { type: "DEPOSIT" as const } : { type: { not: "DEPOSIT" as const } }),
+    },
     orderBy: [{ postedAt: "asc" }, { id: "asc" }],
     select: { id: true, openAmount: true },
   });

@@ -68,6 +68,7 @@ export default function MoveOutWizardPage() {
   const [readings, setReadings] = useState<Record<string, string>>({});
   const [closeAccount, setCloseAccount] = useState(false);
   const [refundDeposit, setRefundDeposit] = useState(false);
+  const [depositTender, setDepositTender] = useState("CHECK");
   const [notes, setNotes] = useState("");
 
   useEffect(() => {
@@ -145,9 +146,28 @@ export default function MoveOutWizardPage() {
         closeAccount,
         refundDeposit,
       };
+      if (refundDeposit && depositTender) body.depositTender = depositTender;
       if (notes) body.notes = notes;
-      await apiClient.post("/api/v1/workflows/move-out", body);
-      toast("Move-out complete", "success");
+      const res = await apiClient.post<{
+        depositReturn: { refunded: string; stillOwed: string } | null;
+      }>("/api/v1/workflows/move-out", body);
+      // Say what happened to the money. A deposit return is the part of
+      // a move-out the customer will ring about, and "Move-out complete"
+      // answers none of it -- including the case where the box was
+      // ticked and nothing was held.
+      const d = res.depositReturn;
+      if (!d) {
+        toast("Move-out complete", "success");
+      } else if (parseFloat(d.refunded) === 0) {
+        toast("Move-out complete. No deposit was held, so nothing was returned.", "success");
+      } else if (parseFloat(d.stillOwed) > 0) {
+        toast(
+          `Move-out complete. Deposit of $${d.refunded} returned — note this account still owes $${d.stillOwed}.`,
+          "success",
+        );
+      } else {
+        toast(`Move-out complete. Deposit of $${d.refunded} returned.`, "success");
+      }
       router.push(`/accounts/${accountId}`);
     } catch (err) {
       toast(err instanceof Error ? err.message : "Move-out failed", "error");
@@ -412,6 +432,31 @@ export default function MoveOutWizardPage() {
                 />
                 Refund deposit
               </label>
+              {/*
+                Only once the box is ticked. A tender on a refund that is
+                not happening is a fact about money that never moved --
+                and the disbursement needs the method, because a returned
+                deposit is tied out against the cheque run it went in.
+              */}
+              {refundDeposit && (
+                <label
+                  style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px" }}
+                >
+                  Paid by
+                  <select
+                    value={depositTender}
+                    onChange={(e) => setDepositTender(e.target.value)}
+                    aria-label="Deposit refund tender"
+                    style={{ ...fieldStyle, padding: "4px 8px", fontSize: "12px" }}
+                  >
+                    <option value="CHECK">Check</option>
+                    <option value="CASH">Cash</option>
+                    <option value="CARD">Card</option>
+                    <option value="ACH">ACH</option>
+                    <option value="LOCKBOX">Lockbox</option>
+                  </select>
+                </label>
+              )}
             </div>
 
             <div>

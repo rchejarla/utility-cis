@@ -88,7 +88,16 @@ export const moveOutSchema = z.object({
     zip: z.string().max(10),
   }).optional(),
   closeAccount: z.boolean().default(false),
+  /**
+   * Return the deposit as part of the move-out.
+   *
+   * This was accepted and ignored from the day the workflow shipped — an
+   * operator ticked the box and no money moved. It now issues a `REFUND`
+   * drawn from the deposit pool, in the move-out's own transaction.
+   */
   refundDeposit: z.boolean().default(false),
+  /** How the returned deposit was paid out. A disbursement wants a method. */
+  depositTender: z.enum(["CARD", "ACH", "CASH", "CHECK", "LOCKBOX"]).optional(),
   notes: z.string().max(2000).optional(),
 }).strict();
 
