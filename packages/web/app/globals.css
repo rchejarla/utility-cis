@@ -45,9 +45,19 @@
   --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #22d3ee 100%);
 
   --radius: 10px;
+
+  /* Tells the browser to render native controls -- the <option> popup a
+     <select> opens, date pickers, scrollbars -- in dark. Without it
+     Chrome paints that popup light while our options inherit the near
+     white --text-primary, so every dropdown in the app opens looking
+     empty: the entries are there and you cannot read them. The popup is
+     drawn by the browser outside the page, so no amount of styling on
+     the <select> itself reaches it. */
+  color-scheme: dark;
 }
 
 [data-theme="light"] {
+  color-scheme: light;
   /* ─── Light theme — "indigo-washed" ────────────────────────
      Surfaces use the indigo family (50/100/200) instead of slate.
      Cards stay pure white so they float above the tinted page.
@@ -211,4 +221,20 @@ textarea::placeholder {
 }
 .mapboxgl-popup-tip {
   display: none;
+}
+
+
+/*
+ * Native select popups.
+ *
+ * `color-scheme` above is what actually fixes these, but an explicit
+ * pair is cheap insurance: some platforms ignore the hint for the popup
+ * and fall back to the element's own colors. An <option> inheriting a
+ * near-white foreground onto a white popup is invisible, which reads as
+ * "this dropdown has no entries" rather than as a styling fault -- the
+ * failure costs far more to diagnose than the rule costs to keep.
+ */
+select option {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
 }
