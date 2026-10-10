@@ -166,6 +166,8 @@ It is a **credit by sign and a liability in meaning**, which is why it is exclud
 
 `depositWaived` and `depositWaivedReason` stay on the account: they record whether a deposit was *required*, which is a decision, not money.
 
+**Where it shows.** The account **Overview** names it *Deposit Held*, read-only. The **AR tab** carries a third balance card, *Deposit held — not counted against what is owed*, shown only when there is one; `GET /accounts/:id/ledger` returns `depositHeld` beside `balance` for it. That card is not decoration: `listLedger` does not filter by type, so the `DEPOSIT` entry appears in the table like any other row, rendered `($500.00)` by the credit convention — directly beneath a header saying $169.25 is due. Without the card the two read as a contradiction, and a reader would reasonably conclude the credit should have cancelled the debt.
+
 **Taking a deposit** goes through `recordDeposit`, which every path that used to write the column now calls inside its own transaction — account creation, move-in and the account importer — so an account and the deposit it was opened with commit together or not at all.
 
 **`depositAmount` is no longer editable.** It is omitted from `updateAccountSchema`, so `PATCH /api/v1/accounts/:id` answers `Unrecognized key(s) in object: 'depositAmount'`, and the account page shows it read-only. Nobody types over `balance` either. A deposit changes by taking one or returning one — acts with a tender, a date and an audit row — and editing the number would leave the column disagreeing with the ledger until a recompute silently overwrote it, with reconciliation reporting the drift in between. `depositWaived` and `depositWaivedReason` remain editable, being decisions rather than money.

@@ -39,7 +39,7 @@ function row(over: Partial<LedgerRow> = {}): LedgerRow {
   };
 }
 
-const LEDGER: LedgerPage = { data: [row()], balance: "40.00", openCount: 1 };
+const LEDGER: LedgerPage = { data: [row()], balance: "40.00", openCount: 1, depositHeld: "0.00" };
 
 const UNPOSTED = {
   data: [
@@ -183,6 +183,7 @@ describe("ArTab actions — behaviour", () => {
       data: [row({ reversedByEntryId: "e2" }), row({ id: "e2", type: "REVERSAL", reversesEntryId: "e1" })],
       balance: "0.00",
       openCount: 0,
+      depositHeld: "0.00",
     });
     renderTab();
     expect(await screen.findByRole("table")).toBeInTheDocument();

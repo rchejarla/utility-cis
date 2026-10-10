@@ -52,6 +52,15 @@ export interface LedgerPage {
   data: LedgerRow[];
   /** The account's cached balance, 2dp. Negative means in credit. */
   balance: string;
+  /**
+   * What the utility holds of the customer's, 2dp, positive.
+   *
+   * Reported beside the balance and never folded into it. A DEPOSIT row
+   * appears in `data` like any other entry, so without this figure the
+   * reader sees a $500 credit in the table under a header saying $169.25
+   * is due, and no reason given for why the two do not cancel.
+   */
+  depositHeld: string;
   /** Entries still open, across the whole account rather than this page. */
   openCount: number;
 }
@@ -68,7 +77,7 @@ export async function listLedger(
   // balance in the header must come from the same read as the rows.
   const account = await prisma.account.findFirst({
     where: { id: accountId, utilityId },
-    select: { balance: true },
+    select: { balance: true, depositAmount: true },
   });
   if (!account) throw err("ACCOUNT_NOT_FOUND", `Account ${accountId} not found`, 404);
 
@@ -113,6 +122,7 @@ export async function listLedger(
 
   return {
     balance: account.balance.toFixed(2),
+    depositHeld: account.depositAmount.toFixed(2),
     openCount,
     data: rows.map((e) => ({
       id: e.id,
