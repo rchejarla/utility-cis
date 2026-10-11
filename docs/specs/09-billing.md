@@ -1,8 +1,8 @@
 # Billing
 
 **Module:** 09 — Billing
-**Status:** Partially shipped — `BillSegment`, `BillSegmentLine` and `Bill` are live (Rate Model v2 slices 5a–5b.2), and AR posting is live (module 23 slice 1). Batch run and bill rendering are outstanding.
-**Entities:** BillSegment (shipped), BillSegmentLine (shipped), Bill (shipped), BillDocument (planned), BillMessage (planned)
+**Status:** Partially shipped — `BillSegment`, `BillSegmentLine` and `Bill` are live (Rate Model v2 slices 5a–5b.2), AR posting is live (module 23 slice 1), and bill rendering to a stored PDF is live (bill production slice 1). The batch billing run and bill delivery are outstanding.
+**Entities:** BillSegment (shipped), BillSegmentLine (shipped), Bill (shipped), BillDocument (shipped), BillMessage (shipped)
 
 ## Overview
 
@@ -26,7 +26,8 @@ Differences worth noting against the superseded design:
 - Amounts are `DECIMAL(14,4)`, not `DECIMAL(10,2)` — rating needs sub-cent precision before rounding.
 - There is no `saaslogic_invoice_id` on the charge record. CIS owns the bill; see module 21.
 - No status enum yet. A `Bill` existing means it was issued. `DRAFT`/`VOID` arrive when rendering and delivery need them.
-- Proration, bill holds, final-bill and correction/reprint versioning are **not** yet implemented. The fields below describe the intended eventual shape.
+- Proration, bill holds and final-bill handling are **not** yet implemented. The fields below describe the intended eventual shape.
+- **Correction/reprint versioning is not implemented and is not pending on rendering.** Reprinting a bill produces byte-identical output from the same presentation, so it creates no version. Versioning belongs with corrected issuance — a rebill or adjustment that changes what is owed — which is where `version` and `replaces_id` should be designed. See `BillDocument` below.
 
 ### BillingRecord (superseded — retained for its field-level intent)
 
@@ -82,51 +83,64 @@ One record per service agreement per billing cycle execution.
 
 ---
 
-### BillDocument (planned)
+### BillDocument (shipped — bill production slice 1)
 
-Rendered bill artifact — PDF or structured data file — associated with a BillingRecord. Supports bill viewing, reprints, and print-vendor delivery.
+The rendered artifact for one `Bill`. Holds a **pointer, never bytes and never a URL**: the object lives in the tenant's own store (S3, Azure Blob or GCS), reached through apptor-connect's files plane, which also holds the credential. A capability link is minted per access and discarded, so bytes always stream through our API and authorization stays with our RBAC.
+
+One row per bill per document type, keyed by `UNIQUE (bill_id, document_type)`. A re-render replaces it in place.
 
 | Field | Type | Notes |
 |-------|------|-------|
 | id | UUID | PK |
-| utility_id | UUID | Tenant scope |
-| billing_record_id | UUID | FK → BillingRecord |
-| account_id | UUID | FK → Account |
-| document_type | ENUM | PDF, PRINT_EXPORT, EMAIL_HTML |
-| storage_url | VARCHAR(1000) | S3 or blob storage path |
-| file_size_bytes | INTEGER | |
-| generated_at | TIMESTAMPTZ | When rendered |
-| delivery_channel | ENUM | EMAIL, MAIL, PORTAL, PRINT_VENDOR |
-| delivered_at | TIMESTAMPTZ | Nullable |
-| delivery_status | ENUM | PENDING, DELIVERED, FAILED, BOUNCED |
-| is_paperless | BOOLEAN | Copy of Account.paperless_billing at time of generation |
-| created_at | TIMESTAMPTZ | |
+| utility_id | UUID | Tenant scope (RLS) |
+| bill_id | UUID | FK → Bill, `ON DELETE RESTRICT` |
+| document_type | VARCHAR(20) | `PDF` today. Not an enum: `PRINT_EXPORT` and `EMAIL_HTML` are undesigned, and Postgres cannot remove an enum value once added |
+| storage_integration | VARCHAR(100) | apptor-connect integration name, from `TenantConfig.settings.billDocuments` |
+| storage_connection | VARCHAR(100) | Nullable named connection |
+| object_key | VARCHAR(500) | Exactly `bills/{utility_id}/{bill_id}.pdf` — derived, never supplied |
+| byte_size | INTEGER | Nullable until the upload completes |
+| sha256 | CHAR(64) | Nullable until the upload completes |
+| template_key | VARCHAR(100) | `default-bill-v1` |
+| generated_at | TIMESTAMPTZ | Moves on a forced re-render |
+| is_paperless | BOOLEAN | Copy of `Account.paperless_billing` at generation time |
+
+**Why `byte_size` and `sha256` are nullable.** The row is *claimed* before the upload runs, so the unique constraint decides which of two concurrent renders proceeds and the loser never uploads. A row with no size and no hash means "claimed, not yet stored"; a claim whose upload fails is deleted.
+
+**Deliberately absent:** no `version`, no `replaces_id`, no `storage_url`, and no delivery columns. Reprinting creates no version — a re-render produces byte-identical output from the same presentation, so there is no second version whose content differs, and nothing yet *delivers* a bill, so there is no sent copy to preserve. Versioning belongs with corrected issuance (rebill/adjustment), not with reprinting; delivery columns belong with the delivery feature that will write them.
+
+**Auditing.** The claim is not audited — a claim is not a document. One audit row is written when the bytes land: `bill_document.created` on a first store, `bill_document.revised` on a forced re-render, carrying the replaced hash in its before-state. A failed upload leaves no audit trail.
 
 ---
 
-### BillMessage (planned)
+### BillMessage (shipped — bill production slice 1, Bozeman #137)
 
-Configurable messages that appear on bill documents, segmented by account type, commodity, or date range.
+Configurable text printed on bills, targeted by account type and/or commodity over a date window.
 
 | Field | Type | Notes |
 |-------|------|-------|
 | id | UUID | PK |
-| utility_id | UUID | Tenant scope |
-| message_text | TEXT | The message to display on the bill |
-| account_type | ENUM | Nullable: RESIDENTIAL, COMMERCIAL, INDUSTRIAL, MUNICIPAL; null = all |
-| commodity_id | UUID | Nullable FK → Commodity; null = all commodities |
-| display_start | DATE | When to begin showing this message |
-| display_end | DATE | Nullable: when to stop showing; null = indefinite |
-| priority | INTEGER | Display order when multiple messages apply |
-| is_active | BOOLEAN | |
+| utility_id | UUID | Tenant scope (RLS) |
+| label | VARCHAR(255) | Operator-facing name, also the tiebreak in display order |
+| body | TEXT | The text printed on the bill |
+| account_type_def_id | UUID | Nullable FK → AccountTypeDef; null = all |
+| commodity_id | UUID | Nullable FK → Commodity; null = all |
+| priority | INTEGER | Default 100; ascending, then `label` ascending |
+| active_from | DATE | Window start |
+| active_to | DATE | Nullable; null = indefinite |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
+
+**Targeting** is a null-means-all match on each side independently, so an untargeted message prints alongside ones targeted at this bill.
+
+**Selection happens at `bill.bill_date`, never at `now()`**, so reprinting an old bill reproduces the messages it originally carried.
+
+Two departures from the superseded sketch above: account type is an FK to `AccountTypeDef` rather than an enum, because account types are tenant-configurable; and there is no `is_active` flag, because `active_from`/`active_to` already say when a message applies and a second switch would let the two disagree.
 
 ---
 
 ## API Endpoints
 
-All endpoints are planned for Phase 3.
+Bill document and bill message endpoints are shipped. The rest are planned for Phase 3.
 
 ### Billing Cycle Execution
 
@@ -147,21 +161,40 @@ All endpoints are planned for Phase 3.
 | POST | `/api/v1/billing-records/:id/release-hold` | Release hold |
 | POST | `/api/v1/billing-records/:id/reprint` | Generate corrected bill (creates new version) |
 
-### Bill Documents
+### Bill Documents (shipped)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/billing-records/:id/document` | Retrieve or generate PDF for a billing record |
-| POST | `/api/v1/billing-records/:id/resend` | Resend bill via original delivery channel |
+Addressed by `Bill`, not `BillingRecord`. Bytes stream through the API; a minted apptor-connect link never reaches a client.
 
-### Bill Messages
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| POST | `/api/v1/bills/:id/document` | `accounts:VIEW` | Render and store the PDF; idempotent — returns the existing pointer if one is stored |
+| POST | `/api/v1/bills/:id/document/re-render` | `accounts:APPROVE` | Replace the stored document in place. Does not change what is owed |
+| GET | `/api/v1/bills/:id/document` | `accounts:VIEW` | Stream the stored PDF as `application/pdf` attachment |
+| GET | `/portal/api/bills/:id/document` | `portal_billing:VIEW` | The customer's own copy, scoped through the account's `customer_id` |
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/bill-messages` | List bill messages |
-| POST | `/api/v1/bill-messages` | Create bill message |
-| PATCH | `/api/v1/bill-messages/:id` | Update message |
-| DELETE | `/api/v1/bill-messages/:id` | Deactivate message |
+Re-rendering is a **separate path rather than `?force=true`** because it carries different authority, and route config is the one place permissions are enforced — a query flag would require a second permission check inside a handler.
+
+The portal route is a pure read: if no document has been rendered it answers 404 rather than generating one on a customer's GET. A bill belonging to another customer answers identically to one that does not exist, so the status cannot be used to confirm which bill ids are real.
+
+Status mapping:
+
+| Condition | Status |
+|-----------|--------|
+| `ISSUER_INCOMPLETE`, `RECIPIENT_INCOMPLETE`, `NO_CHARGES`, `STORAGE_NOT_CONFIGURED` | 422, body names the `missing` fields |
+| `NOT_POSTED` — a bill becomes a document once it is posted | 409 |
+| `NOT_RENDERED` — no document, or no such bill | 404 |
+| apptor-connect rejected the request | 502, body names the integration and never a link |
+
+### Bill Messages (shipped)
+
+Gated on `settings`, not `accounts`: the text printed on bills is tenant configuration, and editing it should not require the authority to read every account.
+
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| GET | `/api/v1/bill-messages` | `settings:VIEW` | List bill messages |
+| POST | `/api/v1/bill-messages` | `settings:EDIT` | Create bill message |
+| PATCH | `/api/v1/bill-messages/:id` | `settings:EDIT` | Update message |
+| DELETE | `/api/v1/bill-messages/:id` | `settings:DELETE` | Delete message |
 
 ## Business Rules
 
@@ -182,7 +215,7 @@ All endpoints are planned for Phase 3.
 
 6. **Bill holds:** A service agreement with `hold_reason` set cannot be submitted to SaaSLogic. Holds must be reviewed and released by authorized staff. Hold reasons are logged in AuditLog.
 
-7. **Bill versioning / reprints:** A reprinted bill creates a new BillingRecord with `version = old.version + 1` and `replaces_id = old.id`. The SaaSLogic credit memo / adjustment process is triggered for the difference. The original record is retained for audit.
+7. **Bill versioning / corrections (not built):** A *reprint* creates no version — see rule 12. What needs versioning is **corrected issuance**: a rebill or adjustment that changes what is owed, which should create a new record with `version = old.version + 1` and `replaces_id = old.id`, trigger the credit memo / adjustment process for the difference, and retain the original for audit. This arrives with slice 5d, not with rendering.
 
 8. **Collection handoff (revised 2026-10-09):** CIS issues the `Bill` and owns the receivable. The only thing sent to SaaSLogic is the amount due for an issued Bill, keyed on the Bill for idempotency, so the customer has something payable. No charge breakdown is sent for pricing — CIS has already priced it. Previously this step POSTed a per-agreement billing instruction and stored a returned `saaslogic_invoice_id`. See modules 10 and 21.
 
@@ -190,9 +223,9 @@ All endpoints are planned for Phase 3.
 
 10. **Charge validation:** Before submission, total_amount is validated against the adopted rate schedule. Discrepancies above a configurable tolerance threshold trigger an exception requiring supervisor approval (Bozeman Req 140).
 
-11. **Bill messages:** At bill render time, all active BillMessages matching the service agreement's account type and commodity (or global messages) are included, ordered by priority.
+11. **Bill messages (shipped):** At render time, every `BillMessage` whose window contains **`bill.bill_date`** and whose targeting matches the bill's account type and commodities — or which is untargeted — is included, ordered by `priority` then `label`. Resolving at the bill's own date, not `now()`, is what makes a reprint reproduce the messages the bill originally carried.
 
-12. **PDF generation:** Bill documents are rendered server-side using a configurable bill template. PDFs are stored in blob storage; the `storage_url` provides access. Paperless customers receive the PDF via email; others receive a print-vendor export file (Bozeman Reqs 130–131).
+12. **PDF generation (shipped):** Bills are rendered server-side with `@react-pdf/renderer` from a declarative template, against a resolved `BillPresentation` — the template reads the presentation and nothing else, so the machinery carries no tenant conditionals. Output is **byte-stable**: PDF creation and modification timestamps are pinned, so re-rendering the same presentation produces identical bytes and a concurrent re-render is safe. Bytes go to the tenant's own object store through apptor-connect's files plane and stream back through our API. A bill must be **posted** to become a document, and refuses to render if the tenant's issuer identity is incomplete, the recipient has no name or address, or the bill has no charge lines. Rounded line amounts are summed to produce the printed group subtotal, so what a customer can add up is what is printed. Delivery — email to paperless customers, print-vendor export for the rest (Bozeman Reqs 130–131) — is **not** built; `BillDocument` carries no delivery columns yet.
 
 ## UI Pages
 
@@ -245,15 +278,23 @@ All pages are planned for Phase 3.
   - Golden tests pinning the Bozeman water / sewer / stormwater / solid-waste tariffs and NorthWestern Energy residential electric
   - AR posting (module 23 slice 1): each issued `Bill` posts one signed `LedgerEntry`; `Account.balance` and `lastDueDate` are recomputed from the ledger in the posting transaction; posting is configurable per tenant (`TenantConfig.autoPostBills`) and per account
 
+- **Phase 3 — shipped (bill production slice 1):**
+  - `BillPresentation` resolver turning a `Bill` and its neighbours into render-ready content
+  - Declarative bill template + byte-stable `@react-pdf/renderer` machinery
+  - `BillDocument` pointer rows; bytes in the tenant's own object store via apptor-connect's files plane
+  - Issuer identity and bill storage as `TenantConfig.settings` namespaces (`issuer`, `billDocuments`) — no new columns
+  - `BillMessage` with account-type and commodity targeting, resolved at `bill_date`
+  - Render, re-render and download endpoints, staff and portal
+
 - **Phase 3 — outstanding:**
   - Batch billing run across a cycle's accounts (slice 5c)
-  - Rebill / corrections and reprint versioning (slice 5d)
+  - Rebill / corrections (slice 5d) — this is where bill versioning belongs
   - Payments, allocation, waivers, write-offs and the customer statement view, against the ledger (module 23 slices 2–4)
   - Proration for partial periods
   - Bill holds
   - Final bill on account closure
-  - `BillDocument` + PDF generation; print vendor export
-  - `BillMessage` + bill message UI
+  - Bill delivery: email to paperless customers, print vendor export
+  - UI: download / re-render actions on the bills list, AR tab and portal; bill message management page; issuer identity settings fields
   - `BIMONTHLY` / `QUARTERLY` cycle frequencies — `computeBillPeriod` throws `UNSUPPORTED_FREQUENCY` today
   - Tenant-configurable due-date offset — hardcoded at bill date + 30 days
 
@@ -274,12 +315,12 @@ All pages are planned for Phase 3.
 | 73 | Exclude irrigation from wastewater | **Shipped** — predicate on meter/commodity in the quantity source |
 | 74 | Minimum bills regardless of usage | **Shipped** — `minimum_bill` stage applied after main pricing |
 | 101–105 | Interval aggregation, partial periods, rebilling, reconciliation | Phase 3: rate engine scope |
-| 130 | PDF bill generation, historical images | Phase 3: BillDocument entity + PDF renderer |
-| 131 | Print vendor integration | Phase 3: print export file delivery |
-| 133 | Bill reprints, corrected bills with versioning | Outstanding: slice 5d, versioning via `replaces_id` on `Bill` |
+| 130 | PDF bill generation, historical images | **Shipped (API)** — `BillDocument` + `@react-pdf/renderer`; a stored document is the historical image. UI actions outstanding |
+| 131 | Print vendor integration | Outstanding: print export file delivery. `document_type` is a VARCHAR so `PRINT_EXPORT` needs no migration |
+| 133 | Bill reprints, corrected bills with versioning | **Partial** — a bill can be printed again on demand, byte-identically. Corrected bills and versioning are outstanding (slice 5d); reprinting deliberately creates no version |
 | 134 | Final bill at account closure | Phase 3: FINAL billing trigger |
 | 136 | Bill holds | Phase 3: hold_reason on BillingRecord |
-| 137 | Configurable bill messages by account type/service | Phase 3: BillMessage entity |
+| 137 | Configurable bill messages by account type/service | **Shipped (API)** — `BillMessage` targeted by account type and commodity over a date window, resolved at `bill_date`. Management UI outstanding |
 | 138 | Prorate tier thresholds for partial periods | Phase 3: proration in rate engine |
 | 139 | Itemized charges on bills | **Shipped** — `BillSegmentLine` rows, each traceable to the `RateComponent` that produced it |
 | 140 | Validate charges against adopted rates | Outstanding: lines already carry `source_schedule_id` / `source_component_id`, so validation has what it needs |

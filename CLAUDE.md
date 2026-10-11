@@ -101,6 +101,6 @@ Every entity has `utility_id`. PostgreSQL RLS enforces tenant isolation at DB le
 
 Customer portal lives at `/portal/*` as a route segment in the web app. Unified JWT format shared with admin — portal tokens carry a `customer_id` claim. Portal users are `CisUser` rows with a `customerId` FK to `Customer` and a `Portal Customer` role with `portal_*` module permissions. Admin chrome (sidebar/topbar) is skipped for `/portal/*`, `/login`, and `/dev` routes.
 
-**Portal API routes:** `/portal/api/auth/register`, `/portal/api/auth/login`, `/portal/api/dashboard`, `/portal/api/accounts`, `/portal/api/accounts/:id`, `/portal/api/agreements/:id/usage`, `/portal/api/profile` (GET + PATCH).
+**Portal API routes:** `/portal/api/auth/register`, `/portal/api/auth/login`, `/portal/api/dashboard`, `/portal/api/accounts`, `/portal/api/accounts/:id`, `/portal/api/agreements/:id/usage`, `/portal/api/profile` (GET + PATCH), `/portal/api/bills/:id/document` (GET — the customer's own bill PDF, streamed through the API).
 
 **Dev test credentials:** `jane.smith@example.com` and `robert.j@example.com` (seeded via `seed_db.bat`). Login at `/login` and click the portal customer quick-login pills.

@@ -122,7 +122,7 @@ export const REQUIRED_ISSUER_FIELDS: readonly [
 
 Task 3 reads `settings.issuer`; Task 6 reads `settings.billDocuments`. Both use `REQUIRED_ISSUER_FIELDS` so "which fields are mandatory" is stated once.
 
-- [ ] **Step 1: Write the failing validator tests**
+- [x] **Step 1: Write the failing validator tests**
 
 ```ts
 // packages/shared/src/validators/__tests__/tenant-settings.test.ts
@@ -191,12 +191,12 @@ describe("billDocumentSettingsSchema", () => {
 });
 ```
 
-- [ ] **Step 2: Run them and confirm they fail**
+- [x] **Step 2: Run them and confirm they fail**
 
 Run: `cd packages/shared && pnpm vitest run src/validators/__tests__/tenant-settings.test.ts`
 Expected: FAIL — `issuerSettingsSchema` is not exported.
 
-- [ ] **Step 3: Add the namespaces**
+- [x] **Step 3: Add the namespaces**
 
 In `packages/shared/src/validators/tenant-settings.ts`, following the existing schemas' shape exactly (`.strict()`, every field `.optional()`, `.or(z.literal(""))` where the settings pages clear a value by sending an empty string):
 
@@ -252,12 +252,12 @@ export const billDocumentSettingsSchema = z
 export type BillDocumentSettings = z.infer<typeof billDocumentSettingsSchema>;
 ```
 
-- [ ] **Step 4: Run the validator tests**
+- [x] **Step 4: Run the validator tests**
 
 Run: the Step 2 command.
 Expected: PASS (7 tests).
 
-- [ ] **Step 5: Wire the namespaces into the PATCH body**
+- [x] **Step 5: Wire the namespaces into the PATCH body**
 
 In `packages/api/src/routes/tenant-config.ts`, add `issuerSettingsSchema` and `billDocumentSettingsSchema` to the import from `@utility-cis/shared`, then two keys to `updateBodySchema` alongside `branding` / `notifications` / `retention` / `billing`:
 
@@ -268,11 +268,11 @@ In `packages/api/src/routes/tenant-config.ts`, add `issuerSettingsSchema` and `b
 
 Nothing else changes: the route already shallow-merges each namespace into `settings.<namespace>`, so no service or Prisma edit is needed. Read the handler to confirm the merge is generic over the namespace keys rather than listing them — if it lists them, add these two there too.
 
-- [ ] **Step 6: Verify the endpoint accepts and rejects**
+- [x] **Step 6: Verify the endpoint accepts and rejects**
 
 Add to `packages/api/src/__tests__/integration/tenant-context.integration.test.ts`, or a new `tenant-issuer-settings.integration.test.ts` following its boot preamble, a case asserting that `updateTenantConfig` with `{ issuer: { utilityName: "City of Testville Utilities" } }` persists to `settings.issuer.utilityName`, and that `{ issuer: { remitanceCity: "x" } }` is rejected. Match the real `updateTenantConfig` signature — read the service first.
 
-- [ ] **Step 7: Typecheck and commit**
+- [x] **Step 7: Typecheck and commit**
 
 Run: `pnpm typecheck`
 
@@ -297,7 +297,7 @@ git commit -m "feat(billing): issuer identity and bill storage as tenant setting
 - Consumes: nothing.
 - Produces: `selectBillMessages(utilityId: string, opts: { accountTypeDefId: string | null; commodityIds: string[]; onDate: Date }): Promise<BillMessageRow[]>` where `BillMessageRow = { id: string; label: string; body: string; priority: number }`, ordered by `priority` ascending then `label` ascending. Task 3 calls this.
 
-- [ ] **Step 1: Write the failing targeting tests**
+- [x] **Step 1: Write the failing targeting tests**
 
 ```ts
 // packages/api/src/__tests__/services/bill-message.service.test.ts
@@ -359,12 +359,12 @@ describe("selectBillMessages", () => {
 });
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [x] **Step 2: Run it and confirm it fails**
 
 Run: `cd packages/api && pnpm vitest run src/__tests__/services/bill-message.service.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Add the model**
+- [x] **Step 3: Add the model**
 
 In `packages/shared/prisma/schema.prisma`:
 
@@ -396,7 +396,7 @@ model BillMessage {
 
 Add the matching back-relations: `billMessages BillMessage[]` on `AccountTypeDef` and on `Commodity`.
 
-- [ ] **Step 4: Write the migration**
+- [x] **Step 4: Write the migration**
 
 ```sql
 -- packages/shared/prisma/migrations/20261011120100_bill_message/migration.sql
@@ -430,7 +430,7 @@ CREATE POLICY "bill_message_tenant_isolation" ON "bill_message"
 
 Before writing this, open the most recent migration that creates a table (`20261009120000_ledger_foundation`) and copy its RLS policy wording exactly — if it differs from the above, that file is authoritative, not this plan.
 
-- [ ] **Step 5: Implement the selector**
+- [x] **Step 5: Implement the selector**
 
 ```ts
 // packages/api/src/services/bill-message.service.ts
@@ -480,12 +480,12 @@ export async function selectBillMessages(
 }
 ```
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: `cd packages/api && pnpm vitest run src/__tests__/services/bill-message.service.test.ts`
 Expected: PASS (4 tests). If `prisma.billMessage` is undefined in the mock, add `billMessage: crud(),` to the mock factory in `packages/api/src/__tests__/vitest.setup.ts`.
 
-- [ ] **Step 7: Add the validator**
+- [x] **Step 7: Add the validator**
 
 ```ts
 // packages/shared/src/validators/bill-message.ts
@@ -509,11 +509,11 @@ export type BillMessageUpdate = z.infer<typeof billMessageUpdateSchema>;
 
 Add `export * from "./bill-message";` to `packages/shared/src/validators/index.ts`, keeping that file's existing ordering convention.
 
-- [ ] **Step 8: Add CRUD routes and register them**
+- [x] **Step 8: Add CRUD routes and register them**
 
 Create `packages/api/src/routes/bill-messages.ts` following `packages/api/src/routes/suspension-type-defs.ts` as the model for a settings-scoped tenant CRUD module — read it first and mirror its structure, using `{ config: { module: "settings", permission: "VIEW" | "CREATE" | "EDIT" | "DELETE" } }` and `billMessageCreateSchema` / `billMessageUpdateSchema`. Register it in `packages/api/src/app.ts` next to the other settings route registrations.
 
-- [ ] **Step 9: Typecheck and commit**
+- [x] **Step 9: Typecheck and commit**
 
 Run: `pnpm --filter @utility-cis/api exec tsc --noEmit`
 
@@ -560,7 +560,7 @@ All money fields are 2dp strings. Task 5 and Task 6 consume this.
 
 > **Naming note for the implementer:** the spec calls this unit `BillPresentationLoader`. Services in this codebase export functions, not classes (`bill.service.ts` exports `getBill`, `listBills`), so it ships as a function module. The rate-engine `*Loader` classes are a different layer; do not follow them here.
 
-- [ ] **Step 1: Write the failing tests, including three Review Focus items**
+- [x] **Step 1: Write the failing tests, including three Review Focus items**
 
 ```ts
 // packages/api/src/__tests__/services/bill-presentation.service.test.ts
@@ -753,12 +753,12 @@ describe("loadBillPresentation", () => {
 });
 ```
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 Run: `cd packages/api && pnpm vitest run src/__tests__/services/bill-presentation.service.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement the resolver**
+- [x] **Step 3: Implement the resolver**
 
 Write `packages/api/src/services/bill-presentation.service.ts` with the interfaces from the Interfaces block and this behaviour:
 
@@ -788,12 +788,12 @@ Then `loadBillPresentation`:
 8. `branding` from `tenantTheme.findUnique`, falling back to `DEFAULT_BRANDING` field by field; read `colors`/`typography` JSON defensively since they are untyped.
 9. `remittance.payTo` is `utilityLegalName ?? utilityName`; `amountDue` is `totals.total`.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: the Step 2 command.
 Expected: PASS (7 tests). Add `bill: crud(), tenantTheme: crud(),` to the setup mock if they are missing.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 ```bash
 git add packages/api/src/services/bill-presentation.service.ts packages/api/src/__tests__/services/bill-presentation.service.test.ts
@@ -825,7 +825,7 @@ export class ApptorConnectError extends Error { constructor(message: string, rea
 
 Task 6 consumes `putObject` / `getObject` and never `mintFileLink` directly.
 
-- [ ] **Step 1: Write the contract test**
+- [x] **Step 1: Write the contract test**
 
 This is the test that notices if apptor-connect's contract moves, per the spec's testing section.
 
@@ -957,12 +957,12 @@ describe("apptor-connect files client", () => {
 });
 ```
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 Run: `cd packages/api && pnpm vitest run src/__tests__/lib/apptor-connect-files-client.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Add config**
+- [x] **Step 3: Add config**
 
 In `packages/api/src/config.ts`, inside `configSchema`, following the style of the entries already there:
 
@@ -975,7 +975,7 @@ In `packages/api/src/config.ts`, inside `configSchema`, following the style of t
 
 > **Open deployment question, do not resolve in code:** the apptor-connect API key is tenant-scoped on their side (`{"tenantId": "acme"}` when minted), while this service is multi-tenant by `utility_id`. This plan uses one deployment-level key and selects each utility's store by integration name. Whether each utility should instead get its own apptor-connect key or customer scope is a provisioning decision for the apptor-connect side; raise it, do not invent it.
 
-- [ ] **Step 4: Implement the client**
+- [x] **Step 4: Implement the client**
 
 ```ts
 // packages/api/src/lib/apptor-connect/files-client.ts
@@ -1046,12 +1046,12 @@ export async function mintFileLink(args: {
 
 Then `putObject` (mint `PUT`, `fetch(link.url, { method: "PUT", body })`, throw `ApptorConnectError` on `!ok`) and `getObject` (mint `GET`, fetch, return `Buffer.from(await res.arrayBuffer())`). Default `ttlSeconds` to `config.BILL_DOCUMENT_LINK_TTL_SECONDS`. Never include `link.url` in an error message.
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: the Step 2 command.
 Expected: PASS (6 tests).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/api/src/lib/apptor-connect packages/api/src/config.ts packages/api/src/__tests__/lib/apptor-connect-files-client.test.ts
@@ -1073,7 +1073,7 @@ git commit -m "feat(billing): apptor-connect files client, with a contract test"
 - Consumes: `BillPresentation` from Task 3.
 - Produces: `renderBillPdf(presentation: BillPresentation): Promise<Buffer>` and `DEFAULT_TEMPLATE_KEY = "default-bill-v1"`. Task 6 consumes both.
 
-- [ ] **Step 1: Install dependencies and enable JSX**
+- [x] **Step 1: Install dependencies and enable JSX**
 
 ```bash
 cd packages/api && pnpm add @react-pdf/renderer@4.3.0 react@18.3.1
@@ -1085,7 +1085,7 @@ In `packages/api/tsconfig.json`, add to `compilerOptions`:
     "jsx": "react-jsx",
 ```
 
-- [ ] **Step 2: Write the failing tests, including Review Focus 4 and byte-stability**
+- [x] **Step 2: Write the failing tests, including Review Focus 4 and byte-stability**
 
 ```ts
 // packages/api/src/__tests__/bill-render/render-bill-pdf.test.ts
@@ -1152,12 +1152,12 @@ describe("renderBillPdf", () => {
 });
 ```
 
-- [ ] **Step 3: Run and confirm failure**
+- [x] **Step 3: Run and confirm failure**
 
 Run: `cd packages/api && pnpm vitest run src/__tests__/bill-render/render-bill-pdf.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 4: Write the template**
+- [x] **Step 4: Write the template**
 
 Create `packages/api/src/bill-template/default-bill.tsx` exporting `DefaultBillTemplate({ presentation }: { presentation: BillPresentation })`, built from `@react-pdf/renderer`'s `Document`, `Page`, `View`, `Text` and `StyleSheet`. Requirements the tests pin:
 
@@ -1167,7 +1167,7 @@ Create `packages/api/src/bill-template/default-bill.tsx` exporting `DefaultBillT
 - The messages block after the totals.
 - Colors come only from `presentation.branding`. No tenant conditionals anywhere in this file — it reads the presentation and nothing else.
 
-- [ ] **Step 5: Write the machinery**
+- [x] **Step 5: Write the machinery**
 
 ```ts
 // packages/api/src/bill-render/render-bill-pdf.ts
@@ -1185,7 +1185,7 @@ export async function renderBillPdf(presentation: BillPresentation): Promise<Buf
 }
 ```
 
-- [ ] **Step 6: Make the output byte-stable**
+- [x] **Step 6: Make the output byte-stable**
 
 A PDF normally embeds `/CreationDate` and `/ModDate` from the wall clock, which would break both the byte-stability test and the idempotent-overwrite reasoning in spec §4.5.
 
@@ -1216,12 +1216,12 @@ export function stabilizePdf(pdf: Buffer): Buffer {
 
 If the byte-stability test still fails after this, print the two buffers' first differing offset and inspect what varies — do not weaken the test. If react-pdf embeds a document ID (`/ID [<…><…>]`), normalise that the same way, and add a test asserting the specific key is pinned.
 
-- [ ] **Step 7: Run the tests**
+- [x] **Step 7: Run the tests**
 
 Run: the Step 3 command.
 Expected: PASS (4 tests).
 
-- [ ] **Step 8: Typecheck and commit**
+- [x] **Step 8: Typecheck and commit**
 
 Run: `pnpm --filter @utility-cis/api exec tsc --noEmit`
 
@@ -1277,7 +1277,7 @@ export function billObjectKey(utilityId: string, billId: string): string;
 
 Note what is deliberately absent: no field holds a URL, and no field holds a version. A minted link is consumed and discarded inside the files client.
 
-- [ ] **Step 1: Add the model and migration**
+- [x] **Step 1: Add the model and migration**
 
 ```prisma
 /// The rendered artifact for one bill. Holds a pointer, never bytes: the
@@ -1309,7 +1309,7 @@ Add `documents BillDocument[]` to `model Bill`. Write the migration to match, in
 
 `documentType` is a `VARCHAR` with `PDF` the only value written now, rather than a Postgres enum, because the project's own migration notes record that enum values cannot be removed once added — and `PRINT_EXPORT` / `EMAIL_HTML` are not designed yet.
 
-- [ ] **Step 2: Write the failing integration test**
+- [x] **Step 2: Write the failing integration test**
 
 ```ts
 // packages/api/src/__tests__/integration/bill-document.integration.test.ts
@@ -1414,16 +1414,16 @@ describe("bill documents", () => {
 });
 ```
 
-- [ ] **Step 3: Implement the fixture helper**
+- [x] **Step 3: Implement the fixture helper**
 
 Replace `postedBill()` with a real builder: `makeTenantFixture(prisma, TENANT_A)`, then create a `BillSegment` with two `BillSegmentLine` rows, a `Bill` with matching totals and `postedAt` set, a `BillingAddress` on the account, and a `TenantConfig` carrying all five required issuer fields. Read `_effective-dating-fixtures.ts` and `bill.service.ts` for the exact required columns rather than guessing.
 
-- [ ] **Step 4: Run and confirm failure**
+- [x] **Step 4: Run and confirm failure**
 
 Run: `cd packages/api && pnpm vitest run --config vitest.integration.config.ts src/__tests__/integration/bill-document.integration.test.ts`
 Expected: FAIL — service module not found.
 
-- [ ] **Step 5: Implement the service**
+- [x] **Step 5: Implement the service**
 
 `packages/api/src/services/bill-document.service.ts`:
 
@@ -1445,26 +1445,34 @@ export function billObjectKey(utilityId: string, billId: string): string {
 
 `readBillDocument(utilityId, billId)` finds the row scoped by `utilityId`, calls `getObject`, and returns both. A missing row is the caller's 404; a missing object is a 500 naming bill id, integration and key.
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: the Step 4 command.
 Expected: PASS (5 tests).
 
-- [ ] **Step 7: Add the routes**
+- [x] **Step 7: Add the routes**
 
 Create `packages/api/src/routes/bill-documents.ts`:
 
-- `POST /api/v1/bills/:id/document` — `accounts:VIEW`; `?force=true` re-renders.
-- `GET /api/v1/bills/:id/document` — `accounts:VIEW`; sets `Content-Type: application/pdf` and `Content-Disposition: attachment; filename="bill-<billNumber>.pdf"`, then sends the buffer.
+- `POST /api/v1/bills/:id/document` — `accounts:VIEW`; renders and stores, idempotent.
+- `POST /api/v1/bills/:id/document/re-render` — `accounts:APPROVE`; replaces in place.
+
+  > **Shipped differently from this plan.** The plan put the re-render behind `?force=true` on the same endpoint. It ships as its own path because it carries different authority, and route config is the only place this codebase enforces permissions — a single endpoint switching on a query flag would need a hand-rolled permission check inside a handler, where nobody would look for it. The test `lets accounts:VIEW generate a document but not replace one` pins the split.
+
+- `GET /api/v1/bills/:id/document` — `accounts:VIEW`; sets `Content-Type: application/pdf` and `Content-Disposition: attachment; filename="bill-<billNumber>.pdf"`, then sends the buffer. The bill number is reduced to filename-safe characters first, so it cannot terminate the header.
 - `GET /portal/api/bills/:id/document` — `portal_billing:VIEW`, scoped so the authenticated customer can only reach bills on their own accounts; follow `routes/portal-api.ts` for how that scoping is already done.
 
 Map error codes to statuses: `ISSUER_INCOMPLETE` / `RECIPIENT_INCOMPLETE` / `NO_CHARGES` / `STORAGE_NOT_CONFIGURED` → 422 with the `missing` list; `NOT_POSTED` → 409; `ApptorConnectError` → 502 naming the integration and never the link. Register in `app.ts`.
 
-- [ ] **Step 8: Add the 422 and 502 endpoint tests**
+- [x] **Step 8: Add the 422 and 502 endpoint tests**
 
 Append two cases to the integration file: a bill whose `TenantConfig` lacks `utilityName` renders a 422 whose body names `utilityName`; and a `put` that rejects with `ApptorConnectError(…, 503, "cis-bills")` surfaces 502 with the integration name and no `url` anywhere in the body.
 
-- [ ] **Step 9: Typecheck and commit**
+Ten endpoint cases shipped rather than two. Beyond the 422 and the 502: the successful download and its headers, a 404 when nothing has been rendered, a 409 for an unposted bill, the permission split above, a customer downloading their own bill, **a customer being refused another customer's bill with the same 404 a non-existent bill gets** — the status must not confirm which bill ids are real — and a portal request on a token carrying no customer claim.
+
+Three audit cases were added to Task 6 as well, after review found the service auditing its claim row: a failed upload deleted the row but left a committed `bill_document.created` entry behind, so the log asserted a document nothing could download. The claim is now unaudited and the store is audited once — `.created` on a first store, `.revised` on a forced re-render.
+
+- [x] **Step 9: Typecheck and commit**
 
 ```bash
 git add packages/shared/prisma packages/api/src/services/bill-document.service.ts packages/api/src/routes/bill-documents.ts packages/api/src/app.ts packages/api/src/__tests__/integration/bill-document.integration.test.ts
