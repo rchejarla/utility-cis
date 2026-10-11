@@ -8,7 +8,7 @@ import type { BillPresentation } from "../services/bill-presentation.service.js"
  * declares structure. It holds no tenant conditionals and talks to no
  * database — everything that varies per tenant arrives inside the
  * presentation. The machinery that turns these declarations into bytes
- * lives in ../bill-render, deliberately apart, because a layout
+ * lives in ../bill-generation, deliberately apart, because a layout
  * designer would later edit templates and never machinery.
  *
  * Fonts: a built-in PDF base font rather than a vendored family. A bill

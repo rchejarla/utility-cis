@@ -19,7 +19,7 @@ Every task's requirements implicitly include these. Values are copied from the s
 - **Object key is exactly** `bills/{utilityId}/{billId}.pdf`. No version segment — see the spec's §4.3.
 - **A minted capability link is a bearer credential.** It must never be returned to a client, embedded in a page or email, or written to a log. Bytes stream through our API so authorization stays with our RBAC.
 - **`maxBytes` is always set explicitly** on a PUT link. TTL is the shortest workable value, never the 7-day maximum.
-- **Templates and machinery stay separate:** declarative layout under `packages/api/src/bill-template/`, rendering machinery under `packages/api/src/bill-render/`. Machinery contains no tenant conditionals; anything per-tenant arrives inside `BillPresentation`.
+- **Templates and machinery stay separate:** declarative layout under `packages/api/src/bill-template/`, rendering machinery under `packages/api/src/bill-generation/`. Machinery contains no tenant conditionals; anything per-tenant arrives inside `BillPresentation`.
 - **Money is `Decimal` (`decimal.js`), never `Number`.** Amounts cross API and module boundaries as strings. `Bill` columns are `Decimal(14,4)`; display is 2dp.
 - **Bill messages resolve at `bill.billDate`, never `now()`**, so reprinting an old bill reproduces the messages it carried.
 - **Fonts are vendored and explicitly registered**, so output does not depend on host fonts.
@@ -38,7 +38,7 @@ Five failure modes the spec implies but no obvious task tests. Each has its test
 2. **A bill with no segments, or segments with no lines, must refuse to render** rather than produce a document showing a total with nothing to explain it. → Task 3.
 3. **An account with no customer name or no billing address must fail with a clear 422**, not render a bill with a blank recipient that gets mailed. → Task 3.
 4. **A bill with enough lines to paginate must repeat the header and place totals and the remittance stub on the last page.** Silent truncation at the page boundary loses charges. → Task 5.
-5. **A forced re-render must not silently replace a stored document without recording it.** With versioning deferred, `?force=true` overwrites in place; `sha256` and `generatedAt` have to move so the replacement is detectable, and an unforced second call must not overwrite at all. → Task 6.
+5. **A forced Regenerate must not silently replace a stored document without recording it.** With versioning deferred, `?force=true` overwrites in place; `sha256` and `generatedAt` have to move so the replacement is detectable, and an unforced second call must not overwrite at all. → Task 6.
 
 ---
 
@@ -52,8 +52,8 @@ Five failure modes the spec implies but no obvious task tests. Each has its test
 - `packages/api/src/services/bill-message.service.ts` — CRUD + targeting selection
 - `packages/api/src/services/bill-presentation.service.ts` — `BillPresentation` type + resolver
 - `packages/api/src/bill-template/default-bill.tsx` — declarative layout
-- `packages/api/src/bill-render/render-bill-pdf.ts` — machinery: fonts, pagination, bytes
-- `packages/api/src/bill-render/stabilize-pdf.ts` — strips non-deterministic PDF metadata
+- `packages/api/src/bill-generation/generate-bill-pdf.ts` — machinery: fonts, pagination, bytes
+- `packages/api/src/bill-generation/stabilize-pdf.ts` — strips non-deterministic PDF metadata
 - `packages/api/src/services/bill-document.service.ts` — render, store, read, reprint
 - `packages/api/src/routes/bill-documents.ts` — render and download endpoints
 - `packages/api/src/routes/bill-messages.ts` — settings CRUD
@@ -1066,14 +1066,14 @@ git commit -m "feat(billing): apptor-connect files client, with a contract test"
 
 **Files:**
 - Create: `packages/api/src/bill-template/default-bill.tsx`
-- Create: `packages/api/src/bill-render/render-bill-pdf.ts`
-- Create: `packages/api/src/bill-render/stabilize-pdf.ts`
+- Create: `packages/api/src/bill-generation/generate-bill-pdf.ts`
+- Create: `packages/api/src/bill-generation/stabilize-pdf.ts`
 - Modify: `packages/api/tsconfig.json`, `packages/api/package.json`
-- Test: `packages/api/src/__tests__/bill-render/render-bill-pdf.test.ts`
+- Test: `packages/api/src/__tests__/bill-generation/generate-bill-pdf.test.ts`
 
 **Interfaces:**
 - Consumes: `BillPresentation` from Task 3.
-- Produces: `renderBillPdf(presentation: BillPresentation): Promise<Buffer>` and `DEFAULT_TEMPLATE_KEY = "default-bill-v1"`. Task 6 consumes both.
+- Produces: `generateBillPdf(presentation: BillPresentation): Promise<Buffer>` and `DEFAULT_TEMPLATE_KEY = "default-bill-v1"`. Task 6 consumes both.
 
 - [x] **Step 1: Install dependencies and enable JSX**
 
@@ -1090,10 +1090,10 @@ In `packages/api/tsconfig.json`, add to `compilerOptions`:
 - [x] **Step 2: Write the failing tests, including Review Focus 4 and byte-stability**
 
 ```ts
-// packages/api/src/__tests__/bill-render/render-bill-pdf.test.ts
+// packages/api/src/__tests__/bill-generation/generate-bill-pdf.test.ts
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
-import { renderBillPdf } from "../../bill-render/render-bill-pdf.js";
+import { generateBillPdf } from "../../bill-generation/generate-bill-pdf.js";
 import type { BillPresentation } from "../../services/bill-presentation.service.js";
 
 function presentation(lineCount: number): BillPresentation {
@@ -1120,15 +1120,15 @@ function pageCount(pdf: Buffer): number {
   return (pdf.toString("latin1").match(/\/Type\s*\/Page[^s]/g) ?? []).length;
 }
 
-describe("renderBillPdf", () => {
+describe("generateBillPdf", () => {
   it("produces a valid PDF", async () => {
-    const pdf = await renderBillPdf(presentation(3));
+    const pdf = await generateBillPdf(presentation(3));
     expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
     expect(pdf.length).toBeGreaterThan(1000);
   });
 
   it("carries the issuer, bill number, every charge label and the total", async () => {
-    const pdf = await renderBillPdf(presentation(3));
+    const pdf = await generateBillPdf(presentation(3));
     const text = pdf.toString("latin1");
     for (const needle of ["B-1001", "A-900", "Charge 1", "Charge 2", "Charge 3"]) {
       expect(text).toContain(needle);
@@ -1137,7 +1137,7 @@ describe("renderBillPdf", () => {
 
   // Review Focus 4
   it("paginates a long bill without losing lines", async () => {
-    const many = await renderBillPdf(presentation(120));
+    const many = await generateBillPdf(presentation(120));
     expect(pageCount(many)).toBeGreaterThan(1);
     const text = many.toString("latin1");
     expect(text).toContain("Charge 1");
@@ -1146,8 +1146,8 @@ describe("renderBillPdf", () => {
 
   // Spec §4.5 depends on this
   it("is byte-stable across renders of the same presentation", async () => {
-    const a = await renderBillPdf(presentation(3));
-    const b = await renderBillPdf(presentation(3));
+    const a = await generateBillPdf(presentation(3));
+    const b = await generateBillPdf(presentation(3));
     const hash = (b: Buffer) => createHash("sha256").update(b).digest("hex");
     expect(hash(a)).toBe(hash(b));
   });
@@ -1156,7 +1156,7 @@ describe("renderBillPdf", () => {
 
 - [x] **Step 3: Run and confirm failure**
 
-Run: `cd packages/api && pnpm vitest run src/__tests__/bill-render/render-bill-pdf.test.ts`
+Run: `cd packages/api && pnpm vitest run src/__tests__/bill-generation/generate-bill-pdf.test.ts`
 Expected: FAIL — module not found.
 
 - [x] **Step 4: Write the template**
@@ -1172,7 +1172,7 @@ Create `packages/api/src/bill-template/default-bill.tsx` exporting `DefaultBillT
 - [x] **Step 5: Write the machinery**
 
 ```ts
-// packages/api/src/bill-render/render-bill-pdf.ts
+// packages/api/src/bill-generation/generate-bill-pdf.ts
 import { renderToBuffer } from "@react-pdf/renderer";
 import { createElement } from "react";
 import { DefaultBillTemplate } from "../bill-template/default-bill.js";
@@ -1181,7 +1181,7 @@ import type { BillPresentation } from "../services/bill-presentation.service.js"
 
 export const DEFAULT_TEMPLATE_KEY = "default-bill-v1";
 
-export async function renderBillPdf(presentation: BillPresentation): Promise<Buffer> {
+export async function generateBillPdf(presentation: BillPresentation): Promise<Buffer> {
   const buffer = await renderToBuffer(createElement(DefaultBillTemplate, { presentation }));
   return stabilizePdf(buffer);
 }
@@ -1192,12 +1192,12 @@ export async function renderBillPdf(presentation: BillPresentation): Promise<Buf
 A PDF normally embeds `/CreationDate` and `/ModDate` from the wall clock, which would break both the byte-stability test and the idempotent-overwrite reasoning in spec §4.5.
 
 ```ts
-// packages/api/src/bill-render/stabilize-pdf.ts
+// packages/api/src/bill-generation/stabilize-pdf.ts
 
 /**
  * Remove the only non-deterministic bytes a PDF carries: the creation and
  * modification timestamps. Without this, two renders of the same
- * presentation differ, and spec §4.5's "a re-render overwrites the same
+ * presentation differ, and spec §4.5's "a Regenerate overwrites the same
  * object with identical bytes" stops being true — which is what makes a
  * concurrent render safe.
  *
@@ -1228,7 +1228,7 @@ Expected: PASS (4 tests).
 Run: `pnpm --filter @utility-cis/api exec tsc --noEmit`
 
 ```bash
-git add packages/api/package.json packages/api/tsconfig.json packages/api/src/bill-template packages/api/src/bill-render packages/api/src/__tests__/bill-render ../../pnpm-lock.yaml
+git add packages/api/package.json packages/api/tsconfig.json packages/api/src/bill-template packages/api/src/bill-generation packages/api/src/__tests__/bill-generation ../../pnpm-lock.yaml
 git commit -m "feat(billing): render a bill presentation to a byte-stable PDF"
 ```
 
@@ -1244,7 +1244,7 @@ git commit -m "feat(billing): render a bill presentation to a byte-stable PDF"
 - Test: `packages/api/src/__tests__/integration/bill-document.integration.test.ts`
 
 **Interfaces:**
-- Consumes: `loadBillPresentation` (Task 3), `putObject`/`getObject`/`ApptorConnectError` (Task 4), `renderBillPdf`/`DEFAULT_TEMPLATE_KEY` (Task 5).
+- Consumes: `loadBillPresentation` (Task 3), `putObject`/`getObject`/`ApptorConnectError` (Task 4), `generateBillPdf`/`DEFAULT_TEMPLATE_KEY` (Task 5).
 - Produces:
 
 ```ts
@@ -1262,7 +1262,7 @@ export interface BillDocumentRow {
   isPaperless: boolean;
 }
 
-export async function renderBillDocument(
+export async function generateBillDocument(
   utilityId: string,
   billId: string,
   actorId: string,
@@ -1282,7 +1282,7 @@ Note what is deliberately absent: no field holds a URL, and no field holds a ver
 - [x] **Step 1: Add the model and migration**
 
 ```prisma
-/// The rendered artifact for one bill. Holds a pointer, never bytes: the
+/// The generated artifact for one bill. Holds a pointer, never bytes: the
 /// object lives in the tenant's own store, reached through
 /// apptor-connect's files plane.
 model BillDocument {
@@ -1366,8 +1366,8 @@ describe("bill documents", () => {
   it("renders once, stores a pointer, and is idempotent", async () => {
     const billId = await postedBill();
 
-    const first = await svc.renderBillDocument(TENANT_A, billId, ACTOR);
-    const second = await svc.renderBillDocument(TENANT_A, billId, ACTOR);
+    const first = await svc.generateBillDocument(TENANT_A, billId, ACTOR);
+    const second = await svc.generateBillDocument(TENANT_A, billId, ACTOR);
 
     expect(put).toHaveBeenCalledTimes(1);
     expect(second.id).toBe(first.id);
@@ -1378,7 +1378,7 @@ describe("bill documents", () => {
 
   it("round-trips the stored bytes on read", async () => {
     const billId = await postedBill();
-    const row = await svc.renderBillDocument(TENANT_A, billId, ACTOR);
+    const row = await svc.generateBillDocument(TENANT_A, billId, ACTOR);
     const uploaded = put.mock.calls[0][0].body as Buffer;
     get.mockResolvedValue(uploaded);
 
@@ -1392,7 +1392,7 @@ describe("bill documents", () => {
     const billId = await postedBill();
     put.mockRejectedValueOnce(new Error("rejected"));
 
-    await expect(svc.renderBillDocument(TENANT_A, billId, ACTOR)).rejects.toThrow();
+    await expect(svc.generateBillDocument(TENANT_A, billId, ACTOR)).rejects.toThrow();
 
     const count = await prismaImports.prisma.billDocument.count({ where: { billId } });
     expect(count).toBe(0);
@@ -1402,14 +1402,14 @@ describe("bill documents", () => {
     const billId = await postedBill();
     await prismaImports.prisma.bill.update({ where: { id: billId }, data: { postedAt: null } });
 
-    await expect(svc.renderBillDocument(TENANT_A, billId, ACTOR)).rejects.toMatchObject({
+    await expect(svc.generateBillDocument(TENANT_A, billId, ACTOR)).rejects.toMatchObject({
       code: "NOT_POSTED",
     });
   });
 
   it("keeps a document invisible to another tenant", async () => {
     const billId = await postedBill();
-    await svc.renderBillDocument(TENANT_A, billId, ACTOR);
+    await svc.generateBillDocument(TENANT_A, billId, ACTOR);
 
     await expect(svc.readBillDocument("00000000-0000-4000-8000-0000000000bb", billId)).rejects.toThrow();
   });
@@ -1435,12 +1435,12 @@ export function billObjectKey(utilityId: string, billId: string): string {
 }
 ```
 
-`renderBillDocument(utilityId, billId, actorId, opts)`:
+`generateBillDocument(utilityId, billId, actorId, opts)`:
 
 1. Load the bill (`postedAt`, `account.paperlessBilling`, `utilityId`). Throw `{ code: "NOT_POSTED" }` if `postedAt` is null.
 2. Unless `opts.force`, return any existing `billDocument` for `(billId, "PDF")`.
 3. Resolve `settings.billDocuments.storageIntegration` (and the optional `storageConnection`) from `TenantConfig`, narrowed through `billDocumentSettingsSchema` rather than cast. If absent or empty, throw `{ code: "STORAGE_NOT_CONFIGURED", integration: null }`.
-4. `loadBillPresentation` → `renderBillPdf` → compute `sha256` over the buffer.
+4. `loadBillPresentation` → `generateBillPdf` → compute `sha256` over the buffer.
 5. `putObject({ integration, connection, key: billObjectKey(utilityId, billId), body, maxBytes: config.BILL_DOCUMENT_MAX_BYTES })`.
 6. Then create the row inside `auditCreate`, so the audit row and the document commit together. **Upload before the row, per spec §7:** an orphan object at a deterministic key is inert and the next render overwrites it; a row pointing at nothing is not.
 7. On a unique-constraint violation (a concurrent render won), re-read and return the existing row rather than throwing.
@@ -1462,7 +1462,7 @@ Create `packages/api/src/routes/bill-documents.ts`:
   >
   > It also said `accounts:APPROVE` for the reprint. **No preset role grants `APPROVE` on `accounts`** — `shared/src/modules/constants.ts` documents that permission as existing for `service_suspensions` alone, and neither System Admin nor Utility Admin carries it elsewhere — so that gate made the endpoint unreachable by every seeded role. The CSR on a call is exactly who needs to reprint a bill, and a CSR holds `accounts:EDIT`. The `APPROVE` idea was inherited from when "reprint" meant issuing a corrected bill, which commit f00eb89 dropped.
   >
-  > A separate `/re-render` path shipped first on that reasoning and was then collapsed back into `?force=true` as this plan originally had it: with the authority equal, the split had nothing left to justify it.
+  > A separate `/Regenerate` path shipped first on that reasoning and was then collapsed back into `?force=true` as this plan originally had it: with the authority equal, the split had nothing left to justify it.
 
 - `GET /api/v1/bills/:id/document` — `accounts:VIEW`; sets `Content-Type: application/pdf` and `Content-Disposition: attachment; filename="bill-<billNumber>.pdf"`, then sends the buffer. The bill number is reduced to filename-safe characters first, so it cannot terminate the header.
 - `GET /portal/api/bills/:id/document` — `portal_billing:VIEW`, scoped so the authenticated customer can only reach bills on their own accounts; follow `routes/portal-api.ts` for how that scoping is already done.
@@ -1475,7 +1475,7 @@ Append two cases to the integration file: a bill whose `TenantConfig` lacks `uti
 
 Ten endpoint cases shipped rather than two. Beyond the 422 and the 502: the successful download and its headers, a 404 when nothing has been rendered, a 409 for an unposted bill, the permission split above, a customer downloading their own bill, **a customer being refused another customer's bill with the same 404 a non-existent bill gets** — the status must not confirm which bill ids are real — and a portal request on a token carrying no customer claim.
 
-Three audit cases were added to Task 6 as well, after review found the service auditing its claim row: a failed upload deleted the row but left a committed `bill_document.created` entry behind, so the log asserted a document nothing could download. The claim is now unaudited and the store is audited once — `.created` on a first store, `.revised` on a forced re-render.
+Three audit cases were added to Task 6 as well, after review found the service auditing its claim row: a failed upload deleted the row but left a committed `bill_document.created` entry behind, so the log asserted a document nothing could download. The claim is now unaudited and the store is audited once — `.created` on a first store, `.revised` on a forced Regenerate.
 
 - [x] **Step 9: Typecheck and commit**
 
@@ -1486,7 +1486,7 @@ git commit -m "feat(billing): BillDocument — render, store a pointer, stream t
 
 ---
 
-## Task 7: UI — download, re-render, and bill messages
+## Task 7: UI — download, Regenerate, and bill messages
 
 **Files:**
 - Create: `packages/web/app/settings/bill-messages/page.tsx`
@@ -1499,7 +1499,7 @@ git commit -m "feat(billing): BillDocument — render, store a pointer, stream t
 
 - [x] **Step 1: Write the failing bills-page test**
 
-Follow `packages/web/app/receipts/__tests__/page.test.tsx` for the established mocking style in this package — read it first. Assert: a Download action per bill calls `GET /api/v1/bills/:id/document`; a bill with no document yet shows a Generate action that POSTs; the Re-render action is absent for a user whose permissions lack `accounts:APPROVE`.
+Follow `packages/web/app/receipts/__tests__/page.test.tsx` for the established mocking style in this package — read it first. Assert: a Download action per bill calls `GET /api/v1/bills/:id/document`; a bill with no document yet shows a Generate action that POSTs; the Regenerate action is absent for a user whose permissions lack `accounts:APPROVE`.
 
 - [x] **Step 2: Run and confirm failure**
 
@@ -1508,7 +1508,7 @@ Expected: FAIL on the missing actions.
 
 - [x] **Step 3: Add the actions to the bills page**
 
-Download triggers a fetch and a blob download; Generate POSTs then downloads; Re-render is permission-gated (`accounts:APPROVE`) and confirms first. The confirmation copy must say two things plainly: re-rendering does not change what is owed, and it replaces the stored document — spec §10 records both, and operators will otherwise expect a correction.
+Download triggers a fetch and a blob download; Generate POSTs then downloads; Regenerate is permission-gated (`accounts:APPROVE`) and confirms first. The confirmation copy must say two things plainly: Regenerateing does not change what is owed, and it replaces the stored document — spec §10 records both, and operators will otherwise expect a correction.
 
 - [x] **Step 4: Run the test**
 

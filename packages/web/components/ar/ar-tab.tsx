@@ -47,11 +47,10 @@ export interface LedgerRow {
   reasonLabel: string | null;
   billNumber: string | null;
   /**
-   * The bill's PDF, when this entry charged a bill. `generatedAt: null`
-   * means the bill has no document yet. `billNumber` above is display
-   * text; this is what the download acts on.
+   * The bill this entry charged. The document endpoint addresses the
+   * bill, not the entry; `billNumber` above is display text.
    */
-  billDocument: { billId: string; generatedAt: string | null } | null;
+  billId: string | null;
   tender: string | null;
   memo: string | null;
   reversedByEntryId: string | null;
@@ -145,11 +144,11 @@ export function ArTab({ accountId }: { accountId: string }) {
   /*
    * The actions column was gated on the two permissions that write to
    * the ledger. Downloading a bill's PDF is a read, so a user with
-   * neither still has something to click wherever a bill charge carries
-   * a document — and the column has to exist for them.
+   * neither still has something to click on any row that charged a
+   * bill — and the column has to exist for them.
    */
   const showRowActions =
-    canReverse || canForgive || (page?.data.some((r) => r.billDocument) ?? false);
+    canReverse || canForgive || (page?.data.some((r) => r.billId) ?? false);
 
   async function confirmReverse() {
     if (!reverseRow) return;
@@ -379,16 +378,11 @@ export function ArTab({ accountId }: { accountId: string }) {
                           customer phones about one. A ledger entry only
                           exists once its bill is posted, so there is no
                           unposted case to guard here. */}
-                      {row.billDocument && (
+                      {row.billId && (
                         <BillDocumentActions
-                          billId={row.billDocument.billId}
+                          billId={row.billId}
                           billNumber={row.billNumber ?? "bill"}
-                          document={
-                            row.billDocument.generatedAt
-                              ? { generatedAt: row.billDocument.generatedAt }
-                              : null
-                          }
-                          canProduce={canProduceDocument}
+                          canGenerate={canProduceDocument}
                           variant="link"
                           onChanged={load}
                         />

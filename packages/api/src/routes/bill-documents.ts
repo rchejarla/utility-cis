@@ -6,12 +6,12 @@ import { ApptorConnectError } from "../lib/apptor-connect/files-client.js";
 import { BillPresentationError } from "../services/bill-presentation.service.js";
 import {
   BillDocumentError,
-  renderBillDocument,
+  generateBillDocument,
   readBillDocument,
 } from "../services/bill-document.service.js";
 
 /**
- * Rendering and downloading a bill's PDF.
+ * Generating and downloading a bill's PDF.
  *
  * The bytes always stream through this API. A link minted by
  * apptor-connect is a bearer credential that needs no login, so it never
@@ -20,7 +20,7 @@ import {
  *
  * Producing a document is `accounts:EDIT` and reading one is
  * `accounts:VIEW`, because the first writes — a row, and an object in
- * the tenant's store — and the second does not. A re-render shares the
+ * the tenant's store — and the second does not. A regeneration shares the
  * write's authority rather than needing a higher one: output is
  * byte-stable, so replacing a document cannot change what it says, and
  * it cannot change what is owed. Gating it above `Post`, which makes a
@@ -48,7 +48,7 @@ const STATUS_BY_CODE: Record<string, number> = {
   NO_CHARGES: 422,
   STORAGE_NOT_CONFIGURED: 422,
   NOT_POSTED: 409,
-  NOT_RENDERED: 404,
+  NOT_GENERATED: 404,
 };
 
 /**
@@ -116,7 +116,7 @@ function notFound(reply: FastifyReply, billId: string): FastifyReply {
 export async function billDocumentRoutes(app: FastifyInstance) {
   /**
    * Idempotent without `force`: a bill whose document is already stored
-   * returns the existing pointer without re-rendering or re-uploading,
+   * returns the existing pointer without generating or re-uploading,
    * so a caller that cannot tell whether one exists can simply ask.
    * `?force=true` replaces it in place.
    */
@@ -129,7 +129,7 @@ export async function billDocumentRoutes(app: FastifyInstance) {
       const { force } = forceQuerySchema.parse(request.query);
       try {
         return reply.send(
-          await renderBillDocument(utilityId, billId, actorId, { force: force === "true" }),
+          await generateBillDocument(utilityId, billId, actorId, { force: force === "true" }),
         );
       } catch (err) {
         return sendDocumentError(reply, err);

@@ -15,12 +15,27 @@ import { API_URL, apiClient } from "./api-client";
  * which issuer fields are missing, which storage integration refused —
  * and a bare status line would throw that away.
  */
+/**
+ * Carries the HTTP status, because callers branch on it: a bill's PDF
+ * answers 404 when none has been produced yet, and that is a cue to
+ * produce one rather than an error to report.
+ */
+export class DownloadError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "DownloadError";
+  }
+}
+
 export async function authDownload(path: string, fileName: string): Promise<void> {
   const headers = await apiClient.getAuthHeadersOnly();
   const res = await fetch(`${API_URL}${path}`, { headers });
 
   if (!res.ok) {
-    throw new Error(await failureMessage(res));
+    throw new DownloadError(await failureMessage(res), res.status);
   }
 
   const blobUrl = window.URL.createObjectURL(await res.blob());

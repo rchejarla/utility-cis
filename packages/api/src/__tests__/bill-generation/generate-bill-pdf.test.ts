@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
 import { inflateSync } from "node:zlib";
-import { renderBillPdf } from "../../bill-render/render-bill-pdf.js";
+import { generateBillPdf } from "../../bill-generation/generate-bill-pdf.js";
 import type { BillPresentation } from "../../services/bill-presentation.service.js";
 
 function presentation(lineCount: number): BillPresentation {
@@ -96,16 +96,16 @@ function extractText(pdf: Buffer): string {
 
 const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 
-describe("renderBillPdf", () => {
+describe("generateBillPdf", () => {
   it("produces a valid PDF", async () => {
-    const pdf = await renderBillPdf(presentation(3));
+    const pdf = await generateBillPdf(presentation(3));
 
     expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
     expect(pdf.length).toBeGreaterThan(1000);
   }, 30_000);
 
   it("draws the issuer, the bill and account numbers, and every charge label", async () => {
-    const pdf = await renderBillPdf(presentation(3));
+    const pdf = await generateBillPdf(presentation(3));
     const text = extractText(pdf);
 
     for (const needle of [
@@ -124,7 +124,7 @@ describe("renderBillPdf", () => {
 
   // Review Focus 4 — silent truncation at a page boundary loses charges.
   it("paginates a long bill without losing lines", async () => {
-    const many = await renderBillPdf(presentation(120));
+    const many = await generateBillPdf(presentation(120));
     const text = extractText(many);
 
     expect(pageCount(many)).toBeGreaterThan(1);
@@ -134,15 +134,15 @@ describe("renderBillPdf", () => {
 
   // Spec §4.5's idempotent-overwrite reasoning depends on this.
   it("is byte-stable across renders of the same presentation", async () => {
-    const a = await renderBillPdf(presentation(3));
-    const b = await renderBillPdf(presentation(3));
+    const a = await generateBillPdf(presentation(3));
+    const b = await generateBillPdf(presentation(3));
 
     expect(sha(a)).toBe(sha(b));
   }, 60_000);
 
   it("renders different bytes when the content differs", async () => {
-    const a = await renderBillPdf(presentation(3));
-    const b = await renderBillPdf(presentation(4));
+    const a = await generateBillPdf(presentation(3));
+    const b = await generateBillPdf(presentation(4));
 
     expect(sha(a)).not.toBe(sha(b));
   }, 60_000);

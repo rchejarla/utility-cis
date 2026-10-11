@@ -75,17 +75,17 @@ The simpler alternative — one function that reads Prisma rows and draws a PDF 
 
 ### 4.2 Template separate from machinery
 
-Per the standing rule that what an author writes never mixes with what happens at runtime, the declarative layout lives in `bill-template/` and the rendering machinery in `bill-render/`. A template reads a `BillPresentation` and declares structure; machinery turns declarations into bytes, registers fonts, paginates and writes files. **This is the seam a future layout designer targets** — it edits templates, never machinery. Rendering code must contain no tenant conditionals; anything that varies per tenant arrives through `BillPresentation` or through the template chosen.
+Per the standing rule that what an author writes never mixes with what happens at runtime, the declarative layout lives in `bill-template/` and the rendering machinery in `bill-generation/`. A template reads a `BillPresentation` and declares structure; machinery turns declarations into bytes, registers fonts, paginates and writes files. **This is the seam a future layout designer targets** — it edits templates, never machinery. Rendering code must contain no tenant conditionals; anything that varies per tenant arrives through `BillPresentation` or through the template chosen.
 
 ### 4.3 Reprinting, and why it creates no version
 
-A reprint is "the customer lost their bill, print it again". Nothing about the document changed: bill messages resolve at `billDate` (§5) and the renderer is byte-stable (§4.4), so re-rendering the same bill produces identical bytes. A second row recording that would be bookkeeping with no fact behind it.
+A reprint is "the customer lost their bill, print it again". Nothing about the document changed: bill messages resolve at `billDate` (§5) and the renderer is byte-stable (§4.4), so Regenerateing the same bill produces identical bytes. A second row recording that would be bookkeeping with no fact behind it.
 
 An earlier draft gave `Bill` a `version` and a `replacesId`, chaining a new row per reprint. That attached version tracking to the wrong half of #133, which reads "bill reprints **and corrected bill issuance** with version tracking" — the tracking belongs to corrected issuance, whose content genuinely differs. Corrected issuance is a rebill, and rebill is out of scope.
 
 The stronger reason it is premature: **nothing in this slice delivers a bill to anyone.** Email and print-vendor delivery are both deferred. Versioning exists to protect the record of what was *sent*, and until something sends there is no such record to protect — so overwriting a stored PDF today destroys nothing.
 
-So `Bill` is untouched: no new columns, and `@@unique([utilityId, billNumber])` stays as it is. One `BillDocument` per bill per type, re-renderable in place, idempotent through the deterministic key in §4.5. What stays answerable without a version chain is which layout produced the stored copy and whether it has changed, from `templateKey`, `sha256` and `generatedAt`.
+So `Bill` is untouched: no new columns, and `@@unique([utilityId, billNumber])` stays as it is. One `BillDocument` per bill per type, Regenerateable in place, idempotent through the deterministic key in §4.5. What stays answerable without a version chain is which layout produced the stored copy and whether it has changed, from `templateKey`, `sha256` and `generatedAt`.
 
 Version tracking returns with whichever arrives first — rebill, or delivery. That is this project's own rule: add the indirection when the second consumer appears.
 
@@ -118,13 +118,13 @@ Three consequences worth stating:
 - **A capability link is a bearer credential.** The response says so plainly: the URL "needs no login… anyone holding it can use it until it expires." So bill bytes are **streamed through the API**, keeping authorization with our RBAC and the portal's customer scoping; links are minted with the shortest workable TTL and never put in a page, an email or a log. A redirect-to-link design would move authorization outside our control and make a forwarded link someone else's bill.
 - **Bytes transit apptor-connect** (`via: "service"`, not a vendor presign), so its upload limit and timeouts apply. A bill PDF is small; `maxBytes` is set explicitly per upload so an unbounded render cannot stream indefinitely.
 
-Writing to a deterministic key makes a re-render idempotent: it overwrites the same object with identical bytes. That depends on the renderer being byte-stable for a given `BillPresentation` — no wall-clock creation timestamp embedded in the PDF — which §4.4's vendored-font requirement already half-buys and which `sha256` verifies. This replaces the temp-file-and-rename dance a local filesystem would have needed.
+Writing to a deterministic key makes a Regenerate idempotent: it overwrites the same object with identical bytes. That depends on the renderer being byte-stable for a given `BillPresentation` — no wall-clock creation timestamp embedded in the PDF — which §4.4's vendored-font requirement already half-buys and which `sha256` verifies. This replaces the temp-file-and-rename dance a local filesystem would have needed.
 
 Defensively, the key is prefixed with `utilityId` even though the integration's connection root is already per-tenant. If a deployment ever points two tenants at one bucket, the prefix is what keeps their bills apart.
 
 ## 5. Data model
 
-**`BillDocument`** — the rendered artifact.
+**`BillDocument`** — the generated artifact.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -136,12 +136,12 @@ Defensively, the key is prefixed with `utilityId` even though the integration's 
 | storageConnection | VarChar(100)? | Named connection under it (`cn`); null for the usual one |
 | objectKey | VarChar(500) | Key within the connection's root, as minted in §4.5 |
 | byteSize | Int | |
-| sha256 | Char(64) | Integrity, and makes a re-render detectable as identical |
+| sha256 | Char(64) | Integrity, and makes a Regenerate detectable as identical |
 | templateKey | VarChar(100) | Which template produced it — a reprint under a changed template is explainable |
 | generatedAt | Timestamptz | |
 | isPaperless | Boolean | Copy of `Account.paperlessBilling` at generation, per `docs/specs/09-billing.md:102` |
 
-`@@unique([billId, documentType])` — one document per type per bill. A re-render replaces it in place; §4.3 says why no version sits alongside it.
+`@@unique([billId, documentType])` — one document per type per bill. Generating again replaces it in place; §4.3 says why no version sits alongside it.
 
 **`BillMessage`** — configurable text on bills (#137).
 
@@ -170,7 +170,7 @@ Explicit columns rather than the existing `settings` JSON, because these are req
 | CRUD | `/api/v1/bill-messages` | Standard tenant CRUD via `crud-routes`. |
 | GET | `/portal/api/bills/:id/document` | Portal download, scoped to the authenticated customer's accounts. |
 
-A forced re-render sits behind a higher permission than a download, in the spirit of `docs/specs/09-billing.md:224` ("supervisor-only" for reprints): replacing a stored document is an elevated act even while nothing has been delivered.
+A forced Regenerate sits behind a higher permission than a download, in the spirit of `docs/specs/09-billing.md:224` ("supervisor-only" for reprints): replacing a stored document is an elevated act even while nothing has been delivered.
 
 ## 7. Errors
 
@@ -221,5 +221,5 @@ Integration (testcontainers, `*.integration.test.ts`):
 - **A new dependency in the render path.** Bill production now cannot complete while apptor-connect is down, where a local write would have succeeded. That is the right trade for durability and single-sourced credentials, but it is a real coupling: rendering is an interactive operator action, so the failure is visible and retryable rather than silent. Batch rendering, when it arrives, needs that failure to be per-bill resumable.
 - **Capability links are bearer credentials.** §4.5 streams bytes through the API precisely so a link never reaches a browser, an email or a log. The risk is that a later slice — portal download, or emailing a bill — takes the shortcut of handing the link out. A forwarded or logged link is someone else's bill until it expires.
 - **Printing again is not correcting.** It does not touch money. Until rebill ships, a bill that is *wrong* has no clean path, and operators may reach for reprint expecting one. The UI should say so plainly.
-- **A forced re-render replaces the stored document.** With no versioning (§4.3), `?force=true` overwrites. Harmless while nothing is delivered, and a real hazard the moment delivery ships — which is exactly when versioning should return. `sha256` and `generatedAt` make the replacement detectable after the fact.
+- **A forced Regenerate replaces the stored document.** With no versioning (§4.3), `?force=true` overwrites. Harmless while nothing is delivered, and a real hazard the moment delivery ships — which is exactly when versioning should return. `sha256` and `generatedAt` make the replacement detectable after the fact.
 - **Template churn before the designer exists.** Layout changes are code changes until L3. `templateKey` on `BillDocument` at least makes it answerable which layout produced a given document.

@@ -1920,13 +1920,13 @@ model BillMessage {
   @@map("bill_message")
 }
 
-/// The rendered artifact for one bill. Holds a pointer, never bytes: the
+/// The generated artifact for one bill. Holds a pointer, never bytes: the
 /// object lives in the tenant's own store (S3, Azure Blob or GCS),
 /// reached through apptor-connect's files plane, which also holds the
 /// credential. No URL is stored — a capability link is minted per
 /// access and discarded.
 ///
-/// One row per bill per document type. A re-render replaces it in
+/// One row per bill per document type. Generating again replaces it in
 /// place; there is deliberately no version column, because nothing yet
 /// produces a second version whose content differs and nothing delivers
 /// a bill, so there is no sent copy to preserve.

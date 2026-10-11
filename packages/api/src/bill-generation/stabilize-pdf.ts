@@ -1,10 +1,10 @@
 /**
  * Pins the non-deterministic bytes a PDF carries, so the same
- * `BillPresentation` always renders to the same bytes.
+ * `BillPresentation` always generates the same bytes.
  *
  * Spec §4.5 writes each bill to a deterministic object key and treats
  * `sha256` as the answer to "has this document changed?". A wall-clock
- * timestamp in the file breaks that silently: every render differs
+ * timestamp in the file breaks that silently: every generation differs
  * while looking identical, so a stored hash stops meaning anything and
  * an overwrite can no longer be assumed safe.
  *
@@ -13,7 +13,7 @@
  * — and not only as a `/CreationDate (...)` dictionary entry. An earlier
  * version of this file matched the dictionary form alone and left a
  * single varying byte (the seconds digit), which passed in isolation and
- * failed under a loaded test suite: two renders a second apart differed.
+ * failed under a loaded test suite: two generations a second apart differed.
  *
  * Every replacement preserves length. A PDF's cross-reference table
  * holds byte offsets into the file, so changing the size of anything

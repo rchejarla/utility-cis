@@ -29,7 +29,7 @@ function row(over: Partial<LedgerRow> = {}): LedgerRow {
     reasonCode: null,
     reasonLabel: null,
     billNumber: "BILL-202605-1",
-    billDocument: null,
+    billId: null,
     tender: null,
     memo: null,
     reversedByEntryId: null,
@@ -309,7 +309,7 @@ describe("ArTab — the bill's PDF", () => {
         openCount: 1,
         data: [
           row({
-            billDocument: { billId: "bill-9", generatedAt: "2026-05-16T00:00:00.000Z" },
+            billId: "bill-9",
           }),
         ],
       }),
@@ -329,13 +329,13 @@ describe("ArTab — the bill's PDF", () => {
       page({
         balance: "0.00",
         depositHeld: "750.00",
-        data: [row({ id: "d1", type: "DEPOSIT", billNumber: null, billDocument: null })],
+        data: [row({ id: "d1", type: "DEPOSIT", billNumber: null, billId: null })],
       }),
     );
     renderTab();
 
     await screen.findByRole("table");
     expect(screen.queryByRole("button", { name: "PDF" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Generate PDF" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Regenerate" })).not.toBeInTheDocument();
   });
 });

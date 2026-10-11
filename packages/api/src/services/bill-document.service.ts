@@ -5,17 +5,17 @@ import { config } from "../config.js";
 import { auditUpdate } from "../lib/audit-wrap.js";
 import { putObject, getObject } from "../lib/apptor-connect/files-client.js";
 import { loadBillPresentation } from "./bill-presentation.service.js";
-import { renderBillPdf, DEFAULT_TEMPLATE_KEY } from "../bill-render/render-bill-pdf.js";
+import { generateBillPdf, DEFAULT_TEMPLATE_KEY } from "../bill-generation/generate-bill-pdf.js";
 
 /**
- * Rendering, storing and reading a bill's document.
+ * Generating, storing and reading a bill's document.
  *
  * The row holds a pointer, never bytes and never a URL: the object
  * lives in the tenant's own store behind apptor-connect's files plane,
  * and a capability link is minted per access and discarded.
  */
 
-export type BillDocumentErrorCode = "NOT_POSTED" | "STORAGE_NOT_CONFIGURED" | "NOT_RENDERED";
+export type BillDocumentErrorCode = "NOT_POSTED" | "STORAGE_NOT_CONFIGURED" | "NOT_GENERATED";
 
 export class BillDocumentError extends Error {
   constructor(
@@ -71,7 +71,7 @@ function toRow(row: {
   if (row.byteSize === null || row.sha256 === null) {
     throw new BillDocumentError(
       `Bill document ${row.id} is claimed but not stored`,
-      "NOT_RENDERED",
+      "NOT_GENERATED",
     );
   }
   return { ...row, documentType: PDF, byteSize: row.byteSize, sha256: row.sha256 };
@@ -96,20 +96,20 @@ function storageOf(settings: unknown): { integration: string; connection: string
 }
 
 /**
- * Render a bill to PDF, store it, and return the pointer.
+ * Generate a bill's PDF, store it, and return the pointer.
  *
  * Order matters and is the reverse of a filesystem design. The row is
  * claimed FIRST, so the unique constraint on (bill_id, document_type)
- * decides which of two concurrent renders proceeds and the loser never
+ * decides which of two concurrent generations proceeds and the loser never
  * uploads at all. That keeps correctness independent of whether two
- * renders produce identical bytes — they do today, and a stabilizer
- * keeps it that way, but a design that breaks when a renderer changes
+ * generations produce identical bytes — they do today, and a stabilizer
+ * keeps it that way, but a design that breaks when the generator changes
  * is a design waiting to break.
  *
  * A row whose byteSize and sha256 are still null is a claim whose
  * upload did not finish: it is completed rather than returned.
  */
-export async function renderBillDocument(
+export async function generateBillDocument(
   utilityId: string,
   billId: string,
   actorId: string,
@@ -120,7 +120,7 @@ export async function renderBillDocument(
     select: { id: true, postedAt: true, account: { select: { paperlessBilling: true } } },
   });
   if (!bill) {
-    throw new BillDocumentError(`Bill ${billId} not found`, "NOT_RENDERED");
+    throw new BillDocumentError(`Bill ${billId} not found`, "NOT_GENERATED");
   }
   if (!bill.postedAt) {
     throw new BillDocumentError(
@@ -139,10 +139,10 @@ export async function renderBillDocument(
   const config_ = await prisma.tenantConfig.findUnique({ where: { utilityId } });
   const storage = storageOf(config_?.settings);
 
-  // Resolve and render before claiming, so a bill that cannot render
-  // leaves no row behind at all.
+  // Resolve and generate before claiming, so a bill that cannot be
+  // generated leaves no row behind at all.
   const presentation = await loadBillPresentation(utilityId, billId);
-  const pdf = await renderBillPdf(presentation);
+  const pdf = await generateBillPdf(presentation);
   const sha256 = createHash("sha256").update(pdf).digest("hex");
   const objectKey = billObjectKey(utilityId, billId);
 
@@ -166,7 +166,7 @@ export async function renderBillDocument(
         },
       })
       .catch(async (err: unknown) => {
-        // Lost the race: another render claimed it first.
+        // Lost the race: another generation claimed it first.
         const won = await prisma.billDocument.findUnique({
           where: { billId_documentType: { billId, documentType: PDF } },
         });
@@ -200,7 +200,7 @@ export async function renderBillDocument(
   // One audit row, written when the document becomes real. A first
   // store is the document's creation even though the SQL is an UPDATE —
   // what the log records is the fact, not the statement. A forced
-  // re-render over a stored document is a revision, and carries the
+  // regeneration over a stored document is a revision, and carries the
   // replaced hash in its before state so the replacement is traceable.
   const wasStored = claim.sha256 !== null;
   const stored = await auditUpdate(
@@ -226,7 +226,7 @@ export async function readBillDocument(
     where: { billId, documentType: PDF, utilityId },
   });
   if (!found) {
-    throw new BillDocumentError(`No document has been rendered for bill ${billId}`, "NOT_RENDERED");
+    throw new BillDocumentError(`No document has been generated for bill ${billId}`, "NOT_GENERATED");
   }
   const row = toRow(found);
   const bytes = await getObject({

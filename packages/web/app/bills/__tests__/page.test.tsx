@@ -9,12 +9,15 @@ import BillsPage from "../page";
 /**
  * The bill-document actions on the tenant-wide bill list.
  *
- * What a reader must not get wrong is which act each button performs.
- * Downloading a stored PDF is a read; producing one writes a row and an
- * object in the tenant's store; replacing one overwrites a copy that
- * cannot be recovered. So each has its own button, chosen by whether a
- * document exists rather than by one label that changes meaning, and the
- * two that write are absent for a user who may only look at accounts.
+ * One button answers "give me the bill", because whether a PDF was
+ * produced before is a fact about our storage and not something a CSR
+ * should read off a row. The order inside it is what these cases pin:
+ * fetch first, produce only on a 404. A produce-first button would stop
+ * a read-only user from downloading a PDF that already exists, since
+ * producing is `accounts:EDIT` and downloading is `accounts:VIEW`.
+ *
+ * Regenerate is separate because it overwrites a copy that cannot be
+ * recovered, and it is absent for a user who may only look.
  */
 
 const get = apiClient.get as unknown as ReturnType<typeof vi.fn>;
@@ -34,9 +37,21 @@ function bill(over: Record<string, unknown> = {}) {
     billingCycleName: "Residential",
     account: { id: "acc-1", accountNumber: "A-900", customerName: "Jane Smith" },
     charge: { entryId: "le-1", openAmount: "107.50", reversed: false },
-    document: null,
     ...over,
   };
+}
+
+/** A response for the download fetch: the PDF, or a status. */
+function pdfResponse() {
+  return {
+    ok: true,
+    status: 200,
+    blob: async () => new Blob(["%PDF-"], { type: "application/pdf" }),
+  };
+}
+
+function notProduced() {
+  return { ok: false, status: 404, json: async () => ({ error: { code: "NOT_GENERATED" } }) };
 }
 
 function payload(rows: unknown[]) {
@@ -77,26 +92,29 @@ afterEach(() => {
 });
 
 describe("Bills page — bill document actions", () => {
-  it("downloads a stored PDF from the bill's document endpoint", async () => {
-    get.mockResolvedValue(payload([bill({ document: { generatedAt: "2026-03-02T10:00:00Z" } })]));
+  it("downloads an existing PDF without producing anything", async () => {
+    get.mockResolvedValue(payload([bill()]));
+    fetchMock.mockResolvedValue(pdfResponse());
     renderPage();
 
     await userEvent.click(await screen.findByRole("button", { name: "PDF" }));
 
     await waitFor(() =>
       expect(
-        fetchMock.mock.calls.some(([u]) =>
-          String(u).endsWith("/api/v1/bills/bill-1/document"),
-        ),
+        fetchMock.mock.calls.some(([u]) => String(u).endsWith("/api/v1/bills/bill-1/document")),
       ).toBe(true),
     );
-    // The bytes must not be fetched through the JSON client, which would
-    // try to parse a PDF as JSON.
+    // The point of fetching first: no write happens for a bill that
+    // already has one, so a read-only user can still get it.
+    expect(post).not.toHaveBeenCalled();
+    // And the bytes must not go through the JSON client, which would try
+    // to parse a PDF as JSON.
     expect(get.mock.calls.every(([u]) => !String(u).includes("/document"))).toBe(true);
   });
 
   it("names the downloaded file after the bill", async () => {
-    get.mockResolvedValue(payload([bill({ document: { generatedAt: "2026-03-02T10:00:00Z" } })]));
+    get.mockResolvedValue(payload([bill()]));
+    fetchMock.mockResolvedValue(pdfResponse());
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     renderPage();
 
@@ -108,97 +126,103 @@ describe("Bills page — bill document actions", () => {
     click.mockRestore();
   });
 
-  it("offers Generate instead of Download when no PDF exists, and POSTs", async () => {
-    get.mockResolvedValue(payload([bill({ document: null })]));
+  /** The whole reason there is only one button. */
+  it("generates the PDF on a 404 and then downloads it", async () => {
+    get.mockResolvedValue(payload([bill()]));
+    fetchMock.mockResolvedValueOnce(notProduced()).mockResolvedValue(pdfResponse());
     post.mockResolvedValue({ id: "doc-1" });
     renderPage();
 
-    expect(screen.queryByRole("button", { name: "PDF" })).not.toBeInTheDocument();
-    await userEvent.click(await screen.findByRole("button", { name: "Generate PDF" }));
+    await userEvent.click(await screen.findByRole("button", { name: "PDF" }));
 
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith("/api/v1/bills/bill-1/document", {}),
     );
+    // Fetched, produced, fetched again — the operator asked for the
+    // bill, not for a confirmation that one now exists.
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("downloads the PDF it just generated, because that is what was asked for", async () => {
-    get.mockResolvedValue(payload([bill({ document: null })]));
-    post.mockResolvedValue({ id: "doc-1" });
-    renderPage();
-
-    await userEvent.click(await screen.findByRole("button", { name: "Generate PDF" }));
-
-    await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.some(([u]) =>
-          String(u).endsWith("/api/v1/bills/bill-1/document"),
-        ),
-      ).toBe(true),
-    );
-  });
-
-  it("surfaces the missing issuer fields when a bill cannot be produced", async () => {
-    get.mockResolvedValue(payload([bill({ document: null })]));
+  it("surfaces the missing issuer fields when a bill cannot be generated", async () => {
+    get.mockResolvedValue(payload([bill()]));
+    fetchMock.mockResolvedValue(notProduced());
     post.mockRejectedValue(
       new Error("API error 422: No issuer identity is configured (remittanceCity)"),
     );
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Generate PDF" }));
+    await userEvent.click(await screen.findByRole("button", { name: "PDF" }));
 
     expect(await screen.findByText(/remittanceCity/)).toBeInTheDocument();
   });
 
+  it("reports a failed download rather than trying to generate over it", async () => {
+    get.mockResolvedValue(payload([bill()]));
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: async () => ({
+        error: { code: "STORAGE_UNAVAILABLE", message: "The bill document store refused" },
+      }),
+    });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "PDF" }));
+
+    expect(await screen.findByText(/store refused/i)).toBeInTheDocument();
+    // Only a 404 means "not produced yet"; a 502 must not trigger a write.
+    expect(post).not.toHaveBeenCalled();
+  });
+
   /**
-   * Replacing a stored PDF cannot be undone, and "re-render" reads to an
-   * operator as though it might recalculate the bill. The confirmation
-   * has to deny that and say the old copy is gone.
+   * Replacing a stored PDF cannot be undone, and "generate again" reads
+   * to an operator as though it might recalculate the bill. The
+   * confirmation has to deny that and say the old copy is gone.
    */
   it("confirms before replacing a stored PDF, and says what it does not do", async () => {
-    get.mockResolvedValue(payload([bill({ document: { generatedAt: "2026-03-02T10:00:00Z" } })]));
+    get.mockResolvedValue(payload([bill()]));
     post.mockResolvedValue({ id: "doc-1" });
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Re-render" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Regenerate" }));
 
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText(/does not change what is owed/i)).toBeInTheDocument();
     expect(screen.getByText(/previous copy is not kept/i)).toBeInTheDocument();
     expect(post).not.toHaveBeenCalled();
 
-    await userEvent.click(screen.getByRole("button", { name: "Produce again" }));
+    await userEvent.click(screen.getByRole("button", { name: "Generate again" }));
 
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith("/api/v1/bills/bill-1/document?force=true", {}),
     );
   });
 
-  it("hides both writing actions from a user who may only view accounts", async () => {
+  it("keeps the download but hides Regenerate from a user who may only view", async () => {
     vi.spyOn(permModule, "usePermission").mockReturnValue({
       canView: true,
       canCreate: false,
       canEdit: false,
       canDelete: false,
     });
-    get.mockResolvedValue(payload([bill({ document: { generatedAt: "2026-03-02T10:00:00Z" } })]));
+    get.mockResolvedValue(payload([bill()]));
+    fetchMock.mockResolvedValue(pdfResponse());
     renderPage();
 
-    // The read stays available; neither write does.
     expect(await screen.findByRole("button", { name: "PDF" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Re-render" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Generate PDF" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Regenerate" })).not.toBeInTheDocument();
   });
 
   /**
    * A bill is a calculation until it is posted. Offering its document
    * would promise a PDF the API refuses to make, with a 409.
    */
-  it("offers nothing on an unposted bill", async () => {
-    get.mockResolvedValue(payload([bill({ postedAt: null, charge: null, document: null })]));
+  it("offers no PDF action on an unposted bill", async () => {
+    get.mockResolvedValue(payload([bill({ postedAt: null, charge: null })]));
     renderPage();
 
     expect(await screen.findByRole("button", { name: "Post" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Generate PDF" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "PDF" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Regenerate" })).not.toBeInTheDocument();
   });
 });

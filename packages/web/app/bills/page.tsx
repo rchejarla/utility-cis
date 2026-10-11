@@ -41,8 +41,6 @@ interface BillRow {
   billingCycleName: string | null;
   account: { id: string; accountNumber: string; customerName: string | null };
   charge: { entryId: string; openAmount: string; reversed: boolean } | null;
-  /** The stored PDF, or null if none has been produced for this bill. */
-  document: { generatedAt: string } | null;
 }
 
 interface BillPage {
@@ -112,11 +110,9 @@ export default function BillsPage() {
   }, [canView, load]);
 
   // One column for every act a CSR can perform here, so the header does
-  // not appear for a user who can do none of them. A stored PDF counts:
-  // downloading one is a read, so a view-only user still has something
-  // to click where a document exists.
-  const showActions =
-    canEdit || canTakePayment || canReverse || canForgive || rows.some((r) => r.document);
+  // not appear for a user who can do none of them. Downloading a bill's
+  // PDF is a read, so anyone who can see this list has at least that.
+  const showActions = canView;
 
   if (!canView) return <AccessDenied />;
 
@@ -359,8 +355,7 @@ export default function BillsPage() {
                           <BillDocumentActions
                             billId={b.id}
                             billNumber={b.billNumber}
-                            document={b.document}
-                            canProduce={canEdit}
+                            canGenerate={canEdit}
                             disabled={!b.postedAt}
                             onChanged={() => void load()}
                           />
