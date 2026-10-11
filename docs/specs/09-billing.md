@@ -167,12 +167,13 @@ Addressed by `Bill`, not `BillingRecord`. Bytes stream through the API; a minted
 
 | Method | Path | Permission | Description |
 |--------|------|------------|-------------|
-| POST | `/api/v1/bills/:id/document` | `accounts:VIEW` | Render and store the PDF; idempotent — returns the existing pointer if one is stored |
-| POST | `/api/v1/bills/:id/document/re-render` | `accounts:APPROVE` | Replace the stored document in place. Does not change what is owed |
+| POST | `/api/v1/bills/:id/document` | `accounts:EDIT` | Render and store the PDF; idempotent — returns the existing pointer if one is stored. `?force=true` replaces it in place |
 | GET | `/api/v1/bills/:id/document` | `accounts:VIEW` | Stream the stored PDF as `application/pdf` attachment |
 | GET | `/portal/api/bills/:id/document` | `portal_billing:VIEW` | The customer's own copy, scoped through the account's `customer_id` |
 
-Re-rendering is a **separate path rather than `?force=true`** because it carries different authority, and route config is the one place permissions are enforced — a query flag would require a second permission check inside a handler.
+**Producing is `EDIT`, reading is `VIEW`**, because producing writes — a row, and an object in the tenant's store — and reading does not. A re-render shares the write's authority rather than needing a higher one: output is byte-stable, so replacing a document cannot change what it says, and it cannot change what is owed.
+
+This corrects two earlier choices. Producing was briefly `accounts:VIEW`, which would have let a Read-Only user drive a render and an object-store write. Re-rendering was briefly its own path on `accounts:APPROVE`, inherited from when "reprint" meant issuing a corrected bill — but **no preset role grants `APPROVE` on `accounts`** (only `service_suspensions` uses that permission), so the gate made the endpoint unreachable by every seeded role including System Admin, and the CSR on a call is exactly who needs to reprint a bill. With the authority the same for both, the separate path lost its reason to exist and collapsed back into `?force=true`.
 
 The portal route is a pure read: if no document has been rendered it answers 404 rather than generating one on a customer's GET. A bill belonging to another customer answers identically to one that does not exist, so the status cannot be used to confirm which bill ids are real.
 
@@ -229,7 +230,31 @@ Gated on `settings`, not `accounts`: the text printed on bills is tenant configu
 
 ## UI Pages
 
-All pages are planned for Phase 3.
+Bill document actions and the two settings pages are shipped. The billing dashboard and run views are planned for Phase 3.
+
+### Bill document actions (shipped)
+
+`<BillDocumentActions>` (`packages/web/components/bills/bill-document-actions.tsx`) is offered on the **Bills** list and on an account's **AR tab** — a CSR on a call reaches for whichever screen they are already on.
+
+Which buttons appear is decided by state, not by one label that changes meaning:
+
+- **Generate PDF** — no document yet, `accounts:EDIT`. Produces it and downloads it, because an operator who asked for a bill wants the bill.
+- **PDF** — a document exists, `accounts:VIEW`. Downloading is a read, so a view-only user still gets this one.
+- **Re-render** — a document exists, `accounts:EDIT`. Confirms first, and the copy says both things operators otherwise get wrong: it does not recalculate the bill, and the previous copy is not kept.
+
+Nothing is offered on an unposted bill — the API answers 409 — so no button promises a PDF that cannot be made.
+
+Both call sites needed two new API fields: `document` on each row of `GET /api/v1/bills`, and `billDocument` on each ledger row of `GET /api/v1/accounts/:id/ledger` (carrying `billId`, since a document belongs to the bill rather than the entry). A claimed row whose upload never finished reads as absent in both, which is what it is.
+
+### Bill Production — `/settings/bill-production` (shipped)
+
+Issuer identity and bill storage, on `settings`. One page rather than sections on two existing tabs, because these fields answer a single question — why a bill will not produce — and the API's 422 sends the operator to "Settings" to answer it. The five `REQUIRED_ISSUER_FIELDS` are marked required from the imported constant, and a banner above the form names the ones still blank rather than leaving the operator to discover them through a failed render.
+
+Bill storage deliberately does **not** sit beside the SaaSLogic endpoint. SaaSLogic is a payment rail; the bill store is reached through apptor-connect. "Both name an integration" is all they share.
+
+### Bill Messages — `/settings/bill-messages` (shipped)
+
+CRUD over `/api/v1/bill-messages` on `settings`: label, body, account type, service, priority and the active window. The date window is the only switch — there is no active/inactive flag, because a message with both can contradict itself and then nobody can say what a bill will carry. Deleting one warns that bills already produced keep the text they were printed with, since a stored PDF is not re-rendered.
 
 ### Billing Dashboard (`/billing`)
 
@@ -285,6 +310,8 @@ All pages are planned for Phase 3.
   - Issuer identity and bill storage as `TenantConfig.settings` namespaces (`issuer`, `billDocuments`) — no new columns
   - `BillMessage` with account-type and commodity targeting, resolved at `bill_date`
   - Render, re-render and download endpoints, staff and portal
+  - Generate / download / re-render actions on the bills list and the account AR tab
+  - Bill Production and Bill Messages settings pages
 
 - **Phase 3 — outstanding:**
   - Batch billing run across a cycle's accounts (slice 5c)
@@ -294,7 +321,7 @@ All pages are planned for Phase 3.
   - Bill holds
   - Final bill on account closure
   - Bill delivery: email to paperless customers, print vendor export
-  - UI: download / re-render actions on the bills list, AR tab and portal; bill message management page; issuer identity settings fields
+  - **The portal bill download.** The API endpoint is live and tested, but no portal screen can call it: `/portal/bills`, the portal dashboard and `/portal/invoices/[id]` all render `mockCustomerBills`, so there are no real bill ids in the portal UI to download. It needs the portal bill list wired to real `Bill` rows first — Phase 4.2 work, which also needs a `GET /portal/api/bills` that does not exist yet.
   - `BIMONTHLY` / `QUARTERLY` cycle frequencies — `computeBillPeriod` throws `UNSUPPORTED_FREQUENCY` today
   - Tenant-configurable due-date offset — hardcoded at bill date + 30 days
 
@@ -315,12 +342,12 @@ All pages are planned for Phase 3.
 | 73 | Exclude irrigation from wastewater | **Shipped** — predicate on meter/commodity in the quantity source |
 | 74 | Minimum bills regardless of usage | **Shipped** — `minimum_bill` stage applied after main pricing |
 | 101–105 | Interval aggregation, partial periods, rebilling, reconciliation | Phase 3: rate engine scope |
-| 130 | PDF bill generation, historical images | **Shipped (API)** — `BillDocument` + `@react-pdf/renderer`; a stored document is the historical image. UI actions outstanding |
+| 130 | PDF bill generation, historical images | **Shipped** — `BillDocument` + `@react-pdf/renderer`; a stored document is the historical image. Generate / download / re-render on the bills list and AR tab |
 | 131 | Print vendor integration | Outstanding: print export file delivery. `document_type` is a VARCHAR so `PRINT_EXPORT` needs no migration |
 | 133 | Bill reprints, corrected bills with versioning | **Partial** — a bill can be printed again on demand, byte-identically. Corrected bills and versioning are outstanding (slice 5d); reprinting deliberately creates no version |
 | 134 | Final bill at account closure | Phase 3: FINAL billing trigger |
 | 136 | Bill holds | Phase 3: hold_reason on BillingRecord |
-| 137 | Configurable bill messages by account type/service | **Shipped (API)** — `BillMessage` targeted by account type and commodity over a date window, resolved at `bill_date`. Management UI outstanding |
+| 137 | Configurable bill messages by account type/service | **Shipped** — `BillMessage` targeted by account type and commodity over a date window, resolved at `bill_date`, managed at Settings → Bill Messages |
 | 138 | Prorate tier thresholds for partial periods | Phase 3: proration in rate engine |
 | 139 | Itemized charges on bills | **Shipped** — `BillSegmentLine` rows, each traceable to the `RateComponent` that produced it |
 | 140 | Validate charges against adopted rates | Outstanding: lines already carry `source_schedule_id` / `source_component_id`, so validation has what it needs |

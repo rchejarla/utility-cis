@@ -1,7 +1,7 @@
 # Implementation Gap Analysis — What the Code Actually Does
 
 **Date:** 2026-10-10
-**Revised:** 2026-10-11 — bill production slice 1 shipped its API, moving #130, #133 and #137 from absent to partial. Partial rather than built, on this doc's own standard: the endpoints have tests but no page calls them, which is how #149 is scored.
+**Revised:** 2026-10-11 — bill production slice 1 shipped. #130 and #137 move from absent to **built** (API, UI and tests); #133 from absent to **partial**. The staff UI landed the same day as the API; the portal download did not, and the reason is recorded below.
 **Method:** Every one of the 202 Bozeman functional requirements checked against the code in `packages/` — Prisma schema (57 models, all enums), 52 API route modules, 66 services, 87 web pages, and the rate engine. Judged on code, not on specs or on the RFP response.
 **Why this doc exists:** `00-requirements-master.md` maps all 202 requirements to a `docs/specs/` module spec, and the RFP answers all 202 as **Y** (184) or **Y-WC** (18). Column 6 of `bozeman-functional-reqs.xlsx` now names an owning module for every requirement. None of that means the behavior exists. This doc is the difference.
 
@@ -9,8 +9,8 @@
 
 | Verdict | Count | Share |
 |---|---|---|
-| **Built** — the behavior exists and is exercised by tests | 79 | 39% |
-| **Partial** — some of it works; a named piece is missing | 46 | 23% |
+| **Built** — the behavior exists and is exercised by tests | 81 | 40% |
+| **Partial** — some of it works; a named piece is missing | 44 | 22% |
 | **Absent** — no code implements it | 77 | 38% |
 
 By area:
@@ -20,7 +20,7 @@ By area:
 | Customer / Property File | 41 | 19 | 10 | 12 |
 | Solid Waste | 18 | 7 | 5 | 6 |
 | Water / Wastewater & Stormwater | 68 | 36 | 15 | 17 |
-| Billing | 37 | 10 | 12 | 15 |
+| Billing | 37 | 12 | 10 | 15 |
 | Special Assessments | 15 | 0 | 0 | **15** |
 | Service Requests | 23 | 7 | 4 | 12 |
 
@@ -39,13 +39,13 @@ These are not partial. There is no model, route, service, or page.
 No `parcel`, `gisParcelId`, `geospatial`, or sync worker anywhere. The only occurrence of "GIS" in the API is a comment at `packages/api/src/imports/handlers/premise.ts:8` saying the premise CSV import is "used for GIS sync re-loads". There is no ESRI client, no sync schedule, no GIS-sourced attribute, and therefore nothing to restrict overrides on or to retain history for.
 
 ### Bill production — #130, 131, 133, 136, 137 — *partly closed 2026-10-11*
-**Closed (API):** #130 and #137. A posted `Bill` now renders to a stored PDF — `@react-pdf/renderer` against a resolved `BillPresentation`, byte-stable output, bytes in the tenant's own object store through apptor-connect's files plane, a `BillDocument` pointer row holding no URL. Bill messages exist with account-type and commodity targeting resolved at `bill_date`. Render, re-render and download endpoints are live for staff and portal.
+**Closed:** #130 and #137. A posted `Bill` renders to a stored PDF — `@react-pdf/renderer` against a resolved `BillPresentation`, byte-stable output, bytes in the tenant's own object store through apptor-connect's files plane, a `BillDocument` pointer row holding no URL. Staff generate, download and re-render from the bills list and from an account's AR tab. Bill messages are targeted by account type and commodity, resolved at `bill_date`, and managed at Settings → Bill Messages; issuer identity and bill storage at Settings → Bill Production.
 
 **Now partial:** #133. A bill can be printed again on demand and reproduces byte-identically, including the messages it originally carried. Version tracking is still absent and is *deliberately* not part of reprinting — a reprint produces identical bytes, so there is no version to record. It belongs with corrected issuance, which still blocks on rebill (below).
 
 **Still absent:** #131 (no print/mail vendor export; `document_type` is a VARCHAR so adding `PRINT_EXPORT` needs no migration) and #136 (no bill hold). Delivery of any kind is unbuilt — `BillDocument` carries no delivery columns, so #132 is untouched.
 
-**Not yet reachable by a user.** The endpoints exist; no UI calls them. There is no download or re-render action on the bills list, the AR tab or the portal, and no bill-message management page — so a CSR cannot yet produce a bill document without an API client. That UI is the remaining slice-1 work.
+**The portal download is the one piece still unreachable**, and not for want of an endpoint — `GET /portal/api/bills/:id/document` is live and tested, including that another customer's bill answers 404 exactly as a non-existent one does. Every portal bill surface (`/portal/bills`, the portal dashboard, `/portal/invoices/[id]`) still renders `mockCustomerBills`, so there are no real bill ids there to download. It needs the portal bill list wired to real `Bill` rows, plus a `GET /portal/api/bills` that does not exist — Phase 4.2, already recorded as blocked on Phase 3.
 
 ### Payment processing — #157, 158, 162, 164 — *partly delegated by design*
 No gateway, no tokenization, no card/ACH capture (`stripe|braintree|authorize\.net|tokeniz`: zero hits). `PaymentTender {CARD, ACH, CASH, CHECK, LOCKBOX}` records *how a payment was taken elsewhere*; nothing takes payments. No POS integration, no real-time payment feed, no PCI surface.
@@ -156,7 +156,7 @@ One standing consequence: no vendor credential belongs in this codebase. Anythin
 | 131 | Printed bill generation, third-party print export | no export |
 | 136 | Bill holds | `billHold|holdBilling`: zero hits |
 
-> #130, #133 and #137 left this list on 2026-10-11 and are now partial — see the bill production entry in §2 for what shipped and what remains.
+> #130, #133 and #137 left this list on 2026-10-11 — #130 and #137 built, #133 partial. See the bill production entry in §2 for what shipped and what remains.
 | 138 | Prorate tier thresholds for partial periods | usage proration exists; no tier-threshold proration in `evaluators/pricing.ts` |
 | 141 | Reconciliation of water usage vs wastewater billing | no reconciliation report |
 | 142 | Rebill when reads are corrected | no rebill (§2) |

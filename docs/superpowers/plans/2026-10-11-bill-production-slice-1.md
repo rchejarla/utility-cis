@@ -25,6 +25,8 @@ Every task's requirements implicitly include these. Values are copied from the s
 - **Fonts are vendored and explicitly registered**, so output does not depend on host fonts.
 - **apptor-connect is faked in tests, never run.** Reached through one client module that tests substitute.
 - **Permissions** (corrected from the spec, which invented a `bills.REPRINT` that the fixed `PERMISSIONS` tuple has no room for): render/download `accounts:VIEW`; reprint `accounts:APPROVE`; bill-message CRUD `settings`; portal download `portal_billing:VIEW`.
+
+  > **Superseded during Task 7.** Producing a document is `accounts:EDIT` (it writes) and downloading one is `accounts:VIEW` (it reads); the reprint shares `EDIT`. `accounts:APPROVE` is held by no preset role, so it would have made the reprint unreachable. See Task 6, Step 7.
 - **apptor-connect auth is `X-Api-Key: ak_...`**, one deployment-level key in env, never in the database.
 - **Per-tenant values go in a `TenantConfig.settings` namespace, not a new column**, unless a scheduler or a query touches them. Every existing column on that model is read by a background worker selecting tenants or writing run state; everything an operator edits in Settings and one code path reads — branding, retention, number formats, the SaaSLogic endpoint, and now issuer identity and bill storage — is a `.strict()` Zod namespace. A namespace costs one schema and one line on `updateBodySchema`; a column costs a migration on a live table.
 
@@ -1454,10 +1456,13 @@ Expected: PASS (5 tests).
 
 Create `packages/api/src/routes/bill-documents.ts`:
 
-- `POST /api/v1/bills/:id/document` — `accounts:VIEW`; renders and stores, idempotent.
-- `POST /api/v1/bills/:id/document/re-render` — `accounts:APPROVE`; replaces in place.
+- `POST /api/v1/bills/:id/document` — **`accounts:EDIT`**; renders and stores, idempotent. `?force=true` replaces in place.
 
-  > **Shipped differently from this plan.** The plan put the re-render behind `?force=true` on the same endpoint. It ships as its own path because it carries different authority, and route config is the only place this codebase enforces permissions — a single endpoint switching on a query flag would need a hand-rolled permission check inside a handler, where nobody would look for it. The test `lets accounts:VIEW generate a document but not replace one` pins the split.
+  > **The permission in this plan was wrong, twice over.** It said `accounts:VIEW` for render, which would let a Read-Only user drive a PDF render and an object-store write; producing a document writes, so it is `EDIT`.
+  >
+  > It also said `accounts:APPROVE` for the reprint. **No preset role grants `APPROVE` on `accounts`** — `shared/src/modules/constants.ts` documents that permission as existing for `service_suspensions` alone, and neither System Admin nor Utility Admin carries it elsewhere — so that gate made the endpoint unreachable by every seeded role. The CSR on a call is exactly who needs to reprint a bill, and a CSR holds `accounts:EDIT`. The `APPROVE` idea was inherited from when "reprint" meant issuing a corrected bill, which commit f00eb89 dropped.
+  >
+  > A separate `/re-render` path shipped first on that reasoning and was then collapsed back into `?force=true` as this plan originally had it: with the authority equal, the split had nothing left to justify it.
 
 - `GET /api/v1/bills/:id/document` — `accounts:VIEW`; sets `Content-Type: application/pdf` and `Content-Disposition: attachment; filename="bill-<billNumber>.pdf"`, then sends the buffer. The bill number is reduced to filename-safe characters first, so it cannot terminate the header.
 - `GET /portal/api/bills/:id/document` — `portal_billing:VIEW`, scoped so the authenticated customer can only reach bills on their own accounts; follow `routes/portal-api.ts` for how that scoping is already done.
@@ -1492,20 +1497,20 @@ git commit -m "feat(billing): BillDocument — render, store a pointer, stream t
 - Consumes: the endpoints from Tasks 6 and 7.
 - Produces: nothing other tasks depend on.
 
-- [ ] **Step 1: Write the failing bills-page test**
+- [x] **Step 1: Write the failing bills-page test**
 
 Follow `packages/web/app/receipts/__tests__/page.test.tsx` for the established mocking style in this package — read it first. Assert: a Download action per bill calls `GET /api/v1/bills/:id/document`; a bill with no document yet shows a Generate action that POSTs; the Re-render action is absent for a user whose permissions lack `accounts:APPROVE`.
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 Run: `cd packages/web && pnpm vitest run app/bills/__tests__/page.test.tsx`
 Expected: FAIL on the missing actions.
 
-- [ ] **Step 3: Add the actions to the bills page**
+- [x] **Step 3: Add the actions to the bills page**
 
 Download triggers a fetch and a blob download; Generate POSTs then downloads; Re-render is permission-gated (`accounts:APPROVE`) and confirms first. The confirmation copy must say two things plainly: re-rendering does not change what is owed, and it replaces the stored document — spec §10 records both, and operators will otherwise expect a correction.
 
-- [ ] **Step 4: Run the test**
+- [x] **Step 4: Run the test**
 
 Expected: PASS.
 
@@ -1513,19 +1518,27 @@ Expected: PASS.
 
 Same pattern on `packages/web/app/portal/bills/page.tsx`, against `GET /portal/api/bills/:id/document`. Never render a link minted by apptor-connect; the browser only ever talks to our API.
 
-- [ ] **Step 6: Add the download to the account AR tab**
+> **Blocked, and left unchecked on purpose.** This step assumed the portal bills page lists real bills. It does not: `/portal/bills`, the portal dashboard and `/portal/invoices/[id]` all render `mockCustomerBills` from `lib/mock-billing`, so there is no real bill id on any portal screen to download. A button added here would 404 every time.
+>
+> The endpoint itself is live and tested, including that a bill belonging to another customer answers 404 exactly as a non-existent one does. What is missing is the portal bill list against real `Bill` rows, which also needs a `GET /portal/api/bills` that does not exist — Phase 4.2, which the design doc already records as blocked on Phase 3.
+
+- [x] **Step 6: Add the download to the account AR tab**
 
 Spec §9 puts a download alongside each bill in `packages/web/components/ar/ar-tab.tsx`, because that is where staff already look when a customer phones about a bill. Add the same download action used on the bills list — extract it into a small shared component rather than copying the fetch-and-blob logic, since two call sites now need it and a third (the portal) has its own endpoint. Assert in `packages/web/components/ar/__tests__/ar-tab.test.tsx` that a bill row offers the download and hits `GET /api/v1/bills/:id/document`.
 
-- [ ] **Step 7: Build the bill-messages settings page**
+- [x] **Step 7: Build the bill-messages settings page**
 
 CRUD over `/api/v1/bill-messages` with fields for label, body, account type, commodity, priority and the active window, following an existing settings page (`packages/web/app/settings/slas/page.tsx`) for layout and data-fetching conventions.
 
-- [ ] **Step 8: Add the issuer-identity and storage fields to settings**
+- [x] **Step 8: Add the issuer-identity and storage fields to settings**
 
 Add an issuer section using the existing `use-tenant-settings-namespace` hook against the `issuer` namespace, following whichever settings tab already uses it (read `packages/web/app/settings/numbering/page.tsx` and the branding tab for the established read/patch shape). Mark the five `REQUIRED_ISSUER_FIELDS` as required, importing that constant rather than retyping the list, and state on the page that bills cannot be produced until they are filled. Add the `billDocuments.storageIntegration` field the same way — on the billing settings tab, next to the SaaSLogic endpoint, since both name an integration.
 
-- [ ] **Step 9: Run the full web suite, typecheck, commit**
+> **Both namespaces ship on one new page, `/settings/bill-production`,** not split across existing tabs. Two reasons. The hook binds one namespace per call, so issuer on one tab and storage on another is the only shape that avoids two save bars on one page — and these fields answer a single question, "why will a bill not produce", which the API's own 422 sends the operator to Settings to answer. Splitting them means two places to visit for one failure.
+>
+> Storage also does not belong beside the SaaSLogic endpoint. SaaSLogic is a payment rail; the bill store is reached through apptor-connect. "Both name an integration" is the whole of what they share, and filing by that word would group two unrelated jobs.
+
+- [x] **Step 9: Run the full web suite, typecheck, commit**
 
 Run: `cd packages/web && pnpm vitest run` then `pnpm typecheck` from the repo root.
 
