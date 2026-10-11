@@ -150,12 +150,29 @@ export default function BillsPage() {
     const items: ActionMenuItem[] = [];
     const open = b.charge && !b.charge.reversed && Number(b.charge.openAmount) > 0;
 
-    if (canReverse && b.charge && !b.charge.reversed) {
+    /*
+     * Ordered by how often it is reached and how much it costs to get
+     * wrong: taking money first, then the document, then forgiveness,
+     * and reversal last — furthest from where the pointer lands when
+     * the menu opens.
+     *
+     * Payment is account-scoped, not bill-scoped: recordPayment takes an
+     * accountId and §6.3 allocates oldest-first across fees, manual
+     * debits and then bills. The label says "account" so nobody reads it
+     * as paying off this bill alone.
+     */
+    if (canTakePayment && b.postedAt) {
       items.push({
-        label: "Reverse charge",
-        tone: "danger",
-        title: "Negate this bill's charge; both sides stay on the ledger",
-        onSelect: () => setVoidRow(b),
+        label: "Take payment on account",
+        title: "Allocated oldest-first across what the account owes, not to this bill alone",
+        onSelect: () => setPayFor(b),
+      });
+    }
+    if (canEdit && b.postedAt) {
+      items.push({
+        label: "Regenerate PDF",
+        title: "Replace the stored PDF with a freshly generated one",
+        onSelect: () => setRegenerate(b),
       });
     }
     if (canForgive && open) {
@@ -170,11 +187,12 @@ export default function BillsPage() {
         onSelect: () => setAdjust({ mode: "writeOff", bill: b }),
       });
     }
-    if (canEdit && b.postedAt) {
+    if (canReverse && b.charge && !b.charge.reversed) {
       items.push({
-        label: "Regenerate PDF",
-        title: "Replace the stored PDF with a freshly generated one",
-        onSelect: () => setRegenerate(b),
+        label: "Reverse charge",
+        tone: "danger",
+        title: "Negate this bill's charge; both sides stay on the ledger",
+        onSelect: () => setVoidRow(b),
       });
     }
     return items;
@@ -376,22 +394,23 @@ export default function BillsPage() {
                     </Td>
                     {showActions && (
                       <Td>
-                        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                        <div style={{ display: "flex", gap: 6 }}>
                           {/*
-                            Two acts stay inline because they are the two
-                            a CSR performs on nearly every call: take the
-                            money, or send the bill. Everything else is
-                            exception handling — rarer, and mostly
-                            irreversible — so it goes behind More, where
-                            it is one deliberate click away instead of
-                            sitting next to the common ones.
+                            One act inline, and it is the one that only
+                            reads: getting the bill as a PDF. Everything
+                            that moves money or overwrites something sits
+                            behind More, a deliberate click away, so the
+                            row reads as a list of bills rather than a
+                            control panel.
 
-                            Post is the exception that proves it: it only
-                            appears before posting, when PDF cannot (the
-                            API refuses an unposted bill with a 409), so
-                            the row never carries more than two inline.
-                            On an unposted bill it is the only act there
-                            is, and burying the only act would be worse.
+                            Post is the one exception, and it proves the
+                            rule: it appears only before posting, when
+                            PDF cannot (the API refuses an unposted bill
+                            with a 409). The two are mutually exclusive,
+                            so the row never carries more than one inline
+                            action — and on an unposted bill Post is the
+                            only act there is, so burying it would leave
+                            the row with nothing.
                           */}
                           {canEdit && !b.postedAt && (
                             <button
@@ -401,18 +420,6 @@ export default function BillsPage() {
                             >
                               {posting === b.id ? "Posting…" : "Post"}
                             </button>
-                          )}
-                          {/*
-                            Payment is account-scoped, not bill-scoped:
-                            recordPayment takes an accountId and §6.3
-                            allocates oldest-first across fees, manual
-                            debits and then bills. The label says "account"
-                            so nobody reads this as paying off this bill.
-                          */}
-                          {canTakePayment && b.postedAt && (
-                            <SmallBtn tone="var(--info)" onClick={() => setPayFor(b)}>
-                              Take payment
-                            </SmallBtn>
                           )}
                           <BillPdfButton
                             billId={b.id}
@@ -531,36 +538,6 @@ export default function BillsPage() {
 function fmtDate(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split("-");
   return `${m}/${d}/${y}`;
-}
-
-function SmallBtn({
-  children,
-  tone,
-  onClick,
-}: {
-  children: React.ReactNode;
-  tone: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: "3px 8px",
-        fontSize: 10,
-        fontWeight: 600,
-        background: `${tone}18`,
-        color: tone,
-        border: `1px solid ${tone}40`,
-        borderRadius: "var(--radius)",
-        cursor: "pointer",
-        fontFamily: "inherit",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {children}
-    </button>
-  );
 }
 
 function Pill({

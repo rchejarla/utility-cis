@@ -71,8 +71,11 @@ const fetchMock = vi.fn();
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal("fetch", fetchMock);
-  // jsdom implements neither of these; the download turns bytes into a
-  // blob URL and clicks a synthesised anchor.
+  // jsdom implements none of these. Viewing a bill opens a tab and
+  // points it at a blob URL; left unstubbed, jsdom's window.open returns
+  // null and every case would quietly exercise the download fallback
+  // instead of the path the button actually takes.
+  vi.stubGlobal("open", vi.fn(() => ({ location: { href: "" }, close: vi.fn() })));
   window.URL.createObjectURL = vi.fn(() => "blob:bill");
   window.URL.revokeObjectURL = vi.fn();
   headersOnly.mockResolvedValue({ Authorization: "Bearer t" });
@@ -97,7 +100,7 @@ describe("Bills page — bill document actions", () => {
     fetchMock.mockResolvedValue(pdfResponse());
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "PDF" }));
+    await userEvent.click(await screen.findByRole("button", { name: "View bill" }));
 
     await waitFor(() =>
       expect(
@@ -112,20 +115,6 @@ describe("Bills page — bill document actions", () => {
     expect(get.mock.calls.every(([u]) => !String(u).includes("/document"))).toBe(true);
   });
 
-  it("names the downloaded file after the bill", async () => {
-    get.mockResolvedValue(payload([bill()]));
-    fetchMock.mockResolvedValue(pdfResponse());
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-    renderPage();
-
-    await userEvent.click(await screen.findByRole("button", { name: "PDF" }));
-
-    await waitFor(() => expect(click).toHaveBeenCalled());
-    const anchor = click.mock.instances[0] as unknown as HTMLAnchorElement;
-    expect(anchor.download).toBe("bill-B-1001.pdf");
-    click.mockRestore();
-  });
-
   /** The whole reason there is only one button. */
   it("generates the PDF on a 404 and then downloads it", async () => {
     get.mockResolvedValue(payload([bill()]));
@@ -133,7 +122,7 @@ describe("Bills page — bill document actions", () => {
     post.mockResolvedValue({ id: "doc-1" });
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "PDF" }));
+    await userEvent.click(await screen.findByRole("button", { name: "View bill" }));
 
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith("/api/v1/bills/bill-1/document", {}),
@@ -151,7 +140,7 @@ describe("Bills page — bill document actions", () => {
     );
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "PDF" }));
+    await userEvent.click(await screen.findByRole("button", { name: "View bill" }));
 
     expect(await screen.findByText(/remittanceCity/)).toBeInTheDocument();
   });
@@ -167,7 +156,7 @@ describe("Bills page — bill document actions", () => {
     });
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "PDF" }));
+    await userEvent.click(await screen.findByRole("button", { name: "View bill" }));
 
     expect(await screen.findByText(/store refused/i)).toBeInTheDocument();
     // Only a 404 means "not produced yet"; a 502 must not trigger a write.
@@ -177,34 +166,53 @@ describe("Bills page — bill document actions", () => {
   /**
    * What stays on the row, and what does not.
    *
-   * Take payment and PDF are the two acts a CSR performs on nearly every
-   * call. The rest is exception handling — rarer, and mostly
-   * irreversible — so a row of six buttons buried the common ones among
-   * the consequential ones.
+   * The only inline action is the one that just reads — getting the PDF.
+   * Everything that moves money or overwrites something is behind More,
+   * so the row reads as a list of bills rather than a control panel.
    */
-  it("keeps only Take payment and PDF inline, with the rest behind More", async () => {
+  it("keeps only the PDF download inline", async () => {
     get.mockResolvedValue(payload([bill()]));
     fetchMock.mockResolvedValue(pdfResponse());
     renderPage();
 
-    expect(await screen.findByRole("button", { name: "Take payment" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "PDF" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "View bill" })).toBeInTheDocument();
 
-    for (const buried of ["Reverse charge", "Waive", "Write off", "Regenerate PDF"]) {
-      expect(screen.queryByRole("menuitem", { name: buried })).not.toBeInTheDocument();
-    }
+    // Nothing else is a button on the row, and nothing is open yet.
+    expect(screen.queryByRole("button", { name: /Take payment/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("puts the exception handling in the More menu", async () => {
+  it("puts everything that writes in the More menu, money first", async () => {
     get.mockResolvedValue(payload([bill()]));
     renderPage();
 
     await userEvent.click(await screen.findByRole("button", { name: /More actions/ }));
 
     expect(await screen.findByRole("menu")).toBeInTheDocument();
-    for (const item of ["Reverse charge", "Waive", "Write off", "Regenerate PDF"]) {
-      expect(screen.getByRole("menuitem", { name: item })).toBeInTheDocument();
-    }
+    const items = screen.getAllByRole("menuitem").map((el) => el.textContent);
+    // Ordered by how often it is reached and what it costs to get wrong:
+    // money first, reversal last and furthest from the pointer.
+    expect(items).toEqual([
+      "Take payment on account",
+      "Regenerate PDF",
+      "Waive",
+      "Write off",
+      "Reverse charge",
+    ]);
+  });
+
+  it("opens the payment dialog from the menu", async () => {
+    get.mockResolvedValue(payload([bill()]));
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /More actions/ }));
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Take payment on account" }),
+    );
+
+    // The dialog is account-scoped, which is the whole reason the label
+    // says "on account".
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
 
   it("confirms a regenerate from the menu, denying what it does not do", async () => {
@@ -259,7 +267,7 @@ describe("Bills page — bill document actions", () => {
 
     // The download is a read, so it stays; there is nothing to put in a
     // menu, so no empty trigger appears.
-    expect(await screen.findByRole("button", { name: "PDF" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "View bill" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /More actions/ })).not.toBeInTheDocument();
   });
 
@@ -272,7 +280,7 @@ describe("Bills page — bill document actions", () => {
     renderPage();
 
     expect(await screen.findByRole("button", { name: "Post" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "PDF" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View bill" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Regenerate" })).not.toBeInTheDocument();
   });
 });

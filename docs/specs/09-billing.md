@@ -238,10 +238,16 @@ Bill document actions and the two settings pages are shipped. The billing dashbo
 
 `<BillDocumentActions>` (`packages/web/components/bills/bill-document-actions.tsx`) is offered on the **Bills** list and on an account's **AR tab** — a CSR on a call reaches for whichever screen they are already on.
 
-- **PDF** — downloads the bill, generating it first if nothing is stored. On the bills list, the AR tab, and the bill's own dialog.
+- **View bill** — opens the PDF in a new tab for the browser's own viewer, generating it first if nothing is stored. On the bills list, the AR tab, and the bill's own dialog. It views rather than saves because a CSR on a call wants to read the bill out; the viewer still offers print and save. The tab is opened synchronously inside the click handler — after the fetch it would be outside the user gesture and a popup blocker would swallow it silently — and a blocked tab falls back to saving the file rather than doing nothing.
 - **Regenerate** — `accounts:EDIT`. **Only in the bill's dialog**, not on list rows. Confirms first, and the copy says both things operators otherwise get wrong: it does not recalculate the bill, and the previous copy is not kept.
 
-A posted bill row already carries Take payment, Reverse, Waive and Write off. Adding two more buried the act a CSR performs most, so the row keeps the download alone and opening the bill — a deliberate act in itself — is what offers the one that overwrites. The `regenerate` prop is the placement switch; `canGenerate` remains the permission, and conflating the two would have meant lying about a user's authority to control a layout.
+**The bills row carries one inline action: View bill.** Everything that moves money or overwrites something sits behind a **More** menu — Take payment on account, Regenerate PDF, Waive, Write off, Reverse charge, in that order. Ordering is by how often an item is reached and what it costs to get wrong, so reversal is last and furthest from where the pointer lands.
+
+The row had grown to six buttons, which buried the common acts among the consequential ones and read as a control panel rather than a list of bills. `Post` is the single exception and proves the rule: it appears only *before* posting, when View bill cannot (the API refuses an unposted bill with a 409), so the two are mutually exclusive and the row never shows more than one inline action — and on an unposted bill Post is the only act there is.
+
+Menu items keep the availability rule each had on the row rather than merely moving: Reverse needs a charge not already reversed, Waive and Write off need something still owed, Regenerate needs a posted bill. A user holding none of those permissions gets no trigger at all rather than an empty menu.
+
+`ActionMenu` (`components/ui/action-menu.tsx`) renders through a portal with fixed positioning. Its first host is a table inside a card with `overflow: auto`, which clips an absolutely positioned child — the menu appeared and then vanished behind the card's edge on the last rows. Because the position is measured once on open, any scroll or resize closes it rather than letting it drift off its row.
 
 **One button answers "give me the bill", not two.** Whether a PDF was generated before is a fact about our storage, not something a CSR should have to read off a row before knowing which button to press.
 

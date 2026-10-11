@@ -6,20 +6,23 @@ import { apiClient } from "@/lib/api-client";
 import { BillPdfButton } from "../bill-pdf-button";
 
 /**
- * One button that gets a bill as a PDF, generating it if there is
- * nothing stored yet.
+ * One button that shows a customer their bill, generating the PDF if
+ * there is nothing stored yet.
  *
- * The order is what these cases pin: it fetches BEFORE it generates.
- * That is what lets a read-only user download a PDF that already
- * exists, since generating is `accounts:EDIT` and downloading is
- * `accounts:VIEW` — a generate-first button would refuse them outright.
- * And only a 404 means "not generated yet": any other status is a
- * failure to report, not a cue to write.
+ * Three things here are easy to break by accident. It opens a viewer
+ * rather than saving a file, because the label promises viewing. The tab
+ * is opened synchronously, before the fetch, or a popup blocker
+ * swallows it silently. And it fetches BEFORE it generates, which is
+ * what lets a read-only user see a bill that already has a PDF, since
+ * generating is `accounts:EDIT` and fetching is `accounts:VIEW`.
  */
 
 const post = apiClient.post as unknown as ReturnType<typeof vi.fn>;
 const headersOnly = apiClient.getAuthHeadersOnly as unknown as ReturnType<typeof vi.fn>;
 const fetchMock = vi.fn();
+const openMock = vi.fn();
+
+let tab: { location: { href: string }; close: ReturnType<typeof vi.fn> };
 
 const pdf = () => ({
   ok: true,
@@ -42,10 +45,12 @@ function renderButton(props: Partial<Parameters<typeof BillPdfButton>[0]> = {}) 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  tab = { location: { href: "" }, close: vi.fn() };
+  openMock.mockReturnValue(tab);
   vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("open", openMock);
   window.URL.createObjectURL = vi.fn(() => "blob:bill");
   window.URL.revokeObjectURL = vi.fn();
-  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
   headersOnly.mockResolvedValue({ Authorization: "Bearer t" });
   fetchMock.mockResolvedValue(pdf());
 });
@@ -56,46 +61,63 @@ afterEach(() => {
 });
 
 describe("BillPdfButton", () => {
-  it("downloads an existing PDF without writing anything", async () => {
+  it("opens an existing bill in a viewer without writing anything", async () => {
     renderButton();
 
-    await userEvent.click(screen.getByRole("button", { name: "PDF" }));
+    await userEvent.click(screen.getByRole("button", { name: "View bill" }));
 
-    await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.some(([u]) => String(u).endsWith("/api/v1/bills/bill-1/document")),
-      ).toBe(true),
-    );
+    await waitFor(() => expect(tab.location.href).toBe("blob:bill"));
+    expect(
+      fetchMock.mock.calls.some(([u]) => String(u).endsWith("/api/v1/bills/bill-1/document")),
+    ).toBe(true);
     expect(post).not.toHaveBeenCalled();
   });
 
-  it("generates the PDF when there is none, then downloads it", async () => {
+  /**
+   * The tab must be opened while the click is still the active user
+   * gesture. Opening it after the fetch resolves is what popup blockers
+   * stop, and they do it silently.
+   */
+  it("opens the tab before fetching, not after", async () => {
+    let openedBeforeFetch = false;
+    fetchMock.mockImplementation(async () => {
+      openedBeforeFetch = openMock.mock.calls.length > 0;
+      return pdf();
+    });
+    renderButton();
+
+    await userEvent.click(screen.getByRole("button", { name: "View bill" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(openedBeforeFetch).toBe(true);
+  });
+
+  it("generates the PDF when there is none, then shows it", async () => {
     fetchMock.mockResolvedValueOnce(notGenerated()).mockResolvedValue(pdf());
     post.mockResolvedValue({ id: "doc-1" });
     const onChanged = vi.fn();
     renderButton({ onChanged });
 
-    await userEvent.click(screen.getByRole("button", { name: "PDF" }));
+    await userEvent.click(screen.getByRole("button", { name: "View bill" }));
 
     await waitFor(() => expect(post).toHaveBeenCalledWith("/api/v1/bills/bill-1/document", {}));
-    // Fetched, generated, fetched again — the operator asked for the
-    // bill, not for a confirmation that one now exists.
-    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    await waitFor(() => expect(tab.location.href).toBe("blob:bill"));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
-  it("names the file after the bill", async () => {
+  it("saves the file when the tab was blocked, rather than doing nothing", async () => {
+    openMock.mockReturnValue(null);
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     renderButton();
 
-    await userEvent.click(screen.getByRole("button", { name: "PDF" }));
+    await userEvent.click(screen.getByRole("button", { name: "View bill" }));
 
     await waitFor(() => expect(click).toHaveBeenCalled());
     const anchor = click.mock.instances[0] as unknown as HTMLAnchorElement;
     expect(anchor.download).toBe("bill-BILL-202610-0001000-00.pdf");
   });
 
-  it("treats any status other than 404 as a failure to report", async () => {
+  it("closes the tab it opened when the bill cannot be had", async () => {
     fetchMock.mockResolvedValue({
       ok: false,
       status: 502,
@@ -103,9 +125,12 @@ describe("BillPdfButton", () => {
     });
     renderButton();
 
-    await userEvent.click(screen.getByRole("button", { name: "PDF" }));
+    await userEvent.click(screen.getByRole("button", { name: "View bill" }));
 
     expect(await screen.findByText(/store refused/i)).toBeInTheDocument();
+    // A blank tab left behind reads as a broken app.
+    expect(tab.close).toHaveBeenCalled();
+    // Only a 404 means "not generated yet".
     expect(post).not.toHaveBeenCalled();
   });
 
@@ -116,7 +141,7 @@ describe("BillPdfButton", () => {
     );
     renderButton();
 
-    await userEvent.click(screen.getByRole("button", { name: "PDF" }));
+    await userEvent.click(screen.getByRole("button", { name: "View bill" }));
 
     expect(await screen.findByText(/billingAddress/)).toBeInTheDocument();
   });
@@ -124,6 +149,6 @@ describe("BillPdfButton", () => {
   it("offers nothing on an unposted bill", () => {
     renderButton({ disabled: true });
 
-    expect(screen.queryByRole("button", { name: "PDF" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View bill" })).not.toBeInTheDocument();
   });
 });

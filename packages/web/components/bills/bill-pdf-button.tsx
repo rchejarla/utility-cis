@@ -2,35 +2,39 @@
 
 import { useState } from "react";
 import { apiClient } from "@/lib/api-client";
-import { authDownload, DownloadError } from "@/lib/auth-download";
+import {
+  authDownload,
+  authFetchFile,
+  handToViewer,
+  DownloadError,
+} from "@/lib/auth-download";
 import { useToast } from "@/components/ui/toast";
 
 /**
- * The button that gets a bill as a PDF.
+ * The button that shows a customer their bill.
+ *
+ * It opens the PDF in a new tab for the browser's own viewer, rather
+ * than saving a file — a CSR on a call wants to read the bill out, and
+ * "View bill" would be a mis-promise if it only ever downloaded. From
+ * the viewer the operator can still print or save it.
  *
  * One button, not two. Whether a PDF has been generated before is a fact
  * about our storage, not something a CSR should read off a row to know
- * which button to press — so this downloads, and generates first if
- * there is nothing to download.
+ * which button to press — so this fetches, and generates first if there
+ * is nothing to fetch.
  *
- * It fetches before generating, and that order is load-bearing.
- * Downloading is `accounts:VIEW` and generating is `accounts:EDIT`, so a
- * generate-first button would stop a read-only user from fetching a PDF
- * that already exists. Fetching first means they get it, and only the
- * genuinely-missing case reaches the write they cannot perform — where
- * the 403 is the right answer, said plainly. Only a 404 counts as "not
- * generated yet"; any other failure is reported rather than treated as a
- * cue to write.
+ * That order is load-bearing. Fetching is `accounts:VIEW` and generating
+ * is `accounts:EDIT`, so a generate-first button would stop a read-only
+ * user from seeing a bill that already has a PDF. Fetching first means
+ * they get it, and only the genuinely-missing case reaches the write they
+ * cannot perform — where the 403 is the right answer, said plainly. Only
+ * a 404 counts as "not generated yet"; any other failure is reported
+ * rather than treated as a cue to write.
  *
  * Regenerating is deliberately NOT here. It overwrites a copy that
  * cannot be recovered and is performed rarely, so it belongs behind the
  * row's More menu with the other exception handling, implemented once on
  * the page that owns the confirmation.
- *
- * Shared because the bills list, an account's AR tab and the bill's own
- * dialog all offer it — a CSR reaches for whichever screen they are on.
- * The portal download is not here: a different endpoint with a different
- * permission, sharing only the blob dance in `lib/auth-download`.
  */
 
 interface BillPdfButtonProps {
@@ -62,20 +66,37 @@ export function BillPdfButton({
   const fileName = `bill-${billNumber.replace(/[^A-Za-z0-9._-]/g, "_")}.pdf`;
   const path = `/api/v1/bills/${billId}/document`;
 
-  async function get() {
+  /** The bytes, generating them first if none are stored yet. */
+  async function fetchOrGenerate(): Promise<Blob> {
+    try {
+      return await authFetchFile(path);
+    } catch (err) {
+      // 404 is not a failure here, it is "not generated yet".
+      if (!(err instanceof DownloadError) || err.status !== 404) throw err;
+      await apiClient.post(path, {});
+      const file = await authFetchFile(path);
+      onChanged?.();
+      return file;
+    }
+  }
+
+  async function view() {
+    // Opened here, synchronously, while the click is still the active
+    // user gesture — after the await a popup blocker would swallow it.
+    const tab = window.open("", "_blank");
     setBusy(true);
     try {
-      try {
+      const file = await fetchOrGenerate();
+      if (tab) {
+        handToViewer(tab, file);
+      } else {
+        // Blocked, or no window to open into. Saving the file is a worse
+        // answer than viewing it, but a far better one than nothing.
         await authDownload(path, fileName);
-      } catch (err) {
-        // 404 is not a failure here, it is "not generated yet".
-        if (!(err instanceof DownloadError) || err.status !== 404) throw err;
-        await apiClient.post(path, {});
-        await authDownload(path, fileName);
-        onChanged?.();
       }
     } catch (err) {
-      toast(err instanceof Error ? err.message : "Could not get the bill PDF", "error");
+      tab?.close();
+      toast(err instanceof Error ? err.message : "Could not get the bill", "error");
     } finally {
       setBusy(false);
     }
@@ -105,9 +126,9 @@ export function BillPdfButton({
 
   return (
     <button
-      onClick={() => void get()}
+      onClick={() => void view()}
       disabled={busy}
-      title="Download the bill as a PDF, generating it if it has not been generated yet"
+      title="Open the bill as a PDF, generating it if it has not been generated yet"
       style={{
         ...(variant === "pill" ? pill : link),
         cursor: busy ? "default" : "pointer",
@@ -116,7 +137,7 @@ export function BillPdfButton({
         whiteSpace: "nowrap",
       }}
     >
-      {busy ? "…" : "PDF"}
+      {busy ? "…" : "View bill"}
     </button>
   );
 }

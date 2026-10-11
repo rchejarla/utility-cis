@@ -292,6 +292,10 @@ describe("ArTab — the bill's PDF", () => {
 
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
+    // Viewing a bill opens a tab; jsdom's window.open returns null, so
+    // without this the case would exercise the download fallback rather
+    // than the viewer path.
+    vi.stubGlobal("open", vi.fn(() => ({ location: { href: "" }, close: vi.fn() })));
     window.URL.createObjectURL = vi.fn(() => "blob:bill");
     window.URL.revokeObjectURL = vi.fn();
     vi.mocked(apiClient.getAuthHeadersOnly).mockResolvedValue({ Authorization: "Bearer t" });
@@ -316,7 +320,7 @@ describe("ArTab — the bill's PDF", () => {
     );
     renderTab();
 
-    await userEvent.click(await screen.findByRole("button", { name: "PDF" }));
+    await userEvent.click(await screen.findByRole("button", { name: "View bill" }));
 
     // The bill, not the ledger entry: a document belongs to the bill.
     expect(
@@ -335,7 +339,7 @@ describe("ArTab — the bill's PDF", () => {
     renderTab();
 
     await screen.findByRole("table");
-    expect(screen.queryByRole("button", { name: "PDF" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View bill" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Regenerate" })).not.toBeInTheDocument();
   });
 });
