@@ -92,6 +92,39 @@ describe("ActionMenu", () => {
     expect(menu.style.transform).toBe("translate(-100%, -100%)");
   });
 
+  /**
+   * The bug that actually made this a dead button, and the one a test
+   * can only approximate: jsdom does no layout, so the arithmetic has to
+   * be driven by a faked rect and a faked zoom.
+   *
+   * `globals.css` sets `html { zoom: 1.25 }`. getBoundingClientRect
+   * reports visual pixels with that zoom already applied, but the menu
+   * is portaled outside the zoomed subtree, where fixed `left`/`top`
+   * are resolved in zoomed CSS pixels and scaled by 1.25 again. Feeding
+   * the measurement straight back put the menu off the right of the
+   * screen — visible, opaque, and nowhere anyone could see it.
+   */
+  it("divides the measured rect by the effective zoom", async () => {
+    placeTrigger({ top: 100, bottom: 120, right: 600 });
+    Object.defineProperty(HTMLButtonElement.prototype, "currentCSSZoom", {
+      value: 1.25,
+      configurable: true,
+    });
+    try {
+      render(<ActionMenu items={items()} />);
+
+      await userEvent.click(screen.getByRole("button", { name: "More" }));
+
+      const menu = await screen.findByRole("menu");
+      // (120 + 4) / 1.25 and 600 / 1.25 — so that once the browser
+      // multiplies by the zoom again it lands on the trigger.
+      expect(menu.style.top).toBe("99.2px");
+      expect(menu.style.left).toBe("480px");
+    } finally {
+      delete (HTMLButtonElement.prototype as unknown as Record<string, unknown>).currentCSSZoom;
+    }
+  });
+
   it("opens below when there is room, anchored to the trigger", async () => {
     placeTrigger({ top: 100, bottom: 120 });
     render(<ActionMenu items={items()} />);

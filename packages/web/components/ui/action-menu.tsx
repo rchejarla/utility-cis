@@ -52,19 +52,43 @@ export function ActionMenu({
   }, []);
 
   function open() {
-    const r = triggerRef.current?.getBoundingClientRect();
-    if (!r) return;
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+
+    /*
+     * Divided by the effective zoom, and that is the whole reason this
+     * menu works.
+     *
+     * `globals.css` sets `html { zoom: 1.25 }` as the interface-scale
+     * knob. `getBoundingClientRect()` reports visual pixels — the zoom
+     * already applied — but this menu is portaled to `document.body`,
+     * outside that zoomed subtree, where a fixed element's `left` and
+     * `top` are resolved in zoomed CSS pixels and multiplied by 1.25
+     * again. Feeding the measurement straight back therefore placed the
+     * menu 1.25x too far right and down: far enough right to leave the
+     * viewport entirely, which looks exactly like a button that does
+     * nothing. It was in the DOM, visible, opaque and 212px tall, at
+     * left: 2087 on a 1900px-wide screen.
+     *
+     * No test could have caught it. jsdom does no layout, so every rect
+     * is zero and the arithmetic is invisible.
+     */
+    const zoom = el.currentCSSZoom ?? 1;
 
     // Flipped above the trigger when there is not room below, so the
-    // menu is never painted off the bottom of the viewport. That is not
-    // only cosmetic: an off-screen menu gets scrolled into view by the
-    // focus below, and the scroll closes it again before anyone sees it.
-    const needed = items.length * ITEM_HEIGHT + MENU_PADDING;
+    // menu is never painted off the bottom of the viewport. Compared in
+    // visual pixels, which is what both the rect and innerHeight are in.
+    const needed = (items.length * ITEM_HEIGHT + MENU_PADDING) * zoom;
     const above = r.bottom + needed > window.innerHeight && r.top > needed;
 
     // Right-aligned to the trigger: these live at the right edge of a
     // row, so a left-aligned menu would hang off the screen.
-    setAt({ top: above ? r.top - 4 : r.bottom + 4, left: r.right, above });
+    setAt({
+      top: (above ? r.top - 4 : r.bottom + 4) / zoom,
+      left: r.right / zoom,
+      above,
+    });
   }
 
   useEffect(() => {
