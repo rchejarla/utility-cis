@@ -79,7 +79,7 @@ Per the standing rule that what an author writes never mixes with what happens a
 
 ### 4.3 Reprinting, and why it creates no version
 
-A reprint is "the customer lost their bill, print it again". Nothing about the document changed: bill messages resolve at `billDate` (§5) and the renderer is byte-stable (§4.4), so Regenerateing the same bill produces identical bytes. A second row recording that would be bookkeeping with no fact behind it.
+A reprint is "the customer lost their bill, print it again". Nothing about the document changed: bill messages resolve at `billDate` (§5) and the renderer is byte-stable (§4.4), so generating the same bill twice produces identical bytes. A second row recording that would be bookkeeping with no fact behind it.
 
 An earlier draft gave `Bill` a `version` and a `replacesId`, chaining a new row per reprint. That attached version tracking to the wrong half of #133, which reads "bill reprints **and corrected bill issuance** with version tracking" — the tracking belongs to corrected issuance, whose content genuinely differs. Corrected issuance is a rebill, and rebill is out of scope.
 

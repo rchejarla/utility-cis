@@ -51,6 +51,26 @@ function makeStyles(presentation: BillPresentation) {
   });
 }
 
+/**
+ * An amount as it is printed: currency symbol, and thousands separated.
+ *
+ * Formatting lives here rather than in `BillPresentation`, which carries
+ * plain 2dp strings. The presentation is the bill's content; how an
+ * amount looks on paper is this template's business, and a tenant
+ * printing in another currency would change the template rather than the
+ * resolver.
+ *
+ * Grouping is applied by hand instead of `toLocaleString`, because the
+ * Node the API runs on may carry a trimmed ICU and the grouping
+ * character would then vary by host — which would break byte-stability.
+ */
+function printed(amount: string): string {
+  const negative = amount.startsWith("-");
+  const [whole, fraction = "00"] = amount.replace("-", "").split(".");
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${negative ? "-" : ""}$${grouped}.${fraction}`;
+}
+
 export function DefaultBillTemplate({ presentation }: { presentation: BillPresentation }) {
   const s = makeStyles(presentation);
   const { issuer, recipient, account, bill, groups, totals, messages, remittance } = presentation;
@@ -115,13 +135,13 @@ export function DefaultBillTemplate({ presentation }: { presentation: BillPresen
               <View key={li} style={s.row} wrap={false}>
                 <Text style={s.cellLabel}>{line.label}</Text>
                 <Text style={s.cellQty}>{line.quantity ?? ""}</Text>
-                <Text style={s.cellAmount}>{line.amount}</Text>
+                <Text style={s.cellAmount}>{printed(line.amount)}</Text>
               </View>
             ))}
             <View style={s.subtotalRow}>
               <Text style={s.cellLabel}> </Text>
               <Text style={s.cellQty}>Subtotal</Text>
-              <Text style={s.cellAmount}>{group.subtotal}</Text>
+              <Text style={s.cellAmount}>{printed(group.subtotal)}</Text>
             </View>
           </View>
         ))}
@@ -129,19 +149,19 @@ export function DefaultBillTemplate({ presentation }: { presentation: BillPresen
         <View style={s.totalsBox} wrap={false}>
           <View style={s.totalRow}>
             <Text style={s.muted}>Subtotal</Text>
-            <Text>{totals.subtotal}</Text>
+            <Text>{printed(totals.subtotal)}</Text>
           </View>
           <View style={s.totalRow}>
             <Text style={s.muted}>Taxes</Text>
-            <Text>{totals.taxes}</Text>
+            <Text>{printed(totals.taxes)}</Text>
           </View>
           <View style={s.totalRow}>
             <Text style={s.muted}>Credits</Text>
-            <Text>{totals.credits}</Text>
+            <Text>{printed(totals.credits)}</Text>
           </View>
           <View style={s.grandTotal}>
             <Text>Total due</Text>
-            <Text>{totals.total}</Text>
+            <Text>{printed(totals.total)}</Text>
           </View>
         </View>
 
@@ -165,7 +185,7 @@ export function DefaultBillTemplate({ presentation }: { presentation: BillPresen
             <Text style={s.label}>Account</Text>
             <Text>{account.number}</Text>
             <Text style={s.label}>Amount due</Text>
-            <Text>{remittance.amountDue}</Text>
+            <Text>{printed(remittance.amountDue)}</Text>
             <Text style={s.label}>Due</Text>
             <Text>{fmtDate(remittance.dueDate)}</Text>
           </View>

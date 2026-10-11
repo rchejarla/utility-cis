@@ -149,8 +149,16 @@ export async function loadBillPresentation(
     [customer?.firstName, customer?.lastName].filter(Boolean).join(" ").trim();
   const address = bill.account.billingAddresses[0];
   if (!recipientName || !address) {
+    // Say which of the two is missing, and where to fix it. "no name or
+    // no address" left an operator to guess which, on an account they
+    // then had to go and find.
+    const lacks = [
+      !recipientName ? "no customer with a name" : null,
+      !address ? "no billing address" : null,
+    ].filter(Boolean);
     throw new BillPresentationError(
-      "Bill has no recipient name or no billing address",
+      `Account ${bill.account.accountNumber} has ${lacks.join(" and ")}, so this bill cannot say who it is for. ` +
+        `Add ${!recipientName && !address ? "both" : "it"} on the account, then generate the bill again.`,
       "RECIPIENT_INCOMPLETE",
       [!recipientName ? "recipientName" : "", !address ? "billingAddress" : ""].filter(Boolean),
     );

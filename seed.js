@@ -743,11 +743,22 @@ async function main() {
     cArr.push(await p.customer.create({ data: { utilityId: UID, ...cu } }));
   }
 
-  // Link customers to accounts
+  // Link customers to accounts.
+  //
+  // Every account that gets a bill below needs one, and a billing
+  // address: a bill has to say who it is for and where it goes, and bill
+  // generation refuses with a 422 without both. Accounts 0001004-00 and
+  // 0001005-00 had bills but no customer, so half the seeded bills could
+  // not be turned into a PDF — the data said they were billable and they
+  // were not.
   await p.account.update({ where: { id: aArr[0].id }, data: { customerId: cArr[0].id } });
   await p.account.update({ where: { id: aArr[2].id }, data: { customerId: cArr[1].id } });
   await p.account.update({ where: { id: aArr[1].id }, data: { customerId: cArr[2].id } });
   await p.account.update({ where: { id: aArr[3].id }, data: { customerId: cArr[2].id } });
+  await p.account.update({ where: { id: aArr[4].id }, data: { customerId: cArr[2].id } });
+  // Jane's second account, so the portal account list has more than one
+  // row and paperless billing has a customer attached to it.
+  await p.account.update({ where: { id: aArr[5].id }, data: { customerId: cArr[0].id } });
   console.log("  " + cArr.length + " customers");
 
   // Link customers as premise owners
@@ -772,10 +783,15 @@ async function main() {
   }
   console.log("  " + contactData.length + " contacts");
 
+  // One per billed account, for the reason given at the customer links
+  // above: a bill with no recipient address cannot be produced.
   const billingAddressData = [
     { accountId: aArr[0].id, addressLine1: "742 Evergreen Terrace", city: "Springfield", state: "IL", zip: "62704", country: "US", isPrimary: true },
     { accountId: aArr[1].id, addressLine1: "PO Box 1234", city: "Washington", state: "DC", zip: "20500", country: "US", isPrimary: true },
     { accountId: aArr[2].id, addressLine1: "221B Baker Street", city: "New York", state: "NY", zip: "10001", country: "US", isPrimary: true },
+    { accountId: aArr[3].id, addressLine1: "1400 Industrial Way", addressLine2: "Receiving Dock B", city: "Bozeman", state: "MT", zip: "59718", country: "US", isPrimary: true },
+    { accountId: aArr[4].id, addressLine1: "88 Commerce Plaza", city: "Bozeman", state: "MT", zip: "59715", country: "US", isPrimary: true },
+    { accountId: aArr[5].id, addressLine1: "19 Willow Creek Road", city: "Bozeman", state: "MT", zip: "59715", country: "US", isPrimary: true },
   ];
 
   for (const ba of billingAddressData) {

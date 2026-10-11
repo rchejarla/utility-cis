@@ -175,36 +175,12 @@ describe("Bills page — bill document actions", () => {
   });
 
   /**
-   * Replacing a stored PDF cannot be undone, and "generate again" reads
-   * to an operator as though it might recalculate the bill. The
-   * confirmation has to deny that and say the old copy is gone.
+   * The row carries the download and nothing else about documents. Six
+   * buttons on one row buries the act a CSR performs most, so the rare
+   * one that also overwrites moved into the bill's own dialog. The
+   * confirm flow itself is covered on the component.
    */
-  it("confirms before replacing a stored PDF, and says what it does not do", async () => {
-    get.mockResolvedValue(payload([bill()]));
-    post.mockResolvedValue({ id: "doc-1" });
-    renderPage();
-
-    await userEvent.click(await screen.findByRole("button", { name: "Regenerate" }));
-
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText(/does not change what is owed/i)).toBeInTheDocument();
-    expect(screen.getByText(/previous copy is not kept/i)).toBeInTheDocument();
-    expect(post).not.toHaveBeenCalled();
-
-    await userEvent.click(screen.getByRole("button", { name: "Generate again" }));
-
-    await waitFor(() =>
-      expect(post).toHaveBeenCalledWith("/api/v1/bills/bill-1/document?force=true", {}),
-    );
-  });
-
-  it("keeps the download but hides Regenerate from a user who may only view", async () => {
-    vi.spyOn(permModule, "usePermission").mockReturnValue({
-      canView: true,
-      canCreate: false,
-      canEdit: false,
-      canDelete: false,
-    });
+  it("offers only the download on the row, even for a user who may generate", async () => {
     get.mockResolvedValue(payload([bill()]));
     fetchMock.mockResolvedValue(pdfResponse());
     renderPage();

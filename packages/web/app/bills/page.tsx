@@ -347,15 +347,19 @@ export default function BillsPage() {
                             stands at all.
                           */}
                           {/*
-                            The bill as a document. Offered only once
-                            posted: the API refuses to render an unposted
-                            bill with a 409, so a button here would
-                            promise a PDF that cannot be made.
+                            The bill as a document — the download only.
+                            Offered once posted: the API refuses an
+                            unposted bill with a 409, so a button here
+                            would promise a PDF that cannot be made.
+                            Regenerate lives in the bill's own dialog,
+                            because it is rare, it overwrites, and this
+                            row has enough on it already.
                           */}
                           <BillDocumentActions
                             billId={b.id}
                             billNumber={b.billNumber}
                             canGenerate={canEdit}
+                            regenerate={false}
                             disabled={!b.postedAt}
                             onChanged={() => void load()}
                           />

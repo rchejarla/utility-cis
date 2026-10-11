@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api-client";
+import { usePermission } from "@/lib/use-permission";
+import { BillDocumentActions } from "./bill-document-actions";
 
 interface SegmentLine {
   id: string;
@@ -43,6 +45,7 @@ const fmt = (s: string) => `$${parseFloat(s).toFixed(2)}`;
 const ymd = (s: string) => s.slice(0, 10);
 
 export function BillDetailDialog({ billId, onClose }: { billId: string; onClose: () => void }) {
+  const { canEdit } = usePermission("accounts");
   const [bill, setBill] = useState<BillWithSegments | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -83,11 +86,35 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
           <div style={{ color: "var(--text-muted)" }}>Loading...</div>
         ) : (
           <>
-            <h3 style={{ margin: "0 0 6px", fontSize: "16px", color: "var(--text-primary)" }}>
-              {bill.billNumber}
-            </h3>
-            <div style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "16px" }}>
-              {ymd(bill.periodStart)} → {ymd(bill.periodEnd)} · Due {ymd(bill.dueDate)}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                justifyContent: "space-between",
+                gap: 12,
+                marginBottom: "16px",
+              }}
+            >
+              <div>
+                <h3 style={{ margin: "0 0 6px", fontSize: "16px", color: "var(--text-primary)" }}>
+                  {bill.billNumber}
+                </h3>
+                <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+                  {ymd(bill.periodStart)} → {ymd(bill.periodEnd)} · Due {ymd(bill.dueDate)}
+                </div>
+              </div>
+              {/*
+                The document actions live here rather than on the list
+                row. Opening a bill is the deliberate act that regenerating
+                its PDF deserves, and the row stays legible without it.
+              */}
+              <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                <BillDocumentActions
+                  billId={bill.id}
+                  billNumber={bill.billNumber}
+                  canGenerate={canEdit}
+                />
+              </div>
             </div>
 
             {bill.segments.map((seg) => (

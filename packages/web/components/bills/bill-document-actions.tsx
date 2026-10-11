@@ -48,6 +48,14 @@ interface BillDocumentActionsProps {
   /** A posted bill only; an unposted one has no document to offer. */
   disabled?: boolean;
   /**
+   * Whether to offer Regenerate *here*. Separate from `canGenerate`,
+   * which is the permission: a list row deliberately shows the download
+   * alone, because regenerating is rare and overwrites, and a row
+   * crowded with six buttons makes the common act harder to find. The
+   * bill's own dialog is where the rare ones live.
+   */
+  regenerate?: boolean;
+  /**
    * Match the host's own action style — pills on the bills list, text
    * links on an account's AR tab. The same host-style override the
    * shared custom-fields section takes, and for the same reason: one
@@ -62,6 +70,7 @@ export function BillDocumentActions({
   canGenerate,
   onChanged,
   disabled = false,
+  regenerate = true,
   variant = "pill",
 }: BillDocumentActionsProps) {
   const { toast } = useToast();
@@ -117,7 +126,7 @@ export function BillDocumentActions({
       >
         {busy === "download" ? "…" : "PDF"}
       </DocBtn>
-      {canGenerate && (
+      {regenerate && canGenerate && (
         <DocBtn
           variant={variant}
           tone="var(--text-muted)"

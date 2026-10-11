@@ -122,6 +122,41 @@ describe("generateBillPdf", () => {
     }
   }, 30_000);
 
+  /**
+   * Every amount carries a currency symbol. A bare "110.75" on a bill is
+   * ambiguous on paper, and the presentation deliberately carries plain
+   * 2dp strings — so if the template stops formatting them, nothing else
+   * would notice.
+   */
+  it("prints every amount with a currency symbol", async () => {
+    const pdf = await generateBillPdf(presentation(3));
+    const text = extractText(pdf);
+
+    // Line amount, group subtotal, the totals block and the stub.
+    expect(text).toContain("$1.00");
+    expect(text).toContain("$3.00");
+    expect(text).toContain("$0.00");
+
+    // A charge row, read straight out of the concatenated text runs:
+    // label, then the bare quantity, then the amount with its symbol.
+    // This pins both halves — that amounts are formatted, and that the
+    // quantity column is NOT, since a quantity is not money.
+    expect(text).toContain("Charge 11.00$1.00");
+  }, 30_000);
+
+  it("groups thousands, so a large commercial bill stays readable", async () => {
+    const big = presentation(1);
+    big.groups[0].lines[0].amount = "1234567.89";
+    big.groups[0].subtotal = "1234567.89";
+    big.totals.subtotal = "1234567.89";
+    big.totals.total = "1234567.89";
+    big.remittance.amountDue = "1234567.89";
+
+    const text = extractText(await generateBillPdf(big));
+
+    expect(text).toContain("$1,234,567.89");
+  }, 30_000);
+
   // Review Focus 4 — silent truncation at a page boundary loses charges.
   it("paginates a long bill without losing lines", async () => {
     const many = await generateBillPdf(presentation(120));

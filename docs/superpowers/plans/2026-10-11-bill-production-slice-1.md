@@ -1508,7 +1508,11 @@ Expected: FAIL on the missing actions.
 
 - [x] **Step 3: Add the actions to the bills page**
 
-Download triggers a fetch and a blob download; Generate POSTs then downloads; Regenerate is permission-gated (`accounts:APPROVE`) and confirms first. The confirmation copy must say two things plainly: Regenerateing does not change what is owed, and it replaces the stored document — spec §10 records both, and operators will otherwise expect a correction.
+Download triggers a fetch and a blob download; Generate POSTs then downloads; Regenerate is permission-gated (`accounts:APPROVE`) and confirms first. The confirmation copy must say two things plainly: generating again does not change what is owed, and it replaces the stored document — spec §10 records both, and operators will otherwise expect a correction.
+
+> **Shipped as one button, and in two places.** A single **PDF** action downloads and generates on a 404, so a CSR never picks between Download and Generate; see the note under Task 6 Step 7 for why fetching first is what keeps `VIEW` and `EDIT` straight. `accounts:APPROVE` was wrong — see the Global Constraints note.
+>
+> **Regenerate is not on the list row.** A posted bill already carries Take payment, Reverse, Waive and Write off; two more buried the act performed most. The row keeps the download, and the bill's own dialog — opening it being a deliberate act — carries the one that overwrites.
 
 - [x] **Step 4: Run the test**
 

@@ -117,6 +117,14 @@ async function handleResponse<T>(response: Response): Promise<T> {
     try {
       const errorBody = await response.json();
       errorDetails = errorBody.error?.message || errorBody.message || JSON.stringify(errorBody);
+      // A 422 that names the fields it is missing is the only thing that
+      // tells an operator what to go and fill in. Dropping the list left
+      // "no recipient name or no billing address" with no way to tell
+      // which of the two it was.
+      const missing = errorBody.error?.missing;
+      if (Array.isArray(missing) && missing.length > 0) {
+        errorDetails = `${errorDetails} (${missing.join(", ")})`;
+      }
     } catch {
       errorDetails = await response.text();
     }
