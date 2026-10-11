@@ -33,11 +33,30 @@ export default defineConfig({
     // lifecycle via beforeAll/afterAll.
     testTimeout: 60_000,
     hookTimeout: 120_000,
-    // Run integration suites serially. Each one boots its own
-    // containers; running in parallel would multiply startup cost
-    // for no real benefit at our current size.
+    // Run integration suites one at a time, each in its own fork.
+    //
+    // `fileParallelism: false` keeps them serial: every file boots its
+    // own containers, and running them in parallel would multiply that
+    // startup cost for no real benefit at our current size. What it
+    // deliberately does NOT do is put all 58 files in one process, which
+    // `singleFork: true` used to.
+    //
+    // That sharing cost an evening of misattributed errors.
+    // worker-suspension.test.ts sets `process.env.REDIS_URL` to its Redis
+    // container's mapped port and never restores it, and afterAll stops
+    // the container. Four files later bill-creation built the first Redis
+    // client of the run, read that dead address, and ioredis retried it
+    // forever — one client logging 861 "Unhandled error event" lines
+    // across the remaining 51 files, each attributed to whichever file
+    // happened to be running. Reproduce the old behaviour by running
+    // worker-suspension followed by bill-creation under `singleFork`.
+    //
+    // A fork per file means leaked env vars and leaked handles die with
+    // the file that created them, so a failure belongs to the file it is
+    // reported against.
     pool: "forks",
-    poolOptions: { forks: { singleFork: true } },
+    fileParallelism: false,
+    poolOptions: { forks: { isolate: true } },
     // Do NOT use the unit-test config's blanket `server.deps.inline`
     // here. Inlining ioredis (and other CJS modules with `default`
     // exports) collides with Vite's ESM transform — the resulting
