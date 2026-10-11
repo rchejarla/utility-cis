@@ -70,6 +70,58 @@ export const billingIntegrationSettingsSchema = z
 export type BillingIntegrationSettings = z.infer<typeof billingIntegrationSettingsSchema>;
 
 /**
+ * Who issued the bill and where payment goes. A namespace rather than
+ * columns because nothing queries a remittance address: it is edited in
+ * Settings and read by the bill presentation loader. `.strict()` is what
+ * makes this safe as JSON — a misspelled key is rejected at the API
+ * boundary instead of going quietly missing and surfacing later as an
+ * unexplained "issuer incomplete" at render time.
+ */
+export const issuerSettingsSchema = z
+  .object({
+    utilityName: z.string().min(1).max(200).optional().or(z.literal("")),
+    utilityLegalName: z.string().min(1).max(200).optional().or(z.literal("")),
+    remittanceAddressLine1: z.string().min(1).max(200).optional().or(z.literal("")),
+    remittanceAddressLine2: z.string().max(200).optional().or(z.literal("")),
+    remittanceCity: z.string().min(1).max(100).optional().or(z.literal("")),
+    remittanceState: z.string().min(1).max(50).optional().or(z.literal("")),
+    remittancePostalCode: z.string().min(1).max(20).optional().or(z.literal("")),
+    billingPhone: z.string().max(40).optional().or(z.literal("")),
+    billingEmail: z.string().email().max(254).optional().or(z.literal("")),
+    websiteUrl: z.string().url().max(500).optional().or(z.literal("")),
+  })
+  .strict();
+export type IssuerSettings = z.infer<typeof issuerSettingsSchema>;
+
+/**
+ * The five without which a bill is not a valid document. Stated once
+ * here so the presentation loader's 422 and the settings page's
+ * "required" markers cannot drift apart.
+ */
+export const REQUIRED_ISSUER_FIELDS = [
+  "utilityName",
+  "remittanceAddressLine1",
+  "remittanceCity",
+  "remittanceState",
+  "remittancePostalCode",
+] as const;
+
+export type RequiredIssuerField = (typeof REQUIRED_ISSUER_FIELDS)[number];
+
+/**
+ * Which apptor-connect integration holds this tenant's bill PDFs. The
+ * integration name selects S3, Azure Blob or GCS on their side; no
+ * bucket name, region or credential belongs here.
+ */
+export const billDocumentSettingsSchema = z
+  .object({
+    storageIntegration: z.string().min(1).max(100).optional().or(z.literal("")),
+    storageConnection: z.string().min(1).max(100).optional().or(z.literal("")),
+  })
+  .strict();
+export type BillDocumentSettings = z.infer<typeof billDocumentSettingsSchema>;
+
+/**
  * Umbrella schema used by the tenant-config PATCH route. Each namespace
  * is optional so a patch only has to include the block it's changing.
  * Unknown top-level keys are rejected so typos fail loudly.
@@ -80,6 +132,8 @@ export const tenantSettingsNamespacesSchema = z
     notifications: notificationSettingsSchema.optional(),
     retention: retentionSettingsSchema.optional(),
     billing: billingIntegrationSettingsSchema.optional(),
+    issuer: issuerSettingsSchema.optional(),
+    billDocuments: billDocumentSettingsSchema.optional(),
   })
   .strict();
 export type TenantSettingsNamespaces = z.infer<typeof tenantSettingsNamespacesSchema>;

@@ -128,4 +128,54 @@ describe("PATCH /api/v1/tenant-config — settings namespaces", () => {
     const res = await inject({ branding: { logoUrl: "not-a-url" } });
     expect(res.statusCode).toBe(400);
   });
+
+  it("merges an issuer patch into settings.issuer without touching other namespaces", async () => {
+    const res = await inject(
+      { issuer: { utilityName: "City of Testville Utilities" } },
+      { branding: { logoUrl: "https://cdn.example.com/logo.png" } },
+    );
+
+    expect(res.statusCode).toBe(200);
+    const upsertCall = (prisma.tenantConfig.upsert as any).mock.calls[0][0];
+    expect(upsertCall.update.settings.issuer).toEqual({
+      utilityName: "City of Testville Utilities",
+    });
+    expect(upsertCall.update.settings.branding).toEqual({
+      logoUrl: "https://cdn.example.com/logo.png",
+    });
+  });
+
+  it("keeps issuer fields already saved when the patch sends only one", async () => {
+    const res = await inject(
+      { issuer: { billingPhone: "406-555-0100" } },
+      { issuer: { utilityName: "City of Testville Utilities" } },
+    );
+
+    expect(res.statusCode).toBe(200);
+    const upsertCall = (prisma.tenantConfig.upsert as any).mock.calls[0][0];
+    expect(upsertCall.update.settings.issuer).toEqual({
+      utilityName: "City of Testville Utilities",
+      billingPhone: "406-555-0100",
+    });
+  });
+
+  it("rejects a misspelled issuer key rather than storing it", async () => {
+    const res = await inject({ issuer: { remitanceCity: "Testville" } });
+
+    expect(res.statusCode).toBe(400);
+    // Naming the offending key matters: a 400 that merely rejects the
+    // whole `issuer` block would pass this test while proving nothing
+    // about the namespace's own .strict().
+    expect(res.body).toContain("remitanceCity");
+  });
+
+  it("merges the bill-document storage integration", async () => {
+    const res = await inject({ billDocuments: { storageIntegration: "cis-bills" } });
+
+    expect(res.statusCode).toBe(200);
+    const upsertCall = (prisma.tenantConfig.upsert as any).mock.calls[0][0];
+    expect(upsertCall.update.settings.billDocuments).toEqual({
+      storageIntegration: "cis-bills",
+    });
+  });
 });

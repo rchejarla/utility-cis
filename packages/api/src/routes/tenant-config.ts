@@ -6,6 +6,8 @@ import {
   notificationSettingsSchema,
   retentionSettingsSchema,
   billingIntegrationSettingsSchema,
+  issuerSettingsSchema,
+  billDocumentSettingsSchema,
 } from "@utility-cis/shared";
 import { getTenantConfig, updateTenantConfig } from "../services/tenant-config.service.js";
 
@@ -54,6 +56,8 @@ const updateBodySchema = z
     notifications: notificationSettingsSchema.optional(),
     retention: retentionSettingsSchema.optional(),
     billing: billingIntegrationSettingsSchema.optional(),
+    issuer: issuerSettingsSchema.optional(),
+    billDocuments: billDocumentSettingsSchema.optional(),
   })
   .strict();
 
@@ -85,7 +89,9 @@ export async function tenantConfigRoutes(app: FastifyInstance) {
         patch.branding !== undefined ||
         patch.notifications !== undefined ||
         patch.retention !== undefined ||
-        patch.billing !== undefined;
+        patch.billing !== undefined ||
+        patch.issuer !== undefined ||
+        patch.billDocuments !== undefined;
 
       if (touchesSettings) {
         const current = await getTenantConfig(utilityId);
@@ -118,6 +124,18 @@ export async function tenantConfigRoutes(app: FastifyInstance) {
           nextSettings.billing = {
             ...(current.settings.billing as Record<string, unknown> | undefined),
             ...patch.billing,
+          };
+        }
+        if (patch.issuer !== undefined) {
+          nextSettings.issuer = {
+            ...(current.settings.issuer as Record<string, unknown> | undefined),
+            ...patch.issuer,
+          };
+        }
+        if (patch.billDocuments !== undefined) {
+          nextSettings.billDocuments = {
+            ...(current.settings.billDocuments as Record<string, unknown> | undefined),
+            ...patch.billDocuments,
           };
         }
         merged.settings = nextSettings;
