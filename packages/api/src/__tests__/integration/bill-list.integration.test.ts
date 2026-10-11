@@ -408,6 +408,60 @@ describe("listBills", () => {
     });
   });
 
+  /**
+   * Search covers who the bill is for, not just its number.
+   *
+   * A caller rarely holds the paper. They give a name, or read an
+   * account number off an older statement — and `nextBillNumber`
+   * produces BILL-YYYYMM-<counter>, so neither is in the bill number.
+   */
+  describe("search", () => {
+    const found = async (search: string) =>
+      numbers(await bills.listBills(utilityId, { ...Q, search }));
+
+    it("still matches the bill number", async () => {
+      expect(await found("B-JAN")).toContain("B-JAN");
+    });
+
+    it("matches the account number", async () => {
+      // The fixture account is BL-001; no bill number contains it.
+      const hits = await found("BL-001");
+      expect(hits.length).toBeGreaterThan(0);
+      expect(hits.every((n) => !n.includes("BL-001"))).toBe(true);
+    });
+
+    it("matches a customer's surname", async () => {
+      expect((await found("Lovelace")).length).toBeGreaterThan(0);
+    });
+
+    /**
+     * The one the house pattern gets wrong. ORing the raw string across
+     * firstName and lastName matches neither, because neither field
+     * contains "Ada Lovelace" — so every token is matched separately
+     * and all of them must hit.
+     */
+    it("matches a full name, both halves of it", async () => {
+      expect((await found("Ada Lovelace")).length).toBeGreaterThan(0);
+      // Order should not matter either.
+      expect((await found("Lovelace Ada")).length).toBeGreaterThan(0);
+    });
+
+    it("requires every token to match, so a wrong half finds nothing", async () => {
+      expect(await found("Ada Nobody")).toEqual([]);
+    });
+
+    it("is case-insensitive on names", async () => {
+      expect((await found("lovelace")).length).toBeGreaterThan(0);
+    });
+
+    it("does not let a customer name cross tenants", async () => {
+      // The other tenant's bill must not surface for this tenant's
+      // search, and the reverse: searching our customer from theirs.
+      expect(await found("B-OTHER")).toEqual([]);
+      expect(numbers(await bills.listBills(otherUtility, { ...Q, search: "Lovelace" }))).toEqual([]);
+    });
+  });
+
   it("never returns another utility's bills", async () => {
     const res = await bills.listBills(utilityId, Q);
     expect(numbers(res)).not.toContain("B-OTHER");

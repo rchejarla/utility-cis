@@ -93,7 +93,11 @@ export const billQuerySchema = z
     /** Inclusive bounds on billDate. */
     from: z.string().date().optional(),
     to: z.string().date().optional(),
-    /** Case-insensitive contains against billNumber. */
+    /**
+     * Case-insensitive contains against the bill number, the account
+     * number, and the customer's name. Whitespace splits it into tokens
+     * that must all match, so a full name works.
+     */
     search: z.string().min(1).max(100).optional(),
   })
   .strict()

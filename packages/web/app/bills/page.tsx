@@ -258,15 +258,15 @@ export default function BillsPage() {
     <div>
       <PageHeader
         title="Bills"
-        subtitle="Every bill across all accounts — search by bill number"
+        subtitle="Every bill across all accounts — search by bill number, account number or customer"
       />
 
       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search bill number…"
-          aria-label="Search bill number"
+          placeholder="Search bill, account or customer…"
+          aria-label="Search bill number, account number or customer"
           style={{
             padding: "7px 12px",
             fontSize: 13,
@@ -301,7 +301,7 @@ export default function BillsPage() {
       ) : rows.length === 0 ? (
         <div style={EMPTY}>
           {debounced
-            ? `No bill number matches “${debounced}”`
+            ? `Nothing matches “${debounced}” — tried bill numbers, account numbers and customer names`
             : state === "unposted"
               ? "Every bill has been posted — nothing waiting."
               : state === "overdue"

@@ -446,7 +446,35 @@ export async function listBills(
   }
 
   if (query.search) {
-    where.billNumber = { contains: query.search, mode: "insensitive" };
+    /*
+     * Bill number, account number, or who the bill is for.
+     *
+     * Bill number alone assumed the caller is holding the paper. They
+     * usually are not: they give a name, or read an account number off
+     * an older statement. The only route from a name to a bill was
+     * global search → customer → account → AR tab, which is three hops
+     * on a phone call.
+     *
+     * Not free by accident, either. `nextBillNumber` produces
+     * BILL-YYYYMM-<counter>, so an account number is nowhere in it —
+     * the dev seed's BILL-202610-0001000-00 embeds one and is
+     * misleading about this.
+     *
+     * Every token has to match something, so "Jane Smith" needs both
+     * halves: one OR per token, ANDed. The customers list ORs the raw
+     * string across its fields, which means a full name there matches
+     * nothing at all; worth fixing the same way, but not from here.
+     */
+    const tokens = query.search.trim().split(/\s+/).filter(Boolean);
+    where.AND = tokens.map((token) => ({
+      OR: [
+        { billNumber: { contains: token, mode: "insensitive" } },
+        { account: { accountNumber: { contains: token, mode: "insensitive" } } },
+        { account: { customer: { firstName: { contains: token, mode: "insensitive" } } } },
+        { account: { customer: { lastName: { contains: token, mode: "insensitive" } } } },
+        { account: { customer: { organizationName: { contains: token, mode: "insensitive" } } } },
+      ],
+    }));
   }
 
   const page = await paginatedTenantList<
