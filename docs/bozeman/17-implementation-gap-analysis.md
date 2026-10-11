@@ -25,6 +25,8 @@ By area:
 
 The strongest area is water/wastewater rating and metering — the rate engine has golden tests against Bozeman's own tariffs (`bozeman-water-sfr`, `bozeman-sewer-wqa`, `bozeman-sewer-linked`, `bozeman-stormwater`, `bozeman-solid-waste`). The weakest are Special Assessments (nothing), bill production and payment processing (most of it), and every external-system integration (all of them).
 
+**Two qualifications on the 80, before anyone prices it as build work.** Three of them (#157, #158, #164) are another product's job by design and mean integration, not implementation — see the payment-processing entry in §2. And every gap that reaches outside this process runs on an integration layer that already exists and is running, apptor-connect, so the mechanism is chosen even though our side of it isn't written — see §2's integration-rail subsection. Neither qualification moves a verdict: nothing above counted as absent is built.
+
 ## 2. Whole capabilities with no code at all
 
 These are not partial. There is no model, route, service, or page.
@@ -38,8 +40,12 @@ No `parcel`, `gisParcelId`, `geospatial`, or sync worker anywhere. The only occu
 ### Bill production — #130, 131, 133, 136, 137
 No PDF generation (`pdfkit`/`puppeteer`/`PDFDocument`: zero hits; the only `pdf` in the codebase is a MIME type in `attachment.service.ts`). No print/mail vendor export. No bill reprint or version tracking. No bill hold. No bill message management. Bills compute and store (`Bill`, `BillSegment`, `BillSegmentLine`) and render in the UI — they are never produced as a document.
 
-### Payment processing — #157, 158, 162, 164
+### Payment processing — #157, 158, 162, 164 — *partly delegated by design*
 No gateway, no tokenization, no card/ACH capture (`stripe|braintree|authorize\.net|tokeniz`: zero hits). `PaymentTender {CARD, ACH, CASH, CHECK, LOCKBOX}` records *how a payment was taken elsewhere*; nothing takes payments. No POS integration, no real-time payment feed, no PCI surface.
+
+**But #157, #158 and #164 are not ours to build.** `docs/specs/21-saaslogic-billing.md:21-33` divides it: CIS is the system of record for what is owed, SaaSLogic owns "card data, hosted payment page, settlement", and the spec states "No card tokenization in CIS. Payment UI stays hosted by SaaSLogic behind a redirect, so PCI scope remains effectively zero." These remain counted as absent because they are absent *here* — that is what this document measures — but closing them means integrating, not implementing, and a roadmap should not price them as build work.
+
+That module's own stated blocker is also **stale**: it says "there is no `Payment` entity, no allocation, and no way to record money received". Payments, allocation, deposits, refunds and disbursements all shipped on 2026-10-09/10. Module 21 is unblocked.
 
 ### Payment plans — #147, 148
 `PaymentPlan|paymentPlan|payment_plan`: zero hits. The only "payment plan" strings are a label in `validators/delinquency.ts` and UI copy.
@@ -58,6 +64,35 @@ Not implemented, and the code says so. `meter-read.service.ts:633` throws *"Cann
 
 ### Bulk / mass communications — #30
 `bulkNotification|massNotification|broadcast`: zero hits. Notifications are per-recipient only; there is no segment-targeted send.
+
+### The integration rail — what it changes, and what it doesn't
+
+Every gap above that reaches outside this process — email, SMS, postal mail, object storage, other applications — runs on **apptor-connect** (`c:\development\apptor-connect`), this stack's integration layer, with `apptor-connect-service` as its HTTP surface. Four planes matter here:
+
+| Plane | What it gives us |
+|---|---|
+| `proxy` — `POST /proxy/v1/{integration}` | Call a vendor without ever holding its credential; the service injects auth and applies timeouts, retries and per-tenant rate limits. |
+| `files` — `/files/v1/*` | Read and write S3, Azure Blob, GCS and SFTP. Mint a link with `POST /files/v1/links`, stream the bytes, keep a pointer. |
+| `events` — `POST /events/v1/{token}` | Verified, deduplicated inbound webhooks, read by cursor — the return path for statuses we don't poll for. |
+| `resolve` — `POST /v1/resolve` | Connection details plus a short-lived token, for callers that must talk to a vendor directly. |
+
+Its ownership hierarchy is `PLATFORM ⊃ TENANT ⊃ CUSTOMER ⊃ SUBJECT`, which maps onto `utility_id` cleanly, and the `mail`, `sendgrid`, `s3`, `azure-blob`, `gcs`, `sftp`, `rest` and `kafka` connectors already exist.
+
+So these gaps are not "we need to choose and build a mechanism" — the mechanism is chosen and running:
+
+| Requirement | What's left on our side |
+|---|---|
+| #27 email/SMS channels, #132 bill delivery | Call `mail`/`sendgrid` through the proxy. Needs a delivery-status model; `NotificationChannel` also needs a `POSTAL` member it currently lacks. |
+| #27 postal mail | A print-and-mail vendor over `sftp` or an object drop. Needs the vendor's file spec. |
+| #130 retained bill images | Done by design in `docs/superpowers/specs/2026-10-11-bill-production-design.md` — the files plane, so no storage code here. Resolves the 7-year retention floor as a bucket lifecycle policy rather than something we implement. |
+| #131 print-vendor export | A renderer over the bill presentation model, dropped via `sftp`. |
+| #189, #190 SR routing to RAMS / work systems | Call them through the proxy. The enum values already exist and are read by nothing. |
+| #191 bi-directional status | The events plane is the inbound half; we need a handler and a status mapping. |
+| #76 meter-reading system API, #106 meter inventory sync | The `rest` connector plus a scheduled pull; today only file import exists. |
+
+**What this does not change: none of these are built, and no verdict in §1 moves.** A rail is not a feature — every row above still needs our side written, and several need a third party's file format or API before they can be specified at all. The distinction worth carrying into planning is narrower than it looks: these are *integration* work against a layer that exists, not *infrastructure* work. That makes them cheaper to estimate, not done.
+
+One standing consequence: no vendor credential belongs in this codebase. Anything that reaches an external system goes through apptor-connect, which holds the credential and never hands it out.
 
 ## 3. Absent — full list by requirement
 
