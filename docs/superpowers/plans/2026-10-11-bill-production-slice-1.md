@@ -26,6 +26,7 @@ Every task's requirements implicitly include these. Values are copied from the s
 - **apptor-connect is faked in tests, never run.** Reached through one client module that tests substitute.
 - **Permissions** (corrected from the spec, which invented a `bills.REPRINT` that the fixed `PERMISSIONS` tuple has no room for): render/download `accounts:VIEW`; reprint `accounts:APPROVE`; bill-message CRUD `settings`; portal download `portal_billing:VIEW`.
 - **apptor-connect auth is `X-Api-Key: ak_...`**, one deployment-level key in env, never in the database.
+- **Per-tenant values go in a `TenantConfig.settings` namespace, not a new column**, unless a scheduler or a query touches them. Every existing column on that model is read by a background worker selecting tenants or writing run state; everything an operator edits in Settings and one code path reads — branding, retention, number formats, the SaaSLogic endpoint, and now issuer identity and bill storage — is a `.strict()` Zod namespace. A namespace costs one schema and one line on `updateBodySchema`; a column costs a migration on a live table.
 
 ## Review Focus
 
@@ -42,7 +43,6 @@ Five failure modes the spec implies but no obvious task tests. Each has its test
 ## File Structure
 
 **Create:**
-- `packages/shared/prisma/migrations/20261011120000_tenant_issuer_identity/migration.sql` — issuer columns
 - `packages/shared/prisma/migrations/20261011120100_bill_message/migration.sql` — bill message table
 - `packages/shared/prisma/migrations/20261011120200_bill_version/migration.sql` — version/replacesId + unique constraint swap
 - `packages/shared/prisma/migrations/20261011120300_bill_document/migration.sql` — bill document table
@@ -61,8 +61,9 @@ Five failure modes the spec implies but no obvious task tests. Each has its test
 **Modify:**
 - `packages/shared/prisma/schema.prisma` — new models and fields
 - `packages/shared/src/validators/index.ts` — export the new validator
+- `packages/shared/src/validators/tenant-settings.ts` — `issuer` and `billDocuments` namespaces
 - `packages/api/src/config.ts` — apptor-connect env
-- `packages/api/src/routes/tenant-config.ts` + `services/tenant-config.service.ts` — issuer fields
+- `packages/api/src/routes/tenant-config.ts` — wire the two new namespaces into `updateBodySchema`
 - `packages/api/src/app.ts` — register two route modules
 - `packages/api/tsconfig.json` — `"jsx": "react-jsx"`
 - `packages/api/package.json` — `@react-pdf/renderer`, `react`
@@ -71,170 +72,214 @@ Five failure modes the spec implies but no obvious task tests. Each has its test
 
 ---
 
-## Task 1: Issuer identity on TenantConfig
+## Task 1: Issuer identity and bill storage as settings namespaces
 
-A bill must say who issued it and where to send payment. Nothing in the schema records that today — there is no `Utility` model at all.
+A bill must say who issued it and where to send payment. Nothing records that today — there is no `Utility` model at all.
+
+It goes in a **`settings` namespace, not in columns.** `TenantConfig.settings` is already a namespaced, validated store: `brandingSettingsSchema`, `notificationSettingsSchema`, `retentionSettingsSchema` and `billingIntegrationSettingsSchema` each describe one block, each is `.strict()` so an unknown key is rejected at the API boundary, the route shallow-merges each into `settings.<namespace>`, and the web side loads one with the `use-tenant-settings-namespace` hook. Issuer identity is one more namespace in that pattern — no migration, no ALTER on a live table, no new form plumbing.
+
+**The rule this follows**, which the existing split already encodes: a **typed column** is for what a scheduler or a query touches (`delinquencyEnabled`, `delinquencyRunHourLocal`, `delinquencyLastRunAt`, `autoPostBills`, `timezone` — the dispatcher selects tenants on those and writes run state back). A **`settings` namespace** is for what an operator edits in Settings and one code path reads by name (branding, retention durations, number formats, the SaaSLogic endpoint). Issuer identity is the second kind: nothing filters on a remittance address.
 
 **Files:**
-- Create: `packages/shared/prisma/migrations/20261011120000_tenant_issuer_identity/migration.sql`
-- Modify: `packages/shared/prisma/schema.prisma` (model `TenantConfig`)
-- Modify: `packages/api/src/routes/tenant-config.ts` (the inline `updateBodySchema`)
-- Modify: `packages/api/src/services/tenant-config.service.ts`
-- Test: `packages/api/src/__tests__/integration/tenant-issuer-identity.integration.test.ts`
+- Modify: `packages/shared/src/validators/tenant-settings.ts` — add two namespaces
+- Modify: `packages/api/src/routes/tenant-config.ts` — wire them into `updateBodySchema`
+- Test: `packages/shared/src/validators/__tests__/tenant-settings.test.ts`
+
+No Prisma change and no migration in this task.
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `TenantConfig.utilityName`, `.utilityLegalName`, `.remittanceAddressLine1`, `.remittanceAddressLine2`, `.remittanceCity`, `.remittanceState`, `.remittancePostalCode`, `.billingPhone`, `.billingEmail`, `.websiteUrl` — all `string | null`. Task 3 reads them.
-
-- [ ] **Step 1: Write the failing test**
+- Produces:
 
 ```ts
-// packages/api/src/__tests__/integration/tenant-issuer-identity.integration.test.ts
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, resetDb, TENANT_A } from "./_effective-dating-fixtures.js";
+export const issuerSettingsSchema: z.ZodObject<{
+  utilityName: z.ZodOptional<z.ZodString>;
+  utilityLegalName: z.ZodOptional<z.ZodString>;
+  remittanceAddressLine1: z.ZodOptional<z.ZodString>;
+  remittanceAddressLine2: z.ZodOptional<z.ZodString>;
+  remittanceCity: z.ZodOptional<z.ZodString>;
+  remittanceState: z.ZodOptional<z.ZodString>;
+  remittancePostalCode: z.ZodOptional<z.ZodString>;
+  billingPhone: z.ZodOptional<z.ZodString>;
+  billingEmail: z.ZodOptional<z.ZodString>;
+  websiteUrl: z.ZodOptional<z.ZodString>;
+}>;
+export type IssuerSettings = z.infer<typeof issuerSettingsSchema>;
 
-let pgContainer: StartedPostgreSqlContainer;
-let prismaImports: typeof import("../../lib/prisma.js");
+export const billDocumentSettingsSchema: z.ZodObject<{
+  storageIntegration: z.ZodOptional<z.ZodString>;
+  storageConnection: z.ZodOptional<z.ZodString>;
+}>;
+export type BillDocumentSettings = z.infer<typeof billDocumentSettingsSchema>;
 
-beforeAll(async () => {
-  const booted = await bootPostgres();
-  pgContainer = booted.container;
-  prismaImports = await import("../../lib/prisma.js");
-}, 180_000);
+export const REQUIRED_ISSUER_FIELDS: readonly [
+  "utilityName",
+  "remittanceAddressLine1",
+  "remittanceCity",
+  "remittanceState",
+  "remittancePostalCode",
+];
+```
 
-afterAll(async () => {
-  await prismaImports?.prisma.$disconnect().catch(() => {});
-  await pgContainer?.stop().catch(() => {});
+Task 3 reads `settings.issuer`; Task 6 reads `settings.billDocuments`. Both use `REQUIRED_ISSUER_FIELDS` so "which fields are mandatory" is stated once.
+
+- [ ] **Step 1: Write the failing validator tests**
+
+```ts
+// packages/shared/src/validators/__tests__/tenant-settings.test.ts
+// Append to the existing file if it already exists; otherwise create it
+// following the style of validators/__tests__/ledger.test.ts.
+import { describe, it, expect } from "vitest";
+import {
+  issuerSettingsSchema,
+  billDocumentSettingsSchema,
+  REQUIRED_ISSUER_FIELDS,
+} from "../tenant-settings.js";
+
+describe("issuerSettingsSchema", () => {
+  it("accepts a complete issuer block", () => {
+    const parsed = issuerSettingsSchema.parse({
+      utilityName: "City of Testville Utilities",
+      utilityLegalName: "City of Testville, Montana",
+      remittanceAddressLine1: "PO Box 1230",
+      remittanceCity: "Testville",
+      remittanceState: "MT",
+      remittancePostalCode: "59771",
+      billingPhone: "406-555-0100",
+      billingEmail: "ub@testville.gov",
+      websiteUrl: "https://testville.gov",
+    });
+    expect(parsed.utilityName).toBe("City of Testville Utilities");
+  });
+
+  it("accepts a partial block, because a PATCH may send one field", () => {
+    expect(() => issuerSettingsSchema.parse({ billingPhone: "406-555-0100" })).not.toThrow();
+  });
+
+  // This is what a JSON blob would not give us.
+  it("rejects a misspelled key instead of silently dropping it", () => {
+    expect(() => issuerSettingsSchema.parse({ remitanceCity: "Testville" })).toThrow();
+  });
+
+  it("rejects a malformed email and a malformed url", () => {
+    expect(() => issuerSettingsSchema.parse({ billingEmail: "not-an-email" })).toThrow();
+    expect(() => issuerSettingsSchema.parse({ websiteUrl: "not-a-url" })).toThrow();
+  });
+
+  it("names the five fields a bill cannot render without", () => {
+    expect([...REQUIRED_ISSUER_FIELDS]).toEqual([
+      "utilityName",
+      "remittanceAddressLine1",
+      "remittanceCity",
+      "remittanceState",
+      "remittancePostalCode",
+    ]);
+  });
 });
 
-beforeEach(async () => {
-  await resetDb(prismaImports.prisma);
-});
-
-describe("tenant issuer identity", () => {
-  it("stores and returns the fields a bill header needs", async () => {
-    const { prisma } = prismaImports;
-    await prisma.tenantConfig.create({
-      data: {
-        utilityId: TENANT_A,
-        utilityName: "City of Testville Utilities",
-        utilityLegalName: "City of Testville, Montana",
-        remittanceAddressLine1: "PO Box 1230",
-        remittanceCity: "Testville",
-        remittanceState: "MT",
-        remittancePostalCode: "59771",
-        billingPhone: "406-555-0100",
-        billingEmail: "utilitybilling@testville.gov",
-        websiteUrl: "https://testville.gov/utilities",
-      },
+describe("billDocumentSettingsSchema", () => {
+  it("accepts the storage integration name and optional connection", () => {
+    const parsed = billDocumentSettingsSchema.parse({
+      storageIntegration: "cis-bills",
+      storageConnection: "primary",
     });
+    expect(parsed.storageIntegration).toBe("cis-bills");
+  });
 
-    const row = await prisma.tenantConfig.findUniqueOrThrow({
-      where: { utilityId: TENANT_A },
-    });
-
-    expect(row.utilityName).toBe("City of Testville Utilities");
-    expect(row.remittancePostalCode).toBe("59771");
-    expect(row.remittanceAddressLine2).toBeNull();
+  it("rejects an unknown key", () => {
+    expect(() => billDocumentSettingsSchema.parse({ bucket: "my-bucket" })).toThrow();
   });
 });
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [ ] **Step 2: Run them and confirm they fail**
 
-Run: `cd packages/api && pnpm vitest run --config vitest.integration.config.ts src/__tests__/integration/tenant-issuer-identity.integration.test.ts`
-Expected: FAIL — Prisma rejects `utilityName` as an unknown argument.
+Run: `cd packages/shared && pnpm vitest run src/validators/__tests__/tenant-settings.test.ts`
+Expected: FAIL — `issuerSettingsSchema` is not exported.
 
-- [ ] **Step 3: Add the columns to the schema**
+- [ ] **Step 3: Add the namespaces**
 
-In `packages/shared/prisma/schema.prisma`, inside `model TenantConfig`, immediately after the `settings` field:
-
-```prisma
-  // ─── Issuer identity (bill production slice 1) ───────────────────
-  // Who issued the bill and where payment goes. Explicit columns rather
-  // than `settings` JSON because a bill cannot render without them, and
-  // the settings UI validates them.
-  utilityName            String? @map("utility_name") @db.VarChar(200)
-  utilityLegalName       String? @map("utility_legal_name") @db.VarChar(200)
-  remittanceAddressLine1 String? @map("remittance_address_line1") @db.VarChar(200)
-  remittanceAddressLine2 String? @map("remittance_address_line2") @db.VarChar(200)
-  remittanceCity         String? @map("remittance_city") @db.VarChar(100)
-  remittanceState        String? @map("remittance_state") @db.VarChar(50)
-  remittancePostalCode   String? @map("remittance_postal_code") @db.VarChar(20)
-  billingPhone           String? @map("billing_phone") @db.VarChar(40)
-  billingEmail           String? @map("billing_email") @db.VarChar(255)
-  websiteUrl             String? @map("website_url") @db.VarChar(500)
-```
-
-- [ ] **Step 4: Write the migration**
-
-```sql
--- packages/shared/prisma/migrations/20261011120000_tenant_issuer_identity/migration.sql
--- Issuer identity for bill documents. Nullable because existing tenants
--- have none; bill rendering refuses with a 422 until they are filled.
-ALTER TABLE "tenant_config"
-  ADD COLUMN "utility_name"             VARCHAR(200),
-  ADD COLUMN "utility_legal_name"       VARCHAR(200),
-  ADD COLUMN "remittance_address_line1" VARCHAR(200),
-  ADD COLUMN "remittance_address_line2" VARCHAR(200),
-  ADD COLUMN "remittance_city"          VARCHAR(100),
-  ADD COLUMN "remittance_state"         VARCHAR(50),
-  ADD COLUMN "remittance_postal_code"   VARCHAR(20),
-  ADD COLUMN "billing_phone"            VARCHAR(40),
-  ADD COLUMN "billing_email"            VARCHAR(255),
-  ADD COLUMN "website_url"              VARCHAR(500);
-```
-
-- [ ] **Step 5: Regenerate the client and run the test**
-
-Run: `pnpm --filter @utility-cis/shared exec prisma generate` then the Step 2 command.
-Expected: PASS.
-
-- [ ] **Step 6: Expose the fields on the settings endpoint**
-
-In `packages/api/src/routes/tenant-config.ts`, extend the inline `updateBodySchema` with these keys (all `.optional()`), matching the style already in that object:
+In `packages/shared/src/validators/tenant-settings.ts`, following the existing schemas' shape exactly (`.strict()`, every field `.optional()`, `.or(z.literal(""))` where the settings pages clear a value by sending an empty string):
 
 ```ts
-  utilityName: z.string().min(1).max(200).nullish(),
-  utilityLegalName: z.string().min(1).max(200).nullish(),
-  remittanceAddressLine1: z.string().min(1).max(200).nullish(),
-  remittanceAddressLine2: z.string().max(200).nullish(),
-  remittanceCity: z.string().min(1).max(100).nullish(),
-  remittanceState: z.string().min(1).max(50).nullish(),
-  remittancePostalCode: z.string().min(1).max(20).nullish(),
-  billingPhone: z.string().max(40).nullish(),
-  billingEmail: z.string().email().max(255).nullish(),
-  websiteUrl: z.string().url().max(500).nullish(),
+/**
+ * Who issued the bill and where payment goes. A namespace rather than
+ * columns because nothing queries a remittance address: it is edited in
+ * Settings and read by the bill presentation loader. `.strict()` is what
+ * makes this safe as JSON — a misspelled key is rejected at the API
+ * boundary instead of going quietly missing and surfacing later as an
+ * unexplained "issuer incomplete" at render time.
+ */
+export const issuerSettingsSchema = z
+  .object({
+    utilityName: z.string().min(1).max(200).optional().or(z.literal("")),
+    utilityLegalName: z.string().min(1).max(200).optional().or(z.literal("")),
+    remittanceAddressLine1: z.string().min(1).max(200).optional().or(z.literal("")),
+    remittanceAddressLine2: z.string().max(200).optional().or(z.literal("")),
+    remittanceCity: z.string().min(1).max(100).optional().or(z.literal("")),
+    remittanceState: z.string().min(1).max(50).optional().or(z.literal("")),
+    remittancePostalCode: z.string().min(1).max(20).optional().or(z.literal("")),
+    billingPhone: z.string().max(40).optional().or(z.literal("")),
+    billingEmail: z.string().email().max(254).optional().or(z.literal("")),
+    websiteUrl: z.string().url().max(500).optional().or(z.literal("")),
+  })
+  .strict();
+export type IssuerSettings = z.infer<typeof issuerSettingsSchema>;
+
+/**
+ * The five without which a bill is not a valid document. Stated once
+ * here so the loader's 422 and the settings page's "required" markers
+ * cannot drift apart.
+ */
+export const REQUIRED_ISSUER_FIELDS = [
+  "utilityName",
+  "remittanceAddressLine1",
+  "remittanceCity",
+  "remittanceState",
+  "remittancePostalCode",
+] as const;
+
+/**
+ * Which apptor-connect integration holds this tenant's bill PDFs. The
+ * integration name selects S3, Azure Blob or GCS on their side; no
+ * bucket name, region or credential belongs here.
+ */
+export const billDocumentSettingsSchema = z
+  .object({
+    storageIntegration: z.string().min(1).max(100).optional().or(z.literal("")),
+    storageConnection: z.string().min(1).max(100).optional().or(z.literal("")),
+  })
+  .strict();
+export type BillDocumentSettings = z.infer<typeof billDocumentSettingsSchema>;
 ```
 
-Then add the same keys to whatever field list `services/tenant-config.service.ts` uses to build its `select` and its update payload. Read that file first; mirror its existing shape rather than inventing one.
+- [ ] **Step 4: Run the validator tests**
 
-- [ ] **Step 7: Add an endpoint test**
+Run: the Step 2 command.
+Expected: PASS (7 tests).
 
-Append to the same test file:
+- [ ] **Step 5: Wire the namespaces into the PATCH body**
+
+In `packages/api/src/routes/tenant-config.ts`, add `issuerSettingsSchema` and `billDocumentSettingsSchema` to the import from `@utility-cis/shared`, then two keys to `updateBodySchema` alongside `branding` / `notifications` / `retention` / `billing`:
 
 ```ts
-  it("rejects a malformed billing email", async () => {
-    const { updateTenantConfig } = await import("../../services/tenant-config.service.js");
-    await expect(
-      updateTenantConfig(TENANT_A, "actor", "Actor", { billingEmail: "not-an-email" } as never),
-    ).rejects.toThrow();
-  });
+    issuer: issuerSettingsSchema.optional(),
+    billDocuments: billDocumentSettingsSchema.optional(),
 ```
 
-If `updateTenantConfig`'s signature differs, match the real one — the point of the test is that validation rejects a bad email, not the argument order.
+Nothing else changes: the route already shallow-merges each namespace into `settings.<namespace>`, so no service or Prisma edit is needed. Read the handler to confirm the merge is generic over the namespace keys rather than listing them — if it lists them, add these two there too.
 
-- [ ] **Step 8: Run both tests, then typecheck**
+- [ ] **Step 6: Verify the endpoint accepts and rejects**
 
-Run: the Step 2 command, then `pnpm --filter @utility-cis/api exec tsc --noEmit`
-Expected: both PASS, typecheck exit 0.
+Add to `packages/api/src/__tests__/integration/tenant-context.integration.test.ts`, or a new `tenant-issuer-settings.integration.test.ts` following its boot preamble, a case asserting that `updateTenantConfig` with `{ issuer: { utilityName: "City of Testville Utilities" } }` persists to `settings.issuer.utilityName`, and that `{ issuer: { remitanceCity: "x" } }` is rejected. Match the real `updateTenantConfig` signature — read the service first.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 7: Typecheck and commit**
+
+Run: `pnpm typecheck`
 
 ```bash
-git add packages/shared/prisma packages/api/src/routes/tenant-config.ts packages/api/src/services/tenant-config.service.ts packages/api/src/__tests__/integration/tenant-issuer-identity.integration.test.ts
-git commit -m "feat(billing): issuer identity on TenantConfig — who issued the bill"
+git add packages/shared/src/validators/tenant-settings.ts packages/shared/src/validators/__tests__/tenant-settings.test.ts packages/api/src/routes/tenant-config.ts packages/api/src/__tests__
+git commit -m "feat(billing): issuer identity and bill storage as tenant settings namespaces"
 ```
 
 ---
@@ -529,18 +574,22 @@ vi.mock("../../services/bill-message.service.js", () => ({
   selectBillMessages: vi.fn().mockResolvedValue([]),
 }));
 
+// Issuer identity lives in settings.issuer (Task 1), not in columns.
 const ISSUER = {
-  utilityId: "util-1",
   utilityName: "City of Testville Utilities",
   utilityLegalName: "City of Testville, Montana",
   remittanceAddressLine1: "PO Box 1230",
-  remittanceAddressLine2: null,
   remittanceCity: "Testville",
   remittanceState: "MT",
   remittancePostalCode: "59771",
   billingPhone: "406-555-0100",
   billingEmail: "ub@testville.gov",
   websiteUrl: "https://testville.gov",
+};
+
+const CONFIG_ROW = {
+  utilityId: "util-1",
+  settings: { issuer: ISSUER, billDocuments: { storageIntegration: "cis-bills" } },
 };
 
 function billRow(overrides: Record<string, unknown> = {}) {
@@ -593,7 +642,7 @@ function billRow(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(prisma.tenantConfig.findUnique).mockResolvedValue(ISSUER as never);
+  vi.mocked(prisma.tenantConfig.findUnique).mockResolvedValue(CONFIG_ROW as never);
   vi.mocked(prisma.tenantTheme.findUnique).mockResolvedValue(null as never);
 });
 
@@ -672,8 +721,9 @@ describe("loadBillPresentation", () => {
 
   it("refuses when issuer identity is incomplete, naming what is missing", async () => {
     vi.mocked(prisma.bill.findFirst).mockResolvedValue(billRow() as never);
+    const { utilityName: _n, remittanceAddressLine1: _a, ...rest } = ISSUER;
     vi.mocked(prisma.tenantConfig.findUnique).mockResolvedValue(
-      { ...ISSUER, utilityName: null, remittanceAddressLine1: null } as never,
+      { utilityId: "util-1", settings: { issuer: rest } } as never,
     );
 
     const err = await loadBillPresentation("util-1", "bill-1").catch((e: unknown) => e);
@@ -716,16 +766,9 @@ Write `packages/api/src/services/bill-presentation.service.ts` with the interfac
 
 ```ts
 import { Decimal } from "decimal.js";
+import { REQUIRED_ISSUER_FIELDS, type IssuerSettings } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
 import { selectBillMessages } from "./bill-message.service.js";
-
-const REQUIRED_ISSUER_FIELDS = [
-  "utilityName",
-  "remittanceAddressLine1",
-  "remittanceCity",
-  "remittanceState",
-  "remittancePostalCode",
-] as const;
 
 const DEFAULT_BRANDING = { logoUrl: null, primaryColor: "#1f2937", fontFamily: "Inter" };
 
@@ -738,7 +781,7 @@ function money(value: Decimal | string): string {
 Then `loadBillPresentation`:
 
 1. Load the bill with `prisma.bill.findFirst({ where: { id: billId, utilityId }, include: … })`, pulling account → customer and billingAddress, and segments → lines ordered by `sortOrder`, plus each segment's commodity code/name/id. Throw `BillPresentationError("Bill not found", "NO_CHARGES", [])` only for missing charges — a missing bill is the caller's 404, so return/throw whatever `getBill` already does for that case; read `bill.service.ts` and match it.
-2. Load `tenantConfig.findUnique({ where: { utilityId } })`. Collect which of `REQUIRED_ISSUER_FIELDS` are null; if any, throw `BillPresentationError` with code `ISSUER_INCOMPLETE` and `missing` listing them.
+2. Load `tenantConfig.findUnique({ where: { utilityId } })` and read `settings.issuer` as `IssuerSettings` — the settings column is untyped `Json`, so narrow it defensively rather than casting a whole row. Collect which of `REQUIRED_ISSUER_FIELDS` are missing or empty string (the settings pages clear a value by sending `""`, so empty counts as absent); if any, throw `BillPresentationError` with code `ISSUER_INCOMPLETE` and `missing` listing them.
 3. Build `recipient.name` from `organizationName ?? [firstName, lastName].filter(Boolean).join(" ")`. If the result is empty, or `billingAddress` is null, throw code `RECIPIENT_INCOMPLETE`.
 4. If every segment has no lines, or there are no segments, throw code `NO_CHARGES`.
 5. Group lines by segment commodity. **Round each line with `money()`, then compute the group subtotal by summing the already-rounded line strings** — not by rounding the stored segment subtotal. That is what makes Review Focus 1 hold: what the customer can add up is what is printed. Keep the stored 4dp subtotal out of the presentation entirely.
@@ -1396,7 +1439,7 @@ export function billObjectKey(utilityId: string, billId: string, version: number
 
 1. Load the bill (`postedAt`, `version`, `account.paperlessBilling`, `utilityId`). Throw `{ code: "NOT_POSTED" }` if `postedAt` is null.
 2. Unless `opts.force`, return any existing `billDocument` for `(billId, "PDF")`.
-3. Resolve the storage integration from `TenantConfig`. If unset, throw `{ code: "STORAGE_NOT_CONFIGURED", integration: null }`.
+3. Resolve `settings.billDocuments.storageIntegration` (and the optional `storageConnection`) from `TenantConfig`, narrowed through `billDocumentSettingsSchema` rather than cast. If absent or empty, throw `{ code: "STORAGE_NOT_CONFIGURED", integration: null }`.
 4. `loadBillPresentation` → `renderBillPdf` → compute `sha256` over the buffer.
 5. `putObject({ integration, connection, key: billObjectKey(...), body, maxBytes: config.BILL_DOCUMENT_MAX_BYTES })`.
 6. Then create the row inside `auditCreate`, so the audit row and the document commit together. **Upload before the row, per spec §7:** an orphan object at a deterministic key is inert and the next render overwrites it; a row pointing at nothing is not.
@@ -1610,9 +1653,9 @@ Spec §9 puts a download alongside each bill in `packages/web/components/ar/ar-t
 
 CRUD over `/api/v1/bill-messages` with fields for label, body, account type, commodity, priority and the active window, following an existing settings page (`packages/web/app/settings/slas/page.tsx`) for layout and data-fetching conventions.
 
-- [ ] **Step 8: Add the issuer-identity fields to settings**
+- [ ] **Step 8: Add the issuer-identity and storage fields to settings**
 
-Extend `packages/web/app/settings/general/page.tsx` with the ten Task 1 fields, and state on the page that bills cannot be produced until the required five are filled.
+Add an issuer section using the existing `use-tenant-settings-namespace` hook against the `issuer` namespace, following whichever settings tab already uses it (read `packages/web/app/settings/numbering/page.tsx` and the branding tab for the established read/patch shape). Mark the five `REQUIRED_ISSUER_FIELDS` as required, importing that constant rather than retyping the list, and state on the page that bills cannot be produced until they are filled. Add the `billDocuments.storageIntegration` field the same way — on the billing settings tab, next to the SaaSLogic endpoint, since both name an integration.
 
 - [ ] **Step 9: Run the full web suite, typecheck, commit**
 
