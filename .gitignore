@@ -15,3 +15,8 @@ uploads/
 
 # Generated test fixtures (regenerate via scripts/generate-meter-reads-csv.mjs)
 reads-*.csv
+
+# Bill PDFs written by scripts/fake-files-plane.mjs when it stands in for
+# apptor-connect in dev. Real deployments put these in the tenant's own
+# object store and nothing lands here.
+.dev-files/
