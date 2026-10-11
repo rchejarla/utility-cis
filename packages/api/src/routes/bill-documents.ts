@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { parseIdParam } from "../lib/route-schemas.js";
 import { ApptorConnectError } from "../lib/apptor-connect/files-client.js";
@@ -17,12 +18,28 @@ import {
  * reaches a browser and never appears in a response or a log —
  * authorization stays with our own RBAC.
  *
- * A forced re-render is its own endpoint rather than `?force=true`,
- * because it needs different authority (`accounts:APPROVE`, not `VIEW`)
- * and route config is the one place this codebase enforces permissions.
- * A single endpoint switching on a query flag would mean hand-rolling a
- * second permission check inside a handler.
+ * Producing a document is `accounts:EDIT` and reading one is
+ * `accounts:VIEW`, because the first writes — a row, and an object in
+ * the tenant's store — and the second does not. A re-render shares the
+ * write's authority rather than needing a higher one: output is
+ * byte-stable, so replacing a document cannot change what it says, and
+ * it cannot change what is owed. Gating it above `Post`, which makes a
+ * bill owed on `EDIT`, would rank a byte-identical rewrite above the act
+ * that creates the debt.
+ *
+ * It was briefly `accounts:APPROVE`, inherited from when "reprint" meant
+ * issuing a corrected bill. That meaning is gone, and no preset role
+ * grants `APPROVE` on `accounts` — only `service_suspensions` uses it —
+ * so the gate made the endpoint unreachable by every seeded role,
+ * including System Admin. The CSR on a call is exactly who needs to
+ * reprint a bill, and a CSR holds `accounts:EDIT`.
  */
+
+/** Only `force=true` forces; anything else leaves the call idempotent. */
+const forceQuerySchema = z
+  .object({ force: z.enum(["true", "false"]).optional() })
+  .partial()
+  .passthrough();
 
 /** 422 — the tenant's data cannot make a bill. 409 — not a bill yet. */
 const STATUS_BY_CODE: Record<string, number> = {
@@ -97,33 +114,23 @@ function notFound(reply: FastifyReply, billId: string): FastifyReply {
 }
 
 export async function billDocumentRoutes(app: FastifyInstance) {
-  app.post(
-    "/api/v1/bills/:id/document",
-    { config: { module: "accounts", permission: "VIEW" } },
-    async (request, reply) => {
-      const { utilityId, id: actorId } = request.user;
-      const billId = parseIdParam(request.params);
-      try {
-        return reply.send(await renderBillDocument(utilityId, billId, actorId));
-      } catch (err) {
-        return sendDocumentError(reply, err);
-      }
-    },
-  );
-
   /**
-   * Replaces the stored document in place. It does not change what is
-   * owed — nothing about the bill's amounts is re-rated — which is why
-   * it carries approval authority rather than being a second Generate.
+   * Idempotent without `force`: a bill whose document is already stored
+   * returns the existing pointer without re-rendering or re-uploading,
+   * so a caller that cannot tell whether one exists can simply ask.
+   * `?force=true` replaces it in place.
    */
   app.post(
-    "/api/v1/bills/:id/document/re-render",
-    { config: { module: "accounts", permission: "APPROVE" } },
+    "/api/v1/bills/:id/document",
+    { config: { module: "accounts", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId, id: actorId } = request.user;
       const billId = parseIdParam(request.params);
+      const { force } = forceQuerySchema.parse(request.query);
       try {
-        return reply.send(await renderBillDocument(utilityId, billId, actorId, { force: true }));
+        return reply.send(
+          await renderBillDocument(utilityId, billId, actorId, { force: force === "true" }),
+        );
       } catch (err) {
         return sendDocumentError(reply, err);
       }

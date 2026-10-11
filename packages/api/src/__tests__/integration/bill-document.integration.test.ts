@@ -574,44 +574,58 @@ describe("bill document endpoints", () => {
   }, 60_000);
 
   /**
-   * Re-rendering is a separate endpoint precisely so that this split is
-   * enforced by route config rather than by a hand-rolled check inside a
-   * handler: generating a missing document is routine, replacing a
-   * stored one is not.
+   * Producing a document writes — a row, and an object in the tenant's
+   * store — so a user who may only look at accounts cannot trigger it.
+   * Downloading one that already exists is a read, and stays on VIEW.
    */
-  it("lets accounts:VIEW generate a document but not replace one", async () => {
+  it("refuses to produce a document for a user who only holds accounts:VIEW", async () => {
     const billId = await postedBill();
     await grantAccounts(["VIEW"]);
+    await svc.renderBillDocument(UTILITY, billId, ACTOR);
+    get.mockResolvedValue((put.mock.calls[0][0] as { body: Buffer }).body);
+    put.mockClear();
+
+    const produce = await app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/document`,
+      headers: staffHeaders(),
+    });
+    const download = await app.inject({
+      method: "GET",
+      url: `/api/v1/bills/${billId}/document`,
+      headers: staffHeaders(),
+    });
+
+    expect(produce.statusCode).toBe(403);
+    expect(download.statusCode).toBe(200);
+    expect(put).not.toHaveBeenCalled();
+  }, 60_000);
+
+  it("lets accounts:EDIT produce and replace a document", async () => {
+    const billId = await postedBill();
+    await grantAccounts(["VIEW", "EDIT"]);
 
     const generate = await app.inject({
       method: "POST",
       url: `/api/v1/bills/${billId}/document`,
       headers: staffHeaders(),
     });
-    const replace = await app.inject({
+    const again = await app.inject({
       method: "POST",
-      url: `/api/v1/bills/${billId}/document/re-render`,
+      url: `/api/v1/bills/${billId}/document`,
+      headers: staffHeaders(),
+    });
+    const forced = await app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/document?force=true`,
       headers: staffHeaders(),
     });
 
-    expect(generate.statusCode).toBe(200);
-    expect(replace.statusCode).toBe(403);
-    expect(put).toHaveBeenCalledTimes(1);
-  }, 60_000);
-
-  it("lets accounts:APPROVE replace a stored document", async () => {
-    const billId = await postedBill();
-    await grantAccounts(["VIEW", "APPROVE"]);
-    await svc.renderBillDocument(UTILITY, billId, ACTOR);
-
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/bills/${billId}/document/re-render`,
-      headers: staffHeaders(),
-    });
-
-    expect(res.statusCode).toBe(200);
+    expect([generate.statusCode, again.statusCode, forced.statusCode]).toEqual([200, 200, 200]);
+    // The unforced repeat must not re-upload; the forced one must.
     expect(put).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(again.body).id).toBe(JSON.parse(generate.body).id);
+    expect(JSON.parse(forced.body).id).toBe(JSON.parse(generate.body).id);
   }, 60_000);
 
   it("refuses a portal download on a staff token with no customer claim", async () => {
