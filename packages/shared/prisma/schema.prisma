@@ -146,6 +146,7 @@ model Commodity {
   rateSchedules      RateSchedule[]
   delinquencyRules   DelinquencyRule[]
   rateServiceClasses RateServiceClass[]
+  billMessages       BillMessage[]
 
   @@unique([utilityId, code])
   @@index([defaultUomId])
@@ -209,6 +210,8 @@ model AccountTypeDef {
   isActive    Boolean  @default(true) @map("is_active")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  billMessages BillMessage[]
 
   @@unique([utilityId, code])
   @@index([isActive, sortOrder])
@@ -1890,4 +1893,28 @@ model LedgerReasonDef {
   @@unique([utilityId, code])
   @@index([utilityId, appliesToType])
   @@map("ledger_reason_def")
+}
+
+/// Configurable text printed on bills (Bozeman #137). Targeting is by
+/// account type and/or commodity; null on either side means "all".
+/// Selection happens at the bill's own bill_date, never at now(), so a
+/// reprint reproduces the messages the bill originally carried.
+model BillMessage {
+  id               String    @id @default(uuid()) @db.Uuid
+  utilityId        String    @map("utility_id") @db.Uuid
+  label            String    @map("label") @db.VarChar(255)
+  body             String    @map("body") @db.Text
+  accountTypeDefId String?   @map("account_type_def_id") @db.Uuid
+  commodityId      String?   @map("commodity_id") @db.Uuid
+  priority         Int       @default(100) @map("priority")
+  activeFrom       DateTime  @map("active_from") @db.Date
+  activeTo         DateTime? @map("active_to") @db.Date
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  accountTypeDef AccountTypeDef? @relation(fields: [accountTypeDefId], references: [id], onDelete: Restrict)
+  commodity      Commodity?      @relation(fields: [commodityId], references: [id], onDelete: Restrict)
+
+  @@index([utilityId, activeFrom])
+  @@map("bill_message")
 }

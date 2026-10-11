@@ -8,6 +8,7 @@ export * from "./rate-schedule";
 export * from "./billing-cycle";
 export * from "./bill-segment";
 export * from "./bill";
+export * from "./bill-message";
 export * from "./theme";
 export * from "./customer";
 export * from "./contact";

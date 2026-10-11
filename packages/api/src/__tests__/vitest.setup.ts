@@ -34,14 +34,20 @@ vi.mock("../lib/prisma.js", () => {
     count: vi.fn().mockResolvedValue(0),
   });
 
-  return {
-    prisma: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const client: any = {
       $executeRawUnsafe: vi.fn().mockResolvedValue(undefined),
       $executeRaw: vi.fn().mockResolvedValue(undefined),
       $queryRaw: vi.fn().mockResolvedValue([]),
       $queryRawUnsafe: vi.fn().mockResolvedValue([]),
+      // Hands the mocked client itself to the callback, so a service
+      // writing through `prisma.$transaction(tx => tx.model...)` — which
+      // every audit-wrapped service does — reaches the same model mocks
+      // the test configured. Passing `{}` made any audited create or
+      // update throw inside the transaction and surface as a 500, which
+      // reads as a route bug rather than a missing mock.
       $transaction: vi.fn((fn: any) =>
-        typeof fn === "function" ? fn({}) : Promise.resolve([])
+        typeof fn === "function" ? fn(client) : Promise.resolve([])
       ),
       commodity: crud(),
       unitOfMeasure: crud(),
@@ -54,6 +60,8 @@ vi.mock("../lib/prisma.js", () => {
       customer: crud(),
       contact: crud(),
       billingAddress: crud(),
+      billMessage: crud(),
+      billDocument: crud(),
       serviceAgreement: crud(),
       servicePoint: crud(),
       servicePointMeter: crud(),
@@ -89,7 +97,10 @@ vi.mock("../lib/prisma.js", () => {
       sla: crud(),
       serviceRequest: crud(),
       serviceRequestCounter: crud(),
-    },
+  };
+
+  return {
+    prisma: client,
     withTenant: vi.fn((_utilityId: string, fn: any) => fn({})),
   };
 });
