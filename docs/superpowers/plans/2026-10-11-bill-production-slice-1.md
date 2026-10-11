@@ -1522,7 +1522,9 @@ Expected: PASS.
 
 Same pattern on `packages/web/app/portal/bills/page.tsx`, against `GET /portal/api/bills/:id/document`. Never render a link minted by apptor-connect; the browser only ever talks to our API.
 
-> **Blocked, and left unchecked on purpose.** This step assumed the portal bills page lists real bills. It does not: `/portal/bills`, the portal dashboard and `/portal/invoices/[id]` all render `mockCustomerBills` from `lib/mock-billing`, so there is no real bill id on any portal screen to download. A button added here would 404 every time.
+> **Descoped from slice 1 on 2026-10-11, by decision.** Slice 1 ships without the portal download: staff can produce and send bills, and customers cannot self-serve yet.
+>
+> This step assumed the portal bills page lists real bills. It does not: `/portal/bills`, the portal dashboard and `/portal/invoices/[id]` all render `mockCustomerBills` from `lib/mock-billing`, so there is no real bill id on any portal screen to download. A button added here would 404 every time.
 >
 > The endpoint itself is live and tested, including that a bill belonging to another customer answers 404 exactly as a non-existent one does. What is missing is the portal bill list against real `Bill` rows, which also needs a `GET /portal/api/bills` that does not exist — Phase 4.2, which the design doc already records as blocked on Phase 3.
 
@@ -1555,9 +1557,9 @@ git commit -m "feat(billing): download and reprint bills, manage bill messages"
 
 ## Final verification
 
-- [ ] `pnpm typecheck` — exit 0 across shared, api and web.
-- [ ] `pnpm --filter @utility-cis/api test` — the unit suite, which is what CI runs.
+- [x] `pnpm typecheck` — exit 0 across shared, api and web.
+- [x] `pnpm --filter @utility-cis/api test` — the unit suite, which is what CI runs. 546 passed, 4 skipped. One run exited 255 with every test passing: the ioredis unhandled-error flake this config's own comment describes, 0 on re-run.
 - [ ] `cd packages/api && pnpm vitest run --config vitest.integration.config.ts` — the full 58-file suite with the dev server stopped. Budget ~25 minutes; a `migrate deploy` failure here is environmental, not yours.
-- [ ] `cd packages/web && pnpm vitest run`.
-- [ ] Update `docs/specs/09-billing.md`: mark `BillDocument` and bill messages shipped, correct its `BillingRecord` references to `Bill`, and record that its `version`/`replaces_id` fields are deliberately NOT built — they belong with corrected issuance, not with reprinting. The project's CLAUDE.md requires the module spec to move with the schema.
-- [ ] Update `docs/bozeman/17-implementation-gap-analysis.md`: #130 and #137 move from absent to built; #132 and #133 from absent to partial (#133 because a bill can be printed again but version tracking is deferred with corrected issuance). Do not touch the other verdicts.
+- [x] `cd packages/web && pnpm vitest run`. 196 passed across 17 files.
+- [x] Update `docs/specs/09-billing.md`: mark `BillDocument` and bill messages shipped, correct its `BillingRecord` references to `Bill`, and record that its `version`/`replaces_id` fields are deliberately NOT built — they belong with corrected issuance, not with reprinting. The project's CLAUDE.md requires the module spec to move with the schema.
+- [x] Update `docs/bozeman/17-implementation-gap-analysis.md`: #130 and #137 move from absent to built; #132 and #133 from absent to partial (#133 because a bill can be printed again but version tracking is deferred with corrected issuance). Do not touch the other verdicts.

@@ -364,7 +364,7 @@ CRUD over `/api/v1/bill-messages` on `settings`: label, body, account type, serv
   - Bill holds
   - Final bill on account closure
   - Bill delivery: email to paperless customers, print vendor export
-  - **The portal bill download.** The API endpoint is live and tested, but no portal screen can call it: `/portal/bills`, the portal dashboard and `/portal/invoices/[id]` all render `mockCustomerBills`, so there are no real bill ids in the portal UI to download. It needs the portal bill list wired to real `Bill` rows first — Phase 4.2 work, which also needs a `GET /portal/api/bills` that does not exist yet.
+  - **The portal bill download — descoped from slice 1 by decision, not forgotten.** The API endpoint is live and tested, but no portal screen can call it: `/portal/bills`, the portal dashboard and `/portal/invoices/[id]` all render `mockCustomerBills`, so there are no real bill ids in the portal UI to download. It needs the portal bill list wired to real `Bill` rows first — Phase 4.2 work, which also needs a `GET /portal/api/bills` that does not exist yet.
   - `BIMONTHLY` / `QUARTERLY` cycle frequencies — `computeBillPeriod` throws `UNSUPPORTED_FREQUENCY` today
   - Tenant-configurable due-date offset — hardcoded at bill date + 30 days
 
