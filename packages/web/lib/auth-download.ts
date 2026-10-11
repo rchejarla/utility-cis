@@ -4,14 +4,16 @@ import { API_URL, apiClient } from "./api-client";
  * Fetch a file from an authenticated endpoint and hand it to the browser
  * as a download.
  *
- * Our file endpoints need an `Authorization` header, so a plain
- * `<a href>` cannot reach them: the bytes have to be fetched with the
- * token attached, wrapped in a blob URL, and clicked.
+ * A browser `<a href download>` issues the GET without our
+ * `Authorization` header, so the API answers 401. The bytes have to be
+ * fetched with the token attached, materialised as a blob URL, and
+ * handed over by clicking a synthesised anchor.
  *
- * The error path reads the response body on purpose. These endpoints
- * answer a failed download with a reason an operator can act on — which
- * issuer fields are missing, which storage integration refused — and a
- * bare "Download failed (422)" would throw that away.
+ * `path` is API-relative; the base URL is added here, so no caller
+ * assembles it. The error path reads the response body on purpose: these
+ * endpoints answer a refusal with a reason an operator can act on —
+ * which issuer fields are missing, which storage integration refused —
+ * and a bare status line would throw that away.
  */
 export async function authDownload(path: string, fileName: string): Promise<void> {
   const headers = await apiClient.getAuthHeadersOnly();

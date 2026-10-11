@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef } from "react";
 import type { AttachmentEntityType } from "@utility-cis/shared";
-import { apiClient, API_URL } from "@/lib/api-client";
+import { apiClient } from "@/lib/api-client";
+import { authDownload } from "@/lib/auth-download";
 import { useToast } from "@/components/ui/toast";
 
 interface Attachment {
@@ -259,18 +260,18 @@ export function AttachmentsTab({ entityType, entityId, showForm: showFormProp, o
                       onClick={async (e) => {
                         e.stopPropagation();
                         try {
-                          const headers = await apiClient.getAuthHeadersOnly();
-                          const res = await fetch(`${API_URL}/api/v1/attachments/${att.id}/download`, { headers });
-                          if (!res.ok) throw new Error("Download failed");
-                          const blob = await res.blob();
-                          const url = window.URL.createObjectURL(blob);
-                          const a = document.createElement("a");
-                          a.href = url;
-                          a.download = att.fileName;
-                          a.click();
-                          window.URL.revokeObjectURL(url);
+                          await authDownload(
+                            `/api/v1/attachments/${att.id}/download`,
+                            att.fileName,
+                          );
                         } catch (err) {
-                          toast("Failed to download file", "error");
+                          // The reason, not a fixed string: this used to
+                          // discard the error and report "Failed to
+                          // download file" whatever went wrong.
+                          toast(
+                            err instanceof Error ? err.message : "Failed to download file",
+                            "error",
+                          );
                         }
                       }}
                       style={{

@@ -2,7 +2,8 @@
 
 import { useEffect, useState, use } from "react";
 import Link from "next/link";
-import { apiClient, API_URL } from "@/lib/api-client";
+import { apiClient } from "@/lib/api-client";
+import { authDownload } from "@/lib/auth-download";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { PageHeader } from "@/components/ui/page-header";
@@ -11,27 +12,6 @@ import { Tabs } from "@/components/ui/tabs";
 import { DataTable } from "@/components/ui/data-table";
 import { useToast } from "@/components/ui/toast";
 import { sourceLabel } from "@/components/imports/source-label";
-
-/**
- * Browser <a href download> sends the GET request without our
- * Authorization header, so the API rejects with 401. Fetch the file
- * with auth, materialise as a Blob URL, then trigger the download
- * via a synthesised anchor click. Same pattern the AttachmentsTab
- * uses; lifted into a helper here because we hit it from three
- * places on this page (original file, errors CSV, summary CSV).
- */
-async function authDownload(url: string, suggestedFileName: string): Promise<void> {
-  const headers = await apiClient.getAuthHeadersOnly();
-  const res = await fetch(url, { headers });
-  if (!res.ok) throw new Error(`Download failed (${res.status})`);
-  const blob = await res.blob();
-  const blobUrl = window.URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = blobUrl;
-  a.download = suggestedFileName;
-  a.click();
-  window.URL.revokeObjectURL(blobUrl);
-}
 
 interface ImportBatch {
   id: string;
@@ -206,7 +186,7 @@ export default function ImportDetailPage({
                 onClick={async () => {
                   try {
                     await authDownload(
-                      `${API_URL}/api/v1/attachments/${attachment.id}/download`,
+                      `/api/v1/attachments/${attachment.id}/download`,
                       attachment.fileName,
                     );
                   } catch (err) {
@@ -286,7 +266,7 @@ export default function ImportDetailPage({
                   onClick={async () => {
                     try {
                       await authDownload(
-                        `${API_URL}/api/v1/imports/${id}/errors.csv`,
+                        `/api/v1/imports/${id}/errors.csv`,
                         `import-${id}-errors.csv`,
                       );
                     } catch (err) {
@@ -429,7 +409,7 @@ export default function ImportDetailPage({
                 onClick={async () => {
                   try {
                     await authDownload(
-                      `${API_URL}/api/v1/imports/${id}/errors.csv`,
+                      `/api/v1/imports/${id}/errors.csv`,
                       `import-${id}-errors.csv`,
                     );
                   } catch (err) {
