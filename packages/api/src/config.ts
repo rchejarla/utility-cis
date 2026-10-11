@@ -64,6 +64,17 @@ export const configSchema = z.object({
   // links in outbound notifications.
   WEB_URL: z.string().default("http://localhost:3000"),
 
+  // ─── apptor-connect ───────────────────────────────────────────────
+  // The integration layer for this stack. One deployment-level key,
+  // tenant-scoped on their side; never stored in the database. Which
+  // object store a given utility's bills land in is per-tenant
+  // configuration (settings.billDocuments.storageIntegration), not env.
+  APPTOR_CONNECT_URL: z.string().default("http://localhost:8080"),
+  APPTOR_CONNECT_API_KEY: z.string().default(""),
+  // A capability link is a bearer credential, so its life is short.
+  BILL_DOCUMENT_LINK_TTL_SECONDS: z.coerce.number().int().min(30).max(900).default(300),
+  BILL_DOCUMENT_MAX_BYTES: z.coerce.number().int().min(1024).default(10_485_760),
+
   // Test / dev opt-outs.
   DISABLE_SCHEDULERS: truthyString,
 
