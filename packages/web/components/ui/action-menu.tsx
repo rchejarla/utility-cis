@@ -44,28 +44,40 @@ export function ActionMenu({
   const menuId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
+  const [at, setAt] = useState<{ top: number; left: number; above: boolean } | null>(null);
 
   const close = useCallback((returnFocus = true) => {
     setAt(null);
-    if (returnFocus) triggerRef.current?.focus();
+    if (returnFocus) triggerRef.current?.focus({ preventScroll: true });
   }, []);
 
   function open() {
     const r = triggerRef.current?.getBoundingClientRect();
     if (!r) return;
+
+    // Flipped above the trigger when there is not room below, so the
+    // menu is never painted off the bottom of the viewport. That is not
+    // only cosmetic: an off-screen menu gets scrolled into view by the
+    // focus below, and the scroll closes it again before anyone sees it.
+    const needed = items.length * ITEM_HEIGHT + MENU_PADDING;
+    const above = r.bottom + needed > window.innerHeight && r.top > needed;
+
     // Right-aligned to the trigger: these live at the right edge of a
     // row, so a left-aligned menu would hang off the screen.
-    setAt({ top: r.bottom + 4, left: r.right });
+    setAt({ top: above ? r.top - 4 : r.bottom + 4, left: r.right, above });
   }
 
   useEffect(() => {
     if (!at) return;
 
-    // Focus the first item so the menu is usable from the keyboard the
-    // moment it opens.
+    // `preventScroll` is load-bearing, not a nicety. Without it the
+    // browser scrolls an ancestor to bring the focused item into view,
+    // the scroll handler below sees that scroll, and the menu closes in
+    // the same frame it opened — which looks exactly like a dead button.
+    // jsdom implements neither focus-scrolling nor scroll events, so no
+    // test can catch this; only clicking it can.
     const first = menuRef.current?.querySelector<HTMLButtonElement>("button:not([disabled])");
-    first?.focus();
+    first?.focus({ preventScroll: true });
 
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
@@ -90,8 +102,13 @@ export function ActionMenu({
       close(false);
     }
 
-    // A measured position goes stale the moment anything moves.
-    const onMove = () => close(false);
+    // A measured position goes stale the moment anything moves — but a
+    // long menu scrolling its own contents is not the page moving, and
+    // closing on that would make the menu unusable.
+    const onMove = (e: Event) => {
+      if (e.target instanceof Node && menuRef.current?.contains(e.target)) return;
+      close(false);
+    };
 
     document.addEventListener("keydown", onKey, true);
     document.addEventListener("mousedown", onPointerDown);
@@ -128,7 +145,14 @@ export function ActionMenu({
             ref={menuRef}
             id={menuId}
             role="menu"
-            style={{ ...MENU, top: at.top, left: at.left }}
+            style={{
+              ...MENU,
+              top: at.top,
+              left: at.left,
+              // Painted from the trigger's right edge leftwards, and
+              // upwards when it had to flip above.
+              transform: at.above ? "translate(-100%, -100%)" : "translateX(-100%)",
+            }}
           >
             {items.map((item) => (
               <button
@@ -170,10 +194,12 @@ const TRIGGER: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+/** Used to decide whether the menu fits below the trigger. */
+const ITEM_HEIGHT = 32;
+const MENU_PADDING = 8;
+
 const MENU: React.CSSProperties = {
   position: "fixed",
-  // Painted from the trigger's right edge leftwards.
-  transform: "translateX(-100%)",
   minWidth: 150,
   padding: 4,
   background: "var(--bg-card)",
