@@ -677,6 +677,7 @@ model Bill {
   billingCycle         BillingCycle  @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
   segments             BillSegment[]
   ledgerEntries        LedgerEntry[]
+  documents            BillDocument[]
 
   @@unique([utilityId, billNumber])
   @@index([utilityId, accountId, periodEnd])
@@ -1917,4 +1918,41 @@ model BillMessage {
 
   @@index([utilityId, activeFrom])
   @@map("bill_message")
+}
+
+/// The rendered artifact for one bill. Holds a pointer, never bytes: the
+/// object lives in the tenant's own store (S3, Azure Blob or GCS),
+/// reached through apptor-connect's files plane, which also holds the
+/// credential. No URL is stored — a capability link is minted per
+/// access and discarded.
+///
+/// One row per bill per document type. A re-render replaces it in
+/// place; there is deliberately no version column, because nothing yet
+/// produces a second version whose content differs and nothing delivers
+/// a bill, so there is no sent copy to preserve.
+model BillDocument {
+  id                 String   @id @default(uuid()) @db.Uuid
+  utilityId          String   @map("utility_id") @db.Uuid
+  billId             String   @map("bill_id") @db.Uuid
+  /// `PDF` today. VARCHAR rather than an enum because PRINT_EXPORT and
+  /// EMAIL_HTML are not designed yet and Postgres cannot remove an enum
+  /// value once added.
+  documentType       String   @map("document_type") @db.VarChar(20)
+  storageIntegration String   @map("storage_integration") @db.VarChar(100)
+  storageConnection  String?  @map("storage_connection") @db.VarChar(100)
+  objectKey          String   @map("object_key") @db.VarChar(500)
+  /// Null until the upload completes. A row exists first so the unique
+  /// constraint decides which concurrent render proceeds; a row with no
+  /// size and no hash means "claimed, not yet stored".
+  byteSize           Int?     @map("byte_size")
+  sha256             String?  @map("sha256") @db.Char(64)
+  templateKey        String   @map("template_key") @db.VarChar(100)
+  generatedAt        DateTime @default(now()) @map("generated_at") @db.Timestamptz
+  isPaperless        Boolean  @map("is_paperless")
+
+  bill Bill @relation(fields: [billId], references: [id], onDelete: Restrict)
+
+  @@unique([billId, documentType])
+  @@index([utilityId, generatedAt])
+  @@map("bill_document")
 }
