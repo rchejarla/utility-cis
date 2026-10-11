@@ -6,6 +6,7 @@ import {
   EVENT_TYPES,
   billSortFields,
   type BillQuery,
+  type BillState,
   type PaginatedResponse,
 } from "@utility-cis/shared";
 
@@ -361,6 +362,58 @@ export interface BillListRow extends BillSummary {
  * alone: a list of bill numbers against account uuids is unusable for the
  * lookup this list exists to serve.
  */
+/**
+ * Translate a bill state into a where clause over the ledger.
+ *
+ * Nothing here reads a status column, because there isn't one and
+ * shouldn't be: the ledger already knows whether a charge is settled,
+ * and a copy on `Bill` could only ever disagree with it.
+ *
+ * Every settled-ness question is asked of the bill's own `BILL_CHARGE`
+ * entry. Widening past that type would let an unrelated credit — a
+ * waiver carries a `billId` too — answer for the charge.
+ */
+function billStateWhere(state: BillState): Record<string, unknown> {
+  const charge = { type: "BILL_CHARGE" as const };
+  /** Standing, i.e. not reversed. A reversed charge is owed by nobody. */
+  const standing = { ...charge, reversedBy: { none: {} } };
+
+  switch (state) {
+    case "unposted":
+      return { postedAt: null };
+
+    case "outstanding":
+      return { ledgerEntries: { some: { ...standing, openAmount: { gt: 0 } } } };
+
+    // "Some of it was paid and some is not." Asked through the
+    // applications rather than by comparing openAmount to amount, which
+    // Prisma cannot do column-to-column — and which would also miss a
+    // waiver that part-settled a charge, since the applications are
+    // what actually consumed it.
+    case "partPaid":
+      return {
+        ledgerEntries: {
+          some: { ...standing, openAmount: { gt: 0 }, debitsIn: { some: {} } },
+        },
+      };
+
+    case "paid":
+      return { ledgerEntries: { some: { ...standing, openAmount: 0 } } };
+
+    // The bill's own due date, not the ledger entry's: the entry's is
+    // nullable, and "overdue bill" is a question about the bill. Date
+    // only, so a bill due today is not already late.
+    case "overdue":
+      return {
+        dueDate: { lt: new Date(new Date().toISOString().slice(0, 10)) },
+        ledgerEntries: { some: { ...standing, openAmount: { gt: 0 } } },
+      };
+
+    case "reversed":
+      return { ledgerEntries: { some: { ...charge, reversedBy: { some: {} } } } };
+  }
+}
+
 export async function listBills(
   utilityId: string,
   query: BillQuery,
@@ -374,6 +427,10 @@ export async function listBills(
   // list silently hides half the bills.
   if (query.posted !== undefined) {
     where.postedAt = query.posted ? { not: null } : null;
+  }
+
+  if (query.state !== undefined) {
+    Object.assign(where, billStateWhere(query.state));
   }
 
   if (query.from || query.to) {

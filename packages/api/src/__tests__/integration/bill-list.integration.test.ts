@@ -267,6 +267,147 @@ describe("listBills", () => {
     }
   });
 
+  /**
+   * The `state` filter, which answers settlement rather than issuance.
+   *
+   * Every state is derived from the bill's own BILL_CHARGE entry — there
+   * is no status column on Bill and deliberately shouldn't be, so these
+   * cases are really about whether the ledger is being read correctly.
+   *
+   * One fixture serves them all: a $10 charge on B-JAN, mutated per
+   * case, so each assertion is about the where clause and not about
+   * which bill happened to be set up.
+   */
+  describe("state filter", () => {
+    async function withCharge(
+      over: { openAmount?: string; applied?: boolean; reversed?: boolean } = {},
+    ) {
+      const { prisma } = prismaImports;
+      const bill = await prisma.bill.findFirstOrThrow({
+        where: { utilityId, billNumber: "B-JAN" },
+      });
+      const charge = await prisma.ledgerEntry.create({
+        data: {
+          utilityId,
+          accountId,
+          type: "BILL_CHARGE",
+          amount: "10.00",
+          openAmount: over.openAmount ?? "10.00",
+          dueDate: new Date("2026-02-10"),
+          effectiveDate: new Date("2026-01-10"),
+          billId: bill.id,
+        },
+      });
+      const extra: string[] = [];
+      if (over.applied) {
+        const credit = await prisma.ledgerEntry.create({
+          data: {
+            utilityId, accountId, type: "PAYMENT", amount: "-4.00", openAmount: "0.00",
+            effectiveDate: new Date("2026-01-20"),
+          },
+        });
+        extra.push(credit.id);
+        await prisma.ledgerApplication.create({
+          data: { utilityId, creditId: credit.id, debitId: charge.id, amount: "4.00" },
+        });
+      }
+      if (over.reversed) {
+        const rev = await prisma.ledgerEntry.create({
+          data: {
+            utilityId, accountId, type: "REVERSAL", amount: "-10.00", openAmount: "0.00",
+            effectiveDate: new Date("2026-01-11"), reversesId: charge.id,
+          },
+        });
+        extra.push(rev.id);
+      }
+      return async () => {
+        await prisma.ledgerApplication.deleteMany({ where: { debitId: charge.id } });
+        for (const id of extra.reverse()) {
+          await prisma.ledgerEntry.delete({ where: { id } });
+        }
+        await prisma.ledgerEntry.delete({ where: { id: charge.id } });
+      };
+    }
+
+    const found = async (state: Parameters<typeof bills.listBills>[1]["state"]) =>
+      numbers(await bills.listBills(utilityId, { ...Q, state }));
+
+    it("finds an unpaid charge as outstanding and overdue, not as paid", async () => {
+      const cleanup = await withCharge();
+      try {
+        expect(await found("outstanding")).toContain("B-JAN");
+        // Due 2026-02-10, long past, with the whole amount still owed.
+        expect(await found("overdue")).toContain("B-JAN");
+        expect(await found("paid")).not.toContain("B-JAN");
+        expect(await found("partPaid")).not.toContain("B-JAN");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("finds a settled charge as paid and nothing else", async () => {
+      const cleanup = await withCharge({ openAmount: "0.00", applied: true });
+      try {
+        expect(await found("paid")).toContain("B-JAN");
+        expect(await found("outstanding")).not.toContain("B-JAN");
+        expect(await found("overdue")).not.toContain("B-JAN");
+        // Nothing is owed, so there is no part of it left to be part paid.
+        expect(await found("partPaid")).not.toContain("B-JAN");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    /**
+     * Part paid is asked through the applications, not by comparing
+     * openAmount to amount — Prisma cannot compare two columns, and the
+     * applications are what actually consumed the charge.
+     */
+    it("finds a part-paid charge as both part paid and outstanding", async () => {
+      const cleanup = await withCharge({ openAmount: "6.00", applied: true });
+      try {
+        expect(await found("partPaid")).toContain("B-JAN");
+        expect(await found("outstanding")).toContain("B-JAN");
+        expect(await found("paid")).not.toContain("B-JAN");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("does not call an untouched charge part paid", async () => {
+      const cleanup = await withCharge({ openAmount: "10.00" });
+      try {
+        expect(await found("partPaid")).not.toContain("B-JAN");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    /** A reversed charge is owed by nobody, so it is not outstanding. */
+    it("excludes a reversed charge from outstanding and overdue", async () => {
+      const cleanup = await withCharge({ reversed: true });
+      try {
+        expect(await found("reversed")).toContain("B-JAN");
+        expect(await found("outstanding")).not.toContain("B-JAN");
+        expect(await found("overdue")).not.toContain("B-JAN");
+      } finally {
+        await cleanup();
+      }
+    });
+
+    it("finds a bill with no charge as unposted, and only that", async () => {
+      // B-JUL is the unposted fixture; it has no ledger entry at all.
+      expect(await found("unposted")).toContain("B-JUL");
+      expect(await found("outstanding")).not.toContain("B-JUL");
+      expect(await found("paid")).not.toContain("B-JUL");
+    });
+
+    it("still returns every bill when no state is given", async () => {
+      const all = await bills.listBills(utilityId, Q);
+      expect(all.meta.total).toBeGreaterThan(1);
+    });
+  });
+
   it("never returns another utility's bills", async () => {
     const res = await bills.listBills(utilityId, Q);
     expect(numbers(res)).not.toContain("B-OTHER");

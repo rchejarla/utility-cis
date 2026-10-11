@@ -264,6 +264,31 @@ Because of that order, **no row needs to carry document state** — and an earli
 
 Nothing is offered on an unposted bill — the API answers 409 — so no button promises a PDF that cannot be made.
 
+### Bill status (shipped)
+
+A bill has **no status column, and deliberately won't get one.** Where it stands is derived from its own `BILL_CHARGE` ledger entry, because the ledger already knows whether a charge is settled and a copy on `Bill` could only ever drift from it — the same reason a refund's pool is derived from the credits it discharges rather than written down.
+
+`GET /api/v1/bills?state=` and the Status filter both take:
+
+| State | Meaning | Derived from |
+|---|---|---|
+| `unposted` | Calculated, not yet owed | no charge on the ledger at all |
+| `outstanding` | Anything still owed | charge standing, `open_amount` > 0 |
+| `partPaid` | Something was applied, some still owed | charge has `ledger_application` rows **and** `open_amount` > 0 |
+| `paid` | Settled | charge standing, `open_amount` = 0 |
+| `overdue` | Still owed and late | `bill.due_date` < today **and** outstanding |
+| `reversed` | No longer stands | charge has a reversal |
+
+Three decisions inside that are easy to get wrong:
+
+- **Two axes, one control.** `unposted` answers *issuance* — is this calculation a debt yet? — and the rest answer *settlement*. An operator does not hold those apart, and a bill is only ever on one side of the first question, so one dropdown stays answerable. The filter previously offered posted and not posted only, which meant a fully paid bill read "Posted" and the paid fact appeared as a dash in the **Still owed** column.
+- **`partPaid` is asked through the applications**, not by comparing `open_amount` to `amount`. Prisma cannot compare two columns in a `where`, and the applications are what actually consumed the charge — so this also catches a waiver that part-settled it.
+- **`overdue` overlaps `outstanding` and `partPaid` on purpose.** A bill can be late and part paid at once, and collections asks for "late" without caring which. Filter values are not a partition.
+
+Only `BILL_CHARGE` answers for the bill. Widening the type would let an unrelated credit — a waiver carries a `bill_id` too — speak for the charge.
+
+The row's status pill reads the same way, in the order Reversed → Paid → Overdue → Part paid → Outstanding → Not posted, so the most consequential fact wins: a reversed charge is owed by nobody, which makes "Paid" a lie. Overdue is compared as date strings rather than `Date` objects, because `new Date("2026-06-30")` is UTC midnight and therefore the 29th west of Greenwich — a bill would read as late a day early across the Americas.
+
 ### Bill Production — `/settings/bill-production` (shipped)
 
 Issuer identity and bill storage, on `settings`. One page rather than sections on two existing tabs, because these fields answer a single question — why a bill will not produce — and the API's 422 sends the operator to "Settings" to answer it. The five `REQUIRED_ISSUER_FIELDS` are marked required from the imported constant, and a banner above the form names the ones still blank rather than leaving the operator to discover them through a failed generation.

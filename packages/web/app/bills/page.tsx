@@ -49,7 +49,28 @@ interface BillPage {
   meta: { total: number; page: number; limit: number; pages: number };
 }
 
-type PostedFilter = "all" | "unposted" | "posted";
+/**
+ * The Status filter's values, and the only place their labels live.
+ *
+ * It used to offer posted and not posted, which answers "is this a debt
+ * yet" and nothing about whether it was paid — so a settled bill read as
+ * "Posted" and the paid fact showed up only as a dash in another
+ * column. Settlement is what a CSR and collections actually ask about.
+ *
+ * Overdue overlaps outstanding and part paid on purpose: a bill can be
+ * late and part paid at once, and "show me the late ones" should not
+ * depend on which.
+ */
+const STATE_OPTIONS = [
+  { value: "unposted", label: "Not posted" },
+  { value: "outstanding", label: "Outstanding" },
+  { value: "overdue", label: "Overdue" },
+  { value: "partPaid", label: "Part paid" },
+  { value: "paid", label: "Paid" },
+  { value: "reversed", label: "Reversed" },
+] as const;
+
+type StateFilter = (typeof STATE_OPTIONS)[number]["value"] | "all";
 
 export default function BillsPage() {
   const { canView, canEdit } = usePermission("accounts");
@@ -71,7 +92,7 @@ export default function BillsPage() {
 
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
-  const [posted, setPosted] = useState<PostedFilter>("all");
+  const [state, setState] = useState<StateFilter>("all");
   const [page, setPage] = useState(1);
 
   // Debounce the bill-number box: an operator types a whole number, and
@@ -86,14 +107,14 @@ export default function BillsPage() {
   // a narrower result set shows an empty table and reads as "no results".
   useEffect(() => {
     setPage(1);
-  }, [debounced, posted]);
+  }, [debounced, state]);
 
   const query = useMemo(() => {
     const p = new URLSearchParams({ page: String(page), limit: "25" });
     if (debounced) p.set("search", debounced);
-    if (posted !== "all") p.set("posted", posted === "posted" ? "true" : "false");
+    if (state !== "all") p.set("state", state);
     return p.toString();
-  }, [page, debounced, posted]);
+  }, [page, debounced, state]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -260,14 +281,11 @@ export default function BillsPage() {
         <FilterBar
           filters={[
             {
-              key: "posted",
+              key: "state",
               label: "Status",
-              value: posted === "all" ? undefined : posted,
-              options: [
-                { label: "Not posted", value: "unposted" },
-                { label: "Posted", value: "posted" },
-              ],
-              onChange: (v) => setPosted((v as PostedFilter) ?? "all"),
+              value: state === "all" ? undefined : state,
+              options: STATE_OPTIONS.map((o) => ({ label: o.label, value: o.value })),
+              onChange: (v) => setState((v as StateFilter) ?? "all"),
             },
           ]}
         />
@@ -284,9 +302,13 @@ export default function BillsPage() {
         <div style={EMPTY}>
           {debounced
             ? `No bill number matches “${debounced}”`
-            : posted === "unposted"
+            : state === "unposted"
               ? "Every bill has been posted — nothing waiting."
-              : "No bills yet."}
+              : state === "overdue"
+                ? "Nothing is overdue."
+                : state !== "all"
+                  ? `No bill is ${(STATE_OPTIONS.find((o) => o.value === state)?.label ?? state).toLowerCase()}.`
+                  : "No bills yet."}
         </div>
       ) : (
         <>
@@ -375,13 +397,32 @@ export default function BillsPage() {
                       )}
                     </Td>
                     <Td>
+                      {/*
+                        Settled-ness, not just issuance. "Posted" was the
+                        only thing this said once a bill was owed, so a
+                        fully paid bill looked identical to an unpaid one
+                        and the difference showed up as a dash in the
+                        column before it.
+                      */}
                       {b.charge?.reversed ? (
                         <Pill tone="var(--text-muted)" title="The charge was reversed, so it no longer stands">
                           Reversed
                         </Pill>
+                      ) : b.charge && Number(b.charge.openAmount) === 0 ? (
+                        <Pill tone="var(--success)" title="Nothing is owed on this bill">
+                          Paid
+                        </Pill>
+                      ) : b.charge && isOverdue(b) ? (
+                        <Pill tone="var(--danger)" title={`Was due ${fmtDate(b.dueDate)}`}>
+                          Overdue
+                        </Pill>
+                      ) : b.charge && Number(b.charge.openAmount) < Number(b.total) ? (
+                        <Pill tone="var(--warning)" title="Part of this bill has been paid">
+                          Part paid
+                        </Pill>
                       ) : b.postedAt ? (
-                        <Pill tone="var(--success)" title={`Posted ${fmtDate(b.postedAt)}`}>
-                          Posted
+                        <Pill tone="var(--info)" title={`Posted ${fmtDate(b.postedAt)} — still owed in full`}>
+                          Outstanding
                         </Pill>
                       ) : (
                         <Pill
@@ -538,6 +579,22 @@ export default function BillsPage() {
 function fmtDate(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split("-");
   return `${m}/${d}/${y}`;
+}
+
+/**
+ * Past its due date with something still owed.
+ *
+ * Compared as date strings rather than Date objects: `dueDate` is a
+ * date-only value, and `new Date("2026-06-30")` is UTC midnight — which
+ * is the 29th west of Greenwich, so a bill would read as overdue a day
+ * early for anyone in the Americas. The API answers the same question
+ * the same way.
+ */
+function isOverdue(b: BillRow): boolean {
+  if (!b.charge || b.charge.reversed || Number(b.charge.openAmount) === 0) return false;
+  const today = new Date();
+  const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  return b.dueDate.slice(0, 10) < iso;
 }
 
 function Pill({

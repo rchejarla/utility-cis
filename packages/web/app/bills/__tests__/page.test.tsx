@@ -94,6 +94,114 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * The Status filter and the status pill.
+ *
+ * Both used to answer issuance only — posted or not — so a fully paid
+ * bill read "Posted" and the paid fact appeared as a dash in the column
+ * before it. What a CSR and collections ask about is settlement.
+ */
+describe("Bills page — status", () => {
+  it("offers settlement states, not just posted and not posted", async () => {
+    get.mockResolvedValue(payload([bill()]));
+    renderPage();
+    await screen.findByText("B-1001");
+
+    await userEvent.click(screen.getByRole("button", { name: /Status/ }));
+
+    // The dropdown items are buttons; a row's status pill is a span, so
+    // role filters out the one that is not a control.
+    for (const label of [
+      "Not posted",
+      "Outstanding",
+      "Overdue",
+      "Part paid",
+      "Paid",
+      "Reversed",
+    ]) {
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+  });
+
+  it("asks the API for the chosen state", async () => {
+    get.mockResolvedValue(payload([bill()]));
+    renderPage();
+    await screen.findByText("B-1001");
+
+    await userEvent.click(screen.getByRole("button", { name: /Status/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Overdue" }));
+
+    await waitFor(() =>
+      expect(get.mock.calls.some(([u]) => String(u).includes("state=overdue"))).toBe(true),
+    );
+    // And the old issuance-only param is gone, not sent alongside.
+    expect(get.mock.calls.every(([u]) => !String(u).includes("posted="))).toBe(true);
+  });
+
+  it("reads Paid once nothing is owed, rather than Posted", async () => {
+    get.mockResolvedValue(
+      payload([bill({ charge: { entryId: "le-1", openAmount: "0.00", reversed: false } })]),
+    );
+    renderPage();
+
+    expect(await screen.findByText("Paid")).toBeInTheDocument();
+    expect(screen.queryByText("Outstanding")).not.toBeInTheDocument();
+  });
+
+  it("reads Part paid when some of it has been paid", async () => {
+    get.mockResolvedValue(
+      payload([
+        bill({
+          dueDate: "2099-01-01",
+          charge: { entryId: "le-1", openAmount: "40.00", reversed: false },
+        }),
+      ]),
+    );
+    renderPage();
+
+    expect(await screen.findByText("Part paid")).toBeInTheDocument();
+  });
+
+  /**
+   * Date-only comparison. `new Date("2026-06-30")` is UTC midnight,
+   * which is the 29th west of Greenwich — a bill would read as overdue a
+   * day early for anyone in the Americas.
+   */
+  it("reads Overdue past the due date, and not on the due date itself", async () => {
+    const today = new Date();
+    const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+
+    get.mockResolvedValue(
+      payload([bill({ dueDate: iso, charge: { entryId: "le-1", openAmount: "107.50", reversed: false } })]),
+    );
+    const dueToday = renderPage();
+    expect(await screen.findByText("Outstanding")).toBeInTheDocument();
+    expect(screen.queryByText("Overdue")).not.toBeInTheDocument();
+    dueToday.unmount();
+
+    get.mockResolvedValue(
+      payload([
+        bill({ dueDate: "2020-01-01", charge: { entryId: "le-1", openAmount: "107.50", reversed: false } }),
+      ]),
+    );
+    renderPage();
+    expect(await screen.findByText("Overdue")).toBeInTheDocument();
+  });
+
+  it("reads Reversed before anything about payment", async () => {
+    get.mockResolvedValue(
+      payload([
+        bill({ dueDate: "2020-01-01", charge: { entryId: "le-1", openAmount: "0.00", reversed: true } }),
+      ]),
+    );
+    renderPage();
+
+    // A reversed charge is owed by nobody, so "Paid" would be a lie.
+    expect(await screen.findByText("Reversed")).toBeInTheDocument();
+    expect(screen.queryByText("Paid")).not.toBeInTheDocument();
+  });
+});
+
 describe("Bills page — bill document actions", () => {
   it("downloads an existing PDF without producing anything", async () => {
     get.mockResolvedValue(payload([bill()]));
