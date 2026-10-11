@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
-import { BillDocumentActions } from "./bill-document-actions";
+import { BillPdfButton } from "./bill-pdf-button";
 
 interface SegmentLine {
   id: string;
@@ -109,10 +109,9 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
                 its PDF deserves, and the row stays legible without it.
               */}
               <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                <BillDocumentActions
+                <BillPdfButton
                   billId={bill.id}
                   billNumber={bill.billNumber}
-                  canGenerate={canEdit}
                 />
               </div>
             </div>

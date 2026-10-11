@@ -12,7 +12,8 @@ import { BillDetailDialog } from "@/components/bills/bill-detail-dialog";
 import { RecordPaymentDialog } from "@/components/ar/record-payment-dialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { AdjustDialog, type AdjustMode } from "@/components/ar/adjust-dialog";
-import { BillDocumentActions } from "@/components/bills/bill-document-actions";
+import { BillPdfButton } from "@/components/bills/bill-pdf-button";
+import { ActionMenu, type ActionMenuItem } from "@/components/ui/action-menu";
 
 /**
  * The tenant-wide bill list.
@@ -65,6 +66,8 @@ export default function BillsPage() {
   const [voidRow, setVoidRow] = useState<BillRow | null>(null);
   const [voiding, setVoiding] = useState(false);
   const [adjust, setAdjust] = useState<{ mode: AdjustMode; bill: BillRow } | null>(null);
+  const [regenerate, setRegenerate] = useState<BillRow | null>(null);
+  const [regenerating, setRegenerating] = useState(false);
 
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -126,6 +129,74 @@ export default function BillsPage() {
       toast(err instanceof Error ? err.message : "Failed to post bill", "error");
     } finally {
       setPosting(null);
+    }
+  }
+
+  /**
+   * The exception-handling acts, behind More.
+   *
+   * Each keeps the availability rule it had when it sat on the row —
+   * these are not merely hidden, they are still only offered where they
+   * can succeed:
+   *
+   *  - Reverse: there is no void (§3.5). A wrong charge is reversed and
+   *    both sides stay on the ledger, so it needs a charge that is not
+   *    already reversed.
+   *  - Waive / write off: both need something left to forgive. A settled
+   *    charge has nothing outstanding; a reversed one no longer stands.
+   *  - Regenerate: replaces the stored PDF, so the bill must be posted.
+   */
+  function moreActions(b: BillRow): ActionMenuItem[] {
+    const items: ActionMenuItem[] = [];
+    const open = b.charge && !b.charge.reversed && Number(b.charge.openAmount) > 0;
+
+    if (canReverse && b.charge && !b.charge.reversed) {
+      items.push({
+        label: "Reverse charge",
+        tone: "danger",
+        title: "Negate this bill's charge; both sides stay on the ledger",
+        onSelect: () => setVoidRow(b),
+      });
+    }
+    if (canForgive && open) {
+      items.push({
+        label: "Waive",
+        title: "Forgive a charge that was correct",
+        onSelect: () => setAdjust({ mode: "waive", bill: b }),
+      });
+      items.push({
+        label: "Write off",
+        title: "Give up on collecting this charge",
+        onSelect: () => setAdjust({ mode: "writeOff", bill: b }),
+      });
+    }
+    if (canEdit && b.postedAt) {
+      items.push({
+        label: "Regenerate PDF",
+        title: "Replace the stored PDF with a freshly generated one",
+        onSelect: () => setRegenerate(b),
+      });
+    }
+    return items;
+  }
+
+  /**
+   * Replace the stored PDF. The only writer of this; the PDF button
+   * deliberately does not offer it, so the warning copy below is the one
+   * place an operator is told what it does and does not do.
+   */
+  async function regenerateDocument() {
+    if (!regenerate) return;
+    setRegenerating(true);
+    try {
+      await apiClient.post(`/api/v1/bills/${regenerate.id}/document?force=true`, {});
+      toast(`${regenerate.billNumber} was generated again`, "success");
+      setRegenerate(null);
+      await load();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not generate the bill again", "error");
+    } finally {
+      setRegenerating(false);
     }
   }
 
@@ -305,8 +376,23 @@ export default function BillsPage() {
                     </Td>
                     {showActions && (
                       <Td>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          {/* Post only exists before posting; the rest only after. */}
+                        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                          {/*
+                            Two acts stay inline because they are the two
+                            a CSR performs on nearly every call: take the
+                            money, or send the bill. Everything else is
+                            exception handling — rarer, and mostly
+                            irreversible — so it goes behind More, where
+                            it is one deliberate click away instead of
+                            sitting next to the common ones.
+
+                            Post is the exception that proves it: it only
+                            appears before posting, when PDF cannot (the
+                            API refuses an unposted bill with a 409), so
+                            the row never carries more than two inline.
+                            On an unposted bill it is the only act there
+                            is, and burying the only act would be worse.
+                          */}
                           {canEdit && !b.postedAt && (
                             <button
                               onClick={() => void post(b)}
@@ -328,60 +414,16 @@ export default function BillsPage() {
                               Take payment
                             </SmallBtn>
                           )}
-                          {/*
-                            There is no void. §3.5: a wrong charge is
-                            reversed, and both sides stay on the ledger.
-                            Offered only where it can succeed — a posted
-                            bill with its own charge, not already reversed.
-                          */}
-                          {canReverse && b.charge && !b.charge.reversed && (
-                            <SmallBtn tone="var(--danger)" onClick={() => setVoidRow(b)}>
-                              Reverse
-                            </SmallBtn>
-                          )}
-                          {/*
-                            Waive and write off need something left to
-                            forgive, so they are offered only while the
-                            charge is still open. A settled charge has
-                            nothing outstanding; a reversed one no longer
-                            stands at all.
-                          */}
-                          {/*
-                            The bill as a document — the download only.
-                            Offered once posted: the API refuses an
-                            unposted bill with a 409, so a button here
-                            would promise a PDF that cannot be made.
-                            Regenerate lives in the bill's own dialog,
-                            because it is rare, it overwrites, and this
-                            row has enough on it already.
-                          */}
-                          <BillDocumentActions
+                          <BillPdfButton
                             billId={b.id}
                             billNumber={b.billNumber}
-                            canGenerate={canEdit}
-                            regenerate={false}
                             disabled={!b.postedAt}
                             onChanged={() => void load()}
                           />
-                          {canForgive &&
-                            b.charge &&
-                            !b.charge.reversed &&
-                            Number(b.charge.openAmount) > 0 && (
-                              <>
-                                <SmallBtn
-                                  tone="var(--warning)"
-                                  onClick={() => setAdjust({ mode: "waive", bill: b })}
-                                >
-                                  Waive
-                                </SmallBtn>
-                                <SmallBtn
-                                  tone="var(--text-muted)"
-                                  onClick={() => setAdjust({ mode: "writeOff", bill: b })}
-                                >
-                                  Write off
-                                </SmallBtn>
-                              </>
-                            )}
+                          <ActionMenu
+                            aria-label={`More actions for ${b.billNumber}`}
+                            items={moreActions(b)}
+                          />
                         </div>
                       </Td>
                     )}
@@ -439,6 +481,28 @@ export default function BillsPage() {
             setAdjust(null);
             void load();
           }}
+        />
+      )}
+
+      {regenerate && (
+        <ConfirmDialog
+          title={`Generate ${regenerate.billNumber} again?`}
+          /*
+           * Both sentences are here because operators expect the wrong
+           * thing otherwise. "Generate again" sounds like it might
+           * recalculate the bill, and it does not; and it overwrites
+           * rather than keeping the old copy, which is the part that
+           * cannot be undone.
+           */
+          message={
+            "This does not change what is owed — nothing about the bill is recalculated. " +
+            "It replaces the stored PDF with a freshly generated one; the previous copy is not kept. " +
+            "Use it when the bill's own details have been corrected, or after a template change."
+          }
+          confirmLabel={regenerating ? "Generating…" : "Generate again"}
+          destructive={false}
+          onConfirm={() => void regenerateDocument()}
+          onCancel={() => setRegenerate(null)}
         />
       )}
 

@@ -6,7 +6,7 @@ import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { BillDocumentActions } from "@/components/bills/bill-document-actions";
+import { BillPdfButton } from "@/components/bills/bill-pdf-button";
 import { RecordPaymentDialog } from "./record-payment-dialog";
 import { RefundDialog } from "./refund-dialog";
 import { AdjustDialog, type AdjustMode } from "./adjust-dialog";
@@ -379,10 +379,9 @@ export function ArTab({ accountId }: { accountId: string }) {
                           exists once its bill is posted, so there is no
                           unposted case to guard here. */}
                       {row.billId && (
-                        <BillDocumentActions
+                        <BillPdfButton
                           billId={row.billId}
                           billNumber={row.billNumber ?? "bill"}
-                          canGenerate={canProduceDocument}
                           variant="link"
                           onChanged={load}
                         />

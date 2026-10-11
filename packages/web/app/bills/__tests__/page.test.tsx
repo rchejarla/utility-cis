@@ -175,18 +175,92 @@ describe("Bills page — bill document actions", () => {
   });
 
   /**
-   * The row carries the download and nothing else about documents. Six
-   * buttons on one row buries the act a CSR performs most, so the rare
-   * one that also overwrites moved into the bill's own dialog. The
-   * confirm flow itself is covered on the component.
+   * What stays on the row, and what does not.
+   *
+   * Take payment and PDF are the two acts a CSR performs on nearly every
+   * call. The rest is exception handling — rarer, and mostly
+   * irreversible — so a row of six buttons buried the common ones among
+   * the consequential ones.
    */
-  it("offers only the download on the row, even for a user who may generate", async () => {
+  it("keeps only Take payment and PDF inline, with the rest behind More", async () => {
     get.mockResolvedValue(payload([bill()]));
     fetchMock.mockResolvedValue(pdfResponse());
     renderPage();
 
+    expect(await screen.findByRole("button", { name: "Take payment" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "PDF" })).toBeInTheDocument();
+
+    for (const buried of ["Reverse charge", "Waive", "Write off", "Regenerate PDF"]) {
+      expect(screen.queryByRole("menuitem", { name: buried })).not.toBeInTheDocument();
+    }
+  });
+
+  it("puts the exception handling in the More menu", async () => {
+    get.mockResolvedValue(payload([bill()]));
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /More actions/ }));
+
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    for (const item of ["Reverse charge", "Waive", "Write off", "Regenerate PDF"]) {
+      expect(screen.getByRole("menuitem", { name: item })).toBeInTheDocument();
+    }
+  });
+
+  it("confirms a regenerate from the menu, denying what it does not do", async () => {
+    get.mockResolvedValue(payload([bill()]));
+    post.mockResolvedValue({ id: "doc-1" });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /More actions/ }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Regenerate PDF" }));
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText(/does not change what is owed/i)).toBeInTheDocument();
+    expect(screen.getByText(/previous copy is not kept/i)).toBeInTheDocument();
+    expect(post).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Generate again" }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/api/v1/bills/bill-1/document?force=true", {}),
+    );
+  });
+
+  /**
+   * The menu is not merely a different place to put the same buttons —
+   * each item keeps the rule that decided whether it was offered at all.
+   * A settled charge has nothing left to forgive.
+   */
+  it("omits Waive and Write off once the charge is settled", async () => {
+    get.mockResolvedValue(
+      payload([bill({ charge: { entryId: "le-1", openAmount: "0.00", reversed: false } })]),
+    );
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /More actions/ }));
+
+    await screen.findByRole("menu");
+    expect(screen.getByRole("menuitem", { name: "Reverse charge" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Waive" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Write off" })).not.toBeInTheDocument();
+  });
+
+  it("offers no menu at all to a user who can only look", async () => {
+    vi.spyOn(permModule, "usePermission").mockReturnValue({
+      canView: true,
+      canCreate: false,
+      canEdit: false,
+      canDelete: false,
+    });
+    get.mockResolvedValue(payload([bill()]));
+    fetchMock.mockResolvedValue(pdfResponse());
+    renderPage();
+
+    // The download is a read, so it stays; there is nothing to put in a
+    // menu, so no empty trigger appears.
     expect(await screen.findByRole("button", { name: "PDF" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Regenerate" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /More actions/ })).not.toBeInTheDocument();
   });
 
   /**
