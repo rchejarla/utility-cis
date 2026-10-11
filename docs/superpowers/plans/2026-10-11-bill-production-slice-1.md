@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Turn a posted `Bill` into a durable, itemised PDF that staff and customers can download, reprintable as a new version without destroying the original.
+**Goal:** Turn a posted `Bill` into a durable, itemised PDF that staff and customers can download, and that can be printed again on demand.
 
 **Architecture:** One resolver turns a `Bill` and its neighbours into a plain `BillPresentation`; a declarative template renders that to PDF; the bytes go to the tenant's object store through apptor-connect's files plane; a `BillDocument` row holds a pointer, never bytes. Reprints are new `Bill` rows chained by `replacesId`.
 
@@ -16,7 +16,7 @@ Every task's requirements implicitly include these. Values are copied from the s
 
 - **Renderer is `@react-pdf/renderer`.** No browser binary, no Puppeteer/Playwright, in the API package or its image.
 - **Storage is apptor-connect's files plane only.** No local-disk writes for bill documents. No storage driver interface, no abstraction over S3/Azure/GCS — one integration name selects the backend.
-- **Object key is exactly** `bills/{utilityId}/{billId}-v{version}.pdf`.
+- **Object key is exactly** `bills/{utilityId}/{billId}.pdf`. No version segment — see the spec's §4.3.
 - **A minted capability link is a bearer credential.** It must never be returned to a client, embedded in a page or email, or written to a log. Bytes stream through our API so authorization stays with our RBAC.
 - **`maxBytes` is always set explicitly** on a PUT link. TTL is the shortest workable value, never the 7-day maximum.
 - **Templates and machinery stay separate:** declarative layout under `packages/api/src/bill-template/`, rendering machinery under `packages/api/src/bill-render/`. Machinery contains no tenant conditionals; anything per-tenant arrives inside `BillPresentation`.
@@ -36,7 +36,7 @@ Five failure modes the spec implies but no obvious task tests. Each has its test
 2. **A bill with no segments, or segments with no lines, must refuse to render** rather than produce a document showing a total with nothing to explain it. → Task 3.
 3. **An account with no customer name or no billing address must fail with a clear 422**, not render a bill with a blank recipient that gets mailed. → Task 3.
 4. **A bill with enough lines to paginate must repeat the header and place totals and the remittance stub on the last page.** Silent truncation at the page boundary loses charges. → Task 5.
-5. **Two concurrent reprints must not both produce version 2.** → Task 7.
+5. **A forced re-render must not silently replace a stored document without recording it.** With versioning deferred, `?force=true` overwrites in place; `sha256` and `generatedAt` have to move so the replacement is detectable, and an unforced second call must not overwrite at all. → Task 6.
 
 ---
 
@@ -44,7 +44,6 @@ Five failure modes the spec implies but no obvious task tests. Each has its test
 
 **Create:**
 - `packages/shared/prisma/migrations/20261011120100_bill_message/migration.sql` — bill message table
-- `packages/shared/prisma/migrations/20261011120200_bill_version/migration.sql` — version/replacesId + unique constraint swap
 - `packages/shared/prisma/migrations/20261011120300_bill_document/migration.sql` — bill document table
 - `packages/shared/src/validators/bill-message.ts` — Zod schemas for bill messages
 - `packages/api/src/lib/apptor-connect/files-client.ts` — the only place that talks to the files plane
@@ -54,7 +53,7 @@ Five failure modes the spec implies but no obvious task tests. Each has its test
 - `packages/api/src/bill-render/render-bill-pdf.ts` — machinery: fonts, pagination, bytes
 - `packages/api/src/bill-render/stabilize-pdf.ts` — strips non-deterministic PDF metadata
 - `packages/api/src/services/bill-document.service.ts` — render, store, read, reprint
-- `packages/api/src/routes/bill-documents.ts` — document + reprint + versions endpoints
+- `packages/api/src/routes/bill-documents.ts` — render and download endpoints
 - `packages/api/src/routes/bill-messages.ts` — settings CRUD
 - `packages/web/app/settings/bill-messages/page.tsx` — message management UI
 
@@ -542,7 +541,7 @@ export interface BillPresentation {
   issuer: { name: string; legalName: string | null; addressLines: string[]; phone: string | null; email: string | null; website: string | null };
   recipient: { name: string; addressLines: string[] };
   account: { number: string; id: string };
-  bill: { number: string; version: number; billDate: Date; dueDate: Date; periodStart: Date; periodEnd: Date };
+  bill: { number: string; billDate: Date; dueDate: Date; periodStart: Date; periodEnd: Date };
   groups: Array<{ heading: string; lines: Array<{ label: string; quantity: string | null; amount: string }>; subtotal: string }>;
   totals: { subtotal: string; taxes: string; credits: string; total: string };
   messages: Array<{ label: string; body: string }>;
@@ -598,7 +597,6 @@ function billRow(overrides: Record<string, unknown> = {}) {
     utilityId: "util-1",
     accountId: "acct-1",
     billNumber: "B-1001",
-    version: 1,
     billDate: new Date("2026-03-01"),
     dueDate: new Date("2026-03-31"),
     periodStart: new Date("2026-02-01"),
@@ -1101,7 +1099,7 @@ function presentation(lineCount: number): BillPresentation {
     issuer: { name: "City of Testville Utilities", legalName: "City of Testville, Montana", addressLines: ["PO Box 1230", "Testville, MT 59771"], phone: "406-555-0100", email: "ub@testville.gov", website: "https://testville.gov" },
     recipient: { name: "Jane Smith", addressLines: ["12 Elm St", "Testville, MT 59771"] },
     account: { number: "A-900", id: "acct-1" },
-    bill: { number: "B-1001", version: 1, billDate: new Date("2026-03-01"), dueDate: new Date("2026-03-31"), periodStart: new Date("2026-02-01"), periodEnd: new Date("2026-02-28") },
+    bill: { number: "B-1001", billDate: new Date("2026-03-01"), dueDate: new Date("2026-03-31"), periodStart: new Date("2026-02-01"), periodEnd: new Date("2026-02-28") },
     groups: [
       {
         heading: "Water",
@@ -1274,10 +1272,10 @@ export async function readBillDocument(
   billId: string,
 ): Promise<{ row: BillDocumentRow; bytes: Buffer }>;
 
-export function billObjectKey(utilityId: string, billId: string, version: number): string;
+export function billObjectKey(utilityId: string, billId: string): string;
 ```
 
-Task 7 consumes `renderBillDocument`. Note what is deliberately absent: no field holds a URL. A minted link is consumed and discarded inside the files client.
+Note what is deliberately absent: no field holds a URL, and no field holds a version. A minted link is consumed and discarded inside the files client.
 
 - [ ] **Step 1: Add the model and migration**
 
@@ -1371,7 +1369,7 @@ describe("bill documents", () => {
 
     expect(put).toHaveBeenCalledTimes(1);
     expect(second.id).toBe(first.id);
-    expect(first.objectKey).toBe(`bills/${TENANT_A}/${billId}-v1.pdf`);
+    expect(first.objectKey).toBe(`bills/${TENANT_A}/${billId}.pdf`);
     expect(first.sha256).toHaveLength(64);
     expect(first.byteSize).toBeGreaterThan(0);
   });
@@ -1430,18 +1428,18 @@ Expected: FAIL — service module not found.
 `packages/api/src/services/bill-document.service.ts`:
 
 ```ts
-export function billObjectKey(utilityId: string, billId: string, version: number): string {
-  return `bills/${utilityId}/${billId}-v${version}.pdf`;
+export function billObjectKey(utilityId: string, billId: string): string {
+  return `bills/${utilityId}/${billId}.pdf`;
 }
 ```
 
 `renderBillDocument(utilityId, billId, actorId, opts)`:
 
-1. Load the bill (`postedAt`, `version`, `account.paperlessBilling`, `utilityId`). Throw `{ code: "NOT_POSTED" }` if `postedAt` is null.
+1. Load the bill (`postedAt`, `account.paperlessBilling`, `utilityId`). Throw `{ code: "NOT_POSTED" }` if `postedAt` is null.
 2. Unless `opts.force`, return any existing `billDocument` for `(billId, "PDF")`.
 3. Resolve `settings.billDocuments.storageIntegration` (and the optional `storageConnection`) from `TenantConfig`, narrowed through `billDocumentSettingsSchema` rather than cast. If absent or empty, throw `{ code: "STORAGE_NOT_CONFIGURED", integration: null }`.
 4. `loadBillPresentation` → `renderBillPdf` → compute `sha256` over the buffer.
-5. `putObject({ integration, connection, key: billObjectKey(...), body, maxBytes: config.BILL_DOCUMENT_MAX_BYTES })`.
+5. `putObject({ integration, connection, key: billObjectKey(utilityId, billId), body, maxBytes: config.BILL_DOCUMENT_MAX_BYTES })`.
 6. Then create the row inside `auditCreate`, so the audit row and the document commit together. **Upload before the row, per spec §7:** an orphan object at a deterministic key is inert and the next render overwrites it; a row pointing at nothing is not.
 7. On a unique-constraint violation (a concurrent render won), re-read and return the existing row rather than throwing.
 
@@ -1457,8 +1455,7 @@ Expected: PASS (5 tests).
 Create `packages/api/src/routes/bill-documents.ts`:
 
 - `POST /api/v1/bills/:id/document` — `accounts:VIEW`; `?force=true` re-renders.
-- `GET /api/v1/bills/:id/document` — `accounts:VIEW`; sets `Content-Type: application/pdf` and `Content-Disposition: attachment; filename="bill-<billNumber>-v<version>.pdf"`, then sends the buffer.
-- `GET /api/v1/bills/:id/versions` — `accounts:VIEW`; the reprint chain, newest first (Task 7 fills the chain; return the single bill until then).
+- `GET /api/v1/bills/:id/document` — `accounts:VIEW`; sets `Content-Type: application/pdf` and `Content-Disposition: attachment; filename="bill-<billNumber>.pdf"`, then sends the buffer.
 - `GET /portal/api/bills/:id/document` — `portal_billing:VIEW`, scoped so the authenticated customer can only reach bills on their own accounts; follow `routes/portal-api.ts` for how that scoping is already done.
 
 Map error codes to statuses: `ISSUER_INCOMPLETE` / `RECIPIENT_INCOMPLETE` / `NO_CHARGES` / `STORAGE_NOT_CONFIGURED` → 422 with the `missing` list; `NOT_POSTED` → 409; `ApptorConnectError` → 502 naming the integration and never the link. Register in `app.ts`.
@@ -1476,144 +1473,7 @@ git commit -m "feat(billing): BillDocument — render, store a pointer, stream t
 
 ---
 
-## Task 7: Reprint versioning
-
-**Files:**
-- Create: `packages/shared/prisma/migrations/20261011120200_bill_version/migration.sql`
-- Modify: `packages/shared/prisma/schema.prisma`, `packages/api/src/services/bill-document.service.ts`, `packages/api/src/routes/bill-documents.ts`
-- Test: `packages/api/src/__tests__/integration/bill-reprint.integration.test.ts`
-
-**Interfaces:**
-- Consumes: `renderBillDocument` (Task 6).
-- Produces: `reprintBill(utilityId, billId, actorId, actorName): Promise<{ bill: BillSummary; document: BillDocumentRow }>` and `listBillVersions(utilityId, billId): Promise<BillSummary[]>`.
-
-> **`BillSummary` has to grow first.** The existing interface in `packages/api/src/services/bill.service.ts` carries no `version` or `replacesId`, but this task's tests read both. Add them there — `version: number` and `replacesId: string | null` — and include the columns in that service's `select`, so the bills list and `getBill` return them too. Task 8's reprint action needs `version` to label a bill, so leaving it off the summary would force a second fetch.
-
-- [ ] **Step 1: Write the migration**
-
-```sql
--- packages/shared/prisma/migrations/20261011120200_bill_version/migration.sql
--- Reprint versioning. A reprint is a new bill row sharing the bill number,
--- so the number is no longer unique on its own.
-ALTER TABLE "bill"
-  ADD COLUMN "version"     INTEGER NOT NULL DEFAULT 1,
-  ADD COLUMN "replaces_id" UUID;
-
-ALTER TABLE "bill"
-  ADD CONSTRAINT "bill_replaces_id_fkey" FOREIGN KEY ("replaces_id")
-    REFERENCES "bill"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
-DROP INDEX IF EXISTS "bill_utility_id_bill_number_key";
-ALTER TABLE "bill" DROP CONSTRAINT IF EXISTS "bill_utility_id_bill_number_key";
-
-ALTER TABLE "bill"
-  ADD CONSTRAINT "bill_utility_id_bill_number_version_key"
-    UNIQUE ("utility_id", "bill_number", "version");
-
-CREATE UNIQUE INDEX "bill_replaces_id_key" ON "bill" ("replaces_id") WHERE "replaces_id" IS NOT NULL;
-```
-
-That last index is what makes Review Focus 5 hold: one bill can be superseded by at most one successor, so two concurrent reprints cannot both create version 2 — the second gets a constraint violation rather than forking the chain.
-
-Update `model Bill` to match: `version Int @default(1)`, `replacesId String? @map("replaces_id") @db.Uuid`, a self-relation (`replaces Bill? @relation("BillReprint", fields: [replacesId], references: [id])` plus `replacedBy Bill? @relation("BillReprint")`), and change `@@unique([utilityId, billNumber])` to `@@unique([utilityId, billNumber, version])`.
-
-- [ ] **Step 2: Write the failing tests**
-
-```ts
-// packages/api/src/__tests__/integration/bill-reprint.integration.test.ts
-// Same boot/mock preamble as bill-document.integration.test.ts, plus the
-// same postedBill() helper — copy it rather than importing, so each file
-// owns its fixture.
-
-describe("bill reprints", () => {
-  it("creates version 2 chained to the original and renders it", async () => {
-    const billId = await postedBill();
-    await svc.renderBillDocument(TENANT_A, billId, ACTOR);
-
-    const { bill, document } = await svc.reprintBill(TENANT_A, billId, ACTOR, "Actor");
-
-    expect(bill.version).toBe(2);
-    expect(bill.replacesId).toBe(billId);
-    expect(bill.billNumber).toBe((await prismaImports.prisma.bill.findUniqueOrThrow({ where: { id: billId } })).billNumber);
-    expect(document.objectKey).toBe(`bills/${TENANT_A}/${bill.id}-v2.pdf`);
-  });
-
-  it("leaves version 1 and its document retrievable", async () => {
-    const billId = await postedBill();
-    await svc.renderBillDocument(TENANT_A, billId, ACTOR);
-    await svc.reprintBill(TENANT_A, billId, ACTOR, "Actor");
-
-    const original = await prismaImports.prisma.bill.findUniqueOrThrow({ where: { id: billId } });
-    expect(original.version).toBe(1);
-    expect(await prismaImports.prisma.billDocument.count({ where: { billId } })).toBe(1);
-  });
-
-  it("writes nothing to the ledger", async () => {
-    const billId = await postedBill();
-    const before = await prismaImports.prisma.ledgerEntry.count();
-
-    await svc.reprintBill(TENANT_A, billId, ACTOR, "Actor");
-
-    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(before);
-  });
-
-  // Review Focus 5
-  it("does not let two concurrent reprints both become version 2", async () => {
-    const billId = await postedBill();
-
-    const results = await Promise.allSettled([
-      svc.reprintBill(TENANT_A, billId, ACTOR, "Actor"),
-      svc.reprintBill(TENANT_A, billId, ACTOR, "Actor"),
-    ]);
-
-    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    const versions = await prismaImports.prisma.bill.findMany({ where: { OR: [{ id: billId }, { replacesId: billId }] } });
-    expect(versions.map((v) => v.version).sort()).toEqual([1, 2]);
-  });
-
-  it("lists the chain newest first", async () => {
-    const billId = await postedBill();
-    const { bill: v2 } = await svc.reprintBill(TENANT_A, billId, ACTOR, "Actor");
-
-    const chain = await svc.listBillVersions(TENANT_A, billId);
-
-    expect(chain.map((b) => b.id)).toEqual([v2.id, billId]);
-  });
-});
-```
-
-- [ ] **Step 3: Run and confirm failure**
-
-Run: `cd packages/api && pnpm vitest run --config vitest.integration.config.ts src/__tests__/integration/bill-reprint.integration.test.ts`
-Expected: FAIL — `reprintBill` is not exported.
-
-- [ ] **Step 4: Implement reprint**
-
-In `bill-document.service.ts`:
-
-`reprintBill` runs one transaction that copies the source bill's period, dates, totals and `billNumber` into a new row with `version = source.version + 1` and `replacesId = source.id`, re-points nothing in the ledger, and writes an audit row via `auditCreate`. Then, outside that transaction, calls `renderBillDocument` for the new bill. Walk to the newest version first so reprinting an already-reprinted bill chains from the tip rather than forking.
-
-`listBillVersions` walks the chain by `billNumber` within the tenant, ordered by `version` descending.
-
-- [ ] **Step 5: Run the tests**
-
-Run: the Step 3 command.
-Expected: PASS (5 tests).
-
-- [ ] **Step 6: Add the route**
-
-`POST /api/v1/bills/:id/reprint` gated `{ config: { module: "accounts", permission: "APPROVE" } }`. Return `{ bill, document }`. Fill in `GET /api/v1/bills/:id/versions` from `listBillVersions`.
-
-- [ ] **Step 7: Typecheck and commit**
-
-```bash
-git add packages/shared/prisma packages/api/src/services/bill-document.service.ts packages/api/src/routes/bill-documents.ts packages/api/src/__tests__/integration/bill-reprint.integration.test.ts
-git commit -m "feat(billing): reprint a bill as a new chained version"
-```
-
----
-
-## Task 8: UI — download, reprint, and bill messages
+## Task 7: UI — download, re-render, and bill messages
 
 **Files:**
 - Create: `packages/web/app/settings/bill-messages/page.tsx`
@@ -1626,7 +1486,7 @@ git commit -m "feat(billing): reprint a bill as a new chained version"
 
 - [ ] **Step 1: Write the failing bills-page test**
 
-Follow `packages/web/app/receipts/__tests__/page.test.tsx` for the established mocking style in this package — read it first. Assert: a Download action per bill calls `GET /api/v1/bills/:id/document`; a bill with no document yet shows a Generate action that POSTs; the Reprint action is absent for a user whose permissions lack `accounts:APPROVE`.
+Follow `packages/web/app/receipts/__tests__/page.test.tsx` for the established mocking style in this package — read it first. Assert: a Download action per bill calls `GET /api/v1/bills/:id/document`; a bill with no document yet shows a Generate action that POSTs; the Re-render action is absent for a user whose permissions lack `accounts:APPROVE`.
 
 - [ ] **Step 2: Run and confirm failure**
 
@@ -1635,7 +1495,7 @@ Expected: FAIL on the missing actions.
 
 - [ ] **Step 3: Add the actions to the bills page**
 
-Download triggers a fetch and a blob download; Generate POSTs then downloads; Reprint is permission-gated and confirms first. The confirmation copy must say plainly that a reprint re-renders the bill and does not change what is owed — spec §10 records that operators will otherwise expect a correction.
+Download triggers a fetch and a blob download; Generate POSTs then downloads; Re-render is permission-gated (`accounts:APPROVE`) and confirms first. The confirmation copy must say two things plainly: re-rendering does not change what is owed, and it replaces the stored document — spec §10 records both, and operators will otherwise expect a correction.
 
 - [ ] **Step 4: Run the test**
 
@@ -1674,5 +1534,5 @@ git commit -m "feat(billing): download and reprint bills, manage bill messages"
 - [ ] `pnpm --filter @utility-cis/api test` — the unit suite, which is what CI runs.
 - [ ] `cd packages/api && pnpm vitest run --config vitest.integration.config.ts` — the full 58-file suite with the dev server stopped. Budget ~25 minutes; a `migrate deploy` failure here is environmental, not yours.
 - [ ] `cd packages/web && pnpm vitest run`.
-- [ ] Update `docs/specs/09-billing.md`: mark `BillDocument` and bill messages shipped, correct its `BillingRecord` references to `Bill`, and record that reprint versioning now exists. The project's CLAUDE.md requires the module spec to move with the schema.
-- [ ] Update `docs/bozeman/17-implementation-gap-analysis.md`: #130, #133 and #137 move from absent to built; #132 from absent to partial. Do not touch the other verdicts.
+- [ ] Update `docs/specs/09-billing.md`: mark `BillDocument` and bill messages shipped, correct its `BillingRecord` references to `Bill`, and record that its `version`/`replaces_id` fields are deliberately NOT built — they belong with corrected issuance, not with reprinting. The project's CLAUDE.md requires the module spec to move with the schema.
+- [ ] Update `docs/bozeman/17-implementation-gap-analysis.md`: #130 and #137 move from absent to built; #132 and #133 from absent to partial (#133 because a bill can be printed again but version tracking is deferred with corrected issuance). Do not touch the other verdicts.

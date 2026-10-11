@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-11
 **Status:** Design, awaiting review
-**Closes:** Bozeman #130 (PDF generation + retained bill images), #133 (reprints with version tracking), #137 (bill message management). Makes #132 (paperless enrollment) meaningful.
+**Closes:** Bozeman #130 (PDF generation + retained bill images), #137 (bill message management). Partially #133: a bill can be printed again, but *version tracking* is deferred with corrected issuance — see §4.3. Makes #132 (paperless enrollment) meaningful.
 **Module specs touched:** `docs/specs/09-billing.md`, `docs/specs/18-theme-and-configuration.md`
 
 ## 1. Intent
@@ -15,7 +15,7 @@ This slice makes a bill into a durable, itemised PDF that staff and customers ca
 
 ## 2. Scope
 
-**In:** the resolved bill presentation; a PDF renderer; `BillDocument` as the stored artifact; reprint versioning on `Bill`; `BillMessage` with targeting; issuer identity; download endpoints for admin and portal; a bill-messages settings page.
+**In:** the resolved bill presentation; a PDF renderer; `BillDocument` as the stored artifact; `BillMessage` with targeting; issuer identity; download endpoints for admin and portal; a bill-messages settings page.
 
 **Out, with reasons:**
 
@@ -25,6 +25,7 @@ This slice makes a bill into a durable, itemised PDF that staff and customers ca
 | Email / paperless delivery (#132) | Needs a delivery-status model, and the tenant's mail integration configured in apptor-connect (`mail` or `sendgrid`, called through the proxy plane). This slice makes `Account.paperlessBilling` meaningful by producing the artifact there is currently nothing to deliver. |
 | **Layout design per utility (L3)** | **A confirmed product requirement, deliberately not now.** §5 states the seam it will target. Nothing in this slice may put layout decisions inside rendering machinery. |
 | Bill holds (#136), rebill (#142, #103) | Separate requirements with their own semantics. Rebill in particular needs the correction chain from `docs/specs/09-billing.md` slice 5d. |
+| **Bill versioning** (the version-tracking half of #133) | See §4.3. Nothing here produces a second version whose content differs, and nothing delivers a bill, so there is no sent copy to preserve. It arrives with whichever comes first: rebill, or delivery. |
 | `Bill` status enum (`DRAFT`/`VOID`) | `docs/specs/09-billing.md:28` defers it until "rendering and delivery need them". Rendering does not: supersession is derivable from the reprint chain (§4.3). Delivery will need it; it can arrive then. |
 
 ## 3. What exists today
@@ -76,15 +77,17 @@ The simpler alternative — one function that reads Prisma rows and draws a PDF 
 
 Per the standing rule that what an author writes never mixes with what happens at runtime, the declarative layout lives in `bill-template/` and the rendering machinery in `bill-render/`. A template reads a `BillPresentation` and declares structure; machinery turns declarations into bytes, registers fonts, paginates and writes files. **This is the seam a future layout designer targets** — it edits templates, never machinery. Rendering code must contain no tenant conditionals; anything that varies per tenant arrives through `BillPresentation` or through the template chosen.
 
-### 4.3 Reprint versioning
+### 4.3 Reprinting, and why it creates no version
 
-`Bill` gains `version Int @default(1)` and `replacesId String?` (nullable self-reference), matching `docs/specs/09-billing.md:58-59`.
+A reprint is "the customer lost their bill, print it again". Nothing about the document changed: bill messages resolve at `billDate` (§5) and the renderer is byte-stable (§4.4), so re-rendering the same bill produces identical bytes. A second row recording that would be bookkeeping with no fact behind it.
 
-A reprint creates a **new `Bill` row**: same `billNumber`, `version = previous.version + 1`, `replacesId = previous.id`, recomputed from its segments. The original is retained unchanged for audit. The existing unique constraint `@@unique([utilityId, billNumber])` becomes `@@unique([utilityId, billNumber, version])`.
+An earlier draft gave `Bill` a `version` and a `replacesId`, chaining a new row per reprint. That attached version tracking to the wrong half of #133, which reads "bill reprints **and corrected bill issuance** with version tracking" — the tracking belongs to corrected issuance, whose content genuinely differs. Corrected issuance is a rebill, and rebill is out of scope.
 
-Supersession is derived, not stored: a bill is superseded when another bill points at it through `replacesId`. One fact, one place — a stored flag would be a second copy free to disagree with the chain.
+The stronger reason it is premature: **nothing in this slice delivers a bill to anyone.** Email and print-vendor delivery are both deferred. Versioning exists to protect the record of what was *sent*, and until something sends there is no such record to protect — so overwriting a stored PDF today destroys nothing.
 
-Reprints do not touch the ledger. A corrected bill that changes what is owed is a rebill, which is out of scope here; a reprint re-renders what the bill already says.
+So `Bill` is untouched: no new columns, and `@@unique([utilityId, billNumber])` stays as it is. One `BillDocument` per bill per type, re-renderable in place, idempotent through the deterministic key in §4.5. What stays answerable without a version chain is which layout produced the stored copy and whether it has changed, from `templateKey`, `sha256` and `generatedAt`.
+
+Version tracking returns with whichever arrives first — rebill, or delivery. That is this project's own rule: add the indirection when the second consumer appears.
 
 ### 4.4 Rendering technology
 
@@ -103,7 +106,7 @@ Bill PDFs are written to the tenant's object store (S3, Azure Blob or GCS) throu
 
 The flow, per `POST /files/v1/links`:
 
-1. Mint a link: `{ i: <integration>, cn: <connection?>, key: "bills/{utilityId}/{billId}-v{version}.pdf", op: "PUT", maxBytes }`.
+1. Mint a link: `{ i: <integration>, cn: <connection?>, key: "bills/{utilityId}/{billId}.pdf", op: "PUT", maxBytes }`.
 2. Stream the rendered bytes to the returned `url`.
 3. Commit the `BillDocument` row holding the **pointer** — integration, connection, object key, sha256, byte size.
 
@@ -138,7 +141,7 @@ Defensively, the key is prefixed with `utilityId` even though the integration's 
 | generatedAt | Timestamptz | |
 | isPaperless | Boolean | Copy of `Account.paperlessBilling` at generation, per `docs/specs/09-billing.md:102` |
 
-`@@unique([billId, documentType])` — one current document per type per bill version. Because a reprint is a new `Bill` row, version history falls out of the bill chain rather than needing document versions.
+`@@unique([billId, documentType])` — one document per type per bill. A re-render replaces it in place; §4.3 says why no version sits alongside it.
 
 **`BillMessage`** — configurable text on bills (#137).
 
@@ -164,12 +167,10 @@ Explicit columns rather than the existing `settings` JSON, because these are req
 |---|---|---|
 | POST | `/api/v1/bills/:id/document` | Render and store. Idempotent: returns the existing document unless `?force=true`. |
 | GET | `/api/v1/bills/:id/document` | Stream the PDF. 404 if never rendered. |
-| GET | `/api/v1/bills/:id/versions` | The reprint chain, newest first. |
-| POST | `/api/v1/bills/:id/reprint` | New version + render. Requires `bills.REPRINT`. |
 | CRUD | `/api/v1/bill-messages` | Standard tenant CRUD via `crud-routes`. |
 | GET | `/portal/api/bills/:id/document` | Portal download, scoped to the authenticated customer's accounts. |
 
-Reprint sits behind its own permission rather than `bills.EDIT`, per `docs/specs/09-billing.md:224` ("supervisor-only").
+A forced re-render sits behind a higher permission than a download, in the spirit of `docs/specs/09-billing.md:224` ("supervisor-only" for reprints): replacing a stored document is an elevated act even while nothing has been delivered.
 
 ## 7. Errors
 
@@ -219,5 +220,6 @@ Integration (testcontainers, `*.integration.test.ts`):
 - **Durability — resolved, and worth noting why.** The earlier draft flagged local disk as unfit for the 7-year statutory floor in `docs/bozeman/08-data-retention-archival-purge.md`. Writing through apptor-connect to the tenant's object store answers it: the lifecycle tiering that doc designs (Standard → IA → Glacier) is a bucket policy, not something this codebase implements. What remains is a deployment prerequisite rather than a design risk — a tenant with no storage integration configured cannot produce bills, which §7 surfaces as a `422`.
 - **A new dependency in the render path.** Bill production now cannot complete while apptor-connect is down, where a local write would have succeeded. That is the right trade for durability and single-sourced credentials, but it is a real coupling: rendering is an interactive operator action, so the failure is visible and retryable rather than silent. Batch rendering, when it arrives, needs that failure to be per-bill resumable.
 - **Capability links are bearer credentials.** §4.5 streams bytes through the API precisely so a link never reaches a browser, an email or a log. The risk is that a later slice — portal download, or emailing a bill — takes the shortcut of handing the link out. A forwarded or logged link is someone else's bill until it expires.
-- **Reprint without rebill.** A reprint re-renders; it does not correct money. Until rebill ships, a bill that is *wrong* has no clean path, and operators may reach for reprint expecting one. The reprint UI should say so plainly.
+- **Printing again is not correcting.** It does not touch money. Until rebill ships, a bill that is *wrong* has no clean path, and operators may reach for reprint expecting one. The UI should say so plainly.
+- **A forced re-render replaces the stored document.** With no versioning (§4.3), `?force=true` overwrites. Harmless while nothing is delivered, and a real hazard the moment delivery ships — which is exactly when versioning should return. `sha256` and `generatedAt` make the replacement detectable after the fact.
 - **Template churn before the designer exists.** Layout changes are code changes until L3. `templateKey` on `BillDocument` at least makes it answerable which layout produced a given document.
