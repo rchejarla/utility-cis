@@ -102,23 +102,23 @@ export function ActionMenu({
       close(false);
     }
 
-    // A measured position goes stale the moment anything moves — but a
-    // long menu scrolling its own contents is not the page moving, and
-    // closing on that would make the menu unusable.
-    const onMove = (e: Event) => {
-      if (e.target instanceof Node && menuRef.current?.contains(e.target)) return;
-      close(false);
-    };
-
+    // Deliberately NOT closing on scroll or resize.
+    //
+    // It did, so that a position measured once could not drift away from
+    // its row. That cost more than it bought: a capture-phase scroll
+    // listener on window hears every scrolling element in the document,
+    // and anything that scrolled for any reason — including the browser
+    // revealing a focused element — shut the menu in the frame it
+    // opened. The symptom is a button that does nothing, and no test can
+    // see it, because jsdom raises no scroll events at all.
+    //
+    // Drifting is the lesser fault: the menu closes on any item, on an
+    // outside click and on Escape, so it is never open for long.
     document.addEventListener("keydown", onKey, true);
     document.addEventListener("mousedown", onPointerDown);
-    window.addEventListener("scroll", onMove, true);
-    window.addEventListener("resize", onMove);
     return () => {
       document.removeEventListener("keydown", onKey, true);
       document.removeEventListener("mousedown", onPointerDown);
-      window.removeEventListener("scroll", onMove, true);
-      window.removeEventListener("resize", onMove);
     };
   }, [at, close]);
 

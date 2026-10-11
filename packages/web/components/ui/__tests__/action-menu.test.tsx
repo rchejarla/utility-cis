@@ -103,28 +103,23 @@ describe("ActionMenu", () => {
     expect(menu.style.transform).toBe("translateX(-100%)");
   });
 
-  it("closes when the page scrolls, because the position was measured once", async () => {
-    render(<ActionMenu items={items()} />);
-    await userEvent.click(screen.getByRole("button", { name: "More" }));
-    await screen.findByRole("menu");
-
-    // Dispatched outside React's event system, so the state update it
-    // causes has to be flushed deliberately.
-    act(() => {
-      window.dispatchEvent(new Event("scroll"));
-    });
-
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-  });
-
-  it("does not close when the scroll came from inside the menu", async () => {
+  /**
+   * A scroll must NOT close it. Closing on scroll is what made the first
+   * version a dead button: a capture-phase listener on window hears
+   * every scrolling element in the document, so anything that scrolled
+   * for any reason shut the menu in the frame it opened. Drift is the
+   * lesser fault, since the menu closes on any item, an outside click
+   * and Escape.
+   */
+  it("survives a scroll, from the page or from inside itself", async () => {
     render(<ActionMenu items={items()} />);
     await userEvent.click(screen.getByRole("button", { name: "More" }));
     const menu = await screen.findByRole("menu");
 
-    // A long menu scrolling its own contents is not the page moving.
     act(() => {
+      window.dispatchEvent(new Event("scroll"));
       menu.dispatchEvent(new Event("scroll", { bubbles: true }));
+      window.dispatchEvent(new Event("resize"));
     });
 
     expect(screen.getByRole("menu")).toBeInTheDocument();
