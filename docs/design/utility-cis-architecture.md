@@ -93,6 +93,24 @@ CREATE POLICY tenant_isolation ON premise
 
 The API validates utility_id as UUID format before interpolation (SQL injection prevention) and sets RLS context per-request.
 
+#### There is no tenant table
+
+`utility_id` is a foreign key to nothing. No `utility` or `tenant` table exists — not as a Prisma model and not in raw SQL — and no migration declares an FK against one. Verified 2026-10-11.
+
+The tenant is a **JWT claim**. It arrives as `request.user.utilityId` (dev login defaults it to `00000000-0000-4000-8000-000000000001`), is pushed into `app.current_utility_id`, and RLS reads it from there. `CisUser.externalId` shows users mirror an external identity provider, so *which tenants exist* is owned outside this database and the claim is trusted on arrival.
+
+The four `Tenant*` models — `TenantConfig`, `TenantTheme`, `TenantModule`, `TenantSetting` — are satellites keyed by `utility_id`. None is the root.
+
+What that costs, none of which the schema will reveal:
+
+- **A `utility_id` cannot be validated.** A wrong or malformed claim does not error; it silently opens an empty tenant partition, and writes land in it.
+- **Tenants cannot be enumerated, deactivated, or dated.** There is nowhere to record that one was onboarded, or that one is suspended.
+- **No cross-tenant integrity guarantee.** Without a root to reference, nothing at the database level stops two rows in a relationship belonging to different tenants.
+
+Why it has not been fixed: a local `Utility` row would largely mirror provider-owned data, and a mirror is a second copy free to disagree with the source. Deciding who owns tenancy — the identity provider, this database, or both with a defined direction — is a real decision and not a side-effect of whichever feature notices the gap next.
+
+Note the distinction that keeps this from blocking work. The provider owns a tenant's *existence and id*; it has no opinion on a tenant's *operational facts* — remittance address, billing phone, bill messages. Those are CIS-owned and live in `TenantConfig.settings` namespaces (see `docs/superpowers/specs/2026-10-11-bill-production-design.md`). If a `Utility` root is later introduced, moving identity onto it is a contained change rather than a migration of scattered columns.
+
 ### 3.4 Integration Contract: CIS ↔ SaaSLogic
 
 **Amount due (CIS → SaaSLogic):** when a `Bill` is issued, CIS registers its total with SaaSLogic so the customer has something payable, keyed on the Bill for idempotency. No usage, no rate configuration and no line detail is sent for pricing — CIS has already priced it.
