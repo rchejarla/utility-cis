@@ -21,8 +21,8 @@ This slice makes a bill into a durable, itemised PDF that staff and customers ca
 
 | Deferred | Why |
 |---|---|
-| Print-and-mail vendor export (#131) | Its file format should be designed against a real vendor specification, not guessed. Additive once that spec exists — it is a second renderer over the same presentation model. |
-| Email / paperless delivery (#132) | Needs the notification channel work and a delivery-status model. This slice makes `Account.paperlessBilling` meaningful by producing the artifact there is currently nothing to deliver. |
+| Print-and-mail vendor export (#131) | Its file format should be designed against a real vendor specification, not guessed. Additive once that spec exists: a second renderer over the same presentation model, delivered to the vendor over apptor-connect's SFTP or object-store integration. |
+| Email / paperless delivery (#132) | Needs a delivery-status model, and the tenant's mail integration configured in apptor-connect (`mail` or `sendgrid`, called through the proxy plane). This slice makes `Account.paperlessBilling` meaningful by producing the artifact there is currently nothing to deliver. |
 | **Layout design per utility (L3)** | **A confirmed product requirement, deliberately not now.** §5 states the seam it will target. Nothing in this slice may put layout decisions inside rendering machinery. |
 | Bill holds (#136), rebill (#142, #103) | Separate requirements with their own semantics. Rebill in particular needs the correction chain from `docs/specs/09-billing.md` slice 5d. |
 | `Bill` status enum (`DRAFT`/`VOID`) | `docs/specs/09-billing.md:28` defers it until "rendering and delivery need them". Rendering does not: supersession is derivable from the reprint chain (§4.3). Delivery will need it; it can arrive then. |
@@ -34,7 +34,8 @@ Grounded, because the module spec is partly stale:
 - `Bill` — `billNumber`, `periodStart/End`, `billDate`, `dueDate`, `subtotal`, `taxes`, `credits`, `total`, `postedAt`. No version, no status, no document.
 - `BillSegmentLine` — `label`, `kindCode`, `amount`, `quantity`, `sortOrder`, plus `sourceScheduleId` and `sourceComponentId`. Every line is already traceable to the rate schedule version and component that produced it, which is what #139 (itemisation) needs.
 - `TenantTheme` — `logoUrl`, `colors`, `typography`, `preset`. Per-tenant branding, already used by the web UI.
-- Attachment storage — local disk at `../../uploads`, flat filenames, with a traversal guard (`safeResolveStoragePath` in `packages/api/src/services/attachment.service.ts`).
+- Attachment storage — local disk at `../../uploads`, flat filenames, with a traversal guard (`safeResolveStoragePath` in `packages/api/src/services/attachment.service.ts`). Bills deliberately do **not** follow this precedent; see §4.5. Migrating attachments onto the same rail is sensible later and is not this slice's job.
+- **apptor-connect** (`c:\development\apptor-connect`) — the integration layer for this stack, with `apptor-connect-service` as its HTTP surface. Four planes: `resolve` (connection details plus a short-lived token), `proxy` (`POST /proxy/v1/{integration}` — it calls the vendor and the credential never reaches us), `files` (`/files/v1/*`, object stores and SFTP), and `events` (verified inbound webhooks, read by cursor). Its ownership hierarchy is `PLATFORM ⊃ TENANT ⊃ CUSTOMER ⊃ SUBJECT`, which maps onto `utility_id` cleanly. This is where email, SMS, object storage and other-application traffic belong — nothing in this codebase holds vendor credentials.
 - `docs/specs/09-billing.md` designs this feature against a `BillingRecord` entity that was **superseded by `Bill`**. Its field list is the right intent on the wrong entity; this design maps it onto `Bill`.
 
 ### 3.1 The prerequisite nobody has
@@ -57,7 +58,10 @@ Bill + segments + lines + Account + Customer
                BillPdfRenderer   (slice 2)        (slice 3)
                       │          export writer    html renderer
                       ▼
-               BillDocument row + file on disk
+          apptor-connect files plane ──► tenant's object store (S3 / Azure Blob / GCS)
+                      │
+                      ▼
+          BillDocument row — a pointer, never the bytes
 ```
 
 ### 4.1 Why a presentation model, and why that is not an abstraction layer
@@ -93,15 +97,27 @@ Rejected, with the trade-off that decided it:
 
 Fonts are registered explicitly and vendored, so rendering does not depend on host fonts and output stays identical across machines.
 
-### 4.5 Storage
+### 4.5 Storage — through apptor-connect
 
-A `bill-document-store` module with `writeBillDocument` / `readBillDocument`, writing to local disk under the existing uploads root, reusing the traversal-guard approach already proven in `attachment.service.ts`.
+Bill PDFs are written to the tenant's object store (S3, Azure Blob or GCS) through **apptor-connect's files plane**, not to local disk. `c:\development\apptor-connect` is the integration layer for this stack, and `apptor-connect-service` is its HTTP surface.
 
-Explicitly **not** a storage interface with swappable drivers: that is the speculative layer the checklist warns about. One module, two functions, so that when durability is addressed there is a single place to change.
+The flow, per `POST /files/v1/links`:
 
-Filenames are derived, never supplied: `{billId}-v{version}.pdf` under a per-tenant subdirectory, so documents cannot collide across tenants and no path component comes from user input. Integrity is carried by `BillDocument.sha256` rather than by the name.
+1. Mint a link: `{ i: <integration>, cn: <connection?>, key: "bills/{utilityId}/{billId}-v{version}.pdf", op: "PUT", maxBytes }`.
+2. Stream the rendered bytes to the returned `url`.
+3. Commit the `BillDocument` row holding the **pointer** — integration, connection, object key, sha256, byte size.
 
-A render writes to a unique temporary file and renames it into place **only after** the `BillDocument` row commits. Rename-after-commit is what makes §7's concurrency and failure rules safe: a render that loses the race deletes its own temporary file and never touches the winner's.
+Reads mint the same link with `op: "GET"` and a short TTL.
+
+Three consequences worth stating:
+
+- **No storage abstraction in this codebase at all.** The earlier draft proposed a local-disk module and explicitly refused a driver interface as speculative. apptor-connect makes even that module unnecessary: one integration name selects S3, Azure or GCS per tenant, resolved from the tenant's own catalog entry. We write a pointer and a key; we own no storage code.
+- **A capability link is a bearer credential.** The response says so plainly: the URL "needs no login… anyone holding it can use it until it expires." So bill bytes are **streamed through the API**, keeping authorization with our RBAC and the portal's customer scoping; links are minted with the shortest workable TTL and never put in a page, an email or a log. A redirect-to-link design would move authorization outside our control and make a forwarded link someone else's bill.
+- **Bytes transit apptor-connect** (`via: "service"`, not a vendor presign), so its upload limit and timeouts apply. A bill PDF is small; `maxBytes` is set explicitly per upload so an unbounded render cannot stream indefinitely.
+
+Writing to a deterministic key makes a re-render idempotent: it overwrites the same object with identical bytes. That depends on the renderer being byte-stable for a given `BillPresentation` — no wall-clock creation timestamp embedded in the PDF — which §4.4's vendored-font requirement already half-buys and which `sha256` verifies. This replaces the temp-file-and-rename dance a local filesystem would have needed.
+
+Defensively, the key is prefixed with `utilityId` even though the integration's connection root is already per-tenant. If a deployment ever points two tenants at one bucket, the prefix is what keeps their bills apart.
 
 ## 5. Data model
 
@@ -113,7 +129,9 @@ A render writes to a unique temporary file and renames it into place **only afte
 | utilityId | UUID | RLS tenant key |
 | billId | UUID | FK → Bill, `onDelete: Restrict` |
 | documentType | enum | `PDF` now; `PRINT_EXPORT`, `EMAIL_HTML` reserved for later slices |
-| storagePath | VarChar(500) | Filename only, resolved through the store |
+| storageIntegration | VarChar(100) | apptor-connect integration name (`i`) that holds the object |
+| storageConnection | VarChar(100)? | Named connection under it (`cn`); null for the usual one |
+| objectKey | VarChar(500) | Key within the connection's root, as minted in §4.5 |
 | byteSize | Int | |
 | sha256 | Char(64) | Integrity, and makes a re-render detectable as identical |
 | templateKey | VarChar(100) | Which template produced it — a reprint under a changed template is explainable |
@@ -157,9 +175,11 @@ Reprint sits behind its own permission rather than `bills.EDIT`, per `docs/specs
 
 - **Missing issuer identity** → `422` naming the missing fields and pointing at the settings page. A bill must never render with a blank issuer.
 - **Unposted bill** → `409`. Only posted bills produce documents; `postedAt` is the gate.
-- **Render failure** → no `BillDocument` row and no orphan file. Bytes go to a temporary file, the row commits, then the file is renamed into place; any failure before the rename deletes only that temporary file.
-- **Concurrent render** → the unique constraint on `(billId, documentType)` decides the winner. The loser discards its temporary file and returns the existing document rather than erroring. Because the rename happens after the row commits, the loser can never overwrite or delete the winner's file — the two never share a path until one has won.
-- **Missing file for an existing row** → `500` with the bill id and storage path, because that is a storage fault worth alerting on, not a 404.
+- **Render failure** → no `BillDocument` row. Bytes are uploaded first and the row commits second, so a failure leaves at most an orphan object at a deterministic key, which the next render overwrites. An orphan object with no row is inert; a row pointing at nothing is not, which is why the order is that way round.
+- **Concurrent render** → the unique constraint on `(billId, documentType)` decides the winner; the loser returns the existing document rather than erroring. Both wrote identical bytes to the same key, so neither can corrupt the other — this is what the byte-stability requirement in §4.5 buys.
+- **Storage integration not configured for the tenant** → `422` naming the integration, in the same family as the missing-issuer error: a setup problem stated plainly, not a 500.
+- **apptor-connect unreachable or the upload rejected** (`maxBytes` exceeded, link expired mid-stream) → `502` with the integration name, and no row. Rendering a bill is an operator action that can be retried; it must not half-succeed.
+- **Missing object for an existing row** → `500` with the bill id, integration and key. That is a storage fault worth alerting on, not a 404.
 
 ## 8. Testing
 
@@ -177,11 +197,14 @@ Renderer, as a smoke test rather than a pixel golden:
 Integration (testcontainers, `*.integration.test.ts`):
 
 - Render → download round-trip returns the stored bytes.
-- Idempotency: a second POST returns the same document and writes no second file.
+- Idempotency: a second POST returns the same document and writes no second object.
 - Reprint: creates `version = 2` with `replacesId` set, leaves version 1 retrievable, and does not write to the ledger.
 - Tenant isolation: a document is invisible across tenants under RLS.
 - Portal scoping: a customer cannot fetch a bill belonging to another customer's account.
-- Issuer-identity 422 path.
+- Issuer-identity 422 path, and the unconfigured-storage-integration 422 path.
+- Upload failure (apptor-connect returning 5xx, or `maxBytes` exceeded) leaves no `BillDocument` row.
+
+**apptor-connect is faked in tests, not run.** Integration tests already boot Postgres via testcontainers; standing up a JVM service and a cloud bucket per test file would multiply an already 20-minute suite for no additional coverage of our logic. The files plane is reached through one narrow client module, which tests substitute. What that costs is real — a fake cannot catch a drift in apptor-connect's contract — so the client module carries a contract test asserting the exact request shape documented in §4.5 (`i`, `cn`, `key`, `op`, `ttlSeconds`, `maxBytes`) and the response fields it reads (`url`, `method`, `expiresAt`, `maxBytes`). When that contract moves, one test fails and names it.
 
 ## 9. UI
 
@@ -193,6 +216,8 @@ Integration (testcontainers, `*.integration.test.ts`):
 
 ## 10. Risks
 
-- **Durability.** Local disk is not a records-retention answer, and `docs/bozeman/08-data-retention-archival-purge.md` sets a 7-year statutory floor for financial records. This slice does not solve it; §4.5 keeps it to one module so that it can be solved once, deliberately, rather than being pre-solved here with infrastructure nobody asked for.
+- **Durability — resolved, and worth noting why.** The earlier draft flagged local disk as unfit for the 7-year statutory floor in `docs/bozeman/08-data-retention-archival-purge.md`. Writing through apptor-connect to the tenant's object store answers it: the lifecycle tiering that doc designs (Standard → IA → Glacier) is a bucket policy, not something this codebase implements. What remains is a deployment prerequisite rather than a design risk — a tenant with no storage integration configured cannot produce bills, which §7 surfaces as a `422`.
+- **A new dependency in the render path.** Bill production now cannot complete while apptor-connect is down, where a local write would have succeeded. That is the right trade for durability and single-sourced credentials, but it is a real coupling: rendering is an interactive operator action, so the failure is visible and retryable rather than silent. Batch rendering, when it arrives, needs that failure to be per-bill resumable.
+- **Capability links are bearer credentials.** §4.5 streams bytes through the API precisely so a link never reaches a browser, an email or a log. The risk is that a later slice — portal download, or emailing a bill — takes the shortcut of handing the link out. A forwarded or logged link is someone else's bill until it expires.
 - **Reprint without rebill.** A reprint re-renders; it does not correct money. Until rebill ships, a bill that is *wrong* has no clean path, and operators may reach for reprint expecting one. The reprint UI should say so plainly.
 - **Template churn before the designer exists.** Layout changes are code changes until L3. `templateKey` on `BillDocument` at least makes it answerable which layout produced a given document.
