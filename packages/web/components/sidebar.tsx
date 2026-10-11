@@ -47,6 +47,8 @@ import {
   faIdCard,
   faScaleBalanced,
   faFileInvoiceDollar,
+  faFileInvoice,
+  faCommentDots,
 } from "@fortawesome/pro-solid-svg-icons";
 
 interface NavItem {
@@ -165,6 +167,11 @@ const navSections: NavSection[] = [
       { href: "/settings/numbering", label: "Numbering", icon: faHashtag, module: "tenant_profile" },
       { href: "/settings/custom-fields", label: "Custom Fields", icon: faListCheck, module: "tenant_profile" },
       { href: "/settings/billing", label: "Billing Integration", icon: faCreditCard, module: "settings" },
+      // Both gated on `settings`, matching their APIs: issuer identity
+      // and bill storage are tenant configuration, and so is the text
+      // printed on a bill.
+      { href: "/settings/bill-production", label: "Bill Production", icon: faFileInvoice, module: "settings" },
+      { href: "/settings/bill-messages", label: "Bill Messages", icon: faCommentDots, module: "settings" },
       { href: "/settings/notifications", label: "Notifications", icon: faBell, module: "tenant_profile" },
       { href: "/settings/slas", label: "Service Request SLAs", icon: faStopwatch, module: "service_request_slas" },
       { href: "/settings/retention", label: "Retention & Audit", icon: faBoxArchive, module: "settings" },

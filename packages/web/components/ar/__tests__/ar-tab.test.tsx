@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { ArTab } from "../ar-tab";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
@@ -28,6 +29,7 @@ function row(over: Partial<LedgerRow> = {}): LedgerRow {
     reasonCode: null,
     reasonLabel: null,
     billNumber: "BILL-202605-1",
+    billDocument: null,
     tender: null,
     memo: null,
     reversedByEntryId: null,
@@ -277,5 +279,63 @@ describe("ArTab — a deposit row does not read as a debt", () => {
     // A charge IS owed, so it must not pick up the credit convention.
     expect(within(table).getAllByText("$40.00")).toHaveLength(2);
     expect(within(table).queryByText("($40.00)")).toBeNull();
+  });
+});
+
+/**
+ * The bill as a document, offered where staff already are when a
+ * customer phones about one. A ledger entry exists only once its bill is
+ * posted, so there is no unposted case to guard against here.
+ */
+describe("ArTab — the bill's PDF", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    window.URL.createObjectURL = vi.fn(() => "blob:bill");
+    window.URL.revokeObjectURL = vi.fn();
+    vi.mocked(apiClient.getAuthHeadersOnly).mockResolvedValue({ Authorization: "Bearer t" });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: async () => new Blob(["%PDF-"], { type: "application/pdf" }),
+    });
+  });
+
+  it("downloads a bill charge's stored PDF from the bill's own endpoint", async () => {
+    routeGets(
+      page({
+        balance: "40.00",
+        openCount: 1,
+        data: [
+          row({
+            billDocument: { billId: "bill-9", generatedAt: "2026-05-16T00:00:00.000Z" },
+          }),
+        ],
+      }),
+    );
+    renderTab();
+
+    await userEvent.click(await screen.findByRole("button", { name: "PDF" }));
+
+    // The bill, not the ledger entry: a document belongs to the bill.
+    expect(
+      fetchMock.mock.calls.some(([u]) => String(u).endsWith("/api/v1/bills/bill-9/document")),
+    ).toBe(true);
+  });
+
+  it("offers nothing on a row that charged no bill", async () => {
+    routeGets(
+      page({
+        balance: "0.00",
+        depositHeld: "750.00",
+        data: [row({ id: "d1", type: "DEPOSIT", billNumber: null, billDocument: null })],
+      }),
+    );
+    renderTab();
+
+    await screen.findByRole("table");
+    expect(screen.queryByRole("button", { name: "PDF" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Generate PDF" })).not.toBeInTheDocument();
   });
 });

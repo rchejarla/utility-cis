@@ -40,6 +40,16 @@ export interface LedgerRow {
   reasonCode: string | null;
   reasonLabel: string | null;
   billNumber: string | null;
+  /**
+   * The bill's PDF, as far as this entry is concerned. Null when the
+   * entry charged no bill; a row with `generatedAt: null` means the bill
+   * exists but no document has been produced for it.
+   *
+   * `billId` is here because the document endpoint addresses the bill,
+   * not the entry — `billNumber` above is what to print, this is what to
+   * act on.
+   */
+  billDocument: { billId: string; generatedAt: string | null } | null;
   tender: string | null;
   memo: string | null;
   /** Set when something reverses THIS entry. */
@@ -134,7 +144,20 @@ export async function listLedger(
       memo: true,
       reversesId: true,
       reason: { select: { code: true, label: true } },
-      bill: { select: { billNumber: true } },
+      // A claimed document whose upload never finished has no sha256, so
+      // it is filtered out rather than offered as a download that would
+      // fail.
+      bill: {
+        select: {
+          id: true,
+          billNumber: true,
+          documents: {
+            where: { documentType: "PDF", sha256: { not: null } },
+            select: { generatedAt: true },
+            take: 1,
+          },
+        },
+      },
       // At most one: reverseEntry refuses a second reversal of the same
       // entry, so this is a list only because the relation is one.
       reversedBy: { select: { id: true }, take: 1 },
@@ -163,6 +186,12 @@ export async function listLedger(
       reasonCode: e.reason?.code ?? null,
       reasonLabel: e.reason?.label ?? null,
       billNumber: e.bill?.billNumber ?? null,
+      billDocument: e.bill
+        ? {
+            billId: e.bill.id,
+            generatedAt: e.bill.documents[0]?.generatedAt.toISOString() ?? null,
+          }
+        : null,
       tender: e.tender ?? null,
       memo: e.memo ?? null,
       reversedByEntryId: e.reversedBy[0]?.id ?? null,

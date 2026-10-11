@@ -12,6 +12,7 @@ import { BillDetailDialog } from "@/components/bills/bill-detail-dialog";
 import { RecordPaymentDialog } from "@/components/ar/record-payment-dialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { AdjustDialog, type AdjustMode } from "@/components/ar/adjust-dialog";
+import { BillDocumentActions } from "@/components/bills/bill-document-actions";
 
 /**
  * The tenant-wide bill list.
@@ -40,6 +41,8 @@ interface BillRow {
   billingCycleName: string | null;
   account: { id: string; accountNumber: string; customerName: string | null };
   charge: { entryId: string; openAmount: string; reversed: boolean } | null;
+  /** The stored PDF, or null if none has been produced for this bill. */
+  document: { generatedAt: string } | null;
 }
 
 interface BillPage {
@@ -109,8 +112,11 @@ export default function BillsPage() {
   }, [canView, load]);
 
   // One column for every act a CSR can perform here, so the header does
-  // not appear for a user who can do none of them.
-  const showActions = canEdit || canTakePayment || canReverse || canForgive;
+  // not appear for a user who can do none of them. A stored PDF counts:
+  // downloading one is a read, so a view-only user still has something
+  // to click where a document exists.
+  const showActions =
+    canEdit || canTakePayment || canReverse || canForgive || rows.some((r) => r.document);
 
   if (!canView) return <AccessDenied />;
 
@@ -344,6 +350,20 @@ export default function BillsPage() {
                             nothing outstanding; a reversed one no longer
                             stands at all.
                           */}
+                          {/*
+                            The bill as a document. Offered only once
+                            posted: the API refuses to render an unposted
+                            bill with a 409, so a button here would
+                            promise a PDF that cannot be made.
+                          */}
+                          <BillDocumentActions
+                            billId={b.id}
+                            billNumber={b.billNumber}
+                            document={b.document}
+                            canProduce={canEdit}
+                            disabled={!b.postedAt}
+                            onChanged={() => void load()}
+                          />
                           {canForgive &&
                             b.charge &&
                             !b.charge.reversed &&

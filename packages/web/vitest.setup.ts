@@ -49,7 +49,11 @@ vi.mock("@/lib/use-permission", () => ({
 }));
 
 // api-client hits fetch + NextAuth; the tests stub its methods per-case.
+// API_URL is part of the module's surface — anything that downloads a
+// file builds a URL from it — so the mock has to carry it or those
+// components fetch from "undefined/...".
 vi.mock("@/lib/api-client", () => ({
+  API_URL: "http://api.test",
   apiClient: {
     get: vi.fn(),
     post: vi.fn(),

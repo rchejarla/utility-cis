@@ -6,6 +6,7 @@ import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { BillDocumentActions } from "@/components/bills/bill-document-actions";
 import { RecordPaymentDialog } from "./record-payment-dialog";
 import { RefundDialog } from "./refund-dialog";
 import { AdjustDialog, type AdjustMode } from "./adjust-dialog";
@@ -45,6 +46,12 @@ export interface LedgerRow {
   reasonCode: string | null;
   reasonLabel: string | null;
   billNumber: string | null;
+  /**
+   * The bill's PDF, when this entry charged a bill. `generatedAt: null`
+   * means the bill has no document yet. `billNumber` above is display
+   * text; this is what the download acts on.
+   */
+  billDocument: { billId: string; generatedAt: string | null } | null;
   tender: string | null;
   memo: string | null;
   reversedByEntryId: string | null;
@@ -98,7 +105,7 @@ function describe(row: LedgerRow): string {
 
 export function ArTab({ accountId }: { accountId: string }) {
   const { toast } = useToast();
-  const { canView } = usePermission("accounts");
+  const { canView, canEdit: canProduceDocument } = usePermission("accounts");
   const { canCreate: canTakePayment, canEdit: canReverse } = usePermission("payments");
   const { canCreate: canRaiseFee, canEdit: canForgive } = usePermission("ar_adjustments");
 
@@ -134,6 +141,15 @@ export function ArTab({ accountId }: { accountId: string }) {
   }, [accountId]);
 
   useEffect(load, [load]);
+
+  /*
+   * The actions column was gated on the two permissions that write to
+   * the ledger. Downloading a bill's PDF is a read, so a user with
+   * neither still has something to click wherever a bill charge carries
+   * a document — and the column has to exist for them.
+   */
+  const showRowActions =
+    canReverse || canForgive || (page?.data.some((r) => r.billDocument) ?? false);
 
   async function confirmReverse() {
     if (!reverseRow) return;
@@ -303,7 +319,7 @@ export function ArTab({ accountId }: { accountId: string }) {
               <th style={{ ...th, textAlign: "right" }}>Charged</th>
               <th style={{ ...th, textAlign: "right" }}>Still owed</th>
               <th style={th}>Detail</th>
-              {(canReverse || canForgive) && <th style={th} aria-label="Actions" />}
+              {showRowActions && <th style={th} aria-label="Actions" />}
             </tr>
           </thead>
           <tbody>
@@ -357,8 +373,26 @@ export function ArTab({ accountId }: { accountId: string }) {
                       .filter(Boolean)
                       .join(" · ") || "—"}
                   </td>
-                  {(canReverse || canForgive) && (
+                  {showRowActions && (
                     <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                      {/* The bill itself, where staff already are when a
+                          customer phones about one. A ledger entry only
+                          exists once its bill is posted, so there is no
+                          unposted case to guard here. */}
+                      {row.billDocument && (
+                        <BillDocumentActions
+                          billId={row.billDocument.billId}
+                          billNumber={row.billNumber ?? "bill"}
+                          document={
+                            row.billDocument.generatedAt
+                              ? { generatedAt: row.billDocument.generatedAt }
+                              : null
+                          }
+                          canProduce={canProduceDocument}
+                          variant="link"
+                          onChanged={load}
+                        />
+                      )}
                       {/* Forgiving only makes sense on a charge that is
                           still owed: a credit cannot be waived, and a
                           settled charge has nothing left to forgive. */}

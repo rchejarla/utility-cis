@@ -347,6 +347,16 @@ export interface BillListRow extends BillSummary {
    * cannot reverse a bill, only the charge it raised.
    */
   charge: { entryId: string; openAmount: string; reversed: boolean } | null;
+  /**
+   * The stored PDF, or null if none has been produced.
+   *
+   * Present so the list can offer the one action that applies — produce,
+   * or download — rather than a single button whose meaning depends on
+   * state the caller cannot see. A claimed row whose upload never
+   * finished reads as null here, which is what it is: nothing to
+   * download.
+   */
+  document: { generatedAt: Date; byteSize: number } | null;
 }
 
 /**
@@ -417,6 +427,7 @@ export async function listBills(
             _count: { select: { reversedBy: true } };
           };
         };
+        documents: { select: { generatedAt: true; byteSize: true } };
       };
     }>
   >(prisma.bill, where, query, {
@@ -448,6 +459,14 @@ export async function listBills(
           openAmount: true,
           _count: { select: { reversedBy: true } },
         },
+        take: 1,
+      },
+      // PDF only — the one document type that exists. A row with no
+      // sha256 is a claim whose upload did not finish, so it is filtered
+      // out here rather than offered as a download that would 500.
+      documents: {
+        where: { documentType: "PDF", sha256: { not: null } },
+        select: { generatedAt: true, byteSize: true },
         take: 1,
       },
     },
@@ -484,6 +503,10 @@ export async function listBills(
             reversed: b.ledgerEntries[0]._count.reversedBy > 0,
           }
         : null,
+      document:
+        b.documents[0] && b.documents[0].byteSize !== null
+          ? { generatedAt: b.documents[0].generatedAt, byteSize: b.documents[0].byteSize }
+          : null,
     })),
   };
 }
