@@ -60,32 +60,110 @@ export interface TenantFixture {
   meterId3: string;
 }
 
+const RESET_TABLES = [
+  "audit_log",
+  "service_point_meter",
+  "service_point",
+  "service_agreement",
+  "meter",
+  "account",
+  "premise",
+  "rate_schedule",
+  "billing_cycle",
+  "unit_of_measure",
+  "measure_type_def",
+  "commodity",
+  "tenant_module",
+  "tenant_config",
+].join(", ");
+
+/** Postgres `lock_not_available` — what `lock_timeout` raises. */
+const LOCK_NOT_AVAILABLE = "55P03";
+const LOCK_TIMEOUT_MS = 10_000;
+const RESET_ATTEMPTS = 3;
+
+// Same reasoning as makeTenantFixture below: staying off the generated
+// Prisma types keeps this fixture from forcing heavy imports on every
+// consumer. Tests pass the real client.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ResetClient = any;
+
+function isLockTimeout(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes(LOCK_NOT_AVAILABLE) || msg.includes("lock timeout");
+}
+
+/**
+ * Who is holding the locks we failed to take. Best-effort: if this
+ * introspection itself fails, the caller still gets the original error.
+ */
+async function describeBlockers(prisma: ResetClient): Promise<string> {
+  try {
+    const rows = await prisma.$queryRawUnsafe(`
+      SELECT pid, state, wait_event_type, left(query, 120) AS query
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND pid <> pg_backend_pid()
+      ORDER BY state
+    `);
+    return JSON.stringify(rows);
+  } catch {
+    return "(pg_stat_activity unavailable)";
+  }
+}
+
 /**
  * Reset DB to a clean slate by truncating every table the tests touch
  * (audit_log first, then leaf tables, then root tables). RESTART
  * IDENTITY ensures sequence-based identifiers don't drift across runs.
+ *
+ * The TRUNCATE is bounded by `lock_timeout` and retried, because it can
+ * block. CASCADE reaches `meter_read` through its FK to `meter`, and
+ * `meter_read` is a Timescale hypertable, so this statement needs ACCESS
+ * EXCLUSIVE on it and every one of its chunks — which Timescale's
+ * background workers take periodically. Postgres has no default
+ * lock_timeout, so a collision waits forever: in the 2026-10-10 suite run
+ * one `beforeEach` in premise-loader.integration.test.ts blocked 153s and
+ * died on the 120s hookTimeout, while the tests either side of it ran in
+ * under a second. The report said only "Hook timed out in 120000ms" —
+ * nothing about a lock, which is why it read as a slow machine.
+ *
+ * The holder is transient (the next test passed 4s later), so a bounded
+ * retry turns that flake into a pass. If it ever doesn't clear, the error
+ * names the sessions on the database instead of timing out mute.
+ *
+ * `SET LOCAL` and the TRUNCATE have to share one session, hence the
+ * transaction — a bare `$executeRawUnsafe` pair can land on two different
+ * pooled connections, leaving the TRUNCATE with no timeout at all.
  */
-export async function resetDb(prisma: {
-  $executeRawUnsafe: (sql: string) => Promise<unknown>;
-}) {
-  await prisma.$executeRawUnsafe(`
-    TRUNCATE TABLE
-      audit_log,
-      service_point_meter,
-      service_point,
-      service_agreement,
-      meter,
-      account,
-      premise,
-      rate_schedule,
-      billing_cycle,
-      unit_of_measure,
-      measure_type_def,
-      commodity,
-      tenant_module,
-      tenant_config
-    RESTART IDENTITY CASCADE
-  `);
+export async function resetDb(prisma: ResetClient) {
+  for (let attempt = 1; attempt <= RESET_ATTEMPTS; attempt++) {
+    try {
+      await prisma.$transaction(
+        async (tx: { $executeRawUnsafe: (sql: string) => Promise<unknown> }) => {
+          await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = ${LOCK_TIMEOUT_MS}`);
+          await tx.$executeRawUnsafe(
+            `TRUNCATE TABLE ${RESET_TABLES} RESTART IDENTITY CASCADE`,
+          );
+        },
+        { timeout: LOCK_TIMEOUT_MS + 5_000, maxWait: 10_000 },
+      );
+      return;
+    } catch (err) {
+      if (!isLockTimeout(err) || attempt === RESET_ATTEMPTS) {
+        if (isLockTimeout(err)) {
+          throw new Error(
+            `resetDb: TRUNCATE still blocked after ${RESET_ATTEMPTS} attempts ` +
+              `at ${LOCK_TIMEOUT_MS}ms each. Sessions on this database: ` +
+              `${await describeBlockers(prisma)}`,
+            { cause: err },
+          );
+        }
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    }
+  }
 }
 
 /**
