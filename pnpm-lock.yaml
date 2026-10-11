@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@react-pdf/hyphenate@0.1.0':
+    hash: 7zbg3hcwdkwwiwo2qqqwdmolwi
+    path: patches/@react-pdf__hyphenate@0.1.0.patch
+
 importers:
 
   .:
@@ -4398,7 +4403,7 @@ snapshots:
       is-url: 1.2.4
       pdfkit: 0.20.1
 
-  '@react-pdf/hyphenate@0.1.0':
+  '@react-pdf/hyphenate@0.1.0(patch_hash=7zbg3hcwdkwwiwo2qqqwdmolwi)':
     dependencies:
       hyphen: 1.6.6
 
@@ -4489,14 +4494,14 @@ snapshots:
   '@react-pdf/textkit@6.4.2':
     dependencies:
       '@react-pdf/fns': 3.1.3
-      '@react-pdf/hyphenate': 0.1.0
+      '@react-pdf/hyphenate': 0.1.0(patch_hash=7zbg3hcwdkwwiwo2qqqwdmolwi)
       bidi-js: 1.1.0
       unicode-properties: 1.4.1
 
   '@react-pdf/textkit@7.0.1':
     dependencies:
       '@react-pdf/fns': 3.1.3
-      '@react-pdf/hyphenate': 0.1.0
+      '@react-pdf/hyphenate': 0.1.0(patch_hash=7zbg3hcwdkwwiwo2qqqwdmolwi)
       bidi-js: 1.1.0
       unicode-properties: 1.4.1
 
