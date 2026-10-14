@@ -37,9 +37,11 @@ function bill(over: Record<string, unknown> = {}) {
     billingCycleName: "Residential",
     account: { id: "acc-1", accountNumber: "A-900", customerName: "Jane Smith" },
     charge: { entryId: "le-1", openAmount: "107.50", reversed: false },
-    // The API decides this; the default is a bill that is not late, and
-    // the dueDate above is only here to be displayed.
+    // The API decides both of these; the defaults are a bill that is
+    // neither late nor part paid, and the dueDate above is only here to
+    // be displayed.
     overdue: false,
+    partPaid: false,
     ...over,
   };
 }
@@ -151,11 +153,12 @@ describe("Bills page — status", () => {
     expect(screen.queryByText("Outstanding")).not.toBeInTheDocument();
   });
 
-  it("reads Part paid when some of it has been paid", async () => {
+  it("reads Part paid when the row says something has been applied", async () => {
     get.mockResolvedValue(
       payload([
         bill({
           dueDate: "2099-01-01",
+          partPaid: true,
           charge: { entryId: "le-1", openAmount: "40.00", reversed: false },
         }),
       ]),
@@ -163,6 +166,31 @@ describe("Bills page — status", () => {
     renderPage();
 
     expect(await screen.findByText("Part paid")).toBeInTheDocument();
+  });
+
+  /**
+   * The pill used to ask `openAmount < total` here, comparing the 2dp
+   * ledger column to the 4dp bill column. The rate engine does not round
+   * and bill totals are stored at 4dp, so any bill carrying a fraction
+   * of a cent satisfied that with nothing paid — it read "Part paid"
+   * while `state=partPaid` correctly returned nothing, because no
+   * application existed. The API answers it now.
+   */
+  it("does not read Part paid on an unpaid bill whose total carries a half-cent", async () => {
+    get.mockResolvedValue(
+      payload([
+        bill({
+          dueDate: "2099-01-01",
+          total: "32.2100",
+          partPaid: false,
+          charge: { entryId: "le-1", openAmount: "32.21", reversed: false },
+        }),
+      ]),
+    );
+    renderPage();
+
+    expect(await screen.findByText("Outstanding")).toBeInTheDocument();
+    expect(screen.queryByText("Part paid")).not.toBeInTheDocument();
   });
 
   /**

@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { parseIdParam } from "../lib/route-schemas.js";
@@ -57,7 +57,11 @@ const STATUS_BY_CODE: Record<string, number> = {
  * a code and a message: a 422 that does not name the missing fields
  * leaves an operator with nothing to act on.
  */
-function sendDocumentError(reply: FastifyReply, err: unknown): FastifyReply {
+function sendDocumentError(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  err: unknown,
+): FastifyReply {
   if (err instanceof BillDocumentError || err instanceof BillPresentationError) {
     return reply.status(STATUS_BY_CODE[err.code] ?? 500).send({
       error: {
@@ -68,6 +72,17 @@ function sendDocumentError(reply: FastifyReply, err: unknown): FastifyReply {
     });
   }
   if (err instanceof ApptorConnectError) {
+    // Logged here because this is the last place the error exists: the
+    // 502 below carries only the integration name, and because this
+    // handler replies rather than rethrowing, the error never reaches
+    // the global error handler either. Without this the `cause` that
+    // distinguishes ECONNREFUSED from a DNS or TLS failure — and the
+    // status, and which key was being read — was collected and then
+    // dropped on the floor. Pino serialises `cause` under `err`.
+    request.log.error(
+      { err, integration: err.integration, status: err.status },
+      "bill document storage failed",
+    );
     // The integration name is what an operator needs to find the
     // misconfiguration. The minted link is never part of this.
     return reply.status(502).send({
@@ -116,6 +131,7 @@ function filenameFor(billNumber: string): string {
 }
 
 async function streamDocument(
+  request: FastifyRequest,
   reply: FastifyReply,
   utilityId: string,
   billId: string,
@@ -128,7 +144,7 @@ async function streamDocument(
       .header("Content-Disposition", `attachment; filename="${filenameFor(billNumber)}"`)
       .send(bytes);
   } catch (err) {
-    return sendDocumentError(reply, err);
+    return sendDocumentError(request, reply, err);
   }
 }
 
@@ -159,7 +175,7 @@ export async function billDocumentRoutes(app: FastifyInstance) {
           ),
         );
       } catch (err) {
-        return sendDocumentError(reply, err);
+        return sendDocumentError(request, reply, err);
       }
     },
   );
@@ -175,7 +191,7 @@ export async function billDocumentRoutes(app: FastifyInstance) {
         select: { billNumber: true },
       });
       if (!bill) return notFound(reply, billId);
-      return streamDocument(reply, utilityId, billId, bill.billNumber);
+      return streamDocument(request, reply, utilityId, billId, bill.billNumber);
     },
   );
 
@@ -204,7 +220,7 @@ export async function billDocumentRoutes(app: FastifyInstance) {
         select: { billNumber: true },
       });
       if (!bill) return notFound(reply, billId);
-      return streamDocument(reply, utilityId, billId, bill.billNumber);
+      return streamDocument(request, reply, utilityId, billId, bill.billNumber);
     },
   );
 }

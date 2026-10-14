@@ -111,6 +111,9 @@ describe("loadBillPresentation", () => {
       subtotal: "100.00",
       taxes: "7.50",
       credits: "0.00",
+      // Exact to cents, so summing the rounded lines and rounding the
+      // stored total agree and there is nothing to disclose.
+      rounding: null,
       total: "107.50",
     });
     expect(p.remittance.amountDue).toBe("107.50");

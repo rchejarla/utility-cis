@@ -46,7 +46,17 @@ export interface BillPresentation {
     periodEnd: Date;
   };
   groups: BillPresentationGroup[];
-  totals: { subtotal: string; taxes: string; credits: string; total: string };
+  totals: {
+    subtotal: string;
+    taxes: string;
+    credits: string;
+    /**
+     * The cent the two rounding orders disagree by, or null when they
+     * agree — which is most bills. Printed only when present.
+     */
+    rounding: string | null;
+    total: string;
+  };
   messages: Array<{ label: string; body: string }>;
   branding: { logoUrl: string | null; primaryColor: string; fontFamily: string };
   remittance: { payTo: string; addressLines: string[]; amountDue: string; dueDate: Date };
@@ -252,11 +262,43 @@ export async function loadBillPresentation(
     .filter((line): line is string => present(line))
     .map((line) => line.trim());
 
+  /*
+   * The totals box is built from the printed group subtotals, not from
+   * the stored 4dp columns.
+   *
+   * The per-group rule above — sum the already-rounded lines, because the
+   * customer can add those up — was applied to the groups and then
+   * contradicted here, where `subtotal` rounded `bill.subtotal`. Two
+   * lines of 16.1050 print as 16.11 and 16.11 under a group subtotal of
+   * 32.22, while `bill.subtotal` of 32.2100 rounds to 32.21: one page
+   * stating both, and the customer holding it can see that it does not
+   * add up. Every fixture on this branch happens to be exact to cents,
+   * so nothing caught it.
+   *
+   * `total` stays tied to `bill.total`, because that is what the ledger
+   * raised as the charge and what the remittance stub asks for; a bill
+   * must not ask for a number the account does not owe. When the two
+   * rounding orders differ, the cent between them is therefore shown as
+   * its own line rather than hidden in a total that does not follow from
+   * the lines above it. A bill whose figures visibly reconcile, rounding
+   * included, is worth more than one that silently absorbs the
+   * difference.
+   */
+  const printedSubtotal = groups.reduce(
+    (acc, group) => acc.plus(new Decimal(group.subtotal)),
+    new Decimal(0),
+  );
+  const taxes = new Decimal(money(bill.taxes));
+  const credits = new Decimal(money(bill.credits));
+  const total = new Decimal(money(bill.total));
+  const rounding = total.minus(printedSubtotal.plus(taxes).minus(credits));
+
   const totals = {
-    subtotal: money(bill.subtotal),
-    taxes: money(bill.taxes),
-    credits: money(bill.credits),
-    total: money(bill.total),
+    subtotal: printedSubtotal.toFixed(2),
+    taxes: taxes.toFixed(2),
+    credits: credits.toFixed(2),
+    rounding: rounding.isZero() ? null : rounding.toFixed(2),
+    total: total.toFixed(2),
   };
 
   return {

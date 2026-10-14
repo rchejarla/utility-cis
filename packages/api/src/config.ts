@@ -73,7 +73,16 @@ export const configSchema = z.object({
   APPTOR_CONNECT_API_KEY: z.string().default(""),
   // A capability link is a bearer credential, so its life is short.
   BILL_DOCUMENT_LINK_TTL_SECONDS: z.coerce.number().int().min(30).max(900).default(300),
-  BILL_DOCUMENT_MAX_BYTES: z.coerce.number().int().min(1024).default(10_485_760),
+  // Passed to apptor-connect as the upload ceiling for one bill PDF, so
+  // an unbounded value here is an unbounded value there. A bill is tens
+  // of kilobytes; 64 MiB is already absurd and is the point at which a
+  // misconfiguration is more likely than an intention.
+  BILL_DOCUMENT_MAX_BYTES: z
+    .coerce.number()
+    .int()
+    .min(1024)
+    .max(67_108_864)
+    .default(10_485_760),
 
   // Test / dev opt-outs.
   DISABLE_SCHEDULERS: truthyString,

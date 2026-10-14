@@ -84,12 +84,43 @@ export async function listBillMessages(utilityId: string) {
   });
 }
 
+/**
+ * Confirm the rows a message points at belong to this tenant.
+ *
+ * `accountTypeDefId` and `commodityId` arrive from the client and were
+ * written straight through. PostgreSQL enforces referential integrity
+ * with triggers that bypass RLS, so the FK accepted another tenant's id
+ * happily. Nothing could come of it at print time — `selectBillMessages`
+ * filters on the bill's own commodities, so a foreign id matches
+ * nothing — but a tenant should not be able to store a reference to
+ * another tenant's row, nor to learn that one exists by whether the
+ * write succeeds.
+ */
+async function assertTargetsAreOurs(
+  utilityId: string,
+  data: { accountTypeDefId?: string | null; commodityId?: string | null },
+): Promise<void> {
+  if (data.accountTypeDefId) {
+    await prisma.accountTypeDef.findFirstOrThrow({
+      where: { id: data.accountTypeDefId, utilityId },
+      select: { id: true },
+    });
+  }
+  if (data.commodityId) {
+    await prisma.commodity.findFirstOrThrow({
+      where: { id: data.commodityId, utilityId },
+      select: { id: true },
+    });
+  }
+}
+
 export async function createBillMessage(
   utilityId: string,
   actorId: string,
   actorName: string | undefined,
   data: BillMessageCreate,
 ) {
+  await assertTargetsAreOurs(utilityId, data);
   return auditCreate(auditCtx(utilityId, actorId, actorName), EVENT_TYPES.BILL_MESSAGE_CREATED, (tx) =>
     tx.billMessage.create({ data: { ...data, utilityId } }),
   );
@@ -103,6 +134,7 @@ export async function updateBillMessage(
   data: BillMessageUpdate,
 ) {
   const before = await prisma.billMessage.findFirstOrThrow({ where: { id, utilityId } });
+  await assertTargetsAreOurs(utilityId, data);
   return auditUpdate(
     auditCtx(utilityId, actorId, actorName),
     EVENT_TYPES.BILL_MESSAGE_UPDATED,

@@ -127,11 +127,34 @@ async function auditTrail(): Promise<Array<{ action: string; eventType: string }
  * from which a bill can legitimately be rendered.
  */
 async function postedBill(
-  opts: { utilityId?: string; issuer?: Record<string, string> | null; storage?: boolean } = {},
+  opts: {
+    utilityId?: string;
+    issuer?: Record<string, string> | null;
+    storage?: boolean;
+    /**
+     * Money, at the 4dp the whole stack actually stores. The default is
+     * exact to cents, which every fixture on this branch was — and that
+     * is precisely why nothing noticed that the printed lines and the
+     * totals box round in different orders. Pass sub-cent amounts to
+     * exercise it.
+     */
+    money?: { lines: [string, string][]; subtotal: string; taxes: string; total: string };
+  } = {},
 ): Promise<string> {
   const { prisma } = prismaImports;
   const utilityId = opts.utilityId ?? UTILITY;
   const suffix = utilityId.slice(-4);
+  const amounts =
+    opts.money ??
+    ({
+      lines: [
+        ["Base charge", "20.0000"],
+        ["Usage", "80.0000"],
+      ],
+      subtotal: "100.0000",
+      taxes: "7.5000",
+      total: "107.5000",
+    } as const);
 
   const settings: Record<string, unknown> = {};
   if (opts.issuer !== null) settings.issuer = opts.issuer ?? ISSUER;
@@ -200,10 +223,10 @@ async function postedBill(
       periodEnd: new Date("2026-02-28"),
       billDate: new Date("2026-03-01"),
       dueDate: new Date("2026-03-31"),
-      subtotal: "100.0000",
-      taxes: "7.5000",
+      subtotal: amounts.subtotal,
+      taxes: amounts.taxes,
       credits: "0.0000",
-      total: "107.5000",
+      total: amounts.total,
       billNumber: `B-${suffix}`,
       postedAt: new Date("2026-03-01"),
     },
@@ -215,10 +238,10 @@ async function postedBill(
       billId: bill.id,
       periodStart: new Date("2026-02-01"),
       periodEnd: new Date("2026-02-28"),
-      subtotal: "100.0000",
-      taxes: "7.5000",
+      subtotal: amounts.subtotal,
+      taxes: amounts.taxes,
       credits: "0.0000",
-      total: "107.5000",
+      total: amounts.total,
       minimumFloorApplied: false,
       segmentNumber: `SEG-${suffix}`,
     },
@@ -248,10 +271,7 @@ async function postedBill(
       effectiveDate: new Date("2026-01-01"),
     },
   });
-  for (const [i, [label, amount]] of [
-    ["Base charge", "20.0000"],
-    ["Usage", "80.0000"],
-  ].entries()) {
+  for (const [i, [label, amount]] of amounts.lines.entries()) {
     await prisma.billSegmentLine.create({
       data: {
         utilityId,
@@ -317,6 +337,31 @@ describe("bill documents", () => {
     expect(Object.values(persisted).join(" ")).not.toMatch(/https?:\/\//);
   }, 60_000);
 
+  /**
+   * The read path holds the row and the bytes, and so is the only place
+   * that can notice them disagreeing. Every bug this feature has had was
+   * exactly that disagreement, and this path used to compare nothing —
+   * it would have served a stale or foreign object as the customer's
+   * bill.
+   */
+  it("refuses bytes that do not match the hash recorded for them", async () => {
+    const billId = await postedBill();
+    const row = await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    // Same length, different content: a size check alone would pass.
+    const wrong = Buffer.alloc(row.byteSize, 0x41);
+    get.mockResolvedValue(wrong);
+
+    await expect(svc.readBillDocument(UTILITY, billId)).rejects.toThrow(/sha256/i);
+  }, 60_000);
+
+  it("refuses bytes of the wrong length for the row", async () => {
+    const billId = await postedBill();
+    await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    get.mockResolvedValue(Buffer.from("%PDF-truncated"));
+
+    await expect(svc.readBillDocument(UTILITY, billId)).rejects.toThrow(/bytes/i);
+  }, 60_000);
+
   it("round-trips the stored bytes on read", async () => {
     const billId = await postedBill();
     const row = await svc.generateBillDocument(UTILITY, billId, ACTOR);
@@ -369,6 +414,64 @@ describe("bill documents", () => {
     expect(moved.storageIntegration).toBe("cis-bills-v2");
     const row = await prismaImports.prisma.billDocument.findFirstOrThrow({ where: { billId } });
     expect(row.storageIntegration).toBe("cis-bills-v2");
+  }, 60_000);
+
+  /**
+   * The interleaving neither earlier review pass could see, because this
+   * file had no concurrent case at all.
+   *
+   * A creates the claim and blocks mid-upload. B adopts that claim,
+   * uploads, and completes it. A's upload then fails. A owns the row, so
+   * an ownership-only rule deletes it — discarding B's finished
+   * document, orphaning its bytes, and leaving an audit row naming a row
+   * that is gone. That is the same end state as a race loser deleting
+   * the winner's claim, reached from the other side.
+   *
+   * Ordering is forced rather than hoped for: the first upload parks on
+   * a promise this test rejects by hand.
+   */
+  it("does not delete a completed document when the creator's own upload fails", async () => {
+    const billId = await postedBill();
+
+    let startedFirstUpload!: () => void;
+    const firstUploadStarted = new Promise<void>((resolve) => {
+      startedFirstUpload = resolve;
+    });
+    let failFirstUpload!: (err: Error) => void;
+    const firstUploadOutcome = new Promise<never>((_resolve, reject) => {
+      failFirstUpload = reject;
+    });
+
+    let uploads = 0;
+    put.mockImplementation(async () => {
+      uploads += 1;
+      if (uploads === 1) {
+        startedFirstUpload();
+        await firstUploadOutcome;
+      }
+      return undefined;
+    });
+
+    // A: claims the row, then parks inside putObject.
+    const creator = svc.generateBillDocument(UTILITY, billId, ACTOR);
+    await firstUploadStarted;
+
+    // B: adopts A's unfinished claim, uploads, and completes it.
+    const adopter = await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    expect(adopter.sha256).toHaveLength(64);
+
+    // A's upload fails, after B has already stored.
+    failFirstUpload(new acError("rejected", 503, "cis-bills"));
+    await expect(creator).rejects.toThrow();
+
+    // B's document survives, and the log records one creation, not two.
+    const row = await prismaImports.prisma.billDocument.findFirstOrThrow({ where: { billId } });
+    expect(row.sha256).toBe(adopter.sha256);
+    expect(row.byteSize).toBe(adopter.byteSize);
+    const created = (await auditTrail()).filter(
+      (r) => r.eventType === "bill_document.created",
+    );
+    expect(created).toHaveLength(1);
   }, 60_000);
 
   it("leaves no row when the upload fails", async () => {
@@ -466,6 +569,53 @@ describe("bill documents", () => {
     expect(p.totals.subtotal).toBe("100.00");
     expect(p.groups[0].subtotal).toBe("100.00");
     expect(p.totals.total).toBe("107.50");
+    // Exact to cents, so the two rounding orders coincide and there is
+    // nothing to disclose.
+    expect(p.totals.rounding).toBeNull();
+  }, 60_000);
+
+  /**
+   * The same claim, on money the stack can actually produce.
+   *
+   * The rate engine never rounds and `bill_segment_line.amount` is 4dp,
+   * so a half-cent line is ordinary. Two lines of 16.1050 print as 16.11
+   * each under a group subtotal of 32.22, while the stored subtotal of
+   * 32.2100 rounds to 32.21 — the bill stated both and did not add up.
+   * Every fixture on this branch was exact to cents, which is why the
+   * test above passed either way.
+   *
+   * `Total due` still has to be what the ledger raised, so the cent is
+   * disclosed as its own line instead of being absorbed.
+   */
+  it("prints an itemisation that adds up when lines carry half-cents", async () => {
+    const billId = await postedBill({
+      money: {
+        lines: [
+          ["Water Service Charge", "16.1050"],
+          ["Sewer Service Charge", "16.1050"],
+        ],
+        subtotal: "32.2100",
+        taxes: "0.0000",
+        total: "32.2100",
+      },
+    });
+    const { loadBillPresentation } = await import("../../services/bill-presentation.service.js");
+
+    const p = await loadBillPresentation(UTILITY, billId);
+
+    // What the customer can add up.
+    expect(p.groups[0].lines.map((l) => l.amount)).toEqual(["16.11", "16.11"]);
+    expect(p.groups[0].subtotal).toBe("32.22");
+    expect(p.totals.subtotal).toBe("32.22");
+    // What the ledger says is owed, which is what the stub asks for.
+    expect(p.totals.total).toBe("32.21");
+    expect(p.remittance.amountDue).toBe("32.21");
+    // And the line that makes the two reconcile on the page.
+    expect(p.totals.rounding).toBe("-0.01");
+    const printed =
+      Number(p.totals.subtotal) + Number(p.totals.taxes) - Number(p.totals.credits) +
+      Number(p.totals.rounding);
+    expect(printed.toFixed(2)).toBe(p.totals.total);
   }, 60_000);
 });
 

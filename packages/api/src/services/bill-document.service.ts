@@ -4,7 +4,11 @@ import { billDocumentSettingsSchema, EVENT_TYPES } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
 import { config } from "../config.js";
 import { writeAuditRow } from "../lib/audit-wrap.js";
-import { putObject, getObject } from "../lib/apptor-connect/files-client.js";
+import {
+  putObject,
+  getObject,
+  ApptorConnectError,
+} from "../lib/apptor-connect/files-client.js";
 import { loadBillPresentation } from "./bill-presentation.service.js";
 import { generateBillPdf, DEFAULT_TEMPLATE_KEY } from "../bill-generation/generate-bill-pdf.js";
 
@@ -234,18 +238,26 @@ export async function generateBillDocument(
     });
   } catch (err) {
     // A claim with nothing stored is worse than no claim: it would read
-    // as a document that cannot be downloaded. Only drop a claim this
-    // call created — and because the claim was never audited, dropping
-    // it needs no compensating audit row.
+    // as a document that cannot be downloaded. Because the claim was
+    // never audited, dropping it needs no compensating audit row.
     //
-    // `claimedHere`, not `!existing`: those differ exactly when a
-    // concurrent generation claimed the row between the read and the
-    // create. This call then adopted that row, and deleting it on our own
-    // upload failure would pull the pointer out from under a generation
-    // that may already have stored its bytes — leaving them orphaned and
-    // an audit row asserting a document that no longer exists.
+    // Two conditions, and both are needed. `claimedHere` rather than
+    // `!existing`, because a concurrent generation can claim the row
+    // between the read and the create — this call then adopts that row,
+    // and a row we adopted is not ours to remove. And `sha256: null` in
+    // the delete itself, because owning the row does not mean it is
+    // still an unfinished claim: the other call may have adopted OUR
+    // claim, uploaded, and completed it while our own upload was
+    // failing. Deleting it then would discard a finished document, leave
+    // its bytes orphaned, and leave an audit row naming a row that no
+    // longer exists — the same end state as deleting someone else's
+    // claim, reached from the other side of the same race.
+    //
+    // So: mine, and still nothing stored against it.
     if (claimedHere) {
-      await prisma.billDocument.delete({ where: { id: claim.id } }).catch(() => {});
+      await prisma.billDocument
+        .deleteMany({ where: { id: claim.id, sha256: null } })
+        .catch(() => {});
     }
     throw err;
   }
@@ -322,9 +334,20 @@ export async function generateBillDocument(
   // Lost the first-store transition. The winner wrote the same bytes to
   // the same key, so its row describes this call's work as faithfully as
   // ours would have.
-  return toRow(
-    await prisma.billDocument.findUniqueOrThrow({ where: { id: claim.id } }),
-  );
+  //
+  // Read rather than read-or-throw: losing the transition means a row
+  // was there a moment ago, not that it still is. Reporting "no
+  // document" immediately after successfully storing one would be a lie
+  // in the opposite direction, so an absent row is treated as the claim
+  // never having been completed, which is what NOT_GENERATED means.
+  const winner = await prisma.billDocument.findUnique({ where: { id: claim.id } });
+  if (!winner) {
+    throw new BillDocumentError(
+      `Bill document for ${billId} was removed while being generated`,
+      "NOT_GENERATED",
+    );
+  }
+  return toRow(winner);
 }
 
 /** The stored document and its bytes, scoped to the tenant. */
@@ -344,5 +367,31 @@ export async function readBillDocument(
     connection: row.storageConnection,
     key: row.objectKey,
   });
+
+  // The row and the bytes are checked against each other, because every
+  // bug this feature has had was those two disagreeing: a row pointing
+  // at a store that no longer held the object, a pointer deleted out
+  // from under stored bytes, a regeneration that moved one and not the
+  // other. This read is the one place that holds both and so the one
+  // place that can notice. A mismatch is not a bill to hand anybody —
+  // it means the object was replaced behind us, the key collided, or
+  // the pointer is stale — so it fails loudly here rather than
+  // downloading as a PDF of somebody's else's bill.
+  if (bytes.byteLength !== row.byteSize) {
+    throw new ApptorConnectError(
+      `Stored bill document for ${billId} is ${bytes.byteLength} bytes, not the ${row.byteSize} recorded`,
+      null,
+      row.storageIntegration,
+    );
+  }
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  if (actual !== row.sha256) {
+    throw new ApptorConnectError(
+      `Stored bill document for ${billId} does not match its recorded sha256`,
+      null,
+      row.storageIntegration,
+    );
+  }
+
   return { row, bytes };
 }

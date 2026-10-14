@@ -282,6 +282,53 @@ describe("apptor-connect files client", () => {
     expect((err as Error).message).toMatch(/not JSON/);
   });
 
+  /**
+   * undici keeps the socket out of its pool until an unread body is
+   * consumed or garbage-collected, so every path that does not read one
+   * leaked a connection per call. Nothing exercised that.
+   */
+  it("releases bodies it does not read, on success and on failure", async () => {
+    const cancels: string[] = [];
+    const body = (label: string) => ({
+      cancel: async () => {
+        cancels.push(label);
+      },
+    });
+
+    // Mint ok, PUT ok: the PUT's body is of no interest but still exists.
+    fetchMock
+      .mockResolvedValueOnce({ ...linkResponse("https://ac.test/d?sig=a"), body: body("mint-ok") })
+      .mockResolvedValueOnce({ ok: true, status: 200, body: body("put-ok") });
+    await putObject({
+      integration: "cis-bills",
+      key: "k",
+      body: Buffer.from("x"),
+      maxBytes: 10,
+    });
+    expect(cancels).toContain("put-ok");
+
+    // A rejected upload: its error body is not read either.
+    cancels.length = 0;
+    fetchMock
+      .mockResolvedValueOnce({ ...linkResponse("https://ac.test/d?sig=b"), body: body("mint-ok-2") })
+      .mockResolvedValueOnce({ ok: false, status: 413, body: body("put-rejected") });
+    await putObject({
+      integration: "cis-bills",
+      key: "k",
+      body: Buffer.from("x"),
+      maxBytes: 10,
+    }).catch(() => undefined);
+    expect(cancels).toContain("put-rejected");
+
+    // A failed mint: same.
+    cancels.length = 0;
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 503, body: body("mint-failed") });
+    await mintFileLink({ integration: "cis-bills", key: "k", op: "GET", ttlSeconds: 60 }).catch(
+      () => undefined,
+    );
+    expect(cancels).toContain("mint-failed");
+  });
+
   // A minted link is a bearer credential: anyone holding it can fetch
   // the file until it expires. It must never reach a log or a caller.
   it("never puts the minted url in an error message", async () => {

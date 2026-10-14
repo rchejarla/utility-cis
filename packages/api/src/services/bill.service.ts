@@ -369,6 +369,18 @@ export interface BillListRow extends BillSummary {
    */
   overdue: boolean;
   /**
+   * Whether something has been applied against this bill's charge with
+   * some still owed — decided here for the same reason as `overdue`.
+   *
+   * The pill used to ask `openAmount < total` in the browser, which
+   * compares a 2dp ledger column to a 4dp bill column: any bill whose
+   * total carries a fraction of a cent satisfied it with nothing paid at
+   * all, and read "Part paid" while `state=partPaid` correctly returned
+   * nothing. "Part paid" is a question about applications, not about
+   * comparing two roundings of two different numbers.
+   */
+  partPaid: boolean;
+  /**
    * The receivable this bill became, or null while it is unposted.
    *
    * `openAmount` is what is still owed on this charge, which is not
@@ -427,8 +439,20 @@ function billStateWhere(state: BillState): Record<string, unknown> {
         },
       };
 
+    // Settled, which includes never having owed anything. A posted bill
+    // whose total rounds to 0.00 raises no charge at all (posting skips
+    // a zero debit), so it has no ledger entry to be settled — and with
+    // only the first clause it matched no state whatsoever: not paid,
+    // not outstanding, not unposted. It then fell through the pill's
+    // conditions to "Outstanding" and stayed there forever, on a bill
+    // that is settled by construction.
     case "paid":
-      return { ledgerEntries: { some: { ...standing, openAmount: 0 } } };
+      return {
+        OR: [
+          { ledgerEntries: { some: { ...standing, openAmount: 0 } } },
+          { postedAt: { not: null }, ledgerEntries: { none: { type: "BILL_CHARGE" } } },
+        ],
+      };
 
     // The bill's own due date, not the ledger entry's: the entry's is
     // nullable, and "overdue bill" is a question about the bill. Date
@@ -529,7 +553,7 @@ export async function listBills(
           select: {
             id: true;
             openAmount: true;
-            _count: { select: { reversedBy: true } };
+            _count: { select: { reversedBy: true; debitsIn: true } };
           };
         };
       };
@@ -561,7 +585,11 @@ export async function listBills(
         select: {
           id: true,
           openAmount: true,
-          _count: { select: { reversedBy: true } },
+          // `debitsIn` is what "part paid" is actually asked through —
+          // see billStateWhere. Counted here so the row can carry the
+          // same answer the filter gives, rather than the browser
+          // guessing at it from two columns of different precision.
+          _count: { select: { reversedBy: true, debitsIn: true } },
         },
         take: 1,
       },
@@ -608,6 +636,13 @@ export async function listBills(
         b.ledgerEntries[0]._count.reversedBy === 0 &&
         b.ledgerEntries[0].openAmount.greaterThan(0) &&
         b.dueDate < cutoff,
+      // Same conditions as the `partPaid` filter: standing, something
+      // still owed, and something already applied against it.
+      partPaid:
+        !!b.ledgerEntries[0] &&
+        b.ledgerEntries[0]._count.reversedBy === 0 &&
+        b.ledgerEntries[0].openAmount.greaterThan(0) &&
+        b.ledgerEntries[0]._count.debitsIn > 0,
     })),
   };
 }

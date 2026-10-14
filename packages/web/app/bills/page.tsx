@@ -45,6 +45,12 @@ interface BillRow {
   charge: { entryId: string; openAmount: string; reversed: boolean } | null;
   /** Decided by the API, so the pill and the overdue filter agree. */
   overdue: boolean;
+  /**
+   * Also decided by the API. Asking `openAmount < total` here compared a
+   * 2dp ledger column to a 4dp bill column, so any bill with a
+   * fractional cent read "Part paid" with nothing paid.
+   */
+  partPaid: boolean;
 }
 
 interface BillPage {
@@ -427,11 +433,23 @@ export default function BillsPage() {
                         <Pill tone="var(--success)" title="Nothing is owed on this bill">
                           Paid
                         </Pill>
+                      ) : b.postedAt && !b.charge ? (
+                        /*
+                         * Posted, but it raised no charge: a bill whose
+                         * total rounds to 0.00 posts without a debit, so
+                         * there is nothing to owe. This used to fall all
+                         * the way through to "Outstanding" and sit there
+                         * permanently on a bill that was settled the
+                         * moment it posted.
+                         */
+                        <Pill tone="var(--success)" title="Posted with nothing to charge">
+                          Paid
+                        </Pill>
                       ) : b.charge && isOverdue(b) ? (
                         <Pill tone="var(--danger)" title={`Was due ${fmtDate(b.dueDate)}`}>
                           Overdue
                         </Pill>
-                      ) : b.charge && Number(b.charge.openAmount) < Number(b.total) ? (
+                      ) : b.charge && b.partPaid ? (
                         <Pill tone="var(--warning)" title="Part of this bill has been paid">
                           Part paid
                         </Pill>
@@ -633,8 +651,14 @@ function Pill({
         textTransform: "uppercase",
         letterSpacing: "0.05em",
         color: tone,
-        background: `${tone}18`,
-        border: `1px solid ${tone}40`,
+        // `tone` is a `var(--…)` reference, and `var(--danger)18` is not
+        // that colour at 0x18 alpha: var() substitutes a whole token, so
+        // both of these declarations were dropped and every status pill
+        // rendered as bare coloured text with no chip behind it. This
+        // predates the branch, but the branch is what put four new tones
+        // on the screen. Same mistake as bill-pdf-button had.
+        background: `color-mix(in srgb, ${tone} 9%, transparent)`,
+        border: `1px solid color-mix(in srgb, ${tone} 25%, transparent)`,
         borderRadius: 999,
         whiteSpace: "nowrap",
       }}

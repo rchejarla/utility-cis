@@ -104,7 +104,13 @@ function describe(row: LedgerRow): string {
 
 export function ArTab({ accountId }: { accountId: string }) {
   const { toast } = useToast();
-  const { canView, canEdit: canProduceDocument } = usePermission("accounts");
+  // No `canEdit` here on purpose. Downloading a bill is a read, so the
+  // button stays for a view-only user exactly as it does on the Bills
+  // screen; only generating a missing one needs accounts:EDIT, and the
+  // API refuses that with a 403 the component surfaces. An unused
+  // `canEdit: canProduceDocument` sat here and read as a gate nobody had
+  // applied.
+  const { canView } = usePermission("accounts");
   const { canCreate: canTakePayment, canEdit: canReverse } = usePermission("payments");
   const { canCreate: canRaiseFee, canEdit: canForgive } = usePermission("ar_adjustments");
 

@@ -38,6 +38,7 @@ function presentation(lineCount: number): BillPresentation {
       subtotal: `${lineCount}.00`,
       taxes: "0.00",
       credits: "0.00",
+      rounding: null,
       total: `${lineCount}.00`,
     },
     messages: [{ label: "Notice", body: "Water restrictions begin June 1." }],

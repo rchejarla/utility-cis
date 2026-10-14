@@ -398,6 +398,53 @@ describe("listBills", () => {
       }
     }, 60_000);
 
+    /**
+     * `partPaid` in the row has to mean what `state=partPaid` means.
+     *
+     * The pill used to decide it in the browser with `openAmount <
+     * total` — a 2dp ledger column against a 4dp bill column — so a bill
+     * with nothing applied but a fractional cent in its total read "Part
+     * paid" and was absent from the Part-paid filter. The filter asks
+     * through the applications; so does the field now.
+     */
+    it("agrees with the partPaid filter, including on an unpaid fractional total", async () => {
+      const { prisma } = prismaImports;
+      const rowOf = async (billNumber: string) => {
+        const page = await bills.listBills(utilityId, Q);
+        return page.data.find((b) => b.billNumber === billNumber);
+      };
+
+      // Nothing applied, and a total that does not land on a cent.
+      const target = await prisma.bill.findFirstOrThrow({
+        where: { utilityId, billNumber: "B-JAN" },
+      });
+      const originalTotal = target.total;
+      await prisma.bill.update({
+        where: { id: target.id },
+        data: { total: "10.0049" },
+      });
+      const unpaid = await withCharge();
+      try {
+        expect(await found("partPaid")).not.toContain("B-JAN");
+        expect((await rowOf("B-JAN"))?.partPaid).toBe(false);
+      } finally {
+        await unpaid();
+      }
+
+      // Something applied, with some still owed.
+      const partly = await withCharge({ openAmount: "6.00", applied: true });
+      try {
+        expect(await found("partPaid")).toContain("B-JAN");
+        expect((await rowOf("B-JAN"))?.partPaid).toBe(true);
+      } finally {
+        await partly();
+        await prisma.bill.update({
+          where: { id: target.id },
+          data: { total: originalTotal },
+        });
+      }
+    }, 60_000);
+
     it("finds a settled charge as paid and nothing else", async () => {
       const cleanup = await withCharge({ openAmount: "0.00", applied: true });
       try {

@@ -159,6 +159,17 @@ export function DefaultBillTemplate({ presentation }: { presentation: BillPresen
             <Text style={s.muted}>Credits</Text>
             <Text>{printed(totals.credits)}</Text>
           </View>
+          {/*
+            Only when the per-line and whole-bill rounding disagree, so a
+            customer adding up the lines above arrives at Total due
+            exactly. Absent from almost every bill.
+          */}
+          {totals.rounding ? (
+            <View style={s.totalRow}>
+              <Text style={s.muted}>Rounding</Text>
+              <Text>{printed(totals.rounding)}</Text>
+            </View>
+          ) : null}
           <View style={s.grandTotal}>
             <Text>Total due</Text>
             <Text>{printed(totals.total)}</Text>

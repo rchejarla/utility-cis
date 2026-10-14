@@ -115,6 +115,35 @@ bill answers 422 `RECIPIENT_INCOMPLETE` — a data condition, not config,
 and correct behaviour: a bill with a blank recipient should not be
 mailable.
 
+> **Changing `storageIntegration` later does not move documents already
+> stored.** Each `bill_document` row records the integration its bytes
+> were written to, so after the setting changes, previously generated
+> documents keep pointing at the old one. New bills and any forced
+> regeneration use the new integration and repair their own row; nothing
+> touches historical rows.
+>
+> This matters because the usual reason to change the setting is that the
+> old integration is going away. When it does, every historical download
+> answers 502 `STORAGE_UNAVAILABLE` naming the old integration, and the
+> only repair in this slice is **Regenerate PDF** on each affected bill,
+> one at a time. A bulk re-point is not built.
+>
+> So: if the old store is being retired, either keep it readable until
+> its documents have been regenerated, or accept that bills before the
+> switch are not downloadable until someone regenerates them. The bytes
+> in the old store are not deleted by any of this — see Rollback, where
+> the same fact cuts the other way.
+
+### Follow-up carried out of review
+
+The tenant logo is fetched from `tenantTheme.logoUrl` while a bill
+renders, with the request restricted to https and public addresses and
+every redirect re-checked (`generate-bill-pdf.ts`). That restriction is
+the mitigation, not the fix: the fix is to stop fetching a
+tenant-supplied URL at render time and have the logo uploaded as an
+`Attachment` instead, which also removes a remote dependency from the
+bytes of every bill. Worth doing in the next slice that touches theming.
+
 ## 5. Verify
 
 ```bash
