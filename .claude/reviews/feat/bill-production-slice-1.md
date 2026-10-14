@@ -324,10 +324,104 @@ a required field the service omits.
      with what is there, not a regression from this branch.
 
 ## Adversarial review (Tier 2+)
-- [ ] Dispatched adversarial-reviewer
-- Blocking findings: <category + file:line + disposition, or "none">
-- Non-blocking findings: <category + file:line + disposition, or "none">
-- Reviewer's meta-notes: <which hostile question surfaced the most issues>
+- [x] Dispatched adversarial-reviewer
+- 5 blocking, 11 non-blocking. All 16 fixed; nothing deferred. Two of the
+  five blocking findings were in code written earlier the same day to
+  close L1 findings, which is the reason this gate exists.
+- **Blocking 1 — the L1 Critical fix was half a fix.**
+  `bill-document.service.ts` — `claimedHere` answers "did this call create
+  the row", not "is it still an unfinished claim". Creator A blocks
+  mid-upload; adopter B completes the row and returns 200; A's upload then
+  fails and A deletes B's *finished* document. Object in the store, no
+  row, and an audit row naming an id that is gone — the same end state as
+  the original Critical, reached from the other side of the same race, and
+  reachable from two CSRs on one bill or a double click. Now
+  `deleteMany({ id, sha256: null })`: mine, and still nothing stored
+  against it. Covered by the first concurrent test this suite has had,
+  which forces the interleaving by parking the first upload on a promise
+  the test rejects by hand.
+- **Blocking 2 — the `overdue` divergence survived one line below it.**
+  `app/bills/page.tsx` computed the "Part paid" pill as
+  `openAmount < total`: a 2dp ledger column against a 4dp bill column.
+  The rate engine never rounds and bill totals are stored at 4dp, so any
+  bill carrying a fraction of a cent satisfied it with nothing paid —
+  reading "Part paid" while `state=partPaid`, which asks through the
+  applications, correctly returned nothing. The API now answers it the
+  same way the filter does, pinned by a test that asserts field and
+  filter agree on a `10.0049` total. The cross-layer audit had checked
+  this exact row for symmetry and asked "is every field read" rather
+  than "do the two readers agree".
+- **Blocking 3 — the printed bill did not add up.** Group subtotals sum
+  the already-rounded lines, deliberately and documented ("what the
+  customer can add up has to be what is printed"), while the totals box
+  rounded the stored 4dp columns. Two lines of `16.1050` print as
+  `16.11 + 16.11` under a group subtotal of `32.22`, with the totals box
+  reading `32.21`: one page stating both. The totals box now derives from
+  the printed lines; `Total due` stays tied to what the ledger raised,
+  because a bill must not ask for a number the account does not owe; and
+  the cent between the two rounding orders prints as its own `Rounding`
+  line rather than being absorbed into a total that does not follow from
+  the lines above it.
+- **Blocking 4 — SSRF through a tenant-editable field.** The logo fetch
+  added for L1 #6 took `tenantTheme.logoUrl` (written under `theme:EDIT`,
+  validated only as a URL) and fetched it from inside the API, following
+  redirects. `169.254.169.254`, `127.0.0.1`, `metadata.google.internal`
+  and `[::1]` were all accepted, and a public host redirecting to an
+  internal address was followed. Not blind: anything answering
+  `image/png` under 2 MiB came back base64-embedded in a PDF the
+  attacker downloads, so it is a read primitive with the API's network
+  position, driven by a tenant role. Now https only, DNS resolved with
+  every answer checked against loopback/private/link-local/CGNAT/
+  multicast ranges, and redirects followed by hand with each hop
+  re-checked. Writing the test found a further hole of my own: `URL`
+  normalises `[::ffff:127.0.0.1]` to the hex form `::ffff:7f00:1`, which
+  the dotted-form check let through to loopback.
+- **Blocking 5 — the size cap was applied after the memory was spent.**
+  `arrayBuffer()` buffered the whole body and *then* compared it to
+  `LOGO_MAX_BYTES`, so a hostile 64 MiB response declared as `image/png`
+  cost 64 MiB of the API's heap before being rejected — the cap
+  documented an intention the code did not carry out. Now rejected on
+  `content-length` and enforced while streaming, abandoning the response
+  the moment it goes over.
+- **Non-blocking — all 11 fixed.** The download path held `row.sha256`
+  and the bytes and compared neither, which is worth stating plainly:
+  every bug this feature has had was the row and the bytes disagreeing,
+  and this was the one place that could notice and did not. It now
+  verifies length and hash and fails loudly rather than serving a stale
+  or foreign object as a customer's bill. Also: `ApptorConnectError.cause`
+  was collected by an L1 fix and never logged — `sendDocumentError`
+  replies instead of rethrowing, so it never reached the global handler
+  either; a posted bill whose total rounds to `0.00` raises no charge and
+  so matched *no* status filter, reading "Outstanding" forever on
+  something settled by construction; the same `var()`-is-not-an-alpha
+  -suffix bug as L1 fixed in `bill-pdf-button` was still live in the
+  bills page `Pill`, so every status chip rendered as bare text;
+  `canProduceDocument` was dead in `ar-tab`; `accountTypeDefId` and
+  `commodityId` on a bill message accepted another tenant's ids, since
+  PostgreSQL's RI triggers bypass RLS; `BILL_DOCUMENT_MAX_BYTES` had no
+  ceiling while being passed to apptor-connect as one; the post-loss read
+  used `findUniqueOrThrow`; and the body-draining fix had no test.
+  Historical documents orphaning when `storageIntegration` changes is now
+  written into the runbook, with the point that the usual reason to change
+  it is that the old store is being retired.
+- Reviewer's meta-notes: the user-journey trace surfaced the most —
+  following a row from `ledger_entry.open_amount` through serialization to
+  the pill produced blocking 2, and following `bill_segment_line.amount`
+  through `money()` to the template produced blocking 3. Three structural
+  lessons, which are worth more than the individual fixes:
+  1. **Every fixture on this branch was exact to cents** — the seed, the
+     integration fixtures, and therefore the live smoke test too — while
+     the whole stack stores 4dp. That made an entire class of
+     rounding-order bug invisible to every gate that ran. The fixture is
+     now parameterised and one case carries half-cents.
+  2. **Pattern-class findings need a repo-wide grep, not a point fix.**
+     L1 fixed one `var()` alpha suffix, one dead `canEdit` and one
+     unordered `[0]`; a second instance of each survived in a file the
+     same diff touched.
+  3. **A fix is not evidence.** Two of five blocking findings were in
+     code written hours earlier to close review findings, and the
+     `maxBytes` regression was caught only by re-running the live path
+     rather than trusting a green suite.
 
 ## Runbook + rollback (Tier 3)
 - Runbook path: `docs/runbooks/bill-production-slice-1.md`
@@ -370,9 +464,47 @@ a required field the service omits.
     provisioning question; not a decision this branch can make.
 
 ## Final verdict
-- [ ] All required gates passed for declared tier
-- [ ] Checklist committed
-- [ ] Ready to ship
+- [x] All required gates passed for declared tier — L1, smoke test,
+  cross-layer contract check and adversarial review are all populated
+  with evidence, and every finding from all four is fixed: 5 cross-layer
+  orphans, 23 L1 findings, 16 adversarial findings. Nothing deferred.
+- [x] Checklist committed
+- [ ] **Ready to ship — not by this session.** Two Tier 3 requirements
+  are unmet and cannot be met from here, both recorded under Escape
+  hatches: there was no staging environment, so the deploy has had no
+  dry run, and the rollback SQL has never been executed anywhere. For a
+  change whose runbook opens with three prerequisites that fail silently,
+  that is the gap that matters. A human with a staging environment should
+  run section 5 of the runbook and the rollback before this merges.
 
-Signed: <Claude-session-or-human-reviewer>
-Date: YYYY-MM-DD
+Verification run at the point of signing, all on the current tree:
+- `pnpm typecheck` — clean across shared, api and web.
+- API unit suite — 578 passed, 4 skipped.
+- Web unit suite — 197 passed.
+- `bill-document.integration` — 28 passed, including the first
+  concurrency case on the claim/upload/complete path and a half-cent
+  money fixture.
+- `bill-list.integration` — 33 passed, including the due-date boundary
+  and the partPaid field-vs-filter agreement.
+- `apptor-connect-files-client` — 14 passed; `logo-fetch` — 23 passed.
+- Live, against a real apptor-connect and minio: `POST` 200 → `GET` 200,
+  `application/pdf`, 3719 bytes, downloaded sha256 equal to the stored
+  hash, which now also means the read path's own verification agrees with
+  the store. `partPaid` true on exactly the bill with an application, and
+  `state=partPaid` returned exactly that bill.
+
+What a reader of this branch should carry forward, more than any single
+fix:
+1. The running service, not its documentation, is the contract. Twice
+   apptor-connect's spec was wrong in a way that would have shipped: an
+   annotation implying `X-Api-Key` cannot authenticate the files plane,
+   and a required field it does not send.
+2. A fix is not evidence. Two of five blocking adversarial findings, and
+   the `maxBytes` regression, were introduced by review fixes earlier the
+   same day and caught only by re-running the real path.
+3. Fixtures that are all exact to cents hide every rounding-order bug in
+   a stack that stores four decimal places.
+
+Signed: Claude Opus 5 (session), for the review gates only — the staging
+dry run and rollback test remain for a human.
+Date: 2026-10-14
