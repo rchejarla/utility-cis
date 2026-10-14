@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { config } from "../../config.js";
 
 /**
@@ -25,9 +26,60 @@ export class ApptorConnectError extends Error {
     message: string,
     readonly status: number | null,
     readonly integration: string,
+    options?: { cause?: unknown },
   ) {
-    super(message);
+    // The underlying error is carried rather than dropped: ECONNREFUSED,
+    // a DNS failure and a TLS handshake error all produce the same
+    // "unreachable" message, and without a cause the operator has
+    // nothing to tell them apart.
+    super(message, options);
     this.name = "ApptorConnectError";
+  }
+}
+
+/**
+ * The fields of apptor-connect's mint response this client relies on,
+ * checked rather than asserted. A 200 whose body is not what we expect
+ * would otherwise surface as a TypeError from somewhere downstream and
+ * reach the caller as a 500, bypassing the error mapping that exists to
+ * turn every storage failure into a 502 naming the integration.
+ *
+ * Their response carries `grantedTtlSeconds` and `via` as well; this
+ * client does not use them, so they are not required here.
+ */
+const mintResponseSchema = z.object({
+  url: z.string().min(1),
+  method: z.enum(["GET", "PUT"]),
+  expiresAt: z.string().min(1),
+  /**
+   * Absent on a GET link, and the spec is wrong about this: it lists
+   * `maxBytes` as required and documents it as "null for a download",
+   * while the service omits the field altogether. Requiring it here
+   * rejected every download with a 502 — caught within a minute of
+   * pointing this client at a real apptor-connect, and invisible to the
+   * local fake, which answers whatever we taught it to.
+   *
+   * Normalised to null so `FileLink.maxBytes` keeps meaning "no limit
+   * applies", whichever way their serialiser expresses it.
+   */
+  maxBytes: z
+    .number()
+    .nullish()
+    .transform((v) => v ?? null),
+});
+
+/**
+ * Release a response whose body we are not going to read.
+ *
+ * undici holds the socket out of the keep-alive pool until an unread
+ * body is consumed or garbage collected, so every error path and the
+ * bodyless PUT success would otherwise leak a connection per call.
+ */
+async function discardBody(res: Response): Promise<void> {
+  try {
+    await res.body?.cancel();
+  } catch {
+    // A body that cannot be cancelled is already finished with.
   }
 }
 
@@ -74,10 +126,12 @@ export async function mintFileLink(args: MintArgs): Promise<FileLink> {
       `apptor-connect unreachable while minting a ${args.op} link`,
       null,
       args.integration,
+      { cause },
     );
   }
 
   if (!res.ok) {
+    await discardBody(res);
     throw new ApptorConnectError(
       `Minting a ${args.op} link failed with ${res.status}`,
       res.status,
@@ -85,7 +139,33 @@ export async function mintFileLink(args: MintArgs): Promise<FileLink> {
     );
   }
 
-  const json = (await res.json()) as FileLink;
+  let minted: unknown;
+  try {
+    minted = await res.json();
+  } catch (cause) {
+    throw new ApptorConnectError(
+      `Minting a ${args.op} link returned a body that is not JSON`,
+      res.status,
+      args.integration,
+      { cause },
+    );
+  }
+
+  const parsed = mintResponseSchema.safeParse(minted);
+  if (!parsed.success) {
+    // Deliberately does not quote the body: a well-formed-enough
+    // response holds a live capability link, and this message is bound
+    // for a log.
+    throw new ApptorConnectError(
+      `Minting a ${args.op} link returned an unexpected shape: ${parsed.error.issues
+        .map((i) => i.path.join("."))
+        .join(", ")}`,
+      res.status,
+      args.integration,
+    );
+  }
+
+  const json = parsed.data;
   return {
     url: json.url,
     method: json.method,
@@ -128,16 +208,22 @@ export async function putObject(args: {
       `Upload of ${args.key} failed: apptor-connect unreachable`,
       null,
       args.integration,
+      { cause },
     );
   }
 
   if (!res.ok) {
+    await discardBody(res);
     throw new ApptorConnectError(
       `Upload of ${args.key} rejected with ${res.status}`,
       res.status,
       args.integration,
     );
   }
+
+  // A PUT's response body is of no interest, which is not the same as it
+  // not existing.
+  await discardBody(res);
 }
 
 /** Read the bytes at `key`. */
@@ -163,10 +249,12 @@ export async function getObject(args: {
       `Download of ${args.key} failed: apptor-connect unreachable`,
       null,
       args.integration,
+      { cause },
     );
   }
 
   if (!res.ok) {
+    await discardBody(res);
     throw new ApptorConnectError(
       `Download of ${args.key} failed with ${res.status}`,
       res.status,

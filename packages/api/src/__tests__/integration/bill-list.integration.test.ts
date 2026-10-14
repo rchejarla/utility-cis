@@ -345,6 +345,59 @@ describe("listBills", () => {
       }
     });
 
+    /**
+     * The due-date boundary, in the host's own zone, asserted in the
+     * filter and in the row together.
+     *
+     * `bill.dueDate` is `@db.Date`, so the comparison point has to be UTC
+     * midnight of the LOCAL calendar date. Deriving it from UTC parts
+     * instead — `new Date().toISOString().slice(0, 10)` — moved "today"
+     * on at UTC midnight, so from early evening anywhere west of
+     * Greenwich a bill due today came back from `state=overdue`. The row
+     * disagreed, because the pill was computed in the browser's zone
+     * instead. One of those answers had to go; this pins what is left.
+     */
+    it("does not call a bill due today overdue, in the filter or the row", async () => {
+      const { prisma } = prismaImports;
+      const target = await prisma.bill.findFirstOrThrow({
+        where: { utilityId, billNumber: "B-JAN" },
+      });
+      const originalDueDate = target.dueDate;
+      const now = new Date();
+      const dueToday = new Date(
+        Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()),
+      );
+      const dueYesterday = new Date(dueToday.getTime() - 86_400_000);
+
+      const rowOf = async (billNumber: string) => {
+        const page = await bills.listBills(utilityId, Q);
+        return page.data.find((b) => b.billNumber === billNumber);
+      };
+
+      const cleanup = await withCharge();
+      try {
+        await prisma.bill.update({
+          where: { id: target.id },
+          data: { dueDate: dueToday },
+        });
+        expect(await found("overdue")).not.toContain("B-JAN");
+        expect((await rowOf("B-JAN"))?.overdue).toBe(false);
+
+        await prisma.bill.update({
+          where: { id: target.id },
+          data: { dueDate: dueYesterday },
+        });
+        expect(await found("overdue")).toContain("B-JAN");
+        expect((await rowOf("B-JAN"))?.overdue).toBe(true);
+      } finally {
+        await prisma.bill.update({
+          where: { id: target.id },
+          data: { dueDate: originalDueDate },
+        });
+        await cleanup();
+      }
+    }, 60_000);
+
     it("finds a settled charge as paid and nothing else", async () => {
       const cleanup = await withCharge({ openAmount: "0.00", applied: true });
       try {

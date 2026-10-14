@@ -285,11 +285,36 @@ describe("bill documents", () => {
     expect(first.templateKey).toBe("default-bill-v1");
   }, 60_000);
 
-  it("stores no url, only a pointer", async () => {
+  /**
+   * The storage design: this service addresses a file by pointer —
+   * integration name plus key — and never by url. apptor-connect holds
+   * the vendor credential and mints a link per operation, so a url
+   * reaching either the row or the client's arguments would mean a
+   * capability link had been persisted.
+   *
+   * This used to assert that the returned row's JSON contained no
+   * "http", which no field of `BillDocumentRow` could have held in the
+   * first place. The assertion that can fail is about what the service
+   * asks the files client for.
+   */
+  it("addresses the file by pointer, never by url", async () => {
     const billId = await postedBill();
     const row = await svc.generateBillDocument(UTILITY, billId, ACTOR);
 
-    expect(JSON.stringify(row)).not.toContain("http");
+    const args = put.mock.calls[0][0] as Record<string, unknown>;
+    expect(args).toMatchObject({
+      integration: "cis-bills",
+      key: `bills/${UTILITY}/${billId}.pdf`,
+    });
+    expect(Object.keys(args)).not.toContain("url");
+    // The stored row names the same pointer, and nothing resembling one
+    // of apptor-connect's minted links.
+    expect(row.objectKey).toBe(`bills/${UTILITY}/${billId}.pdf`);
+    expect(row.storageIntegration).toBe("cis-bills");
+    const persisted = await prismaImports.prisma.billDocument.findFirstOrThrow({
+      where: { billId },
+    });
+    expect(Object.values(persisted).join(" ")).not.toMatch(/https?:\/\//);
   }, 60_000);
 
   it("round-trips the stored bytes on read", async () => {

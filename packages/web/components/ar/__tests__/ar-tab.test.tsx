@@ -339,7 +339,11 @@ describe("ArTab — the bill's PDF", () => {
     renderTab();
 
     await screen.findByRole("table");
+    // View bill is the only bill-scoped action this tab renders, so it is
+    // the whole of the claim. There was a second assertion here about a
+    // `button` named "Regenerate": nothing in the AR tab has ever offered
+    // regeneration — it lives on the Bills screen behind a menu — so it
+    // guarded a feature that does not exist here and could not fail.
     expect(screen.queryByRole("button", { name: "View bill" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Regenerate" })).not.toBeInTheDocument();
   });
 });

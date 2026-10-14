@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api-client";
-import { usePermission } from "@/lib/use-permission";
 import { BillPdfButton } from "./bill-pdf-button";
 
 interface SegmentLine {
@@ -34,6 +33,13 @@ interface BillWithSegments {
   periodEnd: string;
   billDate: string;
   dueDate: string;
+  /**
+   * Carried so the document action can be gated the same way the list
+   * row gates it. The detail payload has always included this; the type
+   * simply left it out, which is why the dialog offered a PDF for an
+   * unposted bill and spent a 404 and a 409 toast finding out.
+   */
+  postedAt: string | null;
   subtotal: string;
   taxes: string;
   credits: string;
@@ -45,7 +51,6 @@ const fmt = (s: string) => `$${parseFloat(s).toFixed(2)}`;
 const ymd = (s: string) => s.slice(0, 10);
 
 export function BillDetailDialog({ billId, onClose }: { billId: string; onClose: () => void }) {
-  const { canEdit } = usePermission("accounts");
   const [bill, setBill] = useState<BillWithSegments | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -109,10 +114,12 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
                 its PDF deserves, and the row stays legible without it.
               */}
               <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                <BillPdfButton
-                  billId={bill.id}
-                  billNumber={bill.billNumber}
-                />
+                {bill.postedAt && (
+                  <BillPdfButton
+                    billId={bill.id}
+                    billNumber={bill.billNumber}
+                  />
+                )}
               </div>
             </div>
 

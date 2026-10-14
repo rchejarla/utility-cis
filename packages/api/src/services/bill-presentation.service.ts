@@ -112,7 +112,21 @@ export async function loadBillPresentation(
       account: {
         include: {
           customer: true,
-          billingAddresses: true,
+          // Ordered, because the bill prints exactly one of these and
+          // took whichever the database happened to return first. An
+          // account with two addresses therefore printed an arbitrary
+          // one, and could print a different one on a regeneration —
+          // which also breaks the byte-stability that makes `sha256`
+          // meaningful as "has this document changed?".
+          //
+          // Primary first; failing that the oldest, since an account
+          // whose only address is not flagged primary still has to be
+          // billable. `id` is the final tiebreak so the answer cannot
+          // depend on row order.
+          billingAddresses: {
+            orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }, { id: "asc" }],
+            take: 1,
+          },
         },
       },
       segments: {

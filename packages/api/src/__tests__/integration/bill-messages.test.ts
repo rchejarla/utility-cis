@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { Prisma } from "@utility-cis/shared/src/generated/prisma";
 import { createTestApp, createTestToken } from "../setup.js";
 import { prisma } from "../../lib/prisma.js";
 
@@ -105,6 +106,82 @@ describe("/api/v1/bill-messages", () => {
     });
 
     expect(res.statusCode).toBe(400);
+  });
+
+  /**
+   * PATCH and DELETE had no tests at all, and the only thing keeping one
+   * tenant out of another's messages is the `findFirstOrThrow({ id,
+   * utilityId })` each performs before writing — the update and delete
+   * themselves match on `id` alone. Removing that guard broke nothing,
+   * which is the state these three tests exist to end.
+   */
+  const MESSAGE_ID = "11111111-1111-4111-8111-111111111111";
+  const OTHER_TENANTS_MESSAGE_ID = "22222222-2222-4222-8222-222222222222";
+
+  it("updates a message, having first proved it belongs to this tenant", async () => {
+    const found = prisma.billMessage.findFirstOrThrow as never as ReturnType<typeof vi.fn>;
+    found.mockResolvedValue({ id: MESSAGE_ID, utilityId, label: "Notice", body: "Old" });
+    (prisma.billMessage.update as never as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: MESSAGE_ID,
+      label: "Notice",
+    });
+
+    const app = await createTestApp();
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/bill-messages/${MESSAGE_ID}`,
+      headers,
+      payload: { body: "New text" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(found.mock.calls[0][0].where).toEqual({ id: MESSAGE_ID, utilityId });
+  });
+
+  it("answers 404 for a message belonging to another tenant", async () => {
+    // The real error class, not a plain Error carrying a `code`: the
+    // handler's P2025 → 404 branch is an `instanceof` check, so a
+    // look-alike would have been a 500 here and the test would have
+    // asserted behaviour the application does not have.
+    (prisma.billMessage.findFirstOrThrow as never as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError("No BillMessage found", {
+        code: "P2025",
+        clientVersion: "test",
+      }),
+    );
+
+    const app = await createTestApp();
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/bill-messages/${OTHER_TENANTS_MESSAGE_ID}`,
+      headers,
+      payload: { body: "New text" },
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(prisma.billMessage.update as never as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
+
+  it("deletes a message and audits it with no after-state", async () => {
+    const found = prisma.billMessage.findFirstOrThrow as never as ReturnType<typeof vi.fn>;
+    found.mockResolvedValue({ id: MESSAGE_ID, utilityId, label: "Notice", body: "Text" });
+
+    const app = await createTestApp();
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/bill-messages/${MESSAGE_ID}`,
+      // Authorization only: declaring a JSON content-type on a request
+      // with no body is a 400 before the route is ever reached.
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(204);
+    expect(found.mock.calls[0][0].where).toEqual({ id: MESSAGE_ID, utilityId });
+    const audit = (prisma.auditLog.create as never as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(audit.data.action).toBe("DELETE");
+    // A deleted row is in no state; this used to record `{ id }`.
+    expect(audit.data.afterState).not.toEqual({ id: MESSAGE_ID });
+    expect(audit.data.beforeState).toMatchObject({ id: MESSAGE_ID });
   });
 
   it("refuses a caller without settings:EDIT", async () => {

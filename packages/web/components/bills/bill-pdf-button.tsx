@@ -108,9 +108,14 @@ export function BillPdfButton({
     padding: "3px 8px",
     fontSize: 10,
     fontWeight: 600,
-    background: "var(--info)18",
+    // `var(--info)18` does not mean "--info at 0x18 alpha": var()
+    // substitutes a whole token, so the result was two tokens and the
+    // declaration was dropped, leaving the pill with no tint and no
+    // border. color-mix is the form that works, and the one
+    // settings/bill-production already uses.
+    background: "color-mix(in srgb, var(--info) 9%, transparent)",
     color: "var(--info)",
-    border: "1px solid var(--info)40",
+    border: "1px solid color-mix(in srgb, var(--info) 25%, transparent)",
     borderRadius: "var(--radius)",
   };
   const link: React.CSSProperties = {

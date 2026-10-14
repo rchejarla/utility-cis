@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
+import { Prisma } from "@utility-cis/shared/src/generated/prisma";
 import { billDocumentSettingsSchema, EVENT_TYPES } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
 import { config } from "../config.js";
-import { auditUpdate } from "../lib/audit-wrap.js";
+import { writeAuditRow } from "../lib/audit-wrap.js";
 import { putObject, getObject } from "../lib/apptor-connect/files-client.js";
 import { loadBillPresentation } from "./bill-presentation.service.js";
 import { generateBillPdf, DEFAULT_TEMPLATE_KEY } from "../bill-generation/generate-bill-pdf.js";
@@ -83,7 +84,22 @@ function storageOf(settings: unknown): { integration: string; connection: string
       ? (settings as { billDocuments?: unknown }).billDocuments
       : undefined;
   const parsed = billDocumentSettingsSchema.safeParse(raw ?? {});
-  const integration = parsed.success ? parsed.data.storageIntegration : undefined;
+  // Settings that exist but cannot be read are a different operator
+  // problem from settings that were never filled in, and they used to
+  // produce the same message: "set the storage integration under
+  // Settings", naming a field the settings page shows as already set.
+  // Say which field is wrong instead.
+  if (!parsed.success) {
+    const paths = parsed.error.issues.map((i) => `billDocuments.${i.path.join(".")}`);
+    throw new BillDocumentError(
+      `This tenant's bill-document settings cannot be read: ${parsed.error.issues
+        .map((i) => `${i.path.join(".") || "(root)"} ${i.message}`)
+        .join("; ")}`,
+      "STORAGE_NOT_CONFIGURED",
+      paths,
+    );
+  }
+  const integration = parsed.data.storageIntegration;
   if (!integration) {
     throw new BillDocumentError(
       "No bill-document storage integration is configured for this tenant. Set it under Settings.",
@@ -91,8 +107,7 @@ function storageOf(settings: unknown): { integration: string; connection: string
       ["billDocuments.storageIntegration"],
     );
   }
-  const connection = parsed.success ? parsed.data.storageConnection || null : null;
-  return { integration, connection };
+  return { integration, connection: parsed.data.storageConnection || null };
 }
 
 /**
@@ -100,11 +115,24 @@ function storageOf(settings: unknown): { integration: string; connection: string
  *
  * Order matters and is the reverse of a filesystem design. The row is
  * claimed FIRST, so the unique constraint on (bill_id, document_type)
- * decides which of two concurrent generations proceeds and the loser never
- * uploads at all. That keeps correctness independent of whether two
- * generations produce identical bytes — they do today, and a stabilizer
- * keeps it that way, but a design that breaks when the generator changes
- * is a design waiting to break.
+ * decides which of two concurrent generations OWNS the row.
+ *
+ * It does not make the upload exclusive, and an earlier version of this
+ * comment claimed it did. The loser of that race adopts the winner's
+ * claim and uploads too, because an unfinished claim has to stay
+ * completable: a row with a null sha256 may equally be the wreckage of a
+ * generation that crashed mid-upload, and refusing to touch it would
+ * leave a bill permanently undownloadable. Telling those two apart needs
+ * a lease, which is not worth building until something demands it.
+ *
+ * What that costs, stated rather than glossed: two concurrent
+ * generations can both upload. They write identical bytes to the same
+ * key — today by determinism and a stabilizer, which is why this is
+ * tolerable — so the stored object is right either way. The residue is
+ * that each writes its own audit row, and that a loser whose upload
+ * succeeds while the winner's fails ends up with bytes in the store and
+ * no pointer to them. Both are bounded by `force` being an operator
+ * action on one bill, not a scheduled fan-out.
  *
  * A row whose byteSize and sha256 are still null is a claim whose
  * upload did not finish: it is completed rather than returned.
@@ -150,6 +178,11 @@ export async function generateBillDocument(
   // download it, and the upload that would make it real may still fail.
   // The audit row is written once the bytes are stored, so the log never
   // asserts a document that does not exist.
+  // Whether THIS call brought the row into being, which is not the same
+  // question as whether one existed when we looked. A concurrent
+  // generation can claim between the read above and the create below; we
+  // then adopt its row, and a row we adopted is not ours to remove.
+  let claimedHere = false;
   const claim =
     existing ??
     (await prisma.billDocument
@@ -165,8 +198,21 @@ export async function generateBillDocument(
           isPaperless: bill.account.paperlessBilling,
         },
       })
+      .then((row) => {
+        claimedHere = true;
+        return row;
+      })
       .catch(async (err: unknown) => {
-        // Lost the race: another generation claimed it first.
+        // Lost the race: another generation claimed it first. Only a
+        // unique-constraint collision means that; every other write
+        // failure is a real one, and re-querying it would dress a broken
+        // database up as a race and then rethrow something misleading.
+        if (
+          !(err instanceof Prisma.PrismaClientKnownRequestError) ||
+          err.code !== "P2002"
+        ) {
+          throw err;
+        }
         const won = await prisma.billDocument.findUnique({
           where: { billId_documentType: { billId, documentType: PDF } },
         });
@@ -191,7 +237,14 @@ export async function generateBillDocument(
     // as a document that cannot be downloaded. Only drop a claim this
     // call created — and because the claim was never audited, dropping
     // it needs no compensating audit row.
-    if (!existing) {
+    //
+    // `claimedHere`, not `!existing`: those differ exactly when a
+    // concurrent generation claimed the row between the read and the
+    // create. This call then adopted that row, and deleting it on our own
+    // upload failure would pull the pointer out from under a generation
+    // that may already have stored its bytes — leaving them orphaned and
+    // an audit row asserting a document that no longer exists.
+    if (claimedHere) {
       await prisma.billDocument.delete({ where: { id: claim.id } }).catch(() => {});
     }
     throw err;
@@ -202,15 +255,19 @@ export async function generateBillDocument(
   // what the log records is the fact, not the statement. A forced
   // regeneration over a stored document is a revision, and carries the
   // replaced hash in its before state so the replacement is traceable.
+  //
+  // "One" is enforced rather than assumed. Two concurrent generations can
+  // both reach this point having uploaded the same bytes to the same key
+  // (see the note on the claim above), and both would otherwise write
+  // `bill_document.created` for a single document. The first store is
+  // therefore a conditional update guarded on `sha256` still being null:
+  // exactly one call can make that transition, and the one that loses
+  // writes no audit row and returns what the winner stored. The audit row
+  // stays in the same transaction as the mutation, which is the whole
+  // point of audit-wrap, so this uses `writeAuditRow` directly rather
+  // than doing the mutation outside it.
   const wasStored = claim.sha256 !== null;
-  const stored = await auditUpdate(
-    { utilityId, actorId, entityType: "BillDocument" },
-    wasStored ? EVENT_TYPES.BILL_DOCUMENT_REVISED : EVENT_TYPES.BILL_DOCUMENT_CREATED,
-    wasStored ? claim : null,
-    (tx) =>
-      tx.billDocument.update({
-        where: { id: claim.id },
-        data: {
+  const data = {
           byteSize: pdf.length,
           sha256,
           generatedAt: new Date(),
@@ -233,14 +290,41 @@ export async function generateBillDocument(
           // apptor-connect, which 404s an integration it does not have —
           // the local fake accepted every name, so this could not surface
           // until the contract was exercised for real.
-          storageIntegration: storage.integration,
-          storageConnection: storage.connection,
-          objectKey,
-        },
-      }),
-  );
+    storageIntegration: storage.integration,
+    storageConnection: storage.connection,
+    objectKey,
+  };
 
-  return toRow(stored);
+  const stored = await prisma.$transaction(async (tx) => {
+    if (wasStored) {
+      await tx.billDocument.update({ where: { id: claim.id }, data });
+    } else {
+      const won = await tx.billDocument.updateMany({
+        where: { id: claim.id, sha256: null },
+        data,
+      });
+      if (won.count === 0) return null;
+    }
+    const row = await tx.billDocument.findUniqueOrThrow({ where: { id: claim.id } });
+    await writeAuditRow(
+      tx,
+      { utilityId, actorId, entityType: "BillDocument" },
+      wasStored ? EVENT_TYPES.BILL_DOCUMENT_REVISED : EVENT_TYPES.BILL_DOCUMENT_CREATED,
+      row.id,
+      wasStored ? claim : null,
+      row,
+    );
+    return row;
+  });
+
+  if (stored) return toRow(stored);
+
+  // Lost the first-store transition. The winner wrote the same bytes to
+  // the same key, so its row describes this call's work as faithfully as
+  // ours would have.
+  return toRow(
+    await prisma.billDocument.findUniqueOrThrow({ where: { id: claim.id } }),
+  );
 }
 
 /** The stored document and its bytes, scoped to the tenant. */

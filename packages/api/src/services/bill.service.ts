@@ -331,6 +331,25 @@ async function assembleBillWithSegments(
 }
 
 /** A bill in the tenant-wide list, carrying who it belongs to. */
+/**
+ * The point a `dueDate` has to fall before to count as late.
+ *
+ * `dueDate` is `@db.Date`, which Prisma hands back as midnight UTC, so
+ * the comparison point must be that same shape — but assembled from
+ * **local** calendar parts. Taking UTC parts (what
+ * `toISOString().slice(0, 10)` gives) rolled "today" over in the early
+ * evening anywhere west of Greenwich: `state=overdue` returned a bill
+ * due today while the row rendered it as outstanding, because the two
+ * sides were asking the question in different zones.
+ *
+ * The host's zone stands in for the utility's, which holds for a
+ * single-utility deployment. A tenant-level timezone is the real answer
+ * the day one deployment serves utilities in two of them.
+ */
+function dueDateCutoff(now: Date = new Date()): Date {
+  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+}
+
 export interface BillListRow extends BillSummary {
   account: {
     id: string;
@@ -338,6 +357,17 @@ export interface BillListRow extends BillSummary {
     customerName: string | null;
   };
   billingCycleName: string | null;
+  /**
+   * Whether this bill is late, decided here so the list and the
+   * `state=overdue` filter cannot disagree.
+   *
+   * They did: the filter asked in UTC and the row pill asked in the
+   * browser's zone, so for several hours each evening a bill came back
+   * from `state=overdue` and then rendered as "Outstanding". One
+   * authority, one answer — the same reasoning that keeps
+   * REQUIRED_ISSUER_FIELDS shared between the form and its 422.
+   */
+  overdue: boolean;
   /**
    * The receivable this bill became, or null while it is unposted.
    *
@@ -405,7 +435,7 @@ function billStateWhere(state: BillState): Record<string, unknown> {
     // only, so a bill due today is not already late.
     case "overdue":
       return {
-        dueDate: { lt: new Date(new Date().toISOString().slice(0, 10)) },
+        dueDate: { lt: dueDateCutoff() },
         ledgerEntries: { some: { ...standing, openAmount: { gt: 0 } } },
       };
 
@@ -538,6 +568,8 @@ export async function listBills(
     },
   });
 
+  const cutoff = dueDateCutoff();
+
   return {
     ...page,
     data: page.data.map((b) => ({
@@ -569,6 +601,13 @@ export async function listBills(
             reversed: b.ledgerEntries[0]._count.reversedBy > 0,
           }
         : null,
+      // Same three conditions as the `overdue` filter above, against the
+      // same cutoff: something still owed, not reversed, past due.
+      overdue:
+        !!b.ledgerEntries[0] &&
+        b.ledgerEntries[0]._count.reversedBy === 0 &&
+        b.ledgerEntries[0].openAmount.greaterThan(0) &&
+        b.dueDate < cutoff,
     })),
   };
 }

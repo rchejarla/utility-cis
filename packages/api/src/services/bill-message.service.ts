@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma.js";
-import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
+import { auditCreate, auditUpdate, writeAuditRow } from "../lib/audit-wrap.js";
 import { EVENT_TYPES, type BillMessageCreate, type BillMessageUpdate } from "@utility-cis/shared";
 
 /**
@@ -118,13 +118,21 @@ export async function deleteBillMessage(
   id: string,
 ) {
   const before = await prisma.billMessage.findFirstOrThrow({ where: { id, utilityId } });
-  await auditUpdate(
-    auditCtx(utilityId, actorId, actorName),
-    EVENT_TYPES.BILL_MESSAGE_DELETED,
-    before,
-    async (tx) => {
-      await tx.billMessage.delete({ where: { id } });
-      return { id };
-    },
-  );
+  await prisma.$transaction(async (tx) => {
+    await tx.billMessage.delete({ where: { id } });
+    // afterState is null, because a deleted row is not in any state.
+    // This went through auditUpdate, whose signature wants an entity
+    // back so it can read an id off it, so the only thing it could
+    // return was `{ id }` — and the audit row then claimed that was
+    // what the row now looked like. writeAuditRow takes the id
+    // directly, which is all that was ever needed.
+    await writeAuditRow(
+      tx,
+      auditCtx(utilityId, actorId, actorName),
+      EVENT_TYPES.BILL_MESSAGE_DELETED,
+      id,
+      before,
+      null,
+    );
+  });
 }

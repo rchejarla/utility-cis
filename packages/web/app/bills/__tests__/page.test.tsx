@@ -37,6 +37,9 @@ function bill(over: Record<string, unknown> = {}) {
     billingCycleName: "Residential",
     account: { id: "acc-1", accountNumber: "A-900", customerName: "Jane Smith" },
     charge: { entryId: "le-1", openAmount: "107.50", reversed: false },
+    // The API decides this; the default is a bill that is not late, and
+    // the dueDate above is only here to be displayed.
+    overdue: false,
     ...over,
   };
 }
@@ -163,25 +166,36 @@ describe("Bills page — status", () => {
   });
 
   /**
-   * Date-only comparison. `new Date("2026-06-30")` is UTC midnight,
-   * which is the 29th west of Greenwich — a bill would read as overdue a
-   * day early for anyone in the Americas.
+   * Whether a bill is late is the API's answer, not this page's.
+   *
+   * This test used to compute the boundary here from the browser's
+   * calendar date, which is exactly what made the pill and the
+   * `state=overdue` filter disagree each evening west of Greenwich: two
+   * copies of one judgement in two zones. The date arithmetic is now
+   * tested where it lives, against a real database, in
+   * `bill-list.integration.test.ts`. What this page owes is to render
+   * what it is told.
    */
-  it("reads Overdue past the due date, and not on the due date itself", async () => {
-    const today = new Date();
-    const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-
+  it("reads Overdue when the row says so, and not when it does not", async () => {
     get.mockResolvedValue(
-      payload([bill({ dueDate: iso, charge: { entryId: "le-1", openAmount: "107.50", reversed: false } })]),
+      payload([
+        bill({
+          overdue: false,
+          charge: { entryId: "le-1", openAmount: "107.50", reversed: false },
+        }),
+      ]),
     );
-    const dueToday = renderPage();
+    const notLate = renderPage();
     expect(await screen.findByText("Outstanding")).toBeInTheDocument();
     expect(screen.queryByText("Overdue")).not.toBeInTheDocument();
-    dueToday.unmount();
+    notLate.unmount();
 
     get.mockResolvedValue(
       payload([
-        bill({ dueDate: "2020-01-01", charge: { entryId: "le-1", openAmount: "107.50", reversed: false } }),
+        bill({
+          overdue: true,
+          charge: { entryId: "le-1", openAmount: "107.50", reversed: false },
+        }),
       ]),
     );
     renderPage();
@@ -389,6 +403,12 @@ describe("Bills page — bill document actions", () => {
 
     expect(await screen.findByRole("button", { name: "Post" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "View bill" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Regenerate" })).not.toBeInTheDocument();
+    // The menu is the only place Regenerate can appear, and on an unposted
+    // bill every item is gated on postedAt or a charge, so no trigger is
+    // rendered at all. This used to assert on a `button` named
+    // "Regenerate", which could never fail: the item is a menuitem
+    // labelled "Regenerate PDF", behind a menu that starts closed.
+    expect(screen.queryByRole("button", { name: /More actions/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Regenerate PDF" })).not.toBeInTheDocument();
   });
 });

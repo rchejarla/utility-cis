@@ -53,15 +53,36 @@ type Draft = {
   activeTo: string;
 };
 
-const EMPTY_DRAFT: Draft = {
-  label: "",
-  body: "",
-  accountTypeDefId: "",
-  commodityId: "",
-  priority: "100",
-  activeFrom: new Date().toISOString().slice(0, 10),
-  activeTo: "",
-};
+/**
+ * Today, by the operator's own calendar.
+ *
+ * `toISOString().slice(0, 10)` is the UTC date, so an operator anywhere
+ * west of Greenwich filling this in during the evening was offered
+ * tomorrow as the default "Shown from" — and a message that does not
+ * print today looks like a message that does not work. The Bills screen
+ * builds its dates from local parts for the same reason.
+ *
+ * A function rather than a constant so a page left open across midnight
+ * does not keep offering yesterday.
+ */
+function todayLocal(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+    now.getDate(),
+  ).padStart(2, "0")}`;
+}
+
+function emptyDraft(): Draft {
+  return {
+    label: "",
+    body: "",
+    accountTypeDefId: "",
+    commodityId: "",
+    priority: "100",
+    activeFrom: todayLocal(),
+    activeTo: "",
+  };
+}
 
 export default function BillMessagesPage() {
   const { toast } = useToast();
@@ -72,9 +93,10 @@ export default function BillMessagesPage() {
   const [commodities, setCommodities] = useState<Commodity[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<string | "new" | null>(null);
-  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [saving, setSaving] = useState(false);
   const [deleteRow, setDeleteRow] = useState<BillMessageRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -107,7 +129,7 @@ export default function BillMessagesPage() {
   if (!canView) return <AccessDenied />;
 
   function startNew() {
-    setDraft(EMPTY_DRAFT);
+    setDraft(emptyDraft());
     setEditing("new");
   }
 
@@ -155,7 +177,11 @@ export default function BillMessagesPage() {
   }
 
   async function remove() {
-    if (!deleteRow) return;
+    // Guarded like submit() is. Without it a second click fired a second
+    // DELETE for a row the first had already removed, and the operator
+    // was told the deletion failed on a message that is gone.
+    if (!deleteRow || deleting) return;
+    setDeleting(true);
     try {
       await apiClient.delete(`/api/v1/bill-messages/${deleteRow.id}`);
       toast(`“${deleteRow.label}” deleted`, "success");
@@ -163,6 +189,8 @@ export default function BillMessagesPage() {
       await load();
     } catch (err) {
       toast(err instanceof Error ? err.message : "Could not delete the message", "error");
+    } finally {
+      setDeleting(false);
     }
   }
 

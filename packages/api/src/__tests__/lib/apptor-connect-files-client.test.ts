@@ -102,22 +102,25 @@ describe("apptor-connect files client", () => {
     });
   });
 
-  it("uploads to the minted url and returns nothing that holds it", async () => {
+  it("uploads the bytes to the minted url", async () => {
     fetchMock
       .mockResolvedValueOnce(linkResponse("https://ac.test/files/v1/d?sig=put"))
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) });
 
-    const result = await putObject({
+    // This used to also assert the resolved value was undefined, which a
+    // Promise<void> cannot fail; that the url does not escape is the
+    // business of the error-message test below and of the return type.
+    await putObject({
       integration: "cis-bills",
       key: "bills/util-1/bill-1.pdf",
       body: Buffer.from("%PDF-1.7"),
       maxBytes: 4096,
     });
 
-    expect(result).toBeUndefined();
     const [putUrl, putInit] = fetchMock.mock.calls[1];
     expect(String(putUrl)).toBe("https://ac.test/files/v1/d?sig=put");
     expect(putInit.method).toBe("PUT");
+    expect(Buffer.from(putInit.body).toString()).toBe("%PDF-1.7");
   });
 
   it("downloads bytes through a GET link", async () => {
@@ -163,6 +166,120 @@ describe("apptor-connect files client", () => {
     }).catch((e: unknown) => e);
 
     expect((err as ApptorConnectError).status).toBe(413);
+  });
+
+  /**
+   * The transport-failure branch: `status` is null because there was no
+   * response, and the underlying error is carried so ECONNREFUSED can be
+   * told apart from a DNS or TLS failure. Nothing exercised this before,
+   * so the 502 mapping it feeds was untested.
+   */
+  it("raises ApptorConnectError with a null status when apptor-connect cannot be reached", async () => {
+    const cause = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), {
+      code: "ECONNREFUSED",
+    });
+    fetchMock.mockRejectedValueOnce(cause);
+
+    const err = await mintFileLink({
+      integration: "cis-bills",
+      key: "k",
+      op: "GET",
+      ttlSeconds: 60,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ApptorConnectError);
+    expect((err as ApptorConnectError).status).toBeNull();
+    expect((err as ApptorConnectError).integration).toBe("cis-bills");
+    expect((err as ApptorConnectError).cause).toBe(cause);
+  });
+
+  it("carries the cause when a download's transport fails", async () => {
+    const cause = new Error("socket hang up");
+    fetchMock.mockResolvedValueOnce(linkResponse("https://ac.test/files/v1/d", "GET"));
+    fetchMock.mockRejectedValueOnce(cause);
+
+    const err = await getObject({ integration: "cis-bills", key: "k" }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(ApptorConnectError);
+    expect((err as ApptorConnectError).cause).toBe(cause);
+  });
+
+  /**
+   * A 200 whose body is not the documented shape used to be asserted
+   * through with a cast, so a missing `url` became a TypeError from
+   * somewhere downstream and reached the caller as a 500 — bypassing the
+   * 502 mapping that every other storage failure goes through.
+   */
+  it("refuses a mint response that is missing a field it depends on", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ method: "GET", expiresAt: "2026-10-11T00:05:00Z", maxBytes: null }),
+    });
+
+    const err = await mintFileLink({
+      integration: "cis-bills",
+      key: "k",
+      op: "GET",
+      ttlSeconds: 60,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ApptorConnectError);
+    expect((err as Error).message).toContain("url");
+  });
+
+  /**
+   * A GET link's response has no `maxBytes` key at all. Their OpenAPI
+   * spec lists it as required and describes it as "null for a
+   * download", but the service omits the field, so a schema that
+   * required it turned every download into a 502. Found by pointing
+   * this client at a real apptor-connect; the fake could not have shown
+   * it, because the fake answers whatever we taught it to.
+   */
+  it("accepts a GET link that omits maxBytes entirely", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        url: "https://ac.test/files/v1/d?sig=get",
+        method: "GET",
+        expiresAt: "2026-10-14T11:26:07.764850900Z",
+        grantedTtlSeconds: 300,
+        via: "service",
+      }),
+    });
+
+    const link = await mintFileLink({
+      integration: "dev-files",
+      key: "k",
+      op: "GET",
+      ttlSeconds: 300,
+    });
+
+    expect(link.maxBytes).toBeNull();
+    expect(link.url).toBe("https://ac.test/files/v1/d?sig=get");
+  });
+
+  it("refuses a mint response that is not JSON at all", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("Unexpected token < in JSON at position 0");
+      },
+    });
+
+    const err = await mintFileLink({
+      integration: "cis-bills",
+      key: "k",
+      op: "GET",
+      ttlSeconds: 60,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ApptorConnectError);
+    expect((err as Error).message).toMatch(/not JSON/);
   });
 
   // A minted link is a bearer credential: anyone holding it can fetch

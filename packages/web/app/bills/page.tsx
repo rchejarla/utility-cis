@@ -43,6 +43,8 @@ interface BillRow {
   billingCycleName: string | null;
   account: { id: string; accountNumber: string; customerName: string | null };
   charge: { entryId: string; openAmount: string; reversed: boolean } | null;
+  /** Decided by the API, so the pill and the overdue filter agree. */
+  overdue: boolean;
 }
 
 interface BillPage {
@@ -595,19 +597,20 @@ function fmtDate(iso: string): string {
 }
 
 /**
- * Past its due date with something still owed.
+ * Past its due date with something still owed — as decided by the API.
  *
- * Compared as date strings rather than Date objects: `dueDate` is a
- * date-only value, and `new Date("2026-06-30")` is UTC midnight — which
- * is the 29th west of Greenwich, so a bill would read as overdue a day
- * early for anyone in the Americas. The API answers the same question
- * the same way.
+ * This used to be computed here from the browser's calendar date while
+ * `state=overdue` computed it from UTC, so for the hours between local
+ * midnight and UTC midnight the filter and the pill disagreed about the
+ * same bill: it came back from the overdue filter and then rendered as
+ * "Outstanding". Two copies of one judgement, in different zones.
+ *
+ * The row now carries the answer. The question is the utility's, not the
+ * viewer's: a bill is late by the utility's calendar, whatever zone the
+ * person looking at it happens to be in.
  */
 function isOverdue(b: BillRow): boolean {
-  if (!b.charge || b.charge.reversed || Number(b.charge.openAmount) === 0) return false;
-  const today = new Date();
-  const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-  return b.dueDate.slice(0, 10) < iso;
+  return b.overdue;
 }
 
 function Pill({
