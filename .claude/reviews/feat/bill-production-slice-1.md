@@ -6,12 +6,83 @@
 **Started:** 2026-10-11
 
 ## L1 code review (all tiers)
-- [ ] Dispatched l1-reviewer
-- Findings:
-  - Critical: <file:line — problem, or "none">
-  - Important: <file:line — problem, or "none">
-  - Minor: <file:line — problem, or "none">
-- Resolution: <fixed / deferred with reason per finding>
+- [x] Dispatched l1-reviewer
+- 23 findings: 1 Critical, 10 Important, 12 Minor. Every one verified against
+  the code before being acted on; four were checked in detail (the Critical,
+  the two vacuous assertions, the dropped CSS) rather than taken on trust.
+- **Critical — fixed.** `bill-document.service.ts` compensating delete fired
+  on `!existing`, which is "no row when we looked", not "this call created
+  the row". The loser of a claim race adopts the winner's row, so its own
+  upload failure deleted the winner's pointer: bytes orphaned in the store
+  and an audit row asserting a document that no longer exists — the exact
+  invariant the claim-first ordering exists to protect. Now keyed on
+  `claimedHere`. The function's doc comment also claimed "the loser never
+  uploads at all", which the code has never done; it now states what
+  concurrent generation actually costs instead of asserting it away.
+- **Important — all 10 fixed.**
+  1. Race loser wrote a second `bill_document.created` for one document. The
+     first store is now a conditional update guarded on `sha256 IS NULL`, so
+     exactly one call can make that transition; the loser writes no audit row
+     and returns what the winner stored. Uses `writeAuditRow` directly to
+     keep the audit row in the mutation's transaction.
+  2. `files-client` asserted the mint response through a cast, so a 200 with
+     a missing `url` became a `TypeError` and reached the caller as a 500,
+     bypassing the 502 mapping every other storage failure goes through. Now
+     parsed; a bad shape names the field and never quotes the body, which
+     would hold a live capability link.
+  3. The transport error was bound and dropped — ECONNREFUSED, DNS and TLS
+     failures were one indistinguishable "unreachable". Carried as `cause`.
+  4. Response bodies were never consumed on the PUT success path or any
+     error path, holding a socket out of undici's pool per call. Drained.
+  5. `billingAddresses[0]` had no ordering: an account with two addresses
+     printed an arbitrary one, and could print a different one on a
+     regeneration — which also breaks `sha256` as "has this changed?".
+     Now primary first, then oldest, then id.
+  6. The tenant logo was fetched by react-pdf mid-render with no timeout and
+     no failure path, so a bad URL in Settings turned every generation for
+     that tenant into a 500. Fetched here instead: 3s timeout, PNG/JPEG only
+     (react-pdf handles no others), 2 MiB cap, and a failure means a bill
+     without a logo. Residual recorded in the code: bytes still depend on a
+     remote resource.
+  7. `state=overdue` compared in UTC while the row pill compared in the
+     browser's zone, so for the hours between local and UTC midnight the
+     filter returned a bill the row then rendered as "Outstanding".
+     Deleted one of the two: the server decides, the row carries `overdue`.
+     The cutoff is now local calendar parts assembled as UTC midnight,
+     matching the `@db.Date` column. Boundary tested against a real DB.
+  8. Two negative assertions could never fail — `queryByRole("button", {
+     name: "Regenerate" })` where the item is a `menuitem` named
+     "Regenerate PDF" behind a closed menu. One now asserts the menu
+     trigger is absent; the other was guarding a feature the AR tab has
+     never had and says so.
+  9. Nothing declared the Node floor the `@react-pdf/hyphenate` patch
+     depends on, though below 22.12 the API does not boot at all.
+     `engines.node >= 22.12.0` and `.nvmrc`, with the reason recorded next
+     to the patch it belongs to.
+- **Minor — all 12 fixed.** Dead `canEdit`; the detail dialog now gates its
+  PDF action on `postedAt` (the payload always carried it, the type omitted
+  it, so the dialog spent a 404 and a 409 toast finding out); `var(--info)18`
+  and `var(--info)40` are not alpha suffixes — `var()` substitutes a whole
+  token, so both declarations were dropped and the pill had no tint or
+  border, now `color-mix` as used elsewhere in this branch; `storageOf` told
+  an operator to fill in a field the settings page shows as set whenever the
+  settings merely failed to parse, and now says which field is wrong; the
+  lost-race catch re-queried every write failure as though it were a race,
+  and now checks P2002; three assertions that could not fail replaced with
+  ones that can; the transport-failure branch of `files-client` had no test;
+  PATCH and DELETE `/bill-messages` had none at all, and the tenant guard
+  they depend on was unenforced — now covered, including a real
+  `PrismaClientKnownRequestError` so the cross-tenant case asserts the 404
+  the application actually returns; the `.deleted` audit row recorded
+  `{ id }` as the state of a row that is gone, now no after-state;
+  "Shown from" defaulted to the UTC date, offering tomorrow to an operator
+  west of Greenwich in the evening; `remove()` had no in-flight guard where
+  `submit()` has one; and the mock client's properties were re-indented
+  after being hoisted.
+- Resolution: all 23 fixed, nothing deferred. `pnpm typecheck` clean; API
+  unit suite 553 passed / 4 skipped; web unit suite 196 passed;
+  `bill-document` and `bill-list` integration suites green; `files-client`
+  13 passed.
 
 ## Smoke test (all tiers) — EVIDENCE REQUIRED
 - Boot command (including prerequisites):
@@ -152,6 +223,27 @@ update. Re-verified: forced regeneration → row moves to `dev-files`, and
 `GET` → 200 with the hash matching. A stale row now repairs itself on the
 next forced regeneration. Covered by a new integration test, "moves the
 stored pointer when the tenant's storage integration changes".
+
+**Second bug found the same way, and it was one of ours from an hour
+earlier.** The L1 fix that validates the mint response (Important 2)
+required `maxBytes`, because apptor-connect's OpenAPI spec lists it as
+required and documents it as "null for a download". The service does not
+send it at all on a GET link — the key is absent, not null. Every
+download therefore answered 502 `STORAGE_UNAVAILABLE`, while uploads
+worked, because a PUT link does carry the field.
+
+Caught by re-running the live round trip after the L1 fixes rather than
+trusting a green unit suite: the fake answers whatever it was taught, and
+a schema derived from the written contract disagreed with the running
+service. The field is now `nullish` and normalised to null, and a test
+pins the real GET-link shape. Re-verified live: `POST` 200 → `GET` 200,
+`application/pdf`, 3719 bytes, hash equal to the row's, 409 `NOT_POSTED`
+intact.
+
+Worth carrying forward: this is twice now that the authority was the
+running service and not its documentation — first the `bearerAuth`
+annotation that implies `X-Api-Key` cannot work on the files plane, then
+a required field the service omits.
 
 ## Cross-layer contract check (Tier 2+)
 - [x] Dispatched cross-layer-auditor
