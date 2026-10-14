@@ -8,8 +8,13 @@
  * The `DomainEvent` interface that previously rode alongside these
  * constants was removed when the EventEmitter audit pipeline was
  * deleted (commit refactor(audit): replace EventEmitter pipeline with
- * in-transaction audit writes). The constants stay because every
- * service still passes one to auditCreate/auditUpdate.
+ * in-transaction audit writes).
+ *
+ * The constants stay because this is the one place every event type an
+ * audit row can carry is written down, which is what makes them
+ * greppable. `writeAuditRow` takes a bare `string`, so nothing enforces
+ * their use — bill production's five were inline literals until a
+ * cross-layer audit noticed they were missing here.
  */
 export const EVENT_TYPES = {
   COMMODITY_CREATED: "commodity.created",
@@ -43,6 +48,15 @@ export const EVENT_TYPES = {
   CUSTOMER_UPDATED: "customer.updated",
   CONTACT_CREATED: "contact.created",
   CONTACT_UPDATED: "contact.updated",
+  // A bill document is audited only once its bytes are stored: a claimed
+  // row is not a document. `revised` rather than `updated` because the
+  // first store IS the creation even though the SQL is an UPDATE, so the
+  // two cases need different names.
+  BILL_DOCUMENT_CREATED: "bill_document.created",
+  BILL_DOCUMENT_REVISED: "bill_document.revised",
+  BILL_MESSAGE_CREATED: "bill_message.created",
+  BILL_MESSAGE_UPDATED: "bill_message.updated",
+  BILL_MESSAGE_DELETED: "bill_message.deleted",
 } as const;
 
 export type EventType = (typeof EVENT_TYPES)[keyof typeof EVENT_TYPES];

@@ -8,6 +8,7 @@ import {
   BillDocumentError,
   generateBillDocument,
   readBillDocument,
+  type BillDocumentRow,
 } from "../services/bill-document.service.js";
 
 /**
@@ -81,6 +82,30 @@ function sendDocumentError(reply: FastifyReply, err: unknown): FastifyReply {
 }
 
 /**
+ * What a caller is told about a document it just generated.
+ *
+ * Deliberately not the row. The row names where the bytes live —
+ * `storageIntegration`, `storageConnection`, `objectKey` — and which
+ * object store a tenant's bills sit in is not the client's business:
+ * that is the same reasoning that keeps a minted capability link out of
+ * every response. A cross-layer audit found the full row going to the
+ * browser while neither caller read a single field of it.
+ *
+ * `sha256` and `byteSize` stay because they describe the bytes the
+ * caller just caused to exist, and a client that wants to verify what
+ * it downloads has nothing else to compare against.
+ */
+function producedDocument(row: BillDocumentRow) {
+  return {
+    billId: row.billId,
+    documentType: row.documentType,
+    byteSize: row.byteSize,
+    sha256: row.sha256,
+    generatedAt: row.generatedAt,
+  };
+}
+
+/**
  * A bill number reaches a `Content-Disposition` header, so it is reduced
  * to characters that cannot close the quoted string or start a new
  * header line. Our own numbering never produces anything else; this is
@@ -129,7 +154,9 @@ export async function billDocumentRoutes(app: FastifyInstance) {
       const { force } = forceQuerySchema.parse(request.query);
       try {
         return reply.send(
-          await generateBillDocument(utilityId, billId, actorId, { force: force === "true" }),
+          producedDocument(
+            await generateBillDocument(utilityId, billId, actorId, { force: force === "true" }),
+          ),
         );
       } catch (err) {
         return sendDocumentError(reply, err);

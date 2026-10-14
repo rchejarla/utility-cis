@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
-import type { BillMessageCreate, BillMessageUpdate } from "@utility-cis/shared";
+import { EVENT_TYPES, type BillMessageCreate, type BillMessageUpdate } from "@utility-cis/shared";
 
 /**
  * Bill messages — the configurable text a tenant prints on bills
@@ -90,7 +90,7 @@ export async function createBillMessage(
   actorName: string | undefined,
   data: BillMessageCreate,
 ) {
-  return auditCreate(auditCtx(utilityId, actorId, actorName), "bill_message.created", (tx) =>
+  return auditCreate(auditCtx(utilityId, actorId, actorName), EVENT_TYPES.BILL_MESSAGE_CREATED, (tx) =>
     tx.billMessage.create({ data: { ...data, utilityId } }),
   );
 }
@@ -105,7 +105,7 @@ export async function updateBillMessage(
   const before = await prisma.billMessage.findFirstOrThrow({ where: { id, utilityId } });
   return auditUpdate(
     auditCtx(utilityId, actorId, actorName),
-    "bill_message.updated",
+    EVENT_TYPES.BILL_MESSAGE_UPDATED,
     before,
     (tx) => tx.billMessage.update({ where: { id }, data }),
   );
@@ -120,7 +120,7 @@ export async function deleteBillMessage(
   const before = await prisma.billMessage.findFirstOrThrow({ where: { id, utilityId } });
   await auditUpdate(
     auditCtx(utilityId, actorId, actorName),
-    "bill_message.deleted",
+    EVENT_TYPES.BILL_MESSAGE_DELETED,
     before,
     async (tx) => {
       await tx.billMessage.delete({ where: { id } });

@@ -316,6 +316,36 @@ describe("bill documents", () => {
     expect(forced.sha256).toHaveLength(64);
   }, 60_000);
 
+  /**
+   * Found by exercising a real apptor-connect, which 404s an integration
+   * it does not hold. The local fake accepted every name, so a row
+   * pointing at a store without the object looked healthy: the bytes went
+   * to the tenant's current integration while the row kept the one it was
+   * first stored under, and every later download answered 502 with the new
+   * bytes orphaned.
+   */
+  it("moves the stored pointer when the tenant's storage integration changes", async () => {
+    const billId = await postedBill();
+    await svc.generateBillDocument(UTILITY, billId, ACTOR);
+
+    await prismaImports.prisma.tenantConfig.update({
+      where: { utilityId: UTILITY },
+      data: {
+        settings: {
+          issuer: ISSUER,
+          billDocuments: { storageIntegration: "cis-bills-v2" },
+        } as Prisma.InputJsonObject,
+      },
+    });
+    const moved = await svc.generateBillDocument(UTILITY, billId, ACTOR, { force: true });
+
+    // The upload went to the new integration, so the row has to name it.
+    expect(put.mock.calls[1][0]).toMatchObject({ integration: "cis-bills-v2" });
+    expect(moved.storageIntegration).toBe("cis-bills-v2");
+    const row = await prismaImports.prisma.billDocument.findFirstOrThrow({ where: { billId } });
+    expect(row.storageIntegration).toBe("cis-bills-v2");
+  }, 60_000);
+
   it("leaves no row when the upload fails", async () => {
     const billId = await postedBill();
     put.mockRejectedValueOnce(new acError("rejected", 503, "cis-bills"));
@@ -624,8 +654,15 @@ describe("bill document endpoints", () => {
     expect([generate.statusCode, again.statusCode, forced.statusCode]).toEqual([200, 200, 200]);
     // The unforced repeat must not re-upload; the forced one must.
     expect(put).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(again.body).id).toBe(JSON.parse(generate.body).id);
-    expect(JSON.parse(forced.body).id).toBe(JSON.parse(generate.body).id);
+    // Replaced in place, never accumulated: one bill, one document row.
+    // This used to compare `id` across the three response bodies, which
+    // stopped meaning anything when the response narrowed to describing
+    // bytes rather than storage — both sides read `undefined` and the
+    // assertion passed vacuously. The invariant is checked where it
+    // lives instead.
+    expect(await prismaImports.prisma.billDocument.count({ where: { billId } })).toBe(1);
+    // An unforced repeat hands back the same stored generation.
+    expect(JSON.parse(again.body)).toEqual(JSON.parse(generate.body));
   }, 60_000);
 
   it("refuses a portal download on a staff token with no customer claim", async () => {

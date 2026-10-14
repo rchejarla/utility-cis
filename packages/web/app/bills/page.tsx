@@ -14,6 +14,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { AdjustDialog, type AdjustMode } from "@/components/ar/adjust-dialog";
 import { BillPdfButton } from "@/components/bills/bill-pdf-button";
 import { ActionMenu, type ActionMenuItem } from "@/components/ui/action-menu";
+import type { BillState } from "@utility-cis/shared";
 
 /**
  * The tenant-wide bill list.
@@ -50,7 +51,7 @@ interface BillPage {
 }
 
 /**
- * The Status filter's values, and the only place their labels live.
+ * The Status filter's labels, and the only place they live.
  *
  * It used to offer posted and not posted, which answers "is this a debt
  * yet" and nothing about whether it was paid — so a settled bill read as
@@ -60,17 +61,29 @@ interface BillPage {
  * Overdue overlaps outstanding and part paid on purpose: a bill can be
  * late and part paid at once, and "show me the late ones" should not
  * depend on which.
+ *
+ * Keyed by `BillState` so the filter cannot drift from the enum the API
+ * validates against: a state added there fails to compile here until it
+ * is given a label, and a label for a state that no longer exists fails
+ * too. Declaration order is the display order, which is why the list is
+ * written out rather than mapped from `billStates.options` — the enum
+ * orders by meaning, the menu orders overdue next to outstanding.
  */
-const STATE_OPTIONS = [
-  { value: "unposted", label: "Not posted" },
-  { value: "outstanding", label: "Outstanding" },
-  { value: "overdue", label: "Overdue" },
-  { value: "partPaid", label: "Part paid" },
-  { value: "paid", label: "Paid" },
-  { value: "reversed", label: "Reversed" },
-] as const;
+const STATE_LABELS: Record<BillState, string> = {
+  unposted: "Not posted",
+  outstanding: "Outstanding",
+  overdue: "Overdue",
+  partPaid: "Part paid",
+  paid: "Paid",
+  reversed: "Reversed",
+};
 
-type StateFilter = (typeof STATE_OPTIONS)[number]["value"] | "all";
+const STATE_OPTIONS = (Object.keys(STATE_LABELS) as BillState[]).map((value) => ({
+  value,
+  label: STATE_LABELS[value],
+}));
+
+type StateFilter = BillState | "all";
 
 export default function BillsPage() {
   const { canView, canEdit } = usePermission("accounts");

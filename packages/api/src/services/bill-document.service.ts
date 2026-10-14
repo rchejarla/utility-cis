@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { billDocumentSettingsSchema } from "@utility-cis/shared";
+import { billDocumentSettingsSchema, EVENT_TYPES } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
 import { config } from "../config.js";
 import { auditUpdate } from "../lib/audit-wrap.js";
@@ -205,12 +205,38 @@ export async function generateBillDocument(
   const wasStored = claim.sha256 !== null;
   const stored = await auditUpdate(
     { utilityId, actorId, entityType: "BillDocument" },
-    wasStored ? "bill_document.revised" : "bill_document.created",
+    wasStored ? EVENT_TYPES.BILL_DOCUMENT_REVISED : EVENT_TYPES.BILL_DOCUMENT_CREATED,
     wasStored ? claim : null,
     (tx) =>
       tx.billDocument.update({
         where: { id: claim.id },
-        data: { byteSize: pdf.length, sha256, generatedAt: new Date(), templateKey: DEFAULT_TEMPLATE_KEY },
+        data: {
+          byteSize: pdf.length,
+          sha256,
+          generatedAt: new Date(),
+          templateKey: DEFAULT_TEMPLATE_KEY,
+          // Refreshed, not just set on the claim. The column is a copy
+          // of the account's paperless flag *as of this generation*, so
+          // it has to move whenever generatedAt moves — otherwise a
+          // regenerated document reports whether the customer was
+          // paperless months ago.
+          isPaperless: bill.account.paperlessBilling,
+          // Where the bytes actually went. `storage` is resolved from the
+          // tenant's CURRENT settings and that is what putObject wrote to,
+          // but on a forced regeneration the claim is the pre-existing row,
+          // still carrying whatever integration it was first stored under.
+          // Leaving these unwritten made the row describe a location that
+          // does not hold the object: a tenant who changes their storage
+          // integration and regenerates got bytes in the new store, a row
+          // pointing at the old one, and a permanent 502 on every download
+          // with the new bytes orphaned. Verified against a real
+          // apptor-connect, which 404s an integration it does not have —
+          // the local fake accepted every name, so this could not surface
+          // until the contract was exercised for real.
+          storageIntegration: storage.integration,
+          storageConnection: storage.connection,
+          objectKey,
+        },
       }),
   );
 
