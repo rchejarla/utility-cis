@@ -113,6 +113,76 @@ async function describeBlockers(prisma: ResetClient): Promise<string> {
 }
 
 /**
+ * The RBAC caches describe rows a reset destroys, and they do not live
+ * in the container that goes away with the file.
+ *
+ * `getTenantModules` and `getUserRole` cache in Redis for 600s and 300s,
+ * keyed by ids the fixtures hard-code — every file shares `TENANT_A` and
+ * the actor `…aaaa00000001`. The Redis itself is the developer's, shared
+ * by every fork, so a cached module list outlives the file that wrote it
+ * and is read by the next file as though it were that file's own setup.
+ *
+ * The symptom is a whole file of uniform 403s with nothing wrong in it.
+ * In the 2026-10-14 full-suite run that was 17 tests across two files:
+ * `lifecycle-endpoints` read another file's module set, and
+ * `customer-import` — which does invalidate the module cache — read a
+ * stale *role* for the shared actor and got FORBIDDEN on permissions its
+ * own fixture had granted. Both passed in isolation, which is what makes
+ * this class of failure so expensive to chase.
+ *
+ * Cheaper than asking every file to remember two invalidations: the
+ * reset that invalidates the rows invalidates the cache of them. Files
+ * that truncate on their own still need their own call.
+ */
+async function clearRbacCaches(): Promise<void> {
+  try {
+    const { redis } = await import("../../lib/cache-redis.js");
+    await withTimeout(
+      (async () => {
+        for (const pattern of ["tenant-modules:*", "user-role:*"]) {
+          const keys = await redis.keys(pattern);
+          if (keys.length > 0) await redis.del(...keys);
+        }
+      })(),
+      CACHE_CLEAR_TIMEOUT_MS,
+    );
+  } catch {
+    // Best-effort, exactly as the cache helpers are: a run without a
+    // reachable Redis is a run with no cache to poison.
+  }
+}
+
+/**
+ * Why a timeout and not just a try/catch.
+ *
+ * ioredis queues commands while disconnected and retries them for as
+ * long as it takes, so an unreachable cache does not throw here — it
+ * never answers. A `catch` cannot see that. The first version of this
+ * helper awaited `keys()` with no bound and turned one fork's aborted
+ * Redis connection into a hook that timed out and a file that sat for
+ * twenty minutes, in a suite where that file had just passed: the
+ * failure moved from the cache to the reset that consults it.
+ *
+ * A reset must never be able to hang on a best-effort cache clear, so
+ * the wait is bounded and losing the race is not an error. Generous
+ * enough that it only trips when Redis is genuinely gone.
+ */
+const CACHE_CLEAR_TIMEOUT_MS = 2_000;
+
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T | void> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    work.finally(() => clearTimeout(timer)),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, ms);
+      // Do not hold the process open for a cache clear nobody is
+      // waiting on.
+      timer.unref?.();
+    }),
+  ]);
+}
+
+/**
  * Reset DB to a clean slate by truncating every table the tests touch
  * (audit_log first, then leaf tables, then root tables). RESTART
  * IDENTITY ensures sequence-based identifiers don't drift across runs.
@@ -148,6 +218,7 @@ export async function resetDb(prisma: ResetClient) {
         },
         { timeout: LOCK_TIMEOUT_MS + 5_000, maxWait: 10_000 },
       );
+      await clearRbacCaches();
       return;
     } catch (err) {
       if (!isLockTimeout(err) || attempt === RESET_ATTEMPTS) {
