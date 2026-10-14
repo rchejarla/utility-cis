@@ -99,8 +99,23 @@ minted API key. A second API instance on port 3101 carried the real
   `byteSize: 3719`, `sha256: 2386d3d4…f30d`. `GET` → 200,
   `application/pdf`, `attachment; filename="bill-BILL-202610-0001000-00.pdf"`,
   3719 bytes downloaded, sha256 of the bytes equal to the stored hash.
-  The object was independently fetched straight from `dev-files` through
-  a separately minted GET link: same 3719 bytes, same hash.
+  Both of those reads go **through apptor-connect** — the minted link is
+  `/files/v1/d` on their service and the mint reports `via: "service"`,
+  so bytes transit apptor-connect rather than a vendor presign. A second
+  read through a separately minted link is therefore not independent
+  evidence that the object is in the bucket; it only shows apptor-connect
+  resolves the key consistently.
+- **Independently confirmed in the object store itself.** Read directly
+  from minio on `:9000` with `mc`, bypassing apptor-connect: the object
+  is at `inbound/bills/00000000-0000-4000-8000-000000000001/35a0a33f….pdf`
+  — our `bills/<utility>/<bill>.pdf` under the connection's `inbound/`
+  root, which is the prefix our client deliberately does not know about —
+  beginning `%PDF-`, and its bytes hash to
+  `2386d3d483a730e4a24b5c55a5f321dcf2d22295d5310a28e82845c8e4c6f30d`,
+  equal to the row's `sha256` and to what the API served. Incidental: the
+  stored object's content type is `application/octet-stream`. The API sets
+  `application/pdf` on the way out so downloads are correct, but anything
+  serving from the store directly would not.
 - **One real bug, found only because the store is real.** See below.
 - **Refusals on the real service.** Unposted bill → 409 `NOT_POSTED`. An
   integration the service does not hold → real 404, surfaced as 502
