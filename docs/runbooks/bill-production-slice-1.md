@@ -182,6 +182,13 @@ DELETE FROM _prisma_migrations
  WHERE migration_name IN ('20261011120300_bill_document', '20261011120100_bill_message');
 ```
 
+These statements have been run, on a throwaway database rather than
+staging (2026-10-14): both drops succeed without `CASCADE`, so nothing
+else holds a foreign key to either table, the `DELETE` removes exactly two
+rows, and `migrate deploy` afterwards re-applies both migrations with
+their policies intact — the rollback is recoverable forward. Untested with
+real rows in either table.
+
 Then the dependency, if the API is also being reverted to a release that
 predates it: dropping `pnpm.patchedDependencies` and the `patches/`
 entry is safe **only** once nothing imports `@react-pdf/renderer`.

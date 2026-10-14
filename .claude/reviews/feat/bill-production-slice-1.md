@@ -442,17 +442,41 @@ a required field the service omits.
   DELETE FROM _prisma_migrations
    WHERE migration_name IN ('20261011120300_bill_document', '20261011120100_bill_message');
   ```
-- [ ] Rollback tested in staging — verification output: **not tested.**
-  The drop statements above are untried. Note also what rollback cannot
-  undo: PDFs already written to a tenant's object store survive, by
+- [ ] Rollback tested in staging — **not in staging. Executed, on a
+  throwaway database** (`utility_cis_rollback_test`, created on the dev
+  postgres container and dropped afterwards), 2026-10-14:
+  1. `pnpm --filter @utility-cis/shared exec prisma migrate deploy` from
+     an empty database — the runbook's own §2 command, not
+     `migrate_db.bat` — applied the whole history including both new
+     migrations.
+  2. The §2 check passed: `pg_policies` returned two rows
+     (`bill_document`/`tenant_isolation`, `bill_message`/`tenant_isolation`),
+     `relrowsecurity` true on both, with the unique index on
+     `(bill_id, document_type)` and the FK to `bill` present.
+  3. The rollback SQL above ran verbatim with `ON_ERROR_STOP=1`: both
+     `DROP TABLE`s succeeded **without `CASCADE`**, which proves nothing
+     else holds an FK to either table, and the `DELETE` removed exactly 2
+     `_prisma_migrations` rows. No tables and no migration rows left.
+  4. `migrate deploy` re-run afterwards re-applied exactly those two
+     migrations and the policies came back — so the rollback is
+     recoverable forward, which the runbook asserted but had not shown.
+
+  What this does not cover: a rollback with real rows in either table, and
+  anything about the production build path or env. Note also what rollback
+  cannot undo: PDFs already written to a tenant's object store survive, by
   design, and dropping `bill_document` orphans them.
 
 ## Escape hatches used
 - [ ] None (default)
 - Skipped steps with written justification:
-  - **No staging dry-run, and the rollback SQL is untried** — no staging
-    environment was available; see the Runbook section, which records what
-    was done against the dev database instead and does not call it a dry run.
+  - **No staging dry-run** — no staging environment was available; see the
+    Runbook section, which records what was done against the dev database
+    instead and does not call it a dry run. The rollback SQL is no longer
+    untried: it was executed on a throwaway database, including the forward
+    re-apply afterwards, which is recorded there. What remains unexercised
+    is the production build path — specifically whether it honours
+    `pnpm.patchedDependencies`, the one failure that takes every endpoint
+    down — and that cannot be tested from a developer machine.
   - **Still unexercised against real apptor-connect, narrowly:** the
     `maxBytes` ceiling (no bill is anywhere near 10 MiB, so the enforced
     limit has never actually been hit), link expiry (`ttlSeconds` elapsing
@@ -469,13 +493,15 @@ a required field the service omits.
   with evidence, and every finding from all four is fixed: 5 cross-layer
   orphans, 23 L1 findings, 16 adversarial findings. Nothing deferred.
 - [x] Checklist committed
-- [ ] **Ready to ship — not by this session.** Two Tier 3 requirements
-  are unmet and cannot be met from here, both recorded under Escape
-  hatches: there was no staging environment, so the deploy has had no
-  dry run, and the rollback SQL has never been executed anywhere. For a
-  change whose runbook opens with three prerequisites that fail silently,
-  that is the gap that matters. A human with a staging environment should
-  run section 5 of the runbook and the rollback before this merges.
+- [ ] **Ready to ship — not by this session.** One Tier 3 requirement is
+  unmet and cannot be met from here, recorded under Escape hatches: there
+  was no staging environment, so the deploy sequence has had no dry run on
+  a production-like build path. For a change whose runbook opens with
+  three prerequisites that fail silently — and whose first one takes every
+  endpoint down, not just bills — that is the gap that matters. A human
+  with a staging environment should run sections 1 to 5 of the runbook
+  before this merges. The rollback is no longer part of that gap: it was
+  executed, and recovered forward, on a throwaway database.
 
 Verification run at the point of signing, all on the current tree:
 - `pnpm typecheck` — clean across shared, api and web.
