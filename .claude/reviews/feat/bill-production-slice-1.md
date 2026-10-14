@@ -566,9 +566,13 @@ Verification run at the point of signing, all on the current tree:
 - `pnpm typecheck` — clean across shared, api and web.
 - API unit suite — 578 passed, 4 skipped.
 - Web unit suite — 197 passed.
-- `bill-document.integration` — 28 passed, including the first
-  concurrency case on the claim/upload/complete path and a half-cent
-  money fixture.
+- **The full integration suite — 59 files, 545 tests, all passing,
+  25m21s** (2026-10-14, dev server stopped). This had never been run on
+  the branch; it was the plan's last unchecked box, and running it cost
+  three passes and found a real defect — see below.
+- `bill-document.integration` — 29 passed, including the first
+  concurrency case on the claim/upload/complete path, a half-cent money
+  fixture, and the ceiling refusal.
 - `bill-list.integration` — 33 passed, including the due-date boundary
   and the partPaid field-vs-filter agreement.
 - `apptor-connect-files-client` — 14 passed; `logo-fetch` — 23 passed.
@@ -577,6 +581,36 @@ Verification run at the point of signing, all on the current tree:
   hash, which now also means the read path's own verification agrees with
   the store. `partPaid` true on exactly the bill with an application, and
   `state=partPaid` returned exactly that bill.
+
+**What the full suite found, since it is not a bill-production bug and
+will outlive this branch.** The first run failed 17 tests across
+`lifecycle-endpoints` and `customer-import` — uniform 403s, nothing wrong
+in either file, both passing in isolation. Every integration file gets
+its own fork and its own Postgres container, so the files look isolated;
+the cache is the exception. `getTenantModules` and `getUserRole` cache in
+the developer's Redis for 600s and 300s under keys built from ids every
+fixture hard-codes, so one file's module set outlives it and the next
+file reads it as its own setup. Ten files already invalidate for exactly
+this reason; those two did not, or did it for modules and not the role.
+`resetDb` now clears both families, since it truncates the rows they
+describe.
+
+Two things worth recording about how that went. **The first baseline was
+worthless:** a `git worktree` on `main` reproduced the failure, which I
+reported as pre-existing — but both checkouts share that Redis, still
+warm from the branch run. Flushed, `main` passed. **And the first fix
+introduced a worse failure than the one it cured:** an unbounded
+`redis.keys()` inside `resetDb`, where ioredis queues commands while
+disconnected and retries indefinitely, so an unreachable cache never
+answers and no `catch` can see it — one fork's aborted connection became
+`Hook timed out in 180000ms` and a file that sat for twenty minutes,
+having passed in the run before. Bounded at 2s now, verified by stopping
+Redis: 57s and green, where it had timed out.
+
+The defect is pre-existing and in files this branch never touched. What
+this branch did was add `bill-document.integration`, which sorts early,
+uses the same tenant and caches a different module set — turning a latent
+trap into a failing suite.
 
 What a reader of this branch should carry forward, more than any single
 fix:
