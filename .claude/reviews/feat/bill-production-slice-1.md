@@ -245,6 +245,47 @@ running service and not its documentation — first the `bearerAuth`
 annotation that implies `X-Api-Key` cannot work on the files plane, then
 a required field the service omits.
 
+### Live apptor-connect verification, part 2 (2026-10-14) — the two gaps
+
+The escape hatch below said two things had never been exercised against
+the real service: the `maxBytes` ceiling actually being hit, and a
+capability link outliving its `ttlSeconds`. Both have now been, driven
+through our own `files-client` so what is under test is their behaviour
+**and** our mapping of it. Probe objects were removed from the bucket
+afterwards.
+
+- **`maxBytes` is enforced — and our report of it named the wrong
+  culprit.** Control first: 512 bytes under `maxBytes: 1024` stored
+  fine. Then 4096 bytes under the same 1024 ceiling → **413**, surfaced
+  by the client as `ApptorConnectError status=413`. Reading the key back
+  showed the 512-byte control still there (first byte `0x41`, not
+  `0x42`), so the oversize body did not land: the ceiling is a real
+  guard, not advisory. But the route maps *every* `ApptorConnectError`
+  to 502 `STORAGE_UNAVAILABLE` naming the integration — which is a
+  statement about a store that had just done its job correctly, and
+  sends an operator to investigate it. **Fixed:** the ceiling is this
+  deployment's and the size is known before the upload, so
+  `generateBillDocument` now refuses with 422 `DOCUMENT_TOO_LARGE`
+  naming both the PDF's byte count and `BILL_DOCUMENT_MAX_BYTES`,
+  without asking the store. Checked before the claim, so a bill that
+  cannot be stored leaves no row to read as an undownloadable document.
+  Integration test added. The 413 path stays mapped to 502, where it is
+  now a genuine disagreement with the store rather than our own limit
+  misattributed.
+- **`ttlSeconds` is enforced, and an expired link is indistinguishable
+  from a missing object.** A freshly minted GET link served 200. The
+  same link fetched 35s after a 30s TTL answered **404**; an expired PUT
+  link answered 404 too. So expiry is real — but 404 is also what the
+  service answers for a key that is not there, which means our 502
+  cannot tell "your link aged out" from "the object is gone", and
+  neither can apptor-connect. Not worth inventing a distinction there is
+  no source for; recorded because a reader will otherwise assume a 403
+  or a 410. In practice links are minted and used in the same call, and
+  `config.ts` floors the TTL at 30s.
+- Incidental, consistent with the 2026-10-13 run: bytes fetched straight
+  from a minted link arrive as `application/octet-stream`;
+  `application/pdf` is set by our API on the way out.
+
 ## Cross-layer contract check (Tier 2+)
 - [x] Dispatched cross-layer-auditor
 - Grep 1 — Orphan fields (UI writes → backend reads): `settings.issuer` all 10
@@ -430,10 +471,28 @@ a required field the service omits.
   deploy sequence against the dev database: `migrate_db.bat` applied both
   migrations from a clean state, both RLS policies attached, and the
   feature worked end to end afterwards (see the smoke test). That is not
-  a staging dry run and should not be recorded as one. The three
-  prerequisites in the runbook — the dependency patch, the two
-  apptor-connect env vars, the per-tenant settings — have not been
-  verified in any environment that resembles production.
+  a staging dry run and should not be recorded as one.
+
+  Of the three prerequisites, two have now been exercised here as far as
+  a developer machine allows, 2026-10-14:
+  - **§1, the dependency patch** — all four `node_modules` trees deleted
+    and `pnpm install --frozen-lockfile` run from the lockfile alone. The
+    patch applied (`require` conditions present in the installed
+    `@react-pdf/hyphenate/package.json`) and the runbook's own check,
+    `node -e "require('@react-pdf/renderer')"` from `packages/api`,
+    printed `renderer loads`. One unrelated optional native dependency
+    (`cpu-features`, via ssh2) fails to build for want of a compiler and
+    does not fail the install — pre-existing, and worth knowing before
+    someone reads that output as the patch failing.
+  - **§3, the env vars** — exercised in both states: absent, the API
+    boots and only fails at download time; present and real, the live
+    verification sections above.
+
+  What remains untested, and cannot be tested from here, is the
+  production **build path** honouring `pnpm.patchedDependencies`. A local
+  `pnpm install` proves the field works; it does not prove whatever CI or
+  image build runs in production uses it. That is the failure that exits
+  the process before Fastify listens.
 - Rollback command: application rollback needs nothing; the two tables are
   additive and no earlier code reads them. To remove the schema as well:
   ```sql
@@ -477,12 +536,12 @@ a required field the service omits.
     is the production build path — specifically whether it honours
     `pnpm.patchedDependencies`, the one failure that takes every endpoint
     down — and that cannot be tested from a developer machine.
-  - **Still unexercised against real apptor-connect, narrowly:** the
-    `maxBytes` ceiling (no bill is anywhere near 10 MiB, so the enforced
-    limit has never actually been hit), link expiry (`ttlSeconds` elapsing
-    mid-transfer), and any store other than S3/minio. The protocol itself,
-    auth, both transfer directions and the error mapping are now verified
-    live — see the Live apptor-connect verification above.
+  - **Still unexercised against real apptor-connect, narrowly:** any
+    store other than S3/minio, and expiry *mid-transfer* rather than
+    before the request. The protocol, auth, both transfer directions, the
+    error mapping, the `maxBytes` ceiling and link expiry are all verified
+    live now — see both Live apptor-connect verification sections. The
+    ceiling test produced the one finding of that run, recorded there.
   - **One deployment-level API key means one apptor-connect tenant** for
     every utility. Recorded as a finding above and as the runbook's open
     provisioning question; not a decision this branch can make.

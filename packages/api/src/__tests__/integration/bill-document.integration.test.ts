@@ -541,6 +541,39 @@ describe("bill documents", () => {
     expect(put).not.toHaveBeenCalled();
   }, 60_000);
 
+  /**
+   * The ceiling is this deployment's, so the refusal has to be ours.
+   *
+   * Verified against the real files plane on 2026-10-14: an upload over
+   * the `maxBytes` the link was minted with comes back 413, and the
+   * route maps every `ApptorConnectError` to 502 STORAGE_UNAVAILABLE —
+   * which would send an operator to investigate a store that is working
+   * perfectly. Refused before the upload now, naming both numbers, and
+   * the store is never asked.
+   */
+  it("refuses a PDF over this deployment's ceiling, before uploading it", async () => {
+    const billId = await postedBill();
+    const cfg = await import("../../config.js");
+    const ceiling = cfg.config.BILL_DOCUMENT_MAX_BYTES;
+    (cfg.config as { BILL_DOCUMENT_MAX_BYTES: number }).BILL_DOCUMENT_MAX_BYTES = 1024;
+
+    try {
+      const err = await svc.generateBillDocument(UTILITY, billId, ACTOR).catch((e: unknown) => e);
+
+      expect((err as { code: string }).code).toBe("DOCUMENT_TOO_LARGE");
+      expect((err as Error).message).toMatch(/1024/);
+      expect((err as Error).message).toMatch(/BILL_DOCUMENT_MAX_BYTES/);
+      expect(put).not.toHaveBeenCalled();
+      // Generated before the claim, so a bill that cannot be stored
+      // leaves no row to read as an undownloadable document.
+      expect(
+        await prismaImports.prisma.billDocument.findFirst({ where: { billId } }),
+      ).toBeNull();
+    } finally {
+      (cfg.config as { BILL_DOCUMENT_MAX_BYTES: number }).BILL_DOCUMENT_MAX_BYTES = ceiling;
+    }
+  }, 60_000);
+
   it("refuses when issuer identity is incomplete, naming the fields", async () => {
     const billId = await postedBill({
       issuer: { utilityName: "City of Testville Utilities" },

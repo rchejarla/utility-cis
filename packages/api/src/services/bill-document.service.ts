@@ -20,7 +20,11 @@ import { generateBillPdf, DEFAULT_TEMPLATE_KEY } from "../bill-generation/genera
  * and a capability link is minted per access and discarded.
  */
 
-export type BillDocumentErrorCode = "NOT_POSTED" | "STORAGE_NOT_CONFIGURED" | "NOT_GENERATED";
+export type BillDocumentErrorCode =
+  | "NOT_POSTED"
+  | "STORAGE_NOT_CONFIGURED"
+  | "NOT_GENERATED"
+  | "DOCUMENT_TOO_LARGE";
 
 export class BillDocumentError extends Error {
   constructor(
@@ -175,6 +179,18 @@ export async function generateBillDocument(
   // generated leaves no row behind at all.
   const presentation = await loadBillPresentation(utilityId, billId);
   const pdf = await generateBillPdf(presentation);
+  // The ceiling is ours and the size is known here, so this is the place
+  // to refuse. Verified against the real files plane: an oversize upload
+  // comes back 413, which the route can only report as
+  // STORAGE_UNAVAILABLE — sending an operator to investigate a store
+  // that is working perfectly, when the cause is this deployment's own
+  // limit against this bill's own size. Both numbers, named.
+  if (pdf.byteLength > config.BILL_DOCUMENT_MAX_BYTES) {
+    throw new BillDocumentError(
+      `The generated PDF is ${pdf.byteLength} bytes, over this deployment's ceiling of ${config.BILL_DOCUMENT_MAX_BYTES} (BILL_DOCUMENT_MAX_BYTES)`,
+      "DOCUMENT_TOO_LARGE",
+    );
+  }
   const sha256 = createHash("sha256").update(pdf).digest("hex");
   const objectKey = billObjectKey(utilityId, billId);
 

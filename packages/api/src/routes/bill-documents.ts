@@ -48,6 +48,10 @@ const STATUS_BY_CODE: Record<string, number> = {
   RECIPIENT_INCOMPLETE: 422,
   NO_CHARGES: 422,
   STORAGE_NOT_CONFIGURED: 422,
+  // Same family as the two above: the deployment is configured such that
+  // this bill cannot be produced. Not a 413 back at the caller, who sent
+  // nothing of the sort.
+  DOCUMENT_TOO_LARGE: 422,
   NOT_POSTED: 409,
   NOT_GENERATED: 404,
 };

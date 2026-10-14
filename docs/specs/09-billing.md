@@ -182,9 +182,17 @@ Status mapping:
 | Condition | Status |
 |-----------|--------|
 | `ISSUER_INCOMPLETE`, `RECIPIENT_INCOMPLETE`, `NO_CHARGES`, `STORAGE_NOT_CONFIGURED` | 422, body names the `missing` fields |
+| `DOCUMENT_TOO_LARGE` — the rendered PDF exceeds `BILL_DOCUMENT_MAX_BYTES` | 422, message names both sizes |
 | `NOT_POSTED` — a bill becomes a document once it is posted | 409 |
 | `NOT_GENERATED` — no document, or no such bill | 404 |
 | apptor-connect rejected the request | 502, body names the integration and never a link |
+
+`DOCUMENT_TOO_LARGE` is checked before the upload rather than left to the
+store. The files plane does enforce the `maxBytes` a link was minted with
+— verified live, it answers 413 and the oversize body does not land — but
+every `ApptorConnectError` maps to 502 `STORAGE_UNAVAILABLE`, which would
+name a store that is working perfectly when the cause is this
+deployment's own ceiling against this bill's own size.
 
 ### Bill Messages (shipped)
 
