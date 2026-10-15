@@ -12,7 +12,7 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 
 ## Entity Summary
 
-**34 core domain entities** (curated; the Prisma schema defines 58 models, and type-def, plumbing and later-phase tables such as `Bill` and `ServicePoint` are not listed here) across 12 categories (RBAC category added in Phase 2; TenantConfig and SuspensionTypeDef added alongside Service Holds v1; CustomFieldSchema added in Custom Fields Phase 1; Notifications and Delinquency categories added in Phase 3; Service Requests category added in Phase 4 slice B; Accounts Receivable category added in Phase 3 AR slice 1):
+**34 core domain entities** (curated; the Prisma schema defines 62 models, and type-def, plumbing and later-phase tables such as `Bill`, `BillingRun` and `ServicePoint` are not listed here) across 12 categories (RBAC category added in Phase 2; TenantConfig and SuspensionTypeDef added alongside Service Holds v1; CustomFieldSchema added in Custom Fields Phase 1; Notifications and Delinquency categories added in Phase 3; Service Requests category added in Phase 4 slice B; Accounts Receivable category added in Phase 3 AR slice 1):
 
 | # | Entity | Table | Category | Phase Built | Key Relationships |
 |---|--------|-------|----------|-------------|-------------------|

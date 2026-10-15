@@ -1,8 +1,8 @@
 # Billing
 
 **Module:** 09 — Billing
-**Status:** Partially shipped — `BillSegment`, `BillSegmentLine` and `Bill` are live (Rate Model v2 slices 5a–5b.2), AR posting is live (module 23 slice 1), and bill generation to a stored PDF is live (bill production slice 1). The batch billing run and bill delivery are outstanding.
-**Entities:** BillSegment (shipped), BillSegmentLine (shipped), Bill (shipped), BillDocument (shipped), BillMessage (shipped)
+**Status:** Partially shipped — `BillSegment`, `BillSegmentLine` and `Bill` are live (Rate Model v2 slices 5a–5b.2), AR posting is live (module 23 slice 1), bill generation to a stored PDF is live (bill production slice 1), and the batch billing run is live **as API and worker with no UI** (slice 5c). Bill delivery is outstanding.
+**Entities:** BillSegment (shipped), BillSegmentLine (shipped), Bill (shipped), BillDocument (shipped), BillMessage (shipped), BillingRun (shipped), BillingRunItem (shipped)
 
 ## Overview
 
@@ -51,10 +51,16 @@ the answer to that and is not built — and `READ_PREDATES_BILLED_PERIOD`
 (409) for a backdated read, which needs a rebill rather than a new
 segment.
 
-Still nominal, and knowingly: `computeBillPeriod` remains the scheduling
-window, and tier-threshold proration for intervals that are not ~30 days
-(Req 138) is not built, so a 44-day interval is still priced against a
-full period's allowance.
+`computeBillPeriod` remains the **scheduling** window — which accounts are
+due and which reads to expect — and that is what a billing run's
+`window_start` / `window_end` now are.
+
+Tier-threshold proration for intervals that are not ~30 days (Req 138)
+shipped on 2026-10-15, but it is **opt-in**: a `tiered` pricing scales its
+thresholds only if it declares `standard_days`, and no tariff in the data
+declares one yet. So today a 44-day interval is still priced against a full
+period's allowance until the schedule says what a standard period is. See
+`docs/specs/07b-rate-model-v2-design.md`.
 
 Differences worth noting against the superseded design:
 
@@ -172,20 +178,109 @@ Configurable text printed on bills, targeted by account type and/or commodity ov
 
 Two departures from the superseded sketch above: account type is an FK to `AccountTypeDef` rather than an enum, because account types are tenant-configurable; and there is no `is_active` flag, because `active_from`/`active_to` already say when a message applies and a second switch would let the two disagree.
 
+### BillingRun / BillingRunItem (shipped — slice 5c)
+
+One initiated pass over a cycle, account by account. Design:
+`docs/superpowers/specs/2026-10-14-billing-run-design.md`; service
+`billing-run.service.ts`, worker `billing-run-worker.ts`, migration
+`20261015110000_billing_run`.
+
+**A run is a row, not a long request.** Twelve thousand accounts each
+rating several agreements is minutes of work, and an HTTP request that long
+dies to a proxy with the work half done and no record of how far it got —
+after which re-running it turns the per-account overlap guard into twelve
+thousand 409s rather than a resume. `billing_run` and `billing_run_item`
+are shaped after `import_batch` / `import_row` and **copied rather than
+abstracted**: the two share a shape, not a reason, and an "async batch job"
+base class would make a change to imports a change to billing.
+
+#### BillingRun
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | Tenant scope (RLS) |
+| billing_cycle_id | UUID | FK → BillingCycle, `onDelete: Restrict` |
+| window_start / window_end | DATE | The **scheduling** window from `computeBillPeriod`, not the service period |
+| bill_date / due_date | DATE | The utility's own dates, identical across the run, so a CSR can talk about "the October run" |
+| status | BillingRunStatus | PENDING · RUNNING · COMPLETE · PARTIAL · FAILED · CANCELLED |
+| account_count | INTEGER | Accounts selected as due |
+| billed_count / exception_count | INTEGER | Maintained by `finalise` from the items |
+| posted_at / posted_by | TIMESTAMPTZ / UUID | Nullable; posting is a second act over a finished run |
+| cancel_requested | BOOLEAN | Checked between accounts; the run finishes the one it is on |
+| last_progress_at | TIMESTAMPTZ | What makes a stalled run distinguishable from a slow one |
+| created_by | UUID | Preserved across a resumed run, so the audit trail names the person and not the replica |
+| created_at | TIMESTAMPTZ | |
+
+Unique on `(utility_id, billing_cycle_id, window_end)`: a second attempt at
+the same window is a 409 naming the first run, not a second set of bills.
+
+#### BillingRunItem
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | Tenant scope (RLS) |
+| billing_run_id | UUID | FK → BillingRun, `onDelete: Cascade` |
+| account_id | UUID | FK → Account, `onDelete: Restrict` |
+| status | BillingRunItemStatus | PENDING · BILLED · SKIPPED · FAILED |
+| bill_id | UUID | Nullable FK → Bill, `onDelete: SetNull` |
+| service_period_start / service_period_end | DATE | What the bill actually covered — per account, read to read |
+| segment_count | INTEGER | |
+| total | DECIMAL(14,4) | A snapshot, like `LedgerEntry.amount`: the run's page shows money without joining every bill |
+| error_code | VARCHAR(64) | |
+| error_message | TEXT | |
+| processed_at | TIMESTAMPTZ | |
+
+Unique on `(billing_run_id, account_id)`; indexed on
+`(billing_run_id, status)`, which is the exception list's query.
+
+**SKIPPED and FAILED are separate statuses because only one of them is
+work.** Skipped is "nothing to bill" — `NO_READ_IN_WINDOW`,
+`NO_SEGMENTS_TO_BILL`, `BILL_ALREADY_EXISTS_FOR_PERIOD`,
+`NO_ACTIVE_ASSIGNMENTS`. Failed is "should have billed and could not".
+A single `error_count` would bury the second in the first, and the
+exception list is the entire value of a run.
+
 ---
 
 ## API Endpoints
 
-Bill document and bill message endpoints are shipped. The rest are planned for Phase 3.
+Billing run, bill document and bill message endpoints are shipped. The rest are planned for Phase 3.
 
-### Billing Cycle Execution
+### Billing Runs (shipped — slice 5c)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/billing/run` | Execute billing cycle: calculates charges, creates BillingRecords |
-| GET | `/api/v1/billing/runs` | List billing cycle executions with status |
-| GET | `/api/v1/billing/runs/:runId` | Get execution detail, counts, errors |
-| POST | `/api/v1/billing/runs/:runId/submit` | Submit batch to SaaSLogic after review |
+`accounts:EDIT` to start or post a run, `accounts:VIEW` to read one — the
+same authority that creates and posts a single bill, because a run is that
+act repeated rather than a new kind of power.
+
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| POST | `/api/v1/billing-runs` | `accounts:EDIT` | Start a run. **202** with the PENDING run and `queued` — the work is minutes long, so the response is the record to watch rather than the result |
+| GET | `/api/v1/billing-runs` | `accounts:VIEW` | The 100 most recent runs, newest first |
+| GET | `/api/v1/billing-runs/:id` | `accounts:VIEW` | One run's counts and status |
+| GET | `/api/v1/billing-runs/:id/items` | `accounts:VIEW` | The item list. `?status=FAILED` is the work queue; `limit` (≤500) / `offset` |
+| POST | `/api/v1/billing-runs/:id/post` | `accounts:EDIT` | Post every bill the run produced. **201** with `{ posted, alreadyPosted, failed }` |
+| POST | `/api/v1/billing-runs/:id/cancel` | `accounts:EDIT` | Ask a run to stop; it finishes the account it is on |
+
+The body is `{ billingCycleId }` and, optionally, `windowEnd`, `billDate`,
+`dueDate`. **`windowEnd` is the scheduling bound, not the service period** —
+naming it so is the point, since the first draft of this design conflated
+the two. It defaults to the cycle's own window for today; `billDate`
+defaults to the window end and `dueDate` to 30 days after it, so the
+ordinary call is a cycle id and nothing else.
+
+| Condition | Status |
+|-----------|--------|
+| `CYCLE_NOT_FOUND`, `RUN_NOT_FOUND` | 404 |
+| `INVALID_DATES` — due date before bill date | 400 |
+| `CYCLE_INACTIVE` — an inactive cycle has nothing due | 409 |
+| `RUN_ALREADY_EXISTS_FOR_WINDOW` — body names the existing run; resume or cancel it | 409 |
+| `RUN_NOT_FINISHED` — posting a run that is still PENDING or RUNNING | 409 |
+
+A failed enqueue is logged and swallowed by `enqueueSafely`: the run stays
+PENDING and the boot sweep takes it, which is better than a 500 on a run
+that exists.
 
 ### Billing Records
 
@@ -245,6 +340,8 @@ Gated on `settings`, not `accounts`: the text printed on bills is tenant configu
 
 1. **Billing cycle execution prerequisites:** Before a billing cycle run begins, the system validates: (a) all meters in the cycle have a read for the billing period, (b) no reads in the period are in exception-pending state, (c) no active billing hold on the service agreement. Failures are reported per service agreement; the run continues for qualifying agreements.
 
+    **What shipped does this per account instead of up front** (rule 14). Eligibility is one query — cycle, billable status, an agreement overlapping the window — and everything else is discovered while billing that account and recorded against its item with a reason. A pre-flight pass would have to resolve a service period per agreement to know whether a read exists, which is the expensive half of billing; doing it twice to report it earlier buys an operator nothing a SKIPPED item does not already tell them. (b) and (c) are genuinely not checked: exception-pending reads are not excluded, and bill holds do not exist (Req 136).
+
 2. **Rate engine application:** For each service agreement in the cycle, the system identifies the active RateSchedule as of the billing period end date, applies the `rate_config` to consumption, and produces a `charge_breakdown`. Rate type logic:
    - **FLAT:** `base_charge + (consumption × per_unit_rate)`
    - **TIERED:** `base_charge + sum of (units_in_tier × tier_rate)` per tier consumed
@@ -280,11 +377,23 @@ Gated on `settings`, not `accounts`: the text printed on bills is tenant configu
 
     **Not built:** previous balance and balance forward. The block covers this bill's own charge, not the account's position across bills, so a customer with older open charges sees nothing of them here. That belongs with the statement view in module 23 and with #131's City-defined bill formats.
 
-14. **Amounts on the bill:** every printed amount carries a currency symbol and thousands separators. The formatting lives in the template, not in `BillPresentation`, which carries plain 2dp strings — the presentation is the bill's content, and how an amount looks on paper is the template's business. Grouping is applied by hand rather than through `toLocaleString`, because a trimmed ICU on the host would otherwise vary the separator and break byte-stability. The quantity column is deliberately bare: a quantity is not money.
+14. **Billing runs (shipped — slice 5c):** a run selects the accounts a cycle has due, bills each one in **its own transaction**, and records what happened per account.
+
+    **Who is in the run:** a query — the account belongs to the cycle, its status bills (`ACTIVE` only; FINAL and CLOSED belong to Req 134), and it has a service agreement overlapping the window. An account that is simply not due is **not in the run at all**; an account that is due and cannot be billed is an item with a reason.
+
+    **Not atomic, deliberately.** One transaction over twelve thousand accounts holds locks for minutes and lets one bad rate assignment roll back eleven thousand good bills. A partially complete run with forty exceptions is the normal, useful outcome — which is what `PARTIAL` means. Rating and aggregation do share one transaction per account, because segment creation marks the period's reads `billed_at`: rating that succeeds under an aggregation that fails would leave reads marked billed against segments with no bill.
+
+    **Resume is the status filter, not a retry.** `attempts: 1` on the queue — an auto-retry would restart a run whose early accounts are already billed. Re-enqueueing bills only what is still PENDING, so a BILLED account cannot be billed twice, and a boot sweep re-enqueues anything a dead replica left `RUNNING`.
+
+    **The run calculates; posting is a second act.** Bills a run creates pass `suppressAutoPost`, overriding the tenant's `autoPostBills`, and `POST /billing-runs/:id/post` raises the receivables once somebody has looked at the exceptions. Without this the run would have raised every receivable as it went and the review step would have happened after the money moved — a run is exactly when a bad rate change becomes twelve thousand wrong charges, and reversing those is far worse than discarding unposted bills. The per-account path keeps auto-posting as each tenant configured it, because there the operator is looking at the one bill they just made. Posting tolerates a bill somebody posted by hand in between rather than failing on it.
+
+    **A known trap, not a bug:** `computeBillPeriod` clamps a window's start to `account.created_at`, so an account created *after* a window's start gets a window that starts after it ends, finds no segments, and is skipped `NO_SEGMENTS_TO_BILL`. Correct for a mid-period enrolment, and a real surprise on a fresh deployment's **first** run, where every account is newer than the window. The run's own window is computed with `created_at` at the epoch so the clamp cannot fire at run level — a run's window belongs to the cycle, not to any one account.
+
+15. **Amounts on the bill:** every printed amount carries a currency symbol and thousands separators. The formatting lives in the template, not in `BillPresentation`, which carries plain 2dp strings — the presentation is the bill's content, and how an amount looks on paper is the template's business. Grouping is applied by hand rather than through `toLocaleString`, because a trimmed ICU on the host would otherwise vary the separator and break byte-stability. The quantity column is deliberately bare: a quantity is not money.
 
 ## UI Pages
 
-Bill document actions and the two settings pages are shipped. The billing dashboard and run views are planned for Phase 3.
+Bill document actions and the two settings pages are shipped. The billing dashboard and the run views are **not built** — the billing run ships as API and worker only, so there is no screen that can start one or review its exceptions.
 
 ### Bill document actions (shipped)
 
@@ -366,13 +475,29 @@ CRUD over `/api/v1/bill-messages` on `settings`: label, body, account type, serv
 - Aging dashboard widget linking to Accounts Receivable (Module 23) (Bozeman Reqs 149–150)
 - "Run Billing Cycle" action: select cycle, preview impacted accounts, confirm
 
-### Billing Run Detail (`/billing/runs/:runId`)
+### Billing Run Detail (`/billing/runs/:runId`) — not built
 
-- Run metadata: cycle, execution timestamp, user who triggered
-- Status breakdown table: PENDING / SUBMITTED / HELD / REJECTED counts
-- Per-agreement results: expandable rows with charge summaries and any errors
-- Bulk actions: submit all PENDING, release all holds
-- Download: CSV export of run results
+**The run itself is shipped and has no screen.** It is reachable by
+endpoint only, which means a run can be started by nobody in the building —
+the one gap that matters most here, because the design's whole argument is
+that an operator reviews the exceptions before the money is posted, and
+today there is nowhere to review them.
+
+What it needs, now that the statuses are real:
+
+- Run metadata: cycle, window, bill and due dates, who started it, `last_progress_at` so a stalled run is distinguishable from a slow one
+- Counts by item status — **BILLED / SKIPPED / FAILED**, not the superseded PENDING/SUBMITTED/HELD/REJECTED. Failed is the work queue and belongs first; skipped is noise an operator scrolls past, and the two must not share a number
+- Per-account rows: account number, service period actually billed, segment count, total, and for an exception its `error_code` and message
+- **Post this run** — the review gate, and the one action that moves money. Disabled while the run is PENDING or RUNNING, since the API refuses it with `RUN_NOT_FINISHED`
+- Cancel while running
+- CSV export of the item list
+
+### Start a run — not built
+
+`POST /api/v1/billing-runs` with a cycle id. The screen it needs is a cycle
+picker, a preview of how many accounts are due, and the three dates it
+would otherwise default. `RUN_ALREADY_EXISTS_FOR_WINDOW` names the existing
+run, so the UI can offer "open that run" rather than an error.
 
 ### Billing Record Detail (`/billing-records/:id`)
 
@@ -417,8 +542,16 @@ CRUD over `/api/v1/bill-messages` on `settings`: label, body, account type, serv
   - Generate / download / Regenerate actions on the bills list and the account AR tab
   - Bill Production and Bill Messages settings pages
 
+- **Phase 3 — shipped (slice 5c, API only):**
+  - A service period is read to read — `resolveServicePeriod` is the one place a period is decided, and a `Bill`'s period is the span of its segments
+  - `BillingCycle.read_day_of_month` — a cycle says when its reads are due, not just its bills; required, and must precede the bill day
+  - Tier-threshold proration by the days actually billed (Req 138), opt-in per tariff via `standard_days`
+  - `BillingRun` + `BillingRunItem`, the `billing-runs` queue and worker, six endpoints, a boot sweep for runs a dead replica left RUNNING
+  - Run-created bills are **not** auto-posted; posting the run is its own act
+
 - **Phase 3 — outstanding:**
-  - Batch billing run across a cycle's accounts (slice 5c)
+  - **The billing run's UI** — start a run, watch it, review the exception list, post it. The API has no caller, which makes the review gate the design is built around unreachable today
+  - `Generate Bill` on an account's Bills tab is still the only thing that can create a bill. It should become the Req 134 final-bill action or go, once the run is usable
   - Rebill / corrections (slice 5d) — this is where bill versioning belongs
   - Payments, allocation, waivers, write-offs and the customer statement view, against the ledger (module 23 slices 2–4)
   - Proration for partial periods
@@ -445,14 +578,14 @@ CRUD over `/api/v1/bill-messages` on `settings`: label, body, account type, serv
 | 72 | Winter averaging for wastewater | **Shipped** — WQA source window |
 | 73 | Exclude irrigation from wastewater | **Shipped** — predicate on meter/commodity in the quantity source |
 | 74 | Minimum bills regardless of usage | **Shipped** — `minimum_bill` stage applied after main pricing |
-| 101–105 | Interval aggregation, partial periods, rebilling, reconciliation | Phase 3: rate engine scope |
+| 101–105 | Interval aggregation, partial periods, rebilling, reconciliation | Phase 3: rate engine scope. **Partial periods are now billed as they actually fall** — read to read rather than calendar month |
 | 130 | PDF bill generation, historical images | **Shipped** — `BillDocument` + `@react-pdf/renderer`; a stored document is the historical image. Generate, download and regenerate on the bills list and AR tab |
 | 131 | Print vendor integration | Outstanding: print export file delivery. `document_type` is a VARCHAR so `PRINT_EXPORT` needs no migration |
 | 133 | Bill reprints, corrected bills with versioning | **Partial** — a bill can be printed again on demand, byte-identically. Corrected bills and versioning are outstanding (slice 5d); reprinting deliberately creates no version |
 | 134 | Final bill at account closure | Phase 3: FINAL billing trigger |
 | 136 | Bill holds | Phase 3: hold_reason on BillingRecord |
 | 137 | Configurable bill messages by account type/service | **Shipped** — `BillMessage` targeted by account type and commodity over a date window, resolved at `bill_date`, managed at Settings → Bill Messages |
-| 138 | Prorate tier thresholds for partial periods | Phase 3: proration in rate engine |
+| 138 | Prorate tier thresholds for partial periods | **Shipped** — a `tiered` pricing declaring `standard_days` has each tier's `to` scaled by the days billed. Opt-in, so a published schedule prices unchanged until it is revised, and no tariff declares it yet |
 | 139 | Itemized charges on bills | **Shipped** — `BillSegmentLine` rows, each traceable to the `RateComponent` that produced it |
 | 140 | Validate charges against adopted rates | Outstanding: lines already carry `source_schedule_id` / `source_component_id`, so validation has what it needs |
 | 141 | Reconciliation: water usage vs wastewater billing | Outstanding: WQA-related |
