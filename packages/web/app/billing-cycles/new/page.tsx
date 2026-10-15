@@ -5,6 +5,7 @@ import { EntityFormPage } from "@/components/ui/entity-form-page";
 interface BillingCycleForm extends Record<string, unknown> {
   name: string;
   cycleCode: string;
+  readDayOfMonth: string;
   billDayOfMonth: string;
   frequency: string;
 }
@@ -27,6 +28,7 @@ export default function NewBillingCyclePage() {
       initialValues={{
         name: "",
         cycleCode: "",
+        readDayOfMonth: "",
         billDayOfMonth: "",
         frequency: "MONTHLY",
       }}
@@ -41,6 +43,18 @@ export default function NewBillingCyclePage() {
           hint: "BR-BC-005: Cannot be changed after creation",
         },
         { key: "frequency", label: "Frequency", type: "select", required: true, options: FREQUENCIES },
+        {
+          key: "readDayOfMonth",
+          label: "Read Day of Month",
+          type: "number",
+          min: "1",
+          max: "28",
+          placeholder: "8",
+          hint: "1–28, before the bill day",
+          tooltip:
+            "The day reads are expected to be complete by. Billing a cycle before its reads are in produces a bill for zero usage, so this must come before the bill day.",
+          tooltipRuleId: "BR-BC-001",
+        },
         {
           key: "billDayOfMonth",
           label: "Bill Day of Month",
@@ -59,6 +73,7 @@ export default function NewBillingCyclePage() {
           cycleCode: form.cycleCode,
           frequency: form.frequency,
         };
+        if (form.readDayOfMonth) body.readDayOfMonth = parseInt(form.readDayOfMonth, 10);
         if (form.billDayOfMonth) body.billDayOfMonth = parseInt(form.billDayOfMonth, 10);
         return body;
       }}

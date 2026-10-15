@@ -13,6 +13,7 @@ interface BillingCycle {
   id: string;
   name: string;
   cycleCode: string;
+  readDayOfMonth: number | null;
   billDayOfMonth: number;
   frequency: string;
   active: boolean;
@@ -76,6 +77,7 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
     if (!cycle) return;
     setEditForm({
       name: cycle.name ?? "",
+      readDayOfMonth: cycle.readDayOfMonth === null ? "" : String(cycle.readDayOfMonth),
       billDayOfMonth: String(cycle.billDayOfMonth),
       frequency: cycle.frequency ?? "",
       active: cycle.active,
@@ -111,6 +113,11 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
       if (editForm.name !== cycle.name) changes.name = editForm.name;
       const billDay = parseInt(editForm.billDayOfMonth as string, 10);
       if (billDay !== cycle.billDayOfMonth) changes.billDayOfMonth = billDay;
+      // Blank clears it: a cycle whose read day was declared and then
+      // withdrawn is back to not declared, which is not day zero.
+      const readRaw = (editForm.readDayOfMonth as string).trim();
+      const readDay = readRaw === "" ? null : parseInt(readRaw, 10);
+      if (readDay !== cycle.readDayOfMonth) changes.readDayOfMonth = readDay;
       if (editForm.frequency !== cycle.frequency) changes.frequency = editForm.frequency;
       if (editForm.active !== cycle.active) changes.active = editForm.active;
 
@@ -227,6 +234,23 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
             <div style={fieldStyle}>
               <span style={labelStyle}>Cycle Code</span>
               <span style={{ ...valueStyle, fontFamily: "monospace" }}>{cycle.cycleCode}</span>
+            </div>
+
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Read Day of Month</span>
+              {editing ? (
+                <input
+                  style={inputStyle}
+                  type="number"
+                  min="1"
+                  max="28"
+                  placeholder="not declared"
+                  value={editForm.readDayOfMonth as string}
+                  onChange={(e) => setEditForm((f) => ({ ...f, readDayOfMonth: e.target.value }))}
+                />
+              ) : (
+                <span style={valueStyle}>{cycle.readDayOfMonth ?? "—"}</span>
+              )}
             </div>
 
             <div style={fieldStyle}>

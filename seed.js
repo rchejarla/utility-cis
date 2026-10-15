@@ -102,8 +102,8 @@ async function main() {
   const sgal = await p.unitOfMeasure.create({ data: { utilityId: UID, code: "GAL", name: "Gallons", commodityId: sewer.id, measureTypeId: measureUsage.id, conversionFactor: 1, isBaseUnit: true, isActive: true } });
   console.log("  5 UOMs");
 
-  const c1 = await p.billingCycle.create({ data: { utilityId: UID, name: "Route 1 - North District", cycleCode: "R01", billDayOfMonth: 10, frequency: "MONTHLY" } });
-  const c2 = await p.billingCycle.create({ data: { utilityId: UID, name: "Route 2 - South District", cycleCode: "R02", billDayOfMonth: 17, frequency: "MONTHLY" } });
+  const c1 = await p.billingCycle.create({ data: { utilityId: UID, name: "Route 1 - North District", cycleCode: "R01", readDayOfMonth: 8, billDayOfMonth: 10, frequency: "MONTHLY" } });
+  const c2 = await p.billingCycle.create({ data: { utilityId: UID, name: "Route 2 - South District", cycleCode: "R02", readDayOfMonth: 15, billDayOfMonth: 17, frequency: "MONTHLY" } });
   console.log("  2 billing cycles");
 
   // ============ RATE SERVICE CLASSES (v2 — slice 1 task 10) ============

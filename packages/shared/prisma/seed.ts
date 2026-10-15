@@ -108,12 +108,12 @@ async function main() {
   const cycle1 = await prisma.billingCycle.upsert({
     where: { utilityId_cycleCode: { utilityId: UTILITY_ID, cycleCode: "R01" } },
     update: {},
-    create: { utilityId: UTILITY_ID, name: "Route 1 — North District", cycleCode: "R01", billDayOfMonth: 10, frequency: "MONTHLY" },
+    create: { utilityId: UTILITY_ID, name: "Route 1 — North District", cycleCode: "R01", readDayOfMonth: 8, billDayOfMonth: 10, frequency: "MONTHLY" },
   });
   const cycle2 = await prisma.billingCycle.upsert({
     where: { utilityId_cycleCode: { utilityId: UTILITY_ID, cycleCode: "R02" } },
     update: {},
-    create: { utilityId: UTILITY_ID, name: "Route 2 — South District", cycleCode: "R02", billDayOfMonth: 17, frequency: "MONTHLY" },
+    create: { utilityId: UTILITY_ID, name: "Route 2 — South District", cycleCode: "R02", readDayOfMonth: 15, billDayOfMonth: 17, frequency: "MONTHLY" },
   });
   console.log("  2 billing cycles");
 

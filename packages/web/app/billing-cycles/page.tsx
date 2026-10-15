@@ -7,6 +7,7 @@ interface BillingCycle {
   id: string;
   name: string;
   cycleCode: string;
+  readDayOfMonth?: number | null;
   billDayOfMonth?: number;
   frequency: string;
   isActive: boolean;
@@ -26,9 +27,20 @@ const columns: Column<BillingCycle>[] = [
     ),
   },
   {
+    /*
+      Read day and bill day together, because the gap between them is
+      the thing an operator is actually checking: reads have to be in
+      before bills generate, and a cycle reading on the 8th and billing
+      on the 10th has two days of slack for a late reader.
+    */
     key: "billDayOfMonth",
-    header: "Bill Day",
-    render: (row) => <span style={{ fontSize: "12px" }}>{row.billDayOfMonth ?? "—"}</span>,
+    header: "Calendar",
+    render: (row) => (
+      <span style={{ fontSize: "12px" }}>
+        {row.readDayOfMonth ? `read ${row.readDayOfMonth} → ` : ""}
+        {row.billDayOfMonth ? `bill ${row.billDayOfMonth}` : "—"}
+      </span>
+    ),
   },
   {
     key: "frequency",

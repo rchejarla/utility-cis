@@ -580,6 +580,13 @@ model BillingCycle {
   utilityId      String           @map("utility_id") @db.Uuid
   name           String           @map("name") @db.VarChar(255)
   cycleCode      String           @map("cycle_code") @db.VarChar(20)
+  /// The day meter reads are expected to be complete by, which is what
+  /// makes a bill day meaningful: billing a cycle before its reads are
+  /// in produces a bill for zero usage. Nullable because the two cycles
+  /// that predate this column have no declared read day, and inventing
+  /// one for them would be inventing data. Must precede
+  /// `billDayOfMonth` when set (BR-BC-001).
+  readDayOfMonth Int?             @map("read_day_of_month")
   billDayOfMonth Int              @map("bill_day_of_month")
   frequency      BillingFrequency @default(MONTHLY) @map("frequency")
   active         Boolean          @default(true) @map("active")

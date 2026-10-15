@@ -338,6 +338,65 @@ describe("Request validation", () => {
       expect(body.error.code).toBe("VALIDATION_ERROR");
     });
 
+    /**
+     * Spec 07 rule 9, and the reason it is a rule: billing a cycle
+     * before its reads are in gives the customer a bill for zero usage,
+     * and then a double one next month when both reads land in the same
+     * window.
+     */
+    it("rejects a read day that does not precede the bill day", async () => {
+      const app = await createTestApp();
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/billing-cycles",
+        headers,
+        payload: {
+          name: "Reads After Bills",
+          cycleCode: "LATE",
+          readDayOfMonth: 20,
+          billDayOfMonth: 10,
+          frequency: "MONTHLY",
+        },
+      });
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("rejects a read day equal to the bill day", async () => {
+      const app = await createTestApp();
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/billing-cycles",
+        headers,
+        payload: {
+          name: "Same Day",
+          cycleCode: "SAME",
+          readDayOfMonth: 10,
+          billDayOfMonth: 10,
+          frequency: "MONTHLY",
+        },
+      });
+      expect(response.statusCode).toBe(400);
+    });
+
+    it("rejects a read day outside 1–28", async () => {
+      const app = await createTestApp();
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/billing-cycles",
+        headers,
+        payload: {
+          name: "Month End",
+          cycleCode: "ME",
+          readDayOfMonth: 29,
+          billDayOfMonth: 30,
+          frequency: "MONTHLY",
+        },
+      });
+      expect(response.statusCode).toBe(400);
+    });
+
     it("rejects billing cycle with invalid frequency", async () => {
       const app = await createTestApp();
       const response = await app.inject({

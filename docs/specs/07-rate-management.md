@@ -117,7 +117,7 @@ Defines a read-and-bill schedule. All service agreements are assigned to exactly
 | utility_id | UUID | Tenant scope |
 | name | VARCHAR(255) | e.g. "Monthly Cycle A", "North District Quarterly" |
 | cycle_code | VARCHAR(20) | Short code, unique per utility |
-| read_day_of_month | INTEGER | 1–28: day meters are scheduled to be read |
+| read_day_of_month | INTEGER NULL | 1–28: the day reads are expected to be **complete by**, not the day the reader sets out. Nullable — a cycle that has not declared one reads "not declared", which is not day one. The actual spread of a reading pass lives on the `MeterRead` rows, and belongs to read routes when those exist (Bozeman #78) |
 | bill_day_of_month | INTEGER | 1–28: day bills are generated and sent |
 | frequency | ENUM | MONTHLY, BIMONTHLY, QUARTERLY |
 | active | BOOLEAN | Inactive cycles cannot accept new service agreements |
@@ -171,7 +171,9 @@ Defines a read-and-bill schedule. All service agreements are assigned to exactly
 
 8. **Budget billing eligibility:** Only accounts with `budget_billing = true` and a rate schedule of type BUDGET are enrolled in budget billing. Assignment enforced at service agreement creation.
 
-9. **Billing cycle read/bill day constraint:** `read_day_of_month` must precede `bill_day_of_month` within the same month to ensure reads are available before bills generate.
+9. **Billing cycle read/bill day constraint:** `read_day_of_month` must precede `bill_day_of_month` within the same month to ensure reads are available before bills generate. Enforced on create by the Zod schema, where both days are in the payload, and on update by the service against the merged state — a `PATCH` carrying one day and a row holding the other is invalid in a way the payload alone cannot show (400 `READ_DAY_AFTER_BILL_DAY`).
+
+   Why it is a rule and not a convention: billing a cycle whose reads have not landed gives the customer a bill for zero usage, and then a double one next period when both reads fall inside the same window. The cycle's declared days are a *schedule*; what a bill is actually for comes from the read dates themselves.
 
 10. **Bozeman RFP Req 68:** Future-dated rate ordinances can be entered at any time and will activate automatically on `effective_date`. No rebilling of prior periods occurs unless explicitly triggered.
 
