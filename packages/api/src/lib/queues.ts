@@ -23,6 +23,7 @@ export const QUEUE_NAMES = {
   delinquencyTenant: "delinquency-tenant",
   auditRetention: "audit-retention",
   imports: "imports",
+  billingRuns: "billing-runs",
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
@@ -103,6 +104,21 @@ export const QUEUE_DEFAULTS: Record<QueueName, QueueDefaults> = {
     defaultJobOptions: {
       attempts: 2,
       backoff: { type: "fixed", delay: 300_000 },
+      ...RETENTION_OPTS,
+    },
+  },
+  "billing-runs": {
+    // One run at a time per replica. A run is already a loop over
+    // thousands of accounts hammering the rate engine and the database;
+    // two in parallel would halve neither's wall clock and would make a
+    // slow run look like a broken one.
+    concurrency: 1,
+    // attempts=1, as with imports and for the same reason: an auto-retry
+    // would restart a run whose early accounts are already BILLED. The
+    // resume path is deliberate — re-enqueue and the status filter skips
+    // what is done.
+    defaultJobOptions: {
+      attempts: 1,
       ...RETENTION_OPTS,
     },
   },

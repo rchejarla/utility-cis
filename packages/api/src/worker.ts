@@ -31,6 +31,10 @@ import {
   AUDIT_RETENTION_SCHEDULER_ID,
 } from "./workers/audit-retention-worker.js";
 import {
+  buildBillingRunWorker,
+  reclaimZombieBillingRuns,
+} from "./workers/billing-run-worker.js";
+import {
   buildImportWorker,
   reclaimAndEnqueueZombies,
 } from "./workers/import-worker.js";
@@ -210,6 +214,16 @@ async function main(): Promise<void> {
   if (activeQueues.includes(QUEUE_NAMES.imports)) {
     activeWorkers.push(buildImportWorker());
     await reclaimAndEnqueueZombies();
+  }
+
+  if (activeQueues.includes(QUEUE_NAMES.billingRuns)) {
+    activeWorkers.push(buildBillingRunWorker());
+    // A replica that died holding a run leaves it looking busy forever;
+    // the status filter makes picking it up again safe.
+    const requeued = await reclaimZombieBillingRuns();
+    if (requeued > 0) {
+      logger.warn({ component: "worker", requeued }, "Re-enqueued interrupted billing runs");
+    }
   }
 
   process.on("SIGTERM", () => void shutdown("SIGTERM"));

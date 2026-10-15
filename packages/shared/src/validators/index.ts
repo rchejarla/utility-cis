@@ -7,6 +7,7 @@ export * from "./service-agreement";
 export * from "./rate-schedule";
 export * from "./billing-cycle";
 export * from "./bill-segment";
+export * from "./billing-run";
 export * from "./bill";
 export * from "./bill-message";
 export * from "./theme";

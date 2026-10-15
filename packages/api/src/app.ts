@@ -14,6 +14,7 @@ import { premiseRoutes } from "./routes/premises.js";
 import { meterRoutes } from "./routes/meters.js";
 import { accountRoutes } from "./routes/accounts.js";
 import { billingCycleRoutes } from "./routes/billing-cycles.js";
+import { billingRunRoutes } from "./routes/billing-runs.js";
 import { serviceAgreementRoutes } from "./routes/service-agreements.js";
 import { serviceAgreementBillSegmentRoutes } from "./routes/service-agreement-bill-segments.js";
 import { billSegmentRoutes } from "./routes/bill-segments.js";
@@ -109,6 +110,7 @@ export async function buildApp() {
   await app.register(meterRoutes);
   await app.register(accountRoutes);
   await app.register(billingCycleRoutes);
+  await app.register(billingRunRoutes);
   await app.register(serviceAgreementRoutes);
   await app.register(serviceAgreementBillSegmentRoutes);
   await app.register(billSegmentRoutes);

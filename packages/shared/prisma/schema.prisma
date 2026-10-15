@@ -76,6 +76,34 @@ enum BillingFrequency {
   @@map("billing_frequency")
 }
 
+/// PARTIAL is a real outcome, not a half-failure: a run of twelve
+/// thousand accounts that bills all but forty is the normal result, and
+/// the forty are a work queue rather than a reason to call the run bad.
+enum BillingRunStatus {
+  PENDING
+  RUNNING
+  COMPLETE
+  PARTIAL
+  FAILED
+  CANCELLED
+
+  @@map("billing_run_status")
+}
+
+/// SKIPPED and FAILED are separate because only one of them is work.
+/// Skipped is "nothing to bill" — no overlapping agreement, no unbilled
+/// read, already billed for this window. Failed is "should have billed
+/// and could not", which somebody has to act on. One errorCount would
+/// bury the second in the first.
+enum BillingRunItemStatus {
+  PENDING
+  BILLED
+  SKIPPED
+  FAILED
+
+  @@map("billing_run_item_status")
+}
+
 enum ReadType {
   ACTUAL
   ESTIMATED
@@ -363,6 +391,8 @@ model Account {
   @@index([utilityId, status])
   @@index([utilityId, balance])
   @@index([utilityId, billingCycleId])
+  billingRunItems BillingRunItem[]
+
   @@map("account")
 }
 
@@ -595,6 +625,7 @@ model BillingCycle {
   // Relations
   accounts       Account[]
   bills          Bill[]
+  billingRuns    BillingRun[]
 
   @@unique([utilityId, cycleCode])
   @@index([utilityId, active])
@@ -690,6 +721,8 @@ model Bill {
   @@unique([utilityId, billNumber])
   @@index([utilityId, accountId, periodEnd])
   @@index([utilityId, dueDate])
+  billingRunItems BillingRunItem[]
+
   @@map("bill")
 }
 
@@ -1963,4 +1996,88 @@ model BillDocument {
   @@unique([billId, documentType])
   @@index([utilityId, generatedAt])
   @@map("bill_document")
+}
+
+/// One initiated billing run over one cycle's window.
+///
+/// A row rather than a long request: twelve thousand accounts each
+/// rating several agreements is minutes of work, and an HTTP request
+/// that long dies to a proxy with the work half done and no record of
+/// how far it got — while re-running it turns the per-account overlap
+/// guard into twelve thousand 409s instead of a resume. What makes a run
+/// usable is the record of what happened to each account.
+///
+/// Shaped after ImportBatch deliberately, not factored out of it: the
+/// two share a shape, not a schema, and a generic batch-runner serving
+/// two consumers with different fields and different failure
+/// vocabularies would buy indirection and cost clarity.
+model BillingRun {
+  id             String           @id @default(uuid()) @db.Uuid
+  utilityId      String           @map("utility_id") @db.Uuid
+  billingCycleId String           @map("billing_cycle_id") @db.Uuid
+  /// The scheduling window — which accounts are due and which reads to
+  /// expect. NOT the service period: that is read to read and per
+  /// account, and lives on the segments and the bill.
+  windowStart    DateTime         @map("window_start") @db.Date
+  windowEnd      DateTime         @map("window_end") @db.Date
+  /// The utility's own dates, identical across the run, so the run is
+  /// something a CSR can talk about ("the October run"). Passed in
+  /// rather than derived per account, so one bad clock cannot split a
+  /// run across two days.
+  billDate       DateTime         @map("bill_date") @db.Date
+  dueDate        DateTime         @map("due_date") @db.Date
+  status         BillingRunStatus @default(PENDING) @map("status")
+  accountCount   Int              @default(0) @map("account_count")
+  billedCount    Int              @default(0) @map("billed_count")
+  exceptionCount Int              @default(0) @map("exception_count")
+  /// Posting is a second act over the run. A run is exactly when a bad
+  /// rate change becomes twelve thousand wrong charges, and reversing
+  /// those is a far worse afternoon than discarding unposted bills.
+  postedAt       DateTime?        @map("posted_at") @db.Timestamptz
+  postedBy       String?          @map("posted_by") @db.Uuid
+  cancelRequested Boolean         @default(false) @map("cancel_requested")
+  lastProgressAt DateTime?        @map("last_progress_at") @db.Timestamptz
+  createdBy      String           @map("created_by") @db.Uuid
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  cycle BillingCycle     @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)
+  items BillingRunItem[]
+
+  /// One run per cycle per window. A second attempt is a 409 naming the
+  /// first, not a second set of bills.
+  @@unique([utilityId, billingCycleId, windowEnd])
+  @@index([utilityId, createdAt])
+  @@map("billing_run")
+}
+
+/// One account's outcome in a run.
+///
+/// The exception list is the whole value of a run, so an item carries
+/// why as well as what: the code and message the service threw, and the
+/// service period actually billed, so a 44-day interval is visible
+/// without opening the bill.
+model BillingRunItem {
+  id                 String               @id @default(uuid()) @db.Uuid
+  utilityId          String               @map("utility_id") @db.Uuid
+  billingRunId       String               @map("billing_run_id") @db.Uuid
+  accountId          String               @map("account_id") @db.Uuid
+  status             BillingRunItemStatus @default(PENDING) @map("status")
+  billId             String?              @map("bill_id") @db.Uuid
+  servicePeriodStart DateTime?            @map("service_period_start") @db.Date
+  servicePeriodEnd   DateTime?            @map("service_period_end") @db.Date
+  segmentCount       Int                  @default(0) @map("segment_count")
+  /// A snapshot, like LedgerEntry.amount: the run's own page shows money
+  /// without joining every bill.
+  total              Decimal?             @map("total") @db.Decimal(14, 4)
+  errorCode          String?              @map("error_code") @db.VarChar(64)
+  errorMessage       String?              @map("error_message") @db.Text
+  processedAt        DateTime?            @map("processed_at") @db.Timestamptz
+
+  run     BillingRun @relation(fields: [billingRunId], references: [id], onDelete: Cascade)
+  account Account    @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  bill    Bill?      @relation(fields: [billId], references: [id], onDelete: SetNull)
+
+  @@unique([billingRunId, accountId])
+  @@index([billingRunId, status])
+  @@map("billing_run_item")
 }

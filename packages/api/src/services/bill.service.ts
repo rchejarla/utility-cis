@@ -160,7 +160,21 @@ export async function generateBillForAccount(
   actorId: string,
   actorName: string,
   accountId: string,
-  input: GenerateBillInput,
+  input: GenerateBillInput & {
+    /**
+     * Suppress auto-posting for this bill.
+     *
+     * Not exposed on the HTTP body — only a billing run passes it. A run
+     * produces thousands of bills at once, which is exactly when a bad
+     * rate change becomes thousands of wrong receivables, so a run
+     * reviews its exception list and then posts itself as a second,
+     * deliberate act. Posting on creation would make that review
+     * decorative. The per-account path keeps auto-post as the tenant
+     * configured it (`resolveAutoPostBills`, default on), because there
+     * the operator is looking at the one bill they just made.
+     */
+    suppressAutoPost?: boolean;
+  },
 ): Promise<BillWithSegments> {
   const account = await prisma.account.findUnique({
     where: { id: accountId, utilityId },
@@ -291,7 +305,7 @@ export async function generateBillForAccount(
       // Post to the ledger in THIS transaction when auto-post is on, so
       // a Bill and its receivable commit together or not at all.
       const { resolveAutoPostBills, postBill } = await import("./ar/posting.service.js");
-      if (await resolveAutoPostBills(tx, utilityId, accountId)) {
+      if (!input.suppressAutoPost && (await resolveAutoPostBills(tx, utilityId, accountId))) {
         await postBill(utilityId, actorId, actorName, bill.id, {}, tx);
       }
 

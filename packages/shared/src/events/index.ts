@@ -36,6 +36,7 @@ export const EVENT_TYPES = {
   BILLING_CYCLE_UPDATED: "billing_cycle.updated",
   BILL_SEGMENT_CREATED: "bill_segment.created",
   BILL_CREATED: "bill.created",
+  BILLING_RUN_CREATED: "billing_run.created",
   LEDGER_ENTRY_CREATED: "ledger_entry.created",
   LEDGER_PAYMENT_CREATED: "ledger_payment.created",
   LEDGER_REVERSAL_CREATED: "ledger_reversal.created",
