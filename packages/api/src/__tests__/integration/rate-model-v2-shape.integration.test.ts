@@ -74,7 +74,7 @@ beforeAll(async () => {
       utilityId: TENANT_A,
       name: "Shape Cycle",
       cycleCode: "BC-SHAPE",
-      billDayOfMonth: 10,
+      readDayOfMonth: 1, billDayOfMonth: 10,
       frequency: "MONTHLY",
     },
     update: {},

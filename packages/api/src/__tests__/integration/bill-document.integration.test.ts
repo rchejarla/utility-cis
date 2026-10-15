@@ -177,7 +177,7 @@ async function postedBill(
       utilityId,
       name: "Residential",
       cycleCode: `R-${suffix}`,
-      billDayOfMonth: 15,
+      readDayOfMonth: 1, billDayOfMonth: 15,
       frequency: "MONTHLY",
     },
   });

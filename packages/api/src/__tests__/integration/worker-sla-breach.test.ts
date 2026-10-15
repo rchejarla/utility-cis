@@ -98,7 +98,7 @@ async function seedAccount(utilityId: string): Promise<{ accountId: string }> {
       utilityId,
       name: "Default Cycle",
       cycleCode: `BC-${utilityId.slice(-4)}-${Math.random().toString(36).slice(2, 6)}`,
-      billDayOfMonth: 5,
+      readDayOfMonth: 1, billDayOfMonth: 5,
       frequency: "MONTHLY",
     },
   });

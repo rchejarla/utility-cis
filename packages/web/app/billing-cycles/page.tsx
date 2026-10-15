@@ -7,7 +7,7 @@ interface BillingCycle {
   id: string;
   name: string;
   cycleCode: string;
-  readDayOfMonth?: number | null;
+  readDayOfMonth?: number;
   billDayOfMonth?: number;
   frequency: string;
   isActive: boolean;

@@ -162,7 +162,7 @@ async function seedAgreementChain(utilityId: string, agreementId: string): Promi
       utilityId,
       name: "Test Cycle",
       cycleCode: `BC-${agreementId.slice(-4)}`,
-      billDayOfMonth: 5,
+      readDayOfMonth: 1, billDayOfMonth: 5,
     },
   });
   const account = await prisma.account.create({

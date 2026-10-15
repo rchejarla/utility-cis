@@ -117,7 +117,7 @@ Defines a read-and-bill schedule. All service agreements are assigned to exactly
 | utility_id | UUID | Tenant scope |
 | name | VARCHAR(255) | e.g. "Monthly Cycle A", "North District Quarterly" |
 | cycle_code | VARCHAR(20) | Short code, unique per utility |
-| read_day_of_month | INTEGER NULL | 1–28: the day reads are expected to be **complete by**, not the day the reader sets out. Nullable — a cycle that has not declared one reads "not declared", which is not day one. The actual spread of a reading pass lives on the `MeterRead` rows, and belongs to read routes when those exist (Bozeman #78) |
+| read_day_of_month | INTEGER | 1–28: the day reads are expected to be **complete by**, not the day the reader sets out. Required — a cycle is a read-and-bill calendar, and one declaring only half of it cannot be billed safely. The actual spread of a reading pass lives on the `MeterRead` rows, and belongs to read routes when those exist (Bozeman #78) |
 | bill_day_of_month | INTEGER | 1–28: day bills are generated and sent |
 | frequency | ENUM | MONTHLY, BIMONTHLY, QUARTERLY |
 | active | BOOLEAN | Inactive cycles cannot accept new service agreements |

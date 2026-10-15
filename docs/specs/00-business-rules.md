@@ -129,7 +129,7 @@
 
 | ID | Rule | Enforcement |
 |----|------|-------------|
-| BR-BC-001 | readDayOfMonth and billDayOfMonth must be between 1 and 28 (avoids month-length issues), and readDayOfMonth — which is optional — must come before billDayOfMonth. | Zod validator on create; service check against the merged row on update (`READ_DAY_AFTER_BILL_DAY`); DB CHECK allows 1–31 as the calendar floor |
+| BR-BC-001 | readDayOfMonth and billDayOfMonth are both required, must be between 1 and 28 (avoids month-length issues), and readDayOfMonth must come before billDayOfMonth. | Zod validator on create; service check against the merged row on update (`READ_DAY_AFTER_BILL_DAY`); DB CHECK allows 1–31 as the calendar floor |
 | BR-BC-002 | cycleCode is unique within a utility tenant. | Unique constraint [utilityId, cycleCode] |
 | BR-BC-003 | A billing cycle can be deactivated (active → false) but not deleted. | Soft delete via active flag |
 | BR-BC-004 | Deactivating a cycle does not affect existing agreements — they retain their cycle assignment. | By design |

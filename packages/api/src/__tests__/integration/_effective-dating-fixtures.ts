@@ -290,7 +290,7 @@ export async function makeTenantFixture(
       utilityId,
       name: `Cycle-${suffix}`,
       cycleCode: `C-${suffix}`,
-      billDayOfMonth: 10,
+      readDayOfMonth: 1, billDayOfMonth: 10,
       frequency: "MONTHLY",
     },
   });

@@ -47,7 +47,7 @@ beforeAll(async () => {
 
   const { prisma } = prismaImports;
   const cycle = await prisma.billingCycle.create({
-    data: { utilityId, name: "Residential 1", cycleCode: "R01", billDayOfMonth: 15, frequency: "MONTHLY" },
+    data: { utilityId, name: "Residential 1", cycleCode: "R01", readDayOfMonth: 1, billDayOfMonth: 15, frequency: "MONTHLY" },
   });
   billingCycleId = cycle.id;
 
@@ -68,7 +68,7 @@ beforeAll(async () => {
 
   // Another tenant, with its own cycle and account, to prove scoping.
   const otherCycle = await prisma.billingCycle.create({
-    data: { utilityId: otherUtility, name: "X", cycleCode: "X01", billDayOfMonth: 1, frequency: "MONTHLY" },
+    data: { utilityId: otherUtility, name: "X", cycleCode: "X01", readDayOfMonth: 1, billDayOfMonth: 1, frequency: "MONTHLY" },
   });
   const otherAccount = await prisma.account.create({
     data: {

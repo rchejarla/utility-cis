@@ -329,6 +329,7 @@ describe("Request validation", () => {
         payload: {
           name: "Bad Cycle",
           cycleCode: "BAD",
+          readDayOfMonth: 8,
           billDayOfMonth: 29, // max is 28
           frequency: "MONTHLY",
         },
@@ -380,6 +381,24 @@ describe("Request validation", () => {
       expect(response.statusCode).toBe(400);
     });
 
+    it("rejects a cycle that declares no read day", async () => {
+      const app = await createTestApp();
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/billing-cycles",
+        headers,
+        payload: {
+          name: "Bills Only",
+          cycleCode: "BILLONLY",
+          billDayOfMonth: 10,
+          frequency: "MONTHLY",
+        },
+      });
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error.code).toBe("VALIDATION_ERROR");
+    });
+
     it("rejects a read day outside 1–28", async () => {
       const app = await createTestApp();
       const response = await app.inject({
@@ -406,6 +425,7 @@ describe("Request validation", () => {
         payload: {
           name: "Bad Cycle",
           cycleCode: "BAD",
+          readDayOfMonth: 8,
           billDayOfMonth: 20,
           frequency: "WEEKLY", // not a valid enum value
         },

@@ -431,7 +431,7 @@ Defines when meters in a cycle are read and bills generate.
 | utility_id | UUID | Tenant scope |
 | name | VARCHAR(255) | |
 | cycle_code | VARCHAR(20) | Unique per utility |
-| read_day_of_month | INTEGER NULL | 1-28 (Zod); the day reads are expected complete by. Added 2026-10-15 — the column had been described here since Phase 1 without existing |
+| read_day_of_month | INTEGER | 1-28 (Zod), NOT NULL; the day reads are expected complete by. Added 2026-10-15 — the column had been described here since Phase 1 without existing |
 | bill_day_of_month | INTEGER | 1-28 |
 | frequency | ENUM | MONTHLY, BIMONTHLY, QUARTERLY |
 | active | BOOLEAN | |

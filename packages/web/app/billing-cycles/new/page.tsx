@@ -47,6 +47,7 @@ export default function NewBillingCyclePage() {
           key: "readDayOfMonth",
           label: "Read Day of Month",
           type: "number",
+          required: true,
           min: "1",
           max: "28",
           placeholder: "8",

@@ -52,7 +52,7 @@ beforeAll(async () => {
 
   const { prisma } = prismaImports;
   const cycle = await prisma.billingCycle.create({
-    data: { utilityId, name: "R1", cycleCode: "R01", billDayOfMonth: 15, frequency: "MONTHLY" },
+    data: { utilityId, name: "R1", cycleCode: "R01", readDayOfMonth: 1, billDayOfMonth: 15, frequency: "MONTHLY" },
   });
   const account = await prisma.account.create({
     data: {
@@ -66,7 +66,7 @@ beforeAll(async () => {
   accountId = account.id;
 
   const otherCycle = await prisma.billingCycle.create({
-    data: { utilityId: otherUtilityId, name: "X", cycleCode: "X01", billDayOfMonth: 1, frequency: "MONTHLY" },
+    data: { utilityId: otherUtilityId, name: "X", cycleCode: "X01", readDayOfMonth: 1, billDayOfMonth: 1, frequency: "MONTHLY" },
   });
   const otherAccount = await prisma.account.create({
     data: {

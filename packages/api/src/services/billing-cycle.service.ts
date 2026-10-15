@@ -12,8 +12,8 @@ import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
  * fine. So the rule is applied to the merged state, which only the
  * service has.
  */
-function assertReadPrecedesBill(readDay: number | null, billDay: number) {
-  if (readDay !== null && readDay >= billDay) {
+function assertReadPrecedesBill(readDay: number, billDay: number) {
+  if (readDay >= billDay) {
     throw Object.assign(
       new Error(
         `readDayOfMonth ${readDay} must be before billDayOfMonth ${billDay}, ` +
@@ -59,7 +59,7 @@ export async function updateBillingCycle(
 ) {
   const before = await prisma.billingCycle.findUniqueOrThrow({ where: { id, utilityId } });
   assertReadPrecedesBill(
-    data.readDayOfMonth === undefined ? before.readDayOfMonth : (data.readDayOfMonth ?? null),
+    data.readDayOfMonth ?? before.readDayOfMonth,
     data.billDayOfMonth ?? before.billDayOfMonth,
   );
   return auditUpdate(

@@ -157,7 +157,7 @@ beforeAll(async () => {
   // computed period for asOfDate=2026-05-15 lands at [2026-04-16, 2026-05-15].
   await prisma.billingCycle.updateMany({
     where: { utilityId, id: { in: await prisma.billingCycle.findMany({ where: { utilityId }, select: { id: true } }).then((cs) => cs.map((c) => c.id)) } },
-    data: { billDayOfMonth: 15 },
+    data: { readDayOfMonth: 1, billDayOfMonth: 15 },
   });
 
   // Push account.createdAt back so the period-clamp doesn't fire by

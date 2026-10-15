@@ -32,7 +32,7 @@ beforeAll(async () => {
       utilityId,
       name: "Route 1",
       cycleCode: "R01",
-      billDayOfMonth: 15,
+      readDayOfMonth: 1, billDayOfMonth: 15,
       frequency: "MONTHLY",
     },
   });
