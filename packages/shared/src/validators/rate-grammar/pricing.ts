@@ -26,6 +26,16 @@ const tieredSchema = z
           .strict(),
       )
       .min(1),
+    /**
+     * The period length the thresholds were written for, in days
+     * (Bozeman Req 138). Present, each tier's `to` is scaled by the days
+     * actually billed, so a long interval gets a proportionate
+     * allowance instead of a month's. Absent, thresholds are absolute
+     * and the component prices as it always has — which is why this is
+     * opt-in: the engine is handed an interval and never told what a
+     * normal one looks like, so only the tariff can say.
+     */
+    standard_days: z.number().int().positive().optional(),
   })
   .strict();
 

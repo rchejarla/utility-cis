@@ -124,6 +124,14 @@ Shape varies by `kind`. Examples:
    { "to": null, "rate": 9.58 }
 ]}
 
+// consumption: inclining block whose thresholds are an allowance for a
+// 30-day period, prorated by the days actually billed (Req 138).
+// Optional and opt-in: absent, thresholds are absolute.
+{ "type": "tiered", "standard_days": 30, "tiers": [
+   { "to": 6,    "rate": 3.31 },
+   { "to": null, "rate": 9.58 }
+]}
+
 // consumption: flat per-unit
 { "type": "flat", "rate": 3.40, "unit": "HCF" }
 
@@ -152,6 +160,27 @@ Shape varies by `kind`. Examples:
 ```
 
 `type` values are a small closed set: `lookup`, `tiered`, `flat`, `per_unit`, `catalog`, `percent_of`, `floor`.
+
+**Tier-threshold proration (Req 138, shipped 2026-10-15).** A `tiered`
+pricing may carry `standard_days`: the period length its thresholds were
+written for. Each tier's `to` is then scaled by `daysIn(period) /
+standard_days`, so a 33-day interval gets 33/30 of each allowance.
+Scaled thresholds are **not rounded** — the engine rounds nothing, and a
+threshold rounded to a whole unit would push usage a tier too high and
+compound per tier.
+
+It is opt-in, for two reasons. The engine is handed an interval and is
+never told what a normal one looks like, so "standard" can only come
+from the tariff. And making it automatic would silently change the
+arithmetic of every tiered schedule already published, including
+`bozeman-water-sfr` — the golden tests prove absent `standard_days`
+prices byte-for-byte as before.
+
+Why it matters now rather than at Phase 3: service periods became
+read-to-read on 2026-10-15, so intervals of 29–33 days are ordinary and
+a missed read makes 44 normal. Against a month's allowance, a 44-day
+interval crosses tiers the customer never earned, and the error is a
+whole tier rather than rounding.
 
 ---
 

@@ -78,6 +78,140 @@ describe("applyPricing — tiered", () => {
     expect(result.toString()).toBe("47.34");
   });
 
+  /**
+   * Bozeman Req 138. A tiered threshold is an allowance for a period, so
+   * an interval of a different length needs a proportionate one.
+   *
+   * These use the real SFR brackets, because the size of the error is
+   * the argument: without proration a 44-day interval is priced against
+   * one month's allowance and crosses tiers the customer never earned.
+   */
+  describe("threshold proration", () => {
+    const tiers = [
+      { to: 6, rate: 3.31 },
+      { to: 25, rate: 4.58 },
+      { to: 55, rate: 6.39 },
+      { to: null, rate: 9.58 },
+    ];
+    const period = (startDay: number, endDay: number) => ({
+      period: {
+        startDate: new Date(Date.UTC(2026, 0, startDay)),
+        endDate: new Date(Date.UTC(2026, 1, endDay)),
+      },
+    });
+
+    it("leaves thresholds alone when the tariff declares no standard period", () => {
+      // 31 days billed, no standard_days: absolute thresholds, as before.
+      const result = applyPricing(
+        { type: "tiered", tiers },
+        new Decimal(12),
+        [],
+        makeCtx(period(1, 0)),
+      );
+      expect(result.toString()).toBe("47.34");
+    });
+
+    it("prices a standard-length interval identically with or without it", () => {
+      // 2026-01-01 through 2026-01-31 inclusive is 31 days.
+      const ctx = makeCtx({
+        period: {
+          startDate: new Date(Date.UTC(2026, 0, 1)),
+          endDate: new Date(Date.UTC(2026, 0, 31)),
+        },
+      });
+      const prorated = applyPricing(
+        { type: "tiered", tiers, standard_days: 31 },
+        new Decimal(12),
+        [],
+        ctx,
+      );
+      const absolute = applyPricing({ type: "tiered", tiers }, new Decimal(12), [], ctx);
+      expect(prorated.toString()).toBe(absolute.toString());
+    });
+
+    it("widens the allowance for a long interval, so usage keeps its tier", () => {
+      // A missed read: 2025-12-31 through 2026-02-01 is 33 days against a
+      // 30-day tariff, so tier 1 runs to 6 × 33/30 = 6.6 units.
+      const ctx = makeCtx({
+        period: {
+          startDate: new Date(Date.UTC(2025, 11, 31)),
+          endDate: new Date(Date.UTC(2026, 1, 1)),
+        },
+      });
+      const prorated = applyPricing(
+        { type: "tiered", tiers, standard_days: 30 },
+        new Decimal(12),
+        [],
+        ctx,
+      );
+      const absolute = applyPricing({ type: "tiered", tiers }, new Decimal(12), [], ctx);
+
+      // 6.6 × 3.31 + 5.4 × 4.58 = 21.846 + 24.732 = 46.578
+      expect(prorated.toString()).toBe("46.578");
+      // Cheaper than pricing the same usage against a month's allowance,
+      // which is the whole point: the extra days earned extra tier 1.
+      expect(prorated.lt(absolute)).toBe(true);
+    });
+
+    it("narrows it for a short interval, so a part month is not a bargain", () => {
+      // A move-in mid-cycle: 2026-01-16 through 2026-01-31 is 16 days,
+      // so tier 1 runs to 6 × 16/30 = 3.2 units.
+      const ctx = makeCtx({
+        period: {
+          startDate: new Date(Date.UTC(2026, 0, 16)),
+          endDate: new Date(Date.UTC(2026, 0, 31)),
+        },
+      });
+      const result = applyPricing(
+        { type: "tiered", tiers, standard_days: 30 },
+        new Decimal(6),
+        [],
+        ctx,
+      );
+      // 3.2 × 3.31 + 2.8 × 4.58 = 10.592 + 12.824 = 23.416
+      expect(result.toString()).toBe("23.416");
+    });
+
+    it("does not round a scaled threshold", () => {
+      // 31/30 of 6 is 6.2 exactly; a threshold rounded to 6 would price
+      // 0.2 units a tier too high and the error would compound per tier.
+      const ctx = makeCtx({
+        period: {
+          startDate: new Date(Date.UTC(2026, 0, 1)),
+          endDate: new Date(Date.UTC(2026, 0, 31)),
+        },
+      });
+      const result = applyPricing(
+        { type: "tiered", tiers, standard_days: 30 },
+        new Decimal(6.2),
+        [],
+        ctx,
+      );
+      // All of it inside a widened tier 1: 6.2 × 3.31 = 20.522
+      expect(result.toString()).toBe("20.522");
+    });
+
+    it("leaves the open-ended tier open", () => {
+      const ctx = makeCtx({
+        period: {
+          startDate: new Date(Date.UTC(2026, 0, 1)),
+          endDate: new Date(Date.UTC(2026, 0, 31)),
+        },
+      });
+      const result = applyPricing(
+        { type: "tiered", tiers, standard_days: 30 },
+        new Decimal(100),
+        [],
+        ctx,
+      );
+      // Thresholds scale by 31/30: 6.2, 25.833…, 56.833…, then the rest
+      // at 9.58 with no ceiling.
+      expect(result.gt(new Decimal(0))).toBe(true);
+      const absolute = applyPricing({ type: "tiered", tiers }, new Decimal(100), [], ctx);
+      expect(result.lt(absolute)).toBe(true);
+    });
+  });
+
   it("qty within first tier only", () => {
     const tiers = [
       { to: 6, rate: 3.31 },

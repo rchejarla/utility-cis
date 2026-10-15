@@ -159,7 +159,7 @@ One standing consequence: no vendor credential belongs in this codebase. Anythin
 | 136 | Bill holds | `billHold|holdBilling`: zero hits |
 
 > #130, #133 and #137 left this list on 2026-10-11 — #130 and #137 built, #133 partial. See the bill production entry in §2 for what shipped and what remains.
-| 138 | Prorate tier thresholds for partial periods | usage proration exists; no tier-threshold proration in `evaluators/pricing.ts` |
+| 138 | Prorate tier thresholds for partial periods | **closed 2026-10-15** — a `tiered` pricing may declare `standard_days` and `evaluators/pricing.ts` scales each `to` by the days billed; opt-in, so published schedules price unchanged until revised |
 | 141 | Reconciliation of water usage vs wastewater billing | no reconciliation report |
 | 142 | Rebill when reads are corrected | no rebill (§2) |
 | 147 | Payment plans | no model |

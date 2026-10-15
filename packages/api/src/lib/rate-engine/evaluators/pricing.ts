@@ -1,6 +1,7 @@
 import { Decimal, ZERO, HUNDRED, toDecimal } from "../decimal.js";
 import type { LineItem, RatingContext } from "../types.js";
 import { evaluateSelector } from "./selectors.js";
+import { daysIn } from "../period.js";
 
 type Pricing = Record<string, unknown> & { type: string };
 
@@ -16,11 +17,42 @@ export function applyPricing(
     }
     case "tiered": {
       const tiers = pricing.tiers as Array<{ to: number | null; rate: number }>;
+      /*
+       * Tier thresholds are an allowance for a period, so a period of a
+       * different length needs a different allowance (Bozeman Req 138).
+       *
+       * A tariff declares what its thresholds were written for with
+       * `standard_days`, and the allowance is then scaled by the days
+       * actually billed. Without it a 44-day interval — ordinary after a
+       * missed read, now that periods run read to read — is priced
+       * against one month's allowance and crosses tiers the customer has
+       * not earned. For the Bozeman SFR tariff that is 100 units at
+       * tier 1 against 44 days of usage: the overcharge is not rounding,
+       * it is a whole tier.
+       *
+       * Opt-in, and deliberately. The engine is given an interval and
+       * never told what a normal one looks like, so "standard" has to
+       * come from the tariff. It also means existing published schedules
+       * price exactly as they did until someone revises them to say
+       * otherwise — a silent change to every tiered schedule's
+       * arithmetic is not something to ship by inference.
+       *
+       * Scaled thresholds are not rounded. The engine rounds nothing;
+       * cents are decided when a line is printed.
+       */
+      const standardDays = pricing.standard_days as number | undefined;
+      const factor =
+        standardDays === undefined || standardDays <= 0
+          ? null
+          : toDecimal(daysIn(ctx.base.period)).div(toDecimal(standardDays));
+
       let remaining = qty;
       let prev = ZERO;
       let total = ZERO;
       for (const tier of tiers) {
-        const tierTo = tier.to === null ? null : toDecimal(tier.to);
+        const declared = tier.to === null ? null : toDecimal(tier.to);
+        // The open-ended tier has no threshold to scale.
+        const tierTo = declared === null ? null : factor ? declared.mul(factor) : declared;
         const span = tierTo === null ? remaining : Decimal.min(remaining, tierTo.minus(prev));
         if (span.lte(ZERO)) break;
         total = total.plus(span.mul(toDecimal(tier.rate)));

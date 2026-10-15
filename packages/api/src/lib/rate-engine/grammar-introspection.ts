@@ -12,7 +12,16 @@
 
 export const PRICING_TYPES = [
   { code: "flat", label: "Flat per unit", structuredEditor: true },
-  { code: "tiered", label: "Tiered blocks", structuredEditor: true },
+  {
+    code: "tiered",
+    label: "Tiered blocks",
+    structuredEditor: true,
+    // Req 138. Optional `standard_days` says what period the thresholds
+    // were written for; the engine then scales them by the days billed,
+    // so a long interval gets a proportionate allowance. Absent, they
+    // are absolute.
+    note: "Thresholds may declare standard_days to prorate by period length",
+  },
   { code: "lookup", label: "Lookup table", structuredEditor: true },
   { code: "catalog", label: "Catalog (multi-key)", structuredEditor: false },
   { code: "per_unit", label: "Per unit", structuredEditor: false },

@@ -103,6 +103,33 @@ describe("pricingSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  /**
+   * Req 138. A tariff says what period its thresholds assume, and the
+   * engine scales them by the days actually billed.
+   */
+  it("accepts a tiered pricing that declares its standard period", () => {
+    const result = pricingSchema.safeParse({
+      type: "tiered",
+      tiers: [
+        { to: 6, rate: 3.31 },
+        { to: null, rate: 9.58 },
+      ],
+      standard_days: 30,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a standard period that is not a positive whole number of days", () => {
+    for (const standard_days of [0, -30, 30.5]) {
+      const result = pricingSchema.safeParse({
+        type: "tiered",
+        tiers: [{ to: null, rate: 1 }],
+        standard_days,
+      });
+      expect(result.success, `standard_days=${standard_days}`).toBe(false);
+    }
+  });
+
   it("accepts a lookup pricing keyed by meter size", () => {
     const result = pricingSchema.safeParse({
       type: "lookup",

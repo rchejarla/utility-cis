@@ -1,6 +1,7 @@
 import { Decimal, ZERO, ONE, toDecimal } from "../decimal.js";
 import type { RatingContext } from "../types.js";
 import { UnsupportedInSlice3Error } from "../types.js";
+import { daysIn } from "../period.js";
 
 export type QuantitySource = {
   base: string;
@@ -141,7 +142,4 @@ function snakeToCamel(s: string): string {
   return s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
 }
 
-function daysIn(period: { startDate: Date; endDate: Date }): number {
-  const ms = period.endDate.getTime() - period.startDate.getTime();
-  return Math.round(ms / (1000 * 60 * 60 * 24)) + 1;
-}
+
