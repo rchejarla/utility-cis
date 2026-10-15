@@ -445,6 +445,40 @@ describe("listBills", () => {
       }
     }, 60_000);
 
+    /**
+     * The account's own Bills tab and the tenant-wide list describe the
+     * same bill, so they have to describe it identically.
+     *
+     * The tab used to show `Bill # · Period · Due · Total · Created` from
+     * an endpoint that returned no charge, no open amount and no posted
+     * state — it could not have shown a status, and the obvious fix
+     * would have been to work one out in the browser, which is the bug
+     * `partPaid` above exists to record. Both lists now get their answer
+     * from `settlementOf`, and this is what notices if one of them stops.
+     */
+    it("tells the account's own list exactly what the tenant-wide list says", async () => {
+      const partly = await withCharge({ openAmount: "6.00", applied: true });
+      try {
+        const page = await bills.listBills(utilityId, Q);
+        const wide = page.data.find((b) => b.billNumber === "B-JAN");
+        const scoped = (await bills.listBillsForAccount(utilityId, accountId)).find(
+          (b) => b.billNumber === "B-JAN",
+        );
+
+        expect(scoped).toBeDefined();
+        expect(scoped?.charge).toEqual(wide?.charge);
+        expect(scoped?.partPaid).toBe(wide?.partPaid);
+        expect(scoped?.overdue).toBe(wide?.overdue);
+        // And the fields the row's acts are addressed through, which the
+        // tab had no way to offer before.
+        expect(scoped?.accountId).toBe(accountId);
+        expect(scoped?.charge?.entryId).toBeTruthy();
+        expect(scoped?.partPaid).toBe(true);
+      } finally {
+        await partly();
+      }
+    }, 60_000);
+
     it("finds a settled charge as paid and nothing else", async () => {
       const cleanup = await withCharge({ openAmount: "0.00", applied: true });
       try {

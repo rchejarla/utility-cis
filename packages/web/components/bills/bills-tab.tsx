@@ -5,7 +5,21 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { BillDetailDialog } from "./bill-detail-dialog";
+import { BillStatusPill } from "./bill-status-pill";
+import { BillRowActions } from "./bill-row-actions";
 
+/**
+ * The same shape the Bills page rows have, because this is the same
+ * list of the same things.
+ *
+ * It used to be `Bill # · Period · Due · Total · Created` and a "View →"
+ * link: no status, no PDF, none of the acts. The same bill therefore
+ * read differently depending on which screen you found it on — and the
+ * tempting shortcut, deriving status here from `total` and an open
+ * amount, is the bug that made every fractional-cent bill read "Part
+ * paid" with nothing paid. `overdue`, `partPaid` and `charge` come from
+ * the API for that reason.
+ */
 interface BillSummary {
   id: string;
   billNumber: string;
@@ -15,6 +29,11 @@ interface BillSummary {
   dueDate: string;
   total: string;
   createdAt: string;
+  accountId: string;
+  postedAt: string | null;
+  overdue: boolean;
+  partPaid: boolean;
+  charge: { entryId: string; openAmount: string; reversed: boolean } | null;
 }
 
 const fmt = (s: string) => `$${parseFloat(s).toFixed(2)}`;
@@ -99,7 +118,14 @@ export function BillsTab({ accountId, canEdit }: { accountId: string; canEdit: b
               <th style={th}>Period</th>
               <th style={th}>Due</th>
               <th style={{ ...th, textAlign: "right" }}>Total</th>
-              <th style={th}>Created</th>
+              {/*
+                Still owed earns its place over Created for the same
+                reason it does on the Bills page: it is the question
+                asked on a phone call. Created was only ever here
+                because there was nothing better to show.
+              */}
+              <th style={{ ...th, textAlign: "right" }}>Still owed</th>
+              <th style={th}>Status</th>
               <th style={th}></th>
             </tr>
           </thead>
@@ -114,23 +140,46 @@ export function BillsTab({ accountId, canEdit }: { accountId: string; canEdit: b
                 <td style={{ ...td, textAlign: "right", fontFamily: "monospace", fontWeight: 600 }}>
                   {fmt(b.total)}
                 </td>
-                <td style={{ ...td, color: "var(--text-muted)", fontSize: "12px" }}>
-                  {new Date(b.createdAt).toLocaleString()}
+                <td
+                  style={{
+                    ...td,
+                    textAlign: "right",
+                    fontFamily: "monospace",
+                    fontWeight: b.charge && Number(b.charge.openAmount) > 0 ? 600 : 400,
+                    color:
+                      b.charge && Number(b.charge.openAmount) > 0
+                        ? "var(--text-primary)"
+                        : "var(--text-muted)",
+                  }}
+                >
+                  {b.charge ? fmt(b.charge.openAmount) : "—"}
                 </td>
                 <td style={td}>
-                  <button
-                    onClick={() => setOpenBillId(b.id)}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      color: "var(--accent-primary)",
-                      fontSize: "12px",
-                      cursor: "pointer",
-                      fontFamily: "inherit",
-                    }}
-                  >
-                    View →
-                  </button>
+                  <BillStatusPill bill={b} />
+                </td>
+                <td style={td}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    {/*
+                      The bill's own detail stays available — it is how
+                      someone gets from here to the segments and lines —
+                      but it is no longer the only thing on offer.
+                    */}
+                    <button
+                      onClick={() => setOpenBillId(b.id)}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "var(--accent-primary)",
+                        fontSize: "12px",
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      View →
+                    </button>
+                    <BillRowActions bill={b} onChanged={() => setRefreshKey((k) => k + 1)} />
+                  </div>
                 </td>
               </tr>
             ))}

@@ -263,6 +263,15 @@ The row had grown to six buttons, which buried the common acts among the consequ
 
 Menu items keep the availability rule each had on the row rather than merely moving: Reverse needs a charge not already reversed, Waive and Write off need something still owed, Regenerate needs a posted bill. A user holding none of those permissions gets no trigger at all rather than an empty menu.
 
+**The same row on both screens (2026-10-14).** A bill is listed in two places — the tenant-wide **Bills** page and an account's **Bills tab** — and they described it differently: the tab showed `Bill # · Period · Due · Total · Created` with a `View →` link and no status, no still-owed and none of the acts, because `GET /api/v1/accounts/:id/bills` returned the bill's own columns and nothing else. The tab now carries **Still owed**, **Status** and the full action set; `Created` is gone, since what is owed is the question asked on a call. Account and Customer stay off it — the tab is already inside one account.
+
+Two pieces are shared rather than copied, and that is the point:
+
+- `BillStatusPill` (`components/bills/bill-status-pill.tsx`) — the ladder from reversed → paid → posted-with-no-charge → overdue → part paid → outstanding → not posted.
+- `BillRowActions` (`components/bills/bill-row-actions.tsx`) — Post, View bill, the More menu and the four dialogs it opens, with the availability rules above travelling with them.
+
+Server-side, `BillSettlement` and `settlementOf` in `bill.service.ts` are the single source of `overdue`, `partPaid` and `charge` for **both** list endpoints. The reason is the bug in §13 of Business Rules: the tempting way to give the tab a status is to compare its money columns in the browser, which is how a bill with a fractional cent in its total came to read "Part paid" with nothing paid. One authority, two surfaces.
+
 `ActionMenu` (`components/ui/action-menu.tsx`) renders through a portal with fixed positioning. Its first host is a table inside a card with `overflow: auto`, which clips an absolutely positioned child — the menu appeared and then vanished behind the card's edge on the last rows. Because the position is measured once on open, any scroll or resize closes it rather than letting it drift off its row.
 
 **One button answers "give me the bill", not two.** Whether a PDF was generated before is a fact about our storage, not something a CSR should have to read off a row before knowing which button to press.

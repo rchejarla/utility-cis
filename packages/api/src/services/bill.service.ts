@@ -350,13 +350,16 @@ function dueDateCutoff(now: Date = new Date()): Date {
   return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
 }
 
-export interface BillListRow extends BillSummary {
-  account: {
-    id: string;
-    accountNumber: string;
-    customerName: string | null;
-  };
-  billingCycleName: string | null;
+/**
+ * What a bill row says about settlement — on every surface that lists
+ * bills, from one place.
+ *
+ * Both the tenant-wide list and the account's own list carry this, and
+ * `settlementOf` below is the only thing that computes it. That is not
+ * tidiness: each field here exists because the question was once asked
+ * twice and answered differently.
+ */
+export interface BillSettlement {
   /**
    * Whether this bill is late, decided here so the list and the
    * `state=overdue` filter cannot disagree.
@@ -391,6 +394,85 @@ export interface BillListRow extends BillSummary {
    */
   charge: { entryId: string; openAmount: string; reversed: boolean } | null;
 }
+
+/**
+ * What both lists select to be able to answer `BillSettlement`.
+ *
+ * Only BILL_CHARGE. A bill that netted negative posted an
+ * ADJUSTMENT_CREDIT instead, and waiver credits can also carry a
+ * `billId`, so widening this would let an unrelated credit be mistaken
+ * for the bill's own charge.
+ */
+const CHARGE_FOR_SETTLEMENT = {
+  where: { type: "BILL_CHARGE" as const },
+  select: {
+    id: true,
+    openAmount: true,
+    // `debitsIn` is what "part paid" is actually asked through — see
+    // billStateWhere. Counted here so a row carries the same answer the
+    // filter gives, rather than a browser guessing at it from two
+    // columns of different precision.
+    _count: { select: { reversedBy: true, debitsIn: true } },
+  },
+  take: 1,
+};
+
+type ChargeForSettlement = {
+  id: string;
+  openAmount: Prisma.Decimal;
+  _count: { reversedBy: number; debitsIn: number };
+};
+
+/**
+ * The charge a bill raised, and the two things that makes it.
+ *
+ * `cutoff` is passed rather than taken from the clock so every row in
+ * one response is judged against the same instant — a list that spans
+ * midnight must not call one bill overdue and the next not.
+ */
+function settlementOf(
+  dueDate: Date,
+  entry: ChargeForSettlement | undefined,
+  cutoff: Date,
+): BillSettlement {
+  if (!entry) return { charge: null, overdue: false, partPaid: false };
+  const standing = entry._count.reversedBy === 0;
+  const owed = entry.openAmount.greaterThan(0);
+  return {
+    charge: {
+      entryId: entry.id,
+      openAmount: entry.openAmount.toFixed(2),
+      reversed: !standing,
+    },
+    // Same three conditions as the `overdue` filter, against the same
+    // cutoff: something still owed, not reversed, past due.
+    overdue: standing && owed && dueDate < cutoff,
+    // Same conditions as the `partPaid` filter: standing, something
+    // still owed, and something already applied against it.
+    partPaid: standing && owed && entry._count.debitsIn > 0,
+  };
+}
+
+export interface BillListRow extends BillSummary, BillSettlement {
+  account: {
+    id: string;
+    accountNumber: string;
+    customerName: string | null;
+  };
+  billingCycleName: string | null;
+}
+
+/**
+ * A bill as the account's own Bills tab lists it.
+ *
+ * The same settlement facts as the tenant-wide list, deliberately: the
+ * tab showed `Bill # · Period · Due · Total · Created` and no status at
+ * all, so the same bill read differently depending on which screen you
+ * found it on, and the tab could not offer the acts that depend on a
+ * charge. Account and customer are absent because the tab is already
+ * inside one.
+ */
+export type AccountBillRow = BillSummary & BillSettlement;
 
 /**
  * The tenant-wide bill list.
@@ -576,23 +658,7 @@ export async function listBills(
         },
       },
       billingCycle: { select: { name: true } },
-      // Only BILL_CHARGE. A bill that netted negative posted an
-      // ADJUSTMENT_CREDIT instead, and waiver credits can also carry a
-      // billId, so widening this would let an unrelated credit be
-      // mistaken for the bill's own charge.
-      ledgerEntries: {
-        where: { type: "BILL_CHARGE" },
-        select: {
-          id: true,
-          openAmount: true,
-          // `debitsIn` is what "part paid" is actually asked through —
-          // see billStateWhere. Counted here so the row can carry the
-          // same answer the filter gives, rather than the browser
-          // guessing at it from two columns of different precision.
-          _count: { select: { reversedBy: true, debitsIn: true } },
-        },
-        take: 1,
-      },
+      ledgerEntries: CHARGE_FOR_SETTLEMENT,
     },
   });
 
@@ -622,27 +688,7 @@ export async function listBills(
         customerName: displayCustomerName(b.account.customer),
       },
       billingCycleName: b.billingCycle?.name ?? null,
-      charge: b.ledgerEntries[0]
-        ? {
-            entryId: b.ledgerEntries[0].id,
-            openAmount: b.ledgerEntries[0].openAmount.toFixed(2),
-            reversed: b.ledgerEntries[0]._count.reversedBy > 0,
-          }
-        : null,
-      // Same three conditions as the `overdue` filter above, against the
-      // same cutoff: something still owed, not reversed, past due.
-      overdue:
-        !!b.ledgerEntries[0] &&
-        b.ledgerEntries[0]._count.reversedBy === 0 &&
-        b.ledgerEntries[0].openAmount.greaterThan(0) &&
-        b.dueDate < cutoff,
-      // Same conditions as the `partPaid` filter: standing, something
-      // still owed, and something already applied against it.
-      partPaid:
-        !!b.ledgerEntries[0] &&
-        b.ledgerEntries[0]._count.reversedBy === 0 &&
-        b.ledgerEntries[0].openAmount.greaterThan(0) &&
-        b.ledgerEntries[0]._count.debitsIn > 0,
+      ...settlementOf(b.dueDate, b.ledgerEntries[0], cutoff),
     })),
   };
 }
@@ -671,11 +717,13 @@ function displayCustomerName(
 export async function listBillsForAccount(
   utilityId: string,
   accountId: string,
-): Promise<BillSummary[]> {
+): Promise<AccountBillRow[]> {
   const bills = await prisma.bill.findMany({
     where: { utilityId, accountId },
     orderBy: { periodEnd: "desc" },
+    include: { ledgerEntries: CHARGE_FOR_SETTLEMENT },
   });
+  const cutoff = dueDateCutoff();
   return bills.map((b) => ({
     id: b.id,
     utilityId: b.utilityId,
@@ -692,6 +740,7 @@ export async function listBillsForAccount(
     billNumber: b.billNumber,
     createdAt: b.createdAt,
     postedAt: b.postedAt,
+    ...settlementOf(b.dueDate, b.ledgerEntries[0], cutoff),
   }));
 }
 
