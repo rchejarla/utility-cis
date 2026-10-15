@@ -141,6 +141,58 @@ between them is the point. A tenant that wants one click can have
 `postOnComplete` **when they ask** — not before, and it is a column, not
 a redesign.
 
+### 3.3a The cycle schedules; the reads bound the period
+
+**Raised by Rao, and the first version of this design had it wrong.**
+With manual reading, two accounts on one cycle are not read on the same
+day: A1 on 1/30, A2 on 1/31. A1's next interval therefore starts where
+its last one ended — 1/30 — not on 2/1. The metered interval is
+**read-to-read**, and it differs per account and in length.
+
+What the code does today, verified rather than assumed:
+
+- `computeBillPeriod` derives `periodStart`/`periodEnd` from the cycle's
+  `billDayOfMonth` alone. Nothing about reads enters it.
+- `MeterRead` stores `priorReading` and `consumption` — so consumption
+  *is* a read-to-read delta, computed at import.
+- But `MeterLoader` attributes that consumption to a bill by
+  `readDate ∈ [periodStart, periodEnd]`, and `bill.periodStart/periodEnd`
+  are the nominal cycle dates. `billDate` is simply `period.periodEnd`.
+
+So the quantity is right and the **interval it is billed against is
+nominal**. Three consequences, in increasing severity:
+
+1. The service period printed on the bill is not the period the
+   consumption covers. A1's February bill says 2/1–2/28 over usage
+   metered 1/30–2/28.
+2. Tier thresholds and fixed charges are prorated — when Req 138 lands —
+   against a nominal 30-day period rather than the 29 or 32 days actually
+   metered. The arithmetic will be defensibly wrong.
+3. **A reader slipping across a boundary mis-bills twice.** A read
+   intended for January taken on 2/1 leaves January's window with no read
+   — a zero-usage bill — and February's window with two, billing both
+   intervals on one bill. Usage is not lost (`billedAt` is only set for
+   reads inside the period, so a missed read is picked up later) but it
+   lands on the wrong bill with the wrong dates, and the customer sees a
+   zero bill followed by a double one.
+
+**So the run carries a window, not a period.** `windowStart`/`windowEnd`
+say which accounts are due and which reads to expect. Each item's
+*service period* is derived per account: from the day after that
+account's last billed read to the date of the read this run is billing.
+`BillSegment` already has its own `periodStart`/`periodEnd` columns to
+hold the truth, and the `Bill`'s period becomes the span of its segments
+rather than the cycle's nominal dates.
+
+`billDate` and `dueDate` stay on the run, because those are the
+utility's dates — when it issued and when it wants paying — and they
+should be identical across a run. The service period is the customer's
+and is theirs alone.
+
+**An account with no new read in the window is an exception**, not a
+zero bill. That is what estimated reads exist for, and estimation is not
+in this run (§2.2).
+
 ### 3.4 Eligibility is stated, not implied
 
 An account is billed by a run when, as of the period:
@@ -185,8 +237,12 @@ model BillingRun {
   id              String           @id @default(uuid()) @db.Uuid
   utilityId       String           @map("utility_id") @db.Uuid
   billingCycleId  String           @map("billing_cycle_id") @db.Uuid
-  periodStart     DateTime         @map("period_start") @db.Date
-  periodEnd       DateTime         @map("period_end") @db.Date
+  // The scheduling window — which accounts are due and which reads to
+  // expect. NOT the service period: that is read-to-read and per
+  // account (§3.3a).
+  windowStart     DateTime         @map("window_start") @db.Date
+  windowEnd       DateTime         @map("window_end") @db.Date
+  // The utility's own dates, identical across the run.
   billDate        DateTime         @map("bill_date") @db.Date
   dueDate         DateTime         @map("due_date") @db.Date
   status          BillingRunStatus @default(PENDING)
@@ -203,7 +259,7 @@ model BillingRun {
   cycle BillingCycle     @relation(fields: [billingCycleId], references: [id])
   items BillingRunItem[]
 
-  @@unique([utilityId, billingCycleId, periodEnd])
+  @@unique([utilityId, billingCycleId, windowEnd])
   @@index([utilityId, createdAt])
   @@map("billing_run")
 }
@@ -215,6 +271,11 @@ model BillingRunItem {
   accountId    String               @map("account_id") @db.Uuid
   status       BillingRunItemStatus @default(PENDING)
   billId       String?              @map("bill_id") @db.Uuid
+  // The service period this account was actually billed for, derived
+  // read-to-read (§3.3a) and recorded here so the exception list can
+  // show a 44-day interval without opening the bill.
+  servicePeriodStart DateTime?       @map("service_period_start") @db.Date
+  servicePeriodEnd   DateTime?       @map("service_period_end") @db.Date
   segmentCount Int                  @default(0) @map("segment_count")
   total        Decimal?             @db.Decimal(14, 4)
   errorCode    String?              @map("error_code") @db.VarChar(64)
@@ -234,11 +295,13 @@ enum BillingRunItemStatus { PENDING BILLED SKIPPED FAILED }
 
 Notes on the choices:
 
-- **`billDate` and `dueDate` on the run, not derived per account.** Every
-  bill in one run carries the same dates, which is what makes a run a
-  thing a customer-service rep can talk about ("the October run"). Today
-  `generateBillForAccount` derives them per account from the cycle; the
-  run passes them in so one bad clock cannot split a run across two days.
+- **`billDate` and `dueDate` on the run; the service period is not.**
+  Every bill in one run is issued and falls due on the same dates, which
+  is what makes a run something a CSR can talk about ("the October
+  run") — and the run passes them in so one bad clock cannot split a run
+  across two days. The *service* period is read-to-read and per account
+  (§3.3a); conflating the two is the mistake the first draft of this
+  document made.
 - **`total` on the item** so the run's own page can show money without
   joining every bill. A snapshot, like `LedgerEntry.amount` — §3.2 of the
   ledger design makes the same call for the same reason.
@@ -254,7 +317,7 @@ Notes on the choices:
 ## 5. Operation
 
 ```
-POST /api/v1/billing-runs           { billingCycleId, periodEnd? }  → 201 run (PENDING)
+POST /api/v1/billing-runs           { billingCycleId, windowEnd? }  → 201 run (PENDING)
 GET  /api/v1/billing-runs           list, newest first
 GET  /api/v1/billing-runs/:id       run + counts
 GET  /api/v1/billing-runs/:id/items ?status=FAILED — the exception list
@@ -272,12 +335,17 @@ bounded), then enqueues one job on a new `billingRuns` queue. The worker:
 
 1. Flips the run `RUNNING`, stamps `lastProgressAt`.
 2. For each `PENDING` item, in its own transaction:
-   - rate every overlapping service agreement via
+   - **resolve the service period** for each overlapping service
+     agreement: the day after its last billed read, through the date of
+     the newest unbilled read inside the window. No unbilled read in the
+     window → `SKIPPED` with `NO_READ_IN_WINDOW`, never a zero bill,
+   - rate each agreement for *its own* period via
      `createBillSegmentForServiceAgreement` (skipping agreements that
-     already have a segment for the period),
-   - aggregate via `generateBillForAccount`,
-   - record `BILLED` + `billId` + `total`, or `SKIPPED`/`FAILED` with the
-     code and message the service threw.
+     already have a segment covering it),
+   - aggregate via `generateBillForAccount`, whose bill takes its period
+     from the span of those segments rather than from the cycle,
+   - record `BILLED` + `billId` + `total` + the service period, or
+     `SKIPPED`/`FAILED` with the code and message the service threw.
 3. Checks `cancelRequested` between items; a cancelled run keeps what it
    billed and leaves the rest `PENDING`.
 4. Ends `COMPLETE` (no failures), `PARTIAL` (some), or `FAILED` (nothing
@@ -301,6 +369,10 @@ intentional one.
 5. Posting a run posts only bills that run produced, and only unposted
    ones; a bill posted by hand in between is left alone.
 6. A run never deletes or recalculates an existing bill.
+7. A bill's `periodStart`/`periodEnd` equal the span of its segments, and
+   every day between an account's consecutive bills is covered exactly
+   once — no gap, no overlap. This is the read-to-read invariant, and the
+   one that the current nominal-period code cannot state.
 
 ---
 
@@ -354,6 +426,23 @@ it cannot produce.
   button; a run makes it true 12,000 times. The per-item transaction
   boundary needs to cover rating *and* aggregation, which is why step 2
   above is one transaction per account rather than one per agreement.
+- **Read-to-read is a change to code that already shipped**, not just new
+  code. `computeBillPeriod`, `MeterLoader`'s period filter, the bill's
+  own `periodStart`/`periodEnd` and the service period printed on the PDF
+  all assume nominal dates today. The run cannot be correct while they
+  are, so §3.3a is a prerequisite rather than a refinement — and bills
+  already produced carry nominal periods that no migration can recover,
+  since the intervals were never recorded.
+- **`MeterRead` has `priorReading` but no `priorReadDate`.** The interval
+  is derivable from the previous read row, which means an ordered query
+  per meter per run rather than a column read. Storing the date on the
+  read — a snapshot, exactly as `priorReading` already is — would make
+  the service period a local fact instead of a join, and would survive a
+  later correction of the earlier read. Worth settling before building.
+- **Corrections and re-reads.** `correctsReadId` exists, so a read can be
+  superseded after it was billed. Read-to-read makes that a change to a
+  *period boundary*, not only to a quantity — which is rebill's problem,
+  and rebill is still blocked.
 - **Review is only as good as the exception list.** If `SKIPPED` swamps
   `FAILED`, operators will stop reading it. That is why the two statuses
   are distinct from the start rather than one `errorCount`.
