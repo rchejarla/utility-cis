@@ -16,6 +16,21 @@ interface BillSegmentSummary {
 }
 
 const fmt = (s: string) => `$${parseFloat(s).toFixed(2)}`;
+const ymd = (s: string) => s.slice(0, 10);
+
+/**
+ * What the next segment would cover, answered by the API from the meter
+ * reads. `periodStart` is null when there is nothing to bill, and
+ * `reason` says why — usually no read since the last billed one.
+ */
+interface NextPeriod {
+  periodStart: string | null;
+  periodEnd: string | null;
+  readCount?: number;
+  days?: number;
+  reason?: string;
+  message?: string;
+}
 
 export function BillSegmentsTab({ saId, canEdit }: { saId: string; canEdit: boolean }) {
   const { toast } = useToast();
@@ -25,6 +40,10 @@ export function BillSegmentsTab({ saId, canEdit }: { saId: string; canEdit: bool
   const [showDialog, setShowDialog] = useState(false);
   const [periodStart, setPeriodStart] = useState("");
   const [periodEnd, setPeriodEnd] = useState("");
+  // The dates are an override for corrections. The ordinary path sends
+  // nothing and lets the reads decide, which is why this starts closed.
+  const [overriding, setOverriding] = useState(false);
+  const [next, setNext] = useState<NextPeriod | null>(null);
   const [creating, setCreating] = useState(false);
   const [openSegmentId, setOpenSegmentId] = useState<string | null>(null);
 
@@ -36,18 +55,32 @@ export function BillSegmentsTab({ saId, canEdit }: { saId: string; canEdit: bool
       .finally(() => setLoading(false));
   }, [saId, refreshKey]);
 
+  // Asked when the dialog opens, so it shows the interval it is about to
+  // bill instead of two empty date pickers that invite a guess.
+  const openDialog = () => {
+    setShowDialog(true);
+    setNext(null);
+    setOverriding(false);
+    apiClient
+      .get<NextPeriod>(`/api/v1/service-agreements/${saId}/next-service-period`)
+      .then(setNext)
+      .catch(console.error);
+  };
+
   const handleCreate = async () => {
-    if (!periodStart || !periodEnd) return;
+    if (overriding && (!periodStart || !periodEnd)) return;
+    if (!overriding && !next?.periodStart) return;
     setCreating(true);
     try {
-      await apiClient.post(`/api/v1/service-agreements/${saId}/bill-segments`, {
-        periodStart,
-        periodEnd,
-      });
-      toast("Bill generated", "success");
+      await apiClient.post(
+        `/api/v1/service-agreements/${saId}/bill-segments`,
+        overriding ? { periodStart, periodEnd } : {},
+      );
+      toast("Bill segment generated", "success");
       setShowDialog(false);
       setPeriodStart("");
       setPeriodEnd("");
+      setOverriding(false);
       setRefreshKey((k) => k + 1);
     } catch (err) {
       const msg =
@@ -63,7 +96,7 @@ export function BillSegmentsTab({ saId, canEdit }: { saId: string; canEdit: bool
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px" }}>
         {canEdit && (
           <button
-            onClick={() => setShowDialog(true)}
+            onClick={openDialog}
             style={{
               padding: "7px 16px",
               borderRadius: "var(--radius)",
@@ -161,24 +194,78 @@ export function BillSegmentsTab({ saId, canEdit }: { saId: string; canEdit: bool
             }}
           >
             <h3 style={{ margin: "0 0 16px", fontSize: "16px", color: "var(--text-primary)" }}>
-              Generate Bill
+              Generate Bill Segment
             </h3>
-            <div style={{ marginBottom: "12px" }}>
-              <label
-                style={{ fontSize: "12px", color: "var(--text-muted)", display: "block", marginBottom: "6px" }}
-              >
-                Period Start
-              </label>
-              <DatePicker value={periodStart} onChange={setPeriodStart} />
-            </div>
-            <div style={{ marginBottom: "16px" }}>
-              <label
-                style={{ fontSize: "12px", color: "var(--text-muted)", display: "block", marginBottom: "6px" }}
-              >
-                Period End
-              </label>
-              <DatePicker value={periodEnd} onChange={setPeriodEnd} />
-            </div>
+
+            {/*
+              The interval, shown rather than asked for. A service period
+              runs read to read — the day after the last billed read,
+              through the newest unbilled one — so typing it was always a
+              guess at what the meter already knows.
+            */}
+            {!overriding && (
+              <div style={{ marginBottom: "16px" }}>
+                <label
+                  style={{ fontSize: "12px", color: "var(--text-muted)", display: "block", marginBottom: "6px" }}
+                >
+                  Service period, from the reads
+                </label>
+                {next === null ? (
+                  <span style={{ fontSize: "13px", color: "var(--text-muted)" }}>Reading the meter history…</span>
+                ) : next.periodStart && next.periodEnd ? (
+                  <>
+                    <div style={{ fontSize: "14px", fontFamily: "monospace", color: "var(--text-primary)" }}>
+                      {ymd(next.periodStart)} → {ymd(next.periodEnd)}
+                    </div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "4px" }}>
+                      {next.days} days · {next.readCount} unbilled read
+                      {next.readCount === 1 ? "" : "s"}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: "12px", color: "var(--warning)" }}>{next.message}</div>
+                )}
+                <button
+                  onClick={() => setOverriding(true)}
+                  style={{
+                    marginTop: "10px",
+                    background: "none",
+                    border: "none",
+                    padding: 0,
+                    color: "var(--accent-primary)",
+                    fontSize: "11px",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  Set the dates by hand
+                </button>
+              </div>
+            )}
+
+            {overriding && (
+              <>
+                <div style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "10px" }}>
+                  For a correction. Dates typed here are billed as given, whatever the reads say.
+                </div>
+                <div style={{ marginBottom: "12px" }}>
+                  <label
+                    style={{ fontSize: "12px", color: "var(--text-muted)", display: "block", marginBottom: "6px" }}
+                  >
+                    Period Start
+                  </label>
+                  <DatePicker value={periodStart} onChange={setPeriodStart} />
+                </div>
+                <div style={{ marginBottom: "16px" }}>
+                  <label
+                    style={{ fontSize: "12px", color: "var(--text-muted)", display: "block", marginBottom: "6px" }}
+                  >
+                    Period End
+                  </label>
+                  <DatePicker value={periodEnd} onChange={setPeriodEnd} />
+                </div>
+              </>
+            )}
             <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
               <button
                 onClick={() => setShowDialog(false)}
@@ -197,7 +284,7 @@ export function BillSegmentsTab({ saId, canEdit }: { saId: string; canEdit: bool
               </button>
               <button
                 onClick={handleCreate}
-                disabled={creating || !periodStart || !periodEnd}
+                disabled={creating || (overriding ? !periodStart || !periodEnd : !next?.periodStart)}
                 style={{
                   padding: "7px 16px",
                   borderRadius: "var(--radius)",
@@ -206,8 +293,12 @@ export function BillSegmentsTab({ saId, canEdit }: { saId: string; canEdit: bool
                   color: "#fff",
                   fontSize: "12px",
                   fontWeight: 500,
-                  cursor: creating || !periodStart || !periodEnd ? "not-allowed" : "pointer",
-                  opacity: creating || !periodStart || !periodEnd ? 0.6 : 1,
+                  cursor:
+                    creating || (overriding ? !periodStart || !periodEnd : !next?.periodStart)
+                      ? "not-allowed"
+                      : "pointer",
+                  opacity:
+                    creating || (overriding ? !periodStart || !periodEnd : !next?.periodStart) ? 0.6 : 1,
                   fontFamily: "inherit",
                 }}
               >

@@ -127,6 +127,8 @@ Supported file formats (configurable per tenant):
 
 4. **Read freeze after billing:** When a billing cycle processes a read, `is_frozen=true` and `billed_at` are set. Frozen reads cannot be edited or deleted. A correction requires creating a new CORRECTED read (referencing `corrects_read_id`) and triggering a rebill workflow in Phase 3.
 
+   **`billed_at` also bounds the next service period (2026-10-15).** Billing is read to read: a segment's period starts the day after the last read carrying a `billed_at`, and ends on the newest read without one. So this column is not only a freeze marker — it is where one interval ends and the next begins. Two consequences follow. A read that arrives *dated before* the last billed read cannot simply be billed, because its interval overlaps one already issued; segment creation refuses it with `READ_PREDATES_BILLED_PERIOD` and it needs a rebill. And an account with no unbilled read has no interval at all, answered as `NO_READ_IN_WINDOW` rather than billed as zero usage — which is what estimated reads (rule 3, **not built**) exist to prevent. See spec 09.
+
 5. **Correction audit:** Creating a CORRECTED read automatically creates an AuditLog entry capturing before/after state of both the original (now marked) and new read.
 
 6. **Duplicate import prevention:** The unique constraint on `[meter_id, register_id, read_datetime, read_source]` prevents re-importing the same AMI interval data. Duplicate rows during import are silently skipped with a count in the batch report.

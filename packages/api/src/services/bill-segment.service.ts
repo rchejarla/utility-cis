@@ -8,8 +8,131 @@ import { buildRegistry } from "../lib/rate-engine-registry.js";
 import type { Decimal as JsDecimal } from "../lib/rate-engine/decimal.js";
 
 export interface CreateBillSegmentInput {
+  /**
+   * Both optional, and omitting them is the right default.
+   *
+   * A service period is a fact about reads, not a date range somebody
+   * types: the meter was read on the 30th, so that is when the interval
+   * ends, whatever the cycle's calendar says. Passing dates explicitly
+   * remains possible — a correction sometimes needs it — but the UI no
+   * longer asks, because asking is what produced periods that disagreed
+   * with the meter.
+   */
+  periodStart?: Date;
+  periodEnd?: Date;
+}
+
+/** A service period, and the reads that bound it. */
+export interface ServicePeriod {
   periodStart: Date;
   periodEnd: Date;
+  /** The read that closes it — `periodEnd` is this read's own date. */
+  closingReadId: string;
+  /** How many unbilled reads fall inside, for the caller to report. */
+  readCount: number;
+}
+
+/** Midnight UTC of the day after `d`, since read dates are `@db.Date`. */
+function dayAfter(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1));
+}
+
+/**
+ * The next service period for a service agreement, read to read.
+ *
+ * Ends on the newest unbilled read on or before `asOf` — that read *is*
+ * the end of the interval. Starts the day after the last read already
+ * billed, so consecutive periods abut with no gap and no overlap; with
+ * nothing billed yet it starts at the agreement's own start date, since
+ * service cannot be billed from before it existed.
+ *
+ * Why this rather than the cycle's calendar, which is what the code did
+ * until now: with manual reading two accounts on one cycle are read on
+ * different days, so a nominal 1/1–1/31 period describes neither of
+ * them. Worse, a reader a day late left one window with no read — a
+ * zero-usage bill — and the next with two, billing both intervals at
+ * once and pushing the customer up a tier they never entered.
+ *
+ * `asOf` is the scheduling bound, normally a cycle's bill day: it stops
+ * a read taken after the run from being swept into this period.
+ */
+export async function resolveServicePeriod(
+  utilityId: string,
+  saId: string,
+  opts: { asOf?: Date } = {},
+): Promise<ServicePeriod> {
+  const asOf = opts.asOf ?? new Date();
+  const sa = await prisma.serviceAgreement.findFirst({
+    where: { id: saId, utilityId },
+    select: { startDate: true },
+  });
+  if (!sa) {
+    throw Object.assign(new Error(`Service agreement ${saId} not found`), {
+      statusCode: 404,
+      code: "SA_NOT_FOUND",
+    });
+  }
+
+  // The read that closes the period. Newest first, because the interval
+  // runs to the latest read taken, not the first one found.
+  const closing = await prisma.meterRead.findFirst({
+    where: {
+      utilityId,
+      serviceAgreementId: saId,
+      billedAt: null,
+      readDate: { lte: asOf },
+    },
+    orderBy: [{ readDate: "desc" }, { id: "desc" }],
+    select: { id: true, readDate: true },
+  });
+  if (!closing) {
+    throw Object.assign(
+      new Error(
+        `No unbilled meter read on or before ${asOf.toISOString().slice(0, 10)} for service agreement ${saId}, ` +
+          "so there is no interval to bill. Import the read, or estimate it.",
+      ),
+      { statusCode: 400, code: "NO_READ_IN_WINDOW" },
+    );
+  }
+
+  // Where the last billed interval ended. Not the newest read overall:
+  // a read taken after the window stays for the next period.
+  const lastBilled = await prisma.meterRead.findFirst({
+    where: { utilityId, serviceAgreementId: saId, billedAt: { not: null } },
+    orderBy: [{ readDate: "desc" }, { id: "desc" }],
+    select: { readDate: true },
+  });
+
+  const periodStart = lastBilled ? dayAfter(lastBilled.readDate) : sa.startDate;
+  if (periodStart > closing.readDate) {
+    // The only way here is a backdated read: one taken before the last
+    // interval closed, arriving afterwards. Billing it would overlap a
+    // period already billed, which is rebill's job and not this one's.
+    throw Object.assign(
+      new Error(
+        `The newest unbilled read for service agreement ${saId} is dated ` +
+          `${closing.readDate.toISOString().slice(0, 10)}, before the end of the last billed period ` +
+          `(${periodStart.toISOString().slice(0, 10)}). A backdated read needs a rebill, not a new segment.`,
+      ),
+      { statusCode: 409, code: "READ_PREDATES_BILLED_PERIOD" },
+    );
+  }
+
+  const readCount = await prisma.meterRead.count({
+    where: {
+      utilityId,
+      serviceAgreementId: saId,
+      billedAt: null,
+      readDate: { gte: periodStart, lte: closing.readDate },
+    },
+  });
+
+  return {
+    periodStart,
+    periodEnd: closing.readDate,
+    closingReadId: closing.id,
+    readCount,
+  };
 }
 
 export interface BillSegmentLineRow {
@@ -77,7 +200,24 @@ export async function createBillSegmentForServiceAgreement(
   saId: string,
   input: CreateBillSegmentInput,
 ): Promise<BillSegmentWithLines> {
-  if (input.periodEnd < input.periodStart) {
+  /*
+   * Either both dates or neither. Half a period is a typo, and
+   * resolving the missing half would silently bill an interval nobody
+   * asked for — which is the class of bug this whole change is about.
+   */
+  const explicit = input.periodStart !== undefined && input.periodEnd !== undefined;
+  if (!explicit && (input.periodStart !== undefined || input.periodEnd !== undefined)) {
+    throw Object.assign(
+      new Error("Pass both periodStart and periodEnd, or neither to bill the next period from the reads"),
+      { statusCode: 400, code: "INVALID_PERIOD" },
+    );
+  }
+
+  const resolved = explicit
+    ? { periodStart: input.periodStart as Date, periodEnd: input.periodEnd as Date }
+    : await resolveServicePeriod(utilityId, saId);
+
+  if (resolved.periodEnd < resolved.periodStart) {
     throw Object.assign(new Error("periodEnd must be on/after periodStart"), {
       statusCode: 400,
       code: "INVALID_PERIOD",
@@ -89,7 +229,7 @@ export async function createBillSegmentForServiceAgreement(
     EVENT_TYPES.BILL_SEGMENT_CREATED,
     async (tx) => {
       // 1. loadBase — assignments + components + snapshots
-      const period = { startDate: input.periodStart, endDate: input.periodEnd };
+      const period = { startDate: resolved.periodStart, endDate: resolved.periodEnd };
       const base = await loadBase(tx as unknown as typeof prisma, saId, period, utilityId);
 
       if (base.assignments.length === 0) {
@@ -155,8 +295,8 @@ export async function createBillSegmentForServiceAgreement(
         data: {
           utilityId,
           serviceAgreementId: saId,
-          periodStart: input.periodStart,
-          periodEnd: input.periodEnd,
+          periodStart: resolved.periodStart,
+          periodEnd: resolved.periodEnd,
           subtotal: new Prisma.Decimal(decToFixedRequired(result.totals.subtotal)),
           taxes: new Prisma.Decimal(decToFixedRequired(result.totals.taxes)),
           credits: new Prisma.Decimal(decToFixedRequired(result.totals.credits)),
@@ -194,7 +334,7 @@ export async function createBillSegmentForServiceAgreement(
           where: {
             utilityId,
             meterId: { in: meterIds },
-            readDate: { gte: input.periodStart, lte: input.periodEnd },
+            readDate: { gte: resolved.periodStart, lte: resolved.periodEnd },
             billedAt: null,
           },
           data: { billedAt: now },

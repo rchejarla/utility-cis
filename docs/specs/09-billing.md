@@ -20,6 +20,42 @@ Primary users: billing administrators, finance staff, utility managers.
 
 What actually shipped replaces the `BillingRecord` design below. The charge calculation per agreement is a **`BillSegment`** with one **`BillSegmentLine`** per fired rate component; an account-level **`Bill`** aggregates the segments for a period into the customer-facing document. See `docs/specs/07b-rate-model-v2-design.md` for the rating model and `docs/superpowers/specs/2026-05-08-rate-model-v2-slice-5b.md` for the aggregation design.
 
+**A service period is read to read (2026-10-15).** A segment's period is
+resolved from the meter reads, not from the cycle's calendar: it ends on
+the **newest unbilled read** on or before the scheduling bound — that
+read *is* the end of the interval — and starts the **day after the last
+read already billed**, so consecutive periods abut with no gap and no
+overlap. With nothing billed yet it starts at the service agreement's own
+start date. `resolveServicePeriod` in `bill-segment.service.ts` is the
+only place this is decided, and `POST /service-agreements/:id/bill-segments`
+with an empty body is the ordinary way to use it;
+`GET /service-agreements/:id/next-service-period` previews it so the UI
+can show the interval instead of asking someone to type one. Explicit
+dates are still accepted, for corrections, and passing only one of them
+is refused rather than half-resolved.
+
+**A `Bill`'s period is the span of its segments**, for the same reason.
+The cycle window selects which segments to bill; what the bill is *for*
+is the interval they cover.
+
+Why this replaced deriving the period from `billDayOfMonth`: with manual
+reading, two accounts on one cycle are never read on the same day, so a
+nominal 1/1–1/31 period described neither of them — and a reader one day
+late left one window with **no** read, producing a zero-usage bill, and
+the next window with **two**, billing both intervals at once and pushing
+the customer into a tier they never entered. The usage was never lost
+(`billed_at` only marks reads inside the period) but it was misdated,
+which is worse in a dispute. Two refusals exist rather than a guess:
+`NO_READ_IN_WINDOW` (400) when there is nothing to bill — estimation is
+the answer to that and is not built — and `READ_PREDATES_BILLED_PERIOD`
+(409) for a backdated read, which needs a rebill rather than a new
+segment.
+
+Still nominal, and knowingly: `computeBillPeriod` remains the scheduling
+window, and tier-threshold proration for intervals that are not ~30 days
+(Req 138) is not built, so a 44-day interval is still priced against a
+full period's allowance.
+
 Differences worth noting against the superseded design:
 
 - Line items are **rows** (`BillSegmentLine`), not a `charge_breakdown` JSONB blob, so a line can be traced to the exact `RateSchedule` version and `RateComponent` that produced it.

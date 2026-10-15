@@ -351,11 +351,28 @@ describe("POST /api/v1/accounts/:id/bills — Bozeman SFR golden", () => {
     expect(body.error?.code).toBe("BILL_ALREADY_EXISTS_FOR_PERIOD");
   }, 600_000);
 
-  it("partial-period account: periodStart clamps to account.createdAt", async () => {
+  /**
+   * A bill says what its segments cover, not what the cycle's calendar
+   * says — even for an account created mid-period.
+   *
+   * This case used to assert the opposite: `computeBillPeriod` clamped
+   * `periodStart` to `account.createdAt`, so a bill whose only segment
+   * covered 2026-04-16 to 05-15 was issued claiming 05-08 to 05-15. It
+   * charged thirty days and said eight. The clamp made the dates look
+   * careful while the money disagreed with them, and a service period is
+   * the one thing on a bill a customer checks against their own reading.
+   *
+   * The clamp still exists and still does its real job: deciding which
+   * segments a window picks up. It no longer decides what the bill says
+   * it is for. Not billing service from before it began is now the
+   * segment's own rule — `resolveServicePeriod` starts at the service
+   * agreement's start date — which is a better question than the account
+   * row's creation timestamp anyway.
+   */
+  it("a mid-period account is billed for what its segments cover, not a clamped window", async () => {
     await seedBozemanSegment();
 
-    // Bump the account's createdAt to 2026-05-08 — mid-period for a
-    // billDay=15 cycle. computeBillPeriod's clamp should kick in.
+    // Mid-period for a billDay=15 cycle, which used to move the dates.
     const { prisma } = prismaImports;
     await prisma.$executeRawUnsafe(
       "UPDATE account SET created_at = $1::timestamptz WHERE id = $2::uuid",
@@ -371,7 +388,24 @@ describe("POST /api/v1/accounts/:id/bills — Bozeman SFR golden", () => {
     });
     expect(res.statusCode).toBe(201);
     const body = JSON.parse(res.body);
-    expect(body.periodStart.slice(0, 10)).toBe("2026-05-08");
+    expect(body.periodStart.slice(0, 10)).toBe("2026-04-16");
     expect(body.periodEnd.slice(0, 10)).toBe("2026-05-15");
+
+    // The invariant that replaces the clamp: the bill's period is the
+    // span of its own segments, so the two cannot state different things.
+    const segments = await prisma.billSegment.findMany({
+      where: { billId: body.id },
+      select: { periodStart: true, periodEnd: true },
+    });
+    expect(segments.length).toBeGreaterThan(0);
+    const earliest = segments
+      .map((s) => s.periodStart.toISOString().slice(0, 10))
+      .sort()[0];
+    const latest = segments
+      .map((s) => s.periodEnd.toISOString().slice(0, 10))
+      .sort()
+      .at(-1);
+    expect(body.periodStart.slice(0, 10)).toBe(earliest);
+    expect(body.periodEnd.slice(0, 10)).toBe(latest);
   }, 600_000);
 });

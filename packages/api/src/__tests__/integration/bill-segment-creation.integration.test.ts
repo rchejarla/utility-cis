@@ -221,6 +221,66 @@ describe("POST /api/v1/service-agreements/:id/bill-segments — Bozeman SFR gold
     expect(fetched.lines.length).toBe(created.lines.length);
   }, 600_000);
 
+  /**
+   * The ordinary path: no dates at all.
+   *
+   * A service period runs read to read, so the interval is a fact about
+   * the meter rather than something a person types into two date
+   * pickers. The seeded read is dated 2026-05-31, and nothing has been
+   * billed, so the period ends there and starts at the agreement.
+   */
+  it("bills the period from the reads when the body carries no dates", async () => {
+    const { prisma } = prismaImports;
+    // Whatever the newest unbilled read happens to be — the seed makes
+    // one and this suite's fixture adds another, which is the point: the
+    // interval ends at the latest read taken, not at a date anyone chose.
+    const newest = await prisma.meterRead.findFirstOrThrow({
+      where: { serviceAgreementId: saId, billedAt: null },
+      orderBy: [{ readDate: "desc" }, { id: "desc" }],
+      select: { readDate: true },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/service-agreements/${saId}/bill-segments`,
+      headers: headers(),
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(201);
+    const body = JSON.parse(res.body);
+    expect(body.periodEnd.slice(0, 10)).toBe(newest.readDate.toISOString().slice(0, 10));
+
+    const sa = await prisma.serviceAgreement.findUniqueOrThrow({
+      where: { id: saId },
+      select: { startDate: true },
+    });
+    expect(body.periodStart.slice(0, 10)).toBe(sa.startDate.toISOString().slice(0, 10));
+
+    // The read that closed the period is now spent, so the next call has
+    // nothing to bill rather than billing the same interval again.
+    const again = await app.inject({
+      method: "POST",
+      url: `/api/v1/service-agreements/${saId}/bill-segments`,
+      headers: headers(),
+      payload: {},
+    });
+    expect(again.statusCode).toBe(400);
+    expect(JSON.parse(again.body).error?.code).toBe("NO_READ_IN_WINDOW");
+  }, 60_000);
+
+  it("refuses half a period, rather than inventing the other half", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/service-agreements/${saId}/bill-segments`,
+      headers: headers(),
+      payload: { periodEnd: "2026-05-31" },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error?.code).toBe("INVALID_PERIOD");
+  }, 60_000);
+
   it("returns 400 INVALID_PERIOD when periodEnd < periodStart", async () => {
     const res = await app.inject({
       method: "POST",

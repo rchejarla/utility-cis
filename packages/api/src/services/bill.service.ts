@@ -238,6 +238,28 @@ export async function generateBillForAccount(
         total = total.plus(s.total);
       }
 
+      /*
+       * The service period is the span of the segments, not the cycle's
+       * nominal window.
+       *
+       * The window selected which segments to bill; what the bill is
+       * *for* is the interval those segments actually cover, which is
+       * read to read and rarely the calendar month. Printing 2/1–2/28
+       * over usage metered 1/30–2/28 is a statement the meter does not
+       * support, and it is the service period a customer disputes.
+       *
+       * `billDate` stays the window's end — the utility's own date, the
+       * day it issued the bill — and the due date counts from there.
+       */
+      const servicePeriodStart = segments.reduce(
+        (earliest, s) => (s.periodStart < earliest ? s.periodStart : earliest),
+        segments[0].periodStart,
+      );
+      const servicePeriodEnd = segments.reduce(
+        (latest, s) => (s.periodEnd > latest ? s.periodEnd : latest),
+        segments[0].periodEnd,
+      );
+
       const now = new Date();
       const billDate = period.periodEnd;
       const dueDate = new Date(billDate);
@@ -249,8 +271,8 @@ export async function generateBillForAccount(
           utilityId,
           accountId,
           billingCycleId: account.billingCycleId,
-          periodStart: period.periodStart,
-          periodEnd: period.periodEnd,
+          periodStart: servicePeriodStart,
+          periodEnd: servicePeriodEnd,
           billDate,
           dueDate,
           subtotal,
