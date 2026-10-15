@@ -34,6 +34,34 @@ export interface BillPresentationGroup {
   subtotal: string;
 }
 
+/**
+ * What has already been paid against this bill, as of the bill date.
+ *
+ * A bill with no payment line is the one thing every utility bill has
+ * that this one did not: a customer who paid is told nothing about it,
+ * and the totals box states `Credits $0.00` — which is the credits the
+ * rate engine computed for the period, not their money, and reads as a
+ * denial that it arrived.
+ *
+ * Bounded at `bill.billDate` on purpose. The ledger moves after a bill
+ * is issued, and a document that reads the ledger at render time stops
+ * being a record of what the customer was shown — a reprint of last
+ * March would print today's balances, which is exactly the property
+ * `sha256` and byte-stable regeneration exist to protect. Payments
+ * arriving after the bill date belong on the next bill, which is how
+ * balance-forward billing works anyway.
+ *
+ * `null` when nothing was applied by then, so an ordinary bill prints
+ * exactly as it did before.
+ */
+export interface BillPresentationSettlement {
+  applied: Array<{ date: Date; label: string; amount: string }>;
+  /** Negative: what the applications take off the charge. */
+  appliedTotal: string;
+  /** `total` less `appliedTotal` — what this bill is still asking for. */
+  amountDue: string;
+}
+
 export interface BillPresentation {
   issuer: BillPresentationIssuer;
   recipient: { name: string; addressLines: string[] };
@@ -57,6 +85,7 @@ export interface BillPresentation {
     rounding: string | null;
     total: string;
   };
+  settlement: BillPresentationSettlement | null;
   messages: Array<{ label: string; body: string }>;
   branding: { logoUrl: string | null; primaryColor: string; fontFamily: string };
   remittance: { payTo: string; addressLines: string[]; amountDue: string; dueDate: Date };
@@ -97,6 +126,28 @@ function cityLine(city?: string | null, state?: string | null, postal?: string |
 
 function present(value: unknown): boolean {
   return typeof value === "string" ? value.trim().length > 0 : value != null;
+}
+
+/**
+ * What a credit applied to a bill is called on the bill.
+ *
+ * The ledger's own vocabulary, in the customer's words. A payment says
+ * how it arrived when the tender is recorded, because "Payment (check)"
+ * is what somebody holding a cancelled cheque is looking for.
+ */
+const SETTLEMENT_LABELS: Record<string, string> = {
+  PAYMENT: "Payment",
+  ADJUSTMENT_CREDIT: "Credit adjustment",
+  WRITE_OFF: "Write-off",
+  DEPOSIT: "Deposit applied",
+  REFUND: "Refund",
+  REVERSAL: "Reversal",
+};
+
+function settlementLabel(type: string, tender: string | null): string {
+  const base = SETTLEMENT_LABELS[type] ?? type.toLowerCase().replace(/_/g, " ");
+  if (type !== "PAYMENT" || !tender) return base;
+  return `${base} (${tender.toLowerCase().replace(/_/g, " ")})`;
 }
 
 /**
@@ -301,6 +352,49 @@ export async function loadBillPresentation(
     total: total.toFixed(2),
   };
 
+  // ─── What has been paid against it ─────────────────────────────────
+  // Through the applications rather than the charge's own open_amount,
+  // because the bill has to say what arrived and when, not just that
+  // something did. Ordered by effective date with `id` as the tiebreak,
+  // for the same reason the billing address is ordered: two credits on
+  // one day must not print in whatever order the database returns, or a
+  // regeneration can produce different bytes for an unchanged bill.
+  const charge = await prisma.ledgerEntry.findFirst({
+    where: { utilityId, billId: bill.id, type: "BILL_CHARGE" },
+    select: { id: true },
+  });
+  const applications = charge
+    ? await prisma.ledgerApplication.findMany({
+        where: {
+          utilityId,
+          debitId: charge.id,
+          credit: { effectiveDate: { lte: bill.billDate } },
+        },
+        include: { credit: { select: { type: true, tender: true, effectiveDate: true } } },
+        orderBy: [{ credit: { effectiveDate: "asc" } }, { id: "asc" }],
+      })
+    : [];
+
+  let settlement: BillPresentationSettlement | null = null;
+  if (applications.length > 0) {
+    const appliedTotal = applications.reduce(
+      (acc, app) => acc.plus(new Decimal(money(app.amount))),
+      new Decimal(0),
+    );
+    settlement = {
+      // `ledger_application.amount` is positive by check constraint —
+      // it is how much of a credit went onto this debit. On the bill it
+      // reduces what is owed, so it prints signed.
+      applied: applications.map((app) => ({
+        date: app.credit.effectiveDate,
+        label: settlementLabel(app.credit.type, app.credit.tender),
+        amount: `-${money(app.amount)}`,
+      })),
+      appliedTotal: `-${appliedTotal.toFixed(2)}`,
+      amountDue: total.minus(appliedTotal).toFixed(2),
+    };
+  }
+
   return {
     issuer: {
       name: issuer.utilityName as string,
@@ -330,12 +424,18 @@ export async function loadBillPresentation(
     },
     groups,
     totals,
+    settlement,
     messages: messages.map((m) => ({ label: m.label, body: m.body })),
     branding,
     remittance: {
       payTo: (issuer.utilityLegalName || issuer.utilityName) as string,
       addressLines: issuerAddressLines,
-      amountDue: totals.total,
+      // The stub asks for what is left, not what was raised — same rule
+      // the totals box follows about rounding: a bill must not ask for a
+      // number the account does not owe. Paying the printed stub on a
+      // part-paid bill would otherwise overpay by exactly the amount
+      // already received.
+      amountDue: settlement ? settlement.amountDue : totals.total,
       dueDate: bill.dueDate,
     },
   };

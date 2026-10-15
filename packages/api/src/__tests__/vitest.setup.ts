@@ -65,6 +65,12 @@ vi.mock("../lib/prisma.js", () => {
     billSegmentLine: crud(),
     billMessage: crud(),
     billDocument: crud(),
+    // The bill's presentation reads these to print what has been paid
+    // against it. Absent, every presentation test failed on
+    // `ledgerEntry.findFirst` of undefined rather than on anything it
+    // was testing.
+    ledgerEntry: crud(),
+    ledgerApplication: crud(),
     serviceAgreement: crud(),
     servicePoint: crud(),
     servicePointMeter: crud(),

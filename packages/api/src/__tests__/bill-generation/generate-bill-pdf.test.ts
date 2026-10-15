@@ -4,7 +4,10 @@ import { inflateSync } from "node:zlib";
 import { generateBillPdf } from "../../bill-generation/generate-bill-pdf.js";
 import type { BillPresentation } from "../../services/bill-presentation.service.js";
 
-function presentation(lineCount: number): BillPresentation {
+function presentation(
+  lineCount: number,
+  settlement: BillPresentation["settlement"] = null,
+): BillPresentation {
   return {
     issuer: {
       name: "City of Testville Utilities",
@@ -41,12 +44,15 @@ function presentation(lineCount: number): BillPresentation {
       rounding: null,
       total: `${lineCount}.00`,
     },
+    settlement,
     messages: [{ label: "Notice", body: "Water restrictions begin June 1." }],
     branding: { logoUrl: null, primaryColor: "#1f2937", fontFamily: "Helvetica" },
     remittance: {
       payTo: "City of Testville, Montana",
       addressLines: ["PO Box 1230", "Testville, MT 59771"],
-      amountDue: `${lineCount}.00`,
+      // As the service does it: the stub asks for what is left, not what
+      // was raised.
+      amountDue: settlement ? settlement.amountDue : `${lineCount}.00`,
       dueDate: new Date("2026-03-31"),
     },
   };
@@ -129,6 +135,48 @@ describe("generateBillPdf", () => {
    * 2dp strings — so if the template stops formatting them, nothing else
    * would notice.
    */
+  /**
+   * The line a customer looks for first.
+   *
+   * A bill that has been partly paid used to say nothing about the
+   * payment and print "Credits $0.00" — the rate engine's credits for
+   * the period, which a payer reads as their money counted at nothing.
+   */
+  it("itemises payments received, and asks only for what is left", async () => {
+    const pdf = await generateBillPdf(
+      presentation(3, {
+        applied: [
+          { date: new Date("2026-02-14"), label: "Payment (check)", amount: "-2.00" },
+        ],
+        appliedTotal: "-2.00",
+        amountDue: "1.00",
+      }),
+    );
+    const text = extractText(pdf);
+
+    // The section heading uses the label style, which uppercases.
+    expect(text).toContain("PAYMENTS AND CREDITS RECEIVED");
+    expect(text).toContain("Payment (check) 2026-02-14");
+    expect(text).toContain("-$2.00");
+    // What was raised and what is owed, both stated and distinguishable.
+    expect(text).toContain("Total billed$3.00");
+    expect(text).toContain("Amount due$1.00");
+    expect(text).not.toContain("Total due");
+    // And the remittance stub asks for the reduced figure, not the
+    // charge — paying the printed stub must not overpay by the amount
+    // already received.
+    expect(text).toContain("AMOUNT DUE$1.00");
+  }, 30_000);
+
+  it("leaves an unpaid bill exactly as it was, with no zero-credit line", async () => {
+    const text = extractText(await generateBillPdf(presentation(3)));
+
+    expect(text).toContain("Total due");
+    expect(text).not.toContain("Payments and credits received");
+    // The row that used to state $0.00 against a customer's payment.
+    expect(text).not.toContain("Credits");
+  }, 30_000);
+
   it("prints every amount with a currency symbol", async () => {
     const pdf = await generateBillPdf(presentation(3));
     const text = extractText(pdf);

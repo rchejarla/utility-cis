@@ -73,7 +73,8 @@ function printed(amount: string): string {
 
 export function DefaultBillTemplate({ presentation }: { presentation: BillPresentation }) {
   const s = makeStyles(presentation);
-  const { issuer, recipient, account, bill, groups, totals, messages, remittance } = presentation;
+  const { issuer, recipient, account, bill, groups, totals, settlement, messages, remittance } =
+    presentation;
 
   return (
     <Document title={`Bill ${bill.number}`} author={issuer.name}>
@@ -155,10 +156,21 @@ export function DefaultBillTemplate({ presentation }: { presentation: BillPresen
             <Text style={s.muted}>Taxes</Text>
             <Text>{printed(totals.taxes)}</Text>
           </View>
-          <View style={s.totalRow}>
-            <Text style={s.muted}>Credits</Text>
-            <Text>{printed(totals.credits)}</Text>
-          </View>
+          {/*
+            Named for what it is. This is the credits the rate engine
+            computed while pricing the period — not the account's credit
+            position, and never a payment. Printed unconditionally as
+            "Credits $0.00" it answered a question nobody asked in the
+            affirmative-negative: a customer who had paid read it as
+            their money being counted at zero. Suppressed when zero, the
+            way Rounding already is.
+          */}
+          {Number(totals.credits) === 0 ? null : (
+            <View style={s.totalRow}>
+              <Text style={s.muted}>Credits this period</Text>
+              <Text>{printed(totals.credits)}</Text>
+            </View>
+          )}
           {/*
             Only when the per-line and whole-bill rounding disagree, so a
             customer adding up the lines above arrives at Total due
@@ -171,9 +183,37 @@ export function DefaultBillTemplate({ presentation }: { presentation: BillPresen
             </View>
           ) : null}
           <View style={s.grandTotal}>
-            <Text>Total due</Text>
+            <Text>{settlement ? "Total billed" : "Total due"}</Text>
             <Text>{printed(totals.total)}</Text>
           </View>
+          {/*
+            Payments and credits already applied to this bill, itemised
+            with the date they took effect, then what is actually left to
+            pay. Only on a bill that has some: an unpaid bill prints
+            exactly as it did before, with "Total due" as its last word.
+
+            Itemised rather than summarised because the line a customer
+            looks for is their own payment, on its own date — "Payment
+            (check) 2026-10-03  -$55.38" is what ends the phone call,
+            where a single net figure starts one.
+          */}
+          {settlement ? (
+            <>
+              <Text style={[s.label, { marginTop: 6 }]}>Payments and credits received</Text>
+              {settlement.applied.map((item, ai) => (
+                <View key={ai} style={s.totalRow}>
+                  <Text style={s.muted}>
+                    {item.label} {fmtDate(item.date)}
+                  </Text>
+                  <Text>{printed(item.amount)}</Text>
+                </View>
+              ))}
+              <View style={s.grandTotal}>
+                <Text>Amount due</Text>
+                <Text>{printed(settlement.amountDue)}</Text>
+              </View>
+            </>
+          ) : null}
         </View>
 
         {messages.length > 0 ? (

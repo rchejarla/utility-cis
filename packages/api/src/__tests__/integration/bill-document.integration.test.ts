@@ -522,6 +522,87 @@ describe("bill documents", () => {
     ]);
   }, 60_000);
 
+  /**
+   * A bill that has been paid against has to say so.
+   *
+   * And it has to say so from the applications, bounded at the bill
+   * date: the ledger keeps moving after a bill is issued, so a document
+   * that reads it live stops being a record of what the customer was
+   * shown — a reprint would quietly restate itself. A payment arriving
+   * after the bill date belongs on the next bill.
+   */
+  it("prints the payments applied to it, and only those by the bill date", async () => {
+    const billId = await postedBill();
+    const { prisma } = prismaImports;
+    const bill = await prisma.bill.findUniqueOrThrow({ where: { id: billId } });
+
+    const charge = await prisma.ledgerEntry.create({
+      data: {
+        utilityId: UTILITY,
+        accountId: bill.accountId,
+        type: "BILL_CHARGE",
+        amount: "107.50",
+        openAmount: "37.50",
+        effectiveDate: bill.billDate,
+        billId,
+      },
+    });
+    const byBillDate = await prisma.ledgerEntry.create({
+      data: {
+        utilityId: UTILITY,
+        accountId: bill.accountId,
+        type: "PAYMENT",
+        amount: "-60.00",
+        openAmount: "0.00",
+        effectiveDate: new Date("2026-02-20"),
+        tender: "CHECK",
+      },
+    });
+    const afterBillDate = await prisma.ledgerEntry.create({
+      data: {
+        utilityId: UTILITY,
+        accountId: bill.accountId,
+        type: "PAYMENT",
+        amount: "-10.00",
+        openAmount: "0.00",
+        effectiveDate: new Date("2026-03-20"),
+        tender: "CARD",
+      },
+    });
+    for (const [credit, amount] of [
+      [byBillDate, "60.00"],
+      [afterBillDate, "10.00"],
+    ] as const) {
+      await prisma.ledgerApplication.create({
+        data: { utilityId: UTILITY, creditId: credit.id, debitId: charge.id, amount },
+      });
+    }
+
+    const { loadBillPresentation } = await import("../../services/bill-presentation.service.js");
+    const p = await loadBillPresentation(UTILITY, billId);
+
+    expect(p.settlement?.applied).toHaveLength(1);
+    expect(p.settlement?.applied[0]?.label).toBe("Payment (check)");
+    expect(p.settlement?.applied[0]?.amount).toBe("-60.00");
+    expect(p.settlement?.applied[0]?.date.toISOString().slice(0, 10)).toBe("2026-02-20");
+    expect(p.settlement?.appliedTotal).toBe("-60.00");
+    // 107.50 raised, 60.00 received by the bill date.
+    expect(p.settlement?.amountDue).toBe("47.50");
+    // The stub asks for what is left, not the charge.
+    expect(p.remittance.amountDue).toBe("47.50");
+    expect(p.totals.total).toBe("107.50");
+  }, 60_000);
+
+  it("leaves a bill with nothing applied to it unchanged", async () => {
+    const billId = await postedBill();
+    const { loadBillPresentation } = await import("../../services/bill-presentation.service.js");
+
+    const p = await loadBillPresentation(UTILITY, billId);
+
+    expect(p.settlement).toBeNull();
+    expect(p.remittance.amountDue).toBe("107.50");
+  }, 60_000);
+
   it("refuses an unposted bill", async () => {
     const billId = await postedBill();
     await prismaImports.prisma.bill.update({ where: { id: billId }, data: { postedAt: null } });
