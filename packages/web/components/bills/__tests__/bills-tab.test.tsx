@@ -93,13 +93,21 @@ describe("Account Bills tab", () => {
     expect(screen.queryByText("Part paid")).not.toBeInTheDocument();
   });
 
-  it("offers the bill's own acts, not just a link to it", async () => {
+  /**
+   * One control per thing, and only one of them called View.
+   *
+   * The first version of this row kept a "View →" link beside the new
+   * "View bill" button — two controls with nearly the same label, one
+   * opening the segments and the other the PDF. The bill number carries
+   * the detail now, as it does on the Bills page.
+   */
+  it("opens the bill from its number, and offers the acts it never had", async () => {
     renderTab();
 
-    await waitFor(() => expect(screen.getByText("B-1001")).toBeInTheDocument());
-    // The detail link survives; it is how someone reaches the segments.
-    expect(screen.getByRole("button", { name: "View →" })).toBeInTheDocument();
-    // And the acts the tab never had.
+    const number = await screen.findByRole("button", { name: "B-1001" });
+    expect(number).toHaveAttribute("title", "View segments and line items");
+    expect(screen.queryByRole("button", { name: /^View →$/ })).not.toBeInTheDocument();
+
     expect(screen.getByRole("button", { name: /view bill/i })).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "More actions for B-1001" }),

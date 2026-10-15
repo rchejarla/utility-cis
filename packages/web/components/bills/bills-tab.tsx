@@ -132,7 +132,23 @@ export function BillsTab({ accountId, canEdit }: { accountId: string; canEdit: b
           <tbody>
             {bills.map((b) => (
               <tr key={b.id}>
-                <td style={{ ...td, fontFamily: "monospace", fontSize: "12px" }}>{b.billNumber}</td>
+                <td style={td}>
+                  {/*
+                    The bill number opens the bill, as it does on the
+                    Bills page — it is the identifier a caller reads out,
+                    so it should be the thing you click. This row briefly
+                    had a "View →" link next to a "View bill" button:
+                    two controls, both called View, one opening the
+                    segments and the other the PDF.
+                  */}
+                  <button
+                    onClick={() => setOpenBillId(b.id)}
+                    style={MONO_BUTTON}
+                    title="View segments and line items"
+                  >
+                    {b.billNumber}
+                  </button>
+                </td>
                 <td style={td}>
                   {ymd(b.periodStart)} → {ymd(b.periodEnd)}
                 </td>
@@ -158,28 +174,7 @@ export function BillsTab({ accountId, canEdit }: { accountId: string; canEdit: b
                   <BillStatusPill bill={b} />
                 </td>
                 <td style={td}>
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    {/*
-                      The bill's own detail stays available — it is how
-                      someone gets from here to the segments and lines —
-                      but it is no longer the only thing on offer.
-                    */}
-                    <button
-                      onClick={() => setOpenBillId(b.id)}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: "var(--accent-primary)",
-                        fontSize: "12px",
-                        cursor: "pointer",
-                        fontFamily: "inherit",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      View →
-                    </button>
-                    <BillRowActions bill={b} onChanged={() => setRefreshKey((k) => k + 1)} />
-                  </div>
+                  <BillRowActions bill={b} onChanged={() => setRefreshKey((k) => k + 1)} />
                 </td>
               </tr>
             ))}
@@ -282,4 +277,15 @@ const td: React.CSSProperties = {
   fontSize: "13px",
   color: "var(--text-primary)",
   borderBottom: "1px solid var(--border-subtle)",
+};
+/** The bill number, as the Bills page renders it: mono, and clickable. */
+const MONO_BUTTON: React.CSSProperties = {
+  fontFamily: "'JetBrains Mono', monospace",
+  fontSize: 12,
+  fontWeight: 600,
+  color: "var(--primary)",
+  background: "none",
+  border: "none",
+  padding: 0,
+  cursor: "pointer",
 };
