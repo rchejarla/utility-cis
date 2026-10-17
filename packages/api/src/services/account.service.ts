@@ -13,6 +13,7 @@ export async function listAccounts(utilityId: string, query: AccountQuery) {
   if (query.accountType) where.accountType = query.accountType;
   if (query.creditRating) where.creditRating = query.creditRating;
   if (query.customerId) where.customerId = query.customerId;
+  if (query.billingCycleId) where.billingCycleId = query.billingCycleId;
   if (query.premiseSearch) {
     where.serviceAgreements = {
       some: {

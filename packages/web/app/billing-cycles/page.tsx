@@ -10,7 +10,7 @@ interface BillingCycle {
   readDayOfMonth?: number;
   billDayOfMonth?: number;
   frequency: string;
-  isActive: boolean;
+  active: boolean;
 }
 
 const columns: Column<BillingCycle>[] = [
@@ -50,17 +50,17 @@ const columns: Column<BillingCycle>[] = [
     ),
   },
   {
-    key: "isActive",
+    key: "active",
     header: "Active",
     render: (row) => (
       <span
         style={{
           fontSize: "11px",
           fontWeight: 500,
-          color: row.isActive ? "var(--success)" : "var(--text-muted)",
+          color: row.active ? "var(--success)" : "var(--text-muted)",
         }}
       >
-        {row.isActive ? "✓ Active" : "Inactive"}
+        {row.active ? "✓ Active" : "Inactive"}
       </span>
     ),
   },

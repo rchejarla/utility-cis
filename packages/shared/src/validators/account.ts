@@ -74,6 +74,15 @@ export const accountQuerySchema = z.object({
   accountType: accountTypeEnum.optional(),
   creditRating: creditRatingEnum.optional(),
   customerId: z.string().uuid().optional(),
+  /**
+   * Accounts on one billing cycle — "who does this route bill?".
+   *
+   * Sits beside `customerId` because it answers the same shape of
+   * question, and a cycle cannot answer it from its own row: the FK
+   * points this way, so without this filter the cycle page would have to
+   * fetch every account and discard most of them.
+   */
+  billingCycleId: z.string().uuid().optional(),
   /** Free-text match against premise.addressLine1 / city — joins
    *  through serviceAgreements. Case-insensitive contains. */
   premiseSearch: z.string().min(1).max(200).optional(),

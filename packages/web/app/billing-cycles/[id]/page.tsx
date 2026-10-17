@@ -19,7 +19,29 @@ interface BillingCycle {
   active: boolean;
 }
 
+/**
+ * An account as this page needs it: who it is, and whether it is in a
+ * state that bills. A run only picks up ACTIVE accounts, so status is
+ * the column that explains why a cycle with nine accounts bills seven.
+ */
+interface CycleAccount {
+  id: string;
+  accountNumber: string;
+  status: string;
+  accountType: string;
+  customer: { firstName: string | null; lastName: string | null; organizationName: string | null } | null;
+}
+
 const FREQUENCIES = ["MONTHLY", "BIMONTHLY", "QUARTERLY", "ANNUAL"];
+
+const ACCOUNTS_PER_PAGE = 25;
+
+function customerLabel(c: CycleAccount["customer"]): string {
+  if (!c) return "—";
+  if (c.organizationName) return c.organizationName;
+  const name = `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim();
+  return name === "" ? "—" : name;
+}
 
 const fieldStyle = {
   display: "grid" as const,
@@ -31,6 +53,38 @@ const fieldStyle = {
 };
 const labelStyle = { fontSize: "12px", color: "var(--text-muted)", fontWeight: "500" as const };
 const valueStyle = { fontSize: "13px", color: "var(--text-primary)" };
+
+const thStyle: React.CSSProperties = {
+  padding: "10px 16px",
+  textAlign: "left",
+  fontSize: 11,
+  fontWeight: 600,
+  textTransform: "uppercase",
+  letterSpacing: "0.06em",
+  color: "var(--text-muted)",
+  borderBottom: "1px solid var(--border)",
+  whiteSpace: "nowrap",
+};
+
+const tdStyle: React.CSSProperties = {
+  padding: "12px 16px",
+  fontSize: 13,
+  color: "var(--text-primary)",
+  borderBottom: "1px solid var(--border-subtle)",
+  whiteSpace: "nowrap",
+};
+
+const pageBtnStyle = (disabled: boolean): React.CSSProperties => ({
+  padding: "5px 12px",
+  fontSize: 12,
+  fontWeight: 600,
+  background: "var(--bg-card)",
+  color: disabled ? "var(--text-muted)" : "var(--text-primary)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius)",
+  cursor: disabled ? "default" : "pointer",
+  fontFamily: "inherit",
+});
 
 const inputStyle = {
   padding: "6px 10px",
@@ -56,6 +110,10 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
   const [saving, setSaving] = useState(false);
   const [showDeactivateConfirm, setShowDeactivateConfirm] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
+  const [accounts, setAccounts] = useState<CycleAccount[]>([]);
+  const [accountMeta, setAccountMeta] = useState<{ total: number; pages: number } | null>(null);
+  const [accountPage, setAccountPage] = useState(1);
+  const [accountsLoading, setAccountsLoading] = useState(false);
 
   const loadCycle = async () => {
     try {
@@ -72,6 +130,41 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
   useEffect(() => {
     loadCycle();
   }, [id]);
+
+  /*
+   * The accounts on this cycle, fetched only when the tab is opened.
+   *
+   * The FK points from account to cycle, so the cycle cannot answer
+   * "who do I bill?" from its own row — this is the account list
+   * filtered by `billingCycleId`, paginated, rather than a second
+   * endpoint that would duplicate its sorting and its shape.
+   */
+  useEffect(() => {
+    if (activeTab !== "accounts") return;
+    let cancelled = false;
+    setAccountsLoading(true);
+    apiClient
+      .get<{ data: CycleAccount[]; meta: { total: number; pages: number } }>("/api/v1/accounts", {
+        billingCycleId: id,
+        page: String(accountPage),
+        limit: String(ACCOUNTS_PER_PAGE),
+      })
+      .then((res) => {
+        if (cancelled) return;
+        setAccounts(res.data ?? []);
+        setAccountMeta(res.meta ?? null);
+      })
+      .catch((err) => {
+        if (!cancelled) toast(err instanceof Error ? err.message : "Failed to load accounts", "error");
+      })
+      .finally(() => {
+        if (!cancelled) setAccountsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, id, accountPage]);
 
   const handleEdit = () => {
     if (!cycle) return;
@@ -145,7 +238,13 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
       />
 
       <Tabs
-        tabs={[{ key: "overview", label: "Overview" }]}
+        tabs={[
+          { key: "overview", label: "Overview" },
+          {
+            key: "accounts",
+            label: accountMeta ? `Accounts (${accountMeta.total})` : "Accounts",
+          },
+        ]}
         activeTab={activeTab}
         onTabChange={setActiveTab}
       >
@@ -288,6 +387,109 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
                 {cycle.id}
               </span>
             </div>
+          </div>
+        )}
+
+        {activeTab === "accounts" && (
+          <div>
+            {/*
+              Said once, here, because it is the question this tab
+              raises: being on a cycle is not the same as being billed by
+              its run. A run takes ACTIVE accounts that also have a
+              service agreement covering the window, so this total is
+              always the ceiling and rarely the figure.
+            */}
+            <p style={{ fontSize: 12, color: "var(--text-muted)", margin: "0 0 12px" }}>
+              Every account on this cycle. A run bills the ACTIVE ones that also have a
+              service agreement covering its window, so it may pick up fewer than these.
+            </p>
+
+            {accountsLoading ? (
+              <p style={{ color: "var(--text-muted)", fontSize: 13 }}>Loading…</p>
+            ) : accounts.length === 0 ? (
+              <div
+                style={{
+                  padding: 32,
+                  textAlign: "center",
+                  color: "var(--text-muted)",
+                  background: "var(--bg-card)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius)",
+                  fontSize: 13,
+                }}
+              >
+                No account is on this cycle, so a run for it would have nothing to bill.
+              </div>
+            ) : (
+              <div
+                style={{
+                  background: "var(--bg-card)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius)",
+                  overflow: "auto",
+                }}
+              >
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ background: "var(--bg-elevated)" }}>
+                      <th style={thStyle}>Account</th>
+                      <th style={thStyle}>Customer</th>
+                      <th style={thStyle}>Type</th>
+                      <th style={thStyle}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {accounts.map((a) => (
+                      <tr key={a.id}>
+                        <td style={tdStyle}>
+                          <a
+                            href={`/accounts/${a.id}`}
+                            style={{
+                              fontFamily: "'JetBrains Mono', monospace",
+                              fontSize: 12,
+                              fontWeight: 600,
+                              color: "var(--primary)",
+                              textDecoration: "none",
+                            }}
+                          >
+                            {a.accountNumber}
+                          </a>
+                        </td>
+                        <td style={tdStyle}>{customerLabel(a.customer)}</td>
+                        <td style={{ ...tdStyle, color: "var(--text-muted)", fontSize: 12 }}>
+                          {a.accountType}
+                        </td>
+                        <td style={tdStyle}>
+                          <StatusBadge status={a.status} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {accountMeta && accountMeta.pages > 1 && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 14 }}>
+                <button
+                  onClick={() => setAccountPage((p) => p - 1)}
+                  disabled={accountPage <= 1}
+                  style={pageBtnStyle(accountPage <= 1)}
+                >
+                  Previous
+                </button>
+                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                  Page {accountPage} of {accountMeta.pages}
+                </span>
+                <button
+                  onClick={() => setAccountPage((p) => p + 1)}
+                  disabled={accountPage >= accountMeta.pages}
+                  style={pageBtnStyle(accountPage >= accountMeta.pages)}
+                >
+                  Next
+                </button>
+              </div>
+            )}
           </div>
         )}
 
