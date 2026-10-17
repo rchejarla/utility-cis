@@ -7,6 +7,8 @@ vi.mock("../../lib/cache-redis.js", () => ({
     get: vi.fn().mockResolvedValue(null),
     setex: vi.fn().mockResolvedValue("OK"),
     del: vi.fn().mockResolvedValue(1),
+    // `/health` reports this, and the cache helpers check it.
+    status: "ready",
   },
   cacheGet: vi.fn().mockResolvedValue(null),
   cacheSet: vi.fn().mockResolvedValue(undefined),
@@ -107,7 +109,7 @@ describe("Authorization middleware", () => {
     const app = await createTestApp();
     const response = await app.inject({ method: "GET", url: "/health" });
     expect(response.statusCode).toBe(200);
-    expect(JSON.parse(response.body)).toEqual({ status: "ok" });
+    expect(JSON.parse(response.body)).toEqual({ status: "ok", cache: "ready" });
   });
 
   // Test 2: Route with valid token and module enabled — authorization middleware passes through

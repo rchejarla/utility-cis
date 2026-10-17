@@ -79,7 +79,7 @@ describe("Route registration", () => {
     const app = await createTestApp();
     const response = await app.inject({ method: "GET", url: "/health" });
     expect(response.statusCode).toBe(200);
-    expect(JSON.parse(response.body)).toEqual({ status: "ok" });
+    expect(JSON.parse(response.body)).toEqual({ status: "ok", cache: "ready" });
   });
 
   it("returns 401 for unknown routes under /api/v1 without auth", async () => {

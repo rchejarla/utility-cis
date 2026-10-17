@@ -85,10 +85,37 @@ function connected(): boolean {
   return redis.status === "ready";
 }
 
+/*
+ * A timeout means the cache is lying about being available: the guard
+ * below only skips a client that admits it is disconnected, so anything
+ * that gets this far thought it was `ready` and then said nothing.
+ *
+ * Logged with the client's own status, at most once a minute, because
+ * that status is the whole diagnosis. "reconnecting" is an outage the
+ * guard already makes cheap; "ready" is the socket that died without
+ * saying so, and the only one worth acting on. Inferring which from the
+ * outside cost an afternoon once.
+ */
+const TIMEOUT_LOG_INTERVAL_MS = 60_000;
+let lastTimeoutLogAt = 0;
+
+function logTimeout(): void {
+  const now = Date.now();
+  if (now - lastTimeoutLogAt < TIMEOUT_LOG_INTERVAL_MS) return;
+  lastTimeoutLogAt = now;
+  logger.warn(
+    { component: "cache-redis", status: redis.status, timeoutMs: CACHE_TIMEOUT_MS },
+    "cache call timed out — serving from the database instead",
+  );
+}
+
 async function withTimeout<T>(p: Promise<T>, fallback: T): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<T>((resolve) => {
-    timer = setTimeout(() => resolve(fallback), CACHE_TIMEOUT_MS);
+    timer = setTimeout(() => {
+      logTimeout();
+      resolve(fallback);
+    }, CACHE_TIMEOUT_MS);
   });
   try {
     return await Promise.race([p, timeout]);

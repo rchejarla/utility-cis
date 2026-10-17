@@ -8,6 +8,7 @@ import { authMiddleware } from "./middleware/auth.js";
 import { tenantMiddleware } from "./middleware/tenant.js";
 import { authorizationMiddleware } from "./middleware/authorization.js";
 import { errorHandler } from "./middleware/error-handler.js";
+import { redis } from "./lib/cache-redis.js";
 import { commodityRoutes } from "./routes/commodities.js";
 import { uomRoutes } from "./routes/uom.js";
 import { premiseRoutes } from "./routes/premises.js";
@@ -93,8 +94,31 @@ export async function buildApp() {
   app.addHook("onRequest", tenantMiddleware);
   app.addHook("onRequest", authorizationMiddleware);
 
+  /**
+   * Liveness, plus the one dependency whose state is invisible from
+   * outside.
+   *
+   * **Always 200, even when the cache is down**, and that is the point
+   * rather than an oversight: this app is built to serve every request
+   * correctly without Redis, so failing the probe would have a deploy
+   * kill a process that is working. The cache's state is reported as
+   * information for a human or a monitor to read, not as a verdict on
+   * whether the process should live.
+   *
+   * `cache` is `redis.status` verbatim — `ready` when healthy,
+   * `reconnecting` or `close` during an outage. Anything other than
+   * `ready` for more than a moment means requests are being served from
+   * the database and someone should look; a client stuck off `ready`
+   * is cured by restarting the API.
+   *
+   * No database check here, deliberately. It would put a query behind
+   * every probe, and a liveness endpoint that does I/O is how probes
+   * start failing for reasons of their own making. If the database is
+   * unreachable the API cannot answer anything, which the caller finds
+   * out from the call it actually wanted.
+   */
   app.get("/health", { config: { skipAuth: true } }, async (_request, reply) => {
-    return reply.send({ status: "ok" });
+    return reply.send({ status: "ok", cache: redis.status });
   });
 
   // Public OpenAPI document — generated from Zod validators so the spec

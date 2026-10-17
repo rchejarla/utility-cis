@@ -7,6 +7,11 @@ vi.mock("../lib/cache-redis.js", () => ({
     get: vi.fn().mockResolvedValue(null),
     setex: vi.fn().mockResolvedValue("OK"),
     del: vi.fn().mockResolvedValue(1),
+    // The real client's connection state, which /health reports and the
+    // cache helpers consult before calling. A mock without it reports
+    // `undefined`, which JSON drops — so the endpoint would look correct
+    // in tests while saying nothing.
+    status: "ready",
   },
   cacheGet: vi.fn().mockResolvedValue(null),
   cacheSet: vi.fn().mockResolvedValue(undefined),
