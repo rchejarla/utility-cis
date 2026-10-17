@@ -2029,7 +2029,12 @@ model BillingRun {
   status         BillingRunStatus @default(PENDING) @map("status")
   accountCount   Int              @default(0) @map("account_count")
   billedCount    Int              @default(0) @map("billed_count")
-  exceptionCount Int              @default(0) @map("exception_count")
+  /// Counted apart because only one of them is work. One
+  /// `exception_count` added "nothing to bill" to "should have billed
+  /// and could not", so a run with forty skips and no failures read as
+  /// forty things to fix. Their sum is still available, derived.
+  failedCount    Int              @default(0) @map("failed_count")
+  skippedCount   Int              @default(0) @map("skipped_count")
   /// Posting is a second act over the run. A run is exactly when a bad
   /// rate change becomes twelve thousand wrong charges, and reversing
   /// those is a far worse afternoon than discarding unposted bills.

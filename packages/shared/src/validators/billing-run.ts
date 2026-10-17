@@ -23,6 +23,22 @@ export const createBillingRunSchema = z
   .strict();
 
 /**
+ * Previewing the same thing, as a query.
+ *
+ * Identical fields to the create body because it describes the very same
+ * call — a preview an operator approves and a run computed from
+ * different inputs would be a preview of nothing.
+ */
+export const previewBillingRunSchema = z
+  .object({
+    billingCycleId: z.string().uuid(),
+    windowEnd: z.string().date().optional(),
+    billDate: z.string().date().optional(),
+    dueDate: z.string().date().optional(),
+  })
+  .strict();
+
+/**
  * The run's item list, which is how an exception is found.
  *
  * `status` narrows to the work: FAILED is what somebody has to act on,
@@ -37,4 +53,5 @@ export const billingRunItemQuerySchema = z
   .strict();
 
 export type CreateBillingRunInput = z.infer<typeof createBillingRunSchema>;
+export type PreviewBillingRunInput = z.infer<typeof previewBillingRunSchema>;
 export type BillingRunItemQuery = z.infer<typeof billingRunItemQuerySchema>;

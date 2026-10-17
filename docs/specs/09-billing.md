@@ -1,7 +1,7 @@
 # Billing
 
 **Module:** 09 — Billing
-**Status:** Partially shipped — `BillSegment`, `BillSegmentLine` and `Bill` are live (Rate Model v2 slices 5a–5b.2), AR posting is live (module 23 slice 1), bill generation to a stored PDF is live (bill production slice 1), and the batch billing run is live **as API and worker with no UI** (slice 5c). Bill delivery is outstanding.
+**Status:** Partially shipped — `BillSegment`, `BillSegmentLine` and `Bill` are live (Rate Model v2 slices 5a–5b.2), AR posting is live (module 23 slice 1), bill generation to a stored PDF is live (bill production slice 1), and the batch billing run is live end to end — API, worker and UI (slice 5c). Bill delivery is outstanding.
 **Entities:** BillSegment (shipped), BillSegmentLine (shipped), Bill (shipped), BillDocument (shipped), BillMessage (shipped), BillingRun (shipped), BillingRunItem (shipped)
 
 ## Overview
@@ -205,7 +205,8 @@ base class would make a change to imports a change to billing.
 | bill_date / due_date | DATE | The utility's own dates, identical across the run, so a CSR can talk about "the October run" |
 | status | BillingRunStatus | PENDING · RUNNING · COMPLETE · PARTIAL · FAILED · CANCELLED |
 | account_count | INTEGER | Accounts selected as due |
-| billed_count / exception_count | INTEGER | Maintained by `finalise` from the items |
+| billed_count | INTEGER | Maintained by `finalise` from the items |
+| failed_count / skipped_count | INTEGER | **Counted apart, because only one of them is work.** One `exception_count` added "nothing to bill" to "should have billed and could not", so a run with forty skips and no failures read as forty things to fix. Their sum is still served as `exceptionCount`, derived rather than stored |
 | posted_at / posted_by | TIMESTAMPTZ / UUID | Nullable; posting is a second act over a finished run |
 | cancel_requested | BOOLEAN | Checked between accounts; the run finishes the one it is on |
 | last_progress_at | TIMESTAMPTZ | What makes a stalled run distinguishable from a slow one |
@@ -258,7 +259,8 @@ act repeated rather than a new kind of power.
 |--------|------|------------|-------------|
 | POST | `/api/v1/billing-runs` | `accounts:EDIT` | Start a run. **202** with the PENDING run and `queued` — the work is minutes long, so the response is the record to watch rather than the result |
 | GET | `/api/v1/billing-runs` | `accounts:VIEW` | The 100 most recent runs, newest first |
-| GET | `/api/v1/billing-runs/:id` | `accounts:VIEW` | One run's counts and status |
+| GET | `/api/v1/billing-runs/preview` | `accounts:VIEW` | What starting a run would do — resolved window, dates, and how many accounts are due — without writing anything. Same fields as the create body, as a query |
+| GET | `/api/v1/billing-runs/:id` | `accounts:VIEW` | One run's counts and status, plus `billedTotal` — what posting would raise |
 | GET | `/api/v1/billing-runs/:id/items` | `accounts:VIEW` | The item list. `?status=FAILED` is the work queue; `limit` (≤500) / `offset` |
 | POST | `/api/v1/billing-runs/:id/post` | `accounts:EDIT` | Post every bill the run produced. **201** with `{ posted, alreadyPosted, failed }` |
 | POST | `/api/v1/billing-runs/:id/cancel` | `accounts:EDIT` | Ask a run to stop; it finishes the account it is on |
@@ -393,7 +395,7 @@ Gated on `settings`, not `accounts`: the text printed on bills is tenant configu
 
 ## UI Pages
 
-Bill document actions and the two settings pages are shipped. The billing dashboard and the run views are **not built** — the billing run ships as API and worker only, so there is no screen that can start one or review its exceptions.
+Bill document actions, the two settings pages and the billing run views are shipped. The billing dashboard is not built.
 
 ### Bill document actions (shipped)
 
@@ -475,29 +477,74 @@ CRUD over `/api/v1/bill-messages` on `settings`: label, body, account type, serv
 - Aging dashboard widget linking to Accounts Receivable (Module 23) (Bozeman Reqs 149–150)
 - "Run Billing Cycle" action: select cycle, preview impacted accounts, confirm
 
-### Billing Run Detail (`/billing/runs/:runId`) — not built
+### Billing Runs — `/billing-runs` (shipped)
 
-**The run itself is shipped and has no screen.** It is reachable by
-endpoint only, which means a run can be started by nobody in the building —
-the one gap that matters most here, because the design's whole argument is
-that an operator reviews the exceptions before the money is posted, and
-today there is nowhere to review them.
+Every run, newest first, under **Billing** in the sidebar rather than
+beside Billing Cycles under Configuration: a cycle is a setting somebody
+edits twice a year, a run is work somebody does every month. The route is
+flat (`/billing-runs`, not `/billing/runs`) to match the API path and every
+other route in this app; the nested path in earlier drafts of this spec
+never existed.
 
-What it needs, now that the statuses are real:
+A run is identified by its cycle and window — "the October residential
+run" — so those are the first two columns and the id is not shown at all.
 
-- Run metadata: cycle, window, bill and due dates, who started it, `last_progress_at` so a stalled run is distinguishable from a slow one
-- Counts by item status — **BILLED / SKIPPED / FAILED**, not the superseded PENDING/SUBMITTED/HELD/REJECTED. Failed is the work queue and belongs first; skipped is noise an operator scrolls past, and the two must not share a number
-- Per-account rows: account number, service period actually billed, segment count, total, and for an exception its `error_code` and message
-- **Post this run** — the review gate, and the one action that moves money. Disabled while the run is PENDING or RUNNING, since the API refuses it with `RUN_NOT_FINISHED`
-- Cancel while running
-- CSV export of the item list
+**Failed and skipped are separate columns, never one "exceptions" figure.**
+Failed is the only number on the screen that means somebody has work to do.
+A merged count sends a clerk to read forty rows of "no read yet" looking
+for the three that matter. `Posted` is the last column because a run that
+calculated and was never posted has raised no receivable, and that is the
+question the list is most often opened to answer.
 
-### Start a run — not built
+Polling runs only while a run is PENDING or RUNNING; a finished run cannot
+change, so there is no timer on a settled table.
 
-`POST /api/v1/billing-runs` with a cycle id. The screen it needs is a cycle
-picker, a preview of how many accounts are due, and the three dates it
-would otherwise default. `RUN_ALREADY_EXISTS_FOR_WINDOW` names the existing
-run, so the UI can offer "open that run" rather than an error.
+### Start a run — the dialog on `/billing-runs` (shipped)
+
+A cycle picker, then a **preview** of what starting it would do: accounts
+due, the resolved window with its day count, bill date, due date.
+
+The preview is not decoration. The window is the cycle's own — it always
+ends on the cycle's bill day on or before the date asked for, so an
+operator who types the 20th against a cycle that bills on the 15th gets the
+window ending the 15th. `GET /api/v1/billing-runs/preview` exists so the
+screen can say that *before* the click rather than after, in a run that
+cannot be started twice. The three date fields are left blank rather than
+pre-filled, so blank means "use the cycle's answer" and the preview states
+what that answer is.
+
+Start is refused, in the dialog, when the window already has a run (with a
+link to open it, from `existingRun`) or when no account is due.
+
+### Billing Run Detail — `/billing-runs/:id` (shipped)
+
+Cards for status, accounts due, billed, failed, skipped and the billed
+total, then four tabs: **Failures**, Skipped, Billed, Details.
+
+**Failures open first.** The counts are already on the cards, so the
+question this screen exists to answer is "what didn't bill?" — and failures
+are the only part of that which is work. Each exception row shows its
+`error_code` as the primary field, because the code is what an operator
+groups by: forty accounts with no read are one job, forty different codes
+are forty. A billed row shows the service period it actually billed, which
+is read to read and therefore not the run's window — that difference is the
+column's reason for existing.
+
+**Post this run** is the review gate and the only control here that moves
+money. It names the count and the amount before raising anything, says that
+posting cannot be undone, and says how many accounts failed and will stay
+unbilled. It is absent for a user without `accounts:EDIT`, absent while the
+run is still going (the API refuses with `RUN_NOT_FINISHED`), and absent
+once posted. **Cancel run** is offered in its place while a run is in
+flight, and says what cancelling does: stops after the current account,
+leaves what has billed billed.
+
+Two banners carry what no other screen in this app has to say, because
+every other screen shows bills that are already owed: a finished unposted
+run states that no customer owes any of it yet, and a posted run states
+that the bills are now receivables.
+
+Not built: CSV export of the item list.
 
 ### Billing Record Detail (`/billing-records/:id`)
 
@@ -546,12 +593,14 @@ run, so the UI can offer "open that run" rather than an error.
   - A service period is read to read — `resolveServicePeriod` is the one place a period is decided, and a `Bill`'s period is the span of its segments
   - `BillingCycle.read_day_of_month` — a cycle says when its reads are due, not just its bills; required, and must precede the bill day
   - Tier-threshold proration by the days actually billed (Req 138), opt-in per tariff via `standard_days`
-  - `BillingRun` + `BillingRunItem`, the `billing-runs` queue and worker, six endpoints, a boot sweep for runs a dead replica left RUNNING
+  - `BillingRun` + `BillingRunItem`, the `billing-runs` queue and worker, seven endpoints, a boot sweep for runs a dead replica left RUNNING
   - Run-created bills are **not** auto-posted; posting the run is its own act
+  - `/billing-runs` and `/billing-runs/:id` — start a run against a preview, watch it, work the failures, post it
 
 - **Phase 3 — outstanding:**
-  - **The billing run's UI** — start a run, watch it, review the exception list, post it. The API has no caller, which makes the review gate the design is built around unreachable today
-  - `Generate Bill` on an account's Bills tab is still the only thing that can create a bill. It should become the Req 134 final-bill action or go, once the run is usable
+  - **Unattended scheduling.** A run is still started by a person. The cron mechanism already exists (five scheduled jobs run today via `upsertJobScheduler`, and `SCHEDULER_REGISTRY` in `worker.ts` is where one is declared), and `billDayOfMonth` makes the trigger computable. What it needs deciding is not the mechanism: whether a tenant opts in, what actor a run with no operator is audited to, and what happens when a scheduled run's failures go unread for a week. **Posting stays manual either way** — that is what keeps an automatic run from being an unattended money event
+  - CSV export of a run's item list
+  - `Generate Bill` on an account's Bills tab is still the only other way to create a bill. It should become the Req 134 final-bill action or go
   - Rebill / corrections (slice 5d) — this is where bill versioning belongs
   - Payments, allocation, waivers, write-offs and the customer statement view, against the ledger (module 23 slices 2–4)
   - Proration for partial periods

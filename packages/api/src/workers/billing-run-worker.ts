@@ -54,7 +54,8 @@ export function buildBillingRunWorker(): Worker<BillingRunJobData> {
           finalStatus: result.status,
           accountCount: result.accountCount,
           billedCount: result.billedCount,
-          exceptionCount: result.exceptionCount,
+          failedCount: result.failedCount,
+          skippedCount: result.skippedCount,
         },
         "Billing run finished",
       );

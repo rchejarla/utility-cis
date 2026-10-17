@@ -226,9 +226,11 @@ describe("processing a run", () => {
     expect(items.every((i) => i.processedAt !== null)).toBe(true);
 
     expect(result.billedCount).toBe(items.filter((i) => i.status === "BILLED").length);
-    expect(result.exceptionCount).toBe(
-      items.filter((i) => i.status === "SKIPPED" || i.status === "FAILED").length,
-    );
+    // Counted apart, because only one of them is work. `exceptionCount`
+    // is their sum and is derived, so it cannot disagree with them.
+    expect(result.failedCount).toBe(items.filter((i) => i.status === "FAILED").length);
+    expect(result.skippedCount).toBe(items.filter((i) => i.status === "SKIPPED").length);
+    expect(result.exceptionCount).toBe(result.failedCount + result.skippedCount);
     expect(["COMPLETE", "PARTIAL"]).toContain(result.status);
 
     // A billed item carries what it billed, read to read, so a long

@@ -1,8 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { idParamSchema } from "../lib/route-schemas.js";
-import { createBillingRunSchema, billingRunItemQuerySchema } from "@utility-cis/shared";
+import {
+  createBillingRunSchema,
+  previewBillingRunSchema,
+  billingRunItemQuerySchema,
+} from "@utility-cis/shared";
 import {
   createBillingRun,
+  previewBillingRun,
   listBillingRuns,
   getBillingRun,
   listBillingRunItems,
@@ -60,6 +65,31 @@ export async function billingRunRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { utilityId } = request.user;
       return reply.send(await listBillingRuns(utilityId));
+    },
+  );
+
+  /**
+   * What starting a run would do, before it is done.
+   *
+   * `VIEW`, because it writes nothing. It sits next to `/:id`, which
+   * find-my-way resolves in favour of the static segment whichever order
+   * they are declared in; it is written first so a reader does not have
+   * to know that.
+   */
+  app.get(
+    "/api/v1/billing-runs/preview",
+    { config: { module: "accounts", permission: "VIEW" } },
+    async (request, reply) => {
+      const { utilityId } = request.user;
+      const query = previewBillingRunSchema.parse(request.query ?? {});
+      return reply.send(
+        await previewBillingRun(utilityId, {
+          billingCycleId: query.billingCycleId,
+          windowEnd: query.windowEnd ? new Date(query.windowEnd) : undefined,
+          billDate: query.billDate ? new Date(query.billDate) : undefined,
+          dueDate: query.dueDate ? new Date(query.dueDate) : undefined,
+        }),
+      );
     },
   );
 

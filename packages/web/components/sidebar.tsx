@@ -47,6 +47,7 @@ import {
   faIdCard,
   faScaleBalanced,
   faFileInvoiceDollar,
+  faPlay,
   faFileInvoice,
   faCommentDots,
 } from "@fortawesome/pro-solid-svg-icons";
@@ -110,6 +111,17 @@ const navSections: NavSection[] = [
         icon: faFileInvoiceDollar,
         module: "accounts",
         tooltip: "Every bill across all accounts, searchable by bill number, with posting",
+      },
+      {
+        href: "/billing-runs",
+        label: "Billing Runs",
+        icon: faPlay,
+        module: "accounts",
+        // Under Billing rather than Configuration, where the cycle
+        // lives: a cycle is a setting somebody edits twice a year, a run
+        // is work somebody does every month.
+        tooltip:
+          "Bill a whole cycle, account by account — review what failed, then post it. Nothing is owed until the run is posted",
       },
       {
         href: "/receipts",

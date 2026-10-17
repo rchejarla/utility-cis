@@ -4,6 +4,7 @@ import { auditCreate } from "../lib/audit-wrap.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
 import { computeBillPeriod, generateBillForAccount } from "./bill.service.js";
 import { postBill } from "./ar/posting.service.js";
+import { displayCustomerName } from "./ar/customer-name.js";
 import {
   createBillSegmentForServiceAgreement,
   resolveServicePeriod,
@@ -28,6 +29,17 @@ const BILLABLE_ACCOUNT_STATUSES = ["ACTIVE"] as const;
 export interface BillingRunSummary {
   id: string;
   billingCycleId: string;
+  /**
+   * The cycle's own name and code, carried on every summary.
+   *
+   * Not a convenience: a run's identity to an operator *is* its cycle and
+   * window ("the October residential run"), and a list showing a cycle
+   * UUID would be a list nobody can read. Required by the type rather
+   * than nullable, so a query that forgets the relation fails to compile
+   * instead of rendering a blank column.
+   */
+  billingCycleName: string;
+  billingCycleCode: string;
   windowStart: Date;
   windowEnd: Date;
   billDate: Date;
@@ -35,6 +47,16 @@ export interface BillingRunSummary {
   status: string;
   accountCount: number;
   billedCount: number;
+  failedCount: number;
+  skippedCount: number;
+  /**
+   * `failedCount + skippedCount`, derived rather than stored.
+   *
+   * Carried because one figure is sometimes what a caller wants — a log
+   * line, a list column — but never stored, so it cannot drift from the
+   * two numbers it is made of. Anything deciding whether somebody has
+   * work to do should read `failedCount`.
+   */
   exceptionCount: number;
   postedAt: Date | null;
   cancelRequested: boolean;
@@ -57,21 +79,31 @@ function addDays(d: Date, days: number): Date {
 }
 
 /**
- * Start a run: write it and its PENDING items, then let the worker bill.
+ * What a run would be, without writing it.
  *
- * Eligibility is a query, so this is fast and bounded even at twelve
- * thousand accounts — the slow part is rating, which is the worker's.
- * An account is in the run when it belongs to the cycle, its status
- * bills, and it has an agreement overlapping the window. Everything
- * else is an exception with a reason; an account that is simply not due
- * is not in the run at all.
+ * The one place the window, the dates and the eligible accounts are
+ * decided, so the preview an operator approves and the run that then
+ * happens cannot be computed two different ways. It reports an existing
+ * run for the window rather than refusing: a preview's job is to
+ * describe, and `createBillingRun` is where the same fact becomes a 409.
  */
-export async function createBillingRun(
+export interface BillingRunPlan {
+  billingCycleId: string;
+  billingCycleName: string;
+  billingCycleCode: string;
+  windowStart: Date;
+  windowEnd: Date;
+  billDate: Date;
+  dueDate: Date;
+  /** Accounts the run would bill, in the order it would bill them. */
+  accountIds: string[];
+  existingRun: { id: string; status: string } | null;
+}
+
+async function resolveRunPlan(
   utilityId: string,
-  actorId: string,
-  actorName: string,
   args: CreateBillingRunArgs,
-): Promise<BillingRunSummary> {
+): Promise<BillingRunPlan> {
   const cycle = await prisma.billingCycle.findFirst({
     where: { id: args.billingCycleId, utilityId },
   });
@@ -117,21 +149,15 @@ export async function createBillingRun(
     where: { utilityId, billingCycleId: cycle.id, windowEnd: window.periodEnd },
     select: { id: true, status: true },
   });
-  if (existing) {
-    throw Object.assign(
-      new Error(
-        `Billing cycle ${cycle.cycleCode} already has a run for the window ending ` +
-          `${window.periodEnd.toISOString().slice(0, 10)} (${existing.status}). ` +
-          "Resume or cancel that run rather than starting a second one.",
-      ),
-      {
-        statusCode: 409,
-        code: "RUN_ALREADY_EXISTS_FOR_WINDOW",
-        existingRunId: existing.id,
-      },
-    );
-  }
 
+  /*
+   * Eligibility is a query, so this is fast and bounded even at twelve
+   * thousand accounts — the slow part is rating, which is the worker's.
+   * An account is in the run when it belongs to the cycle, its status
+   * bills, and it has an agreement overlapping the window. Everything
+   * else is an exception with a reason; an account that is simply not
+   * due is not in the run at all.
+   */
   const accounts = await prisma.account.findMany({
     where: {
       utilityId,
@@ -148,6 +174,63 @@ export async function createBillingRun(
     orderBy: { accountNumber: "asc" },
   });
 
+  return {
+    billingCycleId: cycle.id,
+    billingCycleName: cycle.name,
+    billingCycleCode: cycle.cycleCode,
+    windowStart: window.periodStart,
+    windowEnd: window.periodEnd,
+    billDate,
+    dueDate,
+    accountIds: accounts.map((a) => a.id),
+    existingRun: existing,
+  };
+}
+
+/**
+ * Describe the run a cycle would produce right now.
+ *
+ * Exists because the window and both dates are computed from the
+ * cycle's calendar, so a screen cannot tell an operator what the button
+ * will do without asking — and the alternative, re-deriving
+ * `computeBillPeriod` in the browser, would put the second definition of
+ * "the October window" in the place least able to keep it right.
+ */
+export async function previewBillingRun(
+  utilityId: string,
+  args: CreateBillingRunArgs,
+): Promise<Omit<BillingRunPlan, "accountIds"> & { accountCount: number }> {
+  const { accountIds, ...rest } = await resolveRunPlan(utilityId, args);
+  return { ...rest, accountCount: accountIds.length };
+}
+
+/**
+ * Start a run: write it and its PENDING items, then let the worker bill.
+ */
+export async function createBillingRun(
+  utilityId: string,
+  actorId: string,
+  actorName: string,
+  args: CreateBillingRunArgs,
+): Promise<BillingRunSummary> {
+  const plan = await resolveRunPlan(utilityId, args);
+  const { windowStart, windowEnd, billDate, dueDate, accountIds } = plan;
+
+  if (plan.existingRun) {
+    throw Object.assign(
+      new Error(
+        `Billing cycle ${plan.billingCycleCode} already has a run for the window ending ` +
+          `${windowEnd.toISOString().slice(0, 10)} (${plan.existingRun.status}). ` +
+          "Resume or cancel that run rather than starting a second one.",
+      ),
+      {
+        statusCode: 409,
+        code: "RUN_ALREADY_EXISTS_FOR_WINDOW",
+        existingRunId: plan.existingRun.id,
+      },
+    );
+  }
+
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "BillingRun" },
     EVENT_TYPES.BILLING_RUN_CREATED,
@@ -155,21 +238,22 @@ export async function createBillingRun(
       const run = await tx.billingRun.create({
         data: {
           utilityId,
-          billingCycleId: cycle.id,
-          windowStart: window.periodStart,
-          windowEnd: window.periodEnd,
+          billingCycleId: plan.billingCycleId,
+          windowStart,
+          windowEnd,
           billDate,
           dueDate,
-          accountCount: accounts.length,
+          accountCount: accountIds.length,
           createdBy: actorId,
         },
+        include: { cycle: RUN_CYCLE_SELECT },
       });
-      if (accounts.length > 0) {
+      if (accountIds.length > 0) {
         await tx.billingRunItem.createMany({
-          data: accounts.map((a) => ({
+          data: accountIds.map((accountId) => ({
             utilityId,
             billingRunId: run.id,
-            accountId: a.id,
+            accountId,
           })),
         });
       }
@@ -177,6 +261,9 @@ export async function createBillingRun(
     },
   );
 }
+
+/** The columns and the one relation every summary is built from. */
+const RUN_CYCLE_SELECT = { select: { name: true, cycleCode: true } } as const;
 
 function toSummary(run: {
   id: string;
@@ -188,15 +275,19 @@ function toSummary(run: {
   status: string;
   accountCount: number;
   billedCount: number;
-  exceptionCount: number;
+  failedCount: number;
+  skippedCount: number;
   postedAt: Date | null;
   cancelRequested: boolean;
   lastProgressAt: Date | null;
   createdAt: Date;
+  cycle: { name: string; cycleCode: string };
 }): BillingRunSummary {
   return {
     id: run.id,
     billingCycleId: run.billingCycleId,
+    billingCycleName: run.cycle.name,
+    billingCycleCode: run.cycle.cycleCode,
     windowStart: run.windowStart,
     windowEnd: run.windowEnd,
     billDate: run.billDate,
@@ -204,7 +295,9 @@ function toSummary(run: {
     status: run.status,
     accountCount: run.accountCount,
     billedCount: run.billedCount,
-    exceptionCount: run.exceptionCount,
+    failedCount: run.failedCount,
+    skippedCount: run.skippedCount,
+    exceptionCount: run.failedCount + run.skippedCount,
     postedAt: run.postedAt,
     cancelRequested: run.cancelRequested,
     lastProgressAt: run.lastProgressAt,
@@ -437,7 +530,6 @@ async function finalise(
   });
   const by = (s: string) => counts.find((c) => c.status === s)?._count._all ?? 0;
   const billed = by("BILLED");
-  const exceptions = by("FAILED") + by("SKIPPED");
 
   const status = cancelled
     ? "CANCELLED"
@@ -452,9 +544,11 @@ async function finalise(
     data: {
       status,
       billedCount: billed,
-      exceptionCount: exceptions,
+      failedCount: by("FAILED"),
+      skippedCount: by("SKIPPED"),
       lastProgressAt: new Date(),
     },
+    include: { cycle: RUN_CYCLE_SELECT },
   });
   if (run.utilityId !== utilityId) {
     throw Object.assign(new Error("Run does not belong to this utility"), {
@@ -544,6 +638,7 @@ export async function cancelBillingRun(
   const updated = await prisma.billingRun.update({
     where: { id: runId },
     data: { cancelRequested: true },
+    include: { cycle: RUN_CYCLE_SELECT },
   });
   return toSummary(updated);
 }
@@ -553,19 +648,45 @@ export async function listBillingRuns(utilityId: string): Promise<BillingRunSumm
     where: { utilityId },
     orderBy: { createdAt: "desc" },
     take: 100,
+    include: { cycle: RUN_CYCLE_SELECT },
   });
   return runs.map(toSummary);
 }
 
-export async function getBillingRun(utilityId: string, runId: string): Promise<BillingRunSummary> {
-  const run = await prisma.billingRun.findFirst({ where: { id: runId, utilityId } });
+/**
+ * One run, with what it would raise if posted.
+ *
+ * `billedTotal` is on the detail and not on the list, because the number
+ * exists for one question — "what am I about to put on customers'
+ * accounts?" — asked at the moment of posting. A column of run totals
+ * would be read as revenue, which it is not: an unposted run's total is
+ * owed by nobody, and a posted one's is already in the ledger.
+ */
+export interface BillingRunDetail extends BillingRunSummary {
+  billedTotal: string;
+}
+
+export async function getBillingRun(utilityId: string, runId: string): Promise<BillingRunDetail> {
+  const run = await prisma.billingRun.findFirst({
+    where: { id: runId, utilityId },
+    include: { cycle: RUN_CYCLE_SELECT },
+  });
   if (!run) {
     throw Object.assign(new Error(`Billing run ${runId} not found`), {
       statusCode: 404,
       code: "RUN_NOT_FOUND",
     });
   }
-  return toSummary(run);
+  const billed = await prisma.billingRunItem.aggregate({
+    where: { utilityId, billingRunId: runId, status: "BILLED" },
+    _sum: { total: true },
+  });
+  return {
+    ...toSummary(run),
+    // Summed at 4dp like the column, and rounded by whatever prints it —
+    // the same order as a bill's own subtotals.
+    billedTotal: (billed._sum.total ?? new Prisma.Decimal(0)).toFixed(4),
+  };
 }
 
 export async function listBillingRunItems(
@@ -580,7 +701,24 @@ export async function listBillingRunItems(
       ...(query.status ? { status: query.status as "PENDING" } : {}),
     },
     include: {
-      account: { select: { accountNumber: true } },
+      /*
+       * The customer's name, because "who is this?" is the next question
+       * after an account number on every exception an operator works,
+       * and one join answers it rather than a page of lookups.
+       */
+      account: {
+        select: {
+          accountNumber: true,
+          customer: {
+            select: {
+              customerType: true,
+              firstName: true,
+              lastName: true,
+              organizationName: true,
+            },
+          },
+        },
+      },
     },
     orderBy: [{ status: "asc" }, { id: "asc" }],
     take: query.limit,
@@ -590,6 +728,7 @@ export async function listBillingRunItems(
     id: i.id,
     accountId: i.accountId,
     accountNumber: i.account.accountNumber,
+    customerName: displayCustomerName(i.account.customer),
     status: i.status,
     billId: i.billId,
     servicePeriodStart: i.servicePeriodStart,

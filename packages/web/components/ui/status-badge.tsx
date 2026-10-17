@@ -18,7 +18,25 @@ function getTone(status: string): { tone: Tone; label: string } {
   if (s === "active" || s === "published") return { tone: "success", label: label || "Active" };
   if (s === "inactive" || s === "pending" || s === "draft") return { tone: "warning", label };
   if (s === "condemned" || s === "suspended") return { tone: "danger", label };
-  // closed / final / superseded / unknown → neutral slate
+
+  /*
+   * Outcomes of work that ran: imports, billing runs, and their rows.
+   *
+   * Without these every one of them rendered neutral slate, so a failed
+   * import and a complete one looked alike and the only loud thing on
+   * the screen was whatever happened to be red for other reasons. A
+   * failure has to read as a failure at a glance; `partial` is amber
+   * because it means "some of it did not", which is the state most
+   * likely to be mistaken for done.
+   */
+  if (s === "complete" || s === "completed" || s === "billed" || s === "imported")
+    return { tone: "success", label };
+  if (s === "failed" || s === "error") return { tone: "danger", label };
+  if (s === "partial" || s === "running" || s === "processing") return { tone: "warning", label };
+
+  // closed / final / superseded / cancelled / skipped / unknown → neutral
+  // slate. Skipped belongs here on purpose: "nothing to bill" is an
+  // ordinary outcome, and colouring it would make noise look like work.
   return { tone: "neutral", label };
 }
 
