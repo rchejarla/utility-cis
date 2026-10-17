@@ -64,6 +64,27 @@ redis.on("error", (err: Error & { code?: string }) => {
 // doesn't answer within CACHE_TIMEOUT_MS, callers fall through to the DB.
 const CACHE_TIMEOUT_MS = 500;
 
+/**
+ * Whether it is worth talking to Redis at all right now.
+ *
+ * The timeout above is the backstop; this is the thing that makes an
+ * outage cheap. A wedged client answers nothing, so every call paid its
+ * full 500ms and then fell through to the DB anyway — four of those in
+ * one authorize pass is two seconds added to every authenticated
+ * request, which is how this was found: `/health` answered in 5ms while
+ * every gated route took a flat 2.05s whatever it returned.
+ *
+ * Read from `redis.status` rather than the `healthy` flag above. The
+ * flag exists to debounce log lines and is a second copy of the same
+ * fact; the client's own status is the one that cannot be wrong. During
+ * startup it is `connecting`, so the first requests skip the cache and
+ * read the database — correct, and faster than queueing behind a
+ * connection that has not finished opening.
+ */
+function connected(): boolean {
+  return redis.status === "ready";
+}
+
 async function withTimeout<T>(p: Promise<T>, fallback: T): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<T>((resolve) => {
@@ -77,6 +98,7 @@ async function withTimeout<T>(p: Promise<T>, fallback: T): Promise<T> {
 }
 
 export async function cacheGet(key: string): Promise<string | null> {
+  if (!connected()) return null;
   try {
     return await withTimeout<string | null>(redis.get(key), null);
   } catch {
@@ -84,19 +106,45 @@ export async function cacheGet(key: string): Promise<string | null> {
   }
 }
 
+/**
+ * Fill the cache. **Not awaited internally, by design.**
+ *
+ * Nothing in a request depends on the write landing — the value it would
+ * store is already in hand, and a lost write costs one future miss. It
+ * was awaited, so a stalled client charged the caller 500ms to write to
+ * a cache that was not working: half the two seconds this path used to
+ * add to every authenticated request was spent that way.
+ *
+ * The returned promise resolves immediately. Callers may keep awaiting
+ * it; they are awaiting the enqueue, not the round trip. Two requests
+ * racing to fill the same key write the same value, so there is nothing
+ * to serialise.
+ */
 export async function cacheSet(
   key: string,
   ttlSeconds: number,
   value: string,
 ): Promise<void> {
-  try {
-    await withTimeout<unknown>(redis.setex(key, ttlSeconds, value), null);
-  } catch {
+  if (!connected()) return;
+  void redis.setex(key, ttlSeconds, value).catch(() => {
     // best-effort cache write — losing this is fine
-  }
+  });
 }
 
+/**
+ * Drop a key. Awaited, unlike the write above, because a caller
+ * invalidating expects the next read to miss — that is correctness, not
+ * optimisation.
+ *
+ * Skipped while disconnected, which loses the invalidation if the key
+ * outlives the outage. That risk is not new: a down client swallowed the
+ * delete after timing out, so the window was always bounded by the TTL
+ * rather than by this call succeeding. Reads are skipped while
+ * disconnected too, so nothing serves the stale value until Redis is
+ * back.
+ */
 export async function cacheDel(key: string): Promise<void> {
+  if (!connected()) return;
   try {
     await withTimeout<unknown>(redis.del(key), null);
   } catch {

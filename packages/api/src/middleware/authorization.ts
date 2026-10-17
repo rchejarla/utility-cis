@@ -21,8 +21,26 @@ export async function authorizationMiddleware(
   const user = request.user;
   if (!user) return; // auth middleware already handled this
 
+  /*
+   * Both lookups at once, then the checks in order.
+   *
+   * Neither depends on the other — one asks what the tenant has turned
+   * on, the other what this user may do — so awaiting them in sequence
+   * served no purpose but doubled whatever a lookup costs. On a healthy
+   * cache that is two round trips instead of one; on a sick one it was
+   * two full timeouts, and this pass was adding a flat two seconds to
+   * every authenticated request.
+   *
+   * The checks below stay in their original order, so a disabled module
+   * is still reported as MODULE_DISABLED before anything is said about
+   * the user's role. Only the fetching moved.
+   */
+  const [enabledModules, userRole] = await Promise.all([
+    getTenantModules(user.utilityId),
+    getUserRole(user.id, user.utilityId),
+  ]);
+
   // 1. Check tenant module is enabled
-  const enabledModules = await getTenantModules(user.utilityId);
   if (!enabledModules.includes(module)) {
     reply.status(403).send({
       error: { code: "MODULE_DISABLED", message: `Module "${module}" is not enabled for this tenant` },
@@ -31,7 +49,6 @@ export async function authorizationMiddleware(
   }
 
   // 2. Check user role has permission
-  const userRole = await getUserRole(user.id, user.utilityId);
   if (!userRole) {
     // User not in CIS User table — allow for now (backwards compatibility during migration)
     return;
