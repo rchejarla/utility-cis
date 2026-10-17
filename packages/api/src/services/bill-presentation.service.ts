@@ -271,11 +271,27 @@ export async function loadBillPresentation(
   // resolve it. A code matching no definition targets nothing rather
   // than failing the render: an unmatched type is a configuration gap,
   // not a reason to withhold a bill.
+  /*
+   * The tenant's own row wins over the global default of the same code.
+   *
+   * Both can exist — `account_type_def` is unique on (utility_id, code),
+   * and a tenant overrides a shipped type by adding its own row with the
+   * same code, which is how every type-def list resolves it. Without the
+   * ordering this was a `findFirst` over both with no preference, so
+   * which one came back was whatever Postgres happened to return. That
+   * is harmless while no tenant has overridden anything and wrong the
+   * moment one does: a message targeted at the tenant's row would stop
+   * printing, on the code path that decides what a customer's bill says.
+   *
+   * `nulls: "last"` is what expresses the preference — descending alone
+   * would put NULL first in Postgres.
+   */
   const typeDef = await prisma.accountTypeDef.findFirst({
     where: {
       code: bill.account.accountType,
       OR: [{ utilityId }, { utilityId: null }],
     },
+    orderBy: { utilityId: { sort: "desc", nulls: "last" } },
     select: { id: true },
   });
   const commodityIds = [

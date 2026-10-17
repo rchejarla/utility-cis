@@ -184,11 +184,36 @@ That is the mode every current deployment is in, and it needs none of
 These need answers before implementation, and none is settled here.
 
 **Q1 — Does a tenant row override a global row of the same code?**
-Unverified. The reads in §1.3 union both sets; nothing has been checked
-about collision resolution. If a tenant adding `RESIDENTIAL` yields two
-rows rather than a shadowed one, D3's "override by addition" does not
-actually work yet and needs building. *Check this first — it decides
-whether customisation is already solved.*
+**Answered 2026-10-17: yes in the list path, and it was honoured nowhere
+else.** All five services run an identical shadow pass — rows collected
+into a `Map` keyed by code, a tenant row replacing a global one
+(`account-type-def.service.ts:51`, and byte-for-byte the same in the
+other four). `@@unique([utilityId, code])` lets both rows coexist, and
+the DTO exposes `isGlobal` so a UI can tell them apart. So D3's "override
+by addition" works.
+
+The rule's five copies are inline loops, reusable by nothing, and both
+consumers outside those services got it wrong:
+
+- `bill-message.service.ts` required a targeted `accountTypeDefId` to
+  *belong to* the tenant. Every account type is global, so Settings →
+  Bill Messages offered five options and answered 404 to all five —
+  account-type targeting had never worked, while Req 137 was recorded as
+  shipped in two documents. Fixed: the check now asks whether the tenant
+  may target the row, and still refuses another tenant's.
+- `bill-presentation.service.ts` resolved the type by code over both sets
+  with an unordered `findFirst`, so with an override present the winner
+  was whatever Postgres returned first — on the path that decides what a
+  customer's bill says. Fixed: ordered `utilityId` descending, nulls
+  last.
+
+**The lesson for anything built on §2.** The resolution rule is policy,
+and it currently lives as five copies of a loop plus two hand-written
+queries. A sixth consumer will get it wrong the same way. Before adding a
+platform actor that can write these rows, give the rule one home — a
+`resolveDefByCode(table, utilityId, code)` helper, or a database view that
+applies the shadow — so a caller inherits it instead of reimplementing
+it.
 
 **Q2 — Where does the platform actor's identity live?**
 Three candidates: a column on `CisUser` with `utility_id` nullable; a
@@ -215,8 +240,10 @@ profile; where that list lives is undecided.
 Deliberately ordered so the risky part is last and the useful part is
 first.
 
-1. **Answer Q1.** One grep and one test. It may remove the need for parts
-   of this document.
+1. ~~**Answer Q1.**~~ Done 2026-10-17. Override-by-addition works; two
+   consumers that ignored it are fixed. Before step 4, give the shadow
+   rule one home — see Q1 for why a sixth consumer will otherwise repeat
+   the same mistake.
 2. **Provisioning service** — `provisionTenant(...)`: utility row,
    `tenant_module` rows, preset roles, first admin, config profile.
    Idempotent, callable from a script, **no UI**. This is the piece with

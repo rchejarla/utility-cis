@@ -85,7 +85,7 @@ export async function listBillMessages(utilityId: string) {
 }
 
 /**
- * Confirm the rows a message points at belong to this tenant.
+ * Confirm the rows a message points at are ones this tenant may target.
  *
  * `accountTypeDefId` and `commodityId` arrive from the client and were
  * written straight through. PostgreSQL enforces referential integrity
@@ -95,14 +95,31 @@ export async function listBillMessages(utilityId: string) {
  * nothing — but a tenant should not be able to store a reference to
  * another tenant's row, nor to learn that one exists by whether the
  * write succeeds.
+ *
+ * **An account type may be global.** `account_type_def` ships five rows
+ * with `utility_id = NULL` — Residential, Commercial, Industrial,
+ * Municipal, Government — which every tenant sees and none owns; a
+ * tenant adds its own row only to rename or extend that set. Demanding
+ * ownership here therefore refused every account type that exists:
+ * Settings → Bill Messages offered five options from `listAccountTypes`
+ * and answered 404 to all five, so targeting a message by account type
+ * had never once worked, while Req 137 was recorded as shipped. The
+ * check is "may this tenant target it", not "does this tenant own it",
+ * and the two differ exactly where a global default is involved.
+ *
+ * Commodities are tenant-owned with no global set, so ownership is the
+ * right test there and stays.
  */
-async function assertTargetsAreOurs(
+async function assertTargetsVisibleToTenant(
   utilityId: string,
   data: { accountTypeDefId?: string | null; commodityId?: string | null },
 ): Promise<void> {
   if (data.accountTypeDefId) {
     await prisma.accountTypeDef.findFirstOrThrow({
-      where: { id: data.accountTypeDefId, utilityId },
+      where: {
+        id: data.accountTypeDefId,
+        OR: [{ utilityId }, { utilityId: null }],
+      },
       select: { id: true },
     });
   }
@@ -120,7 +137,7 @@ export async function createBillMessage(
   actorName: string | undefined,
   data: BillMessageCreate,
 ) {
-  await assertTargetsAreOurs(utilityId, data);
+  await assertTargetsVisibleToTenant(utilityId, data);
   return auditCreate(auditCtx(utilityId, actorId, actorName), EVENT_TYPES.BILL_MESSAGE_CREATED, (tx) =>
     tx.billMessage.create({ data: { ...data, utilityId } }),
   );
@@ -134,7 +151,7 @@ export async function updateBillMessage(
   data: BillMessageUpdate,
 ) {
   const before = await prisma.billMessage.findFirstOrThrow({ where: { id, utilityId } });
-  await assertTargetsAreOurs(utilityId, data);
+  await assertTargetsVisibleToTenant(utilityId, data);
   return auditUpdate(
     auditCtx(utilityId, actorId, actorName),
     EVENT_TYPES.BILL_MESSAGE_UPDATED,

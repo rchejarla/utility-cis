@@ -14,6 +14,11 @@ describe("/api/v1/bill-messages", () => {
   const token = createTestToken();
   const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
   const utilityId = "test-utility-001";
+  // Real UUIDs: the validator takes `accountTypeDefId` as a uuid, so a
+  // readable stub id fails at the Zod layer and never reaches the
+  // targeting check these cases are about.
+  const GLOBAL_TYPE_ID = "aa3428ae-f760-45dc-95fe-f709ea2b8ab0";
+  const OTHER_TENANT_TYPE_ID = "bb3428ae-f760-45dc-95fe-f709ea2b8ab1";
 
   // Permissions are read from userRole.findFirst, not from a role
   // embedded on cisUser — see mockAuthUser in authorization.test.ts,
@@ -77,6 +82,75 @@ describe("/api/v1/bill-messages", () => {
       .calls[0][0];
     expect(createArgs.data.utilityId).toBe(utilityId);
     expect(createArgs.data.label).toBe("Notice");
+  });
+
+  /**
+   * Targeting by account type, which had never worked.
+   *
+   * `account_type_def` ships five rows with `utility_id = NULL` and a
+   * tenant owns none of them until it adds its own. The targeting check
+   * demanded ownership, so the picker on Settings → Bill Messages offered
+   * five types from `listAccountTypes` and the save answered 404 to every
+   * one — while Req 137 was recorded as shipped in two documents.
+   *
+   * These two cases pin both halves: a global type is targetable, and
+   * another tenant's row still is not. Losing the second would turn a
+   * usability fix into a cross-tenant reference.
+   */
+  it("accepts a message targeted at a global account type", async () => {
+    const findTarget = prisma.accountTypeDef.findFirstOrThrow as never as ReturnType<typeof vi.fn>;
+    findTarget.mockResolvedValue({ id: GLOBAL_TYPE_ID });
+    (prisma.billMessage.create as never as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "m-2",
+      label: "Residential notice",
+    });
+
+    const app = await createTestApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/bill-messages",
+      headers,
+      payload: {
+        label: "Residential notice",
+        body: "Summer watering rules.",
+        activeFrom: "2026-06-01",
+        accountTypeDefId: GLOBAL_TYPE_ID,
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    // The lookup must admit a row this tenant does not own, which is
+    // what a global default is.
+    expect(findTarget.mock.calls[0][0].where).toEqual({
+      id: GLOBAL_TYPE_ID,
+      OR: [{ utilityId }, { utilityId: null }],
+    });
+  });
+
+  it("still refuses a message targeted at another tenant's account type", async () => {
+    const findTarget = prisma.accountTypeDef.findFirstOrThrow as never as ReturnType<typeof vi.fn>;
+    findTarget.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError("No record was found", {
+        code: "P2025",
+        clientVersion: "test",
+      }),
+    );
+
+    const app = await createTestApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/bill-messages",
+      headers,
+      payload: {
+        label: "Someone else's type",
+        body: "Text",
+        activeFrom: "2026-06-01",
+        accountTypeDefId: OTHER_TENANT_TYPE_ID,
+      },
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(prisma.billMessage.create).not.toHaveBeenCalled();
   });
 
   it("rejects a message with no active-from date", async () => {

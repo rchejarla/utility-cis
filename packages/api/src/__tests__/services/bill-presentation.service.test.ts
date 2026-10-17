@@ -286,6 +286,34 @@ describe("loadBillPresentation", () => {
     });
   });
 
+  /**
+   * A tenant's own type definition outranks the global default sharing
+   * its code.
+   *
+   * Both can exist — the table is unique on (utility_id, code), and
+   * overriding a shipped type means adding a row with the same code,
+   * which is how every type-def list resolves it. This lookup had no
+   * ordering, so whichever row Postgres returned first won, and a
+   * message targeted at the tenant's row could silently stop printing.
+   * Asserting the ordering rather than the result, because with one
+   * mocked row the result cannot tell the two apart.
+   */
+  it("prefers the tenant's account type over the global default", async () => {
+    vi.mocked(prisma.bill.findFirst).mockResolvedValue(billRow() as never);
+
+    await loadBillPresentation("util-1", "bill-1");
+
+    const args = vi.mocked(prisma.accountTypeDef.findFirst).mock.calls[0][0] as {
+      orderBy?: unknown;
+      where?: unknown;
+    };
+    expect(args.orderBy).toEqual({ utilityId: { sort: "desc", nulls: "last" } });
+    // Still reads both sets: the global default is what most tenants use.
+    expect(args.where).toMatchObject({
+      OR: [{ utilityId: "util-1" }, { utilityId: null }],
+    });
+  });
+
   it("still renders when the account type matches no type definition", async () => {
     vi.mocked(prisma.bill.findFirst).mockResolvedValue(billRow() as never);
     vi.mocked(prisma.accountTypeDef.findFirst).mockResolvedValue(null as never);

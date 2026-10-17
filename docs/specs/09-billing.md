@@ -174,6 +174,10 @@ Configurable text printed on bills, targeted by account type and/or commodity ov
 
 **Targeting** is a null-means-all match on each side independently, so an untargeted message prints alongside ones targeted at this bill.
 
+**Account-type targeting was unreachable until 2026-10-17, and the cause is worth keeping.** `account_type_def` ships its five rows globally (`utility_id = NULL`), and the create/update check demanded that a target *belong to* the tenant — so Settings → Bill Messages offered five types from `listAccountTypes` and answered 404 to every one. The question a targeting check asks is "may this tenant target it", not "does this tenant own it", and those differ exactly where a global default is involved. Commodities are tenant-owned with no global set, so ownership remained the right test there. Refusing another tenant's row is still enforced, which is what the check was for.
+
+**Which row wins when a tenant overrides a type.** A tenant customises a shipped type by adding its own row with the same code; both exist, since the table is unique on `(utility_id, code)`. Every type-def list resolves that by letting the tenant's row shadow the global one, and `BillPresentation` now orders its lookup the same way (`utilityId` descending, nulls last). Before that it was an unordered `findFirst` over both, so which definition a bill resolved to was whatever the database returned first — harmless while no tenant had overridden anything, and silently wrong on the first one that did.
+
 **Selection happens at `bill.bill_date`, never at `now()`**, so reprinting an old bill reproduces the messages it originally carried.
 
 Two departures from the superseded sketch above: account type is an FK to `AccountTypeDef` rather than an enum, because account types are tenant-configurable; and there is no `is_active` flag, because `active_from`/`active_to` already say when a message applies and a second switch would let the two disagree.
@@ -633,7 +637,7 @@ Not built: CSV export of the item list.
 | 133 | Bill reprints, corrected bills with versioning | **Partial** — a bill can be printed again on demand, byte-identically. Corrected bills and versioning are outstanding (slice 5d); reprinting deliberately creates no version |
 | 134 | Final bill at account closure | Phase 3: FINAL billing trigger |
 | 136 | Bill holds | Phase 3: hold_reason on BillingRecord |
-| 137 | Configurable bill messages by account type/service | **Shipped** — `BillMessage` targeted by account type and commodity over a date window, resolved at `bill_date`, managed at Settings → Bill Messages |
+| 137 | Configurable bill messages by account type/service | **Shipped** — `BillMessage` targeted by account type and commodity over a date window, resolved at `bill_date`, managed at Settings → Bill Messages. Account-type targeting was recorded as shipped from 2026-10-11 but answered 404 to every account type in existence until it was fixed on 2026-10-17; see the entity note above |
 | 138 | Prorate tier thresholds for partial periods | **Shipped** — a `tiered` pricing declaring `standard_days` has each tier's `to` scaled by the days billed. Opt-in, so a published schedule prices unchanged until it is revised, and no tariff declares it yet |
 | 139 | Itemized charges on bills | **Shipped** — `BillSegmentLine` rows, each traceable to the `RateComponent` that produced it |
 | 140 | Validate charges against adopted rates | Outstanding: lines already carry `source_schedule_id` / `source_component_id`, so validation has what it needs |
