@@ -107,11 +107,20 @@ function FilterPill({ filter }: { filter: FilterConfig }) {
           gap: "6px",
           padding: "5px 12px",
           borderRadius: "999px",
+          /*
+           * An active pill is marked by its border and the weight of the
+           * value it names, not by a fill. It used to take
+           * `--accent-primary-subtle` with `--accent-primary` text,
+           * which in light mode is indigo-50 behind indigo text — the
+           * same tint that made the date controls look permanently
+           * selected. A thin accent border carries the state without
+           * turning the row of filters blue as they are used.
+           */
           border: isActive
             ? "1px solid var(--accent-primary)"
             : "1px solid var(--border)",
-          background: isActive ? "var(--accent-primary-subtle)" : "var(--bg-card)",
-          color: isActive ? "var(--accent-primary)" : "var(--text-secondary)",
+          background: "var(--bg-card)",
+          color: "var(--text-secondary)",
           fontSize: "12px",
           fontWeight: "500",
           cursor: "pointer",
