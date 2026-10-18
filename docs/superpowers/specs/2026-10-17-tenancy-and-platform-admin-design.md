@@ -94,6 +94,20 @@ not be offered as editable.
 `tenantModule.upsert`, `tenantModule.createMany` — **zero occurrences**
 outside tests, across the API and the seed.
 
+**There is also nothing to create.** Checked 2026-10-18: there is no
+`Utility` or `Tenant` model in `schema.prisma`, and no such table in the
+database — the only tenant-named tables are `tenant_config`,
+`tenant_module`, `tenant_theme` and `tenant_setting`, each of which
+describes a tenant without being one. `utility_id` carries **zero
+foreign-key constraints** anywhere in the schema.
+
+So a tenant is an uncontrolled UUID repeated across every table. It has
+no name, no status, no created-at, and nothing distinguishes a new
+tenant from a typo. Tenants cannot be listed except by
+`SELECT DISTINCT utility_id` over an arbitrary table. Every statement
+elsewhere in this document about "a tenant" is, today, a statement about
+a value in a column.
+
 Consequences, both already observed:
 
 - Onboarding a second tenant means a developer running SQL.
@@ -151,7 +165,8 @@ lapse survived in a service called from two workers and three routes.
 Under those conditions the mechanism that enforces isolation should be
 the one that cannot be forgotten at a call site.
 
-That also makes **build order step 4 depend on more than Q2 and Q3**: the
+That also makes **build order step 5 — the platform actor — depend on
+more than Q2 and Q3**: the
 `utilityId`-parameter-that-scopes-nothing shape is worth sweeping for
 deliberately before an unscoped identity exists, not after.
 
@@ -212,6 +227,55 @@ In `self_serve`, tenant admin **is** system admin: the provisioning
 service runs once at install, and no platform actor exists at runtime.
 That is the mode every current deployment is in, and it needs none of
 §2's machinery beyond D1's script.
+
+### D6. A tenant has to exist as a thing before anything can sit above it
+
+Agreed 2026-10-18. §1.5 is not "provisioning is missing" — it is that a
+tenant is a UUID in a column with no row, no name, no status and no
+foreign key. An actor above tenants presupposes tenants as objects, so
+the entity precedes the actor and precedes provisioning, which has
+nothing to write without it.
+
+**The actor's scope is tenant lifecycle, and that is these six things:**
+
+| # | Responsibility | Why it has no other home |
+|---|---|---|
+| 1 | Create a tenant — identity, display name, status, created-at | Nothing represents a tenant at all |
+| 2 | Enable and disable its modules | `tenant_module` has no writer outside tests; a fresh database answers 403 on every gated route |
+| 3 | Apply a config profile — commodities, UOMs, cycles, tariffs | Q4; this is configuration, not demo data |
+| 4 | Create its first admin | A tenant with no user cannot be administered into existence |
+| 5 | Suspend and reactivate | `isActive` exists on users, not on tenants |
+| 6 | List tenants | Today this is `SELECT DISTINCT utility_id` over an arbitrary table |
+
+Plus exactly one thing that is not lifecycle and still belongs, because
+nothing else can own it: **the cross-tenant queue surface** (D4). §1.6 is
+the concrete case — Bull Board borrowed `tenant_profile:EDIT` for queues
+that are not tenant-scoped, because a tenant permission was all the
+model offered.
+
+**Deferred out of v1**, agreed 2026-10-18. Each is a real need; none is
+lifecycle, and each would widen the one identity in the system that can
+cross the tenant boundary:
+
+- **Impersonation** ("log in as this tenant's admin"). The standard
+  support answer and the largest single expansion of this actor. If it
+  ever lands it needs to be time-boxed and written into the *tenant's*
+  own audit log.
+- **Hard delete and data export.** Offboarding splits into suspend
+  (reversible, #5) and purge (irreversible). They must not be one
+  capability.
+- **Per-tenant integration credentials.** Still open from the
+  bill-production work: one deployment-level apptor-connect key versus
+  one per utility. If per-tenant, provisioning owns minting it.
+- **Cross-tenant billing and usage reporting.** Spec 21's SaaSLogic
+  integration means the vendor bills the utilities, which is a read
+  across all tenants — a different shape from lifecycle, and probably a
+  separate concern with its own identity.
+
+**The principle this scope is sized by.** The platform actor is the only
+thing in the system that can cross the tenant boundary, so it holds only
+what cannot live anywhere else. Every capability added to it is a
+capability that can reach every customer's data.
 
 ---
 
@@ -277,21 +341,31 @@ Deliberately ordered so the risky part is last and the useful part is
 first.
 
 1. ~~**Answer Q1.**~~ Done 2026-10-17. Override-by-addition works; two
-   consumers that ignored it are fixed. Before step 4, give the shadow
+   consumers that ignored it are fixed. Before step 5, give the shadow
    rule one home — see Q1 for why a sixth consumer will otherwise repeat
    the same mistake.
-2. **Provisioning service** — `provisionTenant(...)`: utility row,
+2. **The tenant entity** (D6). A `Utility` model with id, display name,
+   status and created-at, a foreign key from `utility_id` to it, and a
+   backfill for the single existing tenant. Inserted ahead of
+   provisioning on 2026-10-18, because provisioning has nothing to write
+   without it and every "per tenant" claim in this document is currently
+   a claim about a value in a column (§1.5).
+
+   The foreign key is the load-bearing part and the part that will hurt:
+   `utility_id` appears on every entity with no constraint anywhere, so
+   adding one proves no orphan rows exist — and finds them if they do.
+3. **Provisioning service** — `provisionTenant(...)`: utility row,
    `tenant_module` rows, preset roles, first admin, config profile.
    Idempotent, callable from a script, **no UI**. This is the piece with
    value in both modes, and it closes the 403-on-a-fresh-database trap
    that every integration suite currently works around.
-3. **`TENANCY_MODE` in config**, defaulting to `self_serve`, read at boot.
+4. **`TENANCY_MODE` in config**, defaulting to `self_serve`, read at boot.
    Nothing branches on it yet.
-4. **Platform actor** (Q2, Q3), and move `/admin/queues` behind it (D4).
+5. **Platform actor** (Q2, Q3), and move `/admin/queues` behind it (D4).
    Preceded by a deliberate sweep for the `utilityId`-parameter-that-
    scopes-nothing shape — see §1.7 for why this one is a prerequisite
    rather than hygiene.
-5. **A platform console UI** — only if operating the above through
+6. **A platform console UI** — only if operating the above through
    scripts proves genuinely insufficient. Not before.
 
 ---
