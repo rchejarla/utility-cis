@@ -251,6 +251,19 @@ function DropdownItem({
    */
   checkbox?: boolean;
 }) {
+  /*
+   * A filled row is how single-select shows which value is current —
+   * there is at most one, and nothing else marks it.
+   *
+   * Multi-select does not get it. `--bg-hover` is indigo-100 (#d2dcff)
+   * in light mode, so every pick added another blue band and a menu
+   * with three chosen read as stripes. The checkbox and the brighter
+   * label already say which rows are on, and keeping the fill for
+   * hover alone means the row under the pointer is the one that stands
+   * out — which is the thing a fill is actually good for.
+   */
+  const filled = active && !checkbox;
+
   return (
     <button
       onClick={onClick}
@@ -260,20 +273,21 @@ function DropdownItem({
         justifyContent: "space-between",
         width: "100%",
         padding: "8px 14px",
-        background: active ? "var(--bg-hover)" : "transparent",
+        background: filled ? "var(--bg-hover)" : "transparent",
         border: "none",
         color: active ? "var(--text-primary)" : "var(--text-secondary)",
         fontSize: "13px",
+        fontWeight: active && checkbox ? 600 : 400,
         cursor: "pointer",
         textAlign: "left",
         fontFamily: "inherit",
         transition: "background 0.1s ease",
       }}
       onMouseEnter={(e) =>
-        !active && ((e.currentTarget as HTMLButtonElement).style.background = "var(--bg-hover)")
+        !filled && ((e.currentTarget as HTMLButtonElement).style.background = "var(--bg-hover)")
       }
       onMouseLeave={(e) =>
-        !active && ((e.currentTarget as HTMLButtonElement).style.background = "transparent")
+        !filled && ((e.currentTarget as HTMLButtonElement).style.background = "transparent")
       }
     >
       <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
