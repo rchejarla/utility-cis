@@ -169,13 +169,15 @@ export async function billDocumentRoutes(app: FastifyInstance) {
     "/api/v1/bills/:id/document",
     { config: { module: "accounts", permission: "EDIT" } },
     async (request, reply) => {
-      const { utilityId, id: actorId } = request.user;
+      const { utilityId, id: actorId, name: actorName } = request.user;
       const billId = parseIdParam(request.params);
       const { force } = forceQuerySchema.parse(request.query);
       try {
         return reply.send(
           producedDocument(
-            await generateBillDocument(utilityId, billId, actorId, { force: force === "true" }),
+            await generateBillDocument(utilityId, billId, actorId, actorName, {
+              force: force === "true",
+            }),
           ),
         );
       } catch (err) {

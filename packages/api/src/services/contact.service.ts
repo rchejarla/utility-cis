@@ -16,10 +16,11 @@ export async function listContacts(utilityId: string, accountId: string) {
 export async function createContact(
   utilityId: string,
   actorId: string,
+  actorName: string,
   data: CreateContactInput
 ) {
   return auditCreate(
-    { utilityId, actorId, entityType: "Contact" },
+    { utilityId, actorId, actorName, entityType: "Contact" },
     EVENT_TYPES.CONTACT_CREATED,
     (tx) => tx.contact.create({ data: { ...data, utilityId } })
   );
@@ -28,12 +29,13 @@ export async function createContact(
 export async function updateContact(
   utilityId: string,
   actorId: string,
+  actorName: string,
   id: string,
   data: UpdateContactInput
 ) {
   const before = await prisma.contact.findUniqueOrThrow({ where: { id, utilityId } });
   return auditUpdate(
-    { utilityId, actorId, entityType: "Contact" },
+    { utilityId, actorId, actorName, entityType: "Contact" },
     EVENT_TYPES.CONTACT_UPDATED,
     before,
     (tx) => tx.contact.update({ where: { id, utilityId }, data })

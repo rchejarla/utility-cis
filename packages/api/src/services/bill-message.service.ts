@@ -70,7 +70,7 @@ export async function selectBillMessages(
 // so a change to the text printed on customers' bills is attributable.
 
 const ENTITY_TYPE = "BillMessage";
-const auditCtx = (utilityId: string, actorId: string, actorName?: string) => ({
+const auditCtx = (utilityId: string, actorId: string, actorName: string) => ({
   utilityId,
   actorId,
   actorName,
@@ -134,7 +134,7 @@ async function assertTargetsVisibleToTenant(
 export async function createBillMessage(
   utilityId: string,
   actorId: string,
-  actorName: string | undefined,
+  actorName: string,
   data: BillMessageCreate,
 ) {
   await assertTargetsVisibleToTenant(utilityId, data);
@@ -146,7 +146,7 @@ export async function createBillMessage(
 export async function updateBillMessage(
   utilityId: string,
   actorId: string,
-  actorName: string | undefined,
+  actorName: string,
   id: string,
   data: BillMessageUpdate,
 ) {
@@ -163,7 +163,7 @@ export async function updateBillMessage(
 export async function deleteBillMessage(
   utilityId: string,
   actorId: string,
-  actorName: string | undefined,
+  actorName: string,
   id: string,
 ) {
   const before = await prisma.billMessage.findFirstOrThrow({ where: { id, utilityId } });

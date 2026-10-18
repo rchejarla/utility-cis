@@ -14,7 +14,7 @@ Primary users: utility administrators, finance staff, auditors, operations manag
 
 ### AuditLog (Built)
 
-Every entity state change in the CIS system is captured in AuditLog via the internal EventEmitter. No CIS entity is modified without a corresponding audit entry.
+Every entity state change in the CIS system is captured in AuditLog by `packages/api/src/lib/audit-wrap.ts`, which writes the audit row inside the same transaction as the change itself, so the two commit or fail together. No CIS entity is modified without a corresponding audit entry.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -23,11 +23,19 @@ Every entity state change in the CIS system is captured in AuditLog via the inte
 | entity_type | VARCHAR(100) | Name of the entity changed, e.g. "RateSchedule", "Account" |
 | entity_id | UUID | PK of the changed entity |
 | action | ENUM | CREATE, UPDATE, DELETE |
-| actor_id | UUID | User who performed the action (from JWT) |
+| actor_id | UUID | User who performed the action (from JWT). Null for scheduler-driven changes, which identify themselves in `actor_name` instead |
+| actor_name | VARCHAR(255) | The actor's name **at the time of the change** — denormalized on purpose, so history survives a rename or a deleted user. Required by `AuditContext`; see below |
+| source | VARCHAR(100) | `user:<cisUserId>` or `scheduler:<queue-name>`. The retention sweep filters on `source LIKE 'scheduler:%'` so user audits stay outside its scope |
 | before_state | JSONB | Full entity state before change (null on CREATE) |
 | after_state | JSONB | Full entity state after change (null on DELETE) |
 | metadata | JSONB | Contextual data: IP address, user agent, request ID, related entity info |
 | created_at | TIMESTAMPTZ | When the change occurred |
+
+**`actor_name` is required at write time, and nothing legitimately omits it.** `CisUser.name` is NOT NULL; `middleware/auth.ts:77` resolves `request.user.name` to the name claim, then the email, then `"Unknown"`, so it is never empty for a request-driven write; and scheduler writes name themselves ("SLA breach sweeper") while nulling `actor_id`.
+
+It was nevertheless optional on `AuditContext`, and `writeAuditRow` wrote `ctx.actorName ?? undefined`, so a service that simply never passed it wrote null and nothing complained. Three did — `contact.service.ts`, `bill-document.service.ts` and (as a loose type only) `bill-message.service.ts`. Every `BillDocument` row in the dev database had lost its actor that way while every other entity's rows kept theirs. The field is now required, so an omission is a compile error.
+
+The column stays nullable, because the rows already written cannot be repaired: the name they should have recorded is not recoverable, and filling it with the actor's present name would falsify exactly the point-in-time attribution the denormalization exists to preserve. `GET /api/v1/audit-log` instead returns `actorNameCurrent` for such rows — the actor's name today, resolved from `CisUser` for display only — which the UI shows marked "(current)" rather than as the recorded value.
 
 **Indexes:** `[utility_id, entity_type, entity_id]`, `[utility_id, created_at DESC]`, `[utility_id, actor_id]`
 

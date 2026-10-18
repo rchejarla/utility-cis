@@ -6,6 +6,11 @@ export function createTestToken(
     sub: string;
     utility_id: string;
     email: string;
+    // Absent by default, which is deliberate: `auth.ts:77` falls back to
+    // the email and then to "Unknown", so a token without this claim
+    // still yields a usable actor name. Tests asserting on audit
+    // attribution set it to something distinctive.
+    name: string;
     role: string;
   }>
 ) {

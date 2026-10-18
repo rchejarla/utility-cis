@@ -149,6 +149,7 @@ export async function generateBillDocument(
   utilityId: string,
   billId: string,
   actorId: string,
+  actorName: string,
   opts: { force?: boolean } = {},
 ): Promise<BillDocumentRow> {
   const bill = await prisma.bill.findFirst({
@@ -336,7 +337,7 @@ export async function generateBillDocument(
     const row = await tx.billDocument.findUniqueOrThrow({ where: { id: claim.id } });
     await writeAuditRow(
       tx,
-      { utilityId, actorId, entityType: "BillDocument" },
+      { utilityId, actorId, actorName, entityType: "BillDocument" },
       wasStored ? EVENT_TYPES.BILL_DOCUMENT_REVISED : EVENT_TYPES.BILL_DOCUMENT_CREATED,
       row.id,
       wasStored ? claim : null,

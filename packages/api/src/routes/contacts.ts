@@ -22,17 +22,17 @@ export async function contactRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/v1/contacts", { config: { module: "customers", permission: "CREATE" } }, async (request, reply) => {
-    const { utilityId, id: actorId } = request.user;
+    const { utilityId, id: actorId, name: actorName } = request.user;
     const data = createContactSchema.parse(request.body);
-    const contact = await createContact(utilityId, actorId, data);
+    const contact = await createContact(utilityId, actorId, actorName, data);
     return reply.status(201).send(contact);
   });
 
   app.patch("/api/v1/contacts/:id", { config: { module: "customers", permission: "EDIT" } }, async (request, reply) => {
-    const { utilityId, id: actorId } = request.user;
+    const { utilityId, id: actorId, name: actorName } = request.user;
     const { id } = idParamSchema.parse(request.params);
     const data = updateContactSchema.parse(request.body);
-    const contact = await updateContact(utilityId, actorId, id, data);
+    const contact = await updateContact(utilityId, actorId, actorName, id, data);
     return reply.send(contact);
   });
 

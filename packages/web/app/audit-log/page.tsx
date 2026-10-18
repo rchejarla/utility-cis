@@ -16,6 +16,13 @@ interface AuditEntry {
   action: string;
   actorId?: string;
   actorName?: string;
+  /**
+   * The actor's name as it stands today, supplied only when the row
+   * recorded none. Not interchangeable with `actorName`, which is the
+   * name at the time of the change — hence the "(current)" marker
+   * where it is shown.
+   */
+  actorNameCurrent?: string | null;
   changes?: unknown;
   createdAt: string;
 }
@@ -140,9 +147,44 @@ export default function AuditLogPage() {
     {
       key: "actorId",
       header: "Actor",
-      render: (row: AuditEntry) => (
-        <span style={{ fontSize: "12px" }}>{row.actorName ?? row.actorId ?? "System"}</span>
-      ),
+      render: (row: AuditEntry) => {
+        /*
+         * Three cases, in order of how much the row knows:
+         *   - a recorded name: what the actor was called at the time;
+         *   - no recorded name but a known actor: today's name, marked
+         *     "(current)" so it is not mistaken for the first case;
+         *   - no actor at all: a scheduler, which names itself in
+         *     `actorName`, so reaching "System" means neither was set.
+         *
+         * Rows written before `AuditContext.actorName` was required fall
+         * into the second case — every BillDocument row did — and used
+         * to render a raw 36-character uuid here.
+         */
+        if (row.actorName) {
+          return (
+            <span style={{ fontSize: "12px" }} title={row.actorName}>
+              {row.actorName}
+            </span>
+          );
+        }
+        if (row.actorNameCurrent) {
+          return (
+            <span
+              style={{ fontSize: "12px" }}
+              title={`Not recorded on this entry. ${row.actorNameCurrent} is the actor's name today.`}
+            >
+              {row.actorNameCurrent}
+              <span style={{ color: "var(--text-muted)", fontSize: "11px" }}> (current)</span>
+            </span>
+          );
+        }
+        const fallback = row.actorId ?? "System";
+        return (
+          <span style={{ fontSize: "12px" }} title={fallback}>
+            {fallback}
+          </span>
+        );
+      },
     },
   ];
 

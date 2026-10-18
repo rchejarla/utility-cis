@@ -99,6 +99,43 @@ export async function auditLogRoutes(app: FastifyInstance) {
       prisma.auditLog.count({ where }),
     ]);
 
-    return reply.send(paginatedResponse(data, total, query));
+    /*
+     * Rows written before `AuditContext.actorName` was required can
+     * carry a null name — every `BillDocument` row did — and the list
+     * used to render the raw actor uuid for them.
+     *
+     * Those rows cannot be repaired: the name they should have recorded
+     * is not recoverable, and the column is denormalized precisely so
+     * history survives a rename or a deletion. Writing today's name into
+     * it would quietly falsify that. So the current name is resolved for
+     * display only, in a separate field the UI labels as current rather
+     * than historical, and the stored value is never touched.
+     *
+     * One extra query, and only when the page actually contains such a
+     * row.
+     */
+    const unnamed = [
+      ...new Set(
+        data
+          .filter((row) => !row.actorName && row.actorId)
+          .map((row) => row.actorId as string),
+      ),
+    ];
+    const currentNames = new Map<string, string>();
+    if (unnamed.length > 0) {
+      const users = await prisma.cisUser.findMany({
+        where: { utilityId, id: { in: unnamed } },
+        select: { id: true, name: true },
+      });
+      for (const user of users) currentNames.set(user.id, user.name);
+    }
+
+    const rows = data.map((row) => ({
+      ...row,
+      actorNameCurrent:
+        row.actorName || !row.actorId ? null : currentNames.get(row.actorId) ?? null,
+    }));
+
+    return reply.send(paginatedResponse(rows, total, query));
   });
 }

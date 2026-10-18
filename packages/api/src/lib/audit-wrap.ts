@@ -34,7 +34,24 @@ type TxClient = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$trans
 export interface AuditContext {
   utilityId: string;
   actorId: string;
-  actorName?: string;
+  /*
+   * Required, because nothing legitimately lacks it and an audit row
+   * without an actor name has lost what the table exists to record.
+   *
+   * `CisUser.name` is NOT NULL, and `auth.ts:77` resolves
+   * `request.user.name` to the name claim, then the email, then
+   * "Unknown" — so every request-driven write has one. Scheduler-driven
+   * writes name themselves ("SLA breach sweeper") and null `actorId`
+   * instead.
+   *
+   * While this was optional and `writeAuditRow` wrote
+   * `ctx.actorName ?? undefined`, a service that never passed it wrote
+   * null silently. Three did; all twenty `BillDocument` rows in the dev
+   * database lost their actor that way, while every other entity's rows
+   * kept theirs. Making it required turns that from a silent null into
+   * a compile error.
+   */
+  actorName: string;
   entityType: string;
 }
 
@@ -76,7 +93,7 @@ export async function writeAuditRow(
       entityId,
       action: mapEventTypeToAction(eventType),
       actorId: ctx.actorId,
-      actorName: ctx.actorName ?? undefined,
+      actorName: ctx.actorName,
       beforeState: toJsonInput(before),
       afterState: toJsonInput(after),
       metadata: { eventType } satisfies Prisma.InputJsonValue,

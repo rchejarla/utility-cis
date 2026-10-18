@@ -35,6 +35,8 @@ vi.mock("../../lib/apptor-connect/files-client.js", () => ({
 const UTILITY = "00000000-0000-4000-8000-0000000000aa";
 const OTHER_UTILITY = "00000000-0000-4000-8000-0000000000bb";
 const ACTOR = "00000000-0000-4000-8000-aaaa00000001";
+/** Audit rows record who acted; the service now requires the name. */
+const ACTOR_NAME = "Document Generator";
 
 const ISSUER = {
   utilityName: "City of Testville Utilities",
@@ -293,8 +295,8 @@ describe("bill documents", () => {
   it("renders once, stores a pointer, and is idempotent", async () => {
     const billId = await postedBill();
 
-    const first = await svc.generateBillDocument(UTILITY, billId, ACTOR);
-    const second = await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    const first = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    const second = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
     expect(put).toHaveBeenCalledTimes(1);
     expect(second.id).toBe(first.id);
@@ -303,6 +305,24 @@ describe("bill documents", () => {
     expect(first.byteSize).toBeGreaterThan(0);
     expect(first.storageIntegration).toBe("cis-bills");
     expect(first.templateKey).toBe("default-bill-v1");
+  }, 60_000);
+
+  /**
+   * This service wrote its audit rows with no actor name, because
+   * `AuditContext.actorName` was optional and nothing noticed the
+   * omission. Every `BillDocument` row in the dev database — all
+   * twenty — carried a null actor while every other entity's rows
+   * carried one, so the UI fell back to printing a raw uuid.
+   */
+  it("names the actor on the audit row it writes", async () => {
+    const billId = await postedBill();
+    const row = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+
+    const audit = await prismaImports.prisma.auditLog.findFirstOrThrow({
+      where: { utilityId: UTILITY, entityType: "BillDocument", entityId: row.id },
+    });
+    expect(audit.actorId).toBe(ACTOR);
+    expect(audit.actorName).toBe(ACTOR_NAME);
   }, 60_000);
 
   /**
@@ -319,7 +339,7 @@ describe("bill documents", () => {
    */
   it("addresses the file by pointer, never by url", async () => {
     const billId = await postedBill();
-    const row = await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    const row = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
     const args = put.mock.calls[0][0] as Record<string, unknown>;
     expect(args).toMatchObject({
@@ -346,7 +366,7 @@ describe("bill documents", () => {
    */
   it("refuses bytes that do not match the hash recorded for them", async () => {
     const billId = await postedBill();
-    const row = await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    const row = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     // Same length, different content: a size check alone would pass.
     const wrong = Buffer.alloc(row.byteSize, 0x41);
     get.mockResolvedValue(wrong);
@@ -356,7 +376,7 @@ describe("bill documents", () => {
 
   it("refuses bytes of the wrong length for the row", async () => {
     const billId = await postedBill();
-    await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     get.mockResolvedValue(Buffer.from("%PDF-truncated"));
 
     await expect(svc.readBillDocument(UTILITY, billId)).rejects.toThrow(/bytes/i);
@@ -364,7 +384,7 @@ describe("bill documents", () => {
 
   it("round-trips the stored bytes on read", async () => {
     const billId = await postedBill();
-    const row = await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    const row = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     const uploaded = (put.mock.calls[0][0] as { body: Buffer }).body;
     get.mockResolvedValue(uploaded);
 
@@ -376,9 +396,9 @@ describe("bill documents", () => {
 
   it("re-renders in place when forced, and records the new hash", async () => {
     const billId = await postedBill();
-    const first = await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    const first = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
-    const forced = await svc.generateBillDocument(UTILITY, billId, ACTOR, { force: true });
+    const forced = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME, { force: true });
 
     expect(put).toHaveBeenCalledTimes(2);
     expect(forced.id).toBe(first.id);
@@ -396,7 +416,7 @@ describe("bill documents", () => {
    */
   it("moves the stored pointer when the tenant's storage integration changes", async () => {
     const billId = await postedBill();
-    await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
     await prismaImports.prisma.tenantConfig.update({
       where: { utilityId: UTILITY },
@@ -407,7 +427,7 @@ describe("bill documents", () => {
         } as Prisma.InputJsonObject,
       },
     });
-    const moved = await svc.generateBillDocument(UTILITY, billId, ACTOR, { force: true });
+    const moved = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME, { force: true });
 
     // The upload went to the new integration, so the row has to name it.
     expect(put.mock.calls[1][0]).toMatchObject({ integration: "cis-bills-v2" });
@@ -453,11 +473,11 @@ describe("bill documents", () => {
     });
 
     // A: claims the row, then parks inside putObject.
-    const creator = svc.generateBillDocument(UTILITY, billId, ACTOR);
+    const creator = svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     await firstUploadStarted;
 
     // B: adopts A's unfinished claim, uploads, and completes it.
-    const adopter = await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    const adopter = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     expect(adopter.sha256).toHaveLength(64);
 
     // A's upload fails, after B has already stored.
@@ -478,7 +498,7 @@ describe("bill documents", () => {
     const billId = await postedBill();
     put.mockRejectedValueOnce(new acError("rejected", 503, "cis-bills"));
 
-    await expect(svc.generateBillDocument(UTILITY, billId, ACTOR)).rejects.toThrow();
+    await expect(svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME)).rejects.toThrow();
 
     const count = await prismaImports.prisma.billDocument.count({ where: { billId } });
     expect(count).toBe(0);
@@ -493,8 +513,8 @@ describe("bill documents", () => {
   it("audits the document once, when it becomes real", async () => {
     const billId = await postedBill();
 
-    await svc.generateBillDocument(UTILITY, billId, ACTOR);
-    await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
     expect(await auditTrail()).toEqual([
       { action: "CREATE", eventType: "bill_document.created" },
@@ -505,16 +525,16 @@ describe("bill documents", () => {
     const billId = await postedBill();
     put.mockRejectedValueOnce(new acError("rejected", 503, "cis-bills"));
 
-    await expect(svc.generateBillDocument(UTILITY, billId, ACTOR)).rejects.toThrow();
+    await expect(svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME)).rejects.toThrow();
 
     expect(await auditTrail()).toEqual([]);
   }, 60_000);
 
   it("audits a forced re-render as a revision of the stored document", async () => {
     const billId = await postedBill();
-    await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
-    await svc.generateBillDocument(UTILITY, billId, ACTOR, { force: true });
+    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME, { force: true });
 
     expect(await auditTrail()).toEqual([
       { action: "CREATE", eventType: "bill_document.created" },
@@ -607,7 +627,7 @@ describe("bill documents", () => {
     const billId = await postedBill();
     await prismaImports.prisma.bill.update({ where: { id: billId }, data: { postedAt: null } });
 
-    await expect(svc.generateBillDocument(UTILITY, billId, ACTOR)).rejects.toMatchObject({
+    await expect(svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME)).rejects.toMatchObject({
       code: "NOT_POSTED",
     });
     expect(put).not.toHaveBeenCalled();
@@ -616,7 +636,7 @@ describe("bill documents", () => {
   it("refuses when the tenant has no storage integration configured", async () => {
     const billId = await postedBill({ storage: false });
 
-    await expect(svc.generateBillDocument(UTILITY, billId, ACTOR)).rejects.toMatchObject({
+    await expect(svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME)).rejects.toMatchObject({
       code: "STORAGE_NOT_CONFIGURED",
     });
     expect(put).not.toHaveBeenCalled();
@@ -639,7 +659,7 @@ describe("bill documents", () => {
     (cfg.config as { BILL_DOCUMENT_MAX_BYTES: number }).BILL_DOCUMENT_MAX_BYTES = 1024;
 
     try {
-      const err = await svc.generateBillDocument(UTILITY, billId, ACTOR).catch((e: unknown) => e);
+      const err = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME).catch((e: unknown) => e);
 
       expect((err as { code: string }).code).toBe("DOCUMENT_TOO_LARGE");
       expect((err as Error).message).toMatch(/1024/);
@@ -660,7 +680,7 @@ describe("bill documents", () => {
       issuer: { utilityName: "City of Testville Utilities" },
     });
 
-    const err = await svc.generateBillDocument(UTILITY, billId, ACTOR).catch((e: unknown) => e);
+    const err = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME).catch((e: unknown) => e);
 
     expect((err as { code: string }).code).toBe("ISSUER_INCOMPLETE");
     expect((err as { missing: string[] }).missing).toContain("remittanceCity");
@@ -669,7 +689,7 @@ describe("bill documents", () => {
 
   it("keeps a document invisible to another tenant", async () => {
     const billId = await postedBill();
-    await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
     await expect(svc.readBillDocument(OTHER_UTILITY, billId)).rejects.toThrow();
   }, 60_000);
@@ -770,7 +790,7 @@ async function customerIdOf(billId: string): Promise<string> {
 describe("bill document endpoints", () => {
   it("streams the stored PDF as an attachment named for the bill", async () => {
     const billId = await postedBill();
-    await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     get.mockResolvedValue((put.mock.calls[0][0] as { body: Buffer }).body);
 
     const res = await app.inject({
@@ -859,7 +879,7 @@ describe("bill document endpoints", () => {
 
   it("lets a customer download a bill on their own account", async () => {
     const billId = await postedBill();
-    await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     get.mockResolvedValue((put.mock.calls[0][0] as { body: Buffer }).body);
 
     const res = await app.inject({
@@ -879,7 +899,7 @@ describe("bill document endpoints", () => {
    */
   it("hides another customer's bill from the portal", async () => {
     const billId = await postedBill();
-    await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     get.mockResolvedValue((put.mock.calls[0][0] as { body: Buffer }).body);
 
     const res = await app.inject({
@@ -900,7 +920,7 @@ describe("bill document endpoints", () => {
   it("refuses to produce a document for a user who only holds accounts:VIEW", async () => {
     const billId = await postedBill();
     await grantAccounts(["VIEW"]);
-    await svc.generateBillDocument(UTILITY, billId, ACTOR);
+    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     get.mockResolvedValue((put.mock.calls[0][0] as { body: Buffer }).body);
     put.mockClear();
 
