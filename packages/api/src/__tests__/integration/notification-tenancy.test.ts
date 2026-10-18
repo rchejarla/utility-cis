@@ -153,7 +153,7 @@ describe("notification routes — tenant scoping on caller-supplied ids", () => 
       firstName: "Jane",
       lastName: "Smith",
       organizationName: null,
-      customerType: "RESIDENTIAL",
+      customerType: "INDIVIDUAL",
     });
     (prisma.notification.create as never as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: "notif-1",
@@ -197,7 +197,7 @@ describe("notification routes — tenant scoping on caller-supplied ids", () => 
       firstName: "Jane",
       lastName: "Smith",
       organizationName: null,
-      customerType: "RESIDENTIAL",
+      customerType: "INDIVIDUAL",
     });
     // Scoped, the foreign account misses. The default mock returns null
     // for `findFirst`; setting it explicitly says so out loud.
