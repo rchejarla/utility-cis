@@ -1,3 +1,20 @@
+-- ============================================================
+-- DO NOT RUN `prisma migrate dev` AGAINST THIS SCHEMA.
+--
+-- Everything in this file is invisible to schema.prisma, so Prisma
+-- compares the database against the model, finds 35 CHECK constraints,
+-- 6 generated columns, 62 policies, a hypertable, a trigger, an
+-- exclusion constraint and 6 partial indexes that the model does not
+-- describe — and generates a migration REVERTING them. It will look
+-- like a routine drift fix and will silently remove the ledger's
+-- invariants and full-text search.
+--
+-- Use `prisma migrate deploy`. To change the schema, write the
+-- migration by hand, or generate one with `migrate diff` and then read
+-- it line by line before keeping it. CLAUDE.md records the recreate
+-- procedure for a database that has fallen behind.
+-- ============================================================
+
 -- Everything `schema.prisma` cannot express, and which a baseline
 -- generated from it therefore omits. Extracted from a database built
 -- from the 51 migrations this pair replaces, so the expressions here are

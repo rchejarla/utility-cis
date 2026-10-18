@@ -125,6 +125,17 @@ relation that does not exist.
 Losing the data is the intent: this product is in development and data
 that does not fit a new design is reseeded, never migrated.
 
+**Never run `prisma migrate dev` against this schema.** The
+`database_features` migration holds 35 CHECK constraints, 6 generated
+columns, 62 RLS policies, a hypertable, a trigger, an exclusion
+constraint and 6 partial indexes — none of which `schema.prisma` can
+express. `migrate dev` compares the database against the model, finds
+all of it undescribed, and generates a migration *reverting* it. It
+reads as a routine drift fix and would silently drop the ledger's
+invariants and full-text search. Use `migrate deploy`; write schema
+changes by hand, or generate with `migrate diff` and read the output
+line by line before keeping it.
+
 ## Multi-tenancy
 
 Every entity has `utility_id`, and since 2026-10-18 it is a **foreign key to `utility(id)`** (`ON DELETE RESTRICT`) — a tenant is a row, so a write naming one that does not exist is refused. It is nullable on seven global reference tables, where NULL means "belongs to no tenant". PostgreSQL RLS enforces tenant isolation at DB level, though the policies are inert while the app role is a superuser that owns the tables. The API sets `app.current_utility_id` per request via JWT claims. Dev tenant UUID: `00000000-0000-4000-8000-000000000001`.
