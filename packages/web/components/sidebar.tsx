@@ -83,10 +83,26 @@ interface NavSection {
  * Each section answers one question, and that sentence decides what
  * belongs in it:
  *
- *   Operations      — work somebody does.
+ *   Operations      — the utility's business records, and the
+ *                     transactions on them. About customers and their
+ *                     service.
  *   Configuration   — lists the business maintains. Many rows.
  *   Settings        — one value per tenant. One row.
- *   Administration  — who may act, and whether the system is sound.
+ *   Administration  — the system itself: who may use it, and whether it
+ *                     is sound. About staff and the software.
+ *
+ * The first two of those read "work somebody does" and "who may act",
+ * which were too loose to decide anything: somebody reads the audit log
+ * too. What separates the two sections is the subject — customers and
+ * their service, versus staff and the software. That is also why one
+ * log sits in each: the delivery log answers "did my customer get their
+ * notice", the audit log answers "what did our staff do".
+ *
+ * One entry straddles the line and is left straddling it: Operations →
+ * Notifications is a delivery log (Operations, by the rule) and a
+ * template list (Configuration, by the rule) on a single page. Splitting
+ * a working screen to satisfy a menu rule is the wrong trade, so it
+ * stays — but the rule should not pretend the case is clean.
  *
  * Settings held eighteen entries before this, mixing all four kinds:
  * single-value tenant config next to multi-row reference data

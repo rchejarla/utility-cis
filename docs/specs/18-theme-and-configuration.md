@@ -347,10 +347,14 @@ Defined in `packages/web/components/sidebar.tsx`. Each section answers one quest
 
 | Section | Rule |
 |---|---|
-| Operations | Work somebody does. |
+| Operations | The utility's business records, and the transactions on them. About customers and their service. |
 | Configuration | Lists the business maintains. Many rows. |
 | Settings | One value per tenant. One row. |
-| Administration | Who may act, and whether the system is sound. |
+| Administration | The system itself: who may use it, and whether it is sound. About staff and the software. |
+
+The first and last rules were originally written as "work somebody does" and "who may act, and whether the system is sound," which were too loose to decide anything — somebody reads the audit log too. What separates those two sections is the **subject**: customers and their service, versus staff and the software. That is also why one log sits in each — the delivery log answers "did my customer get their notice," the audit log answers "what did our staff do."
+
+One entry straddles the line and is deliberately left straddling it: Operations → Notifications is a delivery log (Operations, by the rule) and a template list (Configuration, by the rule) on a single page. Splitting a working screen to satisfy a menu rule is the wrong trade.
 
 Settings previously held 18 of the 44 entries and mixed all four kinds — single-value tenant config beside multi-row reference data (Custom Fields, Bill Messages, Service Request SLAs), beside access control, beside three things that are not settings at all. Applying the rules above moved five items and split one section, leaving 11 / 3 / 4 / 2 / 10 / 8 / 6 across Operations, Solid Waste, Billing, Collections, Configuration, Settings and Administration:
 
