@@ -151,14 +151,22 @@ export default function AuditLogPage() {
         /*
          * Three cases, in order of how much the row knows:
          *   - a recorded name: what the actor was called at the time;
-         *   - no recorded name but a known actor: today's name, marked
-         *     "(current)" so it is not mistaken for the first case;
+         *   - no recorded name but a known actor: today's name, shown
+         *     muted and italic because it is a lookup rather than a
+         *     record — the tooltip says so;
          *   - no actor at all: a scheduler, which names itself in
          *     `actorName`, so reaching "System" means neither was set.
          *
          * Rows written before `AuditContext.actorName` was required fall
          * into the second case — every BillDocument row did — and used
          * to render a raw 36-character uuid here.
+         *
+         * The second case carried a visible "(current)" suffix at first.
+         * It went because this is the column that was overflowing, and
+         * ten characters of label worked against the clipping fix for a
+         * distinction that only ever applies to rows written before the
+         * field became required. Muted italic keeps it discoverable
+         * without widening the cell.
          */
         if (row.actorName) {
           return (
@@ -170,11 +178,14 @@ export default function AuditLogPage() {
         if (row.actorNameCurrent) {
           return (
             <span
-              style={{ fontSize: "12px" }}
-              title={`Not recorded on this entry. ${row.actorNameCurrent} is the actor's name today.`}
+              style={{
+                fontSize: "12px",
+                color: "var(--text-secondary)",
+                fontStyle: "italic",
+              }}
+              title={`This entry did not record a name. ${row.actorNameCurrent} is what this user is called today, which may differ from the name they had at the time.`}
             >
               {row.actorNameCurrent}
-              <span style={{ color: "var(--text-muted)", fontSize: "11px" }}> (current)</span>
             </span>
           );
         }
