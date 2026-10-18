@@ -4,6 +4,7 @@ import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureUtilities } from "./_effective-dating-fixtures.js";
 
 /**
  * Integration tests for the notification-send worker.
@@ -56,6 +57,10 @@ beforeAll(async () => {
   });
 
   prismaImports = await import("../../lib/prisma.js");
+
+  // `utility_id` is a foreign key, so the tenants this file writes
+  // rows for have to exist before the first write.
+  await ensureUtilities(prismaImports.prisma, [TENANT_A, TENANT_B]);
   serviceImports = await import("../../services/notification.service.js");
 }, 180_000);
 
@@ -68,7 +73,7 @@ afterAll(async () => {
 beforeEach(async () => {
   const { prisma } = prismaImports;
   await prisma.$executeRawUnsafe(`
-    TRUNCATE TABLE notification, tenant_config RESTART IDENTITY CASCADE
+    TRUNCATE TABLE notification, utility_config RESTART IDENTITY CASCADE
   `);
 });
 
@@ -81,7 +86,7 @@ interface TenantOpts {
 
 async function seedTenant(utilityId: string, opts: TenantOpts = {}): Promise<void> {
   const { prisma } = prismaImports;
-  await prisma.tenantConfig.create({
+  await prisma.utilityConfig.create({
     data: {
       utilityId,
       notificationSendEnabled: opts.notificationSendEnabled ?? true,

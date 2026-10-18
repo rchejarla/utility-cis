@@ -19,7 +19,7 @@ import {
  * NODE_ENV=test. The authorization middleware lets the request
  * through if no `cisUser` row exists for the test actor (the
  * "backwards compat during migration" branch). What we DO need is a
- * `tenant_module` row for each module the route touches — otherwise
+ * `utility_module` row for each module the route touches — otherwise
  * the request hits a 403 MODULE_DISABLED.
  *
  * Endpoints covered:
@@ -55,7 +55,7 @@ function makeToken(utilityId: string, actorId = "00000000-0000-4000-8000-aaaa000
 }
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [TENANT_A] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   appImports = await import("../../app.js");
@@ -76,7 +76,7 @@ beforeEach(async () => {
 
   // Enable the modules the routes are gated on.
   for (const moduleKey of ENABLED_MODULES) {
-    await prisma.tenantModule.create({
+    await prisma.utilityModule.create({
       data: { utilityId: fixA.utilityId, moduleKey },
     });
   }

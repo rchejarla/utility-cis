@@ -35,7 +35,7 @@ function makeToken(utilityId: string, actorId = ACTOR_ID) {
 const headers = () => ({ authorization: `Bearer ${makeToken(TENANT_A)}` });
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [TENANT_A] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   appImports = await import("../../app.js");
@@ -61,11 +61,11 @@ beforeEach(async () => {
   );
   // Ensure the rate_schedules module is enabled for TENANT_A so the
   // route's permission check passes.
-  const existing = await prisma.tenantModule.findFirst({
+  const existing = await prisma.utilityModule.findFirst({
     where: { utilityId: TENANT_A, moduleKey: "rate_schedules" },
   });
   if (!existing) {
-    await prisma.tenantModule.create({
+    await prisma.utilityModule.create({
       data: { utilityId: TENANT_A, moduleKey: "rate_schedules" },
     });
   }

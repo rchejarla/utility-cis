@@ -46,7 +46,7 @@ function makeToken(sub: string = ACTOR) {
 const headers = (sub?: string) => ({ authorization: `Bearer ${makeToken(sub)}` });
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [utilityId, otherUtilityId] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   const appImports = await import("../../app.js");
@@ -69,9 +69,9 @@ beforeAll(async () => {
     },
   });
   accountId = account.id;
-  await prisma.tenantModule.create({ data: { utilityId, moduleKey: "accounts" } });
-  await prisma.tenantModule.create({ data: { utilityId, moduleKey: "payments" } });
-  await prisma.tenantModule.create({ data: { utilityId, moduleKey: "ar_adjustments" } });
+  await prisma.utilityModule.create({ data: { utilityId, moduleKey: "accounts" } });
+  await prisma.utilityModule.create({ data: { utilityId, moduleKey: "payments" } });
+  await prisma.utilityModule.create({ data: { utilityId, moduleKey: "ar_adjustments" } });
 
   // Reason codes for the fee and adjustment routes. Tenant-scoped, so
   // these belong to `utilityId` only.

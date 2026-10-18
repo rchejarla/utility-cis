@@ -41,7 +41,7 @@ let otherAccountId: string;
 const Q = { page: 1, limit: 25, sort: "effectiveDate" as const, order: "desc" as const };
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [utilityId, otherUtility] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   receipts = await import("../../services/ar/payment.service.js");

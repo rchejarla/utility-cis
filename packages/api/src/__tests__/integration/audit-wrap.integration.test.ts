@@ -3,6 +3,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testconta
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureUtilities } from "./_effective-dating-fixtures.js";
 
 /**
  * Integration test for audit-wrap atomicity.
@@ -62,6 +63,10 @@ beforeAll(async () => {
   });
 
   prismaImports = await import("../../lib/prisma.js");
+
+  // `utility_id` is a foreign key, so the tenants this file writes
+  // rows for have to exist before the first write.
+  await ensureUtilities(prismaImports.prisma, [TENANT]);
   auditWrapImports = await import("../../lib/audit-wrap.js");
 }, 180_000);
 
@@ -74,9 +79,9 @@ beforeEach(async () => {
   // Reset between scenarios — only what these tests touch.
   const { prisma } = prismaImports;
   await prisma.$executeRawUnsafe(
-    "TRUNCATE TABLE audit_log, commodity, tenant_config RESTART IDENTITY CASCADE",
+    "TRUNCATE TABLE audit_log, commodity, utility_config RESTART IDENTITY CASCADE",
   );
-  await prisma.tenantConfig.create({ data: { utilityId: TENANT } });
+  await prisma.utilityConfig.create({ data: { utilityId: TENANT } });
 });
 
 describe("audit-wrap atomicity (in-transaction)", () => {

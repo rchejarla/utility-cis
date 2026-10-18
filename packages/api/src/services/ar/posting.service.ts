@@ -279,7 +279,7 @@ export type { TxClient };
  * so flipping the tenant setting moves every account that has not
  * explicitly opted out.
  *
- * No tenant_config row means an unconfigured tenant, which takes the
+ * No utility_config row means an unconfigured tenant, which takes the
  * column default: auto-post on.
  */
 export async function resolveAutoPostBills(
@@ -292,7 +292,7 @@ export async function resolveAutoPostBills(
     // cross-tenant account id resolves to nothing rather than to its own
     // tenant's setting.
     tx.account.findFirst({ where: { id: accountId, utilityId }, select: { autoPostBills: true } }),
-    tx.tenantConfig.findUnique({ where: { utilityId }, select: { autoPostBills: true } }),
+    tx.utilityConfig.findUnique({ where: { utilityId }, select: { autoPostBills: true } }),
   ]);
   return account?.autoPostBills ?? config?.autoPostBills ?? true;
 }

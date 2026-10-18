@@ -61,7 +61,7 @@ export type ModuleKey = (typeof MODULES)[number];
 
 // APPROVE is a specialized permission currently used only by the
 // service_suspensions module (for the optional "requires approval" flow
-// controlled by TenantConfig.requireHoldApproval). Adding it to the
+// controlled by UtilityConfig.requireHoldApproval). Adding it to the
 // global tuple keeps the RBAC check uniform; roles that don't need it
 // simply omit it from their module permission list.
 export const PERMISSIONS = ["VIEW", "CREATE", "EDIT", "DELETE", "APPROVE"] as const;

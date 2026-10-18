@@ -137,7 +137,7 @@ One row per bill per document type, keyed by `UNIQUE (bill_id, document_type)`. 
 | utility_id | UUID | Tenant scope (RLS) |
 | bill_id | UUID | FK → Bill, `ON DELETE RESTRICT` |
 | document_type | VARCHAR(20) | `PDF` today. Not an enum: `PRINT_EXPORT` and `EMAIL_HTML` are undesigned, and Postgres cannot remove an enum value once added |
-| storage_integration | VARCHAR(100) | apptor-connect integration name, from `TenantConfig.settings.billDocuments` |
+| storage_integration | VARCHAR(100) | apptor-connect integration name, from `UtilityConfig.settings.billDocuments` |
 | storage_connection | VARCHAR(100) | Nullable named connection |
 | object_key | VARCHAR(500) | Exactly `bills/{utility_id}/{bill_id}.pdf` — derived, never supplied |
 | byte_size | INTEGER | Nullable until the upload completes |
@@ -581,13 +581,13 @@ Not built: CSV export of the item list.
   - `BillSegment` + `BillSegmentLine` per agreement per period (slice 5a)
   - Account-level `Bill` aggregating segments (slice 5b.2)
   - Golden tests pinning the Bozeman water / sewer / stormwater / solid-waste tariffs and NorthWestern Energy residential electric
-  - AR posting (module 23 slice 1): each issued `Bill` posts one signed `LedgerEntry`; `Account.balance` and `lastDueDate` are recomputed from the ledger in the posting transaction; posting is configurable per tenant (`TenantConfig.autoPostBills`) and per account
+  - AR posting (module 23 slice 1): each issued `Bill` posts one signed `LedgerEntry`; `Account.balance` and `lastDueDate` are recomputed from the ledger in the posting transaction; posting is configurable per tenant (`UtilityConfig.autoPostBills`) and per account
 
 - **Phase 3 — shipped (bill production slice 1):**
   - `BillPresentation` resolver turning a `Bill` and its neighbours into the content a PDF is generated from
   - Declarative bill template + byte-stable `@react-pdf/renderer` machinery
   - `BillDocument` pointer rows; bytes in the tenant's own object store via apptor-connect's files plane
-  - Issuer identity and bill storage as `TenantConfig.settings` namespaces (`issuer`, `billDocuments`) — no new columns
+  - Issuer identity and bill storage as `UtilityConfig.settings` namespaces (`issuer`, `billDocuments`) — no new columns
   - `BillMessage` with account-type and commodity targeting, resolved at `bill_date`
   - Generate, regenerate and download endpoints, staff and portal
   - Generate / download / Regenerate actions on the bills list and the account AR tab

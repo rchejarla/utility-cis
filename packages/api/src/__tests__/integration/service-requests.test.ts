@@ -63,6 +63,26 @@ async function setTenantSession() {
 
 beforeAll(async () => {
   if (!REAL_DB_AVAILABLE) return;
+
+  /*
+   * The dev tenant has to exist before anything writes rows carrying its
+   * id: `utility_id` is a foreign key to `utility`. The seeded dev
+   * database has the row, but `setup_db.bat` and `migrate_db.bat` leave a
+   * migrated-but-unseeded database behind, and this file's own
+   * instructions above tell an operator to start the containers and set
+   * the flag — so the row cannot be assumed.
+   *
+   * This file is the one in this directory that matches neither glob in
+   * vitest.integration.config.ts, which is why three sweeps for
+   * undeclared tenants missed it; the schema-invariants suite now guards
+   * the shape rather than the spelling.
+   */
+  await prisma.utility.upsert({
+    where: { id: UID },
+    update: {},
+    create: { id: UID, name: "City of Bozeman" },
+  });
+
   app = await createTestApp();
   await app.ready();
 
@@ -70,7 +90,7 @@ beforeAll(async () => {
 
   // Enable the service_requests module for the dev tenant (Task 15 will
   // do this globally; Task 14 needs it locally for the integration test).
-  await prisma.tenantModule.upsert({
+  await prisma.utilityModule.upsert({
     where: { utilityId_moduleKey: { utilityId: UID, moduleKey: "service_requests" } },
     update: { isEnabled: true },
     create: { utilityId: UID, moduleKey: "service_requests", isEnabled: true },

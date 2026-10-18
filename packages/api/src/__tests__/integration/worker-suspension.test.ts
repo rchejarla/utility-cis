@@ -4,6 +4,7 @@ import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureUtilities } from "./_effective-dating-fixtures.js";
 
 /**
  * Production-grade integration test for the suspension migration.
@@ -88,6 +89,10 @@ beforeAll(async () => {
 
   // ─── Late-import modules so they pick up the env we just set ─────
   prismaImports = await import("../../lib/prisma.js");
+
+  // `utility_id` is a foreign key, so the tenants this file writes
+  // rows for have to exist before the first write.
+  await ensureUtilities(prismaImports.prisma, [TENANT_A, TENANT_B]);
   queueImports = await import("../../lib/queues.js");
   workerImports = await import("../../workers/suspension-worker.js");
 }, 180_000);
@@ -115,14 +120,14 @@ beforeEach(async () => {
       rate_schedule,
       commodity,
       billing_cycle,
-      tenant_config
+      utility_config
     RESTART IDENTITY CASCADE
   `);
 });
 
 async function seedTenant(utilityId: string, opts: { suspensionEnabled?: boolean; requireHoldApproval?: boolean } = {}): Promise<void> {
   const { prisma } = prismaImports;
-  await prisma.tenantConfig.create({
+  await prisma.utilityConfig.create({
     data: {
       utilityId,
       requireHoldApproval: opts.requireHoldApproval ?? false,
@@ -330,7 +335,7 @@ describe("worker-suspension integration", () => {
     expect(after?.status).toBe("ACTIVE");
   });
 
-  it("respects suspension_enabled = false on the tenant_config join", async () => {
+  it("respects suspension_enabled = false on the utility_config join", async () => {
     const { prisma } = prismaImports;
     const { sweepSuspensionsAllTenants } = await import(
       "../../services/service-suspension.service.js"

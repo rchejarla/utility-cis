@@ -101,7 +101,7 @@ export async function getTenantModules(utilityId: string): Promise<string[]> {
     return JSON.parse(cached) as string[];
   }
 
-  const modules = await prisma.tenantModule.findMany({
+  const modules = await prisma.utilityModule.findMany({
     where: { utilityId, isEnabled: true },
     select: { moduleKey: true },
   });

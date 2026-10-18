@@ -33,7 +33,7 @@ let serviceImports: typeof import("../../services/effective-dating.service.js");
 let fixA: TenantFixture;
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [TENANT_A] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   serviceImports = await import("../../services/effective-dating.service.js");

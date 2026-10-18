@@ -22,7 +22,7 @@ describe("PATCH /api/v1/tenant-config — settings namespaces", () => {
     vi.clearAllMocks();
 
     // Grant settings:EDIT for the whole suite
-    (prisma.tenantModule.findMany as any).mockResolvedValue([
+    (prisma.utilityModule.findMany as any).mockResolvedValue([
       { moduleKey: "settings" },
     ]);
     (prisma.cisUser.findFirst as any).mockResolvedValue({
@@ -38,7 +38,7 @@ describe("PATCH /api/v1/tenant-config — settings namespaces", () => {
   });
 
   async function inject(body: object, currentSettings: Record<string, unknown> = {}) {
-    (prisma.tenantConfig.findUnique as any).mockResolvedValue({
+    (prisma.utilityConfig.findUnique as any).mockResolvedValue({
       id: "tc1",
       utilityId,
       requireHoldApproval: false,
@@ -46,7 +46,7 @@ describe("PATCH /api/v1/tenant-config — settings namespaces", () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     });
-    (prisma.tenantConfig.upsert as any).mockImplementation(async (args: any) => ({
+    (prisma.utilityConfig.upsert as any).mockImplementation(async (args: any) => ({
       id: "tc1",
       utilityId,
       requireHoldApproval: args.update.requireHoldApproval ?? false,
@@ -70,7 +70,7 @@ describe("PATCH /api/v1/tenant-config — settings namespaces", () => {
       { numberFormats: { account: { template: "ACC-{seq:5}", startAt: 1 } } },
     );
     expect(res.statusCode).toBe(200);
-    const upsertCall = (prisma.tenantConfig.upsert as any).mock.calls[0][0];
+    const upsertCall = (prisma.utilityConfig.upsert as any).mock.calls[0][0];
     expect(upsertCall.update.settings.branding).toEqual({
       logoUrl: "https://cdn.example.com/logo.png",
     });
@@ -85,7 +85,7 @@ describe("PATCH /api/v1/tenant-config — settings namespaces", () => {
       billing: { sandbox: false, pollMinutes: 10 },
     });
     expect(res.statusCode).toBe(200);
-    const s = (prisma.tenantConfig.upsert as any).mock.calls[0][0].update.settings;
+    const s = (prisma.utilityConfig.upsert as any).mock.calls[0][0].update.settings;
     expect(s.branding.logoUrl).toBe("https://cdn.example.com/logo.png");
     expect(s.notifications.senderEmail).toBe("bills@example.com");
     expect(s.notifications.dailyDigestEnabled).toBe(true);
@@ -106,7 +106,7 @@ describe("PATCH /api/v1/tenant-config — settings namespaces", () => {
       },
     );
     expect(res.statusCode).toBe(200);
-    const s = (prisma.tenantConfig.upsert as any).mock.calls[0][0].update.settings;
+    const s = (prisma.utilityConfig.upsert as any).mock.calls[0][0].update.settings;
     expect(s.billing).toEqual({
       saaslogicBaseUrl: "https://api.saaslogic.io/v1",
       sandbox: false,
@@ -136,7 +136,7 @@ describe("PATCH /api/v1/tenant-config — settings namespaces", () => {
     );
 
     expect(res.statusCode).toBe(200);
-    const upsertCall = (prisma.tenantConfig.upsert as any).mock.calls[0][0];
+    const upsertCall = (prisma.utilityConfig.upsert as any).mock.calls[0][0];
     expect(upsertCall.update.settings.issuer).toEqual({
       utilityName: "City of Testville Utilities",
     });
@@ -152,7 +152,7 @@ describe("PATCH /api/v1/tenant-config — settings namespaces", () => {
     );
 
     expect(res.statusCode).toBe(200);
-    const upsertCall = (prisma.tenantConfig.upsert as any).mock.calls[0][0];
+    const upsertCall = (prisma.utilityConfig.upsert as any).mock.calls[0][0];
     expect(upsertCall.update.settings.issuer).toEqual({
       utilityName: "City of Testville Utilities",
       billingPhone: "406-555-0100",
@@ -173,7 +173,7 @@ describe("PATCH /api/v1/tenant-config — settings namespaces", () => {
     const res = await inject({ billDocuments: { storageIntegration: "cis-bills" } });
 
     expect(res.statusCode).toBe(200);
-    const upsertCall = (prisma.tenantConfig.upsert as any).mock.calls[0][0];
+    const upsertCall = (prisma.utilityConfig.upsert as any).mock.calls[0][0];
     expect(upsertCall.update.settings.billDocuments).toEqual({
       storageIntegration: "cis-bills",
     });

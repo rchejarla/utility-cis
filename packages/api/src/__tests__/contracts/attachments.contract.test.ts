@@ -19,7 +19,7 @@ describe("Contract: attachments ← web", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+    (prisma.utilityModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "attachments" },
     ]);
     (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({

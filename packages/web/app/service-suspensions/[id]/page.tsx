@@ -62,7 +62,7 @@ interface SuspensionTypeDef {
   label: string;
 }
 
-interface TenantConfig {
+interface UtilityConfig {
   requireHoldApproval: boolean;
 }
 
@@ -137,7 +137,7 @@ export default function SuspensionDetailPage({ params }: PageProps) {
   const [error, setError] = useState<string | null>(null);
   const [hold, setHold] = useState<SuspensionDetail | null>(null);
   const [typeDefs, setTypeDefs] = useState<SuspensionTypeDef[]>([]);
-  const [tenantConfig, setTenantConfig] = useState<TenantConfig | null>(null);
+  const [utilityConfig, setTenantConfig] = useState<UtilityConfig | null>(null);
   const [confirmOpen, setConfirmOpen] = useState<null | "cancel" | "complete" | "activate" | "approve">(null);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -148,7 +148,7 @@ export default function SuspensionDetailPage({ params }: PageProps) {
       const [detail, types, config] = await Promise.all([
         apiClient.get<SuspensionDetail>(`/api/v1/service-suspensions/${id}`),
         apiClient.get<{ data: SuspensionTypeDef[] }>("/api/v1/suspension-types"),
-        apiClient.get<TenantConfig>("/api/v1/tenant-config"),
+        apiClient.get<UtilityConfig>("/api/v1/tenant-config"),
       ]);
       setHold(detail);
       setTypeDefs(types.data ?? []);
@@ -204,7 +204,7 @@ export default function SuspensionDetailPage({ params }: PageProps) {
   }
 
   const typeLabel = typeDefs.find((t) => t.code === hold.suspensionType)?.label ?? hold.suspensionType;
-  const requiresApproval = tenantConfig?.requireHoldApproval ?? false;
+  const requiresApproval = utilityConfig?.requireHoldApproval ?? false;
   const isApproved = hold.approvedBy !== null;
   // Compound tone: the badge reflects the combined status + approval
   // state so PENDING isn't presented identically before and after an

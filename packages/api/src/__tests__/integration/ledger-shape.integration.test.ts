@@ -16,7 +16,7 @@ const utilityId = "00000000-0000-4000-8000-0000000000aa";
 let accountId: string;
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [utilityId] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 
@@ -69,7 +69,7 @@ describe("ledger schema", () => {
   });
 
   it("adds the auto-post and postedAt columns", async () => {
-    expect(Object.keys(await cols("tenant_config"))).toContain("auto_post_bills");
+    expect(Object.keys(await cols("utility_config"))).toContain("auto_post_bills");
     expect(Object.keys(await cols("account"))).toContain("auto_post_bills");
     expect(Object.keys(await cols("bill"))).toContain("posted_at");
   });

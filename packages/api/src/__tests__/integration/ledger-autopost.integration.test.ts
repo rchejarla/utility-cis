@@ -25,7 +25,7 @@ let accountId: string;
 let serviceAgreementId: string;
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [utilityId] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   posting = await import("../../services/ar/posting.service.js");
@@ -81,7 +81,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   const { prisma } = prismaImports;
-  await prisma.tenantConfig.deleteMany({ where: { utilityId } });
+  await prisma.utilityConfig.deleteMany({ where: { utilityId } });
   await prisma.ledgerEntry.deleteMany({});
   await prisma.billSegment.deleteMany({});
   await prisma.bill.deleteMany({});
@@ -93,7 +93,7 @@ beforeEach(async () => {
 
 async function setTenant(autoPostBills: boolean) {
   const { prisma } = prismaImports;
-  await prisma.tenantConfig.create({ data: { utilityId, autoPostBills } });
+  await prisma.utilityConfig.create({ data: { utilityId, autoPostBills } });
 }
 
 async function setAccount(autoPostBills: boolean | null) {
@@ -139,7 +139,7 @@ describe("resolveAutoPostBills", () => {
     const { prisma } = prismaImports;
     await setTenant(false);
     await expect(posting.resolveAutoPostBills(prisma, utilityId, accountId)).resolves.toBe(false);
-    await prisma.tenantConfig.deleteMany({ where: { utilityId } });
+    await prisma.utilityConfig.deleteMany({ where: { utilityId } });
     await setTenant(true);
     await expect(posting.resolveAutoPostBills(prisma, utilityId, accountId)).resolves.toBe(true);
   });

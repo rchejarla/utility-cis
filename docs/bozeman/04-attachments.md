@@ -217,7 +217,7 @@ The `GET /api/v1/attachments` endpoint requires both `entityType` AND `entityId`
   - **Implementation:** Use `file-type` npm package or equivalent. Inconsistent types reject with HTTP 415.
   - **Acceptance:** Manual test: rename a .exe to .pdf, upload, verify 415 with a clear error.
 
-- **FR-ATT-012** — File size limit per upload: configurable, default 25 MB (up from 10 MB). Tenant-level override via `tenant_config.attachment_max_size_mb` with a hard ceiling of 100 MB to protect platform resources.
+- **FR-ATT-012** — File size limit per upload: configurable, default 25 MB (up from 10 MB). Tenant-level override via `utility_config.attachment_max_size_mb` with a hard ceiling of 100 MB to protect platform resources.
   - **Acceptance:** Default behavior + tenant-override behavior both verified.
 
 ### 4.3 Metadata fields
@@ -242,7 +242,7 @@ The `GET /api/v1/attachments` endpoint requires both `entityType` AND `entityId`
   - `afterState`: full attachment row excluding storage path
   - **Acceptance:** Upload an attachment; verify a corresponding `audit_log` row exists with classified `event_class`.
 
-- **FR-ATT-031** — Delete is **soft-delete**. The DELETE endpoint sets `softDeletedAt` + `softDeletedBy` and emits an audit row of class `OPERATIONAL` with `action: "DELETE"`, `beforeState`: full row, `afterState`: null. The file content is retained on storage for 90 days (configurable per tenant via `tenant_config.attachment_purge_days`), after which a sweeper job hard-deletes both the row and the storage object.
+- **FR-ATT-031** — Delete is **soft-delete**. The DELETE endpoint sets `softDeletedAt` + `softDeletedBy` and emits an audit row of class `OPERATIONAL` with `action: "DELETE"`, `beforeState`: full row, `afterState`: null. The file content is retained on storage for 90 days (configurable per tenant via `utility_config.attachment_purge_days`), after which a sweeper job hard-deletes both the row and the storage object.
   - **Rationale:** Forensic review of removed evidence is a frequent need; immediate hard-delete prevents that. 90 days mirrors the typical financial-investigation discovery window.
   - **Acceptance:** Delete an attachment; verify it disappears from `listAttachments` (which now filters `softDeletedAt IS NULL`); verify the file is still on disk; verify the sweeper purges after the configured window.
 
@@ -323,7 +323,7 @@ Two integration patterns are supported. Pattern selection is per-tenant, agreed 
   - `dms.searchContent(query, tenantId)` — full-text search against DMS-indexed content; returns `{ attachmentId, snippet, score }[]`
   - **Acceptance:** Each method has a contract test against a recorded Apptorflow stub. The stub records every call; we replay against staging Apptorflow before production cutover.
 
-- **FR-ATT-061** — Tenant config MUST select between three modes via `tenant_config.dms_integration_mode`:
+- **FR-ATT-061** — Tenant config MUST select between three modes via `utility_config.dms_integration_mode`:
   - `"none"` — no DMS integration; storage per §4.6 only. Default.
   - `"pattern_1_external"` — Pattern 1, file body never lands in SaaSLogic S3. Requires `dms_target_system` (one of `sharepoint | laserfiche | onbase | mfiles | other`) and credentials passed through to Apptorflow.
   - `"pattern_2_replication"` — Pattern 2, file body in SaaSLogic S3 + replicated. Requires same fields.
@@ -408,7 +408,7 @@ The category is captured at upload time. Default category per entity type (uploa
 - **FR-ATT-088** — A "Restore from archive" endpoint `POST /api/v1/attachments/:id/restore` MUST initiate an S3 restore request and update `archive_status` to `RESTORING`. UI surfaces the in-progress state and notifies the user (in-app banner + optional email per the Module 13 notification engine) when the file is available.
   - **Acceptance:** Restore a Glacier Deep Archive object; verify the API call completes and a notification is sent on completion.
 
-- **FR-ATT-089** — Restore costs (proportional to the size of restored files and tier) MUST be capped per tenant per day via `tenant_config.attachment_restore_daily_cap_mb` (default 1024 MB / 1 GB). Exceeding the cap rejects the restore with a clear error directing the user to operator support.
+- **FR-ATT-089** — Restore costs (proportional to the size of restored files and tier) MUST be capped per tenant per day via `utility_config.attachment_restore_daily_cap_mb` (default 1024 MB / 1 GB). Exceeding the cap rejects the restore with a clear error directing the user to operator support.
 
 #### Functional requirements — purge
 
@@ -544,8 +544,8 @@ model RetentionPolicy {
   @@map("retention_policy")
 }
 
-// New TenantConfig fields
-model TenantConfig {
+// New UtilityConfig fields
+model UtilityConfig {
   // ... existing fields ...
   attachmentMaxSizeMb           Int                  @default(25)   @map("attachment_max_size_mb")
   attachmentPurgeDays           Int                  @default(90)   @map("attachment_purge_days")  // soft-delete purge window

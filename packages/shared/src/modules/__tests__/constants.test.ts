@@ -13,7 +13,7 @@ import { MODULES, MODULE_META } from "../constants";
  * problem these tests exist for: a module present in MODULES but absent
  * from the seeder is enabled for no tenant, so its routes answer 403
  * MODULE_DISABLED on every seeded database — while the routes' own tests
- * pass, because integration fixtures create their tenant_module rows by
+ * pass, because integration fixtures create their utility_module rows by
  * hand. That is exactly how `payments` shipped unreachable in AR slice 2
  * until this test was written.
  */

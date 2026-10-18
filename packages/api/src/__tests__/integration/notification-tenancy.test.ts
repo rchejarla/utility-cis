@@ -52,7 +52,7 @@ describe("notification routes — tenant scoping on caller-supplied ids", () => 
   const OTHER_TENANTS_TEMPLATE_ID = "ee000000-0000-4000-8000-000000000005";
 
   function grant(permissions: Record<string, string[]>) {
-    (prisma.tenantModule.findMany as never as ReturnType<typeof vi.fn>).mockResolvedValue(
+    (prisma.utilityModule.findMany as never as ReturnType<typeof vi.fn>).mockResolvedValue(
       Object.keys(permissions).map((moduleKey) => ({ moduleKey })),
     );
     (prisma.cisUser.findFirst as never as ReturnType<typeof vi.fn>).mockResolvedValue({

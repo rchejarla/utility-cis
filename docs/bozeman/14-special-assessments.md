@@ -320,7 +320,7 @@ The RFP's claim that assessments transfer with the parcel requires this gap to c
   - **On-demand sync per parcel** — operator-triggered; pulls a single parcel's attributes immediately. Used during assessment posting if the staff knows GIS has been updated.
   - **Webhook-driven** (Phase 2 — depends on City's GIS configuration) — ESRI pushes change notifications; CIS pulls only the changed parcels.
 
-- **FR-SA-041** — GIS sync uses the ESRI REST API (`/<feature_class>/query` endpoint) with paging + retry. Connection details in `tenant_config.gis_config` (KMS-referenced for credentials per [09-bulk-upload-and-data-ingestion.md](./09-bulk-upload-and-data-ingestion.md) FR-ING-040 pattern). Failed syncs alert tenant admins; partial syncs are detected by row-count delta.
+- **FR-SA-041** — GIS sync uses the ESRI REST API (`/<feature_class>/query` endpoint) with paging + retry. Connection details in `utility_config.gis_config` (KMS-referenced for credentials per [09-bulk-upload-and-data-ingestion.md](./09-bulk-upload-and-data-ingestion.md) FR-ING-040 pattern). Failed syncs alert tenant admins; partial syncs are detected by row-count delta.
 
 - **FR-SA-042** — Parcels in the City's GIS that have no corresponding Premise in CIS are auto-created with `premiseType = LAND_ONLY` and `status = INACTIVE` (so they don't appear in routine searches). Audit row of class `AUDIT_OPERATIONAL` captures the creation. Operators can promote a `LAND_ONLY` premise to `RESIDENTIAL`/`COMMERCIAL`/etc. when service is requested.
 
@@ -422,7 +422,7 @@ The RFP's claim that assessments transfer with the parcel requires this gap to c
 
 - **FR-SA-063** — Final-installment rounding: floating-point math accumulates pennies of error over a 20-year amortization. The library forces the final installment's principal to be `levyAmount − Σ(prior_principal)` so total principal equals the original levy exactly. Final installment interest may differ from prior installments by a few cents; this is normal and consistent with how mortgages handle it.
 
-- **FR-SA-064** — Late fees on overdue installments: per `tenant_config.assessment_late_fee_pct` and `tenant_config.assessment_late_fee_grace_days`, a nightly worker scans `AssessmentInstallment` rows where `status = BILLED` AND `dueDate + grace_days < today` AND `paidAmount < totalAmount`. For each, posts a `late_fee` `AdhocCharge` (per [12-corrections-and-reversals.md](./12-corrections-and-reversals.md)) to the responsible party and emits an `AUDIT_FINANCIAL` audit row. Late fees are billed separately from the installment (avoid compounding interest).
+- **FR-SA-064** — Late fees on overdue installments: per `utility_config.assessment_late_fee_pct` and `utility_config.assessment_late_fee_grace_days`, a nightly worker scans `AssessmentInstallment` rows where `status = BILLED` AND `dueDate + grace_days < today` AND `paidAmount < totalAmount`. For each, posts a `late_fee` `AdhocCharge` (per [12-corrections-and-reversals.md](./12-corrections-and-reversals.md)) to the responsible party and emits an `AUDIT_FINANCIAL` audit row. Late fees are billed separately from the installment (avoid compounding interest).
 
 ### 3.7 Payoff calculation + portal
 
@@ -486,7 +486,7 @@ The RFP's claim that assessments transfer with the parcel requires this gap to c
   6. Emit `AUDIT_FINANCIAL` audit rows for each ParcelAssessment touched + the PremiseOwnerHistory creation.
   7. Notify the new owner of the inherited assessment schedule via `customer_message` (with onboarding text explaining what they're inheriting).
 
-- **FR-SA-081** — Approval gate per [13-workflow-approvals-action-queue.md](./13-workflow-approvals-action-queue.md): ownership transfers above $X total assessment liability (per `tenant_config.assessment_transfer_dual_approval_threshold`, default $5000) require dual approval before execution.
+- **FR-SA-081** — Approval gate per [13-workflow-approvals-action-queue.md](./13-workflow-approvals-action-queue.md): ownership transfers above $X total assessment liability (per `utility_config.assessment_transfer_dual_approval_threshold`, default $5000) require dual approval before execution.
 
 - **FR-SA-082** — The transfer endpoint does NOT modify any active liens — liens are recorded against the parcel at the County, and survive ownership transfer per real estate law. The new owner inherits the lien encumbrance. The lien's `responsibleParty` reference updates to the new owner snapshot for accurate billing/notification.
 
@@ -543,8 +543,8 @@ The RFP's claim that assessments transfer with the parcel requires this gap to c
   ```
 
 - **FR-SA-101** — Lien-eligibility worker: nightly job scans `AssessmentInstallment` rows. A `ParcelAssessment` becomes lien-eligible when:
-  - At least one installment has been overdue more than `tenant_config.assessment_lien_threshold_days` (default 60).
-  - The cumulative overdue + late fees exceed `tenant_config.assessment_lien_min_amount` (default $0 — every overdue assessment is lien-eligible).
+  - At least one installment has been overdue more than `utility_config.assessment_lien_threshold_days` (default 60).
+  - The cumulative overdue + late fees exceed `utility_config.assessment_lien_min_amount` (default $0 — every overdue assessment is lien-eligible).
   - The parcel has not had an active appeal in the past 90 days.
 
   When eligible, an `AssessmentLien` row is created in `ELIGIBLE` status with the current outstanding amounts. Workflow rule from [doc 13](./13-workflow-approvals-action-queue.md) can fire to notify the operator + create a Task.
@@ -553,9 +553,9 @@ The RFP's claim that assessments transfer with the parcel requires this gap to c
   1. Selects the date range or specific liens.
   2. Reviews the listing (one row per lien with parcel, owner, principal, interest, fees, total).
   3. Confirms the export.
-  4. The system generates a CSV in the County-required format (TBD with the County — the format spec is captured per tenant in `tenant_config.county_lien_export_format` as a templated string mapping CIS columns to County's expected columns and labels).
+  4. The system generates a CSV in the County-required format (TBD with the County — the format spec is captured per tenant in `utility_config.county_lien_export_format` as a templated string mapping CIS columns to County's expected columns and labels).
   5. Each lien row's `status = EXPORTED`, `countyExportBatchId` set.
-  6. The CSV file is delivered via SFTP push (per the tenant's `tenant_config.county_sftp_config`) OR downloaded by the operator for manual upload to the County's portal — both modes supported, configurable per tenant.
+  6. The CSV file is delivered via SFTP push (per the tenant's `utility_config.county_sftp_config`) OR downloaded by the operator for manual upload to the County's portal — both modes supported, configurable per tenant.
 
 - **FR-SA-103** — Recordation confirmation: the County returns a confirmation file (CSV or fixed-width per County preference) with each lien's recordation document number. A worker imports this file (via [doc 09](./09-bulk-upload-and-data-ingestion.md)'s ingestion pipeline), updating each `AssessmentLien.status = FILED` and `filedAt` and `filedDocRef`. Mismatches are flagged and routed to operators.
 
@@ -601,7 +601,7 @@ The RFP's claim that assessments transfer with the parcel requires this gap to c
 |---|---|---|
 | `Premise` | Add `parcelId`, `gisParcelId`, `squareFootage`, `frontageFeet`, `imperviousAreaSqFt`, `assessmentBasisUnits`, `gisLastSyncedAt`, `gisSyncStatus` | FR-SA-001 |
 | `Premise` | Extend `PremiseType` enum with `LAND_ONLY` | FR-SA-002 |
-| `tenant_config` | Add `gis_config` (KMS-referenced ESRI credentials), `assessment_late_fee_pct`, `assessment_late_fee_grace_days`, `assessment_lien_threshold_days`, `assessment_lien_min_amount`, `assessment_transfer_dual_approval_threshold`, `county_lien_export_format`, `county_sftp_config` | FR-SA-040+, FR-SA-064, FR-SA-101, FR-SA-081, FR-SA-102 |
+| `utility_config` | Add `gis_config` (KMS-referenced ESRI credentials), `assessment_late_fee_pct`, `assessment_late_fee_grace_days`, `assessment_lien_threshold_days`, `assessment_lien_min_amount`, `assessment_transfer_dual_approval_threshold`, `county_lien_export_format`, `county_sftp_config` | FR-SA-040+, FR-SA-064, FR-SA-101, FR-SA-081, FR-SA-102 |
 
 ### 4.3 New enums
 
@@ -695,7 +695,7 @@ The biggest unknowns are **County format** (Phase 5) and **Module 09 readiness**
 6. **Multi-jurisdictional assessments** — this doc commits to single-tenant assessments. Cities sharing improvement districts (e.g., a regional sewer district crossing city boundaries) require multi-tenant data-sharing primitives that are out of scope.
 7. **Dynamic district boundary changes** — once a district is `ACTIVE`, its boundary is fixed (per `gis_layer_id`). Adding parcels mid-district-life requires a re-enrollment flow that is operator-initiated, not auto-detected from GIS changes. (Future enhancement: GIS-driven boundary expansion. Phase 5+.)
 8. **Tax-exempt parcel handling** — exempt parcels (churches, government buildings) require state-specific exemption logic. Out of scope; operators manually exclude exempt parcels at enrollment time.
-9. **County format auto-detection** — the County must provide format spec; CIS does not auto-detect schema from a sample file. (The spec is parameterized in `tenant_config.county_lien_export_format` as the canonical extension point.)
+9. **County format auto-detection** — the County must provide format spec; CIS does not auto-detect schema from a sample file. (The spec is parameterized in `utility_config.county_lien_export_format` as the canonical extension point.)
 10. **Real estate closing integration** — automatic detection of property closings is out of scope. Operators receive closing paperwork from the City and trigger `transferOwnership` manually.
 11. **Cash-flow forecasting for districts** — predicting district revenue stream over the multi-year amortization is a finance-team concern, not addressed by this CIS module.
 12. **Bond-issuance and proceeds tracking** — many improvement districts are bond-funded. The bond proceeds, debt service, etc., live in the City's general ledger / ERP, not in CIS. CIS captures the assessments levied on parcels; how those revenues flow to bond service is the City's accounting.
@@ -720,7 +720,7 @@ The biggest unknowns are **County format** (Phase 5) and **Module 09 readiness**
 | Portal RLS leaks one customer's parcel-assessment to another | **Critical** | Portal RLS uses `is_premise_visible_to_portal_user` SQL helper joined through `Premise.ownerId` chain. Tested with adversarial input — confirmed cross-customer reads return 0 rows. |
 | Multi-meter parcel — assessment shown twice in consolidated bill | Low | FR-SA-092 specifies one line item per district per parcel, regardless of meter count. Consolidated billing logic computes line items at the parcel level, not the meter level. |
 | GIS coordinate-system mismatch (NAD83 vs WGS84) | Low | CIS doesn't perform spatial calculations (FR-SA-040 only mirrors attribute values). The City's GIS handles its own projection. |
-| ESRI feature class schema changes (renamed columns) | Medium | The sync worker fails loud (audit row + alert) if expected columns are missing. Configured field mapping per tenant (`tenant_config.gis_config.field_map`) makes recovery a config update. |
+| ESRI feature class schema changes (renamed columns) | Medium | The sync worker fails loud (audit row + alert) if expected columns are missing. Configured field mapping per tenant (`utility_config.gis_config.field_map`) makes recovery a config update. |
 | Bulk parcel enrollment fails halfway through a 5,000-parcel district | Medium | Per FR-SA-021, batch policy is `reject_batch_threshold:1` — the entire enrollment aborts on one bad row. Operators fix the bad row and re-import. Idempotency on `(districtId, premiseId)` ensures re-import doesn't double-enroll. |
 | Late-fee accrual continues during appeal | Low | District config governs (`appeal_pause_billing` flag); per FR-SA-024 default is to pause billing during appeal. Operators audit pauses. |
 | Customer disputes the levy basis (e.g., "my frontage was measured wrong") | Medium | Appeal workflow (FR-SA-024) handles the procedural side. Levy reversal + re-post (FR-SA-023) corrects the math. The `calculationBasis` JSON snapshot makes the dispute clear (here's the attribute, here's the rate, here's the math). |

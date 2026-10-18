@@ -15,7 +15,7 @@ import { usePermission } from "@/lib/use-permission";
  * rendered preview on this page uses the same parser, so what you
  * see is exactly what the generator will produce.
  *
- * Storage lives inside tenant_config.settings.numberFormats; the
+ * Storage lives inside utility_config.settings.numberFormats; the
  * backend PATCH handler merges it into the existing settings bucket
  * without clobbering unrelated keys.
  */

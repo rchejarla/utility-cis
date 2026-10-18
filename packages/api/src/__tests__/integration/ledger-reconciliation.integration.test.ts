@@ -12,6 +12,12 @@ import { bootPostgres } from "./_effective-dating-fixtures.js";
 
 const ACTOR = "00000000-0000-4000-8000-aaaa00000001";
 const utilityId = "00000000-0000-4000-8000-0000000000aa";
+// Second tenants, hoisted out of the test bodies: utility_id is a
+// foreign key, so they must be declared at bootPostgres below.
+const other = "00000000-0000-4000-8000-0000000000bb";
+const barren = "00000000-0000-4000-8000-0000000000cc";
+// Second tenants, hoisted out of the test bodies: utility_id is a
+// foreign key, so they must be declared at bootPostgres below.
 
 let pgContainer: StartedPostgreSqlContainer;
 let prismaImports: typeof import("../../lib/prisma.js");
@@ -27,7 +33,7 @@ let billingCycleId: string;
 let feeReasonId: string;
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [utilityId, other, barren] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   posting = await import("../../services/ar/posting.service.js");
@@ -126,7 +132,6 @@ describe("reconcileBalances", () => {
   });
 
   it("reports checked: 0 for a tenant with no accounts rather than implying health", async () => {
-    const barren = "00000000-0000-4000-8000-0000000000cc";
     const report = await recon.reconcileBalances(barren);
     expect(report.drift).toEqual([]);
     expect(report.checked).toBe(0);
@@ -217,7 +222,6 @@ describe("reconcileBalances", () => {
 
   it("scopes by utility: another tenant's drift is not reported", async () => {
     const { prisma } = prismaImports;
-    const other = "00000000-0000-4000-8000-0000000000bb";
     const stray = await prisma.account.create({
       data: { utilityId: other, accountNumber: "RECON-OTHER", accountType: "RESIDENTIAL", status: "ACTIVE", billingCycleId, balance: "5.00" },
     });

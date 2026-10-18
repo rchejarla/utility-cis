@@ -13,7 +13,7 @@ async function main() {
   if (p.userRole) await p.userRole.deleteMany({});
   await p.cisUser.deleteMany({});
   await p.role.deleteMany({});
-  await p.tenantModule.deleteMany({});
+  await p.utilityModule.deleteMany({});
 
   // Phase 2 operational entities — delete first.
   if (p.serviceSuspension) await p.serviceSuspension.deleteMany({});
@@ -61,8 +61,8 @@ async function main() {
   await p.unitOfMeasure.deleteMany({});
   await p.commodity.deleteMany({});
   await p.customer.deleteMany({});
-  await p.tenantTheme.deleteMany({});
-  if (p.tenantConfig) await p.tenantConfig.deleteMany({});
+  await p.utilityTheme.deleteMany({});
+  if (p.utilityConfig) await p.utilityConfig.deleteMany({});
   await p.auditLog.deleteMany({});
   await p.userPreference.deleteMany({});
   // Tenant-scoped suspension type defs only — do NOT delete global
@@ -77,6 +77,16 @@ async function main() {
   console.log("  Cleared.");
 
   console.log("Seeding...");
+
+  // The tenant itself, before anything that carries its id. Upserted
+  // rather than created so a reseed does not have to delete it — once
+  // utility_id is a foreign key, deleting this row would be blocked by
+  // every child table not on the clear-down list above.
+  await p.utility.upsert({
+    where: { id: UID },
+    update: { name: "City of Bozeman" },
+    create: { id: UID, name: "City of Bozeman" },
+  });
 
   const water = await p.commodity.create({ data: { utilityId: UID, code: "WATER", name: "Potable Water", displayOrder: 1 } });
   const electric = await p.commodity.create({ data: { utilityId: UID, code: "ELECTRIC", name: "Electricity", displayOrder: 2 } });
@@ -799,7 +809,7 @@ async function main() {
   }
   console.log("  " + billingAddressData.length + " billing addresses");
 
-  await p.tenantTheme.create({
+  await p.utilityTheme.create({
     data: {
       utilityId: UID, preset: "midnight",
       colors: { dark: { "bg-deep": "#06080d", "accent-primary": "#3b82f6", "text-primary": "#e8edf5" }, light: { "bg-deep": "#ffffff", "accent-primary": "#0f766e", "text-primary": "#0f172a" } },
@@ -812,7 +822,7 @@ async function main() {
   // Must stay in step with MODULES in packages/shared/src/modules/constants.ts.
   // A module missing here is enabled for no tenant, so its routes answer
   // 403 MODULE_DISABLED on every seeded database while their own tests
-  // pass, because those create the tenant_module row themselves.
+  // pass, because those create the utility_module row themselves.
   // packages/shared/src/modules/__tests__/constants.test.ts fails if the
   // two lists drift. seed.js deliberately avoids tsx, so this cannot
   // import the constant directly.
@@ -927,7 +937,7 @@ async function main() {
 
   const moduleKeys = allModules;
   for (const mk of moduleKeys) {
-    await p.tenantModule.create({ data: { utilityId: UID, moduleKey: mk, isEnabled: true } });
+    await p.utilityModule.create({ data: { utilityId: UID, moduleKey: mk, isEnabled: true } });
   }
   console.log("  " + moduleKeys.length + " tenant modules");
 

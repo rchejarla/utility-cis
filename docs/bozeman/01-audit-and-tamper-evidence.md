@@ -24,7 +24,7 @@ The following two paragraphs are the City-facing commitments in the proposal res
 | DB-level constraints preventing UPDATE/DELETE | None. No triggers, no rules, no `REVOKE` on the application role. | Implement BEFORE UPDATE/DELETE triggers + REVOKE pattern. |
 | Even a DB admin cannot modify entries | False today. The new audit-retention worker (`packages/api/src/workers/audit-retention-worker.ts`, plan task 9) actively `DELETE`s scheduler-emitted audits per tenant retention policy. Reconciliation needed. | Move retention to a privileged-role path with logged justification, or shift to soft-archive (move-to-S3-then-delete-with-hash). |
 | Replicated to encrypted S3 with object-lock | Zero S3 integration. No `@aws-sdk` dependency. No daily export. | Implement nightly export job + S3 bucket with object-lock in compliance mode. |
-| Default 7-year retention for financial events | `tenant_config.scheduler_audit_retention_days` defaults to 365 (1 year) and applies only to scheduler-emitted audits. No event-type classification, no per-class retention. | Add per-event-type retention policy with a financial-events bucket defaulting to 2555 days. |
+| Default 7-year retention for financial events | `utility_config.scheduler_audit_retention_days` defaults to 365 (1 year) and applies only to scheduler-emitted audits. No event-type classification, no per-class retention. | Add per-event-type retention policy with a financial-events bucket defaulting to 2555 days. |
 | City may extend retention | Tenant settings UI exposes `schedulerAuditRetentionDays` but only one number for all scheduler audits. Cannot extend a specific event type independently. | Per-class retention controls on the same Settings page. |
 | Daily Merkle-tree hash chains | None. No merkle implementation. No hashing job. No signing infrastructure. | New daily job; new signing key management; new verification utility. |
 | Stored separately and signed | N/A — no merkle output exists. | Separate S3 bucket (or distinct KMS key), separate retention policy. |
@@ -35,7 +35,7 @@ The following two paragraphs are the City-facing commitments in the proposal res
 | Integration-credential rotation | No credential management. | Implement credential vault + rotation UI, then audit. |
 | IdP federation changes | No SAML/OIDC federation. No IdP-config UI. | Out of scope for this RFP (call out in §6). |
 | Full before/after state + actor | Where audits exist (~17 services covering account/customer/premise/meter/etc.), payload is correct: `actorId`, `actorName`, `beforeState`, `afterState`, ISO timestamps. Pattern is sound; coverage is the gap. | Apply the existing pattern to the security services. |
-| Two-person approval for sensitive security changes | Only existing approval workflow is `tenant_config.requireHoldApproval` for service suspensions — different domain. | Generalize the approval pattern; apply to sensitive security ops. |
+| Two-person approval for sensitive security changes | Only existing approval workflow is `utility_config.requireHoldApproval` for service suspensions — different domain. | Generalize the approval pattern; apply to sensitive security ops. |
 
 ---
 
@@ -160,7 +160,7 @@ The following two paragraphs are the City-facing commitments in the proposal res
     - `SECURITY` → 2555 days
     - `OPERATIONAL` → 730 days (2 years)
     - `TECHNICAL` → 365 days (1 year)
-    - `SCHEDULER` → 365 days (already shipped via `tenant_config.scheduler_audit_retention_days`)
+    - `SCHEDULER` → 365 days (already shipped via `utility_config.scheduler_audit_retention_days`)
   - **Floor:** SECURITY and FINANCIAL classes have a minimum of 2555 days that the tenant cannot reduce. The City can extend; cannot shorten below the regulatory minimum.
   - **Implementation:** Replace the single `scheduler_audit_retention_days` column with a JSON column `audit_retention_days_by_class` plus a backward-compat view that exposes the scheduler-class field for the existing UI.
 
@@ -230,8 +230,8 @@ enum PendingChangeStatus {
   EXPIRED
 }
 
-// Replace scheduler-only retention with per-class retention on TenantConfig
-model TenantConfig {
+// Replace scheduler-only retention with per-class retention on UtilityConfig
+model UtilityConfig {
   // ... existing fields ...
   // schedulerAuditRetentionDays — kept for backward compat, generated
   // from auditRetentionByClass.scheduler at read time.

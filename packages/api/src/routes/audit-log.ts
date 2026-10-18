@@ -10,7 +10,7 @@ import { AUDIT_ACTIONS, AUDIT_ENTITY_TYPES } from "@utility-cis/shared";
  * entity's history.
  *
  * `settings` is reused rather than introducing an `audit_log_all`
- * module: a new key needs `tenant_module` rows for every existing
+ * module: a new key needs `utility_module` rows for every existing
  * tenant and a place in each role preset, and this one already gates
  * the rest of the Administration section. If the tenant_profile /
  * settings / theme keys are ever consolidated, this moves with them.

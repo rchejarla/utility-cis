@@ -44,7 +44,7 @@ interface NotificationProvider {
  * to another tenant is simply not found.
  *
  * This function took `utilityId` from the start and spent it on one
- * query (`tenantConfig`, below) while the five entity lookups read by
+ * query (`utilityConfig`, below) while the five entity lookups read by
  * primary key alone. The tenant argument read as scoping and scoped
  * nothing, which is how a customer's name, email, phone, account number,
  * premise address and meter number could be rendered into one tenant's
@@ -171,7 +171,7 @@ async function resolveVariables(
   vars["portal.profileUrl"] = `${baseUrl}/portal/profile`;
 
   // Utility info from tenant config
-  const cfg = await prisma.tenantConfig.findUnique({ where: { utilityId } });
+  const cfg = await prisma.utilityConfig.findUnique({ where: { utilityId } });
   const settings = (cfg?.settings as Record<string, unknown>) ?? {};
   const branding = (settings.branding as Record<string, string>) ?? {};
   const notifSettings = (settings.notifications as Record<string, string>) ?? {};
@@ -397,7 +397,7 @@ interface PendingWithTenantCfg {
  *      tick. Email is always eligible.
  *
  * Implementation:
- *   - One query joins notification + tenant_config so per-row config
+ *   - One query joins notification + utility_config so per-row config
  *     is in hand without N+1 lookups.
  *   - Quiet-hours math runs in Node (Postgres timezone math is gnarly
  *     and involves DST handling we'd have to verify per-deploy).
@@ -418,7 +418,7 @@ export async function processPendingNotificationsWithQuietHours(
       tc.notification_quiet_start,
       tc.notification_quiet_end
     FROM notification n
-    INNER JOIN tenant_config tc ON tc.utility_id = n.utility_id
+    INNER JOIN utility_config tc ON tc.utility_id = n.utility_id
     WHERE n.status = 'PENDING'
       AND tc.notification_send_enabled = true
     ORDER BY n.created_at ASC

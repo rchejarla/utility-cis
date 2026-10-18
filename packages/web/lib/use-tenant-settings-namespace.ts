@@ -5,7 +5,7 @@ import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 
 /**
- * Load one namespace of TenantConfig.settings (e.g. "branding" or
+ * Load one namespace of UtilityConfig.settings (e.g. "branding" or
  * "retention"), expose its current value as a typed draft, and let the
  * caller save it back via PATCH /api/v1/tenant-config.
  *

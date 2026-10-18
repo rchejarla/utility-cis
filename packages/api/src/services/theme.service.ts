@@ -1,7 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import type { UpdateThemeInput } from "@utility-cis/shared";
 
-// Default tenant theme, served when no tenantTheme row exists yet and
+// Default tenant theme, served when no utilityTheme row exists yet and
 // seeded on `POST /api/v1/theme/reset`. The color keys are CSS custom
 // properties (leading `--`) matching globals.css so the frontend's
 // applyCSSVariables actually sets anything. Previously keys lived here
@@ -60,12 +60,12 @@ const DEFAULT_THEME = {
 };
 
 export async function getTheme(utilityId: string) {
-  const theme = await prisma.tenantTheme.findUnique({ where: { utilityId } });
+  const theme = await prisma.utilityTheme.findUnique({ where: { utilityId } });
   return theme ?? DEFAULT_THEME;
 }
 
 export async function updateTheme(utilityId: string, data: UpdateThemeInput) {
-  return prisma.tenantTheme.upsert({
+  return prisma.utilityTheme.upsert({
     where: { utilityId },
     create: {
       utilityId,
@@ -86,7 +86,7 @@ export async function updateTheme(utilityId: string, data: UpdateThemeInput) {
 }
 
 export async function resetTheme(utilityId: string) {
-  return prisma.tenantTheme.upsert({
+  return prisma.utilityTheme.upsert({
     where: { utilityId },
     create: {
       utilityId,

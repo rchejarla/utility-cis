@@ -4,12 +4,13 @@ import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureUtilities } from "./_effective-dating-fixtures.js";
 
 /**
  * Integration tests for the audit-retention sweep.
  *
  * Verifies:
- *   - Per-tenant retention from tenant_config.scheduler_audit_retention_days
+ *   - Per-tenant retention from utility_config.scheduler_audit_retention_days
  *   - Only scheduler-emitted audits (source LIKE 'scheduler:%') are deleted
  *   - User audits (source = 'user:<id>' or NULL legacy rows) are preserved
  *   - Multi-tenant: each tenant's threshold applies to its own rows
@@ -55,6 +56,10 @@ beforeAll(async () => {
   });
 
   prismaImports = await import("../../lib/prisma.js");
+
+  // `utility_id` is a foreign key, so the tenants this file writes
+  // rows for have to exist before the first write.
+  await ensureUtilities(prismaImports.prisma, [TENANT_A, TENANT_B]);
   serviceImports = await import("../../services/audit-retention.service.js");
 }, 180_000);
 
@@ -67,13 +72,13 @@ afterAll(async () => {
 beforeEach(async () => {
   const { prisma } = prismaImports;
   await prisma.$executeRawUnsafe(`
-    TRUNCATE TABLE audit_log, tenant_config RESTART IDENTITY CASCADE
+    TRUNCATE TABLE audit_log, utility_config RESTART IDENTITY CASCADE
   `);
 });
 
 async function seedTenant(utilityId: string, retentionDays: number): Promise<void> {
   const { prisma } = prismaImports;
-  await prisma.tenantConfig.create({
+  await prisma.utilityConfig.create({
     data: { utilityId, schedulerAuditRetentionDays: retentionDays },
   });
 }

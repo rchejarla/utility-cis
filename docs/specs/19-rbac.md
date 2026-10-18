@@ -52,7 +52,7 @@ Custom roles with JSONB permissions matrix.
 
 **Unique:** [utility_id, name]
 
-### TenantModule
+### UtilityModule
 
 Which modules are enabled per tenant. Managed by SaaSLogic subscription — no CIS admin UI for this.
 
@@ -84,7 +84,7 @@ export const MODULES = [
   "billing_cycles",  // BillingCycle
   "audit_log",       // AuditLog (VIEW only)
   "attachments",     // Attachment (cross-entity)
-  "theme",           // TenantTheme, UserPreference
+  "theme",           // UtilityTheme, UserPreference
   "settings",        // User management, Role management, system config
 ] as const;
 ```
@@ -305,7 +305,7 @@ V=VIEW, C=CREATE, E=EDIT, D=DELETE, —=no access
 | BR-RB-002 | System roles (is_system=true) cannot be deleted. | API validation |
 | BR-RB-003 | A role cannot be deleted if users are assigned to it. | API validation |
 | BR-RB-004 | CREATE, EDIT, DELETE implicitly require VIEW. | UI auto-check + API validation |
-| BR-RB-005 | Tenant modules are managed by SaaSLogic, not by CIS admin UI. | No UI for TenantModule |
+| BR-RB-005 | Tenant modules are managed by SaaSLogic, not by CIS admin UI. | No UI for UtilityModule |
 | BR-RB-006 | User role and tenant modules are cached in Redis (5min/10min TTL). | Cache + invalidation |
 | BR-RB-007 | Routes without module declaration are allowed but logged in dev. | Middleware behavior |
 | BR-RB-008 | The last System Admin cannot have their role changed. | API validation |
@@ -316,7 +316,7 @@ V=VIEW, C=CREATE, E=EDIT, D=DELETE, —=no access
 ## Migration Path
 
 ### Phase 1: Add entities + middleware (no enforcement)
-- Add User, Role, TenantModule entities
+- Add User, Role, UtilityModule entities
 - Add authorization middleware in "audit mode" — logs what would be blocked but doesn't block
 - Seed preset roles and enable all modules for existing tenant
 - Add /api/v1/auth/me endpoint

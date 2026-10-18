@@ -25,7 +25,7 @@ let prismaImports: typeof import("../../lib/prisma.js");
 let tenantMiddleware: typeof import("../../middleware/tenant.js")["tenantMiddleware"];
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [TENANT_A, TENANT_B] });
   pgContainer = booted.container;
 
   // Pin the pool to a single connection BEFORE the prisma singleton is

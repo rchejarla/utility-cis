@@ -36,7 +36,7 @@ let app: FastifyInstance;
 /**
  * Only tenant B's ids are referenced by the tests — they are the ones
  * that must not resolve. Tenant A still needs a full fixture, because
- * `resolveVariables` reads A's `tenant_config` on every send.
+ * `resolveVariables` reads A's `utility_config` on every send.
  */
 let fixB: TenantFixture;
 
@@ -83,7 +83,7 @@ const headers = () => ({
 });
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [TENANT_A, TENANT_B] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   appImports = await import("../../app.js");
@@ -113,7 +113,7 @@ beforeEach(async () => {
   fixB = await makeTenantFixture(prisma, TENANT_B);
 
   // The route is gated on the module, for the calling tenant only.
-  await prisma.tenantModule.create({
+  await prisma.utilityModule.create({
     data: { utilityId: TENANT_A, moduleKey: "notifications" },
   });
 

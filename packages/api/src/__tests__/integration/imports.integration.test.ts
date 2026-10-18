@@ -98,7 +98,7 @@ function buildMultipart(
 }
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [TENANT_A] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   appImports = await import("../../app.js");
@@ -124,7 +124,7 @@ beforeEach(async () => {
   fixA = await makeTenantFixture(prisma, TENANT_A);
 
   for (const moduleKey of ENABLED_MODULES) {
-    await prisma.tenantModule.create({
+    await prisma.utilityModule.create({
       data: { utilityId: fixA.utilityId, moduleKey },
     });
   }

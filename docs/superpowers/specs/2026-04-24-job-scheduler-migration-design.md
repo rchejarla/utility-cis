@@ -106,7 +106,7 @@ export async function sweepSlaBreaches(now: Date): Promise<{ flipped: number }> 
     const affected = await tx.$queryRaw<{ id: string; utility_id: string; request_number: string }[]>`
       UPDATE service_requests sr
       SET sla_breached = true, updated_at = now()
-      FROM tenant_config tc
+      FROM utility_config tc
       WHERE tc.utility_id = sr.utility_id
         AND tc.sla_breach_sweep_enabled = true
         AND sr.status NOT IN ('COMPLETED','CANCELLED')
@@ -179,10 +179,10 @@ The consumer updates `delinquencyLastRunAt` to `now()` on success so the next di
 
 ### 3.4 Tenant configuration surface
 
-Extension of `TenantConfig`. Typed columns — not a JSON blob. Every automation knob gets a discrete column with constraints, which means DB-level enforcement and clean indexing.
+Extension of `UtilityConfig`. Typed columns — not a JSON blob. Every automation knob gets a discrete column with constraints, which means DB-level enforcement and clean indexing.
 
 ```prisma
-model TenantConfig {
+model UtilityConfig {
   // ... existing fields ...
 
   // Automation
@@ -254,7 +254,7 @@ Daily `audit-retention` cron at 04:00 UTC runs a single cross-tenant query:
 
 ```sql
 DELETE FROM audit_log al
-USING tenant_config tc
+USING utility_config tc
 WHERE al.utility_id = tc.utility_id
   AND al.source LIKE 'scheduler:%'
   AND al.created_at < now() - (tc.scheduler_audit_retention_days || ' days')::interval
@@ -312,7 +312,7 @@ Each step ships independently behind per-job `USE_LEGACY_SCHEDULERS_<NAME>` env 
 | 0 | Logging foundation: extract shared `pino` logger, rename `lib/redis.ts` → `lib/cache-redis.ts`, replace ~23 stray `console.*` calls with structured logger calls | Pure refactor; revert commit |
 | 1 | Worker infra (queue-redis client, queue module, worker entry, config module, health server, metrics, telemetry wrapper, stale-scheduler cleanup, Bull Board gated) | Delete worker.ts, stop deploying the worker service |
 | 2 | Suspension migration + testcontainers + retry + DLQ | `USE_LEGACY_SCHEDULERS_SUSPENSION=true`, redeploy API |
-| 3 | `TenantConfig` schema migration + `getAutomationConfig` + IANA validation helpers | Additive migration; old code ignores new columns |
+| 3 | `UtilityConfig` schema migration + `getAutomationConfig` + IANA validation helpers | Additive migration; old code ignores new columns |
 | 4 | `/settings/automation` UI + API routes | Hide nav entry |
 | 5 | Notification-send migration with quiet hours in WHERE | `USE_LEGACY_SCHEDULERS_NOTIFICATION=true` |
 | 6 | Delinquency dispatcher + per-tenant fanout + priorities + missed-tick recovery | `USE_LEGACY_SCHEDULERS_DELINQUENCY=true` |

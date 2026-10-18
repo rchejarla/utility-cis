@@ -31,7 +31,7 @@ describe("GET /api/v1/attachments", () => {
     vi.clearAllMocks();
     // Module must be enabled or the authorization middleware returns 403
     // before Zod validation runs.
-    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+    (prisma.utilityModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "attachments" },
     ]);
     // Give the test user a role with attachments:VIEW so authz passes.

@@ -83,7 +83,7 @@ const portalHeaders = (customerId: string) => ({
 });
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [OTHER_UTILITY, UTILITY] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/bill-document.service.js");
@@ -107,7 +107,7 @@ beforeEach(async () => {
   // second test in the file collides on a unique code rather than
   // testing anything.
   await prisma.$executeRawUnsafe(
-    `TRUNCATE TABLE audit_log, bill_document, bill_segment_line, bill_segment, bill, service_agreement, account, customer, billing_address, billing_cycle, rate_component, rate_component_kind, rate_schedule, commodity, tenant_config, tenant_module, user_role, cis_user, role RESTART IDENTITY CASCADE`,
+    `TRUNCATE TABLE audit_log, bill_document, bill_segment_line, bill_segment, bill, service_agreement, account, customer, billing_address, billing_cycle, rate_component, rate_component_kind, rate_schedule, commodity, utility_config, utility_module, user_role, cis_user, role RESTART IDENTITY CASCADE`,
   );
 });
 
@@ -161,12 +161,12 @@ async function postedBill(
   const settings: Record<string, unknown> = {};
   if (opts.issuer !== null) settings.issuer = opts.issuer ?? ISSUER;
   if (opts.storage !== false) settings.billDocuments = { storageIntegration: "cis-bills" };
-  await prisma.tenantConfig.create({
+  await prisma.utilityConfig.create({
     data: { utilityId, settings: settings as Prisma.InputJsonObject },
   });
 
   for (const moduleKey of MODULES) {
-    await prisma.tenantModule.create({ data: { utilityId, moduleKey } });
+    await prisma.utilityModule.create({ data: { utilityId, moduleKey } });
   }
   const rbac = await import("../../services/rbac.service.js");
   await rbac.invalidateTenantModulesCache(utilityId);
@@ -418,7 +418,7 @@ describe("bill documents", () => {
     const billId = await postedBill();
     await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
-    await prismaImports.prisma.tenantConfig.update({
+    await prismaImports.prisma.utilityConfig.update({
       where: { utilityId: UTILITY },
       data: {
         settings: {

@@ -8,7 +8,7 @@ import { getTenantConfig } from "../services/tenant-config.service.js";
  * follows the same numberFormats pattern).
  *
  * Algorithm:
- *   1. Read the tenant's template from tenant_config.settings.numberFormats[entity]
+ *   1. Read the tenant's template from utility_config.settings.numberFormats[entity]
  *      (fall back to the caller-supplied default if not configured).
  *   2. Substitute today's year/month into the template to get the
  *      expected prefix/suffix. Build a POSIX regex from the literal
@@ -55,9 +55,9 @@ export async function generateNumber(opts: NumberGeneratorOptions): Promise<stri
   const now = opts.now ?? new Date();
 
   // 1. Load tenant format config with fallback.
-  const tenantConfig = await getTenantConfig(opts.utilityId);
+  const utilityConfig = await getTenantConfig(opts.utilityId);
   const formats =
-    (tenantConfig.settings.numberFormats as Record<string, NumberFormatConfig> | undefined) ?? {};
+    (utilityConfig.settings.numberFormats as Record<string, NumberFormatConfig> | undefined) ?? {};
   const entityFormat: NumberFormatConfig = formats[opts.entity] ?? {
     template: opts.defaultTemplate,
     startAt: opts.defaultStartAt ?? 1,

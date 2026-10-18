@@ -96,7 +96,7 @@ Concrete: `grep -r "manifest\|serviceWorker\|service-worker" packages/web/app pa
 - **FR-PWA-003** — Tenant-aware install: if the URL contains a tenant subdomain (e.g., `bozeman.saaslogic-utilities.com`), the manifest MUST be customized so installs are tenant-scoped:
   - `name`: "SaaSLogic Utilities — Bozeman"
   - `start_url`: tenant-specific dashboard
-  - `theme_color`: the tenant's branded accent (already configurable via `tenant_theme`)
+  - `theme_color`: the tenant's branded accent (already configurable via `utility_theme`)
   - **Implementation:** The manifest is served by Next.js dynamic route `app/manifest.ts` rather than a static file. It reads the tenant from the request host and assembles the response.
   - **Acceptance:** Install from `bozeman.saaslogic-utilities.com` produces a "SaaSLogic Utilities — Bozeman" home-screen icon distinct from a generic install.
 
@@ -295,7 +295,7 @@ packages/web/app/
   field/sw-helpers/                 # Field-specific SW client helpers (queue API)
 ```
 
-**Tenant config — no schema change required.** The tenant's manifest fields (name, theme color) are derived from the existing `tenant_theme` data.
+**Tenant config — no schema change required.** The tenant's manifest fields (name, theme color) are derived from the existing `utility_theme` data.
 
 **No backend schema change** for §4.1 through §4.6. §4.5 (queue) is entirely client-side; the server sees the replayed mutations as ordinary requests.
 

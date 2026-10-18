@@ -7,7 +7,7 @@ import { TenantLoader } from "../../lib/rate-engine-loaders/loaders/tenant-loade
  * Slice 4 task 4 — TenantLoader integration tests.
  *
  * Boots a Postgres container, applies migrations, and exercises the
- * loader's two declared patterns against real `tenant_setting` rows:
+ * loader's two declared patterns against real `utility_setting` rows:
  *   - tenant:drought_stage          (number stored in JSON column)
  *   - tenant:flags:<flag_name>      (boolean stored in JSON column,
  *                                    keyed by `flags.<name>`)
@@ -17,7 +17,7 @@ let pgContainer: StartedPostgreSqlContainer;
 let prismaImports: typeof import("../../lib/prisma.js");
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [TENANT_A] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);
@@ -29,15 +29,15 @@ afterAll(async () => {
 
 beforeEach(async () => {
   const { prisma } = prismaImports;
-  // tenant_setting isn't in resetDb's truncate list (post-dates it);
+  // utility_setting isn't in resetDb's truncate list (post-dates it);
   // wipe it explicitly so each test starts from a known state.
-  await prisma.$executeRawUnsafe("DELETE FROM tenant_setting");
+  await prisma.$executeRawUnsafe("DELETE FROM utility_setting");
   await resetDb(prisma);
 });
 
 async function seedSetting(utilityId: string, name: string, value: unknown): Promise<void> {
   const { prisma } = prismaImports;
-  await prisma.tenantSetting.create({
+  await prisma.utilitySetting.create({
     data: { utilityId, name, value: value as object },
   });
 }
@@ -77,17 +77,17 @@ describe("TenantLoader", () => {
     expect(out.get("tenant:flags:missing")).toBe(false);
   });
 
-  it("batches multiple keys into a single tenant_setting query", async () => {
+  it("batches multiple keys into a single utility_setting query", async () => {
     await makeTenantFixture(prismaImports.prisma, TENANT_A);
     await seedSetting(TENANT_A, "drought_stage", 3);
     await seedSetting(TENANT_A, "flags.autopay", true);
     await seedSetting(TENANT_A, "flags.paperless_default", false);
 
-    const original = prismaImports.prisma.tenantSetting.findMany.bind(
-      prismaImports.prisma.tenantSetting,
+    const original = prismaImports.prisma.utilitySetting.findMany.bind(
+      prismaImports.prisma.utilitySetting,
     );
     const spy = vi
-      .spyOn(prismaImports.prisma.tenantSetting, "findMany")
+      .spyOn(prismaImports.prisma.utilitySetting, "findMany")
       .mockImplementation((args) => original(args) as ReturnType<typeof original>);
     try {
       const loader = new TenantLoader(prismaImports.prisma, TENANT_A);

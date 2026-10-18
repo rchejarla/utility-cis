@@ -4,6 +4,7 @@ import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureUtilities } from "./_effective-dating-fixtures.js";
 
 /**
  * Integration tests for the SLA breach sweep.
@@ -52,6 +53,10 @@ beforeAll(async () => {
   });
 
   prismaImports = await import("../../lib/prisma.js");
+
+  // `utility_id` is a foreign key, so the tenants this file writes
+  // rows for have to exist before the first write.
+  await ensureUtilities(prismaImports.prisma, [TENANT_A, TENANT_B]);
   serviceImports = await import("../../services/service-request.service.js");
 }, 180_000);
 
@@ -75,14 +80,14 @@ beforeEach(async () => {
       rate_schedule,
       commodity,
       billing_cycle,
-      tenant_config
+      utility_config
     RESTART IDENTITY CASCADE
   `);
 });
 
 async function seedTenant(utilityId: string, opts: { slaBreachSweepEnabled?: boolean } = {}): Promise<void> {
   const { prisma } = prismaImports;
-  await prisma.tenantConfig.create({
+  await prisma.utilityConfig.create({
     data: { utilityId, slaBreachSweepEnabled: opts.slaBreachSweepEnabled ?? true },
   });
 }
@@ -234,7 +239,7 @@ describe("worker-sla-breach integration", () => {
     expect(audits).toBe(0);
   });
 
-  it("respects sla_breach_sweep_enabled = false on the tenant_config join", async () => {
+  it("respects sla_breach_sweep_enabled = false on the utility_config join", async () => {
     const { prisma } = prismaImports;
     await seedTenant(TENANT_A, { slaBreachSweepEnabled: false });
     const { accountId } = await seedAccount(TENANT_A);

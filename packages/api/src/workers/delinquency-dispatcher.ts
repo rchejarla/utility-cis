@@ -10,7 +10,7 @@ import { prisma } from "../lib/prisma.js";
 /**
  * Hourly dispatcher for delinquency evaluation (pattern #2 — fan-out).
  *
- * Reads tenant_config for every tenant with delinquencyEnabled=true
+ * Reads utility_config for every tenant with delinquencyEnabled=true
  * and decides which ones are due for evaluation in this tick:
  *   - On schedule: tenant-local hour matches delinquencyRunHourLocal.
  *   - Missed-tick recovery: delinquencyLastRunAt is null OR > 23h ago.
@@ -38,7 +38,7 @@ export interface DispatchResult {
 }
 
 export async function dispatchDelinquency(now: Date = new Date()): Promise<DispatchResult> {
-  const candidates = await prisma.tenantConfig.findMany({
+  const candidates = await prisma.utilityConfig.findMany({
     where: { delinquencyEnabled: true },
     select: {
       utilityId: true,

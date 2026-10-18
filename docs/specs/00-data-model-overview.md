@@ -12,7 +12,7 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 
 ## Entity Summary
 
-**34 core domain entities** (curated; the Prisma schema defines 62 models, and type-def, plumbing and later-phase tables such as `Bill`, `BillingRun` and `ServicePoint` are not listed here) across 12 categories (RBAC category added in Phase 2; TenantConfig and SuspensionTypeDef added alongside Service Holds v1; CustomFieldSchema added in Custom Fields Phase 1; Notifications and Delinquency categories added in Phase 3; Service Requests category added in Phase 4 slice B; Accounts Receivable category added in Phase 3 AR slice 1):
+**35 core domain entities** (curated; the Prisma schema defines 63 models, and type-def, plumbing and later-phase tables such as `Bill`, `BillingRun` and `ServicePoint` are not listed here) across 12 categories (RBAC category added in Phase 2; UtilityConfig and SuspensionTypeDef added alongside Service Holds v1; CustomFieldSchema added in Custom Fields Phase 1; Notifications and Delinquency categories added in Phase 3; Service Requests category added in Phase 4 slice B; Accounts Receivable category added in Phase 3 AR slice 1):
 
 | # | Entity | Table | Category | Phase Built | Key Relationships |
 |---|--------|-------|----------|-------------|-------------------|
@@ -31,13 +31,14 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 | 13 | BillingCycle | `billing_cycle` | Configuration | Phase 1 | Referenced by ServiceAgreement |
 | 14 | MeterRead | `meter_read` | Operations | Phase 1 | Belongs to Meter + ServiceAgreement + UnitOfMeasure; optionally linked to MeterRegister. `uom_id` frozen at write time from the meter's UOM. Phase 2.5: gains nullable `read_event_id` UUID that groups sibling rows from the same multi-register read event (one row per active register per event). |
 | 15 | AuditLog | `audit_log` | System | Phase 1 | Records all entity state changes; references actor by user UUID |
-| 16 | TenantTheme | `tenant_theme` | System | Phase 1 | One per utility (unique on utility_id) |
+| 15a | Utility | `utility` | System | 2026-10-18 | **The tenant.** Every other table's `utility_id` is a foreign key to this row, `ON DELETE RESTRICT`. Holds id, display name, `status` (`ACTIVE \| SUSPENDED`) and created-at. Nothing reads `status` yet — suspension is build-order step 5 of the tenancy design note, so setting it today changes no behaviour. RLS keys on `id`, since this table's primary key *is* the tenant. |
+| 16 | UtilityTheme | `utility_theme` | System | Phase 1 | One per utility (unique on utility_id) |
 | 17 | UserPreference | `user_preference` | System | Phase 1 | One per user per utility (unique on utility_id + user_id) |
 | 18 | Attachment | `attachment` | Operations | Phase 2 | Generic file attachment for any entity (entityType + entityId pattern); RLS enforced |
 | 19 | Role | `role` | RBAC | Phase 2 | Per-tenant permission bundle; referenced by CisUser |
 | 20 | CisUser | `cis_user` | RBAC | Phase 2 | Admin or portal user; belongs to Role; scoped by utility_id. Nullable `customer_id` FK to Customer — null for staff, set for portal customers. Portal users see only their own accounts/data via customer-scoped API endpoints. |
-| 21 | TenantModule | `tenant_module` | RBAC | Phase 2 | Per-tenant module enablement (maps `moduleKey` → enabled) |
-| 22 | TenantConfig | `tenant_config` | System | Phase 2 | One per utility (unique on utility_id); holds `require_hold_approval` and an extensible `settings` JSONB bucket carrying `numberFormats` (identifier generation), `branding`, `notifications`, `retention`, and `billing` namespaces (see spec 18). |
+| 21 | UtilityModule | `utility_module` | RBAC | Phase 2 | Per-tenant module enablement (maps `moduleKey` → enabled) |
+| 22 | UtilityConfig | `utility_config` | System | Phase 2 | One per utility (unique on utility_id); holds `require_hold_approval` and an extensible `settings` JSONB bucket carrying `numberFormats` (identifier generation), `branding`, `notifications`, `retention`, and `billing` namespaces (see spec 18). |
 | 23 | SuspensionTypeDef | `suspension_type_def` | Reference | Phase 2 | Per-tenant (or global, with `utility_id IS NULL`) reference table for service-hold type codes. Replaces the former `SuspensionType` Prisma enum. RLS policy allows global rows to be visible across all tenants. |
 | 24 | CustomFieldSchema | `custom_field_schema` | System | Phase 2 | One row per (utility, entity_type) holding the tenant's custom-field schema as a JSONB FieldDefinition array. Powers the `custom_fields` JSONB column on Customer/Account/Premise/ServiceAgreement/Meter. See spec 20. |
 | 25 | NotificationTemplate | `notification_template` | Notifications | Phase 3 | Per-tenant template with channel (EMAIL/SMS/MAIL), Mustache body, variable interpolation, optional event-trigger binding. See spec 13. |
@@ -83,12 +84,22 @@ MeterRead ──→ Meter + MeterRegister (optional) + ServiceAgreement
 | [06 — Commodities & Units of Measure](./06-commodity-and-uom.md) | `06-commodity-and-uom.md` | Commodity, UnitOfMeasure |
 | [07 — Rate Management](./07-rate-management.md) | `07-rate-management.md` | RateSchedule, BillingCycle |
 | [08 — Meter Reads & Operations](./08-meter-reads.md) | `08-meter-reads.md` | MeterRead |
-| [09 — System & Audit](./09-system-audit.md) | `09-system-audit.md` | AuditLog, TenantTheme, UserPreference |
+| [09 — System & Audit](./09-system-audit.md) | `09-system-audit.md` | AuditLog, UtilityTheme, UserPreference |
 | [17 — Reporting and Audit](./17-reporting-and-audit.md) | `17-reporting-and-audit.md` | Attachment |
 
 ## Multi-Tenancy Model
 
-Every table has a `utility_id UUID NOT NULL` column. RLS policies are enabled on all entity tables:
+Every entity table has a `utility_id UUID` column, and since 2026-10-18 it is a **foreign key to
+`utility(id)`** with `ON DELETE RESTRICT` — so a row naming a tenant that does not exist is refused
+by the database rather than silently opening an empty partition.
+
+It is NOT NULL on 54 of the 61 tables that carry it. The seven exceptions are the global reference
+tables — `account_type_def`, `premise_type_def`, `suspension_type_def`, `service_request_type_def`,
+`rate_component_kind`, `rate_assignment_role`, `rate_service_class` — where `utility_id IS NULL`
+marks a row that belongs to no tenant and is readable by all of them; a tenant shadows one by
+adding its own row with the same code.
+
+RLS policies are enabled on all 62 tenant-carrying tables:
 
 ```sql
 ALTER TABLE premise ENABLE ROW LEVEL SECURITY;

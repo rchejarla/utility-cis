@@ -15,6 +15,11 @@ import { bootPostgres } from "./_effective-dating-fixtures.js";
 
 const ACTOR = "00000000-0000-4000-8000-aaaa00000001";
 const utilityId = "00000000-0000-4000-8000-0000000000aa";
+// Second tenants, hoisted out of the test bodies: utility_id is a
+// foreign key, so they must be declared at bootPostgres below.
+const other = "00000000-0000-4000-8000-0000000000bb";
+// Second tenants, hoisted out of the test bodies: utility_id is a
+// foreign key, so they must be declared at bootPostgres below.
 
 let pgContainer: StartedPostgreSqlContainer;
 let prismaImports: typeof import("../../lib/prisma.js");
@@ -26,7 +31,7 @@ let accountId: string;
 const reasonIdFor: Record<string, string> = {};
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [utilityId, other] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   allocation = await import("../../services/ar/allocation.service.js");
@@ -264,7 +269,6 @@ describe("applyCreditToDebits", () => {
 
   it("does not touch another tenant's debits", async () => {
     const { prisma } = prismaImports;
-    const other = "00000000-0000-4000-8000-0000000000bb";
     const otherCycle = await prisma.billingCycle.create({
       data: {
         utilityId: other,

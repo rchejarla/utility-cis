@@ -96,8 +96,8 @@ outside tests, across the API and the seed.
 
 **There is also nothing to create.** Checked 2026-10-18: there is no
 `Utility` or `Tenant` model in `schema.prisma`, and no such table in the
-database — the only tenant-named tables are `tenant_config`,
-`tenant_module`, `tenant_theme` and `tenant_setting`, each of which
+database — the only tenant-named tables are `utility_config`,
+`utility_module`, `utility_theme` and `utility_setting`, each of which
 describes a tenant without being one. `utility_id` carries **zero
 foreign-key constraints** anywhere in the schema.
 
@@ -112,7 +112,7 @@ Consequences, both already observed:
 
 - Onboarding a second tenant means a developer running SQL.
 - A freshly migrated and seeded database answers **403** on every gated
-  route, because `tenant_module` rows do not exist. Integration suites
+  route, because `utility_module` rows do not exist. Integration suites
   create them inline and invalidate the RBAC cache
   (`billing-run.integration.test.ts:89` and six other suites) — they are
   working around a missing provisioning path, not testing one.
@@ -241,7 +241,7 @@ nothing to write without it.
 | # | Responsibility | Why it has no other home |
 |---|---|---|
 | 1 | Create a tenant — identity, display name, status, created-at | Nothing represents a tenant at all |
-| 2 | Enable and disable its modules | `tenant_module` has no writer outside tests; a fresh database answers 403 on every gated route |
+| 2 | Enable and disable its modules | `utility_module` has no writer outside tests; a fresh database answers 403 on every gated route |
 | 3 | Apply a config profile — commodities, UOMs, cycles, tariffs | Q4; this is configuration, not demo data |
 | 4 | Create its first admin | A tenant with no user cannot be administered into existence |
 | 5 | Suspend and reactivate | `isActive` exists on users, not on tenants |
@@ -316,17 +316,44 @@ applies the shadow — so a caller inherits it instead of reimplementing
 it.
 
 **Q2 — Where does the platform actor's identity live?**
-Three candidates: a column on `CisUser` with `utility_id` nullable; a
-separate `platform_user` table; or outside the CIS entirely, in apptorID,
-with the API trusting a claim. The third keeps the CIS free of a second
-user model but puts the trust boundary in a token.
+**Answered 2026-10-18: `CisUser`, with `utility_id` nullable — and
+apptorID eventually, for every identity rather than this one.** The
+third candidate (identity outside the CIS, the API trusting a claim) is
+the destination, but it is the destination for tenant users and portal
+users too, so it is not a decision this actor should force on its own.
+Until then a null `utility_id` means "not a tenant's user", which is
+exactly what a platform actor is, and it needs no second user model.
+
+Two consequences this answer creates, neither settled by it:
+
+- `CisUser.utilityId` is currently NOT NULL and, since 2026-10-18, a
+  foreign key to `utility`. Making it nullable follows the pattern the
+  seven global-reference tables already use, so the mechanics are
+  known — but it means every query reading `cis_user` by tenant has to
+  mean it, because a null row now exists and belongs to nobody.
+- `@@unique([utilityId, email])` stops constraining platform users:
+  Postgres treats nulls as distinct, so two platform actors could share
+  an email address. A partial unique index on `email WHERE utility_id IS
+  NULL` is the fix, and it is the same shape as the five partial indexes
+  the migration squash turned up.
 
 **Q3 — How does RLS treat it?**
-Either a database role that bypasses RLS, or an actor that still sets
-`app.current_utility_id` per operation and simply may set it to any
-tenant. The second is far more auditable and keeps one enforcement
-mechanism; it also means the platform actor can never read two tenants in
-one query, which is a feature.
+**Answered 2026-10-18: split by operation.** Tenant *lifecycle*
+operations run outside `utility_id` — creating, listing, suspending a
+utility, enabling its modules, loading its profile, creating its first
+admin. Every other operation sets `app.current_utility_id` exactly as
+today. So this is not a role that bypasses RLS wholesale, and the actor
+still cannot read two tenants in one ordinary query.
+
+The consequence to settle before step 5: with no tenant context,
+`current_setting('app.current_utility_id', true)` is NULL, and every
+policy compares `utility_id = NULL`, which is NULL, which filters the
+row out. A lifecycle operation would therefore see nothing. It needs
+either a role exempt from RLS for those operations only, or policies
+that admit an explicit platform context — a second setting the policy
+ORs in. The question is live but not urgent: the policies are inert
+today because the application role is a superuser that owns the tables
+(§1.7).
 
 **Q4 — Who chooses a tenant's seed profile at provisioning time?**
 Related to the seed-profile split (commodities, UOMs, cycles and tariffs
@@ -362,13 +389,19 @@ first.
    on every entity with no constraint anywhere today — but it costs a
    reseed rather than a repair.
 3. **Provisioning service** — `provisionTenant(...)`: utility row,
-   `tenant_module` rows, preset roles, first admin, config profile.
+   `utility_module` rows, preset roles, first admin, config profile.
    Idempotent, callable from a script, **no UI**. This is the piece with
    value in both modes, and it closes the 403-on-a-fresh-database trap
    that every integration suite currently works around.
 4. **`TENANCY_MODE` in config**, defaulting to `self_serve`, read at boot.
    Nothing branches on it yet.
-5. **Platform actor** (Q2, Q3), and move `/admin/queues` behind it (D4).
+5. **Platform actor** — a `CisUser` with a null `utility_id` (Q2), whose
+   lifecycle operations run outside `utility_id` while everything else
+   sets `app.current_utility_id` (Q3) — and move `/admin/queues` behind
+   it (D4). Both answers landed 2026-10-18; each left one consequence to
+   settle first, recorded with them: a partial unique index on platform
+   emails, and how a lifecycle operation reads past a policy that
+   compares against a NULL setting.
    Preceded by a deliberate sweep for the `utilityId`-parameter-that-
    scopes-nothing shape — see §1.7 for why this one is a prerequisite
    rather than hygiene.

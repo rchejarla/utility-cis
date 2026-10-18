@@ -31,7 +31,7 @@ let fix: TenantFixture;
 let saId: string;
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [TENANT_A] });
   pgContainer = booted.container;
   process.env.DATABASE_URL = booted.dbUrl;
   prismaImports = await import("../../lib/prisma.js");

@@ -42,7 +42,7 @@ describe("automation-config routes", () => {
     // tenant_profile module enabled for this tenant + admin role with
     // VIEW + EDIT permission. Mirrors the mock pattern used by other
     // route integration tests in this suite.
-    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+    (prisma.utilityModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "tenant_profile" },
     ]);
     (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -64,7 +64,7 @@ describe("automation-config routes", () => {
 
   describe("GET /api/v1/settings/automation", () => {
     it("returns the tenant's current automation config", async () => {
-      (prisma.tenantConfig.findUnique as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      (prisma.utilityConfig.findUnique as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
         defaultRow(),
       );
 
@@ -89,8 +89,8 @@ describe("automation-config routes", () => {
 
     it("creates a default row on first read for a tenant that has none", async () => {
       // First lookup misses; service falls through to upsert.
-      (prisma.tenantConfig.findUnique as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
-      (prisma.tenantConfig.upsert as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      (prisma.utilityConfig.findUnique as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+      (prisma.utilityConfig.upsert as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
         defaultRow(),
       );
 
@@ -101,7 +101,7 @@ describe("automation-config routes", () => {
         headers: adminHeaders,
       });
       expect(res.statusCode).toBe(200);
-      expect(prisma.tenantConfig.upsert).toHaveBeenCalledTimes(1);
+      expect(prisma.utilityConfig.upsert).toHaveBeenCalledTimes(1);
     });
 
     it("denies without tenant_profile:VIEW permission", async () => {
@@ -128,7 +128,7 @@ describe("automation-config routes", () => {
 
   describe("PATCH /api/v1/settings/automation", () => {
     it("applies a partial patch and returns the updated config", async () => {
-      const upsertMock = prisma.tenantConfig.upsert as ReturnType<typeof vi.fn>;
+      const upsertMock = prisma.utilityConfig.upsert as ReturnType<typeof vi.fn>;
       upsertMock.mockResolvedValueOnce({
         ...defaultRow(),
         delinquencyRunHourLocal: 5,

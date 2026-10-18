@@ -56,7 +56,7 @@ const LOGO_MAX_REDIRECTS = 3;
 /**
  * Resolve a tenant-supplied logo URL, or refuse it.
  *
- * `tenantTheme.logoUrl` is written through `PUT /api/v1/theme` under
+ * `utilityTheme.logoUrl` is written through `PUT /api/v1/theme` under
  * `theme:EDIT` and validated only as a URL. Fetching it from inside the
  * API makes that field a request this service will make on an
  * attacker's behalf, from the API's own network position — and the

@@ -24,7 +24,7 @@ describe("/api/v1/bill-messages", () => {
   // embedded on cisUser — see mockAuthUser in authorization.test.ts,
   // which is the canonical shape.
   function grant(permissions: Record<string, string[]>) {
-    (prisma.tenantModule.findMany as never as ReturnType<typeof vi.fn>).mockResolvedValue(
+    (prisma.utilityModule.findMany as never as ReturnType<typeof vi.fn>).mockResolvedValue(
       Object.keys(permissions).map((moduleKey) => ({ moduleKey })),
     );
     (prisma.cisUser.findFirst as never as ReturnType<typeof vi.fn>).mockResolvedValue({

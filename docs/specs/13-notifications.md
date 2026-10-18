@@ -114,7 +114,7 @@ Simple `{{namespace.field}}` substitution. No conditionals, loops, or logic in v
 | `meter` | Meter | `meterNumber`, `meterType`, `uomCode` |
 | `delinquency` | DelinquencyAction context | `balance`, `daysPastDue`, `tierName`, `dueDate`, `actionType` |
 | `portal` | System URLs | `loginUrl`, `paymentUrl`, `usageUrl`, `profileUrl` |
-| `utility` | TenantConfig + branding | `name`, `phone`, `email`, `website`, `logoUrl` |
+| `utility` | UtilityConfig + branding | `name`, `phone`, `email`, `website`, `logoUrl` |
 
 ### Variable resolution
 
@@ -165,7 +165,7 @@ async function sendNotification(
 
 ### Send job (background)
 
-A BullMQ worker (`packages/api/src/workers/notification-worker.ts`) ticks every 10 seconds and calls `processPendingNotificationsWithQuietHours(now)`. The function honors per-tenant `tenant_config.notificationSendEnabled` and SMS quiet hours. It picks up `PENDING` notifications:
+A BullMQ worker (`packages/api/src/workers/notification-worker.ts`) ticks every 10 seconds and calls `processPendingNotificationsWithQuietHours(now)`. The function honors per-tenant `utility_config.notificationSendEnabled` and SMS quiet hours. It picks up `PENDING` notifications:
 
 1. Query: `WHERE status = 'PENDING' ORDER BY created_at LIMIT 50`
 2. For each: set `status = SENDING`, call the provider adapter, update to `SENT` or `FAILED`.
@@ -188,7 +188,7 @@ interface NotificationProvider {
 | `TwilioProvider` | SMS | `settings.notifications.smsApiKey` |
 | `SmtpProvider` | EMAIL | `settings.notifications.smtpHost/port/user/pass` |
 
-Provider selection reads from `TenantConfig.settings.notifications`. Defaults to `console` in dev.
+Provider selection reads from `UtilityConfig.settings.notifications`. Defaults to `console` in dev.
 
 ## API Endpoints
 

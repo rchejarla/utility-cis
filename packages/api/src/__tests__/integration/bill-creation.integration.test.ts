@@ -118,11 +118,11 @@ beforeAll(async () => {
   // Enable agreements + accounts modules so the bill routes' permission
   // gates pass. The seed enables agreements; accounts may need it too.
   for (const moduleKey of ["agreements", "accounts"]) {
-    const existing = await prisma.tenantModule.findFirst({
+    const existing = await prisma.utilityModule.findFirst({
       where: { utilityId, moduleKey },
     });
     if (!existing) {
-      await prisma.tenantModule.create({ data: { utilityId, moduleKey } });
+      await prisma.utilityModule.create({ data: { utilityId, moduleKey } });
     }
   }
   const rbac = await import("../../services/rbac.service.js");

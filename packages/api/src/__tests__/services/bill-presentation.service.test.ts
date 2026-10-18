@@ -88,8 +88,8 @@ function billRow(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(prisma.tenantConfig.findUnique).mockResolvedValue(CONFIG_ROW as never);
-  vi.mocked(prisma.tenantTheme.findUnique).mockResolvedValue(null as never);
+  vi.mocked(prisma.utilityConfig.findUnique).mockResolvedValue(CONFIG_ROW as never);
+  vi.mocked(prisma.utilityTheme.findUnique).mockResolvedValue(null as never);
   vi.mocked(prisma.accountTypeDef.findFirst).mockResolvedValue({ id: "at-1" } as never);
 });
 
@@ -222,7 +222,7 @@ describe("loadBillPresentation", () => {
   it("refuses when issuer identity is incomplete, naming what is missing", async () => {
     vi.mocked(prisma.bill.findFirst).mockResolvedValue(billRow() as never);
     const { utilityName: _n, remittanceAddressLine1: _a, ...rest } = ISSUER;
-    vi.mocked(prisma.tenantConfig.findUnique).mockResolvedValue({
+    vi.mocked(prisma.utilityConfig.findUnique).mockResolvedValue({
       utilityId: "util-1",
       settings: { issuer: rest },
     } as never);
@@ -238,7 +238,7 @@ describe("loadBillPresentation", () => {
 
   it("treats an empty-string issuer field as missing, since that is how settings clear one", async () => {
     vi.mocked(prisma.bill.findFirst).mockResolvedValue(billRow() as never);
-    vi.mocked(prisma.tenantConfig.findUnique).mockResolvedValue({
+    vi.mocked(prisma.utilityConfig.findUnique).mockResolvedValue({
       utilityId: "util-1",
       settings: { issuer: { ...ISSUER, remittanceCity: "" } },
     } as never);
@@ -258,7 +258,7 @@ describe("loadBillPresentation", () => {
 
   it("takes branding from the tenant theme when it has one", async () => {
     vi.mocked(prisma.bill.findFirst).mockResolvedValue(billRow() as never);
-    vi.mocked(prisma.tenantTheme.findUnique).mockResolvedValue({
+    vi.mocked(prisma.utilityTheme.findUnique).mockResolvedValue({
       logoUrl: "https://cdn.example.com/logo.png",
       colors: { primary: "#0055aa" },
       typography: { fontFamily: "Source Sans" },

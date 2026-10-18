@@ -2,7 +2,7 @@
 
 **Module:** 15 — Customer Portal
 **Status:** Phase 4.1 (MVP complete) — see roadmap
-**Entities:** No new entities. Portal users are `CisUser` rows with a nullable `customerId` FK to `Customer`. RBAC uses the existing Role / TenantModule system with four portal-specific modules.
+**Entities:** No new entities. Portal users are `CisUser` rows with a nullable `customerId` FK to `Customer`. RBAC uses the existing Role / UtilityModule system with four portal-specific modules.
 
 ## Overview
 
@@ -136,7 +136,7 @@ Note: password hashing, MFA, and real session management are deferred until Appt
 
 3. **Payment delegation:** CIS never handles payment data. The "Pay Now" button on the invoice detail page will redirect to SaaSLogic's hosted payment page when Phase 3 billing integration is live.
 
-4. **Unified identity:** Portal customers and admin staff share the same `CisUser` table, `Role` system, `TenantModule` system, and JWT format. The only distinction is the `customerId` FK and the role's module permissions.
+4. **Unified identity:** Portal customers and admin staff share the same `CisUser` table, `Role` system, `UtilityModule` system, and JWT format. The only distinction is the `customerId` FK and the role's module permissions.
 
 5. **Usage data visibility:** Customers can view meter read data for their active service agreements via the usage page. Date range is configurable (from/to month pickers, default trailing 12 months). UOM is frozen on each read and displayed alongside consumption.
 

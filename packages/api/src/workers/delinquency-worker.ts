@@ -12,7 +12,7 @@ import { evaluateDelinquencyForTenant } from "../services/delinquency.service.js
  * replica. Each evaluation does multiple DB queries; with the default
  * Prisma connection pool this stays comfortably below saturation.
  *
- * The handler updates tenant_config.delinquencyLastRunAt on success
+ * The handler updates utility_config.delinquencyLastRunAt on success
  * (inside evaluateDelinquencyForTenant) so the dispatcher's
  * missed-tick recovery sees this tenant as "ran today."
  */

@@ -22,7 +22,7 @@ let prismaImports: typeof import("../../lib/prisma.js");
 let reason: typeof import("../../services/ar/reason.service.js");
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [utilityId, otherUtilityId, freshUtilityId] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   reason = await import("../../services/ar/reason.service.js");

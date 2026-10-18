@@ -88,11 +88,11 @@ beforeAll(async () => {
 
   // Enable the agreements module so the bill-segment routes' permission
   // check (module: agreements, permission: EDIT/VIEW) passes.
-  const existingMod = await prisma.tenantModule.findFirst({
+  const existingMod = await prisma.utilityModule.findFirst({
     where: { utilityId, moduleKey: "agreements" },
   });
   if (!existingMod) {
-    await prisma.tenantModule.create({
+    await prisma.utilityModule.create({
       data: { utilityId, moduleKey: "agreements" },
     });
   }

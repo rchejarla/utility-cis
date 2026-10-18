@@ -33,7 +33,7 @@ describe("audit rows carry the actor's name", () => {
   const CONTACT_ID = "bb000000-0000-4000-8000-000000000002";
 
   function grant(permissions: Record<string, string[]>) {
-    (prisma.tenantModule.findMany as never as ReturnType<typeof vi.fn>).mockResolvedValue(
+    (prisma.utilityModule.findMany as never as ReturnType<typeof vi.fn>).mockResolvedValue(
       Object.keys(permissions).map((moduleKey) => ({ moduleKey })),
     );
     (prisma.cisUser.findFirst as never as ReturnType<typeof vi.fn>).mockResolvedValue({

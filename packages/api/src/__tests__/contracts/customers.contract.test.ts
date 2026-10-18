@@ -12,7 +12,7 @@ describe("Contract: customers ← web", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+    (prisma.utilityModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "customers" },
     ]);
     (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({

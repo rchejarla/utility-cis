@@ -65,7 +65,7 @@ The closest things are:
 
 ### 2.5 Email digest ⚠ stub only
 
-**Status: Partial.** `tenant_config.notifications` JSON includes `dailyDigestEnabled: boolean` (toggled in `/settings/notifications/page.tsx`). Saving the toggle persists. **No worker generates the digest.** The settings page itself acknowledges this: *"The sender address and digest toggle are persisted now. SMS provider setup and per-event templates are part of the Phase 3 notification engine and are not yet implemented."*
+**Status: Partial.** `utility_config.notifications` JSON includes `dailyDigestEnabled: boolean` (toggled in `/settings/notifications/page.tsx`). Saving the toggle persists. **No worker generates the digest.** The settings page itself acknowledges this: *"The sender address and digest toggle are persisted now. SMS provider setup and per-event templates are part of the Phase 3 notification engine and are not yet implemented."*
 
 ### 2.6 Notification preferences (per-user, per-category) ⚠ schema only
 
@@ -368,7 +368,7 @@ The `sla-breach-worker.ts` (Task 8 of the scheduler migration) only flags an SR 
   - `digest`: `email: true (always), in_app: true (immediate), sms: false`
   - `broadcast`: `in_app: true (immediate), email: true (immediate), sms: false`
 
-- **FR-WF-053** — A new admin page at `/settings/notifications` (extending the existing page) renders the preferences matrix. Save persists to `UserPreference.preferences`. Reset-to-default button restores tenant defaults. Tenant admins MAY set tenant-level defaults that override product defaults (per-tenant defaults stored in `tenant_config.notification_defaults`).
+- **FR-WF-053** — A new admin page at `/settings/notifications` (extending the existing page) renders the preferences matrix. Save persists to `UserPreference.preferences`. Reset-to-default button restores tenant defaults. Tenant admins MAY set tenant-level defaults that override product defaults (per-tenant defaults stored in `utility_config.notification_defaults`).
 
 - **FR-WF-054** — Time-sensitive overrides: the workflow engine (FR-WF-002 `notify` action) can specify `overrideUserPreference: true` for genuinely urgent events (e.g., security incident, payment failure during automated reconnection). Overriding emits an extra `AUDIT_OPERATIONAL` row noting the override + reason. Tenants can audit override frequency to ensure operators aren't crying wolf.
 
@@ -635,7 +635,7 @@ The `sla-breach-worker.ts` (Task 8 of the scheduler migration) only flags an SR 
 | `notification` (defined in [13-notifications.md](../specs/13-notifications.md), extended by [11-notes-and-comments.md](./11-notes-and-comments.md)) | Add `category` enum column | Per-category preferences per FR-WF-040 |
 | `notification` | Add `digestedAt` column | Per FR-WF-060 dedupe |
 | `user_preference` | Define and Zod-validate the `preferences` JSON shape (no schema change; documentation + runtime validation) | Per FR-WF-050 |
-| `tenant_config` | Add `notification_defaults` JSON, `delegation_max_dollar_default` (numeric), `escalation_default_sla_hours` (int) | Per FR-WF-053, FR-WF-094 |
+| `utility_config` | Add `notification_defaults` JSON, `delegation_max_dollar_default` (numeric), `escalation_default_sla_hours` (int) | Per FR-WF-053, FR-WF-094 |
 
 ### 4.3 New enums
 

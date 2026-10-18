@@ -273,7 +273,7 @@ describe("service-suspension lifecycle", () => {
      * RETURNING` calls and one `auditLog.createMany`. Each unit test
      * here verifies the *shape* of those calls — atomicity (audit
      * iff rows changed), payload contents (correct actor/state),
-     * and counts. The cross-tenant + tenant_config-join behavior
+     * and counts. The cross-tenant + utility_config-join behavior
      * (suspension_enabled flag, require_hold_approval gate) is
      * verified end-to-end by the testcontainers integration test.
      */

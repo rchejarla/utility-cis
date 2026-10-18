@@ -397,7 +397,7 @@ Reading the rest of this section through that lens makes the design choices easi
 
 - **FR-EFF-062** — Generic `PATCH /api/v1/premises/<id>` is **explicitly forbidden** from setting any GIS-sourced field. The Zod schema for the PATCH body excludes those fields; attempting to set them returns 422 with: *"This field is GIS-managed. Use POST /premises/{id}/gis-override to manually override (requires gis.override_attributes permission)."*
 
-- **FR-EFF-063** — Dual approval per the entity's policy: tenants can configure (in `tenant_config.gis_override_dual_approval_thresholds`) which fields require dual approval. Defaults:
+- **FR-EFF-063** — Dual approval per the entity's policy: tenants can configure (in `utility_config.gis_override_dual_approval_thresholds`) which fields require dual approval. Defaults:
   - `gisSyncStatus` flip to `MANUAL_OVERRIDE` — always dual-approved.
   - `geoLat`/`geoLng` — single approval (low-risk).
   - `squareFootage` / `frontageFeet` / `imperviousAreaSqFt` / `assessmentBasisUnits` — dual-approved when the change exceeds 5% of the GIS-reported value (anti-fraud guard against silent assessment basis manipulation).
@@ -435,7 +435,7 @@ Reading the rest of this section through that lens makes the design choices easi
 | `service_agreement` | Add generated `effective_range tstzrange` column + exclusion constraint + CHECK constraint + lifecycle trigger | FR-EFF-001..003 |
 | `service_agreement_meter` | Add generated `effective_range tstzrange` + exclusion constraint + CHECK constraint | FR-EFF-010..011 |
 | `premise` | Convert `serviceTerritoryId` from `String?` to `String? @db.Uuid` with FK to `ServiceTerritory.id`; backfill migration | FR-EFF-031 |
-| `tenant_config` | Add `gis_override_dual_approval_thresholds` JSON | FR-EFF-063 |
+| `utility_config` | Add `gis_override_dual_approval_thresholds` JSON | FR-EFF-063 |
 
 ### 4.3 New SQL helpers
 
@@ -570,7 +570,7 @@ Hard dependencies:
 - [ ] `gis.override_attributes` permission distinct from `premise.write`.
 - [ ] `POST /premises/<id>/gis-override` requires the new permission + reason text.
 - [ ] Generic PATCH rejects GIS field edits with 422 + override-endpoint guidance.
-- [ ] Dual approval per `tenant_config.gis_override_dual_approval_thresholds`; threshold-based for amount-sensitive fields.
+- [ ] Dual approval per `utility_config.gis_override_dual_approval_thresholds`; threshold-based for amount-sensitive fields.
 - [ ] Override emits `AUDIT_SECURITY` audit row with field-level diff.
 - [ ] `gisSyncStatus = MANUAL_OVERRIDE` blocks subsequent GIS sync from updating the field.
 - [ ] Override release returns the parcel to `STALE` status; sync resumes on next tick.

@@ -2,7 +2,7 @@
 
 **Module:** 23 — Accounts Receivable
 **Status:** Phase 3 — slices 1 (ledger and posting), 2 (payments, allocation, reversal), 3 (fees, adjustments, reason codes) and 4a (the account AR tab) shipped; 4b and slices 5–6 outstanding. Twelve API endpoints, and the account AR tab is the first user interface.
-**Entities:** `LedgerEntry`, `LedgerApplication`, `LedgerReasonDef`, plus columns on existing entities (`Bill.postedAt`, `Account.balance`, `Account.lastDueDate`, `Account.autoPostBills`, `TenantConfig.autoPostBills`).
+**Entities:** `LedgerEntry`, `LedgerApplication`, `LedgerReasonDef`, plus columns on existing entities (`Bill.postedAt`, `Account.balance`, `Account.lastDueDate`, `Account.autoPostBills`, `UtilityConfig.autoPostBills`).
 
 ## Authority
 
@@ -31,7 +31,7 @@ The test is dependency direction (design §3.9). The ledger's consumers are Bill
 | `Account.balance` | DECIMAL(14,2) | Pre-existing column, now actually written: `SUM(ledger_entry.open_amount)` for the account, recomputed inside the posting transaction. Never written by a background job, which is why it cannot drift. |
 | `Account.lastDueDate` | DATE? | The **oldest open debit's** due date, null when nothing is open. See module 11 — the name predates this meaning and a rename is a slice 5 item. |
 | `Account.autoPostBills` | BOOLEAN? | Per-account override. Null means inherit the tenant setting, so flipping the tenant value moves every account that has not explicitly opted out. |
-| `TenantConfig.autoPostBills` | BOOLEAN NOT NULL DEFAULT true | Tenant default. No `tenant_config` row means an unconfigured tenant, which takes the column default: auto-post on. |
+| `UtilityConfig.autoPostBills` | BOOLEAN NOT NULL DEFAULT true | Tenant default. No `utility_config` row means an unconfigured tenant, which takes the column default: auto-post on. |
 
 The `tenant_isolation` RLS policies on the three new tables are inert as things stand, because the application role is a SUPERUSER and superusers bypass RLS. Tenant separation rests on the `utility_id` predicates in application code. Pre-existing condition, recorded in the migration's header comment and in `docs/design/utility-cis-architecture.md` §7.1.
 

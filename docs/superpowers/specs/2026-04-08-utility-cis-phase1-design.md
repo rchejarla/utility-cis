@@ -470,7 +470,7 @@ Captures all entity state changes via internal event emitter.
 | metadata | JSONB | Nullable — extra context |
 | created_at | TIMESTAMPTZ | |
 
-### 5.14 TenantTheme
+### 5.14 UtilityTheme
 
 Per-tenant UI theme configuration.
 
@@ -693,7 +693,7 @@ app/
 - CSS variable swap via `data-theme` attribute — no page reload
 - Persistence: user preference (DB) → tenant default (Theme Editor) → system (`prefers-color-scheme`)
 - Map adapts: Mapbox style switches between dark-v11 and light-v11
-- `TenantTheme.colors` JSONB nests under `"dark"` and `"light"` keys
+- `UtilityTheme.colors` JSONB nests under `"dark"` and `"light"` keys
 - `UserPreference.theme_mode`: `"dark"` | `"light"` | `"system"`
 
 ---

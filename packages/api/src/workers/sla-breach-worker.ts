@@ -12,7 +12,7 @@ import { sweepBreachedSRs } from "../services/service-request.service.js";
  * sweep is one cross-tenant SQL statement; overlapping ticks would
  * race (idempotently) and waste DB connections.
  *
- * Tenant gating happens inside the SQL JOIN with tenant_config; this
+ * Tenant gating happens inside the SQL JOIN with utility_config; this
  * worker is dumb glue.
  */
 

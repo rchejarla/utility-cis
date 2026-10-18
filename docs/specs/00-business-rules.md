@@ -204,7 +204,7 @@
 | BR-RB-002 | System roles (is_system=true) cannot be deleted. | API validation |
 | BR-RB-003 | A role cannot be deleted if users are assigned to it. | API validation |
 | BR-RB-004 | CREATE, EDIT, DELETE implicitly require VIEW. | UI auto-check + API validation |
-| BR-RB-005 | Tenant modules are managed by SaaSLogic, not by CIS admin UI. | No UI for TenantModule |
+| BR-RB-005 | Tenant modules are managed by SaaSLogic, not by CIS admin UI. | No UI for UtilityModule |
 | BR-RB-006 | User role and tenant modules are cached in Redis (5min/10min TTL). | Cache + invalidation |
 | BR-RB-007 | Routes without module declaration are allowed but logged in dev. | Middleware behavior |
 | BR-RB-008 | The last System Admin cannot have their role changed. | API validation |
