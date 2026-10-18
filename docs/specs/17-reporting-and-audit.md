@@ -150,15 +150,15 @@ The CIS uses a Node.js EventEmitter for intra-process domain events in Phase 1. 
 
 | Method | Path | Description | Permission |
 |--------|------|-------------|------------|
-| GET | `/api/v1/audit-log` | One entity's history | `audit_log:VIEW` + `entityType` **and** `entityId` |
+| GET | `/api/v1/audit-log` | One entity's history | `audit_log:VIEW` + **exactly one** `entityType` **and** `entityId` |
 | GET | `/api/v1/audit-log` | The whole log, any filters | `audit_log:VIEW` **and** `settings:VIEW` |
 | GET | `/api/v1/audit-log/entity-types` | The distinct `entity_type` values present in this tenant's log, sorted | `audit_log:VIEW` |
 
 **Query parameters** (camelCase, as the Zod schema in `packages/api/src/routes/audit-log.ts` defines them — an earlier version of this table documented them as `entity_type`, `entity_id`, `from` and `to`, which the endpoint has never accepted; the schema is `.strict()`, so those names are rejected outright):
 
-- `entityType` — filter by entity type (e.g., "RateSchedule")
+- `entityType` — one or more entity types, comma-separated (`Account` or `Account,Contact`). Must be in `AUDIT_ENTITY_TYPES`
 - `entityId` — filter to a specific entity's history (uuid)
-- `action` — CREATE | UPDATE | DELETE, from `AUDIT_ACTIONS` in `packages/shared/src/events/index.ts`, which the query schema and the UI filter both read
+- `action` — one or more of CREATE | UPDATE | DELETE, comma-separated, from `AUDIT_ACTIONS` in `packages/shared/src/events/index.ts`, which the query schema and the UI filter both read
 - `actorId` — filter by the user who made the change (uuid)
 - `startDate` — ISO 8601 datetime
 - `endDate` — ISO 8601 datetime
@@ -166,7 +166,7 @@ The CIS uses a Node.js EventEmitter for intra-process domain events in Phase 1. 
 
 **Authorization — two needs, one endpoint.** Five entity detail pages (account, premise, rate schedule, service agreement, service request) show an Audit tab that sends `entityType` + `entityId`; that is why the CSR and Field Technician presets hold `audit_log:VIEW`. Because every filter is optional, that same grant also answered a request with *no* filters — the entire tenant's log, including role changes, user management and settings edits — to anyone who could open an account. The sidebar hid the menu entry but could not restrict the endpoint.
 
-An unfiltered read now additionally requires `settings:VIEW`, the key the rest of the Administration section already uses (reused rather than adding an `audit_log_all` module, which would need `tenant_module` rows for every existing tenant and a slot in every role preset). Both `entityType` and `entityId` are required to qualify as a scoped read, not either: `entityType=Role` alone would sweep exactly the table being protected. A request whose actor has no `CisUser` row is allowed through, matching `authorizationMiddleware`'s migration branch, so this endpoint does not behave differently from every other route for that caller.
+An unfiltered read now additionally requires `settings:VIEW`, the key the rest of the Administration section already uses (reused rather than adding an `audit_log_all` module, which would need `tenant_module` rows for every existing tenant and a slot in every role preset). Both `entityType` and `entityId` are required to qualify as a scoped read, not either: `entityType=Role` alone would sweep exactly the table being protected. Exactly one entity type, too — the lists are multi-value now, and several types alongside one id is not one record's history, so accepting it would turn the multi-select into a way around the key. A request whose actor has no `CisUser` row is allowed through, matching `authorizationMiddleware`'s migration branch, so this endpoint does not behave differently from every other route for that caller.
 
 **Response:** Paginated audit entries with before/after state diff highlighting in UI.
 

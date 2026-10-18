@@ -19,14 +19,28 @@ const UNFILTERED_READ_MODULE = "settings";
 
 const auditSortFields = ["createdAt", "entityType", "action"] as const;
 
+/**
+ * A comma-separated list in one query parameter: `A` or `A,B`.
+ *
+ * Both multi-value filters on the audit log page arrive this way rather
+ * than as repeated parameters, because `apiClient.get` takes
+ * `Record<string, string>` and this needs no change there. Entity type
+ * and action names contain no commas, so nothing needs escaping — a
+ * filter whose values could would need a different encoding.
+ */
+const csvList = z
+  .string()
+  .transform((raw) => raw.split(",").map((value) => value.trim()).filter(Boolean));
+
 const auditQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(25),
   sort: z.enum(auditSortFields).default("createdAt"),
   order: z.enum(["asc", "desc"]).default("desc"),
-  entityType: z.string().max(64).optional(),
+  entityType: csvList.pipe(z.array(z.string().max(64)).min(1)).optional(),
   entityId: z.string().uuid().optional(),
-  action: z.enum(AUDIT_ACTIONS).optional(),
+  // Piped through the enum per value, so a list cannot smuggle past it.
+  action: csvList.pipe(z.array(z.enum(AUDIT_ACTIONS)).min(1)).optional(),
   actorId: z.string().uuid().optional(),
   startDate: z.string().datetime().optional(),
   endDate: z.string().datetime().optional(),
@@ -101,8 +115,13 @@ export async function auditLogRoutes(app: FastifyInstance) {
      *
      * Both filters are required, not either: `entityType=Role` alone
      * would sweep exactly the table this is protecting.
+     *
+     * Exactly one type, too. `entityType` takes a list now, and several
+     * types alongside one id is not one record's history — the id can
+     * belong to only one of them — so accepting it would turn the
+     * multi-select into a way around the key.
      */
-    const pinnedToOneEntity = Boolean(query.entityType && query.entityId);
+    const pinnedToOneEntity = Boolean(query.entityId && query.entityType?.length === 1);
     if (!pinnedToOneEntity) {
       const userRole = await getUserRole(request.user.id, utilityId);
       /*
@@ -127,9 +146,9 @@ export async function auditLogRoutes(app: FastifyInstance) {
 
     const where: Record<string, unknown> = { utilityId };
 
-    if (query.entityType) where.entityType = query.entityType;
+    if (query.entityType) where.entityType = { in: query.entityType };
     if (query.entityId) where.entityId = query.entityId;
-    if (query.action) where.action = query.action;
+    if (query.action) where.action = { in: query.action };
     if (query.actorId) where.actorId = query.actorId;
 
     if (query.startDate || query.endDate) {

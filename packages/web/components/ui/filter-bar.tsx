@@ -7,13 +7,31 @@ interface FilterOption {
   value: string;
 }
 
-interface FilterConfig {
+interface FilterConfigBase {
   key: string;
   label: string;
   options: FilterOption[];
+}
+
+interface SingleFilterConfig extends FilterConfigBase {
+  multiple?: false;
   value?: string;
   onChange: (value: string | undefined) => void;
 }
+
+interface MultiFilterConfig extends FilterConfigBase {
+  multiple: true;
+  /** Empty means no filter, the same as `value: undefined` does. */
+  values: string[];
+  onChange: (values: string[]) => void;
+}
+
+/**
+ * Multi-select is opt-in so the four pages already using single-select
+ * pills are untouched — a filter that accepts one value should not
+ * start offering checkboxes because the component learned how.
+ */
+type FilterConfig = SingleFilterConfig | MultiFilterConfig;
 
 interface FilterBarProps {
   filters: FilterConfig[];
@@ -33,8 +51,18 @@ function FilterPill({ filter }: { filter: FilterConfig }) {
   const [query, setQuery] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const activeOption = filter.options.find((o) => o.value === filter.value);
-  const isActive = filter.value !== undefined;
+  const selected = filter.multiple ? filter.values : filter.value ? [filter.value] : [];
+  const isActive = selected.length > 0;
+
+  /**
+   * What the pill reads when something is chosen. One selection names
+   * itself; several would not fit, and the column is already the one
+   * that overflowed, so they are counted instead.
+   */
+  const activeLabel =
+    selected.length === 1
+      ? (filter.options.find((o) => o.value === selected[0])?.label ?? selected[0])
+      : `${selected.length} selected`;
 
   const searchable = filter.options.length > SEARCHABLE_THRESHOLD;
   const needle = query.trim().toLowerCase();
@@ -47,8 +75,25 @@ function FilterPill({ filter }: { filter: FilterConfig }) {
     setQuery("");
   }
 
-  function choose(value: string | undefined) {
+  /**
+   * Single-select closes on choice; multi-select stays open, because
+   * picking three things should not mean opening the menu three times.
+   */
+  function choose(value: string) {
+    if (filter.multiple) {
+      const next = filter.values.includes(value)
+        ? filter.values.filter((v) => v !== value)
+        : [...filter.values, value];
+      filter.onChange(next);
+      return;
+    }
     filter.onChange(value);
+    close();
+  }
+
+  function clear() {
+    if (filter.multiple) filter.onChange([]);
+    else filter.onChange(undefined);
     close();
   }
 
@@ -76,12 +121,10 @@ function FilterPill({ filter }: { filter: FilterConfig }) {
         }}
       >
         <span>{filter.label}</span>
-        {activeOption && (
+        {isActive && (
           <>
             <span style={{ color: "var(--text-muted)", fontWeight: "400" }}>:</span>
-            <span style={{ color: "var(--text-primary)", fontWeight: "600" }}>
-              {activeOption.label}
-            </span>
+            <span style={{ color: "var(--text-primary)", fontWeight: "600" }}>{activeLabel}</span>
           </>
         )}
         <span style={{ fontSize: "10px", opacity: 0.6 }}>{open ? "▲" : "▼"}</span>
@@ -151,7 +194,7 @@ function FilterPill({ filter }: { filter: FilterConfig }) {
             <DropdownItem
               label={`All ${filter.label}`}
               active={!isActive}
-              onClick={() => choose(undefined)}
+              onClick={clear}
             />
 
             <div style={{ maxHeight: "260px", overflowY: "auto" }}>
@@ -159,7 +202,8 @@ function FilterPill({ filter }: { filter: FilterConfig }) {
                 <DropdownItem
                   key={opt.value}
                   label={opt.label}
-                  active={filter.value === opt.value}
+                  active={selected.includes(opt.value)}
+                  checkbox={filter.multiple}
                   onClick={() => choose(opt.value)}
                 />
               ))}
@@ -186,10 +230,17 @@ function DropdownItem({
   label,
   active,
   onClick,
+  checkbox = false,
 }: {
   label: string;
   active: boolean;
   onClick: () => void;
+  /**
+   * Multi-select shows a box on every row, so the menu says up front
+   * that more than one can be picked. Single-select keeps the bare tick
+   * on the chosen row only, which is what the other four pages have.
+   */
+  checkbox?: boolean;
 }) {
   return (
     <button
@@ -216,8 +267,33 @@ function DropdownItem({
         !active && ((e.currentTarget as HTMLButtonElement).style.background = "transparent")
       }
     >
-      {label}
-      {active && <span style={{ color: "var(--accent-primary)", fontSize: "12px" }}>✓</span>}
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+        {checkbox && (
+          <span
+            aria-hidden
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "13px",
+              height: "13px",
+              flexShrink: 0,
+              borderRadius: "3px",
+              border: `1px solid ${active ? "var(--accent-primary)" : "var(--border)"}`,
+              background: active ? "var(--accent-primary)" : "transparent",
+              color: "#ffffff",
+              fontSize: "9px",
+              lineHeight: 1,
+            }}
+          >
+            {active ? "✓" : ""}
+          </span>
+        )}
+        {label}
+      </span>
+      {active && !checkbox && (
+        <span style={{ color: "var(--accent-primary)", fontSize: "12px" }}>✓</span>
+      )}
     </button>
   );
 }

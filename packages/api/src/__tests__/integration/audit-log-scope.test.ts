@@ -110,7 +110,82 @@ describe("GET /api/v1/audit-log — scope required without the admin key", () =>
     expect(res.statusCode).toBe(200);
     const where = (prisma.auditLog.findMany as never as ReturnType<typeof vi.fn>).mock.calls[0][0]
       .where;
-    expect(where).toMatchObject({ utilityId, entityType: "Account", entityId: ACCOUNT_ID });
+    // `in` even for one value: both filters accept a comma-separated
+    // list now, so there is one code path rather than two.
+    expect(where).toMatchObject({
+      utilityId,
+      entityType: { in: ["Account"] },
+      entityId: ACCOUNT_ID,
+    });
+  });
+
+  // ─── multi-select ──────────────────────────────────────────────
+
+  it("accepts several entity types at once", async () => {
+    grant(ADMIN_LIKE);
+
+    const app = await createTestApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/audit-log?entityType=Account,BillDocument,Contact",
+      headers,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(
+      (prisma.auditLog.findMany as never as ReturnType<typeof vi.fn>).mock.calls[0][0].where,
+    ).toMatchObject({ entityType: { in: ["Account", "BillDocument", "Contact"] } });
+  });
+
+  it("accepts several actions at once", async () => {
+    grant(ADMIN_LIKE);
+
+    const app = await createTestApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/audit-log?action=CREATE,DELETE",
+      headers,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(
+      (prisma.auditLog.findMany as never as ReturnType<typeof vi.fn>).mock.calls[0][0].where,
+    ).toMatchObject({ action: { in: ["CREATE", "DELETE"] } });
+  });
+
+  it("still rejects an action the column cannot hold, inside a list", async () => {
+    grant(ADMIN_LIKE);
+
+    const app = await createTestApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/audit-log?action=CREATE,CREATED",
+      headers,
+    });
+
+    // The whole point of the enum: a list must not become a way past it.
+    expect(res.statusCode).toBe(400);
+    expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The scoped-read exemption is for *one* record's history. Several
+   * types alongside one id is not that — the id can only belong to one
+   * of them — so allowing it would turn the multi-select into a way
+   * around the `settings` requirement.
+   */
+  it("does not treat several entity types plus an id as one entity's history", async () => {
+    grant(CSR_LIKE);
+
+    const app = await createTestApp();
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/audit-log?entityType=Account,Contact&entityId=${ACCOUNT_ID}`,
+      headers,
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
   });
 
   /**

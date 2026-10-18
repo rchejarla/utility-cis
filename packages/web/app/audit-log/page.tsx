@@ -102,8 +102,9 @@ export default function AuditLogPage() {
   const [data, setData] = useState<AuditEntry[]>([]);
   const [meta, setMeta] = useState({ total: 0, page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
-  const [entityType, setEntityType] = useState<string | undefined>(undefined);
-  const [action, setAction] = useState<string | undefined>(undefined);
+  // Both filters take several values; empty means no filter.
+  const [entityTypes, setEntityTypes] = useState<string[]>([]);
+  const [actions, setActions] = useState<string[]>([]);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
@@ -127,8 +128,10 @@ export default function AuditLogPage() {
     setLoading(true);
     try {
       const params: Record<string, string> = { page: String(page), limit: "20" };
-      if (entityType) params.entityType = entityType;
-      if (action) params.action = action;
+      // Comma-separated, which is what the query schema parses and
+      // what `apiClient.get`'s `Record<string, string>` can carry.
+      if (entityTypes.length > 0) params.entityType = entityTypes.join(",");
+      if (actions.length > 0) params.action = actions.join(",");
       /*
        * `startDate` / `endDate` as ISO datetimes, which is what the
        * query schema takes. This sent `dateFrom` / `dateTo` as bare
@@ -153,7 +156,7 @@ export default function AuditLogPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, entityType, action, dateFrom, dateTo]);
+  }, [page, entityTypes, actions, dateFrom, dateTo]);
 
   useEffect(() => {
     fetchData();
@@ -321,15 +324,17 @@ export default function AuditLogPage() {
               key: "entityType",
               label: "Entity Type",
               options: entityTypeOptions,
-              value: entityType,
-              onChange: (v) => { setEntityType(v); setPage(1); },
+              multiple: true,
+              values: entityTypes,
+              onChange: (v) => { setEntityTypes(v); setPage(1); },
             },
             {
               key: "action",
               label: "Action",
               options: ACTION_OPTIONS,
-              value: action,
-              onChange: (v) => { setAction(v); setPage(1); },
+              multiple: true,
+              values: actions,
+              onChange: (v) => { setActions(v); setPage(1); },
             },
           ]}
         />
