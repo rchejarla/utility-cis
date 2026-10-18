@@ -14,19 +14,18 @@ let pgContainer: StartedPostgreSqlContainer;
 let prismaImports: typeof import("../../lib/prisma.js");
 let posting: typeof import("../../services/ar/posting.service.js");
 
-let utilityId: string;
+const utilityId = "00000000-0000-4000-8000-0000000000aa";
 let accountId: string;
 let billingCycleId: string;
 let debitReasonId: string;
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [utilityId] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   posting = await import("../../services/ar/posting.service.js");
 
   const { prisma } = prismaImports;
-  utilityId = "00000000-0000-4000-8000-0000000000aa";
   const cycle = await prisma.billingCycle.create({
     data: {
       utilityId,

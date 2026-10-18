@@ -32,6 +32,71 @@ model Utility {
   createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime      @updatedAt @map("updated_at") @db.Timestamptz
 
+
+  // Back-relations. Prisma requires both sides of a relation to be
+  // declared; these exist so `utility_id` can be a foreign key.
+  accountTypeDefs        AccountTypeDef[]
+  accounts               Account[]
+  attachments            Attachment[]
+  auditLogs              AuditLog[]
+  billDocuments          BillDocument[]
+  billMessages           BillMessage[]
+  billSegmentLines       BillSegmentLine[]
+  billSegments           BillSegment[]
+  billingAddresss        BillingAddress[]
+  billingCycles          BillingCycle[]
+  billingRunItems        BillingRunItem[]
+  billingRuns            BillingRun[]
+  bills                  Bill[]
+  cisUsers               CisUser[]
+  commoditys             Commodity[]
+  contacts               Contact[]
+  containers             Container[]
+  customFieldSchemas     CustomFieldSchema[]
+  customers              Customer[]
+  delinquencyActions     DelinquencyAction[]
+  delinquencyRules       DelinquencyRule[]
+  importBatchs           ImportBatch[]
+  inAppNotifications     InAppNotification[]
+  ledgerApplications     LedgerApplication[]
+  ledgerEntrys           LedgerEntry[]
+  ledgerReasonDefs       LedgerReasonDef[]
+  measureTypeDefs        MeasureTypeDef[]
+  meterEvents            MeterEvent[]
+  meterReads             MeterRead[]
+  meterRegisters         MeterRegister[]
+  meters                 Meter[]
+  notificationTemplates  NotificationTemplate[]
+  notifications          Notification[]
+  premiseTypeDefs        PremiseTypeDef[]
+  premises               Premise[]
+  rateAssignmentRoles    RateAssignmentRole[]
+  rateComponentKinds     RateComponentKind[]
+  rateComponents         RateComponent[]
+  rateIndexs             RateIndex[]
+  rateSchedules          RateSchedule[]
+  rateServiceClasss      RateServiceClass[]
+  roles                  Role[]
+  sAScheduleAssignments  SAScheduleAssignment[]
+  serviceAgreements      ServiceAgreement[]
+  serviceEvents          ServiceEvent[]
+  servicePointMeters     ServicePointMeter[]
+  servicePoints          ServicePoint[]
+  serviceRequestCounters ServiceRequestCounter[]
+  serviceRequestTypeDefs ServiceRequestTypeDef[]
+  serviceRequests        ServiceRequest[]
+  serviceSuspensions     ServiceSuspension[]
+  slas                   Sla[]
+  suspensionTypeDefs     SuspensionTypeDef[]
+  unitOfMeasures         UnitOfMeasure[]
+  userPreferences        UserPreference[]
+  userRoles              UserRole[]
+  utilityConfigs         UtilityConfig[]
+  utilityModules         UtilityModule[]
+  utilitySettings        UtilitySetting[]
+  utilityThemes          UtilityTheme[]
+  wqaValues              WqaValue[]
+
   @@map("utility")
 }
 
@@ -190,6 +255,7 @@ enum CustomerStatus {
 model Commodity {
   id           String   @id @default(uuid()) @db.Uuid
   utilityId    String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   code         String   @map("code") @db.VarChar(50)
   name         String   @map("name") @db.VarChar(100)
   defaultUomId String?  @map("default_uom_id") @db.Uuid
@@ -215,6 +281,7 @@ model Commodity {
 model UnitOfMeasure {
   id               String   @id @default(uuid()) @db.Uuid
   utilityId        String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   code             String   @map("code") @db.VarChar(20)
   name             String   @map("name") @db.VarChar(100)
   commodityId      String   @map("commodity_id") @db.Uuid
@@ -246,6 +313,7 @@ model UnitOfMeasure {
 model PremiseTypeDef {
   id          String   @id @default(uuid()) @db.Uuid
   utilityId   String?  @map("utility_id") @db.Uuid
+  utility     Utility? @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   code        String   @db.VarChar(50)
   label       String   @db.VarChar(100)
   description String?  @db.Text
@@ -262,6 +330,7 @@ model PremiseTypeDef {
 model AccountTypeDef {
   id          String   @id @default(uuid()) @db.Uuid
   utilityId   String?  @map("utility_id") @db.Uuid
+  utility     Utility? @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   code        String   @db.VarChar(50)
   label       String   @db.VarChar(100)
   description String?  @db.Text
@@ -280,6 +349,7 @@ model AccountTypeDef {
 model MeasureTypeDef {
   id          String   @id @default(uuid()) @db.Uuid
   utilityId   String?  @map("utility_id") @db.Uuid
+  utility     Utility? @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   code        String   @db.VarChar(50)
   label       String   @db.VarChar(100)
   description String?  @db.Text
@@ -299,6 +369,7 @@ model MeasureTypeDef {
 model Premise {
   id                 String        @id @default(uuid()) @db.Uuid
   utilityId          String        @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   addressLine1       String        @map("address_line1") @db.VarChar(255)
   addressLine2       String?       @map("address_line2") @db.VarChar(255)
   city               String        @map("city") @db.VarChar(100)
@@ -339,6 +410,7 @@ model Premise {
 model Meter {
   id           String      @id @default(uuid()) @db.Uuid
   utilityId    String      @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   premiseId    String      @map("premise_id") @db.Uuid
   meterNumber  String      @map("meter_number") @db.VarChar(100)
   commodityId  String      @map("commodity_id") @db.Uuid
@@ -377,6 +449,7 @@ model Meter {
 model Account {
   id                  String        @id @default(uuid()) @db.Uuid
   utilityId           String        @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   accountNumber       String        @map("account_number") @db.VarChar(50)
   customerId          String?       @map("customer_id") @db.Uuid
   accountType         String        @map("account_type") @db.VarChar(50)
@@ -430,6 +503,7 @@ model Account {
 model ServiceAgreement {
   id              String                 @id @default(uuid()) @db.Uuid
   utilityId       String                 @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   agreementNumber String                 @map("agreement_number") @db.VarChar(50)
   accountId       String                 @map("account_id") @db.Uuid
   commodityId     String                 @map("commodity_id") @db.Uuid
@@ -493,6 +567,7 @@ enum ServicePointStatus {
 model ServicePoint {
   id                 String              @id @default(uuid()) @db.Uuid
   utilityId          String              @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   serviceAgreementId String              @map("service_agreement_id") @db.Uuid
   premiseId          String              @map("premise_id") @db.Uuid
   type               ServicePointType   @default(METERED) @map("type")
@@ -518,6 +593,7 @@ model ServicePoint {
 model ServicePointMeter {
   id              String    @id @default(uuid()) @db.Uuid
   utilityId       String    @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   servicePointId  String    @map("service_point_id") @db.Uuid
   meterId         String    @map("meter_id") @db.Uuid
   addedDate       DateTime  @map("added_date") @db.Date
@@ -537,6 +613,7 @@ model ServicePointMeter {
 model RateSchedule {
   id             String    @id @default(uuid()) @db.Uuid
   utilityId      String    @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   name           String    @map("name") @db.VarChar(255)
   code           String    @map("code") @db.VarChar(50)
   commodityId    String    @map("commodity_id") @db.Uuid
@@ -568,6 +645,7 @@ model RateSchedule {
 model RateComponent {
   id              String    @id @default(uuid()) @db.Uuid
   utilityId       String    @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   rateScheduleId  String    @map("rate_schedule_id") @db.Uuid
   kindCode        String    @map("kind_code") @db.VarChar(50)
   label           String    @map("label") @db.VarChar(255)
@@ -597,6 +675,7 @@ model RateComponent {
 model SAScheduleAssignment {
   id                  String   @id @default(uuid()) @db.Uuid
   utilityId           String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   serviceAgreementId  String   @map("service_agreement_id") @db.Uuid
   rateScheduleId      String   @map("rate_schedule_id") @db.Uuid
   roleCode            String   @map("role_code") @db.VarChar(50)
@@ -622,6 +701,7 @@ model SAScheduleAssignment {
 model RateIndex {
   id              String   @id @default(uuid()) @db.Uuid
   utilityId       String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   name            String   @map("name") @db.VarChar(50)
   period          String   @map("period") @db.VarChar(20)
   value           Decimal  @map("value") @db.Decimal(18, 8)
@@ -639,6 +719,7 @@ model RateIndex {
 model BillingCycle {
   id             String           @id @default(uuid()) @db.Uuid
   utilityId      String           @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   name           String           @map("name") @db.VarChar(255)
   cycleCode      String           @map("cycle_code") @db.VarChar(20)
   /// The day meter reads are expected to be complete by, which is what
@@ -671,6 +752,7 @@ model BillingCycle {
 model BillSegment {
   id                   String   @id @default(uuid()) @db.Uuid
   utilityId            String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   serviceAgreementId   String   @map("service_agreement_id") @db.Uuid
   /// Slice 5b.2 — once an account-level Bill aggregates this segment,
   /// `bill_id` is set to it. Null = not yet on a Bill. At-most-one is
@@ -700,6 +782,7 @@ model BillSegment {
 model BillSegmentLine {
   id                  String   @id @default(uuid()) @db.Uuid
   utilityId           String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   billSegmentId       String   @map("bill_segment_id") @db.Uuid
   label               String   @map("label") @db.VarChar(255)
   kindCode            String   @map("kind_code") @db.VarChar(50)
@@ -727,6 +810,7 @@ model BillSegmentLine {
 model Bill {
   id                   String   @id @default(uuid()) @db.Uuid
   utilityId            String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   accountId            String   @map("account_id") @db.Uuid
   /// Cycle in effect at issue time. Materialized so a later cycle switch
   /// on the Account doesn't rewrite history.
@@ -760,6 +844,7 @@ model Bill {
 model MeterRead {
   id                 String     @default(uuid()) @db.Uuid
   utilityId          String     @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   meterId            String     @map("meter_id") @db.Uuid
   serviceAgreementId String     @map("service_agreement_id") @db.Uuid
   registerId         String?    @map("register_id") @db.Uuid
@@ -805,6 +890,7 @@ model MeterRead {
 model AuditLog {
   id          String      @id @default(uuid()) @db.Uuid
   utilityId   String      @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   entityType  String      @map("entity_type") @db.VarChar(100)
   entityId    String      @map("entity_id") @db.Uuid
   action      AuditAction @map("action")
@@ -831,6 +917,7 @@ model AuditLog {
 model UtilityTheme {
   id           String   @id @default(uuid()) @db.Uuid
   utilityId    String   @unique @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   preset       String?  @map("preset") @db.VarChar(50)
   colors       Json     @map("colors")
   typography   Json     @map("typography")
@@ -845,6 +932,7 @@ model UtilityTheme {
 model UserPreference {
   id          String    @id @default(uuid()) @db.Uuid
   utilityId   String    @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   userId      String    @map("user_id") @db.Uuid
   themeMode   ThemeMode @default(SYSTEM) @map("theme_mode")
   preferences Json      @default("{}") @map("preferences")
@@ -858,6 +946,7 @@ model UserPreference {
 model Customer {
   id               String         @id @default(uuid()) @db.Uuid
   utilityId        String         @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   customerType     CustomerType   @map("customer_type")
   firstName        String?        @map("first_name") @db.VarChar(100)
   lastName         String?        @map("last_name") @db.VarChar(100)
@@ -899,6 +988,7 @@ model Customer {
 model Contact {
   id         String   @id @default(uuid()) @db.Uuid
   utilityId  String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   accountId  String   @map("account_id") @db.Uuid
   customerId String?  @map("customer_id") @db.Uuid
   firstName  String   @map("first_name") @db.VarChar(100)
@@ -921,6 +1011,7 @@ model Contact {
 model BillingAddress {
   id           String   @id @default(uuid()) @db.Uuid
   utilityId    String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   accountId    String   @map("account_id") @db.Uuid
   addressLine1 String   @map("address_line1") @db.VarChar(255)
   addressLine2 String?  @map("address_line2") @db.VarChar(255)
@@ -942,6 +1033,7 @@ model BillingAddress {
 model MeterRegister {
   id             String   @id @default(uuid()) @db.Uuid
   utilityId      String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   meterId        String   @map("meter_id") @db.Uuid
   registerNumber Int      @map("register_number")
   description    String?  @db.VarChar(100)
@@ -967,6 +1059,7 @@ model MeterRegister {
 model Attachment {
   id          String   @id @default(uuid()) @db.Uuid
   utilityId   String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   entityType  String   @map("entity_type") @db.VarChar(100)
   entityId    String   @map("entity_id") @db.Uuid
   fileName    String   @map("file_name") @db.VarChar(500)
@@ -985,6 +1078,7 @@ model Attachment {
 model Role {
   id          String   @id @default(uuid()) @db.Uuid
   utilityId   String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   name        String   @map("name") @db.VarChar(100)
   description String?  @map("description") @db.VarChar(500)
   permissions Json     @map("permissions")
@@ -1002,6 +1096,7 @@ model Role {
 model CisUser {
   id          String    @id @default(uuid()) @db.Uuid
   utilityId   String    @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   externalId  String?   @map("external_id") @db.VarChar(255)
   email       String    @map("email") @db.VarChar(255)
   name        String    @map("name") @db.VarChar(255)
@@ -1043,6 +1138,7 @@ model CisUser {
 model UserRole {
   id        String   @id @default(uuid()) @db.Uuid
   utilityId String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   userId    String   @map("user_id") @db.Uuid
   accountId String?  @map("account_id") @db.Uuid
   roleId    String   @map("role_id") @db.Uuid
@@ -1063,6 +1159,7 @@ model UserRole {
 model UtilityModule {
   id        String   @id @default(uuid()) @db.Uuid
   utilityId String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   moduleKey String   @map("module_key") @db.VarChar(50)
   isEnabled Boolean  @default(true) @map("is_enabled")
   enabledAt DateTime @default(now()) @map("enabled_at") @db.Timestamptz
@@ -1107,6 +1204,7 @@ enum MeterEventSource {
 model MeterEvent {
   id              String           @id @default(uuid()) @db.Uuid
   utilityId       String           @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   meterId         String           @map("meter_id") @db.Uuid
   eventType       MeterEventType   @map("event_type")
   status          MeterEventStatus @default(OPEN) @map("status")
@@ -1148,6 +1246,7 @@ enum ContainerStatus {
 model Container {
   id                 String          @id @default(uuid()) @db.Uuid
   utilityId          String          @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   premiseId          String          @map("premise_id") @db.Uuid
   serviceAgreementId String?         @map("service_agreement_id") @db.Uuid
   containerType      ContainerType   @map("container_type")
@@ -1200,6 +1299,7 @@ enum SuspensionStatus {
 model CustomFieldSchema {
   id         String   @id @default(uuid()) @db.Uuid
   utilityId  String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   entityType String   @map("entity_type") @db.VarChar(50)
   fields     Json     @default("[]") @map("fields")
   version    Int      @default(1) @map("version")
@@ -1216,6 +1316,7 @@ model CustomFieldSchema {
 model UtilityConfig {
   id                  String   @id @default(uuid()) @db.Uuid
   utilityId           String   @unique @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   requireHoldApproval Boolean  @default(false) @map("require_hold_approval")
   settings            Json     @default("{}") @map("settings")
 
@@ -1249,6 +1350,7 @@ model UtilityConfig {
 model SuspensionTypeDef {
   id                      String   @id @default(uuid()) @db.Uuid
   utilityId               String?  @map("utility_id") @db.Uuid
+  utility     Utility? @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   code                    String   @db.VarChar(50)
   label                   String   @db.VarChar(100)
   description             String?  @db.Text
@@ -1267,6 +1369,7 @@ model SuspensionTypeDef {
 model ServiceSuspension {
   id                 String           @id @default(uuid()) @db.Uuid
   utilityId          String           @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   serviceAgreementId String           @map("service_agreement_id") @db.Uuid
   suspensionType     String           @map("suspension_type") @db.VarChar(50)
   status             SuspensionStatus @default(PENDING) @map("status")
@@ -1324,6 +1427,7 @@ enum ServiceEventBillingAction {
 model ServiceEvent {
   id                 String                     @id @default(uuid()) @db.Uuid
   utilityId          String                     @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   premiseId          String                     @map("premise_id") @db.Uuid
   serviceAgreementId String?                    @map("service_agreement_id") @db.Uuid
   containerId        String?                    @map("container_id") @db.Uuid
@@ -1369,6 +1473,7 @@ enum ImportBatchStatus {
 model ImportBatch {
   id                    String            @id @default(uuid()) @db.Uuid
   utilityId             String            @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   /// Drives handler dispatch. e.g. "meter_read", "customer", "premise", ...
   entityKind            String            @map("entity_kind") @db.VarChar(50)
   source                ImportBatchSource @map("source")
@@ -1442,6 +1547,7 @@ enum NotificationSeverity {
 model InAppNotification {
   id          String                @id @default(uuid()) @db.Uuid
   utilityId   String                @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   userId      String                @map("user_id") @db.Uuid
   kind        InAppNotificationKind
   severity    NotificationSeverity
@@ -1478,6 +1584,7 @@ enum NotificationStatus {
 model NotificationTemplate {
   id          String   @id @default(uuid()) @db.Uuid
   utilityId   String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   name        String   @db.VarChar(255)
   eventType   String   @map("event_type") @db.VarChar(100)
   description String?  @db.Text
@@ -1497,6 +1604,7 @@ model NotificationTemplate {
 model Notification {
   id                String              @id @default(uuid()) @db.Uuid
   utilityId         String              @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   templateId        String?             @map("template_id") @db.Uuid
   eventType         String              @map("event_type") @db.VarChar(100)
   channel           NotificationChannel
@@ -1541,6 +1649,7 @@ enum DelinquencyActionStatus {
 model DelinquencyRule {
   id                    String       @id @default(uuid()) @db.Uuid
   utilityId             String       @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   name                  String       @db.VarChar(255)
   accountType           String?      @map("account_type") @db.VarChar(50)
   commodityId           String?      @map("commodity_id") @db.Uuid
@@ -1566,6 +1675,7 @@ model DelinquencyRule {
 model DelinquencyAction {
   id                  String                  @id @default(uuid()) @db.Uuid
   utilityId           String                  @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   accountId           String                  @map("account_id") @db.Uuid
   ruleId              String                  @map("rule_id") @db.Uuid
   tier                Int
@@ -1638,6 +1748,7 @@ enum ServiceRequestBillingAction {
 model ServiceRequestTypeDef {
   id          String   @id @default(uuid()) @db.Uuid
   utilityId   String?  @map("utility_id") @db.Uuid
+  utility     Utility? @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   code        String   @db.VarChar(100)
   label       String   @db.VarChar(150)
   description String?  @db.Text
@@ -1658,6 +1769,7 @@ model ServiceRequestTypeDef {
 model Sla {
   id               String                 @id @default(uuid()) @db.Uuid
   utilityId        String                 @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   requestType      String                 @map("request_type") @db.VarChar(100)
   priority         ServiceRequestPriority @map("priority")
   responseHours    Decimal                @map("response_hours") @db.Decimal(5, 2)
@@ -1682,6 +1794,7 @@ model Sla {
 // contending on the service_request table itself.
 model ServiceRequestCounter {
   utilityId String @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   year      Int
   nextValue BigInt @default(1) @map("next_value")
 
@@ -1692,6 +1805,7 @@ model ServiceRequestCounter {
 model ServiceRequest {
   id                  String                        @id @default(uuid()) @db.Uuid
   utilityId           String                        @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   requestNumber       String                        @map("request_number") @db.VarChar(50)
   accountId           String?                       @map("account_id") @db.Uuid
   premiseId           String?                       @map("premise_id") @db.Uuid
@@ -1739,6 +1853,7 @@ model ServiceRequest {
 model RateComponentKind {
   id          String   @id @default(uuid()) @db.Uuid
   utilityId   String?  @map("utility_id") @db.Uuid
+  utility     Utility? @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   code        String   @map("code") @db.VarChar(50)
   label       String   @map("label") @db.VarChar(100)
   description String?  @map("description") @db.Text
@@ -1755,6 +1870,7 @@ model RateComponentKind {
 model RateAssignmentRole {
   id          String   @id @default(uuid()) @db.Uuid
   utilityId   String?  @map("utility_id") @db.Uuid
+  utility     Utility? @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   code        String   @map("code") @db.VarChar(50)
   label       String   @map("label") @db.VarChar(100)
   description String?  @map("description") @db.Text
@@ -1771,6 +1887,7 @@ model RateAssignmentRole {
 model RateServiceClass {
   id           String   @id @default(uuid()) @db.Uuid
   utilityId    String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   commodityId  String   @map("commodity_id") @db.Uuid
   code         String   @map("code") @db.VarChar(50)
   label        String   @map("label") @db.VarChar(100)
@@ -1796,6 +1913,7 @@ model RateServiceClass {
 model UtilitySetting {
   id        String   @id @default(uuid()) @db.Uuid
   utilityId String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   name      String   @map("name") @db.VarChar(100)
   value     Json     @map("value")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -1816,6 +1934,7 @@ model UtilitySetting {
 model WqaValue {
   id                  String    @id @default(uuid()) @db.Uuid
   utilityId           String    @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   serviceAgreementId  String    @map("service_agreement_id") @db.Uuid
   waterYear           Int       @map("water_year")
   computedAt          DateTime  @map("computed_at") @db.Timestamptz
@@ -1890,6 +2009,7 @@ enum PaymentTender {
 model LedgerEntry {
   id            String          @id @default(uuid()) @db.Uuid
   utilityId     String          @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   accountId     String          @map("account_id") @db.Uuid
   type          LedgerEntryType @map("type")
   amount        Decimal         @map("amount") @db.Decimal(14, 2)
@@ -1932,6 +2052,7 @@ model LedgerEntry {
 model LedgerApplication {
   id        String   @id @default(uuid()) @db.Uuid
   utilityId String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   creditId  String   @map("credit_id") @db.Uuid
   debitId   String   @map("debit_id") @db.Uuid
   amount    Decimal  @map("amount") @db.Decimal(14, 2)
@@ -1954,6 +2075,7 @@ model LedgerApplication {
 model LedgerReasonDef {
   id            String          @id @default(uuid()) @db.Uuid
   utilityId     String          @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   code          String          @map("code") @db.VarChar(50)
   label         String          @map("label") @db.VarChar(255)
   appliesToType LedgerEntryType @map("applies_to_type")
@@ -1975,6 +2097,7 @@ model LedgerReasonDef {
 model BillMessage {
   id               String    @id @default(uuid()) @db.Uuid
   utilityId        String    @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   label            String    @map("label") @db.VarChar(255)
   body             String    @map("body") @db.Text
   accountTypeDefId String?   @map("account_type_def_id") @db.Uuid
@@ -2005,6 +2128,7 @@ model BillMessage {
 model BillDocument {
   id                 String   @id @default(uuid()) @db.Uuid
   utilityId          String   @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   billId             String   @map("bill_id") @db.Uuid
   /// `PDF` today. VARCHAR rather than an enum because PRINT_EXPORT and
   /// EMAIL_HTML are not designed yet and Postgres cannot remove an enum
@@ -2045,6 +2169,7 @@ model BillDocument {
 model BillingRun {
   id             String           @id @default(uuid()) @db.Uuid
   utilityId      String           @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   billingCycleId String           @map("billing_cycle_id") @db.Uuid
   /// The scheduling window — which accounts are due and which reads to
   /// expect. NOT the service period: that is read to read and per
@@ -2095,6 +2220,7 @@ model BillingRun {
 model BillingRunItem {
   id                 String               @id @default(uuid()) @db.Uuid
   utilityId          String               @map("utility_id") @db.Uuid
+  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   billingRunId       String               @map("billing_run_id") @db.Uuid
   accountId          String               @map("account_id") @db.Uuid
   status             BillingRunItemStatus @default(PENDING) @map("status")

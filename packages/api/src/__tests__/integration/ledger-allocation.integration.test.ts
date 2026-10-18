@@ -26,7 +26,7 @@ let accountId: string;
 const reasonIdFor: Record<string, string> = {};
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [utilityId] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   allocation = await import("../../services/ar/allocation.service.js");

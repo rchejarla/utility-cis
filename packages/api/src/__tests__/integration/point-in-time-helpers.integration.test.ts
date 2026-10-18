@@ -52,7 +52,7 @@ let saAccount2Id: string;
 let account2Id: string;
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [TENANT_A, TENANT_B] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);

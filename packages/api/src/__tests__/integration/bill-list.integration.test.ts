@@ -40,7 +40,7 @@ const Q = {
 };
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [utilityId, otherUtility] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   bills = await import("../../services/bill.service.js");

@@ -31,7 +31,7 @@ let fx: TenantFixture;
 let debitReasonId: string;
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [utilityId] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   workflows = await import("../../services/workflows.service.js");

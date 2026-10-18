@@ -83,7 +83,7 @@ const portalHeaders = (customerId: string) => ({
 });
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [OTHER_UTILITY, UTILITY] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/bill-document.service.js");

@@ -17,7 +17,7 @@ let pgContainer: StartedPostgreSqlContainer;
 let prismaImports: typeof import("../../lib/prisma.js");
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [TENANT_A] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);

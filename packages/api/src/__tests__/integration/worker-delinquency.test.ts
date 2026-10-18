@@ -4,6 +4,7 @@ import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureUtilities } from "./_effective-dating-fixtures.js";
 
 /**
  * Integration tests for the delinquency dispatcher (pattern #2 — fan-out).
@@ -62,6 +63,10 @@ beforeAll(async () => {
   });
 
   prismaImports = await import("../../lib/prisma.js");
+
+  // `utility_id` is a foreign key, so the tenants this file writes
+  // rows for have to exist before the first write.
+  await ensureUtilities(prismaImports.prisma, [TENANT_A, TENANT_B, TENANT_C]);
   dispatcherImports = await import("../../workers/delinquency-dispatcher.js");
   queueImports = await import("../../lib/queues.js");
 }, 180_000);

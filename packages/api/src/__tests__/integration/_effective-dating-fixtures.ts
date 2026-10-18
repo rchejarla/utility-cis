@@ -26,7 +26,72 @@ export interface BootedContainer {
   dbUrl: string;
 }
 
-export async function bootPostgres(): Promise<BootedContainer> {
+/**
+ * SQL that creates a utility row, idempotently.
+ *
+ * Shared by `bootPostgres` (which has no Prisma client yet — it has only
+ * just set DATABASE_URL) and `ensureUtilities` (which does). Keeping one
+ * definition means the two cannot drift on what a test tenant looks
+ * like.
+ */
+function utilityInsertSql(ids: readonly string[]): string {
+  return ids
+    .map(
+      (id) =>
+        `INSERT INTO utility (id, name, status, created_at, updated_at) ` +
+        `VALUES ('${id}', 'Test Utility ${id.slice(-4)}', 'ACTIVE', now(), now()) ` +
+        `ON CONFLICT (id) DO NOTHING;`,
+    )
+    .join("\n");
+}
+
+/**
+ * Create the utility rows a test's tenant ids refer to.
+ *
+ * For the eight files that boot their own container rather than calling
+ * `bootPostgres` — they already hold a Prisma client, so they can do it
+ * directly.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function ensureUtilities(prisma: any, ids: readonly string[]): Promise<void> {
+  for (const id of ids) {
+    await prisma.utility.upsert({
+      where: { id },
+      update: {},
+      create: { id, name: `Test Utility ${id.slice(-4)}` },
+    });
+  }
+}
+
+/**
+ * Boot a database, and declare the tenants this file writes rows for.
+ *
+ * `utility_id` is a foreign key to `utility`, so a test that writes
+ * tenant-scoped rows for an id with no utility row is refused with
+ * P2003. 41 of the 63 container-backed files build their own fixtures
+ * rather than calling `makeTenantFixture`, and each invents its own
+ * tenant id — so the id has to be declared somewhere.
+ *
+ * It is declared here, by the file that uses it, rather than in a
+ * central list inside this helper. A list here would have to be updated
+ * from a distance every time a file introduced a tenant, would rot the
+ * first time one was removed, and would leave each test silently
+ * depending on a registry it never mentions. Passing the ids at the call
+ * site keeps the declaration next to the constants it names, and a new
+ * file that forgets gets a P2003 naming the exact table — a loud,
+ * accurate error rather than a phantom tenant.
+ *
+ * Files that run `prisma/seed.ts` pass nothing: that seed creates the
+ * utility itself, because the six files which run it inherit whatever
+ * tenant it defines rather than inventing one.
+ *
+ * When `provisionTenant()` exists (build-order step 3) this should call
+ * it instead of inserting rows, so tests exercise the path production
+ * uses rather than a parallel one that can drift from it.
+ */
+export async function bootPostgres(
+  opts: { utilities?: readonly string[] } = {},
+): Promise<BootedContainer> {
   const container = await new PostgreSqlContainer("timescale/timescaledb:latest-pg16")
     .withDatabase("utility_cis_test")
     .withUsername("postgres")
@@ -43,6 +108,18 @@ export async function bootPostgres(): Promise<BootedContainer> {
     env: { ...process.env, DATABASE_URL: dbUrl },
     stdio: "pipe",
   });
+
+  // Through `prisma db execute` rather than a client: this function has
+  // only just set DATABASE_URL, and the caller imports `lib/prisma.js`
+  // afterwards precisely so the singleton reads it.
+  if (opts.utilities && opts.utilities.length > 0) {
+    execSync("pnpm prisma db execute --stdin --schema prisma/schema.prisma", {
+      cwd: SHARED_DIR,
+      env: { ...process.env, DATABASE_URL: dbUrl },
+      input: utilityInsertSql(opts.utilities),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  }
 
   return { container, dbUrl };
 }
@@ -254,15 +331,11 @@ export async function makeTenantFixture(
 ): Promise<TenantFixture> {
   const suffix = opts.suffix ?? utilityId.slice(-4);
 
-  // The tenant itself, first: every row below carries its id, and once
-  // the foreign keys land nothing can be written before it exists.
-  // Upsert rather than create — `resetDb` does not truncate `utility`,
-  // so a file calling this per test would collide on the second call.
-  await prisma.utility.upsert({
-    where: { id: utilityId },
-    update: {},
-    create: { id: utilityId, name: `Test Utility ${suffix}` },
-  });
+  // The tenant itself, first: every row below carries its id, and
+  // `utility_id` is a foreign key, so nothing can be written before it
+  // exists. Upserted — `resetDb` does not truncate `utility`, so a file
+  // calling this per test would collide on the second call.
+  await ensureUtilities(prisma, [utilityId]);
 
   await prisma.utilityConfig.create({ data: { utilityId } });
 

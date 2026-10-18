@@ -4,6 +4,7 @@ import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureUtilities } from "./_effective-dating-fixtures.js";
 
 /**
  * Production-grade integration test for the suspension migration.
@@ -88,6 +89,10 @@ beforeAll(async () => {
 
   // ─── Late-import modules so they pick up the env we just set ─────
   prismaImports = await import("../../lib/prisma.js");
+
+  // `utility_id` is a foreign key, so the tenants this file writes
+  // rows for have to exist before the first write.
+  await ensureUtilities(prismaImports.prisma, [TENANT_A, TENANT_B]);
   queueImports = await import("../../lib/queues.js");
   workerImports = await import("../../workers/suspension-worker.js");
 }, 180_000);

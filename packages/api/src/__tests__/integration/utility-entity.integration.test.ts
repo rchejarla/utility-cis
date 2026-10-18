@@ -27,7 +27,7 @@ let pgContainer: StartedPostgreSqlContainer;
 let prismaImports: typeof import("../../lib/prisma.js");
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [TENANT_A, TENANT_B] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);
@@ -63,5 +63,42 @@ describe("the Utility entity", () => {
       where: { id: { in: [TENANT_A, TENANT_B] } },
     });
     expect(count).toBe(2);
+  });
+
+  /**
+   * The point of the key. Without it, `utility_id` was an uncontrolled
+   * value: a typo produced a phantom tenant whose rows nothing owned and
+   * no one could find.
+   */
+  it("refuses a row naming a utility that does not exist", async () => {
+    const { prisma } = prismaImports;
+    const fix = await makeTenantFixture(prisma, TENANT_A);
+
+    await expect(
+      prisma.account.create({
+        data: {
+          utilityId: "99999999-9999-4999-8999-999999999999",
+          accountNumber: "ACCT-ORPHAN",
+          accountType: "RESIDENTIAL",
+          status: "ACTIVE",
+          billingCycleId: fix.billingCycleId,
+          depositAmount: 0,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "P2003" });
+  });
+
+  /**
+   * `onDelete: Restrict`, not Cascade. A cascade would make one mistaken
+   * delete erase a utility's entire history — every customer, bill and
+   * ledger entry — from a single call.
+   */
+  it("refuses to delete a utility that still has rows", async () => {
+    const { prisma } = prismaImports;
+    await makeTenantFixture(prisma, TENANT_A);
+
+    await expect(prisma.utility.delete({ where: { id: TENANT_A } })).rejects.toMatchObject({
+      code: "P2003",
+    });
   });
 });

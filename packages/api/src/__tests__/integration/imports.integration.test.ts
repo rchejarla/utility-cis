@@ -98,7 +98,7 @@ function buildMultipart(
 }
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [TENANT_A] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   appImports = await import("../../app.js");

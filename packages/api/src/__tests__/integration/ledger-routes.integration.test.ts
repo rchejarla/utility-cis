@@ -46,7 +46,7 @@ function makeToken(sub: string = ACTOR) {
 const headers = (sub?: string) => ({ authorization: `Bearer ${makeToken(sub)}` });
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [utilityId, otherUtilityId] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   const appImports = await import("../../app.js");

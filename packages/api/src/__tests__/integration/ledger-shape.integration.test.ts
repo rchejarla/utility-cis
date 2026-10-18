@@ -16,7 +16,7 @@ const utilityId = "00000000-0000-4000-8000-0000000000aa";
 let accountId: string;
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [utilityId] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 

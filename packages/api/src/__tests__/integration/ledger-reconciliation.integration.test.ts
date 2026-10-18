@@ -27,7 +27,7 @@ let billingCycleId: string;
 let feeReasonId: string;
 
 beforeAll(async () => {
-  const booted = await bootPostgres();
+  const booted = await bootPostgres({ utilities: [utilityId] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   posting = await import("../../services/ar/posting.service.js");
