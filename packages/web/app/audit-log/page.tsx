@@ -318,6 +318,14 @@ export default function AuditLogPage() {
             Clear
           </button>
         )}
+        {/*
+          The two groups share a row but are not the same control. The
+          row's own 10px gap left "Filter:" sitting as close to the end
+          date as the end date sits to "to", so the eye read one long
+          strip; this separates them without a divider. FilterBar's
+          margins are deliberately the consumer's job, so it goes here.
+        */}
+        <div style={{ marginLeft: "14px" }}>
         <FilterBar
           filters={[
             {
@@ -338,6 +346,7 @@ export default function AuditLogPage() {
             },
           ]}
         />
+        </div>
       </div>
 
       <DataTable
