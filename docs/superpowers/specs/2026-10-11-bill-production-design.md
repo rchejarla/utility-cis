@@ -34,7 +34,7 @@ Grounded, because the module spec is partly stale:
 
 - `Bill` — `billNumber`, `periodStart/End`, `billDate`, `dueDate`, `subtotal`, `taxes`, `credits`, `total`, `postedAt`. No version, no status, no document.
 - `BillSegmentLine` — `label`, `kindCode`, `amount`, `quantity`, `sortOrder`, plus `sourceScheduleId` and `sourceComponentId`. Every line is already traceable to the rate schedule version and component that produced it, which is what #139 (itemisation) needs.
-- `TenantTheme` — `logoUrl`, `colors`, `typography`, `preset`. Per-tenant branding, already used by the web UI.
+- `UtilityTheme` — `logoUrl`, `colors`, `typography`, `preset`. Per-tenant branding, already used by the web UI.
 - Attachment storage — local disk at `../../uploads`, flat filenames, with a traversal guard (`safeResolveStoragePath` in `packages/api/src/services/attachment.service.ts`). Bills deliberately do **not** follow this precedent; see §4.5. Migrating attachments onto the same rail is sensible later and is not this slice's job.
 - **apptor-connect** (`c:\development\apptor-connect`) — the integration layer for this stack, with `apptor-connect-service` as its HTTP surface. Four planes: `resolve` (connection details plus a short-lived token), `proxy` (`POST /proxy/v1/{integration}` — it calls the vendor and the credential never reaches us), `files` (`/files/v1/*`, object stores and SFTP), and `events` (verified inbound webhooks, read by cursor). Its ownership hierarchy is `PLATFORM ⊃ TENANT ⊃ CUSTOMER ⊃ SUBJECT`, which maps onto `utility_id` cleanly. This is where email, SMS, object storage and other-application traffic belong — nothing in this codebase holds vendor credentials.
 - `docs/specs/09-billing.md` designs this feature against a `BillingRecord` entity that was **superseded by `Bill`**. Its field list is the right intent on the wrong entity; this design maps it onto `Bill`.
@@ -49,7 +49,7 @@ Every bill must say who issued it and where to send payment. This slice adds tha
 
 ```
 Bill + segments + lines + Account + Customer
-  + TenantTheme + issuer identity + BillMessage
+  + UtilityTheme + issuer identity + BillMessage
         │
         ▼
   BillPresentationLoader ──────► BillPresentation   (resolved, render-ready, no DB types)
@@ -157,7 +157,7 @@ Defensively, the key is prefixed with `utilityId` even though the integration's 
 
 Selection at render: messages whose targeting matches the bill's account type and any commodity on the bill (or is null), and whose active window contains `bill.billDate` — **not** `now()`, so a reprint of an old bill reproduces the messages it carried.
 
-**`TenantConfig`** gains issuer identity: `utilityName`, `utilityLegalName`, `remittanceAddressLine1/2`, `remittanceCity`, `remittanceState`, `remittancePostalCode`, `billingPhone`, `billingEmail`, `websiteUrl`.
+**`UtilityConfig`** gains issuer identity: `utilityName`, `utilityLegalName`, `remittanceAddressLine1/2`, `remittanceCity`, `remittanceState`, `remittancePostalCode`, `billingPhone`, `billingEmail`, `websiteUrl`.
 
 Explicit columns rather than the existing `settings` JSON, because these are required for a bill to be valid and belong where the settings UI can validate them. A separate `TenantIdentity` table was considered and rejected: it would need its own CRUD and page to hold nine fields that are already per-tenant configuration.
 
@@ -186,7 +186,7 @@ A forced Regenerate sits behind a higher permission than a download, in the spir
 
 Unit, where the logic is:
 
-- `BillPresentationLoader` — charge grouping and ordering; totals reconcile to `Bill.subtotal`/`taxes`/`credits`/`total`; message selection by account type, commodity, and the active window evaluated at `billDate`; issuer identity resolution; theme fallback when `TenantTheme` is absent.
+- `BillPresentationLoader` — charge grouping and ordering; totals reconcile to `Bill.subtotal`/`taxes`/`credits`/`total`; message selection by account type, commodity, and the active window evaluated at `billDate`; issuer identity resolution; theme fallback when `UtilityTheme` is absent.
 - `BillMessage` targeting — a matrix over (account type, commodity, window) including the null-means-all cases.
 
 Renderer, as a smoke test rather than a pixel golden:

@@ -96,8 +96,8 @@ outside tests, across the API and the seed.
 
 **There is also nothing to create.** Checked 2026-10-18: there is no
 `Utility` or `Tenant` model in `schema.prisma`, and no such table in the
-database — the only tenant-named tables are `tenant_config`,
-`tenant_module`, `tenant_theme` and `tenant_setting`, each of which
+database — the only tenant-named tables are `utility_config`,
+`utility_module`, `utility_theme` and `utility_setting`, each of which
 describes a tenant without being one. `utility_id` carries **zero
 foreign-key constraints** anywhere in the schema.
 
@@ -112,7 +112,7 @@ Consequences, both already observed:
 
 - Onboarding a second tenant means a developer running SQL.
 - A freshly migrated and seeded database answers **403** on every gated
-  route, because `tenant_module` rows do not exist. Integration suites
+  route, because `utility_module` rows do not exist. Integration suites
   create them inline and invalidate the RBAC cache
   (`billing-run.integration.test.ts:89` and six other suites) — they are
   working around a missing provisioning path, not testing one.
@@ -241,7 +241,7 @@ nothing to write without it.
 | # | Responsibility | Why it has no other home |
 |---|---|---|
 | 1 | Create a tenant — identity, display name, status, created-at | Nothing represents a tenant at all |
-| 2 | Enable and disable its modules | `tenant_module` has no writer outside tests; a fresh database answers 403 on every gated route |
+| 2 | Enable and disable its modules | `utility_module` has no writer outside tests; a fresh database answers 403 on every gated route |
 | 3 | Apply a config profile — commodities, UOMs, cycles, tariffs | Q4; this is configuration, not demo data |
 | 4 | Create its first admin | A tenant with no user cannot be administered into existence |
 | 5 | Suspend and reactivate | `isActive` exists on users, not on tenants |
@@ -389,7 +389,7 @@ first.
    on every entity with no constraint anywhere today — but it costs a
    reseed rather than a repair.
 3. **Provisioning service** — `provisionTenant(...)`: utility row,
-   `tenant_module` rows, preset roles, first admin, config profile.
+   `utility_module` rows, preset roles, first admin, config profile.
    Idempotent, callable from a script, **no UI**. This is the piece with
    value in both modes, and it closes the 403-on-a-fresh-database trap
    that every integration suite currently works around.

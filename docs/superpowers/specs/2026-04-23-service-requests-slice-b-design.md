@@ -351,7 +351,7 @@ Single branch, single PR. No feature flag — admin-only, portal untouched.
 
 None at spec-approval time. Assumptions to revisit during implementation:
 
-- Request number format is `SR-YYYY-NNNNNN`. If a tenant wants per-tenant prefixes, we'll add a `TenantConfig.srNumberPrefix` field.
+- Request number format is `SR-YYYY-NNNNNN`. If a tenant wants per-tenant prefixes, we'll add a `UtilityConfig.srNumberPrefix` field.
 - "At-risk" threshold for SLA status filter is <50% of resolution window. If that feels wrong in practice, it's one-line tuning.
 - Field Technician gets EDIT on service requests (to assign/transition) but not CREATE/CANCEL. If CSRs want techs to create-on-behalf, we'll widen the permission.
 - `assigned_team` is free-text in this slice (no lookup table). A `Team` entity with members can come later if ops want it; the VARCHAR column stays the same.

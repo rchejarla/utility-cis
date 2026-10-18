@@ -427,7 +427,7 @@ The system MUST converge UI, API, and SFTP onto a single pipeline. Everything ch
 
 ### 3.11 File size, row count, async, quotas
 
-- **FR-ING-110** — Per-tenant quotas configurable via `tenant_config`:
+- **FR-ING-110** — Per-tenant quotas configurable via `utility_config`:
   - `import_max_file_size_mb` (default 100)
   - `import_max_rows_per_file` (default 1,000,000)
   - `import_max_rows_per_day` (default 10,000,000)
@@ -482,7 +482,7 @@ The system MUST converge UI, API, and SFTP onto a single pipeline. Everything ch
 | `import_batch` | Add columns: `file_sha256`, `committedCount`, `skippedDuplicateCount`, `updatedCount`, `last_committed_chunk_index`, `external_ref`, `cancel_reason`, `s3_report_key` | Track new pipeline outputs and resume points |
 | `import_batch` | Extend `status` enum with `PARSING`, `VALIDATING`, `STAGED`, `COMMITTING`, `PARTIAL` | Lifecycle state machine per FR-ING-112 |
 | `import_batch` | Extend `source` enum with `SFTP`, `EXCEL`, `XML` | Channel coverage |
-| `tenant_config` | Add `import_max_file_size_mb`, `import_max_rows_per_file`, `import_max_rows_per_day`, `import_max_concurrent_batches` | Per-tenant quotas (FR-ING-110) |
+| `utility_config` | Add `import_max_file_size_mb`, `import_max_rows_per_file`, `import_max_rows_per_day`, `import_max_concurrent_batches` | Per-tenant quotas (FR-ING-110) |
 
 ### 4.3 New worker queues
 

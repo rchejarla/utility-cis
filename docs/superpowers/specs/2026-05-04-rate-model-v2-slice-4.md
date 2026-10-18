@@ -185,10 +185,10 @@ The `WqaLoader.load(keys)` reads the latest active row per SA (latest waterYear,
 
 ### TenantLoader
 
-- `tenant:drought_stage` → reads tenant-level setting (a row in `tenant_setting` keyed by name, or fall back to `0` if not set). Returns integer 0-4. Scope: `per_tenant` — value is the same for every SA in a billing run, so the registry's bulk-prefetch path can dedup.
+- `tenant:drought_stage` → reads tenant-level setting (a row in `utility_setting` keyed by name, or fall back to `0` if not set). Returns integer 0-4. Scope: `per_tenant` — value is the same for every SA in a billing run, so the registry's bulk-prefetch path can dedup.
 - `tenant:flags:<flag_name>` → similar, returns boolean.
 
-For Slice 4, since we don't have a `tenant_setting` table yet, the `TenantLoader` reads from a small new table or uses environment variables. **Decision**: add `tenant_setting` table now (small, generic key→value). It's needed for drought stage anyway.
+For Slice 4, since we don't have a `utility_setting` table yet, the `TenantLoader` reads from a small new table or uses environment variables. **Decision**: add `utility_setting` table now (small, generic key→value). It's needed for drought stage anyway.
 
 ### PremiseLoader
 
@@ -266,7 +266,7 @@ If this test passes, the engine + loaders + DB are wired correctly end-to-end.
 |---|---|
 | **Variable key parameter resolution.** The engine's `meter:reads:M-1` references a meter ID that the loader needs to look up. How does the loader know which SA's meter to read? | The loader's `load(keys)` accepts the keys directly and parses meter ID from the pattern. The engine doesn't change. |
 | **WQA storage shape may evolve.** | Slice 4 ships the basic table; Slice 5+ may add winter-sample-window config, exception flagging. The current shape covers Slice 3 + 4 needs. |
-| **Tenant flag storage.** No `tenant_setting` table exists. Slice 4 adds one. | Small generic key-value table, scoped per-tenant. |
+| **Tenant flag storage.** No `utility_setting` table exists. Slice 4 adds one. | Small generic key-value table, scoped per-tenant. |
 | **LinkedCommodityLoader complexity.** | Keep the slice 4 implementation simple: same-account same-premise sibling SA. Edge cases throw documented errors; Slice 5 can refine. |
 | **Items loader's `<sp_id>` mismatch with current Container model.** Container links to SA, not SP. | Loader interprets `items:<sp_id>:<item_type>` by reading containers for SA where `serviceAgreementId = sa.id` and matching `item_type`. The `sp_id` portion is treated as a placeholder for now; Slice 5 may add SP linkage. |
 | **Test container startup time.** Each loader test boots Postgres, taking 30-60s. | Use shared `bootPostgres` infrastructure; load all loaders into a single integration suite where it makes sense. |
@@ -293,7 +293,7 @@ The slice is **done** when:
 - [ ] All 8 loaders implemented with at least the documented capabilities
 - [ ] `loadBase` hydrates a `BaseContext` from Prisma
 - [ ] `WqaValue` Prisma model + migration applied
-- [ ] `tenant_setting` Prisma model + migration applied (or alternative — see Task 4)
+- [ ] `utility_setting` Prisma model + migration applied (or alternative — see Task 4)
 - [ ] Per-loader unit tests pass (~40-60 tests total)
 - [ ] Registry tests pass
 - [ ] `loadBase` test passes

@@ -97,7 +97,7 @@ configuration (below), not environment.
 
 ## 4. Per-tenant settings — no bill produces without these
 
-Per utility, under `TenantConfig.settings`, editable at **Settings → Bill
+Per utility, under `UtilityConfig.settings`, editable at **Settings → Bill
 Production**:
 
 - `billDocuments.storageIntegration` — the apptor-connect integration

@@ -93,9 +93,43 @@ Single overarching architecture and data model reference for the entire system (
 - `node seed.js` — Alternative seed (no tsx needed)
 - `start_prod.bat` — Build + run in production mode
 
+### Recreating the database after the 2026-10-18 migration squash
+
+The 54 incremental migrations were collapsed into three files
+(`baseline`, `database_features`, `reference_data`). Any database created
+before that holds 48–51 applied migrations that no longer exist on disk,
+so **`migrate_db.bat` will refuse to run** — Prisma reports them missing
+rather than applying anything. This is expected, not a fault.
+
+Recreate instead. From the repo root, with the containers up:
+
+```
+docker exec utility-cis-db-1 psql -U cis -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='utility_cis';"
+docker exec utility-cis-db-1 psql -U cis -d postgres -c "DROP DATABASE utility_cis;" -c "CREATE DATABASE utility_cis;"
+cd packages/shared && npx prisma migrate deploy && cd ../..
+node seed.js
+```
+
+Stop the API first, or the drop fails with "There is 1 other session
+using the database" — and a `migrate deploy` attempted after a failed
+drop leaves an unfinished row in `_prisma_migrations` that blocks later
+runs until the database is dropped anyway.
+
+**Also re-run `pnpm --filter @utility-cis/shared exec prisma generate`.**
+The generated client is gitignored and nothing regenerates it on install,
+so a stale one still describes `tenant_config` and `tenant_module` —
+tables the squash renamed out of existence. Symptom: `Cannot read
+properties of undefined (reading 'upsert')`, or a query against a
+relation that does not exist.
+
+Losing the data is the intent: this product is in development and data
+that does not fit a new design is reseeded, never migrated.
+
 ## Multi-tenancy
 
-Every entity has `utility_id`. PostgreSQL RLS enforces tenant isolation at DB level. The API sets `app.current_utility_id` per request via JWT claims. Dev tenant UUID: `00000000-0000-4000-8000-000000000001`.
+Every entity has `utility_id`, and since 2026-10-18 it is a **foreign key to `utility(id)`** (`ON DELETE RESTRICT`) — a tenant is a row, so a write naming one that does not exist is refused. It is nullable on seven global reference tables, where NULL means "belongs to no tenant". PostgreSQL RLS enforces tenant isolation at DB level, though the policies are inert while the app role is a superuser that owns the tables. The API sets `app.current_utility_id` per request via JWT claims. Dev tenant UUID: `00000000-0000-4000-8000-000000000001`.
+
+**Anything writing tenant-scoped rows must ensure the utility row exists first.** Integration tests declare their tenants at `bootPostgres({ utilities: [...] })`, or call `ensureUtilities(prisma, [...])` if they boot their own container; `schema-invariants.integration.test.ts` guards the shape.
 
 ## Portal
 

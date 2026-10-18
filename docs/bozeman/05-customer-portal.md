@@ -570,7 +570,7 @@ model PortalNotificationInbox {
 - `delegation-expiry-sweep` — daily, reuses pattern from §4.12 FR-PORTAL-123.
 - `notification-dispatch` — extends the existing `notification-send` worker from the scheduler migration with the new event types and channels.
 - `web-push-dispatch` — separate from email/SMS because of VAPID/JWT signing latency. Could be folded into `notification-send` if perf permits.
-- `voice-dispatch` — Apptorflow voice channel; gates on `tenant_config.voiceChannelEnabled`.
+- `voice-dispatch` — Apptorflow voice channel; gates on `utility_config.voiceChannelEnabled`.
 - `portfolio-weekly-summary` — weekly cron generating landlord digest emails.
 
 ### 5.4 Apptorflow integration
@@ -619,7 +619,7 @@ The portal scope is large enough that I've split implementation into five sub-pr
 14. **In-portal inbox channel.** New entity + bell icon + tray. Effort: M (~3-4 days).
 15. **Email + SMS production providers.** Configure SES + Twilio (or alternatives); per-tenant config. Effort: S (~2 days, plus vendor account setup).
 16. **Web push.** Service worker push handler; subscription endpoint; VAPID key generation; outbound dispatch. Reconcile with doc 03. Effort: M (~3-4 days).
-17. **Voice via Apptorflow.** Extends the Apptorflow client with voice methods; gated on `tenant_config.voiceChannelEnabled`. Effort: M (~3-4 days, plus Apptorflow-side connector availability).
+17. **Voice via Apptorflow.** Extends the Apptorflow client with voice methods; gated on `utility_config.voiceChannelEnabled`. Effort: M (~3-4 days, plus Apptorflow-side connector availability).
 18. **Notification template seed for the 11 events.** Effort: S (~1-2 days).
 
 ### Phase E — Landlord portfolio

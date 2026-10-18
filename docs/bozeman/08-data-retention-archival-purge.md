@@ -32,7 +32,7 @@ The schema has no `deletedAt`, `archivedAt`, `purgedAt`, or `softDeletedAt` colu
 
 **One exception:**
 
-- **Scheduler-emitted audit rows** (`audit_log` rows where `source LIKE 'scheduler:%'`) are deleted by `sweepExpiredSchedulerAudits()` in `packages/api/src/services/audit-retention.service.ts:32-75`. Default retention: 365 days, configurable per tenant via `tenant_config.scheduler_audit_retention_days` (`packages/shared/prisma/schema.prisma:900`). User-emitted audits (`source LIKE 'user:%'` or NULL) are NOT touched by this sweep.
+- **Scheduler-emitted audit rows** (`audit_log` rows where `source LIKE 'scheduler:%'`) are deleted by `sweepExpiredSchedulerAudits()` in `packages/api/src/services/audit-retention.service.ts:32-75`. Default retention: 365 days, configurable per tenant via `utility_config.scheduler_audit_retention_days` (`packages/shared/prisma/schema.prisma:900`). User-emitted audits (`source LIKE 'user:%'` or NULL) are NOT touched by this sweep.
 
 This single exception is the **only** active deletion in the system. Everything else lives forever today — which incidentally satisfies the RFP's "indefinite by default" commitment, but only because no policy mechanism exists to do anything else.
 
@@ -77,7 +77,7 @@ Hard DELETE on attachments via the API exists today (per [04-attachments.md](./0
 
 **Status: Partial — exists for ServiceSuspension only, not generalized.**
 
-`ServiceSuspension` has `requestedBy: String?` and `approvedBy: String?` columns (`packages/shared/prisma/schema.prisma:943-944`), and `TenantConfig.requireHoldApproval` (`schema.prisma:884`) gates whether a second human must approve a suspension before it activates. This is the **only** entity in the schema with a dual-approval workflow today.
+`ServiceSuspension` has `requestedBy: String?` and `approvedBy: String?` columns (`packages/shared/prisma/schema.prisma:943-944`), and `UtilityConfig.requireHoldApproval` (`schema.prisma:884`) gates whether a second human must approve a suspension before it activates. This is the **only** entity in the schema with a dual-approval workflow today.
 
 [01-audit-and-tamper-evidence.md](./01-audit-and-tamper-evidence.md) §3.5 (FR-AUDIT-040..044) **proposes** generalizing this into a `pending_security_change` table for sensitive security-relevant operations (role edits, MFA changes, credential rotation). [04-attachments.md](./04-attachments.md) §4.8 FR-ATT-091 further generalizes that into a `pending_administrative_change` table for purge approvals. Both are **proposed, not built**.
 
@@ -129,7 +129,7 @@ The `event_class` column doesn't exist on `audit_log` yet. No code enforces thes
 ### 3.1 Indefinite default + retention class catalog
 
 - **FR-RET-001** — Every entity in the production schema MUST be retained indefinitely unless a `retention_policy` row authorizes deletion. The system MUST NOT hard-delete production data based on time alone — only via an explicit policy plus all gates from §3.5–3.7 below.
-  - **Acceptance:** Audit every model in `schema.prisma` and confirm no service code performs unconditional time-based DELETE. The scheduler-audit sweep continues to operate but is rewritten to consult the `retention_policy` table (FR-RET-010) instead of reading `tenant_config.scheduler_audit_retention_days` directly.
+  - **Acceptance:** Audit every model in `schema.prisma` and confirm no service code performs unconditional time-based DELETE. The scheduler-audit sweep continues to operate but is rewritten to consult the `retention_policy` table (FR-RET-010) instead of reading `utility_config.scheduler_audit_retention_days` directly.
 
 - **FR-RET-002** — A new `retention_class` enum classifies every retention-eligible row in the system into one of:
 
@@ -150,7 +150,7 @@ The `event_class` column doesn't exist on `audit_log` yet. No code enforces thes
   Class is intrinsic to each row type (set by the code that emits the row). It cannot be overridden by tenant configuration. Tenant configuration sets the **retention period** within a class, **bounded below** by the statutory floor.
 
 - **FR-RET-003** — Every service that emits a row destined for retention MUST tag the row with its class. For new tables this is a NOT NULL column (`retention_class retention_class NOT NULL`). For existing tables (`audit_log`, `meter_read`, `customer`, `account`, etc.) a backfill migration sets the class based on the row's existing source.
-  - **Acceptance:** A grep for every `prisma.X.create()` in the codebase finds at least one of: (a) explicit `retention_class` field set, (b) class injected at the service layer, or (c) the table doesn't participate in retention (e.g., `tenant_config`).
+  - **Acceptance:** A grep for every `prisma.X.create()` in the codebase finds at least one of: (a) explicit `retention_class` field set, (b) class injected at the service layer, or (c) the table doesn't participate in retention (e.g., `utility_config`).
 
 ### 3.2 Retention policy table
 
@@ -430,7 +430,7 @@ The system runs purge in three modes:
 
 - **FR-RET-074** — The `Account.isProtected` and `Account.protectionReason` columns (which exist today, never enforced) are deprecated in favor of `legal_hold` rows. A migration moves any existing protected accounts into `legal_hold` rows and drops the columns from `Account` in the next major schema version.
 
-- **FR-RET-075** — The "audit log" itself is subject to retention via class `AUDIT_FINANCIAL` / `AUDIT_SECURITY` / `AUDIT_OPERATIONAL` / `AUDIT_TECHNICAL`. The current scheduler-audit retention sweep continues to run, but reads `retention_policy` for `AUDIT_TECHNICAL` instead of the legacy `tenant_config.scheduler_audit_retention_days` column. The legacy column is deprecated and removed in the migration that introduces `retention_policy`.
+- **FR-RET-075** — The "audit log" itself is subject to retention via class `AUDIT_FINANCIAL` / `AUDIT_SECURITY` / `AUDIT_OPERATIONAL` / `AUDIT_TECHNICAL`. The current scheduler-audit retention sweep continues to run, but reads `retention_policy` for `AUDIT_TECHNICAL` instead of the legacy `utility_config.scheduler_audit_retention_days` column. The legacy column is deprecated and removed in the migration that introduces `retention_policy`.
 
 ### 3.6 GDPR/CCPA right-to-erasure
 
@@ -559,7 +559,7 @@ enum ChangeStatus {
 |---|---|---|
 | `account` | `is_protected` | Replaced by `legal_hold` rows (FR-RET-074) |
 | `account` | `protection_reason` | Replaced by `legal_hold.reason` |
-| `tenant_config` | `scheduler_audit_retention_days` | Replaced by `retention_policy` row with class `AUDIT_TECHNICAL` (FR-RET-075) |
+| `utility_config` | `scheduler_audit_retention_days` | Replaced by `retention_policy` row with class `AUDIT_TECHNICAL` (FR-RET-075) |
 
 ### 4.5 RLS updates
 
@@ -580,7 +580,7 @@ The retention/archive/purge workers run with `app.current_utility_id` set per te
 
 ### Phase 1 — Foundation (~3 weeks)
 
-1. **`retention_class` enum + audit_log column + backfill** (~3 days). Adds the column, classifies all existing audit emit sites in code, runs a backfill migration that infers the class from `audit_log.source` patterns. Removes the `tenant_config.scheduler_audit_retention_days` column at the end (replaced by retention_policy).
+1. **`retention_class` enum + audit_log column + backfill** (~3 days). Adds the column, classifies all existing audit emit sites in code, runs a backfill migration that infers the class from `audit_log.source` patterns. Removes the `utility_config.scheduler_audit_retention_days` column at the end (replaced by retention_policy).
 2. **`retention_policy` table + UI** (~1 week). Schema, migrations, RLS, Settings → Retention → Policies tab in `/settings/retention`. No purge yet — just the policy registry. Statutory floors are enforced at validation time.
 3. **`legal_hold` table + Holds tab** (~3 days). Schema, RLS, place/release flows. Migration moves existing `Account.isProtected` into `legal_hold` rows; deprecates the column.
 4. **`pending_administrative_change` generalization** (~3 days). Renames or replaces `pending_security_change` (from doc 01) with the more general form. All consumers (purge requests, retention policy enable, security changes, etc.) reuse the same table.
@@ -651,7 +651,7 @@ For the proposal owner to sign off, every line below must pass.
 ### Retention basics
 - [ ] No production entity is hard-deleted by time-based code outside the retention engine.
 - [ ] Adding a row to a retention-eligible table sets `retention_class` (or the table doesn't participate in retention).
-- [ ] `tenant_config.scheduler_audit_retention_days` is removed; AUDIT_TECHNICAL retention is set via `retention_policy` instead.
+- [ ] `utility_config.scheduler_audit_retention_days` is removed; AUDIT_TECHNICAL retention is set via `retention_policy` instead.
 
 ### Policy configuration
 - [ ] Operators with `retention.write` permission can view and edit the retention matrix at `/settings/retention/policies`.
@@ -709,7 +709,7 @@ For the proposal owner to sign off, every line below must pass.
   - [06-custom-fields.md](./06-custom-fields.md) §4.5 Phase 3 — reporting module against which "Include archived data" toggle integrates
   - [17-reporting-and-audit.md](../specs/17-reporting-and-audit.md) — existing audit-immutability commitment; reconciled with this doc's class-based retention
   - `packages/api/src/services/audit-retention.service.ts` — current scheduler-audit retention sweep (refactored to use `retention_policy`)
-  - `packages/shared/prisma/schema.prisma` — current schema state (`Account.isProtected/protectionReason`, `tenant_config.scheduler_audit_retention_days`, `ServiceSuspension.requestedBy/approvedBy`)
+  - `packages/shared/prisma/schema.prisma` — current schema state (`Account.isProtected/protectionReason`, `utility_config.scheduler_audit_retention_days`, `ServiceSuspension.requestedBy/approvedBy`)
 
 - **External**:
   - IRS record retention (financial) — 7 years for business records

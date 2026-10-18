@@ -278,14 +278,14 @@ Decimal(14,2), not the (14,4) the rate engine uses: rating needs sub-cent precis
 1. Nothing would read it until that workflow exists — a write-only column, the exact asymmetry the cross-layer auditor hunts for.
 2. More fundamentally, **approval cannot be a state on a ledger entry.** Posting is final by design: an entry exists, so it has moved the balance. A waiver awaiting approval must *not* reduce what the customer owes. So approval needs a request object outside the ledger that posts an entry once granted — a different design, and the reason it is out of scope rather than a column away.
 
-The precedent for the eventual shape is `ServiceSuspension`: `TenantConfig.requireHoldApproval` plus a `PENDING` status and `approvedBy`, gating an Approve action in the UI. That state lives on the suspension, not on a financial entry.
+The precedent for the eventual shape is `ServiceSuspension`: `UtilityConfig.requireHoldApproval` plus a `PENDING` status and `approvedBy`, gating an Approve action in the UI. That state lives on the suspension, not on a financial entry.
 
 **Unique:** `(utilityId, code)`. Seeded with defaults per tenant, following `PremiseTypeDef` / `MeasureTypeDef`.
 
 ### 4.5 Changes to existing entities
 
 ```prisma
-// TenantConfig — joins suspensionEnabled / delinquencyEnabled / requireHoldApproval
+// UtilityConfig — joins suspensionEnabled / delinquencyEnabled / requireHoldApproval
 autoPostBills  Boolean   @default(true)
 
 // Account
@@ -350,7 +350,7 @@ Walk open debits in this order:
 1. **Type class:** `FEE`, then `ADJUSTMENT_DEBIT`, then `BILL_CHARGE`
 2. **Oldest `dueDate`** within a class, tie-broken by `postedAt`
 
-Which is spec 10's rule — reconnection fees, then late fees, then oldest bills FIFO. The ranking lives in **one constant**. Spec 10 says it should be tenant-configurable; not built, because no second tenant wants a different order. When one does, it moves to `TenantSetting`, which already exists.
+Which is spec 10's rule — reconnection fees, then late fees, then oldest bills FIFO. The ranking lives in **one constant**. Spec 10 says it should be tenant-configurable; not built, because no second tenant wants a different order. When one does, it moves to `UtilitySetting`, which already exists.
 
 Each application consumes what it can; shortfall stays as `openAmount` on the debit. Partial payments need no special case.
 

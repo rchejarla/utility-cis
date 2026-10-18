@@ -1,6 +1,6 @@
 -- Baseline: every table, enum, index and foreign key Prisma models.
 --
--- Replaces 54 incremental migrations. The product is in development and
+-- Replaces the 51 incremental migrations at commit d28e753. The product is in development and
 -- no deployment holds data worth preserving, so the chain was collapsed
 -- rather than carried: see docs/superpowers/specs/
 -- 2026-10-17-tenancy-and-platform-admin-design.md.
@@ -11,6 +11,24 @@
 -- trigger, the exclusion constraint — lives in the migration beside this
 -- one, and would have been silently lost had this file been the whole
 -- squash.
+--
+-- ONE DELIBERATE BEHAVIOUR CHANGE, found in review and recorded here
+-- because the commit that introduced it called the squash "proven
+-- equivalent", which was wrong:
+--
+-- 27 foreign keys gain `ON UPDATE CASCADE`. The hand-written chain left
+-- them at NO ACTION; Prisma emits CASCADE by default, and this file is
+-- generated. So `UPDATE account SET id = <new uuid>` used to be refused
+-- and now rewrites bill.account_id, ledger_entry.account_id and the
+-- rest. Nothing in the application updates a UUID primary key, so this
+-- is latent.
+--
+-- It is kept rather than reverted: the database now matches the model,
+-- so `prisma migrate diff` stops proposing these 27 renames on every
+-- run — drift the previous FK migration had explicitly declined to
+-- touch. Reverting would mean hand-editing 27 statements in generated
+-- output and re-introducing that churn. If a PK ever becomes mutable,
+-- revisit this.
 
 
 -- CreateSchema

@@ -29,10 +29,14 @@ export interface BootedContainer {
 /**
  * SQL that creates a utility row, idempotently.
  *
- * Shared by `bootPostgres` (which has no Prisma client yet — it has only
- * just set DATABASE_URL) and `ensureUtilities` (which does). Keeping one
- * definition means the two cannot drift on what a test tenant looks
- * like.
+ * Used by `bootPostgres`, which has no Prisma client yet — it has only
+ * just set DATABASE_URL, and the caller imports the singleton afterwards
+ * precisely so it reads it. `ensureUtilities` below does the same thing
+ * through the client instead.
+ *
+ * The two agree today but nothing enforces it: they are separate
+ * statements of the same insert, so a required column added to a test
+ * utility has to be added in both places.
  */
 function utilityInsertSql(ids: readonly string[]): string {
   return ids
@@ -48,9 +52,10 @@ function utilityInsertSql(ids: readonly string[]): string {
 /**
  * Create the utility rows a test's tenant ids refer to.
  *
- * For the eight files that boot their own container rather than calling
+ * For the files that boot their own container rather than calling
  * `bootPostgres` — they already hold a Prisma client, so they can do it
- * directly.
+ * directly. Eight files boot their own; six call this, the other two
+ * (`worker-redis-reconnect`, `worker-shutdown`) write no tenant rows.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function ensureUtilities(prisma: any, ids: readonly string[]): Promise<void> {
@@ -68,7 +73,7 @@ export async function ensureUtilities(prisma: any, ids: readonly string[]): Prom
  *
  * `utility_id` is a foreign key to `utility`, so a test that writes
  * tenant-scoped rows for an id with no utility row is refused with
- * P2003. 41 of the 63 container-backed files build their own fixtures
+ * P2003. 44 of the 63 container-backed files build their own fixtures
  * rather than calling `makeTenantFixture`, and each invents its own
  * tenant id — so the id has to be declared somewhere.
  *

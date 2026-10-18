@@ -1,6 +1,6 @@
 -- Everything `schema.prisma` cannot express, and which a baseline
 -- generated from it therefore omits. Extracted from a database built
--- from the 54 migrations this pair replaces, so the expressions here are
+-- from the 51 migrations this pair replaces, so the expressions here are
 -- the ones that were actually running, not a transcription of them.
 --
 -- Order matters: extensions, then the hypertable, then the generated
@@ -62,7 +62,7 @@ ALTER TABLE ONLY service_point_meter ADD CONSTRAINT spm_no_double_install EXCLUD
 -- UNIQUE and enforce real invariants — one base unit per commodity and
 -- measure type, one BILL_CHARGE per bill, one tenant-wide role per
 -- user — which would simply stop being enforced, with no error anywhere.
--- Found by diffing a database built from the 54 migrations against one
+-- Found by diffing a database built from the 51 migrations against one
 -- built from this pair: 236 indexes against 231.
 CREATE UNIQUE INDEX ledger_entry_bill_charge_key ON ledger_entry USING btree (utility_id, bill_id) WHERE (type = 'BILL_CHARGE'::"LedgerEntryType");
 CREATE INDEX ledger_entry_open_debits_idx ON ledger_entry USING btree (utility_id, due_date) WHERE ((open_amount > (0)::numeric) AND (due_date IS NOT NULL));
@@ -153,7 +153,7 @@ CREATE TRIGGER before_sa_lifecycle_invariants BEFORE INSERT OR UPDATE ON service
 -- against a diff-generated one.
 --
 -- 25 id columns and 13 updated_at, found by diffing a database built
--- from the 54 migrations against one built from this pair.
+-- from the 51 migrations against one built from this pair.
 ALTER TABLE account_type_def ALTER COLUMN id SET DEFAULT gen_random_uuid();
 ALTER TABLE account_type_def ALTER COLUMN updated_at SET DEFAULT now();
 ALTER TABLE bill ALTER COLUMN id SET DEFAULT gen_random_uuid();
@@ -267,6 +267,12 @@ ALTER TABLE customer ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delinquency_action ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delinquency_rule ENABLE ROW LEVEL SECURITY;
 ALTER TABLE import_batch ENABLE ROW LEVEL SECURITY;
+-- in_app_notification was the one tenant-scoped table with neither RLS
+-- nor a policy: 62 tables carry a tenant and only 61 were covered. The
+-- gap predates the squash — the hand-written chain never had it either —
+-- but this file is the first place all 62 are enumerated together, and
+-- the rows hold a title, body and link per user.
+ALTER TABLE in_app_notification ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ledger_application ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ledger_entry ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ledger_reason_def ENABLE ROW LEVEL SECURITY;
@@ -329,6 +335,7 @@ CREATE POLICY tenant_isolation ON customer USING ((utility_id = (current_setting
 CREATE POLICY tenant_isolation ON delinquency_action USING ((utility_id = (current_setting('app.current_utility_id'::text))::uuid));
 CREATE POLICY tenant_isolation ON delinquency_rule USING ((utility_id = (current_setting('app.current_utility_id'::text))::uuid));
 CREATE POLICY tenant_isolation ON import_batch USING ((utility_id = (current_setting('app.current_utility_id'::text))::uuid));
+CREATE POLICY tenant_isolation ON in_app_notification USING ((utility_id = (current_setting('app.current_utility_id'::text, true))::uuid));
 CREATE POLICY tenant_isolation ON ledger_application USING ((utility_id = (current_setting('app.current_utility_id'::text, true))::uuid));
 CREATE POLICY tenant_isolation ON ledger_entry USING ((utility_id = (current_setting('app.current_utility_id'::text, true))::uuid));
 CREATE POLICY tenant_isolation ON ledger_reason_def USING ((utility_id = (current_setting('app.current_utility_id'::text, true))::uuid));

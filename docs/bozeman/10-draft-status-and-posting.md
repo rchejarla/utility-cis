@@ -482,7 +482,7 @@ The previously-proposed `DraftStatus` enum is **dropped** — draftness is encod
 ### 4.4 Tenant config additions
 
 ```prisma
-// On TenantConfig
+// On UtilityConfig
 draftMaxAgeDays    Int     @default(90)  @map("draft_max_age_days")
 draftMaxPerUser    Int     @default(50)  @map("draft_max_per_user")  // soft cap; UI nudges to clean up
 ```

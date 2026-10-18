@@ -223,7 +223,7 @@ The closest analog is `Notification.recipientType` (CUSTOMER vs USER) but this i
   - Explicit allowlist of nodes/marks (matches our content policy)
   - Bundle size is acceptable (~80KB minified gzipped for the subset we need)
 
-  The component lives at `packages/web/components/comments/comment-editor.tsx` and is reused across every entity's comment thread. Theme tokens come from the existing `tenant_theme` (per [docs/specs/18-theme-and-configuration.md](../specs/18-theme-and-configuration.md)) so editor colors match the tenant brand.
+  The component lives at `packages/web/components/comments/comment-editor.tsx` and is reused across every entity's comment thread. Theme tokens come from the existing `utility_theme` (per [docs/specs/18-theme-and-configuration.md](../specs/18-theme-and-configuration.md)) so editor colors match the tenant brand.
 
 - **FR-COMMENT-014** — Mobile read view (per [02-mobile-and-responsive-ui.md](./02-mobile-and-responsive-ui.md)): comment threads render as scrollable lists; rich-text formatting renders correctly at 320px. Mobile editing is supported (Tiptap is touch-aware) but the toolbar collapses to a compact dropdown.
 
@@ -400,7 +400,7 @@ The closest analog is `Notification.recipientType` (CUSTOMER vs USER) but this i
 | `notification` | Add `readAt` column (nullable) | Track in-app notification read state |
 | `notification_template` | Add templates `COMMENT_MENTION`, `COMMENT_FROM_UTILITY` | FR-COMMENT-021, FR-COMMENT-043 |
 | `attachment` | (No schema change.) Allowlist constant in code adds `"comment"` to entity types | FR-COMMENT-030 |
-| `tenant_config` | Add `comment_edit_window_minutes` (default 15), `comment_max_size_kb` (default 10), `comment_customer_facing_rate_limit_per_day` (default 10) | FR-COMMENT-090, NFR-COMMENT-005, FR-COMMENT-043 |
+| `utility_config` | Add `comment_edit_window_minutes` (default 15), `comment_max_size_kb` (default 10), `comment_customer_facing_rate_limit_per_day` (default 10) | FR-COMMENT-090, NFR-COMMENT-005, FR-COMMENT-043 |
 
 ### 4.3 New SQL helpers
 

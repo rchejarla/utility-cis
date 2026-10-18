@@ -67,9 +67,9 @@ But `ServiceSuspension.reason` is a free-text `TEXT` field, not an enumerated FK
 
 ### 2.5 No financial approval thresholds ⚠
 
-**Status: One approval pattern exists; no financial thresholds.** `TenantConfig.requireHoldApproval Boolean @default(false)` (`schema.prisma:884`) gates a second-admin approval on `ServiceSuspension`. This is the **only** approval-gating config in the schema today.
+**Status: One approval pattern exists; no financial thresholds.** `UtilityConfig.requireHoldApproval Boolean @default(false)` (`schema.prisma:884`) gates a second-admin approval on `ServiceSuspension`. This is the **only** approval-gating config in the schema today.
 
-There is no `tenant_config.adjustment_approval_threshold_dollars` or anything similar. There is no role-based gate that says "charges above $X require supervisor." [docs/specs/10-payments-and-collections.md](../specs/10-payments-and-collections.md) line 188 states that ad-hoc charges above a configurable threshold should require supervisor authorization, but the threshold field doesn't exist and the gating logic isn't implemented.
+There is no `utility_config.adjustment_approval_threshold_dollars` or anything similar. There is no role-based gate that says "charges above $X require supervisor." [docs/specs/10-payments-and-collections.md](../specs/10-payments-and-collections.md) line 188 states that ad-hoc charges above a configurable threshold should require supervisor authorization, but the threshold field doesn't exist and the gating logic isn't implemented.
 
 [01-audit-and-tamper-evidence.md](./01-audit-and-tamper-evidence.md) §3.5 and [08-data-retention-archival-purge.md](./08-data-retention-archival-purge.md) §3.4.3 propose a generalized `pending_administrative_change` table for two-person approval — designed but not built. This doc reuses that proposal once it ships.
 
@@ -252,17 +252,17 @@ The system supports **two distinct correction mechanisms**:
 
   | Operation | Approval gate |
   |---|---|
-  | `BillingRecord` void | Always requires `bills.void` permission. Optional dual-approval per `BillVoidReasonDef.requiresApprovalAt` and per `tenant_config.bill_void_dual_approval_threshold`. |
-  | Payment reversal (operator-initiated) | Always requires `payments.reverse` permission. Optional dual-approval per `PaymentReversalReasonDef.requiresApprovalAt` and per `tenant_config.payment_reversal_dual_approval_threshold`. |
+  | `BillingRecord` void | Always requires `bills.void` permission. Optional dual-approval per `BillVoidReasonDef.requiresApprovalAt` and per `utility_config.bill_void_dual_approval_threshold`. |
+  | Payment reversal (operator-initiated) | Always requires `payments.reverse` permission. Optional dual-approval per `PaymentReversalReasonDef.requiresApprovalAt` and per `utility_config.payment_reversal_dual_approval_threshold`. |
   | Payment reversal (SaaSLogic webhook) | No approval gate — the bank already returned the money; this is bookkeeping, not authorization. Audit captures the system actor. |
   | NSF posting (from webhook) | No approval gate — same reasoning as above. |
-  | NSF fee waiver | Requires `nsf.waive` permission. Optional dual-approval per `tenant_config.nsf_waiver_dual_approval` boolean. |
-  | Adjustment posting | Requires `adjustments.write` permission. Dual-approval per `AdjustmentReasonDef.requiresApprovalAt` and per `tenant_config.adjustment_dual_approval_threshold` (default $500). |
+  | NSF fee waiver | Requires `nsf.waive` permission. Optional dual-approval per `utility_config.nsf_waiver_dual_approval` boolean. |
+  | Adjustment posting | Requires `adjustments.write` permission. Dual-approval per `AdjustmentReasonDef.requiresApprovalAt` and per `utility_config.adjustment_dual_approval_threshold` (default $500). |
   | Adjustment reversal | Requires `adjustments.reverse` permission. Dual-approval per `AdjustmentReversalReasonDef.requiresApprovalAt`. |
-  | Write-off | Always requires `writeoffs.write` permission. Dual-approval per `tenant_config.writeoff_dual_approval_threshold` (default $0 — every write-off is dual-approved). |
+  | Write-off | Always requires `writeoffs.write` permission. Dual-approval per `utility_config.writeoff_dual_approval_threshold` (default $0 — every write-off is dual-approved). |
   | Write-off reversal | Requires `writeoffs.reverse` permission. Always dual-approved. |
 
-  The gate evaluates: `(operation > min(reason_code.requires_approval_at, tenant_config.<entity>_dual_approval_threshold))`. Either side can demand the gate; both are checked.
+  The gate evaluates: `(operation > min(reason_code.requires_approval_at, utility_config.<entity>_dual_approval_threshold))`. Either side can demand the gate; both are checked.
 
 - **FR-REV-041** — Dual approval is implemented via the **generalized `pending_administrative_change` table** from [01-audit-and-tamper-evidence.md](./01-audit-and-tamper-evidence.md) §3.5 / [08-data-retention-archival-purge.md](./08-data-retention-archival-purge.md) §3.4.3 (proposed but not built; this doc reuses it once it ships). The flow:
   1. Originator submits the operation → API creates a `pending_administrative_change` row with `operationType` like `"reverse_payment"` / `"void_bill"` / `"reverse_adjustment"` and the proposed payload.
@@ -276,7 +276,7 @@ The system supports **two distinct correction mechanisms**:
 
 - **FR-REV-043** — `reverse_self_charge` (operator reversing a charge they themselves originated) requires dual approval REGARDLESS of dollar threshold. Reasoning: this is a high-risk fraud surface; even small-dollar self-reversals need a second eye.
 
-- **FR-REV-044** — A separate per-tenant config `tenant_config.bulk_reversal_max_count` (default 100) caps how many records can be reversed in a single bulk operation. Above the cap → rejected with a clear error directing the operator to file multiple smaller batches or escalate to engineering for a one-off.
+- **FR-REV-044** — A separate per-tenant config `utility_config.bulk_reversal_max_count` (default 100) caps how many records can be reversed in a single bulk operation. Above the cap → rejected with a clear error directing the operator to file multiple smaller batches or escalate to engineering for a one-off.
 
 ### 3.5 Audit-log capture — financial event class
 
@@ -386,7 +386,7 @@ This doc does not redefine the financial substrate. It depends on:
 | `AdhocCharge` | Add `reverses_id` FK; extend `status` enum with `REVERSED`; add `reason_code_id` and `reversal_reason_code_id` FKs | spec 10 |
 | `Payment` | Add `reverses_id` FK; extend `status` enum with `REVERSED` and `NSF_RETURNED`; add `reversal_reason_code_id` FK | spec 10 / spec 21 mirror |
 | `WriteOff` | Add `reverses_id` FK; extend `status` enum with `REVERSED`; add `reason_code_id` and `reversal_reason_code_id` FKs | spec 10 |
-| `tenant_config` | Add: `bill_void_dual_approval_threshold`, `payment_reversal_dual_approval_threshold`, `nsf_waiver_dual_approval`, `adjustment_dual_approval_threshold`, `writeoff_dual_approval_threshold`, `nsf_fee_amount`, `bulk_reversal_max_count` | This doc |
+| `utility_config` | Add: `bill_void_dual_approval_threshold`, `payment_reversal_dual_approval_threshold`, `nsf_waiver_dual_approval`, `adjustment_dual_approval_threshold`, `writeoff_dual_approval_threshold`, `nsf_fee_amount`, `bulk_reversal_max_count` | This doc |
 
 ### 4.4 Triggers
 
