@@ -4,10 +4,14 @@ import type { ReactNode } from "react";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
 
-// Navigation between settings sub-pages now lives in the main sidebar
-// under the collapsible "Settings" section. No side rail is rendered
-// here — pages own their own PageHeader so each one reads as a
-// first-class destination rather than a sub-tab.
+// Navigation to these pages lives in the main sidebar, and no longer
+// all in one section: `/settings/*` URLs are listed under Settings,
+// Configuration (custom-fields, bill-messages, slas) and Administration
+// (api-keys, retention, ledger-integrity, danger-zone), per the section
+// rules at the top of components/sidebar.tsx. The URL prefix is
+// therefore not a grouping — it is just where these pages happen to
+// live. No side rail is rendered here; pages own their own PageHeader
+// so each one reads as a first-class destination rather than a sub-tab.
 //
 // The layout gate admits anyone who can view at least one settings
 // module, since /settings/* is split across several permission keys

@@ -341,6 +341,27 @@ A live preview theme editor that lets administrators customize the utility's bra
 - Sidebar collapse state persists automatically without user action
 - Future: additional preferences exposed in a settings drawer
 
+### Admin navigation — what each section means
+
+Defined in `packages/web/components/sidebar.tsx`. Each section answers one question, and that sentence decides what belongs in it:
+
+| Section | Rule |
+|---|---|
+| Operations | Work somebody does. |
+| Configuration | Lists the business maintains. Many rows. |
+| Settings | One value per tenant. One row. |
+| Administration | Who may act, and whether the system is sound. |
+
+Settings previously held 18 of the 44 entries and mixed all four kinds — single-value tenant config beside multi-row reference data (Custom Fields, Bill Messages, Service Request SLAs), beside access control, beside three things that are not settings at all. Applying the rules above moved five items and split one section, leaving 11 / 3 / 4 / 2 / 10 / 8 / 6 across Operations, Solid Waste, Billing, Collections, Configuration, Settings and Administration:
+
+- **Imports** → Operations. A clerk loads reads or customers on a schedule; it is work, not configuration.
+- **Custom Fields**, **Bill Messages**, **Service Request SLAs** → Configuration. Each is a list of rows.
+- **Delinquency Rules** → Configuration, relabelled from "Rules", which was only readable while the Collections heading supplied its subject.
+- **Administration** (new) → Users & Roles, API Keys & Webhooks, Retention & Audit, Audit Log, Ledger Integrity, Danger Zone.
+- `/settings/notifications` relabelled **Notification Delivery**, because "Notifications" collided with Operations → Notifications, the send log. This page is the sender address, SMS provider and daily digest.
+
+The reorganization deliberately left every `module` gate untouched, so it changes no one's access. Those gates remain inconsistent — `tenant_profile`, `settings` and `theme` are used across what now reads as three sections, and `/settings/ledger-integrity` is gated on `settings` while its endpoint is `accounts:VIEW` (on purpose — see the comment at its entry). Reconciling them is an API change, not a navigation change, and is still open.
+
 ### Settings (`/settings`) — Built
 
 Consolidated tenant admin surface organized into tabs. The first four tabs are implemented today; new tabs can be added as tenant-level features grow.

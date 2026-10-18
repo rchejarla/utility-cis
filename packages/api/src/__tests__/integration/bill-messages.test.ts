@@ -89,7 +89,7 @@ describe("/api/v1/bill-messages", () => {
    *
    * `account_type_def` ships five rows with `utility_id = NULL` and a
    * tenant owns none of them until it adds its own. The targeting check
-   * demanded ownership, so the picker on Settings → Bill Messages offered
+   * demanded ownership, so the picker on Configuration → Bill Messages offered
    * five types from `listAccountTypes` and the save answered 404 to every
    * one — while Req 137 was recorded as shipped in two documents.
    *

@@ -71,12 +71,40 @@ interface NavSection {
   items: NavItem[];
   /**
    * Collapse this section on first visit. Daily-use sections default
-   * to open; rarely-visited groups (Settings) default to closed so
-   * the sidebar stays calm. Applied only when the user hasn't
-   * explicitly toggled the section — their choice persists after.
+   * to open; rarely-visited groups (Settings, Administration) default
+   * to closed so the sidebar stays calm. Applied only when the user
+   * hasn't explicitly toggled the section — their choice persists
+   * after.
    */
   defaultCollapsed?: boolean;
 }
+
+/*
+ * Each section answers one question, and that sentence decides what
+ * belongs in it:
+ *
+ *   Operations      — work somebody does.
+ *   Configuration   — lists the business maintains. Many rows.
+ *   Settings        — one value per tenant. One row.
+ *   Administration  — who may act, and whether the system is sound.
+ *
+ * Settings held eighteen entries before this, mixing all four kinds:
+ * single-value tenant config next to multi-row reference data
+ * (Custom Fields, Bill Messages, SLAs), next to access control, next
+ * to three things that are not settings at all — Imports is weekly
+ * work, Audit Log is a report, Ledger Integrity is a diagnostic. The
+ * rule above is the decision; the groupings below only follow from it.
+ *
+ * The test, borrowed from the Billing Runs note below: a cycle is a
+ * setting somebody edits twice a year, a run is work somebody does
+ * every month.
+ *
+ * NOTE: the `module` gates are deliberately unchanged here, so this is
+ * a pure relabelling with no effect on who can see which page. They
+ * are still inconsistent — `tenant_profile`, `settings` and `theme`
+ * across what now reads as three sections — and settling that is an
+ * API change, not a nav change.
+ */
 
 const navSections: NavSection[] = [
   {
@@ -92,6 +120,16 @@ const navSections: NavSection[] = [
       { href: "/service-agreements", label: "Agreements", icon: faFileContract, module: "agreements" },
       { href: "/workflows", label: "Workflows", icon: faArrowRightArrowLeft, module: "workflows" },
       { href: "/notifications", label: "Notifications", icon: faEnvelope, module: "notifications" },
+      {
+        href: "/imports",
+        label: "Imports",
+        icon: faFileImport,
+        // Work, not configuration: a clerk loads reads or customers on a
+        // schedule. It sat under Settings, which is where you look for
+        // the sender address, not for this week's meter reads.
+        module: "imports",
+        tooltip: "Load meter reads, customers, accounts, premises or meters from a file",
+      },
     ],
   },
   {
@@ -155,7 +193,6 @@ const navSections: NavSection[] = [
     items: [
       { href: "/delinquency", label: "Delinquency", icon: faScaleUnbalanced, module: "delinquency" },
       { href: "/delinquency/shutoff-eligible", label: "Shut-Off Queue", icon: faPlugCircleXmark, module: "delinquency" },
-      { href: "/delinquency/rules", label: "Rules", icon: faGear, module: "delinquency" },
     ],
   },
   {
@@ -167,6 +204,19 @@ const navSections: NavSection[] = [
       { href: "/account-types", label: "Account Types", icon: faIdCard, module: "accounts" },
       { href: "/rate-schedules", label: "Rate Schedules", icon: faMoneyBill, module: "rate_schedules" },
       { href: "/billing-cycles", label: "Billing Cycles", icon: faCalendarDays, module: "billing_cycles" },
+      { href: "/settings/custom-fields", label: "Custom Fields", icon: faListCheck, module: "tenant_profile" },
+      { href: "/settings/bill-messages", label: "Bill Messages", icon: faCommentDots, module: "settings" },
+      { href: "/settings/slas", label: "Service Request SLAs", icon: faStopwatch, module: "service_request_slas" },
+      {
+        href: "/delinquency/rules",
+        // "Rules" alone was readable under Collections and would not be
+        // here, so the label carries its subject now that the section no
+        // longer supplies it.
+        label: "Delinquency Rules",
+        icon: faGear,
+        module: "delinquency",
+        tooltip: "Tiers, thresholds and the notice each one sends",
+      },
     ],
   },
   {
@@ -177,26 +227,44 @@ const navSections: NavSection[] = [
       { href: "/settings/branding", label: "Branding", icon: faPalette, module: "tenant_profile" },
       { href: "/settings/theme", label: "Theme", icon: faPaintbrush, module: "theme" },
       { href: "/settings/numbering", label: "Numbering", icon: faHashtag, module: "tenant_profile" },
-      { href: "/settings/custom-fields", label: "Custom Fields", icon: faListCheck, module: "tenant_profile" },
-      { href: "/settings/billing", label: "Billing Integration", icon: faCreditCard, module: "settings" },
       // Both gated on `settings`, matching their APIs: issuer identity
-      // and bill storage are tenant configuration, and so is the text
-      // printed on a bill.
+      // and bill storage are tenant configuration.
+      { href: "/settings/billing", label: "Billing Integration", icon: faCreditCard, module: "settings" },
       { href: "/settings/bill-production", label: "Bill Production", icon: faFileInvoice, module: "settings" },
-      { href: "/settings/bill-messages", label: "Bill Messages", icon: faCommentDots, module: "settings" },
-      { href: "/settings/notifications", label: "Notifications", icon: faBell, module: "tenant_profile" },
-      { href: "/settings/slas", label: "Service Request SLAs", icon: faStopwatch, module: "service_request_slas" },
+      {
+        href: "/settings/notifications",
+        // Was "Notifications", which collided with Operations →
+        // Notifications, the send log. This page is the sender address,
+        // the SMS provider and the daily digest — how messages leave,
+        // not which ones did.
+        label: "Notification Delivery",
+        icon: faBell,
+        module: "tenant_profile",
+      },
+      { href: "/settings/automation", label: "Automation", icon: faRobot, module: "tenant_profile" },
+    ],
+  },
+  {
+    title: "Administration",
+    defaultCollapsed: true,
+    items: [
+      { href: "/users-roles", label: "Users & Roles", icon: faUserShield, module: "tenant_users" },
+      { href: "/settings/api-keys", label: "API Keys & Webhooks", icon: faKey, module: "settings" },
       { href: "/settings/retention", label: "Retention & Audit", icon: faBoxArchive, module: "settings" },
+      { href: "/audit-log", label: "Audit Log", icon: faClipboardList, module: "audit_log" },
       {
         href: "/settings/ledger-integrity",
         label: "Ledger Integrity",
         icon: faScaleBalanced,
-        // `settings`, matching the section rather than the endpoint.
+        // Gated on `settings`, which no longer matches this section's
+        // name — one of the inconsistencies the note at the top of this
+        // file leaves open, kept as-is so the reorganization changes
+        // nobody's access.
         //
         // The endpoint is accounts:VIEW, which every role but Portal
         // Customer holds -- so gating this on `accounts` put an admin
         // diagnostic in front of CSRs, Read-Only users and Field
-        // Technicians, for whom it would be the only Settings entry they
+        // Technicians, for whom it would be the only entry here they
         // could see and the only one they can do nothing about.
         //
         // The endpoint deliberately keeps accounts:VIEW: it was once
@@ -210,11 +278,6 @@ const navSections: NavSection[] = [
         module: "settings",
         tooltip: "Proves every account's cached balance still equals the sum of its open ledger entries",
       },
-      { href: "/settings/automation", label: "Automation", icon: faRobot, module: "tenant_profile" },
-      { href: "/settings/api-keys", label: "API Keys & Webhooks", icon: faKey, module: "settings" },
-      { href: "/users-roles", label: "Users & Roles", icon: faUserShield, module: "tenant_users" },
-      { href: "/audit-log", label: "Audit Log", icon: faClipboardList, module: "audit_log" },
-      { href: "/imports", label: "Imports", icon: faFileImport, module: "imports" },
       { href: "/settings/danger-zone", label: "Danger Zone", icon: faBomb, module: "settings" },
     ],
   },
