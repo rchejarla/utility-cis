@@ -349,7 +349,16 @@ export function SearchableEntitySelect<T>({
             left: 0,
             right: 0,
             zIndex: 50,
-            background: "var(--bg-elevated)",
+            /*
+             * `--bg-card`, not `--bg-elevated`. The elevated token is a tinted
+             * well for chips and table headers — in light mode it is indigo-100
+             * (#dbe4ff), and its own definition says "chips, icon wells" — so a
+             * floating panel painted with it read as a blue block. In dark mode
+             * it happens to be the raised surface, which is why this went
+             * unnoticed. The border and shadow already separate the panel from
+             * the page, so a card surface is the right one.
+             */
+            background: "var(--bg-card)",
             border: "1px solid var(--border)",
             borderRadius: "var(--radius)",
             boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
