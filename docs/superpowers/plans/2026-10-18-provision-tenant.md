@@ -13,7 +13,9 @@
 ## Global Constraints
 
 - **Lifecycle only, and only the part with no other home.** Create, enable modules, apply a profile, create the first admin. Suspend/reactivate and list are D6 responsibilities that need no new machinery (a status column and a query); impersonation, purge, per-tenant credentials and cross-tenant reporting are deferred out of v1 and must not appear here.
-- **No UI and no route.** D1: "Idempotent, callable from a script, **no UI**." A platform actor to call it through is build-order step 5, and Q2/Q3's consequences are unbuilt.
+- **A UI, against D1 — and fenced so it cannot become the thing D1 was avoiding.** D1 says "callable from a script, **no UI**", and the build order puts a console at step 6. Rao overrode that on 2026-10-18 after the reasoning was put to him twice. The objection was never the screen; it was that a provisioning page needs a home and an authority, and before the platform actor exists the only home is a tenant's own Administration section gated on a tenant permission — the borrowing §1.6 already flags with Bull Board.
+
+  So it goes at `/dev/tenants`, not in the sidebar. `/dev` is already excluded from admin chrome (`packages/web/components/app-shell.tsx:15`) and already hosts a developer tool, and its API is fenced exactly as `/api/v1/auth/dev-login` is — `!IS_PROD && config.ENABLE_DEV_AUTH_ENDPOINTS` — so it cannot exist in a production build at all. A tool that cannot ship to production cannot become a tenant's route to provisioning other tenants, which is the whole of the original objection. When step 5 lands, the page moves behind the platform actor and the fence comes off; until then it is a single-tenant operator's console, which is what D5's `self_serve` mode describes anyway.
 - **Idempotent.** Running it twice must be a no-op, not a duplicate or an error. Six integration files and every fresh database depend on re-runnability.
 - **One transaction.** A half-provisioned tenant — a utility row with no roles — is indistinguishable from a valid one and would pass every existence check.
 - **`TENANCY_MODE` is not in scope.** It is step 4, and nothing branches on it yet.
@@ -345,4 +347,107 @@ Run: `tsc --noEmit` in all three packages; the three unit suites. Expected: shar
 ```bash
 git add scripts/provision-tenant.ts seed.js CLAUDE.md
 git commit -m "feat(tenancy): a script provisions a tenant, and the seed stops duplicating it"
+```
+
+---
+
+### Task 4: The dev-fenced API the page calls
+
+**Files:**
+- Create: `packages/api/src/routes/dev-tenants.ts`
+- Modify: `packages/api/src/app.ts` — register it beside the other routes
+- Test: `packages/api/src/__tests__/integration/dev-tenants.test.ts` (unit config; mocked Prisma)
+
+**Interfaces:**
+- Consumes: `provisionTenant`, `listUtilities` (Task 2).
+- Produces:
+  - `GET /api/v1/dev/tenants` → `{ data: UtilitySummary[] }`
+  - `POST /api/v1/dev/tenants` → body `{ utilityId?, name, firstAdmin?, dryRun? }` → `201` with `ProvisionTenantResult`, or `200` when `dryRun` is true since nothing was created. `utilityId` omitted means the server generates one.
+  - Both return `404` when the dev fence is closed — not `403`, because a route that cannot exist in production should not advertise itself.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it("answers 404 when the dev fence is closed", async () => {
+  // config.ENABLE_DEV_AUTH_ENDPOINTS false
+  const res = await app.inject({ method: "GET", url: "/api/v1/dev/tenants", headers });
+  expect(res.statusCode).toBe(404);
+});
+
+it("lists utilities when the fence is open", async () => {
+  const res = await app.inject({ method: "GET", url: "/api/v1/dev/tenants", headers });
+  expect(res.statusCode).toBe(200);
+  expect(JSON.parse(res.body).data).toEqual([]);
+});
+
+it("refuses a name that is only whitespace", async () => {
+  const res = await app.inject({ method: "POST", url: "/api/v1/dev/tenants",
+    headers, payload: { name: "   " } });
+  expect(res.statusCode).toBe(400);
+});
+
+it("answers 200 rather than 201 for a dry run, since nothing was created", async () => {
+  const res = await app.inject({ method: "POST", url: "/api/v1/dev/tenants",
+    headers, payload: { name: "City of Example", dryRun: true } });
+  expect(res.statusCode).toBe(200);
+  expect(JSON.parse(res.body).created).toBe(true);
+});
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `cd packages/api && npx vitest run src/__tests__/integration/dev-tenants.test.ts`
+Expected: FAIL — 404 on every route, because none is registered.
+
+- [ ] **Step 3: Implement the routes in `packages/api/src/routes/dev-tenants.ts`**
+
+Follow `routes/auth.ts:8` exactly for the fence: compute `DEV_ENDPOINTS_ENABLED = !IS_PROD && config.ENABLE_DEV_AUTH_ENDPOINTS` once at module scope and register nothing when it is false, so the 404 is Fastify's own rather than a handler's. Body validation with a Zod `.strict()` schema in the route file — this is a dev tool and its shape is not shared with the web package. `config: { module: "settings", permission: "EDIT" }` so an authenticated session is still required; the fence, not the permission, is what makes this safe.
+
+- [ ] **Step 4: Run to verify they pass**
+
+Run: as Step 2. Expected: PASS, 4 tests.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/api/src/routes/dev-tenants.ts packages/api/src/app.ts packages/api/src/__tests__/integration/dev-tenants.test.ts
+git commit -m "feat(dev): a fenced API for provisioning tenants"
+```
+
+---
+
+### Task 5: The page
+
+**Files:**
+- Create: `packages/web/app/dev/tenants/page.tsx`
+- Modify: `packages/web/app/dev/page.tsx` — a link to it
+
+**Interfaces:**
+- Consumes: the two routes from Task 4, through `apiClient`.
+- Produces: nothing other tasks depend on.
+
+No test. There is no component harness in this repo — `packages/web`'s 22 suites are all helper-level — and a page whose logic is two fetches and a form would be tested by mocking the thing under test. It is verified by using it, in Step 2.
+
+- [ ] **Step 1: Build the page**
+
+A table of existing tenants — name, status, created, and the module/role/user counts — above a form taking name, optional first-admin email and name, and a **Preview** button beside **Create**. Preview posts with `dryRun: true` and shows the result without reloading the table; Create posts without it and then reloads. Follow the existing `/dev` page for layout and the project's token conventions (`--bg-card`, `--text-secondary`, never a raw hex). State the fence in the page itself: one line saying this screen exists only in development and moves behind the platform actor at build-order step 5.
+
+- [ ] **Step 2: Use it**
+
+Start the API and web, open `/dev/tenants`:
+- the dev tenant appears with `32 modules, 6 roles, 7 users`;
+- **Preview** on a new name reports what it would create and the table does not change;
+- **Create** adds it, and the row appears with the same counts;
+- creating the same name again reports the no-op rather than erroring;
+- then remove the test tenant with the SQL in Task 3 Step 2.
+
+- [ ] **Step 3: Verify the suites**
+
+Run: `tsc --noEmit` in api and web; the web unit suite. Expected: zero TS errors, web 227. **Ask before the full container suite.**
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add packages/web/app/dev
+git commit -m "feat(dev): a page to provision and list tenants"
 ```
