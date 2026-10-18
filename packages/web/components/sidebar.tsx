@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useEffect } from "react";
 import { usePermission } from "@/lib/use-permission";
+import { useAuth } from "@/lib/auth-context";
+import { visibleNavItems } from "@/lib/nav-visibility";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
 import {
@@ -267,7 +269,24 @@ const navSections: NavSection[] = [
       { href: "/users-roles", label: "Users & Roles", icon: faUserShield, module: "tenant_users" },
       { href: "/settings/api-keys", label: "API Keys & Webhooks", icon: faKey, module: "settings" },
       { href: "/settings/retention", label: "Retention & Audit", icon: faBoxArchive, module: "settings" },
-      { href: "/audit-log", label: "Audit Log", icon: faClipboardList, module: "audit_log" },
+      {
+        href: "/audit-log",
+        label: "Audit Log",
+        icon: faClipboardList,
+        // `settings`, not `audit_log`, and deliberately narrower than
+        // the endpoint — the same divergence as Ledger Integrity below.
+        //
+        // This page reads the log unfiltered, which now requires
+        // settings:VIEW server-side. `audit_log:VIEW` still serves the
+        // Audit tab on account, premise, rate-schedule, agreement and
+        // service-request pages, which pin the query to one entity. A
+        // CSR or Field Technician holds that key for those tabs, so
+        // gating this entry on it put a page in their menu that would
+        // answer 403 — and made Administration a section of one for
+        // them.
+        module: "settings",
+        tooltip: "Every recorded change across the tenant, filterable by entity, action, actor and date",
+      },
       {
         href: "/settings/ledger-integrity",
         label: "Ledger Integrity",
@@ -359,6 +378,14 @@ function CollapsibleSection({
 }) {
   const toggleSection = onToggle;
 
+  // A section whose every entry is hidden renders nothing at all —
+  // header included. Administration made this reachable: the CSR and
+  // Field Technician presets hold no key in it, so without this they
+  // would get a heading that opens onto an empty list.
+  const { permissions, enabledModules } = useAuth();
+  const items = visibleNavItems(section.items, permissions, enabledModules);
+  if (items.length === 0) return null;
+
   return (
     <div style={{ marginBottom: 4 }}>
       {!sidebarCollapsed && (
@@ -404,10 +431,10 @@ function CollapsibleSection({
         <div style={{ height: 1, background: "var(--border)", margin: "6px 12px" }} />
       )}
       {(sidebarCollapsed || sectionOpen) &&
-        section.items.map((item) => {
+        items.map((item) => {
           const exactMatch = pathname === item.href;
           const prefixMatch = item.href !== "/" && pathname.startsWith(item.href + "/");
-          const hasBetterMatch = !exactMatch && prefixMatch && section.items.some(
+          const hasBetterMatch = !exactMatch && prefixMatch && items.some(
             (other) => other.href !== item.href && other.href.length > item.href.length &&
               (pathname === other.href || pathname.startsWith(other.href + "/")),
           );

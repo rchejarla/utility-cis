@@ -2,6 +2,7 @@
 
 import { useAuth } from "./auth-context";
 import { useModuleContext } from "./module-context";
+import { canViewModule } from "./nav-visibility";
 
 export function usePermission(module?: string) {
   const { permissions, enabledModules } = useAuth();
@@ -17,7 +18,9 @@ export function usePermission(module?: string) {
   const perms = permissions[m] ?? [];
 
   return {
-    canView: isEnabled && perms.includes("VIEW"),
+    // Shared with the sidebar's section-visibility check, so "can view"
+    // has one definition rather than two that can drift.
+    canView: canViewModule(permissions, enabledModules, m),
     canCreate: isEnabled && perms.includes("CREATE"),
     canEdit: isEnabled && perms.includes("EDIT"),
     canDelete: isEnabled && perms.includes("DELETE"),

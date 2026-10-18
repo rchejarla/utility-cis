@@ -364,7 +364,9 @@ Settings previously held 18 of the 44 entries and mixed all four kinds — singl
 - **Administration** (new) → Users & Roles, API Keys & Webhooks, Retention & Audit, Audit Log, Ledger Integrity, Danger Zone.
 - `/settings/notifications` relabelled **Notification Delivery**, because "Notifications" collided with Operations → Notifications, the send log. This page is the sender address, SMS provider and daily digest.
 
-The reorganization deliberately left every `module` gate untouched, so it changes no one's access. Those gates remain inconsistent — `tenant_profile`, `settings` and `theme` are used across what now reads as three sections, and `/settings/ledger-integrity` is gated on `settings` while its endpoint is `accounts:VIEW` (on purpose — see the comment at its entry). Reconciling them is an API change, not a navigation change, and is still open.
+One gate did change afterwards: **Audit Log** moved from `audit_log` to `settings`, because that page reads the log unfiltered and an `audit_log`-only holder would have been shown a page that answers 403 — see spec 17. A section whose every entry is hidden now renders nothing at all, header included (`lib/nav-visibility.ts`), which Administration made reachable: the CSR and Field Technician presets hold no key in it.
+
+Otherwise the reorganization deliberately left every `module` gate untouched, so it changes no one's access. Those gates remain inconsistent — `tenant_profile`, `settings` and `theme` are used across what now reads as three sections, and `/settings/ledger-integrity` is gated on `settings` while its endpoint is `accounts:VIEW` (on purpose — see the comment at its entry). Reconciling them is an API change, not a navigation change, and is still open.
 
 ### Settings (`/settings`) — Built
 
