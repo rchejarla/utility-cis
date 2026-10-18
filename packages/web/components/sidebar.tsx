@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { usePermission } from "@/lib/use-permission";
 import { useAuth } from "@/lib/auth-context";
 import { visibleNavItems } from "@/lib/nav-visibility";
@@ -341,13 +341,25 @@ const navSections: NavSection[] = [
   },
 ];
 
-function NavItemWithPermission({ item, collapsed, isActive }: { item: NavItem; collapsed: boolean; isActive: boolean }) {
+function NavItemWithPermission({
+  item,
+  collapsed,
+  isActive,
+  onNavigate,
+}: {
+  item: NavItem;
+  collapsed: boolean;
+  isActive: boolean;
+  /** Closes the collapsed-rail flyout once a destination is chosen. */
+  onNavigate?: () => void;
+}) {
   const { canView } = usePermission(item.module);
   if (!canView) return null;
 
   return (
     <Link
       href={item.href}
+      onClick={onNavigate}
       title={collapsed ? item.label : item.tooltip}
       style={{
         display: "flex",
@@ -392,14 +404,34 @@ function CollapsibleSection({
   sidebarCollapsed,
   sectionOpen,
   onToggle,
+  flyoutOpen,
+  onFlyoutToggle,
+  onFlyoutClose,
 }: {
   section: NavSection;
   pathname: string;
   sidebarCollapsed: boolean;
   sectionOpen: boolean;
   onToggle: () => void;
+  /** Collapsed rail only: whether this section's item flyout is showing. */
+  flyoutOpen: boolean;
+  onFlyoutToggle: () => void;
+  onFlyoutClose: () => void;
 }) {
   const toggleSection = onToggle;
+  const collapsedButtonRef = useRef<HTMLButtonElement>(null);
+  const [flyoutPos, setFlyoutPos] = useState<{ top: number; left: number } | null>(null);
+
+  function openFlyout() {
+    const rect = collapsedButtonRef.current?.getBoundingClientRect();
+    if (rect) setFlyoutPos({ top: rect.top, left: rect.right + 8 });
+    onFlyoutToggle();
+  }
+
+  function closeFlyout() {
+    onFlyoutClose();
+    setFlyoutPos(null);
+  }
 
   // A section whose every entry is hidden renders nothing at all —
   // header included. Administration made this reachable: the CSR and
@@ -407,6 +439,32 @@ function CollapsibleSection({
   // would get a heading that opens onto an empty list.
   const { permissions, enabledModules } = useAuth();
   const items = visibleNavItems(section.items, permissions, enabledModules);
+
+  /**
+   * Longest-prefix wins, so `/delinquency/rules` does not also light up
+   * `/delinquency`. Shared by the expanded list and the collapsed
+   * flyout rather than duplicated — they must agree on what "here"
+   * means.
+   */
+  function isItemActive(item: NavItem): boolean {
+    const exactMatch = pathname === item.href;
+    const prefixMatch = item.href !== "/" && pathname.startsWith(item.href + "/");
+    const hasBetterMatch =
+      !exactMatch &&
+      prefixMatch &&
+      items.some(
+        (other) =>
+          other.href !== item.href &&
+          other.href.length > item.href.length &&
+          (pathname === other.href || pathname.startsWith(other.href + "/")),
+      );
+    return exactMatch || (prefixMatch && !hasBetterMatch);
+  }
+
+  // On the collapsed rail the section icon is the only thing shown, so
+  // it has to carry "you are in here" itself.
+  const hasActiveItem = items.some(isItemActive);
+
   if (items.length === 0) return null;
 
   return (
@@ -475,27 +533,106 @@ function CollapsibleSection({
           />
         </button>
       )}
-      {sidebarCollapsed && section !== navSections[0] && (
-        <div style={{ height: 1, background: "var(--border)", margin: "6px 12px" }} />
+      {/*
+        Collapsed: the seven section icons and nothing else. This used
+        to render every section's items whenever the sidebar was
+        collapsed — all 44 of them in one icon column, which is more
+        than the expanded sidebar ever shows at once. The icon opens a
+        flyout with that section's items instead.
+      */}
+      {sidebarCollapsed && (
+        <button
+          ref={collapsedButtonRef}
+          onClick={openFlyout}
+          title={section.title}
+          aria-label={section.title}
+          aria-expanded={flyoutOpen}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 40,
+            height: 36,
+            margin: "2px 12px",
+            borderRadius: "var(--radius)",
+            border: "none",
+            cursor: "pointer",
+            background:
+              flyoutOpen || hasActiveItem ? "var(--accent-primary)" : "transparent",
+            color: flyoutOpen || hasActiveItem ? "#ffffff" : "var(--text-secondary)",
+            transition: "background 0.15s ease, color 0.15s ease",
+          }}
+        >
+          <FontAwesomeIcon icon={section.icon} style={{ width: 16, height: 16 }} />
+        </button>
       )}
-      {(sidebarCollapsed || sectionOpen) &&
-        items.map((item) => {
-          const exactMatch = pathname === item.href;
-          const prefixMatch = item.href !== "/" && pathname.startsWith(item.href + "/");
-          const hasBetterMatch = !exactMatch && prefixMatch && items.some(
-            (other) => other.href !== item.href && other.href.length > item.href.length &&
-              (pathname === other.href || pathname.startsWith(other.href + "/")),
-          );
-          const isActive = exactMatch || (prefixMatch && !hasBetterMatch);
-          return (
-            <NavItemWithPermission
-              key={item.href}
-              item={item}
-              collapsed={sidebarCollapsed}
-              isActive={isActive}
-            />
-          );
-        })}
+
+      {sidebarCollapsed && flyoutOpen && flyoutPos && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 59 }} onClick={closeFlyout} />
+          {/*
+            `position: fixed` from the button's own rect, because the
+            sidebar clips its children: the <aside> is overflow hidden
+            and the <nav> scrolls, so an absolutely positioned panel
+            would be cut off at the 64px rail.
+          */}
+          <div
+            style={{
+              position: "fixed",
+              top: flyoutPos.top,
+              left: flyoutPos.left,
+              zIndex: 60,
+              minWidth: 196,
+              maxHeight: `calc(100vh - ${flyoutPos.top + 16}px)`,
+              overflowY: "auto",
+              background: "var(--bg-card)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+              padding: "6px 0",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "4px 14px 8px",
+                color: "var(--text-secondary)",
+                fontSize: 11,
+                fontWeight: 600,
+                textTransform: "uppercase",
+                letterSpacing: "0.07em",
+                borderBottom: "1px solid var(--border-subtle)",
+                marginBottom: 4,
+              }}
+            >
+              <FontAwesomeIcon icon={section.icon} style={{ width: 12, height: 12 }} />
+              {section.title}
+            </div>
+            {items.map((item) => (
+              <NavItemWithPermission
+                key={item.href}
+                item={item}
+                collapsed={false}
+                isActive={isItemActive(item)}
+                onNavigate={closeFlyout}
+              />
+            ))}
+          </div>
+        </>
+      )}
+
+      {!sidebarCollapsed &&
+        sectionOpen &&
+        items.map((item) => (
+          <NavItemWithPermission
+            key={item.href}
+            item={item}
+            collapsed={false}
+            isActive={isItemActive(item)}
+          />
+        ))}
     </div>
   );
 }
@@ -508,6 +645,17 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const width = collapsed ? 64 : 240;
+
+  /**
+   * Which collapsed-rail flyout is showing, if any. Held here rather
+   * than per section so clicking a second icon switches straight to it
+   * instead of needing the first one dismissed.
+   *
+   * Separate from `openSection` on purpose: that one is restored from
+   * the route and localStorage, and a panel that opens by itself on
+   * page load is not what a click-to-open flyout should do.
+   */
+  const [flyoutSection, setFlyoutSection] = useState<string | null>(null);
 
   // Section accordion: a single open section at a time. The active-
   // route's section is opened automatically on mount; user toggles
@@ -614,7 +762,12 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
           </>
         )}
         <button
-          onClick={() => setCollapsed(!collapsed)}
+          onClick={() => {
+            // Any open flyout belongs to the collapsed rail; expanding
+            // would otherwise leave it floating beside a 240px sidebar.
+            setFlyoutSection(null);
+            setCollapsed(!collapsed);
+          }}
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           style={{
@@ -654,6 +807,13 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
             sidebarCollapsed={collapsed}
             sectionOpen={openSection === section.title}
             onToggle={() => toggleOpenSection(section.title)}
+            flyoutOpen={flyoutSection === section.title}
+            onFlyoutToggle={() =>
+              setFlyoutSection((current) =>
+                current === section.title ? null : section.title,
+              )
+            }
+            onFlyoutClose={() => setFlyoutSection(null)}
           />
         ))}
       </nav>
