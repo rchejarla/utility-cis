@@ -2,6 +2,7 @@ export * from "./types/api";
 export * from "./validators/index";
 export * from "./events/index";
 export * from "./modules/constants";
+export * from "./modules/role-presets";
 export * from "./lib/number-template";
 export * from "./lib/base-list-query";
 export * from "./lib/custom-fields";
