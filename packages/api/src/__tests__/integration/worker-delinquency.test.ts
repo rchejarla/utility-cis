@@ -29,6 +29,11 @@ const SHARED_DIR = path.resolve(__dirname, "../../../../shared");
 const TENANT_A = "00000000-0000-4000-8000-0000000000d1";
 const TENANT_B = "00000000-0000-4000-8000-0000000000d2";
 const TENANT_C = "00000000-0000-4000-8000-0000000000d3";
+// A fourth tenant, used by the cross-hour idempotency test, which used
+// to derive it inline as TENANT_A.replace(/d1$/, "e1"). Named here
+// because utility_id is a foreign key and a computed id is invisible to
+// any search for one.
+const TENANT_D = "00000000-0000-4000-8000-0000000000e1";
 
 let pgContainer: StartedPostgreSqlContainer;
 let redisContainer: StartedTestContainer;
@@ -66,7 +71,7 @@ beforeAll(async () => {
 
   // `utility_id` is a foreign key, so the tenants this file writes
   // rows for have to exist before the first write.
-  await ensureUtilities(prismaImports.prisma, [TENANT_A, TENANT_B, TENANT_C]);
+  await ensureUtilities(prismaImports.prisma, [TENANT_A, TENANT_B, TENANT_C, TENANT_D]);
   dispatcherImports = await import("../../workers/delinquency-dispatcher.js");
   queueImports = await import("../../lib/queues.js");
 }, 180_000);
@@ -269,7 +274,7 @@ describe("dispatchDelinquency", () => {
 
   it("idempotency keys differ across hours so a separate hour's tick enqueues again", async () => {
     await seedTenant(TENANT_A, { runHourLocal: 3, accountCount: 5 });
-    await seedTenant(TENANT_A.replace(/d1$/, "e1"), { runHourLocal: 4, accountCount: 5 });
+    await seedTenant(TENANT_D, { runHourLocal: 4, accountCount: 5 });
 
     await dispatcherImports.dispatchDelinquency(new Date("2026-04-25T03:00:00Z"));
     await dispatcherImports.dispatchDelinquency(new Date("2026-04-25T04:00:00Z"));

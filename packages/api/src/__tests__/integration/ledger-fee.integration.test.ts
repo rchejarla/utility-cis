@@ -16,6 +16,9 @@ import { bootPostgres } from "./_effective-dating-fixtures.js";
 
 const ACTOR = "00000000-0000-4000-8000-aaaa00000001";
 const utilityId = "00000000-0000-4000-8000-0000000000aa";
+// A second tenant, named rather than inlined: it has to be declared at
+// bootPostgres below, because utility_id is a foreign key.
+const otherUtilityId = "00000000-0000-4000-8000-0000000000bb";
 
 let pgContainer: StartedPostgreSqlContainer;
 let prismaImports: typeof import("../../lib/prisma.js");
@@ -30,7 +33,7 @@ let writeOffReasonId: string;
 let debitReasonId: string;
 
 beforeAll(async () => {
-  const booted = await bootPostgres({ utilities: [utilityId] });
+  const booted = await bootPostgres({ utilities: [utilityId, otherUtilityId] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   posting = await import("../../services/ar/posting.service.js");
@@ -258,7 +261,7 @@ describe("assessFee", () => {
     const { prisma } = prismaImports;
     const stray = await prisma.ledgerReasonDef.create({
       data: {
-        utilityId: "00000000-0000-4000-8000-0000000000bb",
+        utilityId: otherUtilityId,
         code: "STRAY_FEE",
         label: "Stray",
         appliesToType: "FEE",
