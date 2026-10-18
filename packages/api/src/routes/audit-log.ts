@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { paginationArgs, paginatedResponse } from "../lib/pagination.js";
 import { getUserRole } from "../services/rbac.service.js";
-import { AUDIT_ACTIONS } from "@utility-cis/shared";
+import { AUDIT_ACTIONS, AUDIT_ENTITY_TYPES } from "@utility-cis/shared";
 
 /**
  * The key that authorizes reading the whole log rather than one
@@ -61,7 +61,22 @@ export async function auditLogRoutes(app: FastifyInstance) {
         orderBy: { entityType: "asc" },
       });
 
-      return reply.send({ data: rows.map((row) => row.entityType) });
+      /*
+       * The union, not either half. Serving only what the log contains
+       * was the first attempt and it was worse than the hardcoded list
+       * it replaced: a tenant with little history got a nearly empty
+       * filter. Serving only the constant would miss writers that set
+       * `entityType` from a variable, and legacy spellings that still
+       * exist in old rows.
+       */
+      const types = new Set<string>([
+        ...AUDIT_ENTITY_TYPES,
+        ...rows.map((row) => row.entityType),
+      ]);
+
+      return reply.send({
+        data: [...types].sort((a, b) => a.localeCompare(b)),
+      });
     },
   );
 

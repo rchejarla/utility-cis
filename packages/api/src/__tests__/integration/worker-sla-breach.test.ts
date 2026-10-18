@@ -162,7 +162,7 @@ describe("worker-sla-breach integration", () => {
     expect(after?.slaBreached).toBe(true);
 
     const audits = await prisma.auditLog.findMany({
-      where: { entityType: "service_request", entityId: sr.id },
+      where: { entityType: "ServiceRequest", entityId: sr.id },
     });
     expect(audits).toHaveLength(1);
     expect(audits[0].source).toBe("scheduler:sla-breach-sweep");
@@ -229,7 +229,7 @@ describe("worker-sla-breach integration", () => {
 
     expect(result.flipped).toBe(0);
     const audits = await prisma.auditLog.count({
-      where: { entityType: "service_request", entityId: sr.id },
+      where: { entityType: "ServiceRequest", entityId: sr.id },
     });
     expect(audits).toBe(0);
   });
@@ -275,7 +275,7 @@ describe("worker-sla-breach integration", () => {
     expect(result.flipped).toBe(2);
 
     const audits = await prisma.auditLog.findMany({
-      where: { entityType: "service_request" },
+      where: { entityType: "ServiceRequest" },
     });
     expect(audits).toHaveLength(2);
     expect(new Set(audits.map((a) => a.utilityId))).toEqual(new Set([TENANT_A, TENANT_B]));

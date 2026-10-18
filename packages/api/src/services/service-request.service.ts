@@ -372,7 +372,7 @@ export async function sweepBreachedSRs(
         await tx.auditLog.createMany({
           data: flipped.map((row) => ({
             utilityId: row.utility_id,
-            entityType: "service_request",
+            entityType: "ServiceRequest",
             entityId: row.id,
             action: "UPDATE" as const,
             actorId: null,

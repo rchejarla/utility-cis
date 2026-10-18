@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createTestApp, createTestToken } from "../setup.js";
 import { prisma } from "../../lib/prisma.js";
+import { AUDIT_ENTITY_TYPES } from "@utility-cis/shared";
 
 /**
  * `GET /api/v1/audit-log` serves two different needs through one
@@ -118,11 +119,14 @@ describe("GET /api/v1/audit-log — scope required without the admin key", () =>
    * could not be filtered for. Serving the distinct values from the data
    * is what stops it drifting again.
    */
-  it("lists the entity types present in this tenant's log", async () => {
+  it("lists every auditable entity type, not only the ones already logged", async () => {
     grant(CSR_LIKE);
+    // "Unlisted" stands for a writer that sets `entityType` from a
+    // variable rather than a literal — the one case neither the
+    // constant nor a source scan can be relied on to cover.
     (prisma.auditLog.findMany as never as ReturnType<typeof vi.fn>).mockResolvedValue([
       { entityType: "Account" },
-      { entityType: "BillDocument" },
+      { entityType: "Unlisted" },
     ]);
 
     const app = await createTestApp();
@@ -133,7 +137,20 @@ describe("GET /api/v1/audit-log — scope required without the admin key", () =>
     });
 
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body).data).toEqual(["Account", "BillDocument"]);
+    const types: string[] = JSON.parse(res.body).data;
+
+    // Serving only what the log contains was the first attempt, and it
+    // was worse than the hardcoded list it replaced: a fresh tenant got
+    // almost nothing. The full set is offered so a type can be chosen
+    // before anything of that kind has been audited.
+    for (const expected of AUDIT_ENTITY_TYPES) expect(types).toContain(expected);
+    expect(types.length).toBeGreaterThan(20);
+
+    // Whatever the data holds is unioned in.
+    expect(types).toContain("Unlisted");
+
+    // Sorted, and no duplicates where the two sources overlap.
+    expect(types).toEqual([...new Set(types)].sort((a, b) => a.localeCompare(b)));
 
     const args = (prisma.auditLog.findMany as never as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(args.where).toEqual({ utilityId });

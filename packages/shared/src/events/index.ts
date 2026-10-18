@@ -84,3 +84,48 @@ export type EventType = (typeof EVENT_TYPES)[keyof typeof EVENT_TYPES];
 export const AUDIT_ACTIONS = ["CREATE", "UPDATE", "DELETE"] as const;
 
 export type AuditActionValue = (typeof AUDIT_ACTIONS)[number];
+
+/**
+ * Every entity type the API writes to `audit_log.entity_type`.
+ *
+ * The audit log page's Entity Type filter listed six of these by hand
+ * and had drifted far behind. Serving only the types already present in
+ * a tenant's log was a worse answer — a tenant with little history got
+ * a nearly empty filter — so `GET /api/v1/audit-log/entity-types`
+ * returns this list unioned with the distinct values in the data.
+ *
+ * The union matters because a source scan cannot find every writer:
+ * `bill-message.service.ts` sets `entityType` from a module constant,
+ * not a literal. Anything missing here therefore still appears once a
+ * row of that kind exists.
+ */
+export const AUDIT_ENTITY_TYPES = [
+  "Account",
+  "Bill",
+  "BillDocument",
+  "BillMessage",
+  "BillSegment",
+  "BillingCycle",
+  "BillingRun",
+  "Commodity",
+  "Contact",
+  "Container",
+  "Customer",
+  "ImportBatch",
+  "LedgerEntry",
+  "LedgerReasonDef",
+  "Meter",
+  "MeterEvent",
+  "MeterRead",
+  "Premise",
+  "RateSchedule",
+  "ServiceAgreement",
+  "ServiceEvent",
+  "ServicePointMeter",
+  "ServiceRequest",
+  "ServiceSuspension",
+  "Sla",
+  "UnitOfMeasure",
+  "UserRole",
+  "Workflow",
+] as const;

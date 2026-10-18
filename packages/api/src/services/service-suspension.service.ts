@@ -418,7 +418,7 @@ export async function sweepSuspensionsAllTenants(
       const auditRows = [
         ...activated.map((row) => ({
           utilityId: row.utility_id,
-          entityType: "service_suspension",
+          entityType: "ServiceSuspension",
           entityId: row.id,
           action: "UPDATE" as const,
           actorId: null, // scheduler-emitted; no user principal
@@ -433,7 +433,7 @@ export async function sweepSuspensionsAllTenants(
         })),
         ...completed.map((row) => ({
           utilityId: row.utility_id,
-          entityType: "service_suspension",
+          entityType: "ServiceSuspension",
           entityId: row.id,
           action: "UPDATE" as const,
           actorId: null,

@@ -26,6 +26,7 @@ That last sentence is an intent, not a guarantee the code enforces: `deleteConta
 | entity_id | UUID | PK of the changed entity |
 | action | ENUM | CREATE, UPDATE, DELETE |
 | actor_id | UUID | User who performed the action (from JWT). Null for scheduler-driven changes, which identify themselves in `actor_name` instead |
+| entity_type | — | Must be one of `AUDIT_ENTITY_TYPES` in `packages/shared/src/events/index.ts`. Two schedulers wrote snake_case (`service_request`, `service_suspension`) while the request-driven paths for the same entity wrote PascalCase, because they bypass `audit-wrap` with a raw `createMany` — so one entity's history was split across two spellings and the SLA-breach sweeper's rows never appeared on the service request's own Audit tab, which filters on `ServiceRequest`. The writers now agree, and the existing dev rows were corrected in place rather than the old spellings being kept as aliases |
 | actor_name | VARCHAR(255) | The actor's name **at the time of the change** — denormalized on purpose, so history survives a rename or a deleted user. Required by `AuditContext`; see below |
 | source | VARCHAR(100) | `user:<cisUserId>` or `scheduler:<queue-name>`. The retention sweep filters on `source LIKE 'scheduler:%'` so user audits stay outside its scope |
 | before_state | JSONB | Full entity state before change (null on CREATE) |
@@ -226,9 +227,9 @@ Three filter defects, all of the same shape — the page naming things the API d
 |---|---|---|
 | Action | `CREATED`, `UPDATED`, `DELETED`, `STATUS_CHANGED` | `CREATE`, `UPDATE`, `DELETE` |
 | Date range | `dateFrom` / `dateTo` as `YYYY-MM-DD` | `startDate` / `endDate` as ISO datetimes |
-| Entity type | a hardcoded list of 6 | any of the 27 types the API writes |
+| Entity type | a hardcoded list of 6 | any of the 28 types the API writes |
 
-The query schema is `.strict()`, so the first two answered 400 rather than filtering. The action badge colours were keyed on the same wrong strings, so no badge was ever coloured. Actions now come from `AUDIT_ACTIONS` in shared, which the query schema reads too; entity types come from the endpoint above; and the date bounds are built from local midnight to local end-of-day, so a picked calendar day means the user's day and the `lte` end bound includes it.
+The query schema is `.strict()`, so the first two answered 400 rather than filtering. The action badge colours were keyed on the same wrong strings, so no badge was ever coloured. Actions now come from `AUDIT_ACTIONS` in shared, which the query schema reads too; entity types come from `AUDIT_ENTITY_TYPES` in shared, served through the endpoint above unioned with the distinct values in the data (the union covers a writer that sets `entityType` from a variable, which `bill-message.service.ts` does); and the date bounds are built from local midnight to local end-of-day, so a picked calendar day means the user's day and the `lte` end bound includes it.
 
 - Searchable, filterable table of all audit entries
 - Filters: entity type (dropdown of all entity types), action (CREATE/UPDATE/DELETE), actor (user dropdown), date range picker

@@ -271,7 +271,7 @@ describe("worker-suspension integration", () => {
     expect(after?.status).toBe("ACTIVE");
 
     const audits = await prisma.auditLog.findMany({
-      where: { entityType: "service_suspension", entityId: hold.id },
+      where: { entityType: "ServiceSuspension", entityId: hold.id },
     });
     expect(audits).toHaveLength(1);
     expect(audits[0].actorId).toBeNull();
@@ -303,7 +303,7 @@ describe("worker-suspension integration", () => {
     expect(after?.status).toBe("COMPLETED");
 
     const audits = await prisma.auditLog.findMany({
-      where: { entityType: "service_suspension", entityId: hold.id },
+      where: { entityType: "ServiceSuspension", entityId: hold.id },
     });
     expect(audits[0].afterState).toMatchObject({ status: "COMPLETED" });
   });
@@ -352,7 +352,7 @@ describe("worker-suspension integration", () => {
     expect(after?.status).toBe("PENDING");
 
     const audits = await prisma.auditLog.findMany({
-      where: { entityType: "service_suspension" },
+      where: { entityType: "ServiceSuspension" },
     });
     expect(audits).toHaveLength(0);
   });
@@ -418,7 +418,7 @@ describe("worker-suspension integration", () => {
 
     expect(result).toEqual({ activated: 1, completed: 1 });
 
-    const audits = await prisma.auditLog.findMany({ where: { entityType: "service_suspension" } });
+    const audits = await prisma.auditLog.findMany({ where: { entityType: "ServiceSuspension" } });
     expect(audits).toHaveLength(2);
     const utilityIds = new Set(audits.map((a) => a.utilityId));
     expect(utilityIds).toEqual(new Set([TENANT_A, TENANT_B]));
@@ -462,7 +462,7 @@ describe("worker-suspension integration", () => {
       expect(after?.status).toBe("ACTIVE");
 
       const audits = await prisma.auditLog.findMany({
-        where: { entityType: "service_suspension", entityId: hold.id },
+        where: { entityType: "ServiceSuspension", entityId: hold.id },
       });
       expect(audits).toHaveLength(1);
       expect(audits[0].source).toBe("scheduler:suspension-transitions");
@@ -518,7 +518,7 @@ describe("worker-suspension integration", () => {
     // of the atomic UPDATE-RETURNING + createMany pattern.
     for (const id of [a1.id, a2.id, b1.id]) {
       const audits = await prisma.auditLog.findMany({
-        where: { entityType: "service_suspension", entityId: id },
+        where: { entityType: "ServiceSuspension", entityId: id },
       });
       expect(audits).toHaveLength(1);
       expect(audits[0].source).toBe("scheduler:suspension-transitions");
@@ -526,7 +526,7 @@ describe("worker-suspension integration", () => {
 
     // No stray audits for entities that didn't flip.
     const allAudits = await prisma.auditLog.count({
-      where: { entityType: "service_suspension" },
+      where: { entityType: "ServiceSuspension" },
     });
     expect(allAudits).toBe(3);
   });

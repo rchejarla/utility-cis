@@ -339,7 +339,12 @@ describe("service-suspension lifecycle", () => {
         expect(row.actorId).toBeNull();
         expect(row.actorName).toBe("Suspension scheduler");
         expect(row.source).toBe("scheduler:suspension-transitions");
-        expect(row.entityType).toBe("service_suspension");
+        // "ServiceSuspension", as the request-driven paths in this same
+        // service have always written. The sweeper wrote snake_case
+        // because it bypasses audit-wrap with a raw createMany, which
+        // split one entity's history across two spellings and hid these
+        // rows from the record they describe.
+        expect(row.entityType).toBe("ServiceSuspension");
         expect(row.action).toBe("UPDATE");
         expect(row.utilityId).toBe(tenantA);
         expect(row.beforeState).toEqual({ status: "PENDING" });
