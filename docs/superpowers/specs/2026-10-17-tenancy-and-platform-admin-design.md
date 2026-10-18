@@ -345,15 +345,22 @@ first.
    rule one home — see Q1 for why a sixth consumer will otherwise repeat
    the same mistake.
 2. **The tenant entity** (D6). A `Utility` model with id, display name,
-   status and created-at, a foreign key from `utility_id` to it, and a
-   backfill for the single existing tenant. Inserted ahead of
-   provisioning on 2026-10-18, because provisioning has nothing to write
-   without it and every "per tenant" claim in this document is currently
-   a claim about a value in a column (§1.5).
+   status and created-at, and a foreign key from `utility_id` to it.
+   Inserted ahead of provisioning on 2026-10-18, because provisioning has
+   nothing to write without it and every "per tenant" claim in this
+   document is currently a claim about a value in a column (§1.5).
 
-   The foreign key is the load-bearing part and the part that will hurt:
-   `utility_id` appears on every entity with no constraint anywhere, so
-   adding one proves no orphan rows exist — and finds them if they do.
+   **No backfill.** The product is in development and no deployment holds
+   data worth preserving, so existing rows that do not fit the new shape
+   are not migrated — `seed.js` creates the utility row first and the
+   database is recreated. That keeps the migration a plain `CREATE TABLE`
+   plus constraints, with no data-repair step to get wrong, and it is the
+   rule for this whole document: where a change does not fit the data,
+   change the seed.
+
+   The foreign key is still the load-bearing part — `utility_id` appears
+   on every entity with no constraint anywhere today — but it costs a
+   reseed rather than a repair.
 3. **Provisioning service** — `provisionTenant(...)`: utility row,
    `tenant_module` rows, preset roles, first admin, config profile.
    Idempotent, callable from a script, **no UI**. This is the piece with
