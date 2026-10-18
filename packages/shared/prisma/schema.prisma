@@ -797,7 +797,7 @@ model AuditLog {
   @@map("audit_log")
 }
 
-model TenantTheme {
+model UtilityTheme {
   id           String   @id @default(uuid()) @db.Uuid
   utilityId    String   @unique @map("utility_id") @db.Uuid
   preset       String?  @map("preset") @db.VarChar(50)
@@ -808,7 +808,7 @@ model TenantTheme {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  @@map("tenant_theme")
+  @@map("utility_theme")
 }
 
 model UserPreference {
@@ -1029,7 +1029,7 @@ model UserRole {
   @@map("user_role")
 }
 
-model TenantModule {
+model UtilityModule {
   id        String   @id @default(uuid()) @db.Uuid
   utilityId String   @map("utility_id") @db.Uuid
   moduleKey String   @map("module_key") @db.VarChar(50)
@@ -1037,7 +1037,7 @@ model TenantModule {
   enabledAt DateTime @default(now()) @map("enabled_at") @db.Timestamptz
 
   @@unique([utilityId, moduleKey])
-  @@map("tenant_module")
+  @@map("utility_module")
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1180,9 +1180,9 @@ model CustomFieldSchema {
 }
 
 // Tenant-level configuration for service-hold behaviour. Lives alongside
-// TenantTheme/TenantModule. A row is created lazily the first time a flag
+// UtilityTheme/UtilityModule. A row is created lazily the first time a flag
 // is set; absence of a row means "all defaults".
-model TenantConfig {
+model UtilityConfig {
   id                  String   @id @default(uuid()) @db.Uuid
   utilityId           String   @unique @map("utility_id") @db.Uuid
   requireHoldApproval Boolean  @default(false) @map("require_hold_approval")
@@ -1207,7 +1207,7 @@ model TenantConfig {
   createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  @@map("tenant_config")
+  @@map("utility_config")
 }
 
 // Reference table for suspension (hold) types. Replaces the old
@@ -1759,10 +1759,10 @@ model RateServiceClass {
 /// Slice 4 task 4 — generic per-tenant key/value setting backing the
 /// TenantLoader. Holds drought_stage, flag toggles (flags.<name>), and
 /// any other tenant-scoped scalar/JSON value the rate engine needs to
-/// resolve at evaluation time. Distinct from TenantConfig (a single
+/// resolve at evaluation time. Distinct from UtilityConfig (a single
 /// row of well-known scheduler/runtime fields) — this is an open-ended
 /// (utility_id, name) → JSON map.
-model TenantSetting {
+model UtilitySetting {
   id        String   @id @default(uuid()) @db.Uuid
   utilityId String   @map("utility_id") @db.Uuid
   name      String   @map("name") @db.VarChar(100)
@@ -1772,7 +1772,7 @@ model TenantSetting {
 
   @@unique([utilityId, name])
   @@index([utilityId])
-  @@map("tenant_setting")
+  @@map("utility_setting")
 }
 
 /// Slice 4 task 5 — Winter Quarter Average (WQA) value backing the

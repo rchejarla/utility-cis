@@ -77,7 +77,7 @@ export async function tenantConfigRoutes(app: FastifyInstance) {
       const patch = updateBodySchema.parse(request.body);
 
       // Namespaces all live inside the `settings` jsonb bucket so the
-      // TenantConfig Prisma model doesn't need per-namespace columns.
+      // UtilityConfig Prisma model doesn't need per-namespace columns.
       // Merge each patched namespace into its slot in the existing
       // settings object so unrelated keys stay intact.
       const merged: Parameters<typeof updateTenantConfig>[1] = {

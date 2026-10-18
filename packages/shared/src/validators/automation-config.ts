@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /**
  * Per-tenant automation/scheduler configuration. Schema mirrors the
- * 10 columns added to TenantConfig in migration
+ * 10 columns added to UtilityConfig in migration
  * `20260425231524_tenant_automation_config`.
  *
  * Field-level rules:

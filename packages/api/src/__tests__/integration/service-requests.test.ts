@@ -70,7 +70,7 @@ beforeAll(async () => {
 
   // Enable the service_requests module for the dev tenant (Task 15 will
   // do this globally; Task 14 needs it locally for the integration test).
-  await prisma.tenantModule.upsert({
+  await prisma.utilityModule.upsert({
     where: { utilityId_moduleKey: { utilityId: UID, moduleKey: "service_requests" } },
     update: { isEnabled: true },
     create: { utilityId: UID, moduleKey: "service_requests", isEnabled: true },

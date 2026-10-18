@@ -81,7 +81,7 @@ interface TenantOpts {
 
 async function seedTenant(utilityId: string, opts: TenantOpts = {}): Promise<void> {
   const { prisma } = prismaImports;
-  await prisma.tenantConfig.create({
+  await prisma.utilityConfig.create({
     data: {
       utilityId,
       notificationSendEnabled: opts.notificationSendEnabled ?? true,

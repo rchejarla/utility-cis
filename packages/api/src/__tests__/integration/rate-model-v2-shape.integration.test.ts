@@ -99,11 +99,11 @@ beforeEach(async () => {
 
   // Enable the modules the test exercises (rate-schedules + SA detail).
   for (const moduleKey of ["rate_schedules", "agreements"]) {
-    const existing = await prisma.tenantModule.findFirst({
+    const existing = await prisma.utilityModule.findFirst({
       where: { utilityId: TENANT_A, moduleKey },
     });
     if (!existing) {
-      await prisma.tenantModule.create({
+      await prisma.utilityModule.create({
         data: { utilityId: TENANT_A, moduleKey },
       });
     }

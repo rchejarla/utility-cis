@@ -38,7 +38,7 @@ export interface DispatchResult {
 }
 
 export async function dispatchDelinquency(now: Date = new Date()): Promise<DispatchResult> {
-  const candidates = await prisma.tenantConfig.findMany({
+  const candidates = await prisma.utilityConfig.findMany({
     where: { delinquencyEnabled: true },
     select: {
       utilityId: true,

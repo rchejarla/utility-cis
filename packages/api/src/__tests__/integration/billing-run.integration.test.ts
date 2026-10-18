@@ -82,8 +82,8 @@ beforeAll(async () => {
    * Both halves are the convention the other seed-based suites follow.
    */
   for (const moduleKey of ["accounts", "agreements"]) {
-    const existing = await prisma.tenantModule.findFirst({ where: { utilityId, moduleKey } });
-    if (!existing) await prisma.tenantModule.create({ data: { utilityId, moduleKey } });
+    const existing = await prisma.utilityModule.findFirst({ where: { utilityId, moduleKey } });
+    if (!existing) await prisma.utilityModule.create({ data: { utilityId, moduleKey } });
   }
   const rbac = await import("../../services/rbac.service.js");
   await rbac.invalidateTenantModulesCache(utilityId);

@@ -49,7 +49,7 @@ vi.mock("../../lib/prisma.js", async (importOriginal) => {
         delete: vi.fn().mockResolvedValue({}),
         count: vi.fn().mockResolvedValue(0),
       },
-      tenantModule: {
+      utilityModule: {
         findMany: vi.fn().mockResolvedValue([]),
         findFirst: vi.fn().mockResolvedValue(null),
         findUnique: vi.fn().mockResolvedValue(null),
@@ -100,7 +100,7 @@ describe("Authorization middleware", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Default: no tenant modules enabled, no CIS user found
-    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (prisma.utilityModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
   });
 
@@ -117,7 +117,7 @@ describe("Authorization middleware", () => {
     const app = await createTestApp();
 
     // Enable the commodities module for tenant
-    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+    (prisma.utilityModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "commodities" },
     ]);
 
@@ -146,7 +146,7 @@ describe("Authorization middleware", () => {
     const app = await createTestApp();
 
     // Module is enabled for the tenant
-    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+    (prisma.utilityModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "customers" },
     ]);
 
@@ -179,7 +179,7 @@ describe("Authorization middleware", () => {
         },
       },
     });
-    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+    (prisma.utilityModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "customers" },
       { moduleKey: "premises" },
       { moduleKey: "meters" },
@@ -223,7 +223,7 @@ describe("Authorization middleware", () => {
         permissions: { customers: ["VIEW"] },
       },
     });
-    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+    (prisma.utilityModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "customers" },
     ]);
 
@@ -249,7 +249,7 @@ describe("Authorization middleware", () => {
         permissions: { customers: ["VIEW"] }, // no CREATE
       },
     });
-    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+    (prisma.utilityModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "customers" },
     ]);
 
@@ -283,7 +283,7 @@ describe("Authorization middleware", () => {
       },
     });
     // Customers module NOT in enabled modules list
-    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+    (prisma.utilityModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "premises" }, // only premises enabled, not customers
     ]);
 
@@ -304,7 +304,7 @@ describe("Authorization middleware", () => {
 
     // No CIS user and no modules
     (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (prisma.utilityModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
     const response = await app.inject({
       method: "GET",

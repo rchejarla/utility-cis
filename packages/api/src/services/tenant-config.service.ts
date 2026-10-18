@@ -19,7 +19,7 @@ const DEFAULTS: Omit<TenantConfigDTO, "utilityId"> = {
 };
 
 export async function getTenantConfig(utilityId: string): Promise<TenantConfigDTO> {
-  const row = await prisma.tenantConfig.findUnique({ where: { utilityId } });
+  const row = await prisma.utilityConfig.findUnique({ where: { utilityId } });
   if (!row) {
     return { utilityId, ...DEFAULTS };
   }
@@ -45,7 +45,7 @@ export async function updateTenantConfig(
     data.settings = patch.settings as object;
   }
 
-  const row = await prisma.tenantConfig.upsert({
+  const row = await prisma.utilityConfig.upsert({
     where: { utilityId },
     update: data,
     create: {

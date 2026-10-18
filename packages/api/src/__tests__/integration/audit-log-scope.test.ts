@@ -34,7 +34,7 @@ describe("GET /api/v1/audit-log — scope required without the admin key", () =>
   const ACCOUNT_ID = "aa000000-0000-4000-8000-000000000001";
 
   function grant(permissions: Record<string, string[]>) {
-    (prisma.tenantModule.findMany as never as ReturnType<typeof vi.fn>).mockResolvedValue(
+    (prisma.utilityModule.findMany as never as ReturnType<typeof vi.fn>).mockResolvedValue(
       Object.keys(permissions).map((moduleKey) => ({ moduleKey })),
     );
     (prisma.cisUser.findFirst as never as ReturnType<typeof vi.fn>).mockResolvedValue({

@@ -82,7 +82,7 @@ beforeEach(async () => {
 
 async function seedTenant(utilityId: string, opts: { slaBreachSweepEnabled?: boolean } = {}): Promise<void> {
   const { prisma } = prismaImports;
-  await prisma.tenantConfig.create({
+  await prisma.utilityConfig.create({
     data: { utilityId, slaBreachSweepEnabled: opts.slaBreachSweepEnabled ?? true },
   });
 }

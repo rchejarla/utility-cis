@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /**
  * Typed validators for the nested namespaces stored inside
- * TenantConfig.settings. Each namespace is optional — a PATCH only has
+ * UtilityConfig.settings. Each namespace is optional — a PATCH only has
  * to include the block it wants to change. Fields inside each block
  * are also optional so clients can send partial updates.
  *

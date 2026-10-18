@@ -44,7 +44,7 @@ interface NotificationProvider {
  * to another tenant is simply not found.
  *
  * This function took `utilityId` from the start and spent it on one
- * query (`tenantConfig`, below) while the five entity lookups read by
+ * query (`utilityConfig`, below) while the five entity lookups read by
  * primary key alone. The tenant argument read as scoping and scoped
  * nothing, which is how a customer's name, email, phone, account number,
  * premise address and meter number could be rendered into one tenant's
@@ -171,7 +171,7 @@ async function resolveVariables(
   vars["portal.profileUrl"] = `${baseUrl}/portal/profile`;
 
   // Utility info from tenant config
-  const cfg = await prisma.tenantConfig.findUnique({ where: { utilityId } });
+  const cfg = await prisma.utilityConfig.findUnique({ where: { utilityId } });
   const settings = (cfg?.settings as Record<string, unknown>) ?? {};
   const branding = (settings.branding as Record<string, string>) ?? {};
   const notifSettings = (settings.notifications as Record<string, string>) ?? {};

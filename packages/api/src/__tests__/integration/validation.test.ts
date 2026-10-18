@@ -30,7 +30,7 @@ describe("Request validation", () => {
       "settings",
       "theme",
     ];
-    (prisma.tenantModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue(
+    (prisma.utilityModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue(
       ALL_MODULES.map((moduleKey) => ({ moduleKey }))
     );
     (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({

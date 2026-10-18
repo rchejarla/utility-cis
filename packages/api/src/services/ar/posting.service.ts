@@ -292,7 +292,7 @@ export async function resolveAutoPostBills(
     // cross-tenant account id resolves to nothing rather than to its own
     // tenant's setting.
     tx.account.findFirst({ where: { id: accountId, utilityId }, select: { autoPostBills: true } }),
-    tx.tenantConfig.findUnique({ where: { utilityId }, select: { autoPostBills: true } }),
+    tx.utilityConfig.findUnique({ where: { utilityId }, select: { autoPostBills: true } }),
   ]);
   return account?.autoPostBills ?? config?.autoPostBills ?? true;
 }

@@ -13,7 +13,7 @@ async function main() {
   if (p.userRole) await p.userRole.deleteMany({});
   await p.cisUser.deleteMany({});
   await p.role.deleteMany({});
-  await p.tenantModule.deleteMany({});
+  await p.utilityModule.deleteMany({});
 
   // Phase 2 operational entities — delete first.
   if (p.serviceSuspension) await p.serviceSuspension.deleteMany({});
@@ -61,8 +61,8 @@ async function main() {
   await p.unitOfMeasure.deleteMany({});
   await p.commodity.deleteMany({});
   await p.customer.deleteMany({});
-  await p.tenantTheme.deleteMany({});
-  if (p.tenantConfig) await p.tenantConfig.deleteMany({});
+  await p.utilityTheme.deleteMany({});
+  if (p.utilityConfig) await p.utilityConfig.deleteMany({});
   await p.auditLog.deleteMany({});
   await p.userPreference.deleteMany({});
   // Tenant-scoped suspension type defs only — do NOT delete global
@@ -799,7 +799,7 @@ async function main() {
   }
   console.log("  " + billingAddressData.length + " billing addresses");
 
-  await p.tenantTheme.create({
+  await p.utilityTheme.create({
     data: {
       utilityId: UID, preset: "midnight",
       colors: { dark: { "bg-deep": "#06080d", "accent-primary": "#3b82f6", "text-primary": "#e8edf5" }, light: { "bg-deep": "#ffffff", "accent-primary": "#0f766e", "text-primary": "#0f172a" } },
@@ -927,7 +927,7 @@ async function main() {
 
   const moduleKeys = allModules;
   for (const mk of moduleKeys) {
-    await p.tenantModule.create({ data: { utilityId: UID, moduleKey: mk, isEnabled: true } });
+    await p.utilityModule.create({ data: { utilityId: UID, moduleKey: mk, isEnabled: true } });
   }
   console.log("  " + moduleKeys.length + " tenant modules");
 

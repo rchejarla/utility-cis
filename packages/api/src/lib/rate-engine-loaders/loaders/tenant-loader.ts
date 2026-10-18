@@ -79,7 +79,7 @@ export class TenantLoader implements Loader {
 
     if (keyToSettingName.size === 0) return out;
 
-    const rows = await this.prisma.tenantSetting.findMany({
+    const rows = await this.prisma.utilitySetting.findMany({
       where: { utilityId: this.utilityId, name: { in: [...settingNames] } },
       select: { name: true, value: true },
     });

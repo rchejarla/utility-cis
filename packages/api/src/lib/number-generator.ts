@@ -55,9 +55,9 @@ export async function generateNumber(opts: NumberGeneratorOptions): Promise<stri
   const now = opts.now ?? new Date();
 
   // 1. Load tenant format config with fallback.
-  const tenantConfig = await getTenantConfig(opts.utilityId);
+  const utilityConfig = await getTenantConfig(opts.utilityId);
   const formats =
-    (tenantConfig.settings.numberFormats as Record<string, NumberFormatConfig> | undefined) ?? {};
+    (utilityConfig.settings.numberFormats as Record<string, NumberFormatConfig> | undefined) ?? {};
   const entityFormat: NumberFormatConfig = formats[opts.entity] ?? {
     template: opts.defaultTemplate,
     startAt: opts.defaultStartAt ?? 1,

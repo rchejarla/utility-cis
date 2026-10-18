@@ -4,7 +4,7 @@ import { resolveLogoDataUri } from "../../bill-generation/generate-bill-pdf.js";
 /**
  * Where the bill renderer is allowed to send a request.
  *
- * `tenantTheme.logoUrl` is written by a tenant under `theme:EDIT` and
+ * `utilityTheme.logoUrl` is written by a tenant under `theme:EDIT` and
  * validated only as a URL, and the renderer fetches it from inside the
  * API. That makes it a request this service performs on the writer's
  * behalf, from the API's own network position — and the bytes come back

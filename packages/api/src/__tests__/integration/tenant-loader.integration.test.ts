@@ -37,7 +37,7 @@ beforeEach(async () => {
 
 async function seedSetting(utilityId: string, name: string, value: unknown): Promise<void> {
   const { prisma } = prismaImports;
-  await prisma.tenantSetting.create({
+  await prisma.utilitySetting.create({
     data: { utilityId, name, value: value as object },
   });
 }
@@ -83,11 +83,11 @@ describe("TenantLoader", () => {
     await seedSetting(TENANT_A, "flags.autopay", true);
     await seedSetting(TENANT_A, "flags.paperless_default", false);
 
-    const original = prismaImports.prisma.tenantSetting.findMany.bind(
-      prismaImports.prisma.tenantSetting,
+    const original = prismaImports.prisma.utilitySetting.findMany.bind(
+      prismaImports.prisma.utilitySetting,
     );
     const spy = vi
-      .spyOn(prismaImports.prisma.tenantSetting, "findMany")
+      .spyOn(prismaImports.prisma.utilitySetting, "findMany")
       .mockImplementation((args) => original(args) as ReturnType<typeof original>);
     try {
       const loader = new TenantLoader(prismaImports.prisma, TENANT_A);

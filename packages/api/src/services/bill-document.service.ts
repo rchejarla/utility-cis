@@ -173,7 +173,7 @@ export async function generateBillDocument(
     return toRow(existing);
   }
 
-  const config_ = await prisma.tenantConfig.findUnique({ where: { utilityId } });
+  const config_ = await prisma.utilityConfig.findUnique({ where: { utilityId } });
   const storage = storageOf(config_?.settings);
 
   // Resolve and generate before claiming, so a bill that cannot be

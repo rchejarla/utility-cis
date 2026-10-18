@@ -73,7 +73,7 @@ beforeEach(async () => {
 
 async function seedTenant(utilityId: string, retentionDays: number): Promise<void> {
   const { prisma } = prismaImports;
-  await prisma.tenantConfig.create({
+  await prisma.utilityConfig.create({
     data: { utilityId, schedulerAuditRetentionDays: retentionDays },
   });
 }

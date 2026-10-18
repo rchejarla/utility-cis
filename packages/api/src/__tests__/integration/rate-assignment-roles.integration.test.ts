@@ -54,11 +54,11 @@ beforeEach(async () => {
   await prisma.$executeRawUnsafe(
     "DELETE FROM rate_assignment_role WHERE utility_id IS NOT NULL",
   );
-  const existing = await prisma.tenantModule.findFirst({
+  const existing = await prisma.utilityModule.findFirst({
     where: { utilityId: TENANT_A, moduleKey: "rate_schedules" },
   });
   if (!existing) {
-    await prisma.tenantModule.create({
+    await prisma.utilityModule.create({
       data: { utilityId: TENANT_A, moduleKey: "rate_schedules" },
     });
   }

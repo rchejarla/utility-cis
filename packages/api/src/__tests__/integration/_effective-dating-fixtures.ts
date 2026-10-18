@@ -254,7 +254,7 @@ export async function makeTenantFixture(
 ): Promise<TenantFixture> {
   const suffix = opts.suffix ?? utilityId.slice(-4);
 
-  await prisma.tenantConfig.create({ data: { utilityId } });
+  await prisma.utilityConfig.create({ data: { utilityId } });
 
   const commodity = await prisma.commodity.create({
     data: { utilityId, code: `WATER-${suffix}`, name: "Water" },

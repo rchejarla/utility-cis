@@ -160,7 +160,7 @@ describe("priorityForTenant", () => {
 
 describe("patchAutomationConfig — IANA validation guard", () => {
   beforeEach(() => {
-    (prisma.tenantConfig.upsert as ReturnType<typeof vi.fn>).mockReset();
+    (prisma.utilityConfig.upsert as ReturnType<typeof vi.fn>).mockReset();
   });
 
   it("rejects an invalid IANA timezone before touching the DB", async () => {
@@ -170,11 +170,11 @@ describe("patchAutomationConfig — IANA validation guard", () => {
       }),
     ).rejects.toThrow(/Invalid IANA timezone/);
 
-    expect(prisma.tenantConfig.upsert).not.toHaveBeenCalled();
+    expect(prisma.utilityConfig.upsert).not.toHaveBeenCalled();
   });
 
   it("accepts a valid IANA zone and forwards the patch to upsert", async () => {
-    (prisma.tenantConfig.upsert as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    (prisma.utilityConfig.upsert as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       timezone: "America/Los_Angeles",
       suspensionEnabled: true,
       notificationSendEnabled: true,
@@ -193,6 +193,6 @@ describe("patchAutomationConfig — IANA validation guard", () => {
     );
 
     expect(result.timezone).toBe("America/Los_Angeles");
-    expect(prisma.tenantConfig.upsert).toHaveBeenCalledTimes(1);
+    expect(prisma.utilityConfig.upsert).toHaveBeenCalledTimes(1);
   });
 });

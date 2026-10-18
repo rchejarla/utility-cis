@@ -124,7 +124,7 @@ beforeEach(async () => {
   fixA = await makeTenantFixture(prisma, TENANT_A);
 
   for (const moduleKey of ENABLED_MODULES) {
-    await prisma.tenantModule.create({
+    await prisma.utilityModule.create({
       data: { utilityId: fixA.utilityId, moduleKey },
     });
   }

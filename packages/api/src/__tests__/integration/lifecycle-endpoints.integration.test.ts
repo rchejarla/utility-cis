@@ -76,7 +76,7 @@ beforeEach(async () => {
 
   // Enable the modules the routes are gated on.
   for (const moduleKey of ENABLED_MODULES) {
-    await prisma.tenantModule.create({
+    await prisma.utilityModule.create({
       data: { utilityId: fixA.utilityId, moduleKey },
     });
   }

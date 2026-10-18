@@ -204,7 +204,7 @@ export async function loadBillPresentation(
   }
 
   // ─── Issuer ────────────────────────────────────────────────────────
-  const config = await prisma.tenantConfig.findUnique({ where: { utilityId } });
+  const config = await prisma.utilityConfig.findUnique({ where: { utilityId } });
   const issuer = issuerOf(config?.settings);
   const missing = REQUIRED_ISSUER_FIELDS.filter(
     (field) => !present(issuer[field as keyof IssuerSettings]),
@@ -308,7 +308,7 @@ export async function loadBillPresentation(
   });
 
   // ─── Branding ──────────────────────────────────────────────────────
-  const theme = await prisma.tenantTheme.findUnique({ where: { utilityId } });
+  const theme = await prisma.utilityTheme.findUnique({ where: { utilityId } });
   const colors = (theme?.colors ?? {}) as Record<string, unknown>;
   const typography = (theme?.typography ?? {}) as Record<string, unknown>;
   const branding = {

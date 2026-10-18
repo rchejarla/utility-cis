@@ -69,9 +69,9 @@ beforeAll(async () => {
     },
   });
   accountId = account.id;
-  await prisma.tenantModule.create({ data: { utilityId, moduleKey: "accounts" } });
-  await prisma.tenantModule.create({ data: { utilityId, moduleKey: "payments" } });
-  await prisma.tenantModule.create({ data: { utilityId, moduleKey: "ar_adjustments" } });
+  await prisma.utilityModule.create({ data: { utilityId, moduleKey: "accounts" } });
+  await prisma.utilityModule.create({ data: { utilityId, moduleKey: "payments" } });
+  await prisma.utilityModule.create({ data: { utilityId, moduleKey: "ar_adjustments" } });
 
   // Reason codes for the fee and adjustment routes. Tenant-scoped, so
   // these belong to `utilityId` only.

@@ -61,11 +61,11 @@ beforeEach(async () => {
   );
   // Ensure the rate_schedules module is enabled for TENANT_A so the
   // route's permission check passes.
-  const existing = await prisma.tenantModule.findFirst({
+  const existing = await prisma.utilityModule.findFirst({
     where: { utilityId: TENANT_A, moduleKey: "rate_schedules" },
   });
   if (!existing) {
-    await prisma.tenantModule.create({
+    await prisma.utilityModule.create({
       data: { utilityId: TENANT_A, moduleKey: "rate_schedules" },
     });
   }

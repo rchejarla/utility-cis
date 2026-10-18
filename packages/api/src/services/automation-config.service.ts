@@ -10,14 +10,14 @@ import { isValidIANA, localHour } from "../lib/iana-tz.js";
 /**
  * Service layer for the per-tenant automation/scheduler config.
  *
- * The DB-side schema is on `TenantConfig`; this module is the
+ * The DB-side schema is on `UtilityConfig`; this module is the
  * application-side surface that the routes, worker handlers, and
  * dispatchers all read through.
  *
  * What stays here vs in tenant-config.service.ts:
  *   - Anything specifically about scheduler behavior (timezone,
  *     enable flags, quiet hours, run hour) lives here.
- *   - General TenantConfig CRUD stays in tenant-config.service.ts.
+ *   - General UtilityConfig CRUD stays in tenant-config.service.ts.
  *   - This split keeps `tenant-config.service.ts` from growing into
  *     a kitchen-sink module as more automation knobs land.
  */
@@ -61,7 +61,7 @@ function toDto(row: AutomationConfigRow): AutomationConfig {
  * column-level defaults in the migration so behavior is identical.
  */
 export async function getAutomationConfig(utilityId: string): Promise<AutomationConfig> {
-  const row = await prisma.tenantConfig.findUnique({
+  const row = await prisma.utilityConfig.findUnique({
     where: { utilityId },
     select: {
       timezone: true,
@@ -82,7 +82,7 @@ export async function getAutomationConfig(utilityId: string): Promise<Automation
   // No row yet — create with defaults. UPSERT-on-read keeps the rest
   // of the system simple at the cost of one cheap write the first
   // time we see a fresh tenant.
-  const created = await prisma.tenantConfig.upsert({
+  const created = await prisma.utilityConfig.upsert({
     where: { utilityId },
     create: { utilityId },
     update: {},
@@ -120,7 +120,7 @@ export async function patchAutomationConfig(
   // "00:00"/"00:00") effectively disables quiet hours — that's a
   // configurable choice, not a bug.
 
-  const row = await prisma.tenantConfig.upsert({
+  const row = await prisma.utilityConfig.upsert({
     where: { utilityId },
     create: { utilityId, ...patch },
     update: patch,

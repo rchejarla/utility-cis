@@ -161,12 +161,12 @@ async function postedBill(
   const settings: Record<string, unknown> = {};
   if (opts.issuer !== null) settings.issuer = opts.issuer ?? ISSUER;
   if (opts.storage !== false) settings.billDocuments = { storageIntegration: "cis-bills" };
-  await prisma.tenantConfig.create({
+  await prisma.utilityConfig.create({
     data: { utilityId, settings: settings as Prisma.InputJsonObject },
   });
 
   for (const moduleKey of MODULES) {
-    await prisma.tenantModule.create({ data: { utilityId, moduleKey } });
+    await prisma.utilityModule.create({ data: { utilityId, moduleKey } });
   }
   const rbac = await import("../../services/rbac.service.js");
   await rbac.invalidateTenantModulesCache(utilityId);
@@ -418,7 +418,7 @@ describe("bill documents", () => {
     const billId = await postedBill();
     await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
-    await prismaImports.prisma.tenantConfig.update({
+    await prismaImports.prisma.utilityConfig.update({
       where: { utilityId: UTILITY },
       data: {
         settings: {

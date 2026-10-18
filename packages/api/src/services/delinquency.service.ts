@@ -135,7 +135,7 @@ export async function evaluateDelinquencyForTenant(
   now: Date = new Date(),
 ): Promise<{ accountsEvaluated: number; actionsCreated: number }> {
   const result = await evaluateAll(utilityId);
-  await prisma.tenantConfig.update({
+  await prisma.utilityConfig.update({
     where: { utilityId },
     data: { delinquencyLastRunAt: now },
   });

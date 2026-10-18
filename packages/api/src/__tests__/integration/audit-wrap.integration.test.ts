@@ -76,7 +76,7 @@ beforeEach(async () => {
   await prisma.$executeRawUnsafe(
     "TRUNCATE TABLE audit_log, commodity, tenant_config RESTART IDENTITY CASCADE",
   );
-  await prisma.tenantConfig.create({ data: { utilityId: TENANT } });
+  await prisma.utilityConfig.create({ data: { utilityId: TENANT } });
 });
 
 describe("audit-wrap atomicity (in-transaction)", () => {

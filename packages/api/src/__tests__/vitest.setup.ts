@@ -20,7 +20,7 @@ vi.mock("../lib/cache-redis.js", () => ({
 
 // Mock the prisma module before any tests run.
 // IMPORTANT: this must include every model the middleware layer touches
-// (tenantModule, cisUser, role) so authorization middleware can run to
+// (utilityModule, cisUser, role) so authorization middleware can run to
 // completion and request validation tests can reach the Zod parser.
 vi.mock("../lib/prisma.js", () => {
   const crud = () => ({
@@ -83,11 +83,10 @@ vi.mock("../lib/prisma.js", () => {
     billingCycle: crud(),
     attachment: crud(),
     auditLog: crud(),
-    tenantTheme: crud(),
     utilityTheme: crud(),
     userPreference: crud(),
-    tenantModule: crud(),
-    tenantConfig: crud(),
+    utilityModule: crud(),
+    utilityConfig: crud(),
     customFieldSchema: crud(),
     notificationTemplate: crud(),
     notification: crud(),

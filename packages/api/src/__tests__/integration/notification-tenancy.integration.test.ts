@@ -113,7 +113,7 @@ beforeEach(async () => {
   fixB = await makeTenantFixture(prisma, TENANT_B);
 
   // The route is gated on the module, for the calling tenant only.
-  await prisma.tenantModule.create({
+  await prisma.utilityModule.create({
     data: { utilityId: TENANT_A, moduleKey: "notifications" },
   });
 
