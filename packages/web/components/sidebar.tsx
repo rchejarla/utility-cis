@@ -52,6 +52,16 @@ import {
   faPlay,
   faFileInvoice,
   faCommentDots,
+  // Section headers. Deliberately not reused from the items below: a
+  // header wearing an item's icon reads as that item.
+  faBriefcase,
+  faRecycle,
+  faMoneyCheckDollar,
+  faHandHoldingDollar,
+  faSliders,
+  faGears,
+  faShieldHalved,
+  faChevronRight,
 } from "@fortawesome/pro-solid-svg-icons";
 
 interface NavItem {
@@ -70,6 +80,12 @@ interface NavItem {
 
 interface NavSection {
   title: string;
+  /**
+   * Shown beside the header. Seven uppercase words in a column read as
+   * a table of contents — the icon is what lets the eye find a section
+   * by shape instead of by reading each label.
+   */
+  icon: IconDefinition;
   items: NavItem[];
   /**
    * Collapse this section on first visit. Daily-use sections default
@@ -127,6 +143,7 @@ interface NavSection {
 const navSections: NavSection[] = [
   {
     title: "Operations",
+    icon: faBriefcase,
     items: [
       { href: "/customers", label: "Customers", icon: faUsers, module: "customers" },
       { href: "/premises", label: "Premises", icon: faLocationDot, module: "premises" },
@@ -152,6 +169,7 @@ const navSections: NavSection[] = [
   },
   {
     title: "Solid Waste",
+    icon: faRecycle,
     items: [
       { href: "/containers", label: "Containers", icon: faDumpster, module: "containers" },
       { href: "/service-suspensions", label: "Service Holds", icon: faPauseCircle, module: "service_suspensions" },
@@ -160,6 +178,7 @@ const navSections: NavSection[] = [
   },
   {
     title: "Billing",
+    icon: faMoneyCheckDollar,
     items: [
       {
         href: "/bills",
@@ -208,6 +227,7 @@ const navSections: NavSection[] = [
   },
   {
     title: "Collections",
+    icon: faHandHoldingDollar,
     items: [
       { href: "/delinquency", label: "Delinquency", icon: faScaleUnbalanced, module: "delinquency" },
       { href: "/delinquency/shutoff-eligible", label: "Shut-Off Queue", icon: faPlugCircleXmark, module: "delinquency" },
@@ -215,6 +235,7 @@ const navSections: NavSection[] = [
   },
   {
     title: "Configuration",
+    icon: faSliders,
     items: [
       { href: "/commodities", label: "Commodities & UOM", icon: faDroplet, module: "commodities" },
       { href: "/measure-types", label: "Measure Types", icon: faRulerHorizontal, module: "commodities" },
@@ -239,6 +260,7 @@ const navSections: NavSection[] = [
   },
   {
     title: "Settings",
+    icon: faGears,
     defaultCollapsed: true,
     items: [
       { href: "/settings/general", label: "General", icon: faGear, module: "tenant_profile" },
@@ -264,6 +286,7 @@ const navSections: NavSection[] = [
   },
   {
     title: "Administration",
+    icon: faShieldHalved,
     defaultCollapsed: true,
     items: [
       { href: "/users-roles", label: "Users & Roles", icon: faUserShield, module: "tenant_users" },
@@ -405,26 +428,51 @@ function CollapsibleSection({
         >
           <span
             style={{
-              color: "var(--text-muted)",
-              fontSize: 10,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 9,
+              /*
+               * `--text-secondary`, not `--text-muted`. In light mode
+               * muted is indigo-500 (#6366f1) on an indigo-100 sidebar
+               * (#e0e7ff) — about 3.4:1, under AA, and applied to the
+               * smallest text in the app. Secondary is indigo-800
+               * (#3730a3) and clears it comfortably. The open section
+               * goes further, to primary, so the eye can find where it
+               * is without reading every label.
+               */
+              color: sectionOpen ? "var(--text-primary)" : "var(--text-secondary)",
+              fontSize: 11,
               fontWeight: 600,
               textTransform: "uppercase",
-              letterSpacing: "0.08em",
+              letterSpacing: "0.07em",
               whiteSpace: "nowrap",
             }}
           >
+            <FontAwesomeIcon
+              icon={section.icon}
+              style={{
+                width: 13,
+                height: 13,
+                flexShrink: 0,
+                // The open section's icon takes the accent; the rest sit
+                // back so one thing leads at a time.
+                color: sectionOpen ? "var(--accent-primary)" : "inherit",
+                opacity: sectionOpen ? 1 : 0.65,
+              }}
+            />
             {section.title}
           </span>
-          <span
+          <FontAwesomeIcon
+            icon={faChevronRight}
             style={{
-              fontSize: 8,
+              width: 9,
+              height: 9,
+              flexShrink: 0,
               color: "var(--text-muted)",
-              transition: "transform 0.15s",
-              transform: sectionOpen ? "rotate(0deg)" : "rotate(-90deg)",
+              transition: "transform 0.15s ease",
+              transform: sectionOpen ? "rotate(90deg)" : "rotate(0deg)",
             }}
-          >
-            ▼
-          </span>
+          />
         </button>
       )}
       {sidebarCollapsed && section !== navSections[0] && (
