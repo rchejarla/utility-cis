@@ -857,8 +857,14 @@ async function main() {
         customers: ["VIEW","CREATE","EDIT"], premises: ["VIEW","CREATE","EDIT"],
         meters: ["VIEW"], meter_reads: ["VIEW","CREATE"],
         accounts: ["VIEW","CREATE","EDIT"],
-        // A CSR is who takes a payment at the counter and reverses an NSF,
-        // matching ROLE_PRESETS in packages/shared/src/modules/constants.ts.
+        // A CSR is who takes a payment at the counter and reverses an NSF.
+        //
+        // This array is the only definition of the preset roles. A second
+        // one lived in packages/shared as `PRESET_ROLES`, had no consumer,
+        // and had drifted four modules apart from this one (its Read-Only
+        // omitted workflows, notifications, delinquency and imports). It
+        // was deleted rather than reconciled, because nothing read it and
+        // it still read as authoritative.
         payments: ["VIEW","CREATE","EDIT"],
         // Raising a charge and forgiving one are different authority
         // (design §8); a CSR does both at the counter.

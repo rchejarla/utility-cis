@@ -153,7 +153,7 @@ The RFP says these are "optimized for desktop but remain usable on tablets." Tra
 This is a new application surface. None of it exists today. The route segment should be `/field/*` to make the surface discoverable and to allow a different navigation chrome (no admin sidebar; bottom-tab nav suited to single-handed phone use).
 
 - **FR-MOB-T3-001 — Field-tech persona + RBAC.** A new `Field Technician` role with a tightly-scoped permission set: `meter_reads:CREATE`, `meter_reads:VIEW` (own routes only), `service_requests:VIEW`, `service_requests:EDIT` (assigned ones), `attachments:CREATE`. No customer-detail edit, no billing, no rate config.
-  - **Implementation:** Add the role to `seed.js` PRESET_ROLES. Add an `assignedToUserId` filter to meter-read and service-request listings.
+  - **Implementation:** Add the role to the preset-role array in `seed.js` (the only definition — the shared package's `PRESET_ROLES` was unused and has been deleted). Add an `assignedToUserId` filter to meter-read and service-request listings.
 
 - **FR-MOB-T3-002 — Daily route view.** `/field/route` displays today's assigned meter reads as a vertical list grouped by neighborhood / route order. Each item shows: meter number, address, last-read date+value, sequence number. The list works offline (cached at start-of-shift sync).
   - **Acceptance:** Tech taps a route item, sees the meter detail screen ready for read entry.

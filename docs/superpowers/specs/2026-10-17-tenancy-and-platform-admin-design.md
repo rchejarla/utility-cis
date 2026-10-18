@@ -31,8 +31,10 @@ JWT claims.
 
 ### 1.2 "System Admin" is a tenant role, not a platform actor
 
-`packages/shared/src/modules/constants.ts:112` defines it in
-`PRESET_ROLES`:
+`seed.js` defines it among the preset roles (it was also defined in
+`packages/shared/src/modules/constants.ts` as `PRESET_ROLES`, which had
+no consumer and has since been deleted — the seed is now the only
+definition):
 
 | Preset | Permissions |
 |---|---|
