@@ -8,6 +8,7 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
+import { AUDIT_ACTIONS, type AuditActionValue } from "@utility-cis/shared";
 
 interface AuditEntry {
   id: string;
@@ -19,8 +20,8 @@ interface AuditEntry {
   /**
    * The actor's name as it stands today, supplied only when the row
    * recorded none. Not interchangeable with `actorName`, which is the
-   * name at the time of the change — hence the "(current)" marker
-   * where it is shown.
+   * name at the time of the change, which is why it renders muted and
+   * italic rather than as the recorded value.
    */
   actorNameCurrent?: string | null;
   changes?: unknown;
@@ -32,21 +33,58 @@ interface AuditResponse {
   meta: { total: number; page: number; limit: number; pages: number };
 }
 
-const ENTITY_TYPE_OPTIONS = [
-  { label: "Premise", value: "Premise" },
-  { label: "Meter", value: "Meter" },
-  { label: "Account", value: "Account" },
-  { label: "ServiceAgreement", value: "ServiceAgreement" },
-  { label: "RateSchedule", value: "RateSchedule" },
-  { label: "BillingCycle", value: "BillingCycle" },
-];
+/*
+ * Entity types are fetched from `/api/v1/audit-log/entity-types`, not
+ * listed here. A hardcoded list of six had drifted while the API grew
+ * to write 27 distinct types, so most of the log could not be filtered
+ * for.
+ */
 
-const ACTION_OPTIONS = [
-  { label: "Created", value: "CREATED" },
-  { label: "Updated", value: "UPDATED" },
-  { label: "Deleted", value: "DELETED" },
-  { label: "Status Changed", value: "STATUS_CHANGED" },
-];
+/*
+ * Actions come from the shared constant the query schema also uses.
+ * This list read CREATED / UPDATED / DELETED / STATUS_CHANGED, none of
+ * which the column holds or the `.strict()` schema accepts — so the
+ * filter answered 400 and the colours below never matched a row.
+ */
+const ACTION_LABELS: Record<AuditActionValue, string> = {
+  CREATE: "Created",
+  UPDATE: "Updated",
+  DELETE: "Deleted",
+};
+
+const ACTION_OPTIONS = AUDIT_ACTIONS.map((value) => ({
+  label: ACTION_LABELS[value],
+  value,
+}));
+
+/**
+ * Makes the date triggers read as siblings of the filter pills beside
+ * them. The picker's own default is `--bg-deep`, which in light mode is
+ * indigo-50 (`#eef2ff`) — the page background, and the same token as
+ * `--accent-primary-subtle` — so against the white (`--bg-card`) pills
+ * the dates looked tinted and selected.
+ *
+ * `width` is set because the trigger defaults to `100%`, which stretches
+ * inside a flex row. The picker applies its text colour after this
+ * spread, on purpose, so the value/placeholder distinction stays with
+ * the component.
+ */
+const DATE_TRIGGER_STYLE: React.CSSProperties = {
+  width: "auto",
+  minWidth: "132px",
+  padding: "5px 12px",
+  borderRadius: "999px",
+  background: "var(--bg-card)",
+  fontSize: "12px",
+  fontWeight: 500,
+};
+
+/** Matched against `row.action`, so keyed on what the column holds. */
+const ACTION_COLORS: Record<AuditActionValue, string> = {
+  CREATE: "var(--success)",
+  UPDATE: "var(--info)",
+  DELETE: "var(--danger)",
+};
 
 const inputStyle = {
   padding: "7px 12px",
@@ -69,6 +107,21 @@ export default function AuditLogPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
+  const [entityTypeOptions, setEntityTypeOptions] = useState<
+    Array<{ label: string; value: string }>
+  >([]);
+
+  // The types this tenant's log actually holds, rather than a list kept
+  // by hand here. Fetched once; the set only grows as entities are
+  // audited.
+  useEffect(() => {
+    apiClient
+      .get<{ data: string[] }>("/api/v1/audit-log/entity-types")
+      .then((res) =>
+        setEntityTypeOptions((res.data ?? []).map((t) => ({ label: t, value: t }))),
+      )
+      .catch((err) => console.error("Failed to fetch audit entity types", err));
+  }, []);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -76,8 +129,22 @@ export default function AuditLogPage() {
       const params: Record<string, string> = { page: String(page), limit: "20" };
       if (entityType) params.entityType = entityType;
       if (action) params.action = action;
-      if (dateFrom) params.dateFrom = dateFrom;
-      if (dateTo) params.dateTo = dateTo;
+      /*
+       * `startDate` / `endDate` as ISO datetimes, which is what the
+       * query schema takes. This sent `dateFrom` / `dateTo` as bare
+       * `YYYY-MM-DD`, and the schema is `.strict()` with
+       * `z.string().datetime()` — so the date range answered 400 on
+       * both counts and had never filtered anything. (Spec 17
+       * documented a third pair of names again, `from` / `to`.)
+       *
+       * Built from local midnight rather than by appending "Z", so a
+       * calendar day means the user's day. The end bound runs to the
+       * last millisecond because the comparison is `lte`: at
+       * T00:00:00 picking today would exclude everything that happened
+       * today.
+       */
+      if (dateFrom) params.startDate = new Date(`${dateFrom}T00:00:00`).toISOString();
+      if (dateTo) params.endDate = new Date(`${dateTo}T23:59:59.999`).toISOString();
       const res = await apiClient.get<AuditResponse>("/api/v1/audit-log", params);
       setData(res.data);
       setMeta(res.meta);
@@ -124,18 +191,13 @@ export default function AuditLogPage() {
       key: "action",
       header: "Action",
       render: (row: AuditEntry) => {
-        const colors: Record<string, string> = {
-          CREATED: "var(--success)",
-          UPDATED: "var(--info)",
-          DELETED: "var(--danger)",
-          STATUS_CHANGED: "var(--warning)",
-        };
         return (
           <span
             style={{
               fontSize: "11px",
               fontWeight: "600",
-              color: colors[row.action] ?? "var(--text-secondary)",
+              color:
+                ACTION_COLORS[row.action as AuditActionValue] ?? "var(--text-secondary)",
               fontFamily: "monospace",
             }}
           >
@@ -206,8 +268,20 @@ export default function AuditLogPage() {
         subtitle={`${meta.total.toLocaleString()} total entries`}
       />
 
-      {/* Date range filter */}
-      <div style={{ display: "flex", gap: "10px", alignItems: "center", marginBottom: "8px" }}>
+      {/*
+        One row: date range beside the filter pills. They were stacked,
+        which gave two half-empty rows above a table that wants the
+        height.
+      */}
+      <div
+        style={{
+          display: "flex",
+          gap: "10px",
+          alignItems: "center",
+          flexWrap: "wrap",
+          marginBottom: 16,
+        }}
+      >
         <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: "500" }}>
           Date range:
         </span>
@@ -215,19 +289,21 @@ export default function AuditLogPage() {
           value={dateFrom}
           onChange={(v) => { setDateFrom(v); setPage(1); }}
           placeholder="Start date"
+          triggerStyle={DATE_TRIGGER_STYLE}
         />
         <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>to</span>
         <DatePicker
           value={dateTo}
           onChange={(v) => { setDateTo(v); setPage(1); }}
           placeholder="End date"
+          triggerStyle={DATE_TRIGGER_STYLE}
         />
         {(dateFrom || dateTo) && (
           <button
             onClick={() => { setDateFrom(""); setDateTo(""); setPage(1); }}
             style={{
               padding: "5px 10px",
-              borderRadius: "var(--radius)",
+              borderRadius: "999px",
               border: "1px solid var(--border)",
               background: "transparent",
               color: "var(--text-muted)",
@@ -239,27 +315,24 @@ export default function AuditLogPage() {
             Clear
           </button>
         )}
-      </div>
-
-      <div style={{ marginBottom: 16 }}>
-      <FilterBar
-        filters={[
-          {
-            key: "entityType",
-            label: "Entity Type",
-            options: ENTITY_TYPE_OPTIONS,
-            value: entityType,
-            onChange: (v) => { setEntityType(v); setPage(1); },
-          },
-          {
-            key: "action",
-            label: "Action",
-            options: ACTION_OPTIONS,
-            value: action,
-            onChange: (v) => { setAction(v); setPage(1); },
-          },
-        ]}
-      />
+        <FilterBar
+          filters={[
+            {
+              key: "entityType",
+              label: "Entity Type",
+              options: entityTypeOptions,
+              value: entityType,
+              onChange: (v) => { setEntityType(v); setPage(1); },
+            },
+            {
+              key: "action",
+              label: "Action",
+              options: ACTION_OPTIONS,
+              value: action,
+              onChange: (v) => { setAction(v); setPage(1); },
+            },
+          ]}
+        />
       </div>
 
       <DataTable

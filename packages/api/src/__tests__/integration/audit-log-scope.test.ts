@@ -112,6 +112,34 @@ describe("GET /api/v1/audit-log — scope required without the admin key", () =>
     expect(where).toMatchObject({ utilityId, entityType: "Account", entityId: ACCOUNT_ID });
   });
 
+  /**
+   * The Entity Type filter on the audit log page was a hardcoded list of
+   * six, while the API writes 27 distinct types — so most of the log
+   * could not be filtered for. Serving the distinct values from the data
+   * is what stops it drifting again.
+   */
+  it("lists the entity types present in this tenant's log", async () => {
+    grant(CSR_LIKE);
+    (prisma.auditLog.findMany as never as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { entityType: "Account" },
+      { entityType: "BillDocument" },
+    ]);
+
+    const app = await createTestApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/audit-log/entity-types",
+      headers,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).data).toEqual(["Account", "BillDocument"]);
+
+    const args = (prisma.auditLog.findMany as never as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(args.where).toEqual({ utilityId });
+    expect(args.distinct).toEqual(["entityType"]);
+  });
+
   it("allows an unfiltered read to a role holding the admin key", async () => {
     grant(ADMIN_LIKE);
 

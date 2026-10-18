@@ -151,12 +151,13 @@ The CIS uses a Node.js EventEmitter for intra-process domain events in Phase 1. 
 |--------|------|-------------|------------|
 | GET | `/api/v1/audit-log` | One entity's history | `audit_log:VIEW` + `entityType` **and** `entityId` |
 | GET | `/api/v1/audit-log` | The whole log, any filters | `audit_log:VIEW` **and** `settings:VIEW` |
+| GET | `/api/v1/audit-log/entity-types` | The distinct `entity_type` values present in this tenant's log, sorted | `audit_log:VIEW` |
 
 **Query parameters** (camelCase, as the Zod schema in `packages/api/src/routes/audit-log.ts` defines them — an earlier version of this table documented them as `entity_type`, `entity_id`, `from` and `to`, which the endpoint has never accepted; the schema is `.strict()`, so those names are rejected outright):
 
 - `entityType` — filter by entity type (e.g., "RateSchedule")
 - `entityId` — filter to a specific entity's history (uuid)
-- `action` — CREATE | UPDATE | DELETE
+- `action` — CREATE | UPDATE | DELETE, from `AUDIT_ACTIONS` in `packages/shared/src/events/index.ts`, which the query schema and the UI filter both read
 - `actorId` — filter by the user who made the change (uuid)
 - `startDate` — ISO 8601 datetime
 - `endDate` — ISO 8601 datetime
@@ -218,6 +219,16 @@ Displayed on all 5 entity detail pages: Premise, Customer, Account, Meter, Servi
 ### Audit Log (`/audit-log`) — Built
 
 Listed under **Administration** in the sidebar and gated there on `settings`, deliberately narrower than the endpoint's own `audit_log` key: this page reads the log unfiltered, so offering it to an `audit_log`-only holder would show a menu entry that answers 403. Those holders reach the log through the per-entity Audit tabs instead.
+
+Three filter defects, all of the same shape — the page naming things the API does not accept — were fixed together, and all three had always been broken:
+
+| Filter | What the page sent | What the API accepts |
+|---|---|---|
+| Action | `CREATED`, `UPDATED`, `DELETED`, `STATUS_CHANGED` | `CREATE`, `UPDATE`, `DELETE` |
+| Date range | `dateFrom` / `dateTo` as `YYYY-MM-DD` | `startDate` / `endDate` as ISO datetimes |
+| Entity type | a hardcoded list of 6 | any of the 27 types the API writes |
+
+The query schema is `.strict()`, so the first two answered 400 rather than filtering. The action badge colours were keyed on the same wrong strings, so no badge was ever coloured. Actions now come from `AUDIT_ACTIONS` in shared, which the query schema reads too; entity types come from the endpoint above; and the date bounds are built from local midnight to local end-of-day, so a picked calendar day means the user's day and the `lte` end bound includes it.
 
 - Searchable, filterable table of all audit entries
 - Filters: entity type (dropdown of all entity types), action (CREATE/UPDATE/DELETE), actor (user dropdown), date range picker

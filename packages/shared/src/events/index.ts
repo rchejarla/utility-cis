@@ -50,6 +50,9 @@ export const EVENT_TYPES = {
   CONTACT_CREATED: "contact.created",
   CONTACT_UPDATED: "contact.updated",
   CONTACT_DELETED: "contact.deleted",
+  // (AUDIT_ACTIONS, below, is the matching list of what lands in
+  // audit_log.action — kept here beside the event types it is derived
+  // from.)
   // A bill document is audited only once its bytes are stored: a claimed
   // row is not a document. `revised` rather than `updated` because the
   // first store IS the creation even though the SQL is an UPDATE, so the
@@ -62,3 +65,22 @@ export const EVENT_TYPES = {
 } as const;
 
 export type EventType = (typeof EVENT_TYPES)[keyof typeof EVENT_TYPES];
+
+/**
+ * What `audit_log.action` can hold — the `AuditAction` enum, mirrored
+ * here so the API's query schema and the UI's filter read the same
+ * list.
+ *
+ * They did not. The audit log page offered "CREATED", "UPDATED",
+ * "DELETED" and "STATUS_CHANGED"; the column has only ever held the
+ * three below, and the query schema is `.strict()`, so choosing any of
+ * them sent an invalid value and got a 400. The page's action colours
+ * were keyed on the same wrong strings, so no badge was ever coloured.
+ *
+ * `mapEventTypeToAction` in `audit-wrap.ts` derives these from the
+ * event-type suffix: `.created` → CREATE, `.deleted` → DELETE, and
+ * anything else (including `.revised`) → UPDATE.
+ */
+export const AUDIT_ACTIONS = ["CREATE", "UPDATE", "DELETE"] as const;
+
+export type AuditActionValue = (typeof AUDIT_ACTIONS)[number];

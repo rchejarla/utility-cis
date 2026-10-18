@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { paginationArgs, paginatedResponse } from "../lib/pagination.js";
 import { getUserRole } from "../services/rbac.service.js";
+import { AUDIT_ACTIONS } from "@utility-cis/shared";
 
 /**
  * The key that authorizes reading the whole log rather than one
@@ -25,13 +26,45 @@ const auditQuerySchema = z.object({
   order: z.enum(["asc", "desc"]).default("desc"),
   entityType: z.string().max(64).optional(),
   entityId: z.string().uuid().optional(),
-  action: z.enum(["CREATE", "UPDATE", "DELETE"]).optional(),
+  action: z.enum(AUDIT_ACTIONS).optional(),
   actorId: z.string().uuid().optional(),
   startDate: z.string().datetime().optional(),
   endDate: z.string().datetime().optional(),
 }).strict();
 
 export async function auditLogRoutes(app: FastifyInstance) {
+  /*
+   * The entity types this tenant's log actually contains.
+   *
+   * The audit log page's Entity Type filter was a hardcoded list of
+   * six — Premise, Meter, Account, ServiceAgreement, RateSchedule,
+   * BillingCycle — while the API writes 27 distinct types, so most of
+   * the log could not be filtered for at all. Serving the distinct
+   * values is what keeps the filter from drifting again as entities are
+   * added.
+   *
+   * Gated on `audit_log` rather than the `settings` key the unfiltered
+   * read requires: this returns type names, not log contents, and
+   * anyone who can read one entity's history already knows its type
+   * exists.
+   */
+  app.get(
+    "/api/v1/audit-log/entity-types",
+    { config: { module: "audit_log", permission: "VIEW" } },
+    async (request, reply) => {
+      const { utilityId } = request.user;
+
+      const rows = await prisma.auditLog.findMany({
+        where: { utilityId },
+        distinct: ["entityType"],
+        select: { entityType: true },
+        orderBy: { entityType: "asc" },
+      });
+
+      return reply.send({ data: rows.map((row) => row.entityType) });
+    },
+  );
+
   app.get("/api/v1/audit-log", { config: { module: "audit_log", permission: "VIEW" } }, async (request, reply) => {
     const { utilityId } = request.user;
     const query = auditQuerySchema.parse(request.query);
