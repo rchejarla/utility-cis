@@ -241,6 +241,8 @@ export function DataTable<T extends Record<string, unknown>>({
                       color: "var(--text-muted)",
                       borderBottom: "1px solid var(--border)",
                       whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
                     }}
                   >
                     {col.header}
@@ -320,6 +322,25 @@ export function DataTable<T extends Record<string, unknown>>({
                           borderBottom: "1px solid var(--border-subtle)",
                           whiteSpace: col.wrap ? "normal" : "nowrap",
                           wordBreak: col.wrap ? "break-word" : "normal",
+                          /*
+                           * `nowrap` alone is what let content escape the
+                           * table. The table is `table-layout: fixed` at
+                           * width 100%, so a column never widens to fit
+                           * its content and the parent's `overflowX` never
+                           * engages — an over-long cell simply painted
+                           * past its own edge, over the next column or out
+                           * of the table entirely. The audit log's Actor
+                           * column showed it first: it is last, so it
+                           * spilled into open space, and it renders a
+                           * 36-character actor uuid whenever the JWT
+                           * carried no `name` claim.
+                           *
+                           * Clipping belongs here rather than in any one
+                           * column, because every non-wrapping column in
+                           * every table had the same exposure.
+                           */
+                          overflow: col.wrap ? "visible" : "hidden",
+                          textOverflow: col.wrap ? "clip" : "ellipsis",
                         }}
                       >
                         {col.render
