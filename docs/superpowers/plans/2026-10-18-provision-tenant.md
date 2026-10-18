@@ -108,7 +108,27 @@ export interface ProvisionTenantInput {
   firstAdmin?: { email: string; name: string };
   /** Named set of reference configuration. Q4 is otherwise unanswered. */
   profile?: "minimal";
+  /**
+   * Do everything, report it, write nothing. Implemented by rolling the
+   * transaction back at the end rather than by a second code path that
+   * predicts the outcome — a dry run that never reaches the constraints
+   * cannot tell you about the collision that will stop the real one.
+   */
+  dryRun?: boolean;
 }
+
+export interface UtilitySummary {
+  id: string;
+  name: string;
+  status: "ACTIVE" | "SUSPENDED";
+  createdAt: Date;
+  moduleCount: number;
+  roleCount: number;
+  userCount: number;
+}
+
+/** D6 responsibility 6. Needs no platform actor: one table, read-only. */
+export async function listUtilities(): Promise<UtilitySummary[]>;
 
 export interface ProvisionTenantResult {
   utilityId: string;
@@ -185,6 +205,39 @@ it("reports an existing admin rather than failing on the unique index", async ()
   expect(await prisma.cisUser.count({ where: { utilityId: NEW_TENANT } })).toBe(1);
 });
 
+it("writes nothing on a dry run, but reports what it would do", async () => {
+  const planned = await provisionTenant({
+    utilityId: NEW_TENANT, name: "City of Example",
+    firstAdmin: { email: "admin@example.gov", name: "Pat Admin" },
+    dryRun: true,
+  });
+  expect(planned).toMatchObject({ created: true, rolesCreated: 6, adminCreated: true });
+  expect(planned.modulesEnabled).toBe(MODULES.length);
+  // Nothing persisted — the row the result claims to have created is absent.
+  expect(await prisma.utility.findUnique({ where: { id: NEW_TENANT } })).toBeNull();
+  expect(await prisma.role.count({ where: { utilityId: NEW_TENANT } })).toBe(0);
+});
+
+it("reports a dry run against an existing tenant as the no-op it would be", async () => {
+  await provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
+  const planned = await provisionTenant({
+    utilityId: NEW_TENANT, name: "City of Example", dryRun: true,
+  });
+  expect(planned).toMatchObject({ created: false, modulesEnabled: 0, rolesCreated: 0 });
+});
+
+it("lists every utility with what it holds", async () => {
+  await provisionTenant({ utilityId: NEW_TENANT, name: "City of Example",
+    firstAdmin: { email: "admin@example.gov", name: "Pat Admin" } });
+
+  const all = await listUtilities();
+  const mine = all.find((u) => u.id === NEW_TENANT)!;
+  expect(mine).toMatchObject({
+    name: "City of Example", status: "ACTIVE",
+    moduleCount: MODULES.length, roleCount: 6, userCount: 1,
+  });
+});
+
 it("enables only modules the code still has", async () => {   // Review Focus 3
   await provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
   const keys = (await prisma.utilityModule.findMany({
@@ -208,6 +261,8 @@ Everything inside one `prisma.$transaction`. Shape:
 - Roles: for each of `PRESET_ROLES`, create when absent by `(utilityId, name)`. Never update an existing role's permissions: a tenant may have edited them, and re-provisioning must not quietly revert that.
 - First admin, when given: find by `(utilityId, email)`; if present, `adminCreated: false` and leave it alone. Otherwise create the `CisUser` and one `UserRole` with `accountId: null` pointing at the System Admin role created above.
 - `profile` accepts only `"minimal"` in v1, which adds nothing beyond the above. Q4 — who chooses a profile and where the list lives — is unanswered in the spec, so this parameter exists to keep the signature stable when it is answered, and the function must reject any other value rather than ignore it.
+- `dryRun` runs the identical body and then throws a module-private sentinel to roll the transaction back, catching it outside and returning the result it had assembled. Do not branch the logic on `dryRun`: the point is that a dry run meets the same constraints the real run will, so a name mismatch or a role collision surfaces before anyone commits to it.
+- `listUtilities()` returns every utility with its module, role and user counts, ordered by name. Deliberately unscoped by tenant — it is the one read whose whole purpose is to cross tenants, which is why D6 lists it and why the platform actor at step 5 will be its eventual caller. It takes no arguments and writes nothing.
 
 - [ ] **Step 4: Run to verify they pass**
 
@@ -231,13 +286,27 @@ git commit -m "feat(tenancy): provisionTenant — a tenant can be created withou
 
 **Interfaces:**
 - Consumes: `provisionTenant` (Task 2).
-- Produces: `npx tsx scripts/provision-tenant.ts --utility-id <uuid> --name <name> [--admin-email <email> --admin-name <name>]`, exit 0 on success, exit 1 with the error's message on failure.
+- Produces, exit 0 on success and exit 1 with the error's message on failure:
+
+```
+npx tsx scripts/provision-tenant.ts --utility-id <uuid> --name <name>
+                                    [--admin-email <email> --admin-name <name>]
+                                    [--dry-run]
+npx tsx scripts/provision-tenant.ts --list
+```
+
+The script is the whole operator interface at this step: D1 says no UI, and
+the build order puts a console at step 6 "only if operating the above
+through scripts proves genuinely insufficient." `--dry-run` and `--list`
+are what make that true rather than merely asserted — seeing what exists,
+and seeing what a run would change before it changes it, are the two things
+an operator would otherwise open a console for.
 
 - [ ] **Step 1: Write the script**
 
 Argument parsing with `node:util`'s `parseArgs`; no new dependency. It prints the `ProvisionTenantResult` fields as one line each so a reader can see what a re-run actually did. No test of its own: the function it calls is covered by Task 2, and a test of `parseArgs` would be a test of Node.
 
-- [ ] **Step 2: Verify it provisions a fresh tenant**
+- [ ] **Step 2: Verify the three modes against the dev database**
 
 Run, against the dev database:
 
@@ -245,7 +314,13 @@ Run, against the dev database:
 npx tsx scripts/provision-tenant.ts --utility-id 00000000-0000-4000-8000-0000000000f1 --name "Test City"
 ```
 
-Expected: `created: true`, `rolesCreated: 6`, `modulesEnabled: 32`. Run it a second time: `created: false`, both counts 0. Then remove it:
+Expected: `created: true`, `rolesCreated: 6`, `modulesEnabled: 32`. Run it a second time: `created: false`, both counts 0.
+
+Then `--dry-run` against a fresh id: it must report `created: true` with
+full counts, and `--list` must then **not** show that id. And `--list`
+alone must show the dev tenant with `32 modules, 6 roles, 7 users`.
+
+Then remove the test tenant:
 `docker exec utility-cis-db-1 psql -U cis -d utility_cis -c "DELETE FROM user_role WHERE utility_id='...f1'; DELETE FROM role WHERE utility_id='...f1'; DELETE FROM cis_user WHERE utility_id='...f1'; DELETE FROM utility_module WHERE utility_id='...f1'; DELETE FROM utility WHERE id='...f1';"`
 
 - [ ] **Step 3: Make `seed.js` delegate**
