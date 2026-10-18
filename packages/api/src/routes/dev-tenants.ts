@@ -53,9 +53,14 @@ export async function devTenantRoutes(app: FastifyInstance) {
     return;
   }
 
+  // Both routes take `settings:EDIT`, including the read. The Utility
+  // Admin preset holds `settings: ["VIEW"]` — the single permission
+  // separating it from System Admin — so gating the list on VIEW would
+  // let any tenant's own admin enumerate every other tenant's name, id
+  // and counts, which is the borrowing the fence exists to prevent.
   app.get(
     "/api/v1/dev/tenants",
-    { config: { module: "settings", permission: "VIEW" } },
+    { config: { module: "settings", permission: "EDIT" } },
     async (_request, reply) => {
       return reply.send({ data: await listUtilities() });
     },

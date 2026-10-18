@@ -90,6 +90,45 @@ describe("provisionTenant", () => {
   });
 
   /**
+   * Existence is keyed on the id, so nothing stopped two calls that each
+   * generated their own id from producing two tenants with one name — and
+   * neither the page nor `--name` without `--utility-id` supplies an id.
+   * The operator who clicks Create twice means one tenant, and gets two
+   * rows distinguishable only by a uuid in a tooltip.
+   *
+   * Refused rather than adopted: returning the existing tenant would
+   * report success for a tenant this call did not create, and the caller
+   * who did mean to re-provision has `--utility-id` for it.
+   */
+  it("refuses a name another utility already holds", async () => {
+    const { prisma } = prismaImports;
+    await svc.provisionTenant({ utilityId: OTHER, name: "City of Example" });
+
+    await expect(
+      svc.provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" }),
+    ).rejects.toMatchObject({ code: "UTILITY_NAME_TAKEN" });
+
+    // The refusal precedes every write, so the second id does not exist.
+    expect(await prisma.utility.findUnique({ where: { id: NEW_TENANT } })).toBeNull();
+  });
+
+  it("compares the name case-insensitively — two casings are one tenant to a reader", async () => {
+    await svc.provisionTenant({ utilityId: OTHER, name: "City of Example" });
+
+    await expect(
+      svc.provisionTenant({ utilityId: NEW_TENANT, name: "CITY OF EXAMPLE" }),
+    ).rejects.toMatchObject({ code: "UTILITY_NAME_TAKEN" });
+  });
+
+  it("still re-provisions the tenant that holds the name, by id", async () => {
+    await svc.provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
+
+    // The name check must exempt its own holder, or every reseed breaks.
+    const second = await svc.provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
+    expect(second).toMatchObject({ created: false, rolesCreated: 0 });
+  });
+
+  /**
    * A utility row with no roles reads as a provisioned tenant to every
    * existence check and cannot administer itself. One transaction, or
    * nothing.
@@ -137,6 +176,42 @@ describe("provisionTenant", () => {
       include: { role: { select: { name: true } } },
     });
     expect(assignment.role.name).toBe("System Admin");
+  });
+
+  /**
+   * `auth.ts` looks a user up by `email.toLowerCase()`. An admin stored
+   * with a capital letter is therefore an admin who cannot log in — and
+   * it is the only account the new tenant has.
+   */
+  it("stores the first admin's email lowercased, so login can find it", async () => {
+    const { prisma } = prismaImports;
+
+    await svc.provisionTenant({
+      utilityId: NEW_TENANT,
+      name: "City of Example",
+      firstAdmin: { email: "Ops@CityOfExample.gov", name: "Pat Admin" },
+    });
+
+    const user = await prisma.cisUser.findFirstOrThrow({ where: { utilityId: NEW_TENANT } });
+    expect(user.email).toBe("ops@cityofexample.gov");
+  });
+
+  it("treats a case variant of the admin email as the same admin", async () => {
+    const { prisma } = prismaImports;
+
+    await svc.provisionTenant({
+      utilityId: NEW_TENANT,
+      name: "City of Example",
+      firstAdmin: { email: "ops@example.gov", name: "Pat Admin" },
+    });
+    const again = await svc.provisionTenant({
+      utilityId: NEW_TENANT,
+      name: "City of Example",
+      firstAdmin: { email: "OPS@EXAMPLE.GOV", name: "Pat Admin" },
+    });
+
+    expect(again.adminCreated).toBe(false);
+    expect(await prisma.cisUser.count({ where: { utilityId: NEW_TENANT } })).toBe(1);
   });
 
   it("reports an existing admin rather than failing on the unique index", async () => {

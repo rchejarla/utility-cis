@@ -56,12 +56,12 @@ function grant(prisma: any, permissions: Record<string, string[]>) {
  * different object from the one the routes call. Both come back from
  * here for that reason.
  */
-async function appWithFence(open: boolean) {
+async function appWithFence(open: boolean, permissions?: Record<string, string[]>) {
   vi.resetModules();
   vi.stubEnv("ENABLE_DEV_AUTH_ENDPOINTS", open ? "true" : "");
   const { prisma } = await import("../../lib/prisma.js");
   const { buildApp } = await import("../../app.js");
-  grant(prisma, { settings: ["VIEW", "CREATE", "EDIT", "DELETE"] });
+  grant(prisma, permissions ?? { settings: ["VIEW", "CREATE", "EDIT", "DELETE"] });
   return { app: await buildApp(), prisma };
 }
 
@@ -123,6 +123,48 @@ describe("/api/v1/dev/tenants with the fence open", () => {
     });
 
     expect(res.statusCode).toBe(400);
+  });
+
+  /**
+   * Both routes require `settings:EDIT`, not VIEW. The Utility Admin
+   * preset holds `settings: ["VIEW"]` — the one permission separating it
+   * from System Admin — so a read gated on VIEW would let any tenant's
+   * own admin enumerate every other tenant's name, id and counts. That is
+   * the borrowing §1.6 flags, arriving through the route the fence was
+   * written to keep it out of.
+   */
+  it("refuses a tenant admin holding settings VIEW only", async () => {
+    const { app } = await appWithFence(true, { settings: ["VIEW"] });
+    const res = await app.inject({ method: "GET", url: "/api/v1/dev/tenants", headers });
+
+    expect(res.statusCode).toBe(403);
+  });
+
+  /**
+   * The refusal carries the only explanation there is — both names, so
+   * the operator can see which one was the typo. Without a `statusCode`
+   * on the error, the handler's final branch answers 500 and replaces the
+   * message with "An internal server error occurred".
+   */
+  it("surfaces a refusal as 409 carrying its code and message", async () => {
+    const { app, prisma } = await appWithFence(true);
+    const utilityId = "00000000-0000-4000-8000-0000000000aa";
+    (prisma.utility.findUnique as never as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: utilityId,
+      name: "City of Example",
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/tenants",
+      headers,
+      payload: { utilityId, name: "Typo City" },
+    });
+
+    expect(res.statusCode).toBe(409);
+    const body = JSON.parse(res.body);
+    expect(body.error.code).toBe("UTILITY_NAME_MISMATCH");
+    expect(body.error.message).toContain("City of Example");
   });
 
   it("refuses a field the schema does not name", async () => {

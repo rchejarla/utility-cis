@@ -12,10 +12,18 @@ async function main() {
   // so they must be cleared before those parents can be deleted. The
   // original seed script predates Phase 2 and skipped them, which now
   // blocks reseeding any DB that has accumulated operational data.
-  if (p.userRole) await p.userRole.deleteMany({});
-  await p.cisUser.deleteMany({});
-  await p.role.deleteMany({});
-  await p.utilityModule.deleteMany({});
+  // Scoped to the dev tenant, unlike the clear-down below it. These four
+  // are exactly what provisionTenant creates, and since 2026-10-18 a
+  // second tenant can exist — provisioned at /dev/tenants or by the
+  // script. Unscoped, a reseed left every other tenant a utility row with
+  // no modules, roles or users: a tenant that exists, answers 403
+  // MODULE_DISABLED on every gated route, and cannot administer itself.
+  // That is the half-provisioned tenant the one-transaction rule exists
+  // to prevent, arrived at through the seed instead of a crash.
+  if (p.userRole) await p.userRole.deleteMany({ where: { utilityId: UID } });
+  await p.cisUser.deleteMany({ where: { utilityId: UID } });
+  await p.role.deleteMany({ where: { utilityId: UID } });
+  await p.utilityModule.deleteMany({ where: { utilityId: UID } });
 
   // Phase 2 operational entities — delete first.
   if (p.serviceSuspension) await p.serviceSuspension.deleteMany({});

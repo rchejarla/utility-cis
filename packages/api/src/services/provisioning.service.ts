@@ -66,9 +66,20 @@ export interface UtilitySummary {
   userCount: number;
 }
 
+/**
+ * A refusal, not a fault.
+ *
+ * `statusCode` is load-bearing: `middleware/error-handler.ts` reads
+ * `statusCode` and `code` off the error and sends the message through,
+ * and without a status code falls to its final branch — 500, logged as an
+ * unexpected failure, message replaced with "An internal server error
+ * occurred". The explanation is the whole point of refusing rather than
+ * renaming, so losing it loses the feature.
+ */
 class ProvisioningError extends Error {
   constructor(
-    readonly code: "UTILITY_NAME_MISMATCH" | "UNKNOWN_PROFILE",
+    readonly code: "UTILITY_NAME_MISMATCH" | "UTILITY_NAME_TAKEN" | "UNKNOWN_PROFILE",
+    readonly statusCode: number,
     message: string,
   ) {
     super(message);
@@ -88,7 +99,7 @@ export async function provisionTenant(
 ): Promise<ProvisionTenantResult> {
   const profile = input.profile ?? "minimal";
   if (!PROFILES.includes(profile)) {
-    throw new ProvisioningError("UNKNOWN_PROFILE", `Unknown profile "${profile}"`);
+    throw new ProvisioningError("UNKNOWN_PROFILE", 400, `Unknown profile "${profile}"`);
   }
 
   try {
@@ -100,12 +111,35 @@ export async function provisionTenant(
         // re-provisioning, a typo in a script would rename a live tenant.
         throw new ProvisioningError(
           "UTILITY_NAME_MISMATCH",
+          409,
           `Utility ${input.utilityId} is named "${existing.name}", not "${input.name}". ` +
             `Renaming is not part of provisioning.`,
         );
       }
 
       if (!existing) {
+        // Existence is keyed on the id, and a caller that supplies no id
+        // gets a fresh one — so without this, clicking Create twice makes
+        // two tenants with one name, told apart only by a uuid. Refused
+        // rather than adopted: handing back the tenant someone else
+        // created would report success for work this call did not do, and
+        // a caller who means to re-provision names the id.
+        //
+        // Case-insensitively, because two casings of one name are one
+        // tenant to everybody reading the list.
+        const nameHolder = await tx.utility.findFirst({
+          where: { name: { equals: input.name, mode: "insensitive" } },
+          select: { id: true, name: true },
+        });
+        if (nameHolder) {
+          throw new ProvisioningError(
+            "UTILITY_NAME_TAKEN",
+            409,
+            `Utility ${nameHolder.id} is already named "${nameHolder.name}". ` +
+              `Provision a different name, or pass that id to re-provision it.`,
+          );
+        }
+
         await tx.utility.create({ data: { id: input.utilityId, name: input.name } });
       }
 
@@ -162,15 +196,22 @@ export async function provisionTenant(
 
       let adminCreated = false;
       if (input.firstAdmin) {
+        // Lowercased because `routes/auth.ts` looks a user up by
+        // `email.toLowerCase()`: an admin stored as `Ops@City.gov` is an
+        // admin who cannot log in, and it is the only account the new
+        // tenant has. It also makes this existence check — and
+        // `@@unique([utilityId, email])` behind it — agree about what the
+        // same address is, instead of admitting one user per casing.
+        const email = input.firstAdmin.email.trim().toLowerCase();
         const already = await tx.cisUser.findFirst({
-          where: { utilityId: input.utilityId, email: input.firstAdmin.email },
+          where: { utilityId: input.utilityId, email },
           select: { id: true },
         });
         if (!already) {
           const user = await tx.cisUser.create({
             data: {
               utilityId: input.utilityId,
-              email: input.firstAdmin.email,
+              email,
               name: input.firstAdmin.name,
               isActive: true,
             },

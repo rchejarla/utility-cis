@@ -90,10 +90,12 @@ Single overarching architecture and data model reference for the entire system (
 - `stop_db.bat` — Stop containers (data preserved)
 - `migrate_db.bat` — Apply pending Prisma migrations to the dev DB (forward-only; some add enum values PostgreSQL cannot remove)
 - `seed_db.bat` — Seed test data
-- `node seed.js` — Alternative seed (no tsx needed)
+- `node seed.js` — Alternative seed (CommonJS, so no `tsx` to run it — but it shells out to `scripts/provision-tenant.ts` for the tenant, and resolves `tsx` from the pnpm store, so a non-pnpm install fails here)
 - `start_prod.bat` — Build + run in production mode
 - `npx tsx scripts/provision-tenant.ts --list` — list tenants with their module, role and user counts
-- `npx tsx scripts/provision-tenant.ts --name "<name>" [--dry-run]` — create a tenant: utility row, all 32 modules, the six preset roles, optionally a first admin (`--admin-email`, `--admin-name`). Idempotent — a re-run reports zeros rather than duplicating. `--dry-run` does everything and writes nothing, so a name clash or a rename is refused before you commit to it. On Windows `tsx` resolves at `node_modules/.pnpm/node_modules/.bin/tsx.cmd`.
+- `npx tsx scripts/provision-tenant.ts --name "<name>" [--dry-run]` — create a tenant: utility row, all 32 modules, the six preset roles, optionally a first admin (`--admin-email`, `--admin-name`). On Windows `tsx` resolves at `node_modules/.pnpm/node_modules/.bin/tsx.cmd`.
+
+  **Idempotency is keyed on the id, not the name.** `--utility-id <uuid> --name "<same name>"` re-runs as a no-op reporting zeros, which is what `seed.js` relies on. Without `--utility-id` each run invents one, so the same name twice would be two tenants — refused with `UTILITY_NAME_TAKEN` (409) instead, case-insensitively. A different name for an id that exists is refused too (`UTILITY_NAME_MISMATCH`): renaming is its own operation. `--dry-run` does everything and writes nothing, so both refusals land before you commit to the run.
 
 ### Recreating the database after the 2026-10-18 migration squash
 

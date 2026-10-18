@@ -26,8 +26,11 @@ const USAGE = `
 provision-tenant — create a tenant, or list tenants
 
   --list                   list every utility with its module, role and user counts
-  --name <name>            display name (required unless --list)
-  --utility-id <uuid>      defaults to a fresh uuid
+  --name <name>            display name (required unless --list); refused if
+                           another utility already holds it
+  --utility-id <uuid>      defaults to a fresh uuid. Pass the same id and name
+                           to re-provision a tenant — that is the no-op; a
+                           re-run without an id would be a second tenant
   --admin-email <email>    create a first admin holding System Admin
   --admin-name <name>      required with --admin-email
   --dry-run                do everything, report it, write nothing
