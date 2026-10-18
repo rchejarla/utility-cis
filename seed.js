@@ -78,6 +78,16 @@ async function main() {
 
   console.log("Seeding...");
 
+  // The tenant itself, before anything that carries its id. Upserted
+  // rather than created so a reseed does not have to delete it — once
+  // utility_id is a foreign key, deleting this row would be blocked by
+  // every child table not on the clear-down list above.
+  await p.utility.upsert({
+    where: { id: UID },
+    update: { name: "City of Bozeman" },
+    create: { id: UID, name: "City of Bozeman" },
+  });
+
   const water = await p.commodity.create({ data: { utilityId: UID, code: "WATER", name: "Potable Water", displayOrder: 1 } });
   const electric = await p.commodity.create({ data: { utilityId: UID, code: "ELECTRIC", name: "Electricity", displayOrder: 2 } });
   const gas = await p.commodity.create({ data: { utilityId: UID, code: "GAS", name: "Natural Gas", displayOrder: 3 } });

@@ -254,6 +254,16 @@ export async function makeTenantFixture(
 ): Promise<TenantFixture> {
   const suffix = opts.suffix ?? utilityId.slice(-4);
 
+  // The tenant itself, first: every row below carries its id, and once
+  // the foreign keys land nothing can be written before it exists.
+  // Upsert rather than create — `resetDb` does not truncate `utility`,
+  // so a file calling this per test would collide on the second call.
+  await prisma.utility.upsert({
+    where: { id: utilityId },
+    update: {},
+    create: { id: utilityId, name: `Test Utility ${suffix}` },
+  });
+
   await prisma.utilityConfig.create({ data: { utilityId } });
 
   const commodity = await prisma.commodity.create({

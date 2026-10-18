@@ -11,6 +11,37 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ─── The tenant ───────────────────────────────────────────────────────────────
+
+/// A utility is a tenant. Every other table carries its id as
+/// `utility_id`; this is the row that id refers to.
+///
+/// Before this existed, a tenant was an uncontrolled UUID with no name,
+/// no status and no foreign key — a typo was indistinguishable from a
+/// new tenant, and tenants could only be listed by SELECT DISTINCT over
+/// an arbitrary table. See docs/superpowers/specs/
+/// 2026-10-17-tenancy-and-platform-admin-design.md, decision D6.
+///
+/// "Tenant" survives only as the name of the isolation mechanism —
+/// `app.current_utility_id`, `withTenant()`, the `tenant_isolation`
+/// policies. The thing itself is a Utility.
+model Utility {
+  id        String        @id @default(uuid()) @db.Uuid
+  name      String        @db.VarChar(255)
+  status    UtilityStatus @default(ACTIVE)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("utility")
+}
+
+enum UtilityStatus {
+  ACTIVE
+  SUSPENDED
+
+  @@map("utility_status")
+}
+
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
 enum PremiseStatus {

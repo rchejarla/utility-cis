@@ -22,6 +22,16 @@ async function main() {
   // Bypass RLS for seeding
   await prisma.$executeRawUnsafe(`SET app.current_utility_id = '${UTILITY_ID}'`);
 
+  // The tenant itself, before anything that carries its id. Six
+  // integration files run this seed through execSync, so once
+  // utility_id is a foreign key this row has to exist first or every
+  // one of them fails in beforeAll.
+  await prisma.utility.upsert({
+    where: { id: UTILITY_ID },
+    update: { name: "City of Bozeman" },
+    create: { id: UTILITY_ID, name: "City of Bozeman" },
+  });
+
   // ============ COMMODITIES ============
   const water = await prisma.commodity.upsert({
     where: { utilityId_code: { utilityId: UTILITY_ID, code: "WATER" } },
@@ -817,7 +827,7 @@ async function main() {
   console.log(`  ${containerSpecs.length} containers (created ${containerCount} this run)`);
 
   // ============ TENANT THEME ============
-  await prisma.tenantTheme.upsert({
+  await prisma.utilityTheme.upsert({
     where: { utilityId: UTILITY_ID },
     update: {},
     create: {
