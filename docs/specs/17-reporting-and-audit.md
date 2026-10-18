@@ -16,6 +16,8 @@ Primary users: utility administrators, finance staff, auditors, operations manag
 
 Every entity state change in the CIS system is captured in AuditLog by `packages/api/src/lib/audit-wrap.ts`, which writes the audit row inside the same transaction as the change itself, so the two commit or fail together. No CIS entity is modified without a corresponding audit entry.
 
+That last sentence is an intent, not a guarantee the code enforces: `deleteContact` wrote no audit row at all until it was found during unrelated work, taking an `_actorId` it discarded. Deletion is the case where the audit row is the only surviving evidence, so a write path that skips it loses the record outright. When adding a delete, follow `deleteContact` or `deleteBillMessage`: read the prior state, then delete and `writeAuditRow` in one transaction, with `afterState` null.
+
 | Field | Type | Notes |
 |-------|------|-------|
 | id | UUID | PK |

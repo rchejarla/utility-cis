@@ -97,7 +97,7 @@ All endpoints are live. Customer CRUD is at top-level routes; Contact and Billin
 | GET | `/api/v1/contacts` | List contacts (filter by `accountId`) |
 | POST | `/api/v1/contacts` | Add a contact to an account |
 | PATCH | `/api/v1/contacts/:id` | Update a contact |
-| DELETE | `/api/v1/contacts/:id` | Remove a contact |
+| DELETE | `/api/v1/contacts/:id` | Remove a contact. Hard delete, audited — the `AuditLog` row carries the contact's full prior state in `before_state`, which is the only record of what was removed |
 | GET | `/api/v1/billing-addresses` | List billing addresses (filter by `accountId`) |
 | POST | `/api/v1/billing-addresses` | Add a billing address to an account |
 | PATCH | `/api/v1/billing-addresses/:id` | Update a billing address |

@@ -29,6 +29,8 @@ describe("audit rows carry the actor's name", () => {
   const utilityId = "test-utility-001";
 
   const ACCOUNT_ID = "aa000000-0000-4000-8000-000000000001";
+  // Both routes validate the path id with `z.string().uuid()`.
+  const CONTACT_ID = "bb000000-0000-4000-8000-000000000002";
 
   function grant(permissions: Record<string, string[]>) {
     (prisma.tenantModule.findMany as never as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -80,6 +82,51 @@ describe("audit rows carry the actor's name", () => {
     expect(written.entityType).toBe("Contact");
     expect(written.actorId).toBe("test-user-001");
     expect(written.actorName).toBe("Audit Tester");
+  });
+
+  /**
+   * `deleteContact` took `_actorId` and wrote no audit row at all, so a
+   * contact could be removed with no record of it — the one state
+   * change this table is supposed to make impossible to lose. Deletion
+   * is also the case where the audit row is the only surviving evidence,
+   * since the row it describes is gone.
+   */
+  it("records a Contact deletion, with the actor and the prior state", async () => {
+    const before = {
+      id: CONTACT_ID,
+      utilityId,
+      accountId: ACCOUNT_ID,
+      firstName: "Pat",
+      lastName: "Contact",
+    };
+    (prisma.contact.findFirstOrThrow as never as ReturnType<typeof vi.fn>).mockResolvedValue(before);
+    (prisma.contact.delete as never as ReturnType<typeof vi.fn>).mockResolvedValue(before);
+
+    const app = await createTestApp();
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/contacts/${CONTACT_ID}`,
+      // Authorization only: declaring `content-type: application/json`
+      // on a body-less DELETE makes Fastify answer 400 before the route
+      // is reached.
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(204);
+
+    const written = (prisma.auditLog.create as never as ReturnType<typeof vi.fn>).mock.calls[0][0]
+      .data;
+    expect(written.entityType).toBe("Contact");
+    expect(written.action).toBe("DELETE");
+    expect(written.actorName).toBe("Audit Tester");
+    // The prior state is the only record of what was removed.
+    expect(written.beforeState).toMatchObject({ firstName: "Pat", lastName: "Contact" });
+    // A deleted row is in no state. Not `toBeNull()`: `toJsonInput`
+    // converts null to `Prisma.JsonNull`, a sentinel object, because the
+    // Json column rejects `undefined` — so the assertion is that nothing
+    // of the contact survives here.
+    expect(written.afterState).not.toMatchObject({ firstName: "Pat" });
+    expect(written.afterState).not.toEqual({ id: CONTACT_ID });
   });
 
   /**

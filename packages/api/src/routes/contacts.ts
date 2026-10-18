@@ -37,9 +37,9 @@ export async function contactRoutes(app: FastifyInstance) {
   });
 
   app.delete("/api/v1/contacts/:id", { config: { module: "customers", permission: "DELETE" } }, async (request, reply) => {
-    const { utilityId, id: actorId } = request.user;
+    const { utilityId, id: actorId, name: actorName } = request.user;
     const { id } = idParamSchema.parse(request.params);
-    await deleteContact(utilityId, actorId, id);
+    await deleteContact(utilityId, actorId, actorName, id);
     return reply.status(204).send();
   });
 }

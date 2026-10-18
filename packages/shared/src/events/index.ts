@@ -49,6 +49,7 @@ export const EVENT_TYPES = {
   CUSTOMER_UPDATED: "customer.updated",
   CONTACT_CREATED: "contact.created",
   CONTACT_UPDATED: "contact.updated",
+  CONTACT_DELETED: "contact.deleted",
   // A bill document is audited only once its bytes are stored: a claimed
   // row is not a document. `revised` rather than `updated` because the
   // first store IS the creation even though the SQL is an UPDATE, so the
