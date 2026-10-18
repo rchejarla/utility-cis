@@ -1,4 +1,6 @@
 const { PrismaClient } = require("./packages/shared/src/generated/prisma");
+const { execSync } = require("node:child_process");
+const path = require("node:path");
 const p = new PrismaClient();
 const UID = "00000000-0000-4000-8000-000000000001";
 
@@ -82,11 +84,25 @@ async function main() {
   // rather than created so a reseed does not have to delete it — once
   // utility_id is a foreign key, deleting this row would be blocked by
   // every child table not on the clear-down list above.
-  await p.utility.upsert({
-    where: { id: UID },
-    update: { name: "City of Bozeman" },
-    create: { id: UID, name: "City of Bozeman" },
+  // The tenant, its modules and its preset roles come from
+  // provisionTenant — the one definition of what a tenant starts as.
+  // This file carried its own copy of the roles and module list until
+  // 2026-10-18; the two drifted four modules apart once already, which
+  // is the whole reason that duplicate was deleted.
+  //
+  // Shelled out rather than imported because seed.js is CommonJS and the
+  // service is TypeScript. Six integration files already invoke
+  // prisma/seed.ts this way, so tsx is not a new dependency of seeding.
+  // It is idempotent, so a reseed re-runs it harmlessly.
+  const TSX_BIN = path.join(
+    __dirname, "node_modules", ".pnpm", "node_modules", ".bin",
+    process.platform === "win32" ? "tsx.cmd" : "tsx",
+  );
+  execSync(`"${TSX_BIN}" scripts/provision-tenant.ts --utility-id ${UID} --name "City of Bozeman"`, {
+    cwd: __dirname,
+    stdio: "pipe",
   });
+  console.log("  tenant provisioned (utility, 32 modules, 6 preset roles)");
 
   const water = await p.commodity.create({ data: { utilityId: UID, code: "WATER", name: "Potable Water", displayOrder: 1 } });
   const electric = await p.commodity.create({ data: { utilityId: UID, code: "ELECTRIC", name: "Electricity", displayOrder: 2 } });
@@ -823,123 +839,31 @@ async function main() {
   // A module missing here is enabled for no tenant, so its routes answer
   // 403 MODULE_DISABLED on every seeded database while their own tests
   // pass, because those create the utility_module row themselves.
-  // packages/shared/src/modules/__tests__/constants.test.ts fails if the
-  // two lists drift. seed.js deliberately avoids tsx, so this cannot
-  // import the constant directly.
-  const allModules = [
-    "customers","premises","meters","meter_reads","meter_events",
-    "accounts","payments","ar_adjustments","agreements","commodities","rate_schedules","billing_cycles",
-    "containers","service_suspensions","service_events",
-    "workflows","search",
-    "audit_log","attachments","theme","settings",
-    "tenant_profile","tenant_users",
-    "notifications","delinquency",
-    "service_requests","service_request_slas",
-    "portal_accounts","portal_billing","portal_usage","portal_profile",
-    "imports"
+  // The six preset roles and the 32 module rows used to be declared
+  // here, in a 110-line array that had to be kept in step with
+  // packages/shared/src/modules/constants.ts by hand — and wasn't: the
+  // two drifted four modules apart. provisionTenant above creates both
+  // from PRESET_ROLES, so there is one definition and nothing to sync.
+  //
+  // The five dev-login admin users below stay: they are demo data, not
+  // provisioning. A real tenant gets one admin, named at provisioning
+  // time; these five exist so a developer can switch roles in /dev.
+  // Ordered as PRESET_ROLES declares them, NOT alphabetically: the dev
+  // users below index this array by position — roleArr[5] is Portal
+  // Customer — so an alphabetical sort would silently hand the portal
+  // customers the Utility Admin role.
+  const PRESET_ORDER = [
+    "System Admin", "Utility Admin", "CSR", "Field Technician", "Read-Only", "Portal Customer",
   ];
-  const allPerms = ["VIEW","CREATE","EDIT","DELETE"];
-
-  const roles = [
-    {
-      name: "System Admin",
-      description: "Full access to everything including system settings",
-      permissions: {
-        ...Object.fromEntries(allModules.map(m => [m, allPerms])),
-        service_suspensions: ["VIEW","CREATE","EDIT","DELETE","APPROVE"],
-      },
-      isSystem: true,
-    },
-    {
-      name: "Utility Admin",
-      description: "Full access except system settings modification",
-      permissions: {
-        ...Object.fromEntries(allModules.map(m => [m, allPerms])),
-        service_suspensions: ["VIEW","CREATE","EDIT","DELETE","APPROVE"],
-        settings: ["VIEW"],
-      },
-      isSystem: true,
-    },
-    {
-      name: "CSR",
-      description: "Customer service operations",
-      permissions: {
-        customers: ["VIEW","CREATE","EDIT"], premises: ["VIEW","CREATE","EDIT"],
-        meters: ["VIEW"], meter_reads: ["VIEW","CREATE"],
-        accounts: ["VIEW","CREATE","EDIT"],
-        // A CSR is who takes a payment at the counter and reverses an NSF.
-        //
-        // This array is the only definition of the preset roles. A second
-        // one lived in packages/shared as `PRESET_ROLES`, had no consumer,
-        // and had drifted four modules apart from this one (its Read-Only
-        // omitted workflows, notifications, delinquency and imports). It
-        // was deleted rather than reconciled, because nothing read it and
-        // it still read as authoritative.
-        payments: ["VIEW","CREATE","EDIT"],
-        // Raising a charge and forgiving one are different authority
-        // (design §8); a CSR does both at the counter.
-        ar_adjustments: ["VIEW","CREATE","EDIT"],
-        agreements: ["VIEW","CREATE","EDIT"], commodities: ["VIEW"],
-        rate_schedules: ["VIEW"], billing_cycles: ["VIEW"],
-        containers: ["VIEW","CREATE","EDIT"],
-        service_suspensions: ["VIEW","CREATE","EDIT"],
-        service_requests: ["VIEW","CREATE","EDIT"],
-        workflows: ["VIEW","CREATE"],
-        search: ["VIEW"],
-        audit_log: ["VIEW"], attachments: ["VIEW","CREATE","EDIT"],
-      },
-      isSystem: true,
-    },
-    {
-      name: "Field Technician",
-      description: "Meter and premise field operations",
-      permissions: {
-        customers: ["VIEW"], premises: ["VIEW","EDIT"],
-        meters: ["VIEW","EDIT"],
-        meter_reads: ["VIEW","CREATE","EDIT"],
-        meter_events: ["VIEW","CREATE","EDIT"],
-        accounts: ["VIEW"],
-        agreements: ["VIEW"], commodities: ["VIEW"],
-        containers: ["VIEW","EDIT"],
-        service_requests: ["VIEW","EDIT"],
-        workflows: ["VIEW"],
-        search: ["VIEW"],
-        audit_log: ["VIEW"], attachments: ["VIEW","CREATE","EDIT"],
-      },
-      isSystem: true,
-    },
-    {
-      name: "Read-Only",
-      description: "View access to all operational data",
-      permissions: Object.fromEntries(
-        allModules.filter(m => m !== "settings" && m !== "theme" && !m.startsWith("portal_")).map(m => [m, ["VIEW"]])
-      ),
-      isSystem: true,
-    },
-    {
-      name: "Portal Customer",
-      description: "Self-service portal — view own accounts, bills, usage; edit profile",
-      permissions: {
-        portal_accounts: ["VIEW"],
-        portal_billing: ["VIEW"],
-        portal_usage: ["VIEW"],
-        portal_profile: ["VIEW","EDIT"],
-      },
-      isSystem: true,
-    },
-  ];
-
-  const roleArr = [];
-  for (const r of roles) {
-    roleArr.push(await p.role.create({ data: { utilityId: UID, ...r } }));
+  const rolesByName = new Map(
+    (await p.role.findMany({ where: { utilityId: UID } })).map((r) => [r.name, r]),
+  );
+  const roleArr = PRESET_ORDER.map((n) => rolesByName.get(n));
+  if (roleArr.some((r) => !r)) {
+    throw new Error("provisionTenant did not create the expected preset roles");
   }
-  console.log("  " + roleArr.length + " preset roles");
+  console.log("  " + roleArr.length + " preset roles (from provisionTenant)");
 
-  const moduleKeys = allModules;
-  for (const mk of moduleKeys) {
-    await p.utilityModule.create({ data: { utilityId: UID, moduleKey: mk, isEnabled: true } });
-  }
-  console.log("  " + moduleKeys.length + " tenant modules");
 
   // Seed global suspension (hold) type codes.
   const suspensionTypes = [

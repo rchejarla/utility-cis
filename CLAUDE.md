@@ -92,6 +92,8 @@ Single overarching architecture and data model reference for the entire system (
 - `seed_db.bat` — Seed test data
 - `node seed.js` — Alternative seed (no tsx needed)
 - `start_prod.bat` — Build + run in production mode
+- `npx tsx scripts/provision-tenant.ts --list` — list tenants with their module, role and user counts
+- `npx tsx scripts/provision-tenant.ts --name "<name>" [--dry-run]` — create a tenant: utility row, all 32 modules, the six preset roles, optionally a first admin (`--admin-email`, `--admin-name`). Idempotent — a re-run reports zeros rather than duplicating. `--dry-run` does everything and writes nothing, so a name clash or a rename is refused before you commit to it. On Windows `tsx` resolves at `node_modules/.pnpm/node_modules/.bin/tsx.cmd`.
 
 ### Recreating the database after the 2026-10-18 migration squash
 
