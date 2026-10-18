@@ -37,6 +37,31 @@ interface NotificationProvider {
 
 // ─── Template variable resolution ────────────────────────────────
 
+/**
+ * Every id in `context` is caller-supplied — `POST /notifications/send`
+ * takes `recipientId` and a free-form `context` map straight from the
+ * request body — so each lookup carries `utilityId` and a row belonging
+ * to another tenant is simply not found.
+ *
+ * This function took `utilityId` from the start and spent it on one
+ * query (`tenantConfig`, below) while the five entity lookups read by
+ * primary key alone. The tenant argument read as scoping and scoped
+ * nothing, which is how a customer's name, email, phone, account number,
+ * premise address and meter number could be rendered into one tenant's
+ * notification from another tenant's rows — and persisted in
+ * `resolved_variables` under the caller's `utility_id`.
+ *
+ * A not-found row leaves its variables unset and the message renders
+ * with blanks, which is the behaviour a deleted id already had. The only
+ * change here is that another tenant's row now counts as not found.
+ *
+ * `findFirst` rather than `findUnique` is a readability choice, not a
+ * requirement: since Prisma 5 a `findUnique` may carry non-unique
+ * predicates alongside the unique one, and `posting.service.ts:167`
+ * does exactly that. `findFirst` is used here because the lookup is a
+ * filtered read that may legitimately miss, and naming it that way makes
+ * the tenant predicate load-bearing rather than incidental.
+ */
 async function resolveVariables(
   utilityId: string,
   context: Record<string, string>,
@@ -44,8 +69,8 @@ async function resolveVariables(
   const vars: Record<string, string> = {};
 
   if (context.customerId) {
-    const c = await prisma.customer.findUnique({
-      where: { id: context.customerId },
+    const c = await prisma.customer.findFirst({
+      where: { id: context.customerId, utilityId },
       select: {
         firstName: true,
         lastName: true,
@@ -66,8 +91,8 @@ async function resolveVariables(
   }
 
   if (context.accountId) {
-    const a = await prisma.account.findUnique({
-      where: { id: context.accountId },
+    const a = await prisma.account.findFirst({
+      where: { id: context.accountId, utilityId },
       select: { accountNumber: true, accountType: true, status: true },
     });
     if (a) {
@@ -78,8 +103,8 @@ async function resolveVariables(
   }
 
   if (context.premiseId) {
-    const p = await prisma.premise.findUnique({
-      where: { id: context.premiseId },
+    const p = await prisma.premise.findFirst({
+      where: { id: context.premiseId, utilityId },
       select: {
         addressLine1: true,
         addressLine2: true,
@@ -98,8 +123,8 @@ async function resolveVariables(
   }
 
   if (context.agreementId) {
-    const sa = await prisma.serviceAgreement.findUnique({
-      where: { id: context.agreementId },
+    const sa = await prisma.serviceAgreement.findFirst({
+      where: { id: context.agreementId, utilityId },
       select: {
         agreementNumber: true,
         status: true,
@@ -116,8 +141,8 @@ async function resolveVariables(
   }
 
   if (context.meterId) {
-    const m = await prisma.meter.findUnique({
-      where: { id: context.meterId },
+    const m = await prisma.meter.findFirst({
+      where: { id: context.meterId, utilityId },
       select: {
         meterNumber: true,
         meterType: true,
@@ -226,9 +251,22 @@ export async function sendNotification(
   let recipientEmail = input.recipientOverride?.email ?? null;
   let recipientPhone = input.recipientOverride?.phone ?? null;
 
+  /*
+   * The query that decides where the message goes, so the tenant
+   * predicate matters most here: unscoped, naming another tenant's
+   * customer id addressed the notification to that customer. Scoped, the
+   * lookup misses, no address resolves, and the two guards below refuse
+   * the send — `POST /notifications/send` answers 400 rather than
+   * mailing a stranger.
+   *
+   * `recipientOverride` deliberately skips this: it is server-supplied
+   * (the import notifier passes the actor's own address) and
+   * `manualSendSchema` is `.strict()` with no such field, so a request
+   * cannot name its own destination.
+   */
   if (!recipientEmail && !recipientPhone && input.recipientId) {
-    const customer = await prisma.customer.findUnique({
-      where: { id: input.recipientId },
+    const customer = await prisma.customer.findFirst({
+      where: { id: input.recipientId, utilityId },
       select: { email: true, phone: true },
     });
     if (customer) {
@@ -286,13 +324,22 @@ export async function sendNotification(
 
 // ─── Preview (renders without sending) ──────────────────────────
 
+/**
+ * Renders a template without sending it.
+ *
+ * Scoped by tenant for the same reason as `sendNotification`: the id is
+ * a route parameter, and unscoped this returned any tenant's template
+ * subject and body to any caller holding `notifications:VIEW`. The route
+ * turns a null into 404, so another tenant's template now reads as
+ * absent rather than as text.
+ */
 export async function previewTemplate(
   utilityId: string,
   templateId: string,
   sampleContext?: Record<string, string>,
 ): Promise<{ subject: string | null; body: string; variables: Record<string, string> } | null> {
-  const template = await prisma.notificationTemplate.findUnique({
-    where: { id: templateId },
+  const template = await prisma.notificationTemplate.findFirst({
+    where: { id: templateId, utilityId },
   });
   if (!template) return null;
 

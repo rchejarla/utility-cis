@@ -127,6 +127,12 @@ The engine loads each referenced entity from the database and builds a flat `Rec
 
 The resolved variable map is stored on `Notification.resolved_variables` as the audit record of exactly what values were substituted.
 
+**Every entity load is scoped by `utility_id`** — customer, account, premise, agreement and meter alike — so an id belonging to another tenant resolves to nothing and its variables render blank, exactly as a deleted id does. This matters because the context map is caller-supplied: `POST /notifications/send` accepts `recipientId` and arbitrary `context` keys from the request body, so these ids are untrusted input rather than values the engine derived itself.
+
+Until 2026-10-17 they were not scoped. `resolveVariables` took `utilityId` and used it for one query — the tenant config — while all five entity lookups read by primary key alone, as did the recipient lookup that decides the destination address and the template lookup behind the preview endpoint. A caller naming another tenant's customer id would have had that customer's name, email and phone, plus any account, premise or meter named in `context`, rendered into the message, delivered to that customer, and persisted in `resolved_variables` under the *caller's* `utility_id` — where the caller's own tenant-scoped GET would read it back. Nothing was exposed in practice because there is one tenant, and the two internal callers (delinquency evaluation, import completion) pass ids they derived from tenant-scoped queries. The guard belonged in the engine regardless, since both routes are reachable without any second tenant existing.
+
+Covered by `packages/api/src/__tests__/integration/notification-tenancy.test.ts`, which pins the `where` clauses and asserts that what gets written to `resolved_variables` holds nothing of the named tenant's.
+
 ## Engine
 
 ### `sendNotification()` — the public API
@@ -151,7 +157,7 @@ async function sendNotification(
 
 1. Load `NotificationTemplate` by `(utilityId, eventType)`. If not found or inactive, log warning and return null.
 2. Check the template has content for the requested channel. If not, skip with a warning.
-3. Load the recipient's contact info from `Customer` (email for EMAIL, phone for SMS). Use `recipientOverride` if provided.
+3. Load the recipient's contact info from `Customer` by `(id, utilityId)` (email for EMAIL, phone for SMS). Use `recipientOverride` if provided — it is server-supplied only, and `manualSendSchema` is `.strict()` with no such field, so a request cannot name its own destination. A recipient outside the tenant resolves no address, and step 3 then fails the channel guard: the route answers 400 rather than delivering.
 4. Resolve variables: load entities from the context IDs, build the flat variable map.
 5. Render: replace `{{key}}` tokens in subject and body.
 6. Insert a `Notification` row with `status = PENDING`, the rendered content, and the frozen variable map.
@@ -186,17 +192,19 @@ Provider selection reads from `TenantConfig.settings.notifications`. Defaults to
 
 ## API Endpoints
 
-| Method | Path | Module | Description |
-|---|---|---|---|
-| GET | `/api/v1/notification-templates` | settings | List templates (filterable by event_type, is_active) |
-| POST | `/api/v1/notification-templates` | settings | Create template |
-| GET | `/api/v1/notification-templates/:id` | settings | Get template detail |
-| PATCH | `/api/v1/notification-templates/:id` | settings | Update template |
-| DELETE | `/api/v1/notification-templates/:id` | settings | Deactivate (soft delete) |
-| POST | `/api/v1/notification-templates/:id/preview` | settings | Render with sample data, return rendered content without sending |
-| GET | `/api/v1/notifications` | settings | Send log (filterable by status, channel, customer_id, event_type, date range) |
-| GET | `/api/v1/notifications/:id` | settings | Single notification detail |
-| POST | `/api/v1/notifications/send` | settings | Manual one-off send (admin-triggered) |
+Every route is gated on the `notifications` module, not `settings` — this table said `settings` until 2026-10-17 and never matched `routes/notifications.ts`. The permission column is listed because it is what decides who can reach the two routes that accept an id from the caller.
+
+| Method | Path | Module | Permission | Description |
+|---|---|---|---|---|
+| GET | `/api/v1/notification-templates` | notifications | VIEW | List templates (filterable by event_type, is_active) |
+| POST | `/api/v1/notification-templates` | notifications | CREATE | Create template |
+| GET | `/api/v1/notification-templates/:id` | notifications | VIEW | Get template detail |
+| PATCH | `/api/v1/notification-templates/:id` | notifications | EDIT | Update template |
+| DELETE | `/api/v1/notification-templates/:id` | notifications | DELETE | Deactivate (soft delete) |
+| POST | `/api/v1/notification-templates/:id/preview` | notifications | VIEW | Render with sample data, return rendered content without sending. Template resolved by `(id, utilityId)`; another tenant's id is a 404 |
+| GET | `/api/v1/notifications` | notifications | VIEW | Send log (filterable by status, channel, customer_id, event_type, date range) |
+| GET | `/api/v1/notifications/:id` | notifications | VIEW | Single notification detail |
+| POST | `/api/v1/notifications/send` | notifications | CREATE | Manual one-off send (admin-triggered). `recipientId` and `context` are caller-supplied and resolved only within the caller's tenant — see Variable resolution |
 
 ## UI Pages
 
@@ -262,6 +270,7 @@ The daily digest is a special template (`operations.daily_digest`) sent to a sta
 5. **Retry with backoff:** Failed sends retry up to 3 times. After 3 failures, status stays FAILED.
 6. **Rate limiting:** Send job processes 50 per tick (10-second interval). Configurable per tenant.
 7. **Dev mode:** `ConsoleProvider` logs rendered messages to stdout. Notification rows are created with `status = SENT` so the rest of the system works identically.
+8. **Every id the engine resolves is scoped to the tenant that asked.** Recipient, the five context entities and the preview's template all carry `utility_id` in the lookup. An id outside the tenant is not found, which means blank variables for a context entity and a refused send for a recipient — never another tenant's data in a rendered message. The one deliberate exception is the send job, which sweeps `PENDING` rows across all tenants by design and claims them by primary key.
 
 ## Phase Roadmap
 

@@ -119,6 +119,40 @@ that is all the model offers.
 This is the concrete case for a platform actor. The rest of this document
 is about keeping that actor as small as possible.
 
+### 1.7 Tenant separation is predicate-based, and the predicates have holes
+
+RLS is inert today — the application role is a superuser and owns the
+tables — so the `utility_id` predicates in application code are the only
+thing separating tenants (`lib/prisma.ts:43-45`, architecture doc §7.1).
+That is already documented. What was not known until it was checked is
+how reliably those predicates are actually present.
+
+Auditing the two queues that run several tenants' jobs concurrently in
+one process — `imports` (concurrency 4) and `delinquency-tenant` (5) —
+the workers came back clean: `processBatch` and `evaluateAll` both verify
+ownership once at the entry and derive the rest from the proved id, and
+all 13 database accesses in the five import handlers carry `utility_id`.
+The shared service both call did not: `notification.service.ts` took
+`utilityId` and spent it on one query while seven lookups read by primary
+key alone, two of them reachable from routes that accept the id from the
+request body. Fixed the same day; detail and the audit lesson are in
+architecture doc §7.1.
+
+**Why this belongs in a document about a platform actor.** Q2 and Q3 ask
+where the platform identity lives and how RLS treats it. §1.7 is the
+reason Q3's second option — an actor that still sets
+`app.current_utility_id` per operation and may set it to any tenant — is
+the right one, and it sharpens the argument beyond auditability: an
+identity *not* scoped by `utility_id` would be entering a codebase where
+scoping is a convention each query opts into, and where a seven-instance
+lapse survived in a service called from two workers and three routes.
+Under those conditions the mechanism that enforces isolation should be
+the one that cannot be forgotten at a call site.
+
+That also makes **build order step 4 depend on more than Q2 and Q3**: the
+`utilityId`-parameter-that-scopes-nothing shape is worth sweeping for
+deliberately before an unscoped identity exists, not after.
+
 ---
 
 ## 2. Decisions
@@ -252,6 +286,9 @@ first.
 3. **`TENANCY_MODE` in config**, defaulting to `self_serve`, read at boot.
    Nothing branches on it yet.
 4. **Platform actor** (Q2, Q3), and move `/admin/queues` behind it (D4).
+   Preceded by a deliberate sweep for the `utilityId`-parameter-that-
+   scopes-nothing shape — see §1.7 for why this one is a prerequisite
+   rather than hygiene.
 5. **A platform console UI** — only if operating the above through
    scripts proves genuinely insufficient. Not before.
 

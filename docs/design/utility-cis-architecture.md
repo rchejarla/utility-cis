@@ -912,6 +912,45 @@ the `ledger_*` tables use the two-argument form, which returns NULL and so
 silently filters every row. Fail-loud is the safer of the two for a table
 whose emptiness would be read as "nothing is wrong".
 
+**"A query that forgets its predicate" is not hypothetical — one audit found
+seven.** On 2026-10-17, auditing the two queues that run several tenants'
+jobs concurrently in one process (`imports` at concurrency 4,
+`delinquency-tenant` at 5), the workers themselves came back clean: both
+`processBatch` and `evaluateAll` verify tenant ownership once at the entry
+and derive everything after from the id they proved, and all 13 database
+accesses in the five import handlers carry `utility_id`. The shared service
+they both call did not. `notification.service.ts` accepted `utilityId` and
+used it for a single query — the tenant config — while the recipient lookup,
+the five template-variable lookups and the preview endpoint's template
+lookup read by primary key alone.
+
+Two things in that are worth carrying forward for anyone auditing the rest:
+
+- **The giveaway was a `utilityId` parameter that the function body never
+  reaches for.** Both this and the `bill-message.service.ts` targeting defect
+  fixed the same day had that shape — a tenant argument present at the
+  signature, absent from the `where`. It greps for easily and is worth
+  sweeping on deliberately rather than finding by accident.
+- **Reachability came from the routes, not the workers.** The two internal
+  callers pass ids they derived from tenant-scoped queries, so the worker
+  paths were safe by caller discipline. But
+  `POST /api/v1/notifications/send` takes `recipientId` and a free-form
+  `context` map from the request body — validated as uuids and nothing more
+  — so a caller could name ids the engine never derived. That made it a
+  missing authorization check on user input *today*, independent of whether
+  a second tenant exists. An audit that only reads worker code would have
+  called it safe.
+
+Fixed by adding the tenant predicate to all seven lookups. Note for anyone
+sweeping for the same shape: a bare `findUnique({ where: { id } })` is the
+signal, but its presence is not the defect and `findUnique` is not the
+problem — since Prisma 5 it accepts non-unique predicates alongside the
+unique one, and `posting.service.ts:167` relies on that. Read the `where`,
+not the method. Regression coverage:
+`notification-tenancy.test.ts`, which pins the `where` clauses and asserts
+that the persisted `resolved_variables` holds nothing of the named tenant's
+— verified to fail on five of six cases against the unscoped version.
+
 **A token whose subject has no `cis_user` row skips the permission check.**
 `middleware/authorization.ts` returns early when `getUserRole` finds nothing,
 deliberately, for backwards compatibility during the RBAC migration — the
