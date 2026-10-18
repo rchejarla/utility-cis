@@ -56,7 +56,7 @@ function toDto(row: AutomationConfigRow): AutomationConfig {
 
 /**
  * Fetch the automation slice of a tenant's config. If the tenant has
- * no `tenant_config` row yet (legacy), one is upserted with defaults
+ * no `utility_config` row yet (legacy), one is upserted with defaults
  * so callers can rely on a stable shape. The defaults mirror the
  * column-level defaults in the migration so behavior is identical.
  */

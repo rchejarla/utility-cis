@@ -68,7 +68,7 @@ afterAll(async () => {
 beforeEach(async () => {
   const { prisma } = prismaImports;
   await prisma.$executeRawUnsafe(`
-    TRUNCATE TABLE notification, tenant_config RESTART IDENTITY CASCADE
+    TRUNCATE TABLE notification, utility_config RESTART IDENTITY CASCADE
   `);
 });
 

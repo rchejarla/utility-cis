@@ -11,7 +11,7 @@ import type { Loader, LoaderCapability } from "../types.js";
  *                                       (currently-declared drought stage; 0 = none)
  *   - `tenant:flags:<flag_name>`     → boolean
  *
- * Both pull from the generic per-tenant `tenant_setting` table. The
+ * Both pull from the generic per-tenant `utility_setting` table. The
  * setting `name` column is shaped to match the variable key minus the
  * `tenant:` prefix:
  *
@@ -59,7 +59,7 @@ export class TenantLoader implements Loader {
     const out = new Map<VariableKey, VariableValue>();
     if (keys.length === 0) return out;
 
-    // Map each requested variable key to the tenant_setting.name we
+    // Map each requested variable key to the utility_setting.name we
     // expect to find. Keep the key→name pairing local so we can map
     // results back to their original keys after the batched query.
     const settingNames = new Set<string>();

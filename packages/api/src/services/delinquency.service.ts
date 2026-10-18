@@ -121,7 +121,7 @@ export async function evaluateAll(utilityId: string): Promise<{
 
 /**
  * Wrapper around `evaluateAll` for the BullMQ-worker entry point. On
- * success, updates `tenant_config.delinquencyLastRunAt` so the
+ * success, updates `utility_config.delinquencyLastRunAt` so the
  * dispatcher's missed-tick recovery can detect when this tenant
  * hasn't been evaluated in over 23 hours.
  *

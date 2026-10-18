@@ -6,7 +6,7 @@ import { logger } from "../lib/logger.js";
  *
  * Per spec docs/superpowers/specs/2026-04-24-job-scheduler-migration-design.md
  * §3.6: scheduler audits use `source = 'scheduler:<queue>'` and are
- * subject to per-tenant retention via `tenant_config.scheduler_audit_retention_days`.
+ * subject to per-tenant retention via `utility_config.scheduler_audit_retention_days`.
  * User-emitted audits (source = 'user:<id>' or NULL for legacy rows)
  * are governed by a separate compliance retention policy and stay
  * outside this sweep's scope.
@@ -52,7 +52,7 @@ export async function sweepExpiredSchedulerAudits(
       WHERE id IN (
         SELECT al.id
         FROM audit_log al
-        INNER JOIN tenant_config tc ON tc.utility_id = al.utility_id
+        INNER JOIN utility_config tc ON tc.utility_id = al.utility_id
         WHERE al.source LIKE 'scheduler:%'
           AND al.created_at < ${now} - (tc.scheduler_audit_retention_days || ' days')::interval
         LIMIT ${BATCH_SIZE}

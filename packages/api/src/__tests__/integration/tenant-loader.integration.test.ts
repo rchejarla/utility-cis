@@ -7,7 +7,7 @@ import { TenantLoader } from "../../lib/rate-engine-loaders/loaders/tenant-loade
  * Slice 4 task 4 — TenantLoader integration tests.
  *
  * Boots a Postgres container, applies migrations, and exercises the
- * loader's two declared patterns against real `tenant_setting` rows:
+ * loader's two declared patterns against real `utility_setting` rows:
  *   - tenant:drought_stage          (number stored in JSON column)
  *   - tenant:flags:<flag_name>      (boolean stored in JSON column,
  *                                    keyed by `flags.<name>`)
@@ -29,9 +29,9 @@ afterAll(async () => {
 
 beforeEach(async () => {
   const { prisma } = prismaImports;
-  // tenant_setting isn't in resetDb's truncate list (post-dates it);
+  // utility_setting isn't in resetDb's truncate list (post-dates it);
   // wipe it explicitly so each test starts from a known state.
-  await prisma.$executeRawUnsafe("DELETE FROM tenant_setting");
+  await prisma.$executeRawUnsafe("DELETE FROM utility_setting");
   await resetDb(prisma);
 });
 
@@ -77,7 +77,7 @@ describe("TenantLoader", () => {
     expect(out.get("tenant:flags:missing")).toBe(false);
   });
 
-  it("batches multiple keys into a single tenant_setting query", async () => {
+  it("batches multiple keys into a single utility_setting query", async () => {
     await makeTenantFixture(prismaImports.prisma, TENANT_A);
     await seedSetting(TENANT_A, "drought_stage", 3);
     await seedSetting(TENANT_A, "flags.autopay", true);

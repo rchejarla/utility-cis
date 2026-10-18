@@ -115,7 +115,7 @@ beforeEach(async () => {
       rate_schedule,
       commodity,
       billing_cycle,
-      tenant_config
+      utility_config
     RESTART IDENTITY CASCADE
   `);
 });
@@ -330,7 +330,7 @@ describe("worker-suspension integration", () => {
     expect(after?.status).toBe("ACTIVE");
   });
 
-  it("respects suspension_enabled = false on the tenant_config join", async () => {
+  it("respects suspension_enabled = false on the utility_config join", async () => {
     const { prisma } = prismaImports;
     const { sweepSuspensionsAllTenants } = await import(
       "../../services/service-suspension.service.js"

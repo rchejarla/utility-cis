@@ -74,7 +74,7 @@ beforeEach(async () => {
   // Reset between scenarios — only what these tests touch.
   const { prisma } = prismaImports;
   await prisma.$executeRawUnsafe(
-    "TRUNCATE TABLE audit_log, commodity, tenant_config RESTART IDENTITY CASCADE",
+    "TRUNCATE TABLE audit_log, commodity, utility_config RESTART IDENTITY CASCADE",
   );
   await prisma.utilityConfig.create({ data: { utilityId: TENANT } });
 });

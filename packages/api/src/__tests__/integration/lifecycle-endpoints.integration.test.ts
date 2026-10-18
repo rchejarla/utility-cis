@@ -19,7 +19,7 @@ import {
  * NODE_ENV=test. The authorization middleware lets the request
  * through if no `cisUser` row exists for the test actor (the
  * "backwards compat during migration" branch). What we DO need is a
- * `tenant_module` row for each module the route touches — otherwise
+ * `utility_module` row for each module the route touches — otherwise
  * the request hits a 403 MODULE_DISABLED.
  *
  * Endpoints covered:

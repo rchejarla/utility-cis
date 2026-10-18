@@ -367,7 +367,7 @@ interface AffectedSuspension {
  * audit rows land iff suspension rows flip.
  *
  * Tenant gating:
- *   - `tenant_config.suspension_enabled = true` — opted-in tenants
+ *   - `utility_config.suspension_enabled = true` — opted-in tenants
  *     only. Defaults to true so existing tenants keep their
  *     pre-migration behavior.
  *   - For activation: tenants with `require_hold_approval = true`
@@ -392,7 +392,7 @@ export async function sweepSuspensionsAllTenants(
       const activated = await tx.$queryRaw<AffectedSuspension[]>`
         UPDATE service_suspension AS ss
         SET status = 'ACTIVE'
-        FROM tenant_config AS tc
+        FROM utility_config AS tc
         WHERE tc.utility_id = ss.utility_id
           AND tc.suspension_enabled = true
           AND ss.status = 'PENDING'
@@ -405,7 +405,7 @@ export async function sweepSuspensionsAllTenants(
       const completed = await tx.$queryRaw<AffectedSuspension[]>`
         UPDATE service_suspension AS ss
         SET status = 'COMPLETED'
-        FROM tenant_config AS tc
+        FROM utility_config AS tc
         WHERE tc.utility_id = ss.utility_id
           AND tc.suspension_enabled = true
           AND ss.status = 'ACTIVE'

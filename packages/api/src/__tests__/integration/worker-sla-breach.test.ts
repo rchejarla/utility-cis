@@ -75,7 +75,7 @@ beforeEach(async () => {
       rate_schedule,
       commodity,
       billing_cycle,
-      tenant_config
+      utility_config
     RESTART IDENTITY CASCADE
   `);
 });
@@ -234,7 +234,7 @@ describe("worker-sla-breach integration", () => {
     expect(audits).toBe(0);
   });
 
-  it("respects sla_breach_sweep_enabled = false on the tenant_config join", async () => {
+  it("respects sla_breach_sweep_enabled = false on the utility_config join", async () => {
     const { prisma } = prismaImports;
     await seedTenant(TENANT_A, { slaBreachSweepEnabled: false });
     const { accountId } = await seedAccount(TENANT_A);

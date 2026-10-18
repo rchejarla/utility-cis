@@ -107,7 +107,7 @@ beforeEach(async () => {
   // second test in the file collides on a unique code rather than
   // testing anything.
   await prisma.$executeRawUnsafe(
-    `TRUNCATE TABLE audit_log, bill_document, bill_segment_line, bill_segment, bill, service_agreement, account, customer, billing_address, billing_cycle, rate_component, rate_component_kind, rate_schedule, commodity, tenant_config, tenant_module, user_role, cis_user, role RESTART IDENTITY CASCADE`,
+    `TRUNCATE TABLE audit_log, bill_document, bill_segment_line, bill_segment, bill, service_agreement, account, customer, billing_address, billing_cycle, rate_component, rate_component_kind, rate_schedule, commodity, utility_config, utility_module, user_role, cis_user, role RESTART IDENTITY CASCADE`,
   );
 });
 

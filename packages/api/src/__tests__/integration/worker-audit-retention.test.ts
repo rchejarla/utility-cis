@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
  * Integration tests for the audit-retention sweep.
  *
  * Verifies:
- *   - Per-tenant retention from tenant_config.scheduler_audit_retention_days
+ *   - Per-tenant retention from utility_config.scheduler_audit_retention_days
  *   - Only scheduler-emitted audits (source LIKE 'scheduler:%') are deleted
  *   - User audits (source = 'user:<id>' or NULL legacy rows) are preserved
  *   - Multi-tenant: each tenant's threshold applies to its own rows
@@ -67,7 +67,7 @@ afterAll(async () => {
 beforeEach(async () => {
   const { prisma } = prismaImports;
   await prisma.$executeRawUnsafe(`
-    TRUNCATE TABLE audit_log, tenant_config RESTART IDENTITY CASCADE
+    TRUNCATE TABLE audit_log, utility_config RESTART IDENTITY CASCADE
   `);
 });
 

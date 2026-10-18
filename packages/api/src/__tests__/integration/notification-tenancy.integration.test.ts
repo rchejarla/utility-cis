@@ -36,7 +36,7 @@ let app: FastifyInstance;
 /**
  * Only tenant B's ids are referenced by the tests — they are the ones
  * that must not resolve. Tenant A still needs a full fixture, because
- * `resolveVariables` reads A's `tenant_config` on every send.
+ * `resolveVariables` reads A's `utility_config` on every send.
  */
 let fixB: TenantFixture;
 

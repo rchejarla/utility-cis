@@ -8,7 +8,7 @@ import { getTenantConfig } from "../services/tenant-config.service.js";
  * follows the same numberFormats pattern).
  *
  * Algorithm:
- *   1. Read the tenant's template from tenant_config.settings.numberFormats[entity]
+ *   1. Read the tenant's template from utility_config.settings.numberFormats[entity]
  *      (fall back to the caller-supplied default if not configured).
  *   2. Substitute today's year/month into the template to get the
  *      expected prefix/suffix. Build a POSIX regex from the literal

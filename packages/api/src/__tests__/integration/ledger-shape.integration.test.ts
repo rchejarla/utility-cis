@@ -69,7 +69,7 @@ describe("ledger schema", () => {
   });
 
   it("adds the auto-post and postedAt columns", async () => {
-    expect(Object.keys(await cols("tenant_config"))).toContain("auto_post_bills");
+    expect(Object.keys(await cols("utility_config"))).toContain("auto_post_bills");
     expect(Object.keys(await cols("account"))).toContain("auto_post_bills");
     expect(Object.keys(await cols("bill"))).toContain("posted_at");
   });

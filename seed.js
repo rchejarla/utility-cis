@@ -812,7 +812,7 @@ async function main() {
   // Must stay in step with MODULES in packages/shared/src/modules/constants.ts.
   // A module missing here is enabled for no tenant, so its routes answer
   // 403 MODULE_DISABLED on every seeded database while their own tests
-  // pass, because those create the tenant_module row themselves.
+  // pass, because those create the utility_module row themselves.
   // packages/shared/src/modules/__tests__/constants.test.ts fails if the
   // two lists drift. seed.js deliberately avoids tsx, so this cannot
   // import the constant directly.

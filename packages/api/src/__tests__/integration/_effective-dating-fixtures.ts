@@ -73,8 +73,8 @@ const RESET_TABLES = [
   "unit_of_measure",
   "measure_type_def",
   "commodity",
-  "tenant_module",
-  "tenant_config",
+  "utility_module",
+  "utility_config",
 ].join(", ");
 
 /** Postgres `lock_not_available` — what `lock_timeout` raises. */

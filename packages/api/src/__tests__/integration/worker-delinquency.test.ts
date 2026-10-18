@@ -76,7 +76,7 @@ afterAll(async () => {
 beforeEach(async () => {
   const { prisma } = prismaImports;
   await prisma.$executeRawUnsafe(`
-    TRUNCATE TABLE delinquency_action, delinquency_rule, account, customer, tenant_config RESTART IDENTITY CASCADE
+    TRUNCATE TABLE delinquency_action, delinquency_rule, account, customer, utility_config RESTART IDENTITY CASCADE
   `);
   // Obliterate the per-tenant queue between tests so jobs from prior
   // cases don't leak forward AND idempotency-key markers don't

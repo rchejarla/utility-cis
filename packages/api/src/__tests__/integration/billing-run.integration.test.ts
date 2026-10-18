@@ -76,7 +76,7 @@ beforeAll(async () => {
   cycleId = cycle.id;
 
   /*
-   * The seed creates no `tenant_module` rows, so every gated route
+   * The seed creates no `utility_module` rows, so every gated route
    * answers 403 until the modules exist — and the RBAC module list is
    * cached in Redis across forks, so it has to be invalidated as well.
    * Both halves are the convention the other seed-based suites follow.

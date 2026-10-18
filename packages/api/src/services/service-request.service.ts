@@ -358,7 +358,7 @@ export async function sweepBreachedSRs(
       const flipped = await tx.$queryRaw<BreachedSrRow[]>`
         UPDATE service_request AS sr
         SET sla_breached = true, updated_at = now()
-        FROM tenant_config AS tc
+        FROM utility_config AS tc
         WHERE tc.utility_id = sr.utility_id
           AND tc.sla_breach_sweep_enabled = true
           AND sr.status NOT IN ('COMPLETED', 'CANCELLED')

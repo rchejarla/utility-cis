@@ -279,7 +279,7 @@ export type { TxClient };
  * so flipping the tenant setting moves every account that has not
  * explicitly opted out.
  *
- * No tenant_config row means an unconfigured tenant, which takes the
+ * No utility_config row means an unconfigured tenant, which takes the
  * column default: auto-post on.
  */
 export async function resolveAutoPostBills(
