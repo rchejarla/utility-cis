@@ -19,12 +19,38 @@ interface FilterBarProps {
   filters: FilterConfig[];
 }
 
+/**
+ * Above this many options the dropdown gets a search box and starts
+ * scrolling. Chosen against the 260px list height below: about eight
+ * items fit, so a list that needs scrolling is also a list worth
+ * searching. Short filters — Action has three — stay exactly as they
+ * were.
+ */
+const SEARCHABLE_THRESHOLD = 10;
+
 function FilterPill({ filter }: { filter: FilterConfig }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
 
   const activeOption = filter.options.find((o) => o.value === filter.value);
   const isActive = filter.value !== undefined;
+
+  const searchable = filter.options.length > SEARCHABLE_THRESHOLD;
+  const needle = query.trim().toLowerCase();
+  const visibleOptions = needle
+    ? filter.options.filter((o) => o.label.toLowerCase().includes(needle))
+    : filter.options;
+
+  function close() {
+    setOpen(false);
+    setQuery("");
+  }
+
+  function choose(value: string | undefined) {
+    filter.onChange(value);
+    close();
+  }
 
   return (
     <div ref={containerRef} style={{ position: "relative" }}>
@@ -70,7 +96,7 @@ function FilterPill({ filter }: { filter: FilterConfig }) {
               inset: 0,
               zIndex: 49,
             }}
-            onClick={() => setOpen(false)}
+            onClick={close}
           />
 
           <div
@@ -83,30 +109,72 @@ function FilterPill({ filter }: { filter: FilterConfig }) {
               border: "1px solid var(--border)",
               borderRadius: "var(--radius)",
               boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
-              minWidth: "160px",
+              minWidth: "180px",
               overflow: "hidden",
             }}
           >
-            {/* "All" option */}
+            {searchable && (
+              <input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                // Enter takes the only sensible candidate: the first
+                // match. Typing three letters and pressing Enter beats
+                // typing three letters and then aiming.
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && visibleOptions.length > 0) {
+                    choose(visibleOptions[0].value);
+                  } else if (e.key === "Escape") {
+                    close();
+                  }
+                }}
+                placeholder={`Search ${filter.label.toLowerCase()}…`}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  boxSizing: "border-box",
+                  padding: "8px 12px",
+                  border: "none",
+                  borderBottom: "1px solid var(--border)",
+                  background: "transparent",
+                  color: "var(--text-primary)",
+                  fontSize: "12px",
+                  fontFamily: "inherit",
+                  outline: "none",
+                }}
+              />
+            )}
+
+            {/* "All" stays put rather than scrolling away, and is never
+                filtered out — clearing the filter must always be one
+                click. */}
             <DropdownItem
               label={`All ${filter.label}`}
               active={!isActive}
-              onClick={() => {
-                filter.onChange(undefined);
-                setOpen(false);
-              }}
+              onClick={() => choose(undefined)}
             />
-            {filter.options.map((opt) => (
-              <DropdownItem
-                key={opt.value}
-                label={opt.label}
-                active={filter.value === opt.value}
-                onClick={() => {
-                  filter.onChange(opt.value);
-                  setOpen(false);
-                }}
-              />
-            ))}
+
+            <div style={{ maxHeight: "260px", overflowY: "auto" }}>
+              {visibleOptions.map((opt) => (
+                <DropdownItem
+                  key={opt.value}
+                  label={opt.label}
+                  active={filter.value === opt.value}
+                  onClick={() => choose(opt.value)}
+                />
+              ))}
+              {visibleOptions.length === 0 && (
+                <div
+                  style={{
+                    padding: "10px 12px",
+                    fontSize: "12px",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  No match
+                </div>
+              )}
+            </div>
           </div>
         </>
       )}
