@@ -99,6 +99,7 @@ export default function PlatformTenantDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmSuspend, setConfirmSuspend] = useState(false);
+  const [moduleBusy, setModuleBusy] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("staff");
 
   const load = useCallback(async () => {
@@ -116,6 +117,22 @@ export default function PlatformTenantDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  async function toggleModule(moduleKey: string, isEnabled: boolean) {
+    setModuleBusy(moduleKey);
+    setError(null);
+    try {
+      await apiClient.patch(
+        `/api/v1/platform/utilities/${params.id}/modules/${moduleKey}`,
+        { isEnabled },
+      );
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setModuleBusy(null);
+    }
+  }
 
   async function setStatus(next: "ACTIVE" | "SUSPENDED") {
     setBusy(true);
@@ -304,32 +321,50 @@ export default function PlatformTenantDetailPage() {
           )}
           {activeTab === "modules" && (
             <>
-        <div
-          style={{
-            padding: 14,
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 6,
-          }}
-        >
-          {detail.modules.map((m) => (
-            <span
-              key={m.moduleKey}
-              style={{
-                fontSize: 12,
-                fontFamily: "monospace",
-                padding: "3px 8px",
-                borderRadius: 999,
-                border: "1px solid var(--border)",
-                color: m.isEnabled ? "var(--text-secondary)" : "var(--text-muted)",
-                background: m.isEnabled ? "transparent" : "var(--bg-elevated)",
-                textDecoration: m.isEnabled ? "none" : "line-through",
-              }}
-            >
-              {m.moduleKey}
-            </span>
-          ))}
-        </div>
+              <div
+                style={{
+                  padding: "12px 14px",
+                  borderBottom: "1px solid var(--border-subtle)",
+                  fontSize: 12,
+                  color: "var(--text-muted)",
+                }}
+              >
+                Click a module to turn it off or back on. A disabled module answers
+                MODULE_DISABLED on every route it owns, for every one of this utility&apos;s users,
+                and takes effect immediately.
+              </div>
+              <div style={{ padding: 14, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {detail.modules.map((m) => (
+                  <button
+                    key={m.moduleKey}
+                    onClick={() => toggleModule(m.moduleKey, !m.isEnabled)}
+                    disabled={moduleBusy === m.moduleKey}
+                    title={
+                      m.isEnabled
+                        ? `Turn off ${m.moduleKey} for this utility`
+                        : `Turn on ${m.moduleKey} for this utility`
+                    }
+                    // The title would otherwise become the accessible
+                    // name and read out instead of the module.
+                    aria-label={`${m.moduleKey} — ${m.isEnabled ? "enabled" : "disabled"}`}
+                    aria-pressed={m.isEnabled}
+                    style={{
+                      fontSize: 12,
+                      fontFamily: "monospace",
+                      padding: "3px 10px",
+                      borderRadius: 999,
+                      cursor: moduleBusy === m.moduleKey ? "wait" : "pointer",
+                      border: `1px solid ${m.isEnabled ? "var(--border)" : "var(--border-subtle)"}`,
+                      color: m.isEnabled ? "var(--text-secondary)" : "var(--text-muted)",
+                      background: m.isEnabled ? "transparent" : "var(--bg-elevated)",
+                      textDecoration: m.isEnabled ? "none" : "line-through",
+                      opacity: moduleBusy === m.moduleKey ? 0.5 : 1,
+                    }}
+                  >
+                    {m.moduleKey}
+                  </button>
+                ))}
+              </div>
             </>
           )}
         </div>

@@ -1,6 +1,9 @@
 import { MODULES, PRESET_ROLES } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
-import { invalidateUtilityStatusCache } from "./rbac.service.js";
+import {
+  invalidateUtilityStatusCache,
+  invalidateTenantModulesCache,
+} from "./rbac.service.js";
 
 /**
  * Bringing a tenant into existence.
@@ -83,6 +86,7 @@ class ProvisioningError extends Error {
       | "UTILITY_NAME_MISMATCH"
       | "UTILITY_NAME_TAKEN"
       | "UNKNOWN_PROFILE"
+      | "UNKNOWN_MODULE"
       | "UTILITY_NOT_FOUND",
     readonly statusCode: number,
     message: string,
@@ -429,6 +433,53 @@ async function setUtilityStatus(
 
   await invalidateUtilityStatusCache(utilityId);
   return toSummary(row);
+}
+
+/**
+ * Turn one of a utility's modules on or off. D6 responsibility 2, whose
+ * other half — enabling them at provisioning — was all that existed.
+ *
+ * Upserts, because a module added to `MODULES` after a utility was
+ * provisioned has no row at all, and enabling it then has to insert.
+ *
+ * Invalidating the cache is the load-bearing line. `getTenantModules`
+ * holds its answer for 600 seconds and the authorization middleware
+ * consults it on every request, so a disable that skips this is a
+ * disable that means nothing for ten minutes.
+ *
+ * There is deliberately no guard against disabling every module, unlike
+ * the last-platform-operator rule: a utility with nothing enabled is
+ * unusable but every module is one click from returning, and the
+ * operator doing the clicking is not locked out of anything. A key the
+ * code does not have is refused, though — a row for a module no route
+ * reads would look enabled and do nothing.
+ */
+export async function setUtilityModule(
+  utilityId: string,
+  moduleKey: string,
+  isEnabled: boolean,
+): Promise<{ moduleKey: string; isEnabled: boolean }> {
+  if (!(MODULES as readonly string[]).includes(moduleKey)) {
+    throw new ProvisioningError("UNKNOWN_MODULE", 400, `No module named "${moduleKey}".`);
+  }
+
+  const utility = await prisma.utility.findUnique({
+    where: { id: utilityId },
+    select: { id: true },
+  });
+  if (!utility) {
+    throw new ProvisioningError("UTILITY_NOT_FOUND", 404, `No utility with id ${utilityId}.`);
+  }
+
+  const row = await prisma.utilityModule.upsert({
+    where: { utilityId_moduleKey: { utilityId, moduleKey } },
+    update: { isEnabled },
+    create: { utilityId, moduleKey, isEnabled },
+    select: { moduleKey: true, isEnabled: true },
+  });
+
+  await invalidateTenantModulesCache(utilityId);
+  return row;
 }
 
 export async function suspendUtility(utilityId: string): Promise<UtilitySummary> {

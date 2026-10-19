@@ -6,6 +6,7 @@ import {
   getUtilityDetail,
   suspendUtility,
   reactivateUtility,
+  setUtilityModule,
 } from "../services/provisioning.service.js";
 import { getPlatformActor } from "../services/rbac.service.js";
 import {
@@ -61,6 +62,15 @@ const provisionBodySchema = z
   .strict();
 
 const tenantParamsSchema = z.object({ id: z.string().uuid() });
+
+const moduleParamsSchema = z.object({
+  id: z.string().uuid(),
+  // Not validated against MODULES here — the service owns that refusal,
+  // so the route cannot drift from it.
+  moduleKey: z.string().min(1).max(50),
+});
+
+const moduleBodySchema = z.object({ isEnabled: z.boolean() }).strict();
 
 const platformUserBodySchema = z
   .object({
@@ -158,6 +168,20 @@ export async function platformRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { id } = tenantParamsSchema.parse(request.params);
       return reply.send(await setPlatformUserActive(id, true));
+    },
+  );
+
+  app.patch(
+    "/api/v1/platform/utilities/:id/modules/:moduleKey",
+    { config: { platform: true } },
+    async (request, reply) => {
+      // PATCH with the new state in the body rather than enable/disable
+      // verbs: this is one boolean field on one row, and a toggle that
+      // says which way it should end up cannot be applied twice by
+      // mistake.
+      const { id, moduleKey } = moduleParamsSchema.parse(request.params);
+      const { isEnabled } = moduleBodySchema.parse(request.body);
+      return reply.send(await setUtilityModule(id, moduleKey, isEnabled));
     },
   );
 

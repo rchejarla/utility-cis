@@ -304,6 +304,72 @@ describe("GET /api/v1/platform/utilities/:id", () => {
   });
 });
 
+describe("PATCH /api/v1/platform/utilities/:id/modules/:moduleKey", () => {
+  function mockToggle() {
+    (prisma.utility.findUnique as Mock).mockResolvedValue({ id: TENANT, status: "ACTIVE" });
+    (prisma.utilityModule.upsert as Mock).mockResolvedValue({
+      moduleKey: "containers",
+      isEnabled: false,
+    });
+  }
+
+  it("disables a module", async () => {
+    mockToggle();
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/platform/utilities/${TENANT}/modules/containers`,
+      headers: platformHeaders,
+      payload: { isEnabled: false },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({ moduleKey: "containers", isEnabled: false });
+  });
+
+  it("refuses a tenant admin", async () => {
+    mockToggle();
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/platform/utilities/${TENANT}/modules/containers`,
+      headers: tenantHeaders,
+      payload: { isEnabled: false },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(prisma.utilityModule.upsert).not.toHaveBeenCalled();
+  });
+
+  it("refuses a module the code does not have", async () => {
+    mockToggle();
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/platform/utilities/${TENANT}/modules/not_a_module`,
+      headers: platformHeaders,
+      payload: { isEnabled: true },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error.code).toBe("UNKNOWN_MODULE");
+  });
+
+  it("refuses a body without isEnabled", async () => {
+    // Otherwise "toggle" is implied, and a retried request flips it back.
+    mockToggle();
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/platform/utilities/${TENANT}/modules/containers`,
+      headers: platformHeaders,
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+});
+
 describe("suspend and reactivate", () => {
   it("suspends", async () => {
     const app = await buildApp();
