@@ -5,44 +5,44 @@ import { fileURLToPath } from "node:url";
 import { MODULES, MODULE_META } from "../constants";
 
 /**
- * The module list exists twice and must agree.
+ * The module list exists once.
  *
- * `seed.js` at the repo root keeps its own `allModules` array, because it
- * is deliberately runnable as plain `node seed.js` with no tsx and so
- * cannot import this TypeScript constant. That duplication is the
- * problem these tests exist for: a module present in MODULES but absent
- * from the seeder is enabled for no tenant, so its routes answer 403
- * MODULE_DISABLED on every seeded database — while the routes' own tests
- * pass, because integration fixtures create their utility_module rows by
- * hand. That is exactly how `payments` shipped unreachable in AR slice 2
- * until this test was written.
+ * It used to exist twice: `seed.js` kept its own `allModules` array,
+ * because it is runnable as plain `node seed.js` with no tsx and so could
+ * not import this TypeScript constant. That duplication is how
+ * `payments` shipped unreachable in AR slice 2 — present in MODULES,
+ * absent from the seeder, so its routes answered 403 MODULE_DISABLED on
+ * every seeded database while the routes' own tests passed, because
+ * integration fixtures create their `utility_module` rows by hand.
+ *
+ * The tests that compared the two lists are gone with the second list:
+ * since 2026-10-18 the seed shells out to `provisionTenant`, which reads
+ * MODULES directly, so agreement is structural rather than something to
+ * check. `provisioning.integration.test.ts` asserts the remaining
+ * guarantee — that provisioning enables exactly MODULES and nothing it
+ * no longer has.
+ *
+ * What is still worth policing is that the duplication does not come
+ * back, which is what this test does. It was itself red from the moment
+ * the seed changed until 2026-10-19, because nothing ran this package's
+ * suite in between.
  */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SEED_JS = path.resolve(__dirname, "../../../../../seed.js");
 
-function seederModuleKeys(): string[] {
-  const src = readFileSync(SEED_JS, "utf8");
-  const block = /const allModules = \[([\s\S]*?)\];/.exec(src);
-  // If the shape of seed.js changes so this no longer matches, fail
-  // loudly rather than comparing against an empty list and passing.
-  expect(block, `could not find allModules in ${SEED_JS}`).not.toBeNull();
-  const keys = [...block![1]!.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]!);
-  expect(keys.length).toBeGreaterThan(20);
-  return keys;
-}
-
-describe("MODULES and seed.js agree", () => {
-  it("seeds every module key, so no module ships unreachable", () => {
-    const seeded = seederModuleKeys();
-    const missing = MODULES.filter((m) => !seeded.includes(m));
-    expect(missing).toEqual([]);
+describe("the module list is not duplicated", () => {
+  it("keeps no second list of module keys in seed.js", () => {
+    const src = readFileSync(SEED_JS, "utf8");
+    expect(src).not.toMatch(/const allModules\s*=\s*\[/);
   });
 
-  it("seeds no key that is not a real module", () => {
-    const seeded = seederModuleKeys();
-    const unknown = seeded.filter((m) => !(MODULES as readonly string[]).includes(m));
-    expect(unknown).toEqual([]);
+  it("provisions the tenant through the script that owns MODULES", () => {
+    // If this goes, the seed has started creating utility_module rows
+    // itself again and the comparison tests above should come back.
+    const src = readFileSync(SEED_JS, "utf8");
+    expect(src).toMatch(/provision-tenant\.ts/);
+    expect(MODULES.length).toBeGreaterThan(20);
   });
 });
 

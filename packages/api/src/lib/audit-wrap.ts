@@ -33,7 +33,7 @@ type TxClient = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$trans
 
 export interface AuditContext {
   utilityId: string;
-  actorId: string;
+  actorId: string | null;
   /*
    * Required, because nothing legitimately lacks it and an audit row
    * without an actor name has lost what the table exists to record.
@@ -53,6 +53,14 @@ export interface AuditContext {
    */
   actorName: string;
   entityType: string;
+  /**
+   * Audit origin, following the column's existing convention:
+   * `scheduler:<queue>` for sweeps, `platform:<actorId>` for an action
+   * taken on this tenant from above it, `script:<name>` for a CLI run.
+   * A tenant's own staff action leaves it unset — the schema comment
+   * claims `user:<cisUserId>`, but nothing has ever written one.
+   */
+  source?: string;
 }
 
 type WithId = { id: string };
@@ -94,6 +102,7 @@ export async function writeAuditRow(
       action: mapEventTypeToAction(eventType),
       actorId: ctx.actorId,
       actorName: ctx.actorName,
+      source: ctx.source ?? null,
       beforeState: toJsonInput(before),
       afterState: toJsonInput(after),
       metadata: { eventType } satisfies Prisma.InputJsonValue,

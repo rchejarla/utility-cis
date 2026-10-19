@@ -473,6 +473,55 @@ describe("dev-login for the platform actor", () => {
   });
 });
 
+describe("attribution", () => {
+  /**
+   * The services default a missing actor to the script identity, so a
+   * route that forgets to pass one records the action against "script"
+   * instead of the operator — an audit that is wrong rather than
+   * absent, which is harder to notice. These pin it at the boundary.
+   */
+  it("records a suspension against the signed-in operator", async () => {
+    (prisma.utility.findUnique as Mock).mockResolvedValue({ id: TENANT, status: "ACTIVE" });
+    const app = await buildApp();
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/platform/utilities/${TENANT}/suspend`,
+      headers: platformHeaders,
+      payload: {},
+    });
+
+    const audited = (prisma.auditLog.create as Mock).mock.calls.at(-1)?.[0]?.data;
+    expect(audited).toMatchObject({
+      entityType: "Utility",
+      actorId: PLATFORM_ID,
+      source: `platform:${PLATFORM_ID}`,
+    });
+  });
+
+  it("records a module change against the signed-in operator", async () => {
+    (prisma.utility.findUnique as Mock).mockResolvedValue({ id: TENANT, status: "ACTIVE" });
+    (prisma.utilityModule.upsert as Mock).mockResolvedValue({
+      id: "um-1",
+      moduleKey: "containers",
+      isEnabled: false,
+    });
+    const app = await buildApp();
+    await app.inject({
+      method: "PATCH",
+      url: `/api/v1/platform/utilities/${TENANT}/modules/containers`,
+      headers: platformHeaders,
+      payload: { isEnabled: false },
+    });
+
+    const audited = (prisma.auditLog.create as Mock).mock.calls.at(-1)?.[0]?.data;
+    expect(audited).toMatchObject({
+      entityType: "UtilityModule",
+      actorId: PLATFORM_ID,
+      source: `platform:${PLATFORM_ID}`,
+    });
+  });
+});
+
 describe("GET /api/v1/platform/me", () => {
   it("names the platform actor", async () => {
     // The console needs to know who it is, and /auth/me cannot serve it:

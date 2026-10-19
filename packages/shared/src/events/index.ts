@@ -17,6 +17,14 @@
  * cross-layer audit noticed they were missing here.
  */
 export const EVENT_TYPES = {
+  // Tenant lifecycle, performed from above the tenant.
+  UTILITY_PROVISIONED: "utility.created",
+  UTILITY_SUSPENDED: "utility.suspended",
+  UTILITY_REACTIVATED: "utility.reactivated",
+  UTILITY_MODULE_CHANGED: "utility_module.updated",
+  ROLE_CREATED: "role.created",
+  ROLE_UPDATED: "role.updated",
+  ROLE_DELETED: "role.deleted",
   COMMODITY_CREATED: "commodity.created",
   COMMODITY_UPDATED: "commodity.updated",
   UOM_CREATED: "uom.created",
@@ -127,5 +135,8 @@ export const AUDIT_ENTITY_TYPES = [
   "Sla",
   "UnitOfMeasure",
   "UserRole",
+  "Utility",
+  "UtilityModule",
+  "Role",
   "Workflow",
 ] as const;

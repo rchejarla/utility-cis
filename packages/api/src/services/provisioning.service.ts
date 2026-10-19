@@ -1,5 +1,7 @@
 import { MODULES, PRESET_ROLES } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
+import { writeAuditRow } from "../lib/audit-wrap.js";
+import { EVENT_TYPES } from "@utility-cis/shared";
 import {
   invalidateUtilityStatusCache,
   invalidateTenantModulesCache,
@@ -21,6 +23,29 @@ import {
  * oversights — D6 defers each, and this is the one piece with value in
  * both tenancy modes.
  */
+
+/**
+ * Who performed a lifecycle action, for the audit row.
+ *
+ * `id` is nullable because the CLI has no signed-in actor — the same
+ * shape the scheduler audits use, where the name says what ran instead.
+ * Every mutation here takes one and every mutation writes a row: the
+ * default below attributes a non-route caller honestly rather than
+ * skipping the audit, because an action with no record is the thing this
+ * was added to stop.
+ */
+export interface LifecycleActor {
+  id: string | null;
+  name: string;
+  /** `platform:<actorId>` from the console, `script:<name>` from a CLI. */
+  source: string;
+}
+
+const SCRIPT_ACTOR: LifecycleActor = {
+  id: null,
+  name: "provision-tenant script",
+  source: "script:provision-tenant",
+};
 
 export type ProvisionProfile = "minimal";
 
@@ -105,6 +130,7 @@ class DryRunComplete extends Error {
 
 export async function provisionTenant(
   input: ProvisionTenantInput,
+  actor: LifecycleActor = SCRIPT_ACTOR,
 ): Promise<ProvisionTenantResult> {
   const profile = input.profile ?? "minimal";
   if (!PROFILES.includes(profile)) {
@@ -247,6 +273,26 @@ export async function provisionTenant(
         rolesCreated,
         adminCreated,
       };
+
+      // Inside the transaction on purpose: a dry run rolls this back
+      // with everything else, so a preview leaves no row claiming it
+      // happened.
+      if (!existing) {
+        await writeAuditRow(
+          tx,
+          {
+            utilityId: input.utilityId,
+            actorId: actor.id,
+            actorName: actor.name,
+            entityType: "Utility",
+            source: actor.source,
+          },
+          EVENT_TYPES.UTILITY_PROVISIONED,
+          input.utilityId,
+          null,
+          { name: input.name, status: "ACTIVE", modulesEnabled: modules.count, rolesCreated },
+        );
+      }
 
       if (input.dryRun) throw new DryRunComplete(result);
       return result;
@@ -421,10 +467,11 @@ export async function getUtilityDetail(utilityId: string): Promise<UtilityDetail
 async function setUtilityStatus(
   utilityId: string,
   status: "ACTIVE" | "SUSPENDED",
+  actor: LifecycleActor,
 ): Promise<UtilitySummary> {
   const existing = await prisma.utility.findUnique({
     where: { id: utilityId },
-    select: { id: true },
+    select: { id: true, status: true },
   });
   if (!existing) {
     throw new ProvisioningError(
@@ -434,10 +481,27 @@ async function setUtilityStatus(
     );
   }
 
-  const row = await prisma.utility.update({
-    where: { id: utilityId },
-    data: { status },
-    select: SUMMARY_SELECT,
+  const row = await prisma.$transaction(async (tx) => {
+    const updated = await tx.utility.update({
+      where: { id: utilityId },
+      data: { status },
+      select: SUMMARY_SELECT,
+    });
+    await writeAuditRow(
+      tx,
+      {
+        utilityId,
+        actorId: actor.id,
+        actorName: actor.name,
+        entityType: "Utility",
+        source: actor.source,
+      },
+      status === "SUSPENDED" ? EVENT_TYPES.UTILITY_SUSPENDED : EVENT_TYPES.UTILITY_REACTIVATED,
+      utilityId,
+      { status: existing.status },
+      { status },
+    );
+    return updated;
   });
 
   await invalidateUtilityStatusCache(utilityId);
@@ -485,6 +549,7 @@ export async function setUtilityModule(
   utilityId: string,
   moduleKey: string,
   isEnabled: boolean,
+  actor: LifecycleActor = SCRIPT_ACTOR,
 ): Promise<{ moduleKey: string; isEnabled: boolean }> {
   if (!(MODULES as readonly string[]).includes(moduleKey)) {
     throw new ProvisioningError("UNKNOWN_MODULE", 400, `No module named "${moduleKey}".`);
@@ -498,21 +563,48 @@ export async function setUtilityModule(
     throw new ProvisioningError("UTILITY_NOT_FOUND", 404, `No utility with id ${utilityId}.`);
   }
 
-  const row = await prisma.utilityModule.upsert({
-    where: { utilityId_moduleKey: { utilityId, moduleKey } },
-    update: { isEnabled },
-    create: { utilityId, moduleKey, isEnabled },
-    select: { moduleKey: true, isEnabled: true },
+  const row = await prisma.$transaction(async (tx) => {
+    const before = await tx.utilityModule.findUnique({
+      where: { utilityId_moduleKey: { utilityId, moduleKey } },
+      select: { id: true, isEnabled: true },
+    });
+    const updated = await tx.utilityModule.upsert({
+      where: { utilityId_moduleKey: { utilityId, moduleKey } },
+      update: { isEnabled },
+      create: { utilityId, moduleKey, isEnabled },
+      select: { id: true, moduleKey: true, isEnabled: true },
+    });
+    await writeAuditRow(
+      tx,
+      {
+        utilityId,
+        actorId: actor.id,
+        actorName: actor.name,
+        entityType: "UtilityModule",
+        source: actor.source,
+      },
+      EVENT_TYPES.UTILITY_MODULE_CHANGED,
+      updated.id,
+      before ? { moduleKey, isEnabled: before.isEnabled } : null,
+      { moduleKey, isEnabled },
+    );
+    return updated;
   });
 
   await invalidateTenantModulesCache(utilityId);
-  return row;
+  return { moduleKey: row.moduleKey, isEnabled: row.isEnabled };
 }
 
-export async function suspendUtility(utilityId: string): Promise<UtilitySummary> {
-  return setUtilityStatus(utilityId, "SUSPENDED");
+export async function suspendUtility(
+  utilityId: string,
+  actor: LifecycleActor = SCRIPT_ACTOR,
+): Promise<UtilitySummary> {
+  return setUtilityStatus(utilityId, "SUSPENDED", actor);
 }
 
-export async function reactivateUtility(utilityId: string): Promise<UtilitySummary> {
-  return setUtilityStatus(utilityId, "ACTIVE");
+export async function reactivateUtility(
+  utilityId: string,
+  actor: LifecycleActor = SCRIPT_ACTOR,
+): Promise<UtilitySummary> {
+  return setUtilityStatus(utilityId, "ACTIVE", actor);
 }

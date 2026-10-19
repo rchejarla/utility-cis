@@ -1121,7 +1121,8 @@ async function main() {
   // AR reason codes (module 23 slice 3). Mirrors DEFAULT_REASON_CODES in
   // packages/shared/src/validators/ledger.ts — seed.js runs as plain
   // `node seed.js` and cannot import the TypeScript constant, so the list
-  // is duplicated here the same way allModules is.
+  // is duplicated here, the way the module list used to be before the
+  // seed started delegating to scripts/provision-tenant.ts.
   const reasonCodes = [
     ["LATE_FEE", "Late payment fee", "FEE"],
     ["NSF_FEE", "Returned payment fee", "FEE"],

@@ -84,6 +84,19 @@ const platformUserBodySchema = z
   })
   .strict();
 
+
+/**
+ * The signed-in operator, shaped for a lifecycle audit row.
+ *
+ * `request.platformActor` is set by the auth middleware and the route is
+ * `{ platform: true }`, so authorization has already resolved it against
+ * a real row by the time a handler runs.
+ */
+function actorOf(request: { platformActor?: { id: string; name: string } }) {
+  const actor = request.platformActor!;
+  return { id: actor.id, name: actor.name, source: `platform:${actor.id}` };
+}
+
 export async function platformRoutes(app: FastifyInstance) {
   app.get(
     "/api/v1/platform/me",
@@ -131,7 +144,7 @@ export async function platformRoutes(app: FastifyInstance) {
         name: body.name,
         firstAdmin: body.firstAdmin,
         dryRun: body.dryRun,
-      });
+      }, actorOf(request));
 
       // 200, not 201, for a dry run: nothing was created, and a client
       // reading the status rather than the body should not be told it was.
@@ -245,7 +258,7 @@ export async function platformRoutes(app: FastifyInstance) {
       // mistake.
       const { id, moduleKey } = moduleParamsSchema.parse(request.params);
       const { isEnabled } = moduleBodySchema.parse(request.body);
-      return reply.send(await setUtilityModule(id, moduleKey, isEnabled));
+      return reply.send(await setUtilityModule(id, moduleKey, isEnabled, actorOf(request)));
     },
   );
 
@@ -254,7 +267,7 @@ export async function platformRoutes(app: FastifyInstance) {
     { config: { platform: true } },
     async (request, reply) => {
       const { id } = tenantParamsSchema.parse(request.params);
-      return reply.send(await suspendUtility(id));
+      return reply.send(await suspendUtility(id, actorOf(request)));
     },
   );
 
@@ -263,7 +276,7 @@ export async function platformRoutes(app: FastifyInstance) {
     { config: { platform: true } },
     async (request, reply) => {
       const { id } = tenantParamsSchema.parse(request.params);
-      return reply.send(await reactivateUtility(id));
+      return reply.send(await reactivateUtility(id, actorOf(request)));
     },
   );
 }
