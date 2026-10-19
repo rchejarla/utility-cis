@@ -104,7 +104,7 @@ export default function PlatformTenantDetailPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setDetail(await apiClient.get<UtilityDetail>(`/api/v1/platform/tenants/${params.id}`));
+      setDetail(await apiClient.get<UtilityDetail>(`/api/v1/platform/utilities/${params.id}`));
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -122,7 +122,7 @@ export default function PlatformTenantDetailPage() {
     setError(null);
     try {
       await apiClient.post(
-        `/api/v1/platform/tenants/${params.id}/${next === "SUSPENDED" ? "suspend" : "reactivate"}`,
+        `/api/v1/platform/utilities/${params.id}/${next === "SUSPENDED" ? "suspend" : "reactivate"}`,
         {},
       );
       await load();
@@ -141,13 +141,13 @@ export default function PlatformTenantDetailPage() {
   if (!detail) {
     return (
       <div>
-        <PageHeader title="Tenant" />
+        <PageHeader title="Utility" />
         <div style={{ ...card, padding: "20px", fontSize: 13, color: "var(--danger)" }}>
           {error ?? "Not found."}
         </div>
         <div style={{ marginTop: 16 }}>
-          <Link href="/platform/tenants" style={{ color: "var(--accent-primary)", fontSize: 13 }}>
-            Back to tenants
+          <Link href="/platform/utilities" style={{ color: "var(--accent-primary)", fontSize: 13 }}>
+            Back to utilities
           </Link>
         </div>
       </div>
@@ -336,8 +336,8 @@ export default function PlatformTenantDetailPage() {
       </Tabs>
 
       <div style={{ marginTop: 20 }}>
-        <button onClick={() => router.push("/platform/tenants")} style={{ ...btnStyle, color: "var(--text-muted)" }}>
-          Back to tenants
+        <button onClick={() => router.push("/platform/utilities")} style={{ ...btnStyle, color: "var(--text-muted)" }}>
+          Back to utilities
         </button>
       </div>
 

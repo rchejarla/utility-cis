@@ -81,7 +81,7 @@ export default function PlatformTenantsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await apiClient.get<{ data: UtilitySummary[] }>("/api/v1/platform/tenants");
+      const res = await apiClient.get<{ data: UtilitySummary[] }>("/api/v1/platform/utilities");
       setUtilities(res.data ?? []);
       setError(null);
     } catch (err) {
@@ -100,7 +100,7 @@ export default function PlatformTenantsPage() {
     setError(null);
     try {
       await apiClient.post(
-        `/api/v1/platform/tenants/${u.id}/${next === "SUSPENDED" ? "suspend" : "reactivate"}`,
+        `/api/v1/platform/utilities/${u.id}/${next === "SUSPENDED" ? "suspend" : "reactivate"}`,
         {},
       );
       await load();
@@ -115,9 +115,9 @@ export default function PlatformTenantsPage() {
   return (
     <div>
       <PageHeader
-        title="Tenants"
+        title="Utilities"
         subtitle="Every utility on this deployment. These operations sit above any one tenant, so no tenant role can reach them — not even System Admin."
-        action={{ label: "Add tenant", href: "/platform/tenants/new" }}
+        action={{ label: "Add utility", href: "/platform/utilities/new" }}
       />
 
       {error && (
@@ -141,7 +141,7 @@ export default function PlatformTenantsPage() {
         <div style={{ ...card, padding: "32px 18px", textAlign: "center", fontSize: 13, color: "var(--text-muted)" }}>
           {/* Only claimed when the list actually came back empty — saying
               "none at all" under an error box would contradict it. */}
-          {error ? "Could not load the tenant list." : "No tenants. This database has none at all."}
+          {error ? "Could not load the utility list." : "No utilities. This database has none at all."}
         </div>
       ) : (
         <div style={card}>
@@ -164,7 +164,7 @@ export default function PlatformTenantsPage() {
                     {/* The counts in this row are summaries; the name is
                         how you get to what they summarise. */}
                     <Link
-                      href={`/platform/tenants/${u.id}`}
+                      href={`/platform/utilities/${u.id}`}
                       style={{ color: "var(--accent-primary)", textDecoration: "none" }}
                     >
                       {u.name}

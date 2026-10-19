@@ -125,7 +125,7 @@ export async function authorizationMiddleware(
   if (utilityStatus === "SUSPENDED") {
     reply.status(403).send({
       error: {
-        code: "TENANT_SUSPENDED",
+        code: "UTILITY_SUSPENDED",
         message: "This utility is suspended. Contact the platform operator.",
       },
     });

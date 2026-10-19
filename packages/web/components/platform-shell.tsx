@@ -37,7 +37,7 @@ const PLATFORM_SECTIONS: NavSection[] = [
       // sections are not permission-filtered. "platform" is the honest
       // value: it names the authority these screens actually need.
       {
-        href: "/platform/tenants",
+        href: "/platform/utilities",
         label: "Utilities",
         icon: faBuildingColumns,
         module: "platform",

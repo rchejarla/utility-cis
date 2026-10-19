@@ -99,12 +99,12 @@ beforeEach(() => {
   (prisma.utility.update as Mock).mockResolvedValue(summaryRow({ status: "SUSPENDED" }));
 });
 
-describe("GET /api/v1/platform/tenants", () => {
+describe("GET /api/v1/platform/utilities", () => {
   it("lists tenants for the platform actor", async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/platform/tenants",
+      url: "/api/v1/platform/utilities",
       headers: platformHeaders,
     });
 
@@ -116,7 +116,7 @@ describe("GET /api/v1/platform/tenants", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/platform/tenants",
+      url: "/api/v1/platform/utilities",
       headers: tenantHeaders,
     });
 
@@ -133,12 +133,12 @@ describe("GET /api/v1/platform/tenants", () => {
     const { buildApp: buildProd } = await import("../../app.js");
     const app = await buildProd();
 
-    expect(app.hasRoute({ method: "GET", url: "/api/v1/platform/tenants" })).toBe(true);
+    expect(app.hasRoute({ method: "GET", url: "/api/v1/platform/utilities" })).toBe(true);
     vi.unstubAllEnvs();
   });
 });
 
-describe("POST /api/v1/platform/tenants", () => {
+describe("POST /api/v1/platform/utilities", () => {
   it("creates, and answers 201", async () => {
     (prisma.utility.findUnique as Mock).mockResolvedValue(null);
     (prisma.utility.findFirst as Mock).mockResolvedValue(null);
@@ -150,7 +150,7 @@ describe("POST /api/v1/platform/tenants", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/platform/tenants",
+      url: "/api/v1/platform/utilities",
       headers: platformHeaders,
       payload: { name: "City of Example" },
     });
@@ -169,7 +169,7 @@ describe("POST /api/v1/platform/tenants", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/platform/tenants",
+      url: "/api/v1/platform/utilities",
       headers: platformHeaders,
       payload: { name: "City of Example", dryRun: true },
     });
@@ -181,7 +181,7 @@ describe("POST /api/v1/platform/tenants", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/platform/tenants",
+      url: "/api/v1/platform/utilities",
       headers: tenantHeaders,
       payload: { name: "City of Example" },
     });
@@ -195,7 +195,7 @@ describe("POST /api/v1/platform/tenants", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/platform/tenants",
+      url: "/api/v1/platform/utilities",
       headers: platformHeaders,
       payload: { name: "   " },
     });
@@ -207,7 +207,7 @@ describe("POST /api/v1/platform/tenants", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/platform/tenants",
+      url: "/api/v1/platform/utilities",
       headers: platformHeaders,
       payload: { name: "City of Example", firstAdmin: { email: "a@b.gov" } },
     });
@@ -221,7 +221,7 @@ describe("POST /api/v1/platform/tenants", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/platform/tenants",
+      url: "/api/v1/platform/utilities",
       headers: platformHeaders,
       payload: { name: "City of Example", profile: "bozeman" },
     });
@@ -230,7 +230,7 @@ describe("POST /api/v1/platform/tenants", () => {
   });
 });
 
-describe("GET /api/v1/platform/tenants/:id", () => {
+describe("GET /api/v1/platform/utilities/:id", () => {
   function mockDetail() {
     // The detail read selects the whole summary projection, not the
     // `{ id }` the suspend path's existence check does.
@@ -258,7 +258,7 @@ describe("GET /api/v1/platform/tenants/:id", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "GET",
-      url: `/api/v1/platform/tenants/${TENANT}`,
+      url: `/api/v1/platform/utilities/${TENANT}`,
       headers: platformHeaders,
     });
 
@@ -273,7 +273,7 @@ describe("GET /api/v1/platform/tenants/:id", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "GET",
-      url: `/api/v1/platform/tenants/${TENANT}`,
+      url: `/api/v1/platform/utilities/${TENANT}`,
       headers: tenantHeaders,
     });
 
@@ -285,7 +285,7 @@ describe("GET /api/v1/platform/tenants/:id", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "GET",
-      url: `/api/v1/platform/tenants/${ABSENT}`,
+      url: `/api/v1/platform/utilities/${ABSENT}`,
       headers: platformHeaders,
     });
 
@@ -296,7 +296,7 @@ describe("GET /api/v1/platform/tenants/:id", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/platform/tenants/not-a-uuid",
+      url: "/api/v1/platform/utilities/not-a-uuid",
       headers: platformHeaders,
     });
 
@@ -309,7 +309,7 @@ describe("suspend and reactivate", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/platform/tenants/${TENANT}/suspend`,
+      url: `/api/v1/platform/utilities/${TENANT}/suspend`,
       headers: platformHeaders,
       payload: {},
     });
@@ -323,7 +323,7 @@ describe("suspend and reactivate", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/platform/tenants/${TENANT}/reactivate`,
+      url: `/api/v1/platform/utilities/${TENANT}/reactivate`,
       headers: platformHeaders,
       payload: {},
     });
@@ -339,7 +339,7 @@ describe("suspend and reactivate", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/platform/tenants/${ABSENT}/suspend`,
+      url: `/api/v1/platform/utilities/${ABSENT}/suspend`,
       headers: platformHeaders,
       payload: {},
     });
@@ -352,7 +352,7 @@ describe("suspend and reactivate", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/platform/tenants/${TENANT}/suspend`,
+      url: `/api/v1/platform/utilities/${TENANT}/suspend`,
       headers: tenantHeaders,
       payload: {},
     });
@@ -365,7 +365,7 @@ describe("suspend and reactivate", () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/platform/tenants/not-a-uuid/suspend",
+      url: "/api/v1/platform/utilities/not-a-uuid/suspend",
       headers: platformHeaders,
     });
 

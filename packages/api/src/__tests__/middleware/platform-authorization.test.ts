@@ -169,7 +169,7 @@ describe("a suspended tenant", () => {
     const res = await app.inject({ method: "GET", url: "/__tenant", headers });
 
     expect(res.statusCode).toBe(403);
-    expect(JSON.parse(res.body).error.code).toBe("TENANT_SUSPENDED");
+    expect(JSON.parse(res.body).error.code).toBe("UTILITY_SUSPENDED");
   });
 
   it("still admits the platform actor", async () => {
@@ -188,7 +188,7 @@ describe("a suspended tenant", () => {
     const app = await appWithProbes();
     const res = await app.inject({ method: "GET", url: "/__tenant", headers });
 
-    expect(JSON.parse(res.body).error.code).toBe("TENANT_SUSPENDED");
+    expect(JSON.parse(res.body).error.code).toBe("UTILITY_SUSPENDED");
   });
 });
 

@@ -89,7 +89,7 @@ export async function platformRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/api/v1/platform/tenants",
+    "/api/v1/platform/utilities",
     { config: { platform: true } },
     async (_request, reply) => {
       return reply.send({ data: await listUtilities() });
@@ -97,7 +97,7 @@ export async function platformRoutes(app: FastifyInstance) {
   );
 
   app.get(
-    "/api/v1/platform/tenants/:id",
+    "/api/v1/platform/utilities/:id",
     { config: { platform: true } },
     async (request, reply) => {
       const { id } = tenantParamsSchema.parse(request.params);
@@ -106,7 +106,7 @@ export async function platformRoutes(app: FastifyInstance) {
   );
 
   app.post(
-    "/api/v1/platform/tenants",
+    "/api/v1/platform/utilities",
     { config: { platform: true } },
     async (request, reply) => {
       const body = provisionBodySchema.parse(request.body);
@@ -162,7 +162,7 @@ export async function platformRoutes(app: FastifyInstance) {
   );
 
   app.post(
-    "/api/v1/platform/tenants/:id/suspend",
+    "/api/v1/platform/utilities/:id/suspend",
     { config: { platform: true } },
     async (request, reply) => {
       const { id } = tenantParamsSchema.parse(request.params);
@@ -171,7 +171,7 @@ export async function platformRoutes(app: FastifyInstance) {
   );
 
   app.post(
-    "/api/v1/platform/tenants/:id/reactivate",
+    "/api/v1/platform/utilities/:id/reactivate",
     { config: { platform: true } },
     async (request, reply) => {
       const { id } = tenantParamsSchema.parse(request.params);

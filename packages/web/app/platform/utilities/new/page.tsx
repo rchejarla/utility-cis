@@ -79,11 +79,11 @@ export default function NewPlatformTenantPage() {
         body.firstAdmin = { email: adminEmail.trim(), name: adminName.trim() };
       }
       const { apiClient } = await import("@/lib/api-client");
-      const result = await apiClient.post<ProvisionResult>("/api/v1/platform/tenants", body);
+      const result = await apiClient.post<ProvisionResult>("/api/v1/platform/utilities", body);
       if (dryRun) {
         setPreview(result);
       } else {
-        router.push("/platform/tenants");
+        router.push("/platform/utilities");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -95,7 +95,7 @@ export default function NewPlatformTenantPage() {
   return (
     <div>
       <PageHeader
-        title="Provision a tenant"
+        title="Provision a utility"
         subtitle="Creates the utility, enables every module, and adds the six preset roles. Optionally its first admin."
       />
 
@@ -200,7 +200,7 @@ export default function NewPlatformTenantPage() {
               opacity: blocked ? 0.55 : 1,
             }}
           >
-            {busy ? "Working..." : "Create tenant"}
+            {busy ? "Working..." : "Create utility"}
           </button>
           <button
             onClick={() => submit(true)}
@@ -216,7 +216,7 @@ export default function NewPlatformTenantPage() {
             Preview
           </button>
           <button
-            onClick={() => router.push("/platform/tenants")}
+            onClick={() => router.push("/platform/utilities")}
             style={{ ...btnStyle, background: "transparent", color: "var(--text-muted)" }}
           >
             Cancel
