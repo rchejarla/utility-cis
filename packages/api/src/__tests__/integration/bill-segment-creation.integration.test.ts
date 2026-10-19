@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, ensurePrincipal } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 5a task 7 — POST /api/v1/service-agreements/:id/bill-segments produces
@@ -85,6 +85,7 @@ beforeAll(async () => {
   });
   saId = assignment.serviceAgreementId;
   utilityId = assignment.serviceAgreement.utilityId;
+  await ensurePrincipal(prismaImports.prisma, utilityId);
 
   // Enable the agreements module so the bill-segment routes' permission
   // check (module: agreements, permission: EDIT/VIEW) passes.

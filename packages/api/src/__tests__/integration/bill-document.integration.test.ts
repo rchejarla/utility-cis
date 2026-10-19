@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
 import type { Prisma } from "@utility-cis/shared/src/generated/prisma";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import {bootPostgres, ensurePrincipal } from "./_effective-dating-fixtures.js";
 
 /**
  * BillDocument end to end against a real database.
@@ -58,9 +58,15 @@ let app: FastifyInstance;
 
 /**
  * An unsigned dev token, the shape the auth middleware accepts when
- * `alg: "none"`. No CisUser row is seeded, so the authorization
- * middleware's own backwards-compatibility path skips the per-permission
- * check — these cases are about status mapping, not about RBAC.
+ * `alg: "none"`.
+ *
+ * This comment used to say that no CisUser row is seeded, so the
+ * middleware's backwards-compatibility path skipped the per-permission
+ * check. That path is gone — it handed every permission to any token
+ * whose subject had no row — so the principal is seeded in `beforeAll`
+ * with a role that grants everything. The cases here are still about
+ * status mapping rather than RBAC; the difference is that the permission
+ * they need is now granted rather than waived.
  */
 function token(claims: Record<string, unknown> = {}): string {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
@@ -109,6 +115,7 @@ beforeEach(async () => {
   await prisma.$executeRawUnsafe(
     `TRUNCATE TABLE audit_log, bill_document, bill_segment_line, bill_segment, bill, service_agreement, account, customer, billing_address, billing_cycle, rate_component, rate_component_kind, rate_schedule, commodity, utility_config, utility_module, user_role, cis_user, role RESTART IDENTITY CASCADE`,
   );
+  await ensurePrincipal(prisma, UTILITY);
 });
 
 /** Audit rows this entity produced, oldest first. */
@@ -764,12 +771,26 @@ async function grantAccounts(permissions: string[]): Promise<void> {
   const role = await prisma.role.create({
     data: { utilityId: UTILITY, name: `Role ${permissions.join("-")}`, permissions: { accounts: permissions } },
   });
-  await prisma.cisUser.create({
-    data: { id: ACTOR, utilityId: UTILITY, email: "tester@example.com", name: "Tester", isActive: true },
+  // Upserted, not created: `ensurePrincipal` in beforeEach already made
+  // this actor so the cases that never call this helper can authenticate
+  // at all. This one narrows the permissions rather than inventing the
+  // user.
+  await prisma.cisUser.upsert({
+    where: { id: ACTOR },
+    update: { utilityId: UTILITY, isActive: true },
+    create: { id: ACTOR, utilityId: UTILITY, email: "tester@example.com", name: "Tester", isActive: true },
   });
-  await prisma.userRole.create({
-    data: { utilityId: UTILITY, userId: ACTOR, accountId: null, roleId: role.id },
+  const assignment = await prisma.userRole.findFirst({
+    where: { userId: ACTOR, accountId: null },
+    select: { id: true },
   });
+  if (assignment) {
+    await prisma.userRole.update({ where: { id: assignment.id }, data: { roleId: role.id } });
+  } else {
+    await prisma.userRole.create({
+      data: { utilityId: UTILITY, userId: ACTOR, accountId: null, roleId: role.id },
+    });
+  }
   const rbac = await import("../../services/rbac.service.js");
   await rbac.invalidateUserRoleCache(ACTOR, UTILITY);
 }

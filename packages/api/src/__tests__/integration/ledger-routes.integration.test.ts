@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, ensurePrincipal } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 1 — HTTP surface for manual posting: persistence, duplicate-post
@@ -109,6 +109,12 @@ beforeAll(async () => {
     },
   });
   otherAccountId = otherAccount.id;
+
+  // ACTOR is the default subject of `headers()` and the privileged one;
+  // the four below exist to have deliberately narrower permissions. It
+  // was the only one never seeded, which is precisely what the comment
+  // below warned about — it rode the bypass until that was closed.
+  await ensurePrincipal(prisma, utilityId);
 
   // Real users with real roles, so the permission gate actually runs
   // (a token with no cis_user row bypasses it).

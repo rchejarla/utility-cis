@@ -7,6 +7,7 @@ import {
   makeTenantFixture,
   TENANT_A,
   type TenantFixture,
+  ensurePrincipal,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -115,6 +116,7 @@ afterAll(async () => {
 beforeEach(async () => {
   const { prisma } = prismaImports;
   await resetDb(prisma);
+  await ensurePrincipal(prisma, TENANT_A);
   // The shared resetDb doesn't truncate import tables — add them so
   // tests don't accumulate batches across cases.
   await prisma.$executeRawUnsafe(

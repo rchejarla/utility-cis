@@ -7,6 +7,7 @@ import {
   makeTenantFixture,
   TENANT_A,
   type TenantFixture,
+  ensurePrincipal,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -70,6 +71,7 @@ beforeEach(async () => {
     "TRUNCATE TABLE user_role, contact, cis_user, role RESTART IDENTITY CASCADE",
   );
   fixA = await makeTenantFixture(prisma, TENANT_A);
+  await ensurePrincipal(prisma, TENANT_A);
 
   for (const moduleKey of ENABLED_MODULES) {
     await prisma.utilityModule.create({

@@ -9,6 +9,7 @@ import {
   TENANT_B,
   ACTOR,
   type TenantFixture,
+  ensurePrincipal,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -108,6 +109,7 @@ beforeEach(async () => {
   await prisma.$executeRawUnsafe(
     "TRUNCATE TABLE notification, notification_template, customer RESTART IDENTITY CASCADE",
   );
+  await ensurePrincipal(prisma, TENANT_A);
 
   await makeTenantFixture(prisma, TENANT_A);
   fixB = await makeTenantFixture(prisma, TENANT_B);

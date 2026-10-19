@@ -7,6 +7,7 @@ import {
   makeTenantFixture,
   TENANT_A,
   type TenantFixture,
+  ensurePrincipal,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -72,6 +73,7 @@ afterAll(async () => {
 beforeEach(async () => {
   const { prisma } = prismaImports;
   await resetDb(prisma);
+  await ensurePrincipal(prisma, TENANT_A);
   fixA = await makeTenantFixture(prisma, TENANT_A);
 
   // Enable the modules the routes are gated on.

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
-import { bootPostgres, TENANT_A } from "./_effective-dating-fixtures.js";
+import { bootPostgres, TENANT_A, ensurePrincipal} from "./_effective-dating-fixtures.js";
 
 /**
  * `reviseRateSchedule` must carry forward every still-active component
@@ -47,6 +47,7 @@ beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
+  await ensurePrincipal(prismaImports.prisma, TENANT_A);
   appImports = await import("../../app.js");
   app = await appImports.buildApp();
   await app.ready();
