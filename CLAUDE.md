@@ -144,11 +144,20 @@ line by line before keeping it.
 
 Every entity has `utility_id`, and since 2026-10-18 it is a **foreign key to `utility(id)`** (`ON DELETE RESTRICT`) — a tenant is a row, so a write naming one that does not exist is refused. It is nullable on seven global reference tables, where NULL means "belongs to no tenant". PostgreSQL RLS enforces tenant isolation at DB level, though the policies are inert while the app role is a superuser that owns the tables. The API sets `app.current_utility_id` per request via JWT claims. Dev tenant UUID: `00000000-0000-4000-8000-000000000001`.
 
+**The platform actor** is a `CisUser` with a **null `utility_id`** — the one identity that sits above tenants (tenancy design note Q2). It holds no `user_role` row: being the platform actor *is* the authority, so platform routes declare `{ config: { platform: true } }` instead of a module and permission, and `getPlatformActor` gates them on a real row with `utility_id IS NULL` and `is_active`. A tenant's own System Admin is refused there, which is the point — it holds every permission a *tenant* can grant, which is not the same authority.
+
+Consequences worth knowing before touching `cis_user`:
+- `utility_id` being nullable means a query reading users by tenant has to mean it: a platform row matches no `utility_id = $1`. `schema-invariants.integration.test.ts` pins which tables may have a null `utility_id` (the seven global reference tables, plus `cis_user`), so widening that set fails a test on purpose.
+- Both `@@unique([utility_id, …])` constraints stop constraining a platform row, since Postgres treats NULLs as distinct. Two **partial unique indexes** cover it (`email`, and `external_id` where present) and exist only in SQL — Prisma cannot express them, so `migrate dev` would propose dropping them.
+- `request.user` is **not** set on a platform request; `request.platformActor` is, and the authorization middleware refuses each kind on the other's routes. That is deliberate: `request.user.utilityId` stays a non-nullable string at all 243 of its read sites.
+
+**Suspending a tenant** sets `Utility.status` and is enforced on every request, in the same authorization pass that checks enabled modules — a token minted before the suspension would otherwise keep working for its lifetime. It deletes nothing; purge is a separate, deferred capability.
+
 **Anything writing tenant-scoped rows must ensure the utility row exists first.** Integration tests declare their tenants at `bootPostgres({ utilities: [...] })`, or call `ensureUtilities(prisma, [...])` if they boot their own container; `schema-invariants.integration.test.ts` guards the shape.
 
 ## Portal
 
-Customer portal lives at `/portal/*` as a route segment in the web app. Unified JWT format shared with admin — portal tokens carry a `customer_id` claim. Portal users are `CisUser` rows with a `customerId` FK to `Customer` and a `Portal Customer` role with `portal_*` module permissions. Admin chrome (sidebar/topbar) is skipped for `/portal/*`, `/login`, and `/dev` routes.
+Customer portal lives at `/portal/*` as a route segment in the web app. Unified JWT format shared with admin — portal tokens carry a `customer_id` claim. Portal users are `CisUser` rows with a `customerId` FK to `Customer` and a `Portal Customer` role with `portal_*` module permissions. Admin chrome (sidebar/topbar) is skipped for `/portal/*`, `/login`, `/dev` and `/platform/*` routes.
 
 **Portal API routes:** `/portal/api/auth/register`, `/portal/api/auth/login`, `/portal/api/dashboard`, `/portal/api/accounts`, `/portal/api/accounts/:id`, `/portal/api/agreements/:id/usage`, `/portal/api/profile` (GET + PATCH), `/portal/api/bills/:id/document` (GET — the customer's own bill PDF, streamed through the API).
 

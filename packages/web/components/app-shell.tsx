@@ -11,8 +11,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { isMobile, isTablet } = useBreakpoint();
 
-  // Portal, login, and dev pages render without the admin shell
-  if (pathname.startsWith("/dev") || pathname.startsWith("/portal") || pathname.startsWith("/login")) {
+  // Portal, login, dev and platform pages render without the admin
+  // shell. /platform is not a tenant's screen at all — it belongs to the
+  // operator above tenants — so the tenant sidebar and its theme would
+  // be actively misleading there.
+  if (
+    pathname.startsWith("/dev") ||
+    pathname.startsWith("/portal") ||
+    pathname.startsWith("/login") ||
+    pathname.startsWith("/platform")
+  ) {
     return <AuthPermissionProvider>{children}</AuthPermissionProvider>;
   }
 

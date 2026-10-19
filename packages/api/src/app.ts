@@ -31,7 +31,7 @@ import { contactRoutes } from "./routes/contacts.js";
 import { billingAddressRoutes } from "./routes/billing-addresses.js";
 import { attachmentRoutes } from "./routes/attachments.js";
 import { authRoutes } from "./routes/auth.js";
-import { devTenantRoutes } from "./routes/dev-tenants.js";
+import { platformRoutes } from "./routes/platform.js";
 import { userRoutes } from "./routes/users.js";
 import { roleRoutes } from "./routes/roles.js";
 import { meterReadRoutes } from "./routes/meter-reads.js";
@@ -151,7 +151,7 @@ export async function buildApp() {
   await app.register(billingAddressRoutes);
   await app.register(attachmentRoutes);
   await app.register(authRoutes);
-  await app.register(devTenantRoutes);
+  await app.register(platformRoutes);
   await app.register(userRoutes);
   await app.register(roleRoutes);
   await app.register(meterReadRoutes);

@@ -45,14 +45,17 @@ function LoginPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presetEmail]);
 
-  async function doLogin(loginEmail: string) {
+  async function doLogin(loginEmail: string, platform = false) {
     setError("");
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/v1/auth/dev-login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: loginEmail }),
+        // `platform` is an explicit flag rather than an inference from a
+        // missing utilityId: that field carries a default, so its
+        // absence means "the dev tenant", not "the platform".
+        body: JSON.stringify(platform ? { email: loginEmail, platform: true } : { email: loginEmail }),
       });
       const data = await res.json();
 
@@ -231,9 +234,39 @@ function LoginPageInner() {
           <div style={{ fontSize: 10, color: "var(--text-muted)", textAlign: "center", marginBottom: 10, letterSpacing: "0.04em", textTransform: "uppercase" }}>
             Portal customers
           </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center", marginBottom: 12 }}>
             <QuickBtn label="Jane Smith" email="jane.smith@example.com" color="#f59e0b" onClick={doLogin} />
             <QuickBtn label="Robert Johnson" email="robert.j@example.com" color="#f59e0b" onClick={doLogin} />
+          </div>
+
+          {/*
+            Set apart from the staff pills because it is not a staff
+            role. This identity belongs to no tenant and holds no role —
+            it sits above every tenant (Q2), and it is the only sign-in
+            here that does not land in a tenant's screens.
+          */}
+          <div
+            style={{
+              fontSize: 10,
+              color: "var(--text-muted)",
+              textAlign: "center",
+              marginBottom: 10,
+              paddingTop: 12,
+              borderTop: "1px solid var(--border-subtle)",
+              letterSpacing: "0.04em",
+              textTransform: "uppercase",
+            }}
+          >
+            Above all tenants
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
+            <QuickBtn
+              label="Platform Operator"
+              email="platform@utility.com"
+              color="#0ea5e9"
+              platform
+              onClick={doLogin}
+            />
           </div>
         </div>
       </div>
@@ -245,17 +278,20 @@ function QuickBtn({
   label,
   email,
   color,
+  platform,
   onClick,
 }: {
   label: string;
   email: string;
   color: string;
-  onClick: (email: string) => void;
+  /** Signs in as the platform operator rather than a tenant's user. */
+  platform?: boolean;
+  onClick: (email: string, platform?: boolean) => void;
 }) {
   return (
     <button
       type="button"
-      onClick={() => onClick(email)}
+      onClick={() => onClick(email, platform)}
       title={email}
       style={{
         padding: "4px 10px",

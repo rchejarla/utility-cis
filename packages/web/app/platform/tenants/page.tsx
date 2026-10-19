@@ -1,20 +1,26 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import Link from "next/link";
 import { apiClient } from "@/lib/api-client";
 
 /**
- * Provision and list tenants.
+ * The platform operator's console: tenant lifecycle.
  *
- * Lives under /dev, which `app-shell.tsx` excludes from admin chrome, and
- * appears in no sidebar. The design note puts provisioning behind a
- * platform actor (build-order step 5) and a console at step 6; this
- * exists before both, so its API is fenced to non-production builds. The
- * reason is authority rather than caution: inside a tenant's own
- * Administration section this page would be gated on a tenant
- * permission, which is one tenant's admin acting above tenants — the
- * borrowing §1.6 flags with Bull Board.
+ * This lived at `/dev/tenants` behind a non-production fence, because
+ * the authority it needed did not exist — before a platform actor, a
+ * provisioning page had nowhere to live but a tenant's own
+ * Administration section, gated on a tenant permission, which is one
+ * tenant's admin acting above tenants (§1.6). `{ platform: true }` is
+ * that authority now, so the fence is gone.
+ *
+ * It sits outside the admin shell deliberately. This is not a tenant's
+ * screen, so the tenant sidebar and the tenant's own theme would be
+ * actively misleading on it.
+ *
+ * What this is not: a claim that the deployment is safe. Nothing in this
+ * app authenticates anyone yet, so what un-fencing buys is the right
+ * authority model rather than a secure console. Real identity is Q2's
+ * destination.
  */
 
 interface UtilitySummary {
@@ -64,20 +70,29 @@ const label: React.CSSProperties = {
   marginBottom: "6px",
 };
 
-export default function DevTenantsPage() {
+const cell: React.CSSProperties = {
+  padding: "10px",
+  fontSize: "13px",
+  borderBottom: "1px solid var(--border-subtle)",
+  whiteSpace: "nowrap",
+};
+
+export default function PlatformTenantsPage() {
   const [utilities, setUtilities] = useState<UtilitySummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
   const [adminEmail, setAdminEmail] = useState("");
   const [adminName, setAdminName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [preview, setPreview] = useState<ProvisionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [actor, setActor] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await apiClient.get<{ data: UtilitySummary[] }>("/api/v1/dev/tenants");
+      const res = await apiClient.get<{ data: UtilitySummary[] }>("/api/v1/platform/tenants");
       setUtilities(res.data ?? []);
       setError(null);
     } catch (err) {
@@ -89,6 +104,12 @@ export default function DevTenantsPage() {
 
   useEffect(() => {
     load();
+    // Who the console is acting as. Answered from the row rather than the
+    // token, so a renamed operator sees their new name.
+    apiClient
+      .get<{ actor: { email: string } | null }>("/api/v1/platform/me")
+      .then((res) => setActor(res.actor?.email ?? null))
+      .catch(() => setActor(null));
   }, [load]);
 
   async function submit(dryRun: boolean) {
@@ -97,16 +118,14 @@ export default function DevTenantsPage() {
     setPreview(null);
     try {
       const body: Record<string, unknown> = { name: name.trim(), dryRun };
-      // Both or neither. Sending one of them produced `email: ""`, which
-      // the route's schema rejects as a 400 the client renders as
-      // "Validation failed" with the field list dropped — a dead end
-      // where the script says "--admin-email and --admin-name go
-      // together". The buttons are disabled in that state anyway; this
-      // is the guard that makes the half-filled body unconstructible.
+      // Both or neither. Sending one of them produces `email: ""`, which
+      // the route rejects as an opaque 400; the buttons are disabled in
+      // that state anyway, and this makes the half-filled body
+      // unconstructible.
       if (adminEmail.trim() && adminName.trim()) {
         body.firstAdmin = { email: adminEmail.trim(), name: adminName.trim() };
       }
-      const result = await apiClient.post<ProvisionResult>("/api/v1/dev/tenants", body);
+      const result = await apiClient.post<ProvisionResult>("/api/v1/platform/tenants", body);
       if (dryRun) {
         setPreview(result);
       } else {
@@ -122,14 +141,33 @@ export default function DevTenantsPage() {
     }
   }
 
-  // The admin is optional, but it is one thing made of two fields: the
-  // route requires both or neither, so a half-filled pair is a state the
-  // form should name rather than submit.
+  async function setStatus(u: UtilitySummary, next: "ACTIVE" | "SUSPENDED") {
+    const verb = next === "SUSPENDED" ? "Suspend" : "Reactivate";
+    // Suspending stops every one of that tenant's staff working, so it
+    // is confirmed by name rather than by row position.
+    if (next === "SUSPENDED" && !window.confirm(`${verb} ${u.name}? Its users will be refused on every screen until it is reactivated.`)) {
+      return;
+    }
+    setRowBusy(u.id);
+    setError(null);
+    try {
+      await apiClient.post(
+        `/api/v1/platform/tenants/${u.id}/${next === "SUSPENDED" ? "suspend" : "reactivate"}`,
+        {},
+      );
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRowBusy(null);
+    }
+  }
+
   const adminHalfFilled = Boolean(adminEmail.trim()) !== Boolean(adminName.trim());
   const blocked = busy || !name.trim() || adminHalfFilled;
 
   return (
-    <div style={{ maxWidth: "860px", margin: "0 auto", padding: "40px 24px" }}>
+    <div style={{ maxWidth: "960px", margin: "0 auto", padding: "40px 24px" }}>
       <div style={{ marginBottom: "32px" }}>
         <div
           style={{
@@ -141,7 +179,7 @@ export default function DevTenantsPage() {
             marginBottom: "12px",
           }}
         >
-          Dev Testing
+          Platform
         </div>
         <h1
           style={{
@@ -154,23 +192,11 @@ export default function DevTenantsPage() {
           Tenants
         </h1>
         <p style={{ fontSize: "14px", color: "var(--text-secondary)", margin: "0 0 8px" }}>
-          This screen exists only in development. Provisioning moves behind the platform actor at
-          build-order step 5, and this page with it.{" "}
-          <Link href="/dev" style={{ color: "var(--accent-primary)" }}>
-            Back to dev tools
-          </Link>
+          Creating, listing, suspending and reactivating utilities. These operations sit above any
+          one tenant, so no tenant role can reach them — not even System Admin.
         </p>
-        {/*
-          Stated up front because the 403 is otherwise a dead end: both
-          routes require settings:EDIT, and the Utility Admin preset holds
-          settings:["VIEW"] — the one permission separating it from System
-          Admin. A tenant's own admin enumerating every other tenant is
-          the borrowing this page is fenced against, so the lockout is the
-          design; being unable to tell why is not.
-        */}
         <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: 0 }}>
-          Requires <strong>System Admin</strong> — both routes are gated on{" "}
-          <code>settings:EDIT</code>, and Utility Admin holds <code>settings:VIEW</code> only.
+          {actor ? `Acting as ${actor}` : "Requires the platform operator."}
         </p>
       </div>
 
@@ -309,14 +335,16 @@ export default function DevTenantsPage() {
         {loading ? (
           <p style={{ fontSize: "13px", color: "var(--text-muted)" }}>Loading…</p>
         ) : utilities.length === 0 ? (
+          // Only claimed when the list actually came back empty — saying
+          // "none at all" under an error box would contradict it.
           <p style={{ fontSize: "13px", color: "var(--text-muted)" }}>
-            No tenants. This database has none at all.
+            {error ? "Could not load the tenant list." : "No tenants. This database has none at all."}
           </p>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                {["Name", "Status", "Created", "Modules", "Roles", "Users"].map((h) => (
+                {["Name", "Status", "Created", "Modules", "Roles", "Users", ""].map((h) => (
                   <th
                     key={h}
                     style={{
@@ -329,8 +357,6 @@ export default function DevTenantsPage() {
                       color: "var(--text-secondary)",
                       borderBottom: "1px solid var(--border)",
                       whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
                     }}
                   >
                     {h}
@@ -343,13 +369,11 @@ export default function DevTenantsPage() {
                 <tr key={u.id}>
                   <td
                     style={{
-                      padding: "10px",
-                      fontSize: "13px",
+                      ...cell,
                       color: "var(--text-primary)",
-                      borderBottom: "1px solid var(--border-subtle)",
+                      maxWidth: "260px",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
                     }}
                     title={u.id}
                   >
@@ -357,28 +381,40 @@ export default function DevTenantsPage() {
                   </td>
                   <td
                     style={{
-                      padding: "10px",
+                      ...cell,
                       fontSize: "12px",
+                      fontWeight: 600,
                       color: u.status === "ACTIVE" ? "var(--success)" : "var(--warning)",
-                      borderBottom: "1px solid var(--border-subtle)",
                     }}
                   >
                     {u.status}
                   </td>
-                  {[u.createdAt.slice(0, 10), u.moduleCount, u.roleCount, u.userCount].map((v, i) => (
-                    <td
-                      key={i}
+                  <td style={{ ...cell, color: "var(--text-secondary)" }}>
+                    {u.createdAt.slice(0, 10)}
+                  </td>
+                  <td style={{ ...cell, color: "var(--text-secondary)" }}>{u.moduleCount}</td>
+                  <td style={{ ...cell, color: "var(--text-secondary)" }}>{u.roleCount}</td>
+                  <td style={{ ...cell, color: "var(--text-secondary)" }}>{u.userCount}</td>
+                  <td style={{ ...cell, textAlign: "right" }}>
+                    <button
+                      onClick={() => setStatus(u, u.status === "ACTIVE" ? "SUSPENDED" : "ACTIVE")}
+                      disabled={rowBusy === u.id}
                       style={{
-                        padding: "10px",
-                        fontSize: "13px",
-                        color: "var(--text-secondary)",
-                        borderBottom: "1px solid var(--border-subtle)",
-                        whiteSpace: "nowrap",
+                        padding: "5px 12px",
+                        borderRadius: "var(--radius)",
+                        border: "1px solid var(--border)",
+                        background: "var(--bg-card)",
+                        color:
+                          u.status === "ACTIVE" ? "var(--danger)" : "var(--success)",
+                        fontSize: "12px",
+                        fontFamily: "inherit",
+                        cursor: rowBusy === u.id ? "not-allowed" : "pointer",
+                        opacity: rowBusy === u.id ? 0.55 : 1,
                       }}
                     >
-                      {v}
-                    </td>
-                  ))}
+                      {u.status === "ACTIVE" ? "Suspend" : "Reactivate"}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

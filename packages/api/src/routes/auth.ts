@@ -37,13 +37,64 @@ export async function authRoutes(app: FastifyInstance) {
     const devLoginSchema = z.object({
       email: z.string().email(),
       utilityId: z.string().uuid().default("00000000-0000-4000-8000-000000000001"),
+      /**
+       * Sign in as the platform operator rather than as a tenant's user
+       * (tenancy design note Q2). It is a separate flag rather than an
+       * inference from a missing `utilityId`, because that field carries
+       * a default — an absent one means "the dev tenant", not "the
+       * platform".
+       */
+      platform: z.boolean().optional(),
     });
 
     app.post(
       "/api/v1/auth/dev-login",
       { config: { skipAuth: true } },
       async (request, reply) => {
-        const { email, utilityId } = devLoginSchema.parse(request.body);
+        const { email, utilityId, platform } = devLoginSchema.parse(request.body);
+
+        if (platform) {
+          // utility_id IS NULL is the whole identity, so naming a
+          // tenant user's address here finds nothing rather than minting
+          // them a platform token. No role is resolved: being the
+          // platform actor is the authority (D6), and this user has no
+          // tenant to hold a role in.
+          const actor = await prisma.cisUser.findFirst({
+            where: { utilityId: null, email: email.toLowerCase(), isActive: true },
+          });
+
+          if (!actor) {
+            return reply.status(401).send({
+              error: {
+                code: "USER_NOT_FOUND",
+                message: "No active platform operator found with this email",
+              },
+            });
+          }
+
+          const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+          const payload = Buffer.from(
+            JSON.stringify({
+              sub: actor.id,
+              platform: true,
+              email: actor.email,
+              name: actor.name,
+            }),
+          ).toString("base64url");
+
+          return reply.send({
+            token: `${header}.${payload}.dev`,
+            user: {
+              id: actor.id,
+              email: actor.email,
+              name: actor.name,
+              roleName: "Platform Operator",
+              customerId: null,
+            },
+            isPortal: false,
+            redirectTo: "/platform/tenants",
+          });
+        }
 
         const user = await prisma.cisUser.findFirst({
           where: { utilityId, email: email.toLowerCase(), isActive: true },
