@@ -46,7 +46,13 @@ export interface CrudRoutesConfig {
     bodySchema: z.ZodTypeAny;
     service: (user: ServiceUser, id: string, data: unknown) => Promise<unknown>;
   };
-  del?: (id: string, utilityId: string) => Promise<unknown>;
+  /**
+   * Takes the whole ServiceUser rather than just the utility id, so a
+   * delete can be attributed in an audit row the way create and update
+   * already can. Roles is the only consumer today and the one that
+   * needed it.
+   */
+  del?: (id: string, user: ServiceUser) => Promise<unknown>;
 }
 
 function hasQuerySchema(list: ListWithQuery | ListWithoutQuery): list is ListWithQuery {
@@ -101,9 +107,9 @@ export function registerCrudRoutes(app: FastifyInstance, cfg: CrudRoutesConfig):
   if (cfg.del) {
     const delFn = cfg.del;
     app.delete(`${basePath}/:id`, routeOpts("DELETE"), async (request, reply) => {
-      const { utilityId } = request.user;
+      const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
-      await delFn(id, utilityId);
+      await delFn(id, { utilityId, actorId, actorName });
       return reply.status(204).send();
     });
   }

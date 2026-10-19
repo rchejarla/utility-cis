@@ -168,6 +168,87 @@ describe("module changes", () => {
   });
 });
 
+describe("role changes", () => {
+  let roleSvc: typeof import("../../services/role.service.js");
+
+  beforeEach(async () => {
+    await svc.provisionTenant({ utilityId: UTILITY, name: "City of Audit" }, operator);
+    roleSvc = await import("../../services/role.service.js");
+    await prismaImports.prisma.auditLog.deleteMany({ where: { utilityId: UTILITY } });
+  });
+
+  it("records a role being created", async () => {
+    await roleSvc.createRole(
+      UTILITY,
+      { name: "Auditor", permissions: { audit_log: ["VIEW"] } },
+      { actorId: OPERATOR, actorName: "Pat Operator", source: `platform:${OPERATOR}` },
+    );
+
+    const [row] = await auditRows("Role");
+    expect(row).toMatchObject({ action: "CREATE", source: `platform:${OPERATOR}` });
+    expect(row.afterState).toMatchObject({ name: "Auditor" });
+  });
+
+  it("records what a role's permissions changed from", async () => {
+    const { prisma } = prismaImports;
+    const role = await prisma.role.findFirstOrThrow({ where: { utilityId: UTILITY, name: "CSR" } });
+
+    await roleSvc.updateRole(
+      UTILITY,
+      role.id,
+      { permissions: { customers: ["VIEW"] } },
+      { actorId: OPERATOR, actorName: "Pat Operator", source: `platform:${OPERATOR}` },
+    );
+
+    const [row] = await auditRows("Role");
+    expect(row.beforeState).toMatchObject({ name: "CSR" });
+    expect(row.afterState).toMatchObject({ permissions: { customers: ["VIEW"] } });
+  });
+
+  it("records what a deleted role granted, since nothing can be looked up after", async () => {
+    const { prisma } = prismaImports;
+    const role = await prisma.role.create({
+      data: { utilityId: UTILITY, name: "Spare", permissions: { audit_log: ["VIEW"] } },
+    });
+
+    await roleSvc.deleteRole(UTILITY, role.id, {
+      actorId: OPERATOR,
+      actorName: "Pat Operator",
+      source: `platform:${OPERATOR}`,
+    });
+
+    const [row] = await auditRows("Role");
+    expect(row).toMatchObject({ action: "DELETE" });
+    expect(row.beforeState).toMatchObject({ name: "Spare" });
+  });
+
+  it("writes nothing when a refusal stops the delete", async () => {
+    const { prisma } = prismaImports;
+    const preset = await prisma.role.findFirstOrThrow({
+      where: { utilityId: UTILITY, name: "System Admin" },
+    });
+
+    await expect(
+      roleSvc.deleteRole(UTILITY, preset.id, { actorId: OPERATOR, actorName: "Pat" }),
+    ).rejects.toMatchObject({ code: "SYSTEM_ROLE" });
+
+    expect(await auditRows("Role")).toHaveLength(0);
+  });
+
+  it("attributes a tenant's own admin without a platform source", async () => {
+    // Both paths write a row; `source` is what tells them apart, and the
+    // tenant's own action leaves it NULL by the column's convention.
+    await roleSvc.createRole(
+      UTILITY,
+      { name: "Local", permissions: { audit_log: ["VIEW"] } },
+      { actorId: "00000000-0000-4000-8000-aaaa0000d002", actorName: "Tenant Admin" },
+    );
+
+    const [row] = await auditRows("Role");
+    expect(row).toMatchObject({ actorName: "Tenant Admin", source: null });
+  });
+});
+
 describe("the tenant's own view of it", () => {
   it("puts platform actions in the tenant's log, where its admins can read them", async () => {
     // The point of the whole exercise: a tenant can see what was done to

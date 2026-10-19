@@ -239,7 +239,14 @@ describe("GET /api/v1/platform/utilities/:id", () => {
       MODULES.map((moduleKey) => ({ moduleKey, isEnabled: true })),
     );
     (prisma.role.findMany as Mock).mockResolvedValue([
-      { id: "r1", name: "System Admin", description: "Everything", isSystem: true, permissions: { settings: ["VIEW"] } },
+      {
+        id: "r1",
+        name: "System Admin",
+        description: "Everything",
+        isSystem: true,
+        permissions: { settings: ["VIEW"] },
+        _count: { userRoles: 0 },
+      },
     ]);
     (prisma.cisUser.findMany as Mock).mockResolvedValue([
       {

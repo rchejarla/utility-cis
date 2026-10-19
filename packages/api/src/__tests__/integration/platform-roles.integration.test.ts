@@ -71,6 +71,9 @@ afterAll(async () => {
 beforeEach(async () => {
   const { prisma } = prismaImports;
   for (const id of [UTILITY, OTHER]) {
+    // Role mutations write audit rows, and audit_log.utility_id is
+    // ON DELETE RESTRICT, so they go before the utility.
+    await prisma.auditLog.deleteMany({ where: { utilityId: id } });
     await prisma.userRole.deleteMany({ where: { utilityId: id } });
     await prisma.cisUser.deleteMany({ where: { utilityId: id } });
     await prisma.role.deleteMany({ where: { utilityId: id } });
@@ -205,10 +208,41 @@ describe("deleting", () => {
     expect(await prisma.role.count({ where: { id: role.id } })).toBe(0);
   });
 
-  it("refuses a system role — BR-RB-002 still applies through this door", async () => {
+  it("deletes an unassigned preset, which nothing is protected by", async () => {
+    // BR-RB-002 used to refuse this because the role is marked
+    // isSystem. That protected nothing: BR-RB-003 below already refuses
+    // any role somebody holds, so a deletable role is by definition one
+    // whose removal takes no permission away from anyone. All it did was
+    // leave every utility permanently carrying six roles — Portal
+    // Customer on a utility with no portal, Field Technician on one with
+    // no field staff — with no way to shed them.
+    const { prisma } = prismaImports;
+    const preset = await prisma.role.findFirstOrThrow({
+      where: { utilityId: UTILITY, name: "Field Technician" },
+    });
+
+    const res = await app.inject({
+      method: "DELETE",
+      url: `${rolesUrl(UTILITY)}/${preset.id}`,
+      headers: platformAuthOnly,
+    });
+
+    expect(res.statusCode).toBeLessThan(300);
+    expect(await prisma.role.count({ where: { id: preset.id } })).toBe(0);
+  });
+
+  it("still refuses a preset somebody holds", async () => {
+    // The protection that does the work, on a role that is both a preset
+    // and assigned — the case BR-RB-002 was presumably written for.
     const { prisma } = prismaImports;
     const preset = await prisma.role.findFirstOrThrow({
       where: { utilityId: UTILITY, name: "System Admin" },
+    });
+    const user = await prisma.cisUser.create({
+      data: { utilityId: UTILITY, email: "admin@held.gov", name: "Admin" },
+    });
+    await prisma.userRole.create({
+      data: { utilityId: UTILITY, userId: user.id, accountId: null, roleId: preset.id },
     });
 
     const res = await app.inject({
@@ -218,7 +252,7 @@ describe("deleting", () => {
     });
 
     expect(res.statusCode).toBe(400);
-    expect(JSON.parse(res.body).error.code).toBe("SYSTEM_ROLE");
+    expect(JSON.parse(res.body).error.code).toBe("ROLE_IN_USE");
     expect(await prisma.role.count({ where: { id: preset.id } })).toBe(1);
   });
 

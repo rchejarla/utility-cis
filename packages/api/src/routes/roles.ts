@@ -11,12 +11,24 @@ export async function roleRoutes(app: FastifyInstance) {
     get: roleService.getRole,
     create: {
       bodySchema: createRoleSchema,
-      service: (user, data) => roleService.createRole(user.utilityId, data as never),
+      service: (user, data) =>
+        roleService.createRole(user.utilityId, data as never, {
+          actorId: user.actorId,
+          actorName: user.actorName,
+        }),
     },
     update: {
       bodySchema: updateRoleSchema,
-      service: (user, id, data) => roleService.updateRole(user.utilityId, id, data as never),
+      service: (user, id, data) =>
+        roleService.updateRole(user.utilityId, id, data as never, {
+          actorId: user.actorId,
+          actorName: user.actorName,
+        }),
     },
-    del: (id, utilityId) => roleService.deleteRole(utilityId, id),
+    del: (id, user) =>
+      roleService.deleteRole(user.utilityId, id, {
+        actorId: user.actorId,
+        actorName: user.actorName,
+      }),
   });
 }

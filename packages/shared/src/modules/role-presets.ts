@@ -126,3 +126,50 @@ export const PRESET_ROLES: readonly PresetRole[] = [
     },
   },
 ];
+
+/**
+ * Whether a utility's role still matches the preset it was copied from.
+ *
+ * The presets are a template applied once at provisioning, not a
+ * definition read afterwards — each utility owns its copies and editing
+ * one diverges it permanently, which re-provisioning deliberately will
+ * not revert. So a column driven by `isSystem` claims a role is the
+ * standard CSR even when its permissions were edited into something
+ * else; `isSystem` is set at creation and never changes.
+ *
+ * This is the derived answer, computed from the permissions actually
+ * stored, so it cannot go stale:
+ *
+ *   - `custom`   — no preset ships under this name
+ *   - `preset`   — matches what a new utility would get
+ *   - `modified` — shipped under that name, and has since diverged
+ *
+ * Verb order is ignored, since nothing guarantees it survives a round
+ * trip and a re-ordered list grants the same thing. A module whose list
+ * is empty counts as absent, because an editor that unchecks every box
+ * leaves `[]` rather than removing the key, and both grant nothing.
+ */
+export function presetDrift(
+  name: string,
+  permissions: Record<string, string[] | readonly string[]>,
+): "custom" | "preset" | "modified" {
+  const preset = PRESET_ROLES.find((r) => r.name === name);
+  if (!preset) return "custom";
+
+  const normalise = (map: Record<string, string[] | readonly string[]>) => {
+    const out: Record<string, string> = {};
+    for (const [module, verbs] of Object.entries(map ?? {})) {
+      const list = [...(verbs ?? [])].sort();
+      if (list.length > 0) out[module] = list.join(",");
+    }
+    return out;
+  };
+
+  const a = normalise(preset.permissions as Record<string, string[]>);
+  const b = normalise(permissions);
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const key of keys) {
+    if (a[key] !== b[key]) return "modified";
+  }
+  return "preset";
+}

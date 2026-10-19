@@ -97,6 +97,12 @@ function actorOf(request: { platformActor?: { id: string; name: string } }) {
   return { id: actor.id, name: actor.name, source: `platform:${actor.id}` };
 }
 
+/** The same operator, shaped for role.service's audit context. */
+function roleActorOf(request: { platformActor?: { id: string; name: string } }) {
+  const actor = request.platformActor!;
+  return { actorId: actor.id, actorName: actor.name, source: `platform:${actor.id}` };
+}
+
 export async function platformRoutes(app: FastifyInstance) {
   app.get(
     "/api/v1/platform/me",
@@ -182,7 +188,9 @@ export async function platformRoutes(app: FastifyInstance) {
       const { id } = tenantParamsSchema.parse(request.params);
       await assertUtilityExists(id);
       const body = createRoleSchema.parse(request.body);
-      return reply.status(201).send(await roleService.createRole(id, body));
+      return reply.status(201).send(
+        await roleService.createRole(id, body, roleActorOf(request)),
+      );
     },
   );
 
@@ -196,7 +204,7 @@ export async function platformRoutes(app: FastifyInstance) {
       // The scoping comes from the path: `updateRole` filters on
       // { id, utilityId }, so a role belonging to another utility is not
       // found rather than edited.
-      return reply.send(await roleService.updateRole(id, roleId, body));
+      return reply.send(await roleService.updateRole(id, roleId, body, roleActorOf(request)));
     },
   );
 
@@ -206,7 +214,7 @@ export async function platformRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { id, roleId } = roleParamsSchema.parse(request.params);
       await assertUtilityExists(id);
-      await roleService.deleteRole(id, roleId);
+      await roleService.deleteRole(id, roleId, roleActorOf(request));
       return reply.status(204).send();
     },
   );

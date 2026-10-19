@@ -365,6 +365,8 @@ export interface UtilityDetail extends UtilitySummary {
     moduleCount: number;
     /** Returned so the console can edit them without a second fetch. */
     permissions: Record<string, string[]>;
+    /** How many users hold it; a role with any cannot be deleted. */
+    assignmentCount: number;
   }[];
   staff: { id: string; email: string; name: string; isActive: boolean; roleName: string | null }[];
   /** Counted rather than listed — see below. */
@@ -406,7 +408,16 @@ export async function getUtilityDetail(utilityId: string): Promise<UtilityDetail
     }),
     prisma.role.findMany({
       where: { utilityId },
-      select: { id: true, name: true, description: true, isSystem: true, permissions: true },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        isSystem: true,
+        permissions: true,
+        // So the console can disable Delete on a role BR-RB-003 would
+        // refuse, instead of explaining after the click.
+        _count: { select: { userRoles: true } },
+      },
       orderBy: { name: "asc" },
     }),
     prisma.cisUser.findMany({
@@ -437,6 +448,7 @@ export async function getUtilityDetail(utilityId: string): Promise<UtilityDetail
       isSystem: r.isSystem,
       moduleCount: Object.keys((r.permissions ?? {}) as Record<string, unknown>).length,
       permissions: (r.permissions ?? {}) as Record<string, string[]>,
+      assignmentCount: r._count.userRoles,
     })),
     staff: staff.map((u) => ({
       id: u.id,

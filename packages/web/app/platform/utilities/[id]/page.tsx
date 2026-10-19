@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PermissionMatrix } from "@/components/settings/permission-matrix";
+import { presetDrift } from "@utility-cis/shared";
 import { FormField } from "@/components/ui/form-field";
 
 /**
@@ -40,6 +41,7 @@ interface UtilityDetail {
     isSystem: boolean;
     moduleCount: number;
     permissions: Record<string, string[]>;
+    assignmentCount: number;
   }[];
   staff: { id: string; email: string; name: string; isActive: boolean; roleName: string | null }[];
 }
@@ -369,8 +371,11 @@ export default function PlatformTenantDetailPage() {
                 }}
               >
                 <span style={{ fontSize: 12, color: "var(--text-muted)", flex: 1 }}>
-                  A utility normally manages its own roles. Editing them from here is for one with
-                  no working admin — a change applies to its users immediately.
+                  A utility normally manages its own roles; editing from here is for one with no
+                  working admin, and a change applies to its users immediately. Each utility owns
+                  its own copies — a preset is a starting point, so an edit here changes this
+                  utility only and re-provisioning will not revert it. A role can be deleted once
+                  nobody holds it.
                 </span>
                 <button
                   onClick={() =>
@@ -443,7 +448,7 @@ export default function PlatformTenantDetailPage() {
                     <th style={thCell}>Name</th>
                     <th style={thCell}>Description</th>
                     <th style={thCell}>Modules granted</th>
-                    <th style={thCell}>Preset</th>
+                    <th style={thCell}>Origin</th>
                     <th style={{ ...thCell, textAlign: "right" }}>Actions</th>
                   </tr>
                 </thead>
@@ -456,7 +461,20 @@ export default function PlatformTenantDetailPage() {
                       </td>
                       <td style={{ ...tdCell, color: "var(--text-secondary)" }}>{r.moduleCount}</td>
                       <td style={{ ...tdCell, color: "var(--text-secondary)" }}>
-                        {r.isSystem ? "Yes" : "No"}
+                        {/* Derived from the permissions stored, not from
+                            `isSystem` — that is set once at provisioning
+                            and never changes, so it would call an edited
+                            role "the standard CSR". */}
+                        {(() => {
+                          const drift = presetDrift(r.name, r.permissions);
+                          if (drift === "custom") return "Custom";
+                          if (drift === "preset") return "Preset";
+                          return (
+                            <span style={{ color: "var(--warning)" }} title="Edited away from the shipped preset">
+                              Preset (modified)
+                            </span>
+                          );
+                        })()}
                       </td>
                       <td style={{ ...tdCell, textAlign: "right", whiteSpace: "nowrap" }}>
                         <button
@@ -477,16 +495,20 @@ export default function PlatformTenantDetailPage() {
                           // A preset cannot be deleted (BR-RB-002) and the
                           // server refuses it; saying so here beats a 400
                           // after the click.
-                          disabled={r.isSystem || roleBusy}
-                          title={r.isSystem ? "A preset role cannot be deleted" : undefined}
+                          disabled={r.assignmentCount > 0 || roleBusy}
+                          title={
+                            r.assignmentCount > 0
+                              ? `${r.assignmentCount} user(s) hold this role — remove it from them first`
+                              : undefined
+                          }
                           aria-label="Delete"
                           style={{
                             ...btnStyle,
                             padding: "4px 10px",
                             fontSize: 12,
-                            color: r.isSystem ? "var(--text-muted)" : "var(--danger)",
-                            cursor: r.isSystem || roleBusy ? "not-allowed" : "pointer",
-                            opacity: r.isSystem || roleBusy ? 0.45 : 1,
+                            color: r.assignmentCount > 0 ? "var(--text-muted)" : "var(--danger)",
+                            cursor: r.assignmentCount > 0 || roleBusy ? "not-allowed" : "pointer",
+                            opacity: r.assignmentCount > 0 || roleBusy ? 0.45 : 1,
                           }}
                         >
                           Delete
