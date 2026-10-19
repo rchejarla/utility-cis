@@ -1,12 +1,67 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
-import { getUserRole, getTenantModules } from "../services/rbac.service.js";
+import { getUserRole, getTenantModules, getPlatformActor } from "../services/rbac.service.js";
 import { config as appConfig } from "../config.js";
 
 export async function authorizationMiddleware(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> {
-  const routeConfig = request.routeOptions?.config as { module?: string; permission?: string } | undefined;
+  const routeConfig = request.routeOptions?.config as
+    | { module?: string; permission?: string; platform?: boolean }
+    | undefined;
+
+  /*
+   * Platform routes are authorized by identity, not by permission.
+   *
+   * A route says `{ platform: true }` instead of naming a module,
+   * because being the platform actor is the whole authority (D6) — a
+   * tenant's own System Admin holds every permission a tenant can grant
+   * and still must not act above tenants (§1.2).
+   *
+   * `getPlatformActor` is the gate: a real row, no tenant, active. The
+   * token's claim only chose this branch. Note what is deliberately
+   * absent — the tenant path's "no CisUser row ⇒ allow" fallback, which
+   * waves through any token whose subject does not exist. A positive
+   * lookup cannot have that shape.
+   */
+  if (routeConfig?.platform) {
+    const actor = request.platformActor;
+    if (!actor) {
+      reply.status(403).send({
+        error: {
+          code: "PLATFORM_REQUIRED",
+          message: "This operation is reserved to the platform operator",
+        },
+      });
+      return;
+    }
+    if (!(await getPlatformActor(actor.id))) {
+      reply.status(403).send({
+        error: { code: "FORBIDDEN", message: "Not an active platform operator" },
+      });
+      return;
+    }
+    return;
+  }
+
+  /*
+   * And the other direction: a platform token on a tenant route.
+   *
+   * `request.user` is undefined for a platform request, so without this
+   * the handler would read `user.utilityId` off undefined and answer 500
+   * — and every tenant-scoped query below would be scoped by undefined.
+   * This refusal is what lets `request.user.utilityId` stay a plain
+   * string at all 243 of its read sites.
+   */
+  if (request.platformActor) {
+    reply.status(403).send({
+      error: {
+        code: "TENANT_CONTEXT_REQUIRED",
+        message: "This operation acts on one tenant and needs a tenant's user",
+      },
+    });
+    return;
+  }
 
   // No module declared = unprotected route
   if (!routeConfig?.module) {
