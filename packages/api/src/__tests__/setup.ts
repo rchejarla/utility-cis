@@ -21,7 +21,36 @@ export function createTestToken(
     role: "admin",
     ...overrides,
   };
-  // Create a fake JWT (header.payload.signature)
+  return createTokenFromClaims(payload);
+}
+
+/**
+ * A token carrying no tenant — the platform actor's shape.
+ *
+ * Q2: the platform identity is a `CisUser` with a null `utility_id`, so
+ * its token has no `utility_id` claim and says `platform: true` instead.
+ * The claim only selects which lookup authorization runs; the authority
+ * is the database row (`utility_id IS NULL`, active).
+ */
+export function createPlatformToken(
+  overrides?: Partial<{ sub: string; email: string; name: string }>,
+) {
+  return createTokenFromClaims({
+    sub: "test-platform-001",
+    platform: true,
+    email: "platform@example.com",
+    ...overrides,
+  });
+}
+
+/**
+ * Build a token from exactly these claims and nothing else — for the
+ * shapes a well-behaved client never sends, which are the ones the
+ * middleware has to refuse.
+ */
+export function createTokenFromClaims(payload: Record<string, unknown>) {
+  // A fake JWT (header.payload.signature). `alg: "none"` is how the web
+  // client marks a dev token; production rejects unsigned tokens.
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   return `${header}.${body}.fake-signature`;

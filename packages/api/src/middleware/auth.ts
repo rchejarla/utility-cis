@@ -11,9 +11,31 @@ export interface AuthUser {
   customerId: string | null;
 }
 
+/**
+ * An identity that belongs to no tenant (tenancy design note Q2).
+ *
+ * It carries no role, because being the platform actor *is* the
+ * authority — platform routes ask "is this the platform actor", not
+ * "which permissions does it hold". There is no platform permission
+ * matrix until a second class of platform actor exists to need one.
+ */
+export interface PlatformActor {
+  id: string;
+  email: string;
+  name: string;
+}
+
 declare module "fastify" {
   interface FastifyRequest {
+    /**
+     * The tenant user. Set on every authenticated tenant request and on
+     * no platform request — `utilityId` stays non-nullable because 243
+     * sites read it, and the authorization middleware refuses a platform
+     * token on a tenant route, so it is only read where it is set.
+     */
     user: AuthUser;
+    /** The platform actor, set instead of `user` on a platform token. */
+    platformActor?: PlatformActor;
   }
 }
 
@@ -58,16 +80,51 @@ function peekAlg(token: string): string | null {
   }
 }
 
-function assignUser(
+/**
+ * Populate exactly one of `request.user` / `request.platformActor`, by
+ * what the token declares itself to be.
+ *
+ * A token says `platform: true` or it names a `utility_id`. Both or
+ * neither is refused rather than resolved:
+ *
+ *   - **Neither** is the shape a truncated or hand-rolled token
+ *     produces. Reading an absent `utility_id` as "therefore the
+ *     platform" would promote every malformed token to the one identity
+ *     that crosses tenants.
+ *   - **Both** is ambiguous, and whichever we picked, the token would
+ *     carry authority it was not issued.
+ *
+ * The claim selects which lookup runs; it is not the authority. A
+ * platform token is only honoured if `getPlatformActor` finds a real
+ * row with `utility_id IS NULL` and `is_active` (see
+ * `middleware/authorization.ts`).
+ */
+function assignIdentity(
   request: FastifyRequest,
   payload: Record<string, unknown>,
 ): void {
   // Accept both utility_id (JWT convention) and utilityId (NextAuth convention)
   const userId = (payload.sub || payload.id) as string | undefined;
   const utilityId = (payload.utility_id || payload.utilityId) as string | undefined;
+  const claimsPlatform = payload.platform === true;
 
-  if (!userId || !utilityId) {
+  if (!userId) {
     throw new Error("Missing required token fields");
+  }
+  if (claimsPlatform && utilityId) {
+    throw new Error("Token claims both a tenant and the platform");
+  }
+  if (!claimsPlatform && !utilityId) {
+    throw new Error("Missing required token fields");
+  }
+
+  if (claimsPlatform) {
+    request.platformActor = {
+      id: userId,
+      email: (payload.email as string) ?? "",
+      name: (payload.name as string) ?? (payload.email as string) ?? "Unknown",
+    };
+    return;
   }
 
   request.user = {
@@ -119,13 +176,13 @@ export async function authMiddleware(
       // Verified path: signed token + secret available.
       const secret = new TextEncoder().encode(NEXTAUTH_SECRET);
       const { payload } = await jwtVerify(token, secret);
-      assignUser(request, payload as Record<string, unknown>);
+      assignIdentity(request, payload as Record<string, unknown>);
       return;
     }
 
     // Dev fallback: either the token is explicitly unsigned (and we're
     // not in prod) or NEXTAUTH_SECRET isn't configured.
-    assignUser(request, decodeUnsigned(token));
+    assignIdentity(request, decodeUnsigned(token));
   } catch {
     reply.status(401).send({
       error: { code: "UNAUTHORIZED", message: "Invalid token" },
