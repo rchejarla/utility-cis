@@ -860,7 +860,7 @@ Clients can pull the document and generate SDKs, contract tests, or API consoles
 - **JWT verification:** Signatures verified with jose + NEXTAUTH_SECRET
 - **SQL injection:** UUID validation before any raw SQL interpolation
 - **RLS:** PostgreSQL Row-Level Security policies exist on all entity tables — but see "Current gaps" below: they do not enforce today
-- **Defense in depth:** All GET-by-ID queries include utility_id in WHERE clause
+- **Defense in depth:** A by-id query either carries `utility_id` in its `WHERE` or uses an id already proved against `utility_id` earlier in the same function. The flat claim this bullet used to make — that every by-id query carries the predicate — is not true and was never true: the 2026-10-18 sweep below found 89 that do not, all of them entry-proved
 - **Race conditions:** $transaction for account closure guard and meter uniqueness
 - **PII:** SSN/payment card data never stored in CIS (SaaSLogic handles payments)
 - **Audit trail:** All modifications logged with actor, timestamp, before/after state
@@ -973,6 +973,52 @@ DB"), so closing it is a migration rather than a one-line change: several
 suites authenticate with tokens that have no `cis_user` row and rely on this.
 Sequence is (1) seed `cis_user` rows for every real principal, (2) update those
 suites, (3) turn the early return into a 403.
+
+**The deliberate sweep for the same shape (2026-10-18) — 89 sites, no holes.**
+Run as the prerequisite the tenancy design note makes of it (§1.7, build-order
+step 5): the `utilityId`-parameter-that-scopes-nothing shape is worth sweeping
+for before an identity that is not scoped by `utility_id` exists, not after.
+The instrument is committed at `scripts/audit-tenant-predicates.mjs` so the
+numbers below are re-checkable rather than asserted.
+
+Method, and the two passes it took to get right. The script brace-matches every
+`prisma|tx.<model>.<method>(…)` call in `packages/api/src/services`, extracts its
+`where` object, and reports those naming an id with no `utilityId`. **Its first
+version read `/id\s*:/` and so could not see the shorthand `where: { id }` —
+which hid 27 of the 89, including every `auditUpdate` call site in
+`service-request`, `service-suspension`, `container`, `bill-message` and the five
+type-def services.** Anyone re-running this should check that blind spot first;
+a sweep that silently covers two thirds of its target is worse than no sweep,
+because it produces a number.
+
+Results. Of the 89, fifteen receive the id as a bare parameter — the shape that
+can be fed from a request body — and every one is proved before use:
+`cancelImport` and `retryImport` via `findFirstOrThrow({ id, utilityId })`,
+`processBillingRun`/`postBillingRun`/`cancelBillingRun` likewise, `lockAccount`
+by a `SELECT … WHERE id AND utility_id FOR UPDATE` that throws on no row,
+`ar/allocation.apply`'s three callers, and `promoteContactToPortalUser` via the
+contact fetch. The remaining 74 derive their id from a row fetched with the
+predicate. A second pass covered the complementary blind spot — a parent fetched
+by some *other* column with no tenant predicate — and found 19, of which the
+only two worth recording are `uom.service.ts:91,100`: `deleteUom`'s in-use
+guards count `meter`/`commodity` rows by `uomId` alone. They are safe because a
+uuid can only be referenced by its owner's rows, and the delete itself is
+`deleteMany({ where: { id, utilityId } })` with a 404 on zero — but the safety
+rests on an invariant rather than on a predicate, which is the distinction this
+whole subsection exists to make.
+
+**Q3 of the tenancy note, settled 2026-10-18: how a lifecycle operation reads
+past a policy comparing against a NULL setting.** With no tenant context,
+`current_setting('app.current_utility_id', true)` is NULL, every policy compares
+`utility_id = NULL`, and a platform actor's lifecycle read would therefore
+return nothing. The resolution is that the policies admit an explicit platform
+context — a second setting the policy ORs in — rather than a `BYPASSRLS` role,
+which would need its own connection pool and credentials and would exempt all of
+that role's queries instead of only the lifecycle ones. **Not built yet, and
+deliberately:** all 62 policies are inert while the application role is a
+superuser that owns the tables, the change is mechanical when it is needed, and
+writing it now is 62 policy rewrites nothing reads. Whoever turns RLS on owns
+both halves together.
 
 ---
 
