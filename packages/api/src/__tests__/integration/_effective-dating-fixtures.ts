@@ -21,6 +21,87 @@ export const TENANT_A = "00000000-0000-4000-8000-0000000000aa";
 export const TENANT_B = "00000000-0000-4000-8000-0000000000bb";
 export const ACTOR = "00000000-0000-4000-8000-aaaa00000001";
 
+/**
+ * Give `ACTOR` a `cis_user` row and a role, in the tenant a test
+ * authenticates as.
+ *
+ * This is the counterpart of `ensureUtilities`, and it exists for the
+ * same reason: a column that used to be unenforced became enforced, and
+ * every test that writes through the API now has to satisfy it.
+ * `utility_id` became a foreign key, so a tenant had to exist; then the
+ * authorization middleware stopped treating "no `cis_user` row" as
+ * permission to proceed, so the principal has to exist too.
+ *
+ * That branch is worth remembering, because it was load-bearing for 21
+ * files in this directory and for nothing else: the token's subject had
+ * no row anywhere, the middleware shrugged, and every gated route
+ * answered as though the caller held every permission. Closing it broke
+ * all 21 at once, which is what prompted this.
+ *
+ * The role is a test fixture rather than one of the preset roles: it
+ * grants every module every verb, because these tests exercise routes
+ * across the whole surface and a realistic role would make each file's
+ * coverage depend on which preset it happened to pick. Suites that care
+ * about *what a role may do* mock `getUserRole` instead.
+ *
+ * Idempotent, so a `beforeEach` may call it. `resetDb` does not truncate
+ * `cis_user`, `role` or `user_role`, so a `beforeAll` is usually enough.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function ensurePrincipal(
+  prisma: any,
+  utilityId: string,
+  actorId: string = ACTOR,
+): Promise<void> {
+  const { MODULES } = await import("@utility-cis/shared");
+  const permissions = Object.fromEntries(
+    (MODULES as readonly string[]).map((m) => [m, ["VIEW", "CREATE", "EDIT", "DELETE", "APPROVE"]]),
+  );
+
+  const role = await prisma.role.upsert({
+    where: { utilityId_name: { utilityId, name: "Integration Test Admin" } },
+    update: { permissions },
+    create: {
+      utilityId,
+      name: "Integration Test Admin",
+      description: "Every module, every verb — a fixture, not a preset.",
+      isSystem: false,
+      permissions,
+    },
+    select: { id: true },
+  });
+
+  await prisma.cisUser.upsert({
+    where: { id: actorId },
+    update: { utilityId, isActive: true },
+    create: {
+      id: actorId,
+      utilityId,
+      email: `actor-${actorId.slice(-12)}@integration.test`,
+      name: "Integration Tester",
+      isActive: true,
+    },
+  });
+
+  // `@@unique([userId, accountId])` does not constrain a tenant-wide row,
+  // because Postgres treats NULL account ids as distinct — so this is a
+  // find-then-create rather than an upsert.
+  const existing = await prisma.userRole.findFirst({
+    where: { userId: actorId, accountId: null },
+    select: { id: true },
+  });
+  if (existing) {
+    await prisma.userRole.update({
+      where: { id: existing.id },
+      data: { utilityId, roleId: role.id },
+    });
+  } else {
+    await prisma.userRole.create({
+      data: { utilityId, userId: actorId, accountId: null, roleId: role.id },
+    });
+  }
+}
+
 export interface BootedContainer {
   container: StartedPostgreSqlContainer;
   dbUrl: string;

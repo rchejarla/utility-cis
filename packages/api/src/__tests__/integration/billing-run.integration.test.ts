@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, ensurePrincipal } from "./_effective-dating-fixtures.js";
 
 /**
  * The billing run: one initiated pass over a cycle, account by account.
@@ -73,6 +73,7 @@ beforeAll(async () => {
   const { prisma } = prismaImports;
   const cycle = await prisma.billingCycle.findFirstOrThrow({ where: { cycleCode: "R01" } });
   utilityId = cycle.utilityId;
+  await ensurePrincipal(prismaImports.prisma, utilityId);
   cycleId = cycle.id;
 
   /*
