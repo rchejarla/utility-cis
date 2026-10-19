@@ -67,6 +67,9 @@ function mockPrisma(permissions: Record<string, string[]>) {
   (prisma.utilityModule.findMany as Mock).mockResolvedValue(
     Object.keys(permissions).map((moduleKey) => ({ moduleKey })),
   );
+  // Active unless a test says otherwise. A tenant whose status cannot be
+  // read must not be treated as suspended by accident.
+  (prisma.utility.findUnique as Mock).mockResolvedValue({ status: "ACTIVE" });
   (prisma.userRole.findFirst as Mock).mockResolvedValue({
     roleId: "role-admin",
     role: { id: "role-admin", name: "System Admin", permissions },
@@ -150,6 +153,42 @@ describe("a tenant route", () => {
     const res = await app.inject({ method: "GET", url: "/__tenant", headers });
 
     expect(res.statusCode).toBe(200);
+  });
+});
+
+describe("a suspended tenant", () => {
+  beforeEach(() => {
+    (prisma.utility.findUnique as Mock).mockResolvedValue({ status: "SUSPENDED" });
+  });
+
+  it("refuses the tenant's own users", async () => {
+    // Enforcement is per request, not at login: a token minted before
+    // the suspension would otherwise keep working for its whole
+    // lifetime, which is the half of "suspended" that matters.
+    const app = await appWithProbes();
+    const res = await app.inject({ method: "GET", url: "/__tenant", headers });
+
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.body).error.code).toBe("TENANT_SUSPENDED");
+  });
+
+  it("still admits the platform actor", async () => {
+    // The actor has no tenant, so a tenant's status cannot gate it — and
+    // it is who has to reactivate the thing.
+    const app = await appWithProbes();
+    const res = await app.inject({ method: "GET", url: "/__platform", headers: platformHeaders });
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("reports the suspension rather than a disabled module", async () => {
+    // "Module not enabled" for a suspended tenant sends an operator to
+    // the wrong screen entirely, so the status is checked first.
+    (prisma.utilityModule.findMany as Mock).mockResolvedValue([]);
+    const app = await appWithProbes();
+    const res = await app.inject({ method: "GET", url: "/__tenant", headers });
+
+    expect(JSON.parse(res.body).error.code).toBe("TENANT_SUSPENDED");
   });
 });
 

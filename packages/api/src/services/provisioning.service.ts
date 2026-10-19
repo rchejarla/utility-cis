@@ -1,5 +1,6 @@
 import { MODULES, PRESET_ROLES } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
+import { invalidateUtilityStatusCache } from "./rbac.service.js";
 
 /**
  * Bringing a tenant into existence.
@@ -78,7 +79,11 @@ export interface UtilitySummary {
  */
 class ProvisioningError extends Error {
   constructor(
-    readonly code: "UTILITY_NAME_MISMATCH" | "UTILITY_NAME_TAKEN" | "UNKNOWN_PROFILE",
+    readonly code:
+      | "UTILITY_NAME_MISMATCH"
+      | "UTILITY_NAME_TAKEN"
+      | "UNKNOWN_PROFILE"
+      | "UTILITY_NOT_FOUND",
     readonly statusCode: number,
     message: string,
   ) {
@@ -262,19 +267,25 @@ export async function provisionTenant(
  * read whose whole purpose is to cross tenants, which is why the platform
  * actor at build-order step 5 will be its caller. Writes nothing.
  */
-export async function listUtilities(): Promise<UtilitySummary[]> {
-  const rows = await prisma.utility.findMany({
-    orderBy: { name: "asc" },
-    select: {
-      id: true,
-      name: true,
-      status: true,
-      createdAt: true,
-      _count: { select: { utilityModules: true, roles: true, cisUsers: true } },
-    },
-  });
+/** One projection, so a list row and a suspend's answer cannot diverge. */
+const SUMMARY_SELECT = {
+  id: true,
+  name: true,
+  status: true,
+  createdAt: true,
+  _count: { select: { utilityModules: true, roles: true, cisUsers: true } },
+} as const;
 
-  return rows.map((r) => ({
+type SummaryRow = {
+  id: string;
+  name: string;
+  status: "ACTIVE" | "SUSPENDED";
+  createdAt: Date;
+  _count: { utilityModules: number; roles: number; cisUsers: number };
+};
+
+function toSummary(r: SummaryRow): UtilitySummary {
+  return {
     id: r.id,
     name: r.name,
     status: r.status,
@@ -282,5 +293,63 @@ export async function listUtilities(): Promise<UtilitySummary[]> {
     moduleCount: r._count.utilityModules,
     roleCount: r._count.roles,
     userCount: r._count.cisUsers,
-  }));
+  };
+}
+
+export async function listUtilities(): Promise<UtilitySummary[]> {
+  const rows = await prisma.utility.findMany({
+    orderBy: { name: "asc" },
+    select: SUMMARY_SELECT,
+  });
+
+  return rows.map(toSummary);
+}
+
+/**
+ * Suspend a tenant, or reactivate it. D6 responsibility 5.
+ *
+ * Nothing is deleted and nothing cascades: suspension is reversible, and
+ * purge is a separate capability D6 defers precisely so the two cannot
+ * be reached by one act. What suspension does is stop the tenant's
+ * users — enforced per request in `middleware/authorization.ts`, which
+ * is why each of these invalidates the cached status rather than waiting
+ * out its TTL.
+ *
+ * Idempotent in both directions, like provisioning: an operator clicking
+ * twice, or a script re-running, is not an error. But a utility that
+ * does not exist is refused rather than treated as a no-op — an operator
+ * who mistypes an id has suspended nothing and needs telling.
+ */
+async function setUtilityStatus(
+  utilityId: string,
+  status: "ACTIVE" | "SUSPENDED",
+): Promise<UtilitySummary> {
+  const existing = await prisma.utility.findUnique({
+    where: { id: utilityId },
+    select: { id: true },
+  });
+  if (!existing) {
+    throw new ProvisioningError(
+      "UTILITY_NOT_FOUND",
+      404,
+      `No utility with id ${utilityId}.`,
+    );
+  }
+
+  const row = await prisma.utility.update({
+    where: { id: utilityId },
+    data: { status },
+    select: SUMMARY_SELECT,
+  });
+
+  await invalidateUtilityStatusCache(utilityId);
+  return toSummary(row);
+}
+
+export async function suspendUtility(utilityId: string): Promise<UtilitySummary> {
+  return setUtilityStatus(utilityId, "SUSPENDED");
+}
+
+export async function reactivateUtility(utilityId: string): Promise<UtilitySummary> {
+  return setUtilityStatus(utilityId, "ACTIVE");
 }

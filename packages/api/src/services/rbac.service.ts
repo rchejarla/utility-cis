@@ -119,6 +119,50 @@ export async function getTenantModules(utilityId: string): Promise<string[]> {
 }
 
 /**
+ * The tenant's own status, cached beside its modules.
+ *
+ * Read on every authenticated tenant request, because suspension that
+ * only bit at login would leave every token minted beforehand working
+ * for its whole lifetime — which is the half of "suspended" that
+ * matters.
+ *
+ * Null means "could not tell", not "suspended": the global prisma mock
+ * returns null for an unstubbed `findUnique`, and more importantly a
+ * tenant whose status cannot be read must not have its staff locked out
+ * by accident. A missing row is not a real case either way — utility_id
+ * is a foreign key with ON DELETE RESTRICT, so a utility with users
+ * cannot be deleted.
+ *
+ * The 300s TTL bounds how long a suspension applied outside this service
+ * (by SQL, say) takes to bite; `suspendUtility` invalidates the key
+ * directly, so the API path is immediate.
+ */
+export async function getUtilityStatus(
+  utilityId: string,
+): Promise<"ACTIVE" | "SUSPENDED" | null> {
+  const cacheKey = `utility-status:${utilityId}`;
+
+  const cached = await cacheGet(cacheKey);
+  if (cached) {
+    return JSON.parse(cached) as "ACTIVE" | "SUSPENDED";
+  }
+
+  const utility = await prisma.utility
+    .findUnique({ where: { id: utilityId }, select: { status: true } })
+    .catch(() => null);
+
+  if (!utility) return null;
+
+  await cacheSet(cacheKey, 300, JSON.stringify(utility.status));
+  return utility.status;
+}
+
+/** Drop a tenant's cached status, so a suspension bites at once. */
+export async function invalidateUtilityStatusCache(utilityId: string): Promise<void> {
+  await cacheDel(`utility-status:${utilityId}`);
+}
+
+/**
  * Resolve the platform actor, or null.
  *
  * This lookup *is* the authorization for a platform route. The token's

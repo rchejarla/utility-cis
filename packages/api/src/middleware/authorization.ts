@@ -1,5 +1,10 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
-import { getUserRole, getTenantModules, getPlatformActor } from "../services/rbac.service.js";
+import {
+  getUserRole,
+  getTenantModules,
+  getPlatformActor,
+  getUtilityStatus,
+} from "../services/rbac.service.js";
 import { config as appConfig } from "../config.js";
 
 export async function authorizationMiddleware(
@@ -90,10 +95,26 @@ export async function authorizationMiddleware(
    * is still reported as MODULE_DISABLED before anything is said about
    * the user's role. Only the fetching moved.
    */
-  const [enabledModules, userRole] = await Promise.all([
+  const [utilityStatus, enabledModules, userRole] = await Promise.all([
+    getUtilityStatus(user.utilityId),
     getTenantModules(user.utilityId),
     getUserRole(user.id, user.utilityId),
   ]);
+
+  // 0. The tenant itself has to be active, and this is checked before
+  //    the module is, because "module not enabled" for a suspended
+  //    tenant sends an operator to the wrong screen entirely. A null
+  //    status means the status could not be read, which is not a
+  //    suspension — see getUtilityStatus.
+  if (utilityStatus === "SUSPENDED") {
+    reply.status(403).send({
+      error: {
+        code: "TENANT_SUSPENDED",
+        message: "This utility is suspended. Contact the platform operator.",
+      },
+    });
+    return;
+  }
 
   // 1. Check tenant module is enabled
   if (!enabledModules.includes(module)) {
