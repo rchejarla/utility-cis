@@ -241,6 +241,15 @@ export async function provisionTenant(
 
       if (input.dryRun) throw new DryRunComplete(result);
       return result;
+    }, {
+      // Thirteen round trips, a 32-row createMany and six role creates:
+      // comfortably inside Prisma's 5s default against a warm database,
+      // and not always against a cold container or a loaded one, where
+      // it gives up with P2028 having written nothing. The rollback is
+      // right; the message is useless — nobody reads "Transaction
+      // already closed" as "run it again". This is a one-shot lifecycle
+      // operation with nothing waiting on it, so it can afford to wait.
+      timeout: 20_000,
     });
   } catch (err) {
     if (err instanceof DryRunComplete) return err.result;

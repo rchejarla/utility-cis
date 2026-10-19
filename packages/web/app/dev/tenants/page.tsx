@@ -96,8 +96,16 @@ export default function DevTenantsPage() {
     setError(null);
     setPreview(null);
     try {
-      const body: Record<string, unknown> = { name, dryRun };
-      if (adminEmail || adminName) body.firstAdmin = { email: adminEmail, name: adminName };
+      const body: Record<string, unknown> = { name: name.trim(), dryRun };
+      // Both or neither. Sending one of them produced `email: ""`, which
+      // the route's schema rejects as a 400 the client renders as
+      // "Validation failed" with the field list dropped — a dead end
+      // where the script says "--admin-email and --admin-name go
+      // together". The buttons are disabled in that state anyway; this
+      // is the guard that makes the half-filled body unconstructible.
+      if (adminEmail.trim() && adminName.trim()) {
+        body.firstAdmin = { email: adminEmail.trim(), name: adminName.trim() };
+      }
       const result = await apiClient.post<ProvisionResult>("/api/v1/dev/tenants", body);
       if (dryRun) {
         setPreview(result);
@@ -113,6 +121,12 @@ export default function DevTenantsPage() {
       setBusy(false);
     }
   }
+
+  // The admin is optional, but it is one thing made of two fields: the
+  // route requires both or neither, so a half-filled pair is a state the
+  // form should name rather than submit.
+  const adminHalfFilled = Boolean(adminEmail.trim()) !== Boolean(adminName.trim());
+  const blocked = busy || !name.trim() || adminHalfFilled;
 
   return (
     <div style={{ maxWidth: "860px", margin: "0 auto", padding: "40px 24px" }}>
@@ -139,12 +153,24 @@ export default function DevTenantsPage() {
         >
           Tenants
         </h1>
-        <p style={{ fontSize: "14px", color: "var(--text-secondary)", margin: 0 }}>
+        <p style={{ fontSize: "14px", color: "var(--text-secondary)", margin: "0 0 8px" }}>
           This screen exists only in development. Provisioning moves behind the platform actor at
           build-order step 5, and this page with it.{" "}
           <Link href="/dev" style={{ color: "var(--accent-primary)" }}>
             Back to dev tools
           </Link>
+        </p>
+        {/*
+          Stated up front because the 403 is otherwise a dead end: both
+          routes require settings:EDIT, and the Utility Admin preset holds
+          settings:["VIEW"] — the one permission separating it from System
+          Admin. A tenant's own admin enumerating every other tenant is
+          the borrowing this page is fenced against, so the lockout is the
+          design; being unable to tell why is not.
+        */}
+        <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: 0 }}>
+          Requires <strong>System Admin</strong> — both routes are gated on{" "}
+          <code>settings:EDIT</code>, and Utility Admin holds <code>settings:VIEW</code> only.
         </p>
       </div>
 
@@ -178,7 +204,7 @@ export default function DevTenantsPage() {
             />
           </div>
           <div>
-            <label style={label}>First admin email (optional)</label>
+            <label style={label}>First admin email</label>
             <input
               style={input}
               value={adminEmail}
@@ -195,12 +221,24 @@ export default function DevTenantsPage() {
               placeholder="Pat Admin"
             />
           </div>
+          <div
+            style={{
+              gridColumn: "1 / -1",
+              marginTop: "-6px",
+              fontSize: "12px",
+              color: adminHalfFilled ? "var(--danger)" : "var(--text-muted)",
+            }}
+          >
+            {adminHalfFilled
+              ? "Email and name go together — fill both, or leave both empty."
+              : "Optional, and the pair is one thing: fill both, or neither. A tenant can get its first admin later."}
+          </div>
         </div>
 
         <div style={{ display: "flex", gap: "10px", alignItems: "center", marginTop: "18px" }}>
           <button
             onClick={() => submit(true)}
-            disabled={busy || !name.trim()}
+            disabled={blocked}
             style={{
               padding: "7px 16px",
               borderRadius: "var(--radius)",
@@ -209,14 +247,15 @@ export default function DevTenantsPage() {
               color: "var(--text-secondary)",
               fontSize: "13px",
               fontFamily: "inherit",
-              cursor: busy || !name.trim() ? "not-allowed" : "pointer",
+              cursor: blocked ? "not-allowed" : "pointer",
+              opacity: blocked ? 0.55 : 1,
             }}
           >
             Preview
           </button>
           <button
             onClick={() => submit(false)}
-            disabled={busy || !name.trim()}
+            disabled={blocked}
             style={{
               padding: "7px 16px",
               borderRadius: "var(--radius)",
@@ -226,7 +265,8 @@ export default function DevTenantsPage() {
               fontSize: "13px",
               fontWeight: 600,
               fontFamily: "inherit",
-              cursor: busy || !name.trim() ? "not-allowed" : "pointer",
+              cursor: blocked ? "not-allowed" : "pointer",
+              opacity: blocked ? 0.55 : 1,
             }}
           >
             Create
