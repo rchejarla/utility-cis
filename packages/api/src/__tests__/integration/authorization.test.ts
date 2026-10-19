@@ -141,28 +141,41 @@ describe("Authorization middleware", () => {
     expect(response.statusCode).not.toBe(403);
   });
 
-  // Test 3: User has no CIS User record → allowed (backwards compatibility)
-  it("allows request when user has no CIS User record in DB (backwards compatibility)", async () => {
+  /**
+   * Test 3: a token whose subject has no cis_user row is refused.
+   *
+   * This test used to assert the opposite, and said so by name:
+   * "allows request when user has no CIS User record in DB (backwards
+   * compatibility)". The middleware returned early when `getUserRole`
+   * found nothing, so the module check still ran but no per-module
+   * VIEW/CREATE/EDIT/DELETE did.
+   *
+   * What made it worth closing rather than inheriting: the web login
+   * form's credentials provider returns a fixed user id that **does not
+   * exist in the database** (verified: `count = 0`), so every session
+   * created through that form took this branch and passed every
+   * permission check on every tenant route. The compatibility it was
+   * kept for — the RBAC migration — is long done, and an unscoped
+   * platform identity now lives next door (§1.7).
+   */
+  it("refuses a request whose token names a user that does not exist", async () => {
     const app = await createTestApp();
 
-    // Module is enabled for the tenant
     (prisma.utilityModule.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       { moduleKey: "customers" },
     ]);
 
-    // No CIS user found — findUnique returns null
+    // No cis_user row for this token's subject.
     (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
-    // Hit a route that would have module enforcement (customers:VIEW)
-    // Even with module enabled but no user record, middleware allows (BR-RB-007 compatibility)
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/customers",
       headers: authHeader,
     });
 
-    // Not blocked by authorization (403) — may get 200 or 500 from DB mock
-    expect(response.statusCode).not.toBe(403);
+    expect(response.statusCode).toBe(403);
+    expect(JSON.parse(response.body).error.code).toBe("USER_NOT_PROVISIONED");
   });
 
   // Test 4: GET /api/v1/auth/me returns user, permissions, and enabledModules

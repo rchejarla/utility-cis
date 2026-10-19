@@ -141,8 +141,28 @@ export async function authorizationMiddleware(
   }
 
   // 2. Check user role has permission
+  // 2. The token has to name a user who exists and holds a role.
+  //
+  //    This used to return early and allow the request — "backwards
+  //    compatibility during migration", from the RBAC migration, which is
+  //    long done. What it actually did was hand every permission on every
+  //    tenant route to any token whose subject had no `cis_user` row, and
+  //    the web login form mints exactly that: its credentials provider
+  //    returns a fixed user id which is not in the database. So the
+  //    app's own sign-in page was the one caller relying on it.
+  //
+  //    Closing it was a migration rather than a one-line change (see
+  //    architecture §7.1): three suites authenticated with tokens that
+  //    had no role mocked and were carried by this branch. Two of them
+  //    hung `role` off their `cisUser` mock, which `getUserRole` never
+  //    reads — so they looked like they granted permissions and did not.
   if (!userRole) {
-    // User not in CIS User table — allow for now (backwards compatibility during migration)
+    reply.status(403).send({
+      error: {
+        code: "USER_NOT_PROVISIONED",
+        message: "No user record for this token",
+      },
+    });
     return;
   }
 
