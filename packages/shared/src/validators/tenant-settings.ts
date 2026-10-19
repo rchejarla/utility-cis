@@ -109,6 +109,26 @@ export const REQUIRED_ISSUER_FIELDS = [
 export type RequiredIssuerField = (typeof REQUIRED_ISSUER_FIELDS)[number];
 
 /**
+ * Which of the five an issuer block is still missing.
+ *
+ * The predicate travels with the list, because the list alone does not
+ * say what counts as set and that is where the answers would diverge:
+ * the settings page writes `""` for a field the operator cleared, so
+ * anything testing for the key's presence would call such a tenant
+ * complete while its bills refuse to render. Both the presentation
+ * loader's ISSUER_INCOMPLETE and the platform console's readiness panel
+ * read this, so "ready" and "will render" cannot disagree.
+ */
+export function missingIssuerFields(
+  issuer: IssuerSettings | null | undefined,
+): RequiredIssuerField[] {
+  return REQUIRED_ISSUER_FIELDS.filter((field) => {
+    const value = issuer?.[field];
+    return typeof value === "string" ? value.trim().length === 0 : value == null;
+  });
+}
+
+/**
  * Which apptor-connect integration holds this tenant's bill PDFs. The
  * integration name selects S3, Azure Blob or GCS on their side; no
  * bucket name, region or credential belongs here.

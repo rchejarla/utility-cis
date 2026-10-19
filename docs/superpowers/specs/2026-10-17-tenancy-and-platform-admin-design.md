@@ -395,7 +395,7 @@ first.
    that every integration suite currently works around.
 4. **`TENANCY_MODE` in config**, defaulting to `self_serve`, read at boot.
    Nothing branches on it yet.
-5. **Platform actor** — a `CisUser` with a null `utility_id` (Q2), whose
+5. ~~**Platform actor**~~ Done 2026-10-19 — a `CisUser` with a null `utility_id` (Q2), whose
    lifecycle operations run outside `utility_id` while everything else
    sets `app.current_utility_id` (Q3) — and move `/admin/queues` behind
    it (D4). Both answers landed 2026-10-18; each left one consequence to
@@ -407,6 +407,33 @@ first.
    rather than hygiene.
 6. **A platform console UI** — only if operating the above through
    scripts proves genuinely insufficient. Not before.
+
+   Built 2026-10-19 at `/platform/*`, and the condition above was not
+   what triggered it: Rao asked for the console alongside step 5 rather
+   than running the script and finding it wanting. Recorded as it
+   happened, because the gate was a real one and skipping it is the kind
+   of thing that looks like a plan being followed afterwards.
+
+   What it holds, against D6's six responsibilities: a tenant list with
+   provisioning, a detail page (staff, roles, modules, history),
+   suspend/reactivate, module enable/disable, role CRUD per tenant, and
+   operator appoint/deactivate. Reusing the tenant app's `Sidebar` and
+   `Topbar` rather than its own chrome — four rounds of review went on
+   parts that had been rebuilt instead of reused, which is the note worth
+   keeping.
+
+   **Readiness** (2026-10-19) is the one piece that is not a lifecycle
+   operation. The detail page's stats — "32 modules, 6 roles" — read like
+   an answer to "can this tenant work?", and a freshly provisioned tenant
+   showing them cannot bill anything: `provisionTenant` creates no
+   commodity, unit of measure, billing cycle, tariff or issuer identity
+   (Q4's profile, still unanswered, is where those would come from). The
+   panel answers it with seven checks, each restating a constraint
+   enforced elsewhere rather than inventing one — `missingIssuerFields`
+   is what bill presentation refuses over, the storage integration is
+   what bill documents refuse without, `settings:EDIT` is what the
+   tenant's own roles and settings routes require. It reports; it does
+   not fix, since every remedy belongs to the tenant.
 
 ---
 

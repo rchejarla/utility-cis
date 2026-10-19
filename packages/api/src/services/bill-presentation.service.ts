@@ -1,5 +1,5 @@
 import { Decimal } from "decimal.js";
-import { REQUIRED_ISSUER_FIELDS, type IssuerSettings } from "@utility-cis/shared";
+import { missingIssuerFields, type IssuerSettings } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
 import { selectBillMessages } from "./bill-message.service.js";
 
@@ -206,9 +206,7 @@ export async function loadBillPresentation(
   // ─── Issuer ────────────────────────────────────────────────────────
   const config = await prisma.utilityConfig.findUnique({ where: { utilityId } });
   const issuer = issuerOf(config?.settings);
-  const missing = REQUIRED_ISSUER_FIELDS.filter(
-    (field) => !present(issuer[field as keyof IssuerSettings]),
-  );
+  const missing = missingIssuerFields(issuer);
   if (missing.length > 0) {
     throw new BillPresentationError(
       `Issuer identity is incomplete: ${missing.join(", ")}. Set it under Settings before producing bills.`,

@@ -12,6 +12,7 @@ import {
   assertUtilityExists,
   listUtilityHistory,
 } from "../services/provisioning.service.js";
+import { getUtilityReadiness } from "../services/utility-readiness.service.js";
 import { getPlatformActor } from "../services/rbac.service.js";
 import {
   listPlatformUsers,
@@ -140,7 +141,22 @@ export async function platformRoutes(app: FastifyInstance) {
     { config: { platform: true } },
     async (request, reply) => {
       const { id } = tenantParamsSchema.parse(request.params);
-      return reply.send(await getUtilityDetail(id));
+      /*
+       * Composed here rather than inside `getUtilityDetail`, because
+       * `utility-readiness.service` imports `assertUtilityExists` from
+       * `provisioning.service` and the reverse import would close a
+       * cycle. Each service keeps answering one question; the route is
+       * what needs both at once.
+       *
+       * Readiness is on the detail response rather than an endpoint of
+       * its own: the panel is always visible on that page, so a second
+       * request would buy a second loading state and nothing else.
+       */
+      const [detail, readiness] = await Promise.all([
+        getUtilityDetail(id),
+        getUtilityReadiness(id),
+      ]);
+      return reply.send({ ...detail, readiness });
     },
   );
 

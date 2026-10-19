@@ -36,11 +36,20 @@ interface HistoryEntry {
   metadata: { eventType?: string } | null;
 }
 
+interface ReadinessCheck {
+  key: string;
+  label: string;
+  ok: boolean;
+  detail: string;
+  blocks: string;
+}
+
 interface UtilityDetail {
   id: string;
   name: string;
   status: "ACTIVE" | "SUSPENDED";
   createdAt: string;
+  readiness: { ready: boolean; checks: ReadinessCheck[] };
   moduleCount: number;
   roleCount: number;
   userCount: number;
@@ -122,6 +131,108 @@ function Stat({ label, value }: { label: string; value: string | number }) {
       >
         {label}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Shows what this tenant still needs before it can operate.
+ *
+ * It sits directly under the stats because the stats are what made it
+ * necessary: "32 modules, 6 roles" reads like readiness, and a freshly
+ * provisioned tenant showing those numbers cannot bill anything.
+ *
+ * Unmet checks are listed in full and met ones are collapsed, because
+ * the question an operator opens this page with is what is left.
+ */
+export function ReadinessPanel({ readiness }: { readiness: UtilityDetail["readiness"] }) {
+  const [showMet, setShowMet] = useState(false);
+  const unmet = readiness.checks.filter((c) => !c.ok);
+  const met = readiness.checks.filter((c) => c.ok);
+  const accent = readiness.ready ? "var(--success)" : "var(--warning)";
+
+  return (
+    <div style={{ ...card, marginBottom: 20 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          gap: 12,
+          padding: "12px 14px",
+          borderBottom: unmet.length > 0 || showMet ? "1px solid var(--border-subtle)" : "none",
+        }}
+      >
+        <div style={{ fontSize: 13, color: "var(--text-primary)" }}>
+          <strong style={{ color: accent }}>
+            {readiness.ready ? "Ready to operate." : "Not ready to operate."}
+          </strong>{" "}
+          {readiness.ready
+            ? `All ${readiness.checks.length} checks met.`
+            : `${unmet.length} of ${readiness.checks.length} outstanding. The tenant's own staff fix these; ` +
+              "nothing here does it for them."}
+        </div>
+        {met.length > 0 && unmet.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowMet((v) => !v)}
+            style={{
+              ...btnStyle,
+              padding: "4px 10px",
+              fontSize: 12,
+              border: "none",
+              color: "var(--text-secondary)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {showMet ? "Hide" : "Show"} {met.length} met
+          </button>
+        )}
+      </div>
+
+      {unmet.map((c) => (
+        <div
+          key={c.key}
+          style={{
+            padding: "10px 14px",
+            borderTop: "1px solid var(--border-subtle)",
+            display: "grid",
+            gap: 2,
+          }}
+        >
+          <div style={{ fontSize: 13, color: "var(--text-primary)" }}>
+            <span aria-hidden style={{ color: "var(--warning)", marginRight: 8 }}>
+              ●
+            </span>
+            {c.label}
+            <span style={{ color: "var(--text-muted)" }}> — {c.detail}</span>
+          </div>
+          {/* Why it matters, which is the half an operator cannot infer
+              from the label. */}
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", paddingLeft: 20 }}>
+            {c.blocks}
+          </div>
+        </div>
+      ))}
+
+      {(showMet || unmet.length === 0) &&
+        met.map((c) => (
+          <div
+            key={c.key}
+            style={{
+              padding: "8px 14px",
+              borderTop: "1px solid var(--border-subtle)",
+              fontSize: 13,
+              color: "var(--text-secondary)",
+            }}
+          >
+            <span aria-hidden style={{ color: "var(--success)", marginRight: 8 }}>
+              ●
+            </span>
+            {c.label}
+            <span style={{ color: "var(--text-muted)" }}> — {c.detail}</span>
+          </div>
+        ))}
     </div>
   );
 }
@@ -362,6 +473,8 @@ export default function PlatformTenantDetailPage() {
         <Stat label="Staff" value={detail.staff.length} />
         <Stat label="Portal customers" value={detail.portalUserCount} />
       </div>
+
+      <ReadinessPanel readiness={detail.readiness} />
 
       <Tabs
         tabs={[
