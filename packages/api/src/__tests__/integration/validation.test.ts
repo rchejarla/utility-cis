@@ -36,9 +36,17 @@ describe("Request validation", () => {
     (prisma.cisUser.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: "test-user-001",
       utilityId: "test-utility-001",
-      roleId: "role-admin",
+      customerId: null,
       isActive: true,
+    });
+    // The role comes from user_role, not from the user — `getUserRole`
+    // reads it there. Nesting it on the cisUser mock, as this suite used
+    // to, granted nothing: the request was carried by the middleware's
+    // "no role found, allow anyway" branch, which is now a 403.
+    (prisma.userRole.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+      roleId: "role-admin",
       role: {
+        id: "role-admin",
         name: "Admin",
         permissions: Object.fromEntries(
           ALL_MODULES.map((m) => [m, ["VIEW", "CREATE", "EDIT", "DELETE"]])

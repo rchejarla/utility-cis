@@ -28,9 +28,15 @@ describe("PATCH /api/v1/tenant-config — settings namespaces", () => {
     (prisma.cisUser.findFirst as any).mockResolvedValue({
       id: "test-user-001",
       utilityId,
-      roleId: "role-admin",
+      customerId: null,
       isActive: true,
+    });
+    // The role comes from user_role, not from the user — see the same
+    // note in validation.test.ts.
+    (prisma.userRole.findFirst as any).mockResolvedValue({
+      roleId: "role-admin",
       role: {
+        id: "role-admin",
         name: "Admin",
         permissions: { settings: ["VIEW", "CREATE", "EDIT", "DELETE"] },
       },

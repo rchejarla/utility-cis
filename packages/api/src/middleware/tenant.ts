@@ -25,6 +25,16 @@ export async function tenantMiddleware(
     return;
   }
 
+  // A platform request has no tenant, by definition — that is what the
+  // platform actor is (tenancy design note Q2). This hook runs before
+  // authorization, so without the exemption every platform route would
+  // answer 400 here and the authorization branch for them would be
+  // unreachable. Whether this identity may reach the route it asked for
+  // is authorization's question, not this hook's.
+  if (request.platformActor) {
+    return;
+  }
+
   if (!request.user?.utilityId) {
     reply.status(400).send({
       error: { code: "BAD_REQUEST", message: "No utility context available" },

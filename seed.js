@@ -112,6 +112,33 @@ async function main() {
   });
   console.log("  tenant provisioned (utility, 32 modules, 6 preset roles)");
 
+  // The platform operator: a user belonging to no tenant (Q2), which is
+  // the one identity that sits above tenants. It holds no user_role row
+  // — being the platform actor is the authority, and there is no tenant
+  // for it to hold a role in.
+  //
+  // Created only when absent rather than deleted and remade, because the
+  // clear-down above is scoped to the dev tenant and so leaves this row
+  // alone. There is no upsert for it either: the unique key is a partial
+  // index on email WHERE utility_id IS NULL, which Prisma cannot target.
+  const platformEmail = "platform@utility.com";
+  const existingOperator = await p.cisUser.findFirst({
+    where: { utilityId: null, email: platformEmail },
+  });
+  if (existingOperator) {
+    console.log("  platform operator already present");
+  } else {
+    await p.cisUser.create({
+      data: {
+        utilityId: null,
+        email: platformEmail,
+        name: "Platform Operator",
+        isActive: true,
+      },
+    });
+    console.log("  platform operator created");
+  }
+
   const water = await p.commodity.create({ data: { utilityId: UID, code: "WATER", name: "Potable Water", displayOrder: 1 } });
   const electric = await p.commodity.create({ data: { utilityId: UID, code: "ELECTRIC", name: "Electricity", displayOrder: 2 } });
   const gas = await p.commodity.create({ data: { utilityId: UID, code: "GAS", name: "Natural Gas", displayOrder: 3 } });

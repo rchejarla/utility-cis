@@ -51,7 +51,13 @@ async function toDto(
   utilityId: string,
   user: {
     id: string;
-    utilityId: string;
+    // Nullable on the row since the platform actor landed (Q2), but not
+    // in the DTO: every query in this service names a tenant, and
+    // `utility_id = $1` cannot match NULL, so a platform user never
+    // comes back from one. The DTO takes the id from the proved
+    // parameter below rather than from the row, which keeps it a plain
+    // string without asserting anything about what was loaded.
+    utilityId: string | null;
     externalId: string | null;
     email: string;
     name: string;
@@ -62,7 +68,7 @@ async function toDto(
     updatedAt: Date;
   },
 ): Promise<UserDTO> {
-  return { ...user, role: await hydrateRole(utilityId, user.id) };
+  return { ...user, utilityId, role: await hydrateRole(utilityId, user.id) };
 }
 
 export async function listUsers(utilityId: string, query: UserQuery) {

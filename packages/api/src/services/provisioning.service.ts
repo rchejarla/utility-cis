@@ -1,5 +1,6 @@
 import { MODULES, PRESET_ROLES } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
+import { invalidateUtilityStatusCache } from "./rbac.service.js";
 
 /**
  * Bringing a tenant into existence.
@@ -78,7 +79,11 @@ export interface UtilitySummary {
  */
 class ProvisioningError extends Error {
   constructor(
-    readonly code: "UTILITY_NAME_MISMATCH" | "UTILITY_NAME_TAKEN" | "UNKNOWN_PROFILE",
+    readonly code:
+      | "UTILITY_NAME_MISMATCH"
+      | "UTILITY_NAME_TAKEN"
+      | "UNKNOWN_PROFILE"
+      | "UTILITY_NOT_FOUND",
     readonly statusCode: number,
     message: string,
   ) {
@@ -262,19 +267,25 @@ export async function provisionTenant(
  * read whose whole purpose is to cross tenants, which is why the platform
  * actor at build-order step 5 will be its caller. Writes nothing.
  */
-export async function listUtilities(): Promise<UtilitySummary[]> {
-  const rows = await prisma.utility.findMany({
-    orderBy: { name: "asc" },
-    select: {
-      id: true,
-      name: true,
-      status: true,
-      createdAt: true,
-      _count: { select: { utilityModules: true, roles: true, cisUsers: true } },
-    },
-  });
+/** One projection, so a list row and a suspend's answer cannot diverge. */
+const SUMMARY_SELECT = {
+  id: true,
+  name: true,
+  status: true,
+  createdAt: true,
+  _count: { select: { utilityModules: true, roles: true, cisUsers: true } },
+} as const;
 
-  return rows.map((r) => ({
+type SummaryRow = {
+  id: string;
+  name: string;
+  status: "ACTIVE" | "SUSPENDED";
+  createdAt: Date;
+  _count: { utilityModules: number; roles: number; cisUsers: number };
+};
+
+function toSummary(r: SummaryRow): UtilitySummary {
+  return {
     id: r.id,
     name: r.name,
     status: r.status,
@@ -282,5 +293,148 @@ export async function listUtilities(): Promise<UtilitySummary[]> {
     moduleCount: r._count.utilityModules,
     roleCount: r._count.roles,
     userCount: r._count.cisUsers,
-  }));
+  };
+}
+
+export async function listUtilities(): Promise<UtilitySummary[]> {
+  const rows = await prisma.utility.findMany({
+    orderBy: { name: "asc" },
+    select: SUMMARY_SELECT,
+  });
+
+  return rows.map(toSummary);
+}
+
+export interface UtilityDetail extends UtilitySummary {
+  modules: { moduleKey: string; isEnabled: boolean }[];
+  roles: { id: string; name: string; description: string | null; isSystem: boolean; moduleCount: number }[];
+  staff: { id: string; email: string; name: string; isActive: boolean; roleName: string | null }[];
+  /** Counted rather than listed — see below. */
+  portalUserCount: number;
+}
+
+/**
+ * What one tenant holds. The other half of D6 responsibility 6: a list
+ * of counts you cannot open is a dead end, because "6 roles" raises the
+ * question it will not answer.
+ *
+ * **Staff, not users.** Portal customers are `cis_user` rows too, so
+ * returning "the tenant's users" would have a real utility answering
+ * with tens of thousands of them. What this screen is asked is whether
+ * the tenant can be administered, so it lists the users with no
+ * `customer_id` and counts the portal accounts instead. That keeps the
+ * payload bounded by staff headcount rather than by customer base.
+ *
+ * A role's module count is included because the number of roles says
+ * nothing about what they can do, and a staff member with no role is
+ * listed with `roleName: null` rather than omitted — a user who cannot
+ * do anything is precisely what an operator is hunting for when a tenant
+ * reports that it cannot work.
+ */
+export async function getUtilityDetail(utilityId: string): Promise<UtilityDetail> {
+  const utility = await prisma.utility.findUnique({
+    where: { id: utilityId },
+    select: SUMMARY_SELECT,
+  });
+  if (!utility) {
+    throw new ProvisioningError("UTILITY_NOT_FOUND", 404, `No utility with id ${utilityId}.`);
+  }
+
+  const [modules, roles, staff, portalUserCount] = await Promise.all([
+    prisma.utilityModule.findMany({
+      where: { utilityId },
+      select: { moduleKey: true, isEnabled: true },
+      orderBy: { moduleKey: "asc" },
+    }),
+    prisma.role.findMany({
+      where: { utilityId },
+      select: { id: true, name: true, description: true, isSystem: true, permissions: true },
+      orderBy: { name: "asc" },
+    }),
+    prisma.cisUser.findMany({
+      where: { utilityId, customerId: null },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        isActive: true,
+        userRoles: {
+          where: { accountId: null },
+          select: { role: { select: { name: true } } },
+          take: 1,
+        },
+      },
+      orderBy: { email: "asc" },
+    }),
+    prisma.cisUser.count({ where: { utilityId, customerId: { not: null } } }),
+  ]);
+
+  return {
+    ...toSummary(utility),
+    modules,
+    roles: roles.map((r) => ({
+      id: r.id,
+      name: r.name,
+      description: r.description,
+      isSystem: r.isSystem,
+      moduleCount: Object.keys((r.permissions ?? {}) as Record<string, unknown>).length,
+    })),
+    staff: staff.map((u) => ({
+      id: u.id,
+      email: u.email,
+      name: u.name,
+      isActive: u.isActive,
+      roleName: u.userRoles[0]?.role.name ?? null,
+    })),
+    portalUserCount,
+  };
+}
+
+/**
+ * Suspend a tenant, or reactivate it. D6 responsibility 5.
+ *
+ * Nothing is deleted and nothing cascades: suspension is reversible, and
+ * purge is a separate capability D6 defers precisely so the two cannot
+ * be reached by one act. What suspension does is stop the tenant's
+ * users — enforced per request in `middleware/authorization.ts`, which
+ * is why each of these invalidates the cached status rather than waiting
+ * out its TTL.
+ *
+ * Idempotent in both directions, like provisioning: an operator clicking
+ * twice, or a script re-running, is not an error. But a utility that
+ * does not exist is refused rather than treated as a no-op — an operator
+ * who mistypes an id has suspended nothing and needs telling.
+ */
+async function setUtilityStatus(
+  utilityId: string,
+  status: "ACTIVE" | "SUSPENDED",
+): Promise<UtilitySummary> {
+  const existing = await prisma.utility.findUnique({
+    where: { id: utilityId },
+    select: { id: true },
+  });
+  if (!existing) {
+    throw new ProvisioningError(
+      "UTILITY_NOT_FOUND",
+      404,
+      `No utility with id ${utilityId}.`,
+    );
+  }
+
+  const row = await prisma.utility.update({
+    where: { id: utilityId },
+    data: { status },
+    select: SUMMARY_SELECT,
+  });
+
+  await invalidateUtilityStatusCache(utilityId);
+  return toSummary(row);
+}
+
+export async function suspendUtility(utilityId: string): Promise<UtilitySummary> {
+  return setUtilityStatus(utilityId, "SUSPENDED");
+}
+
+export async function reactivateUtility(utilityId: string): Promise<UtilitySummary> {
+  return setUtilityStatus(utilityId, "ACTIVE");
 }

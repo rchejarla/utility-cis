@@ -81,7 +81,12 @@ export async function getUserRole(
 
   const result: UserRoleResult = {
     userId: cisUser.id,
-    utilityId: cisUser.utilityId,
+    // The proved parameter, not `cisUser.utilityId`, which is nullable
+    // since the platform actor landed (Q2). The lookup above names the
+    // tenant and `utility_id = $1` cannot match NULL, so a platform user
+    // never reaches here — this keeps the result non-nullable without
+    // asserting that.
+    utilityId,
     roleId: assignment.roleId,
     roleName: assignment.role.name,
     permissions: assignment.role.permissions as PermissionMap,
@@ -111,6 +116,97 @@ export async function getTenantModules(utilityId: string): Promise<string[]> {
   await cacheSet(cacheKey, 600, JSON.stringify(moduleKeys));
 
   return moduleKeys;
+}
+
+/**
+ * The tenant's own status, cached beside its modules.
+ *
+ * Read on every authenticated tenant request, because suspension that
+ * only bit at login would leave every token minted beforehand working
+ * for its whole lifetime — which is the half of "suspended" that
+ * matters.
+ *
+ * Null means "could not tell", not "suspended": the global prisma mock
+ * returns null for an unstubbed `findUnique`, and more importantly a
+ * tenant whose status cannot be read must not have its staff locked out
+ * by accident. A missing row is not a real case either way — utility_id
+ * is a foreign key with ON DELETE RESTRICT, so a utility with users
+ * cannot be deleted.
+ *
+ * The 300s TTL bounds how long a suspension applied outside this service
+ * (by SQL, say) takes to bite; `suspendUtility` invalidates the key
+ * directly, so the API path is immediate.
+ */
+export async function getUtilityStatus(
+  utilityId: string,
+): Promise<"ACTIVE" | "SUSPENDED" | null> {
+  const cacheKey = `utility-status:${utilityId}`;
+
+  const cached = await cacheGet(cacheKey);
+  if (cached) {
+    return JSON.parse(cached) as "ACTIVE" | "SUSPENDED";
+  }
+
+  const utility = await prisma.utility
+    .findUnique({ where: { id: utilityId }, select: { status: true } })
+    .catch(() => null);
+
+  if (!utility) return null;
+
+  await cacheSet(cacheKey, 300, JSON.stringify(utility.status));
+  return utility.status;
+}
+
+/** Drop a tenant's cached status, so a suspension bites at once. */
+export async function invalidateUtilityStatusCache(utilityId: string): Promise<void> {
+  await cacheDel(`utility-status:${utilityId}`);
+}
+
+/**
+ * Resolve the platform actor, or null.
+ *
+ * This lookup *is* the authorization for a platform route. The token's
+ * `platform: true` claim only selects which lookup runs — the authority
+ * is a real row with no tenant and an active flag, so a tenant user's id
+ * minted into a platform-claiming token resolves to nothing.
+ *
+ * No role, and no permission map: being the platform actor is the whole
+ * authority (D6). A second class of platform actor is what would earn a
+ * matrix, and none exists.
+ *
+ * Both predicates are part of the query rather than checks after it, so
+ * a deactivated actor is simply not found.
+ */
+export async function getPlatformActor(
+  userId: string,
+): Promise<{ id: string; email: string; name: string } | null> {
+  const cacheKey = `platform-actor:${userId}`;
+
+  const cached = await cacheGet(cacheKey);
+  if (cached) {
+    return JSON.parse(cached) as { id: string; email: string; name: string };
+  }
+
+  const actor = await prisma.cisUser
+    .findFirst({
+      where: { id: userId, utilityId: null, isActive: true },
+      select: { id: true, email: true, name: true },
+    })
+    .catch(() => null);
+
+  if (!actor) return null;
+
+  await cacheSet(cacheKey, 300, JSON.stringify(actor));
+  return actor;
+}
+
+/**
+ * Drop a platform actor's cached row — on deactivation or deletion,
+ * which is the window in which a revoked actor would otherwise keep
+ * working for up to the TTL.
+ */
+export async function invalidatePlatformActorCache(userId: string): Promise<void> {
+  await cacheDel(`platform-actor:${userId}`);
 }
 
 export async function invalidateUserRoleCache(
