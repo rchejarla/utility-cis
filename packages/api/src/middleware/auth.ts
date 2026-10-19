@@ -111,20 +111,21 @@ function assignIdentity(
   if (!userId) {
     throw new Error("Missing required token fields");
   }
-  if (claimsPlatform && utilityId) {
-    throw new Error("Token claims both a tenant and the platform");
-  }
-  if (!claimsPlatform && !utilityId) {
-    throw new Error("Missing required token fields");
-  }
 
   if (claimsPlatform) {
+    if (utilityId) {
+      throw new Error("Token claims both a tenant and the platform");
+    }
     request.platformActor = {
       id: userId,
       email: (payload.email as string) ?? "",
       name: (payload.name as string) ?? (payload.email as string) ?? "Unknown",
     };
     return;
+  }
+
+  if (!utilityId) {
+    throw new Error("Missing required token fields");
   }
 
   request.user = {

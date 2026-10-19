@@ -1095,8 +1095,18 @@ model Role {
 
 model CisUser {
   id          String    @id @default(uuid()) @db.Uuid
-  utilityId   String    @map("utility_id") @db.Uuid
-  utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  /// NULL means "belongs to no tenant", which is the platform actor —
+  /// the one identity that sits above tenants (tenancy design note Q2).
+  /// Every query reading users by tenant must therefore mean it: a row
+  /// that belongs to nobody will not match `utility_id = $1`.
+  ///
+  /// Both `@@unique` attributes below stop constraining such a row,
+  /// because Postgres treats NULLs as distinct. Two partial unique
+  /// indexes cover it instead, in
+  /// `migrations/20261018160000_platform_actor_identity` — Prisma cannot
+  /// express a partial index, so they exist only in SQL.
+  utilityId   String?   @map("utility_id") @db.Uuid
+  utility     Utility?  @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   externalId  String?   @map("external_id") @db.VarChar(255)
   email       String    @map("email") @db.VarChar(255)
   name        String    @map("name") @db.VarChar(255)

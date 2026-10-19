@@ -85,4 +85,42 @@ describe("every tenant-scoped table", () => {
 
     expect(unprotected.map((r) => `${r.table_name} (${r.why})`)).toEqual([]);
   });
+
+  /**
+   * A nullable `utility_id` means "belongs to no tenant", and that is
+   * meaningful for exactly two reasons: a global reference row every
+   * tenant reads (§1.3), and the platform actor, whose entire definition
+   * is having no tenant (Q2).
+   *
+   * Any other table acquiring a nullable `utility_id` is a table whose
+   * rows escape every tenant predicate in the codebase — the predicates
+   * are what separate tenants while RLS is inert (§1.7), and
+   * `utility_id = $1` does not match NULL. So the set is pinned by name
+   * rather than counted: a new name here should fail this test and make
+   * someone say why that table has rows belonging to nobody.
+   */
+  it("allows a null utility_id only where belonging to no tenant is meaningful", async () => {
+    const { prisma } = prismaImports;
+
+    const nullable = await prisma.$queryRaw<{ table_name: string }[]>`
+      SELECT table_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND column_name = 'utility_id'
+        AND is_nullable = 'YES'
+      ORDER BY 1`;
+
+    expect(nullable.map((r) => r.table_name)).toEqual([
+      "account_type_def",
+      // The platform actor. Not a global reference row — the one
+      // identity in the system that sits above tenants.
+      "cis_user",
+      "measure_type_def",
+      "premise_type_def",
+      "rate_assignment_role",
+      "rate_component_kind",
+      "service_request_type_def",
+      "suspension_type_def",
+    ]);
+  });
 });

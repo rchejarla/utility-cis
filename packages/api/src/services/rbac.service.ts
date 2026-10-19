@@ -81,7 +81,12 @@ export async function getUserRole(
 
   const result: UserRoleResult = {
     userId: cisUser.id,
-    utilityId: cisUser.utilityId,
+    // The proved parameter, not `cisUser.utilityId`, which is nullable
+    // since the platform actor landed (Q2). The lookup above names the
+    // tenant and `utility_id = $1` cannot match NULL, so a platform user
+    // never reaches here — this keeps the result non-nullable without
+    // asserting that.
+    utilityId,
     roleId: assignment.roleId,
     roleName: assignment.role.name,
     permissions: assignment.role.permissions as PermissionMap,
