@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { BrandMark } from "@/components/ui/brand-mark";
 import { usePathname } from "next/navigation";
 import { useState, useEffect, useRef } from "react";
 import { usePermission } from "@/lib/use-permission";
@@ -734,31 +735,8 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
       >
         {!collapsed && (
           <>
-            <div
-              style={{
-                width: 32,
-                height: 32,
-                borderRadius: 8,
-                background: "var(--accent-primary)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0,
-                color: "white",
-                fontWeight: "bold",
-                fontSize: 14,
-              }}
-            >
-              U
-            </div>
-            <div style={{ overflow: "hidden", flex: 1 }}>
-              <div style={{ color: "var(--text-primary)", fontWeight: 600, fontSize: 14, lineHeight: 1.2, whiteSpace: "nowrap" }}>
-                Utility CIS
-              </div>
-              <div style={{ color: "var(--text-muted)", fontSize: 11, whiteSpace: "nowrap" }}>
-                Admin Portal
-              </div>
-            </div>
+            <BrandMark />
+            <div style={{ flex: 1 }} />
           </>
         )}
         <button

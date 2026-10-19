@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import { useBreakpoint } from "@/lib/use-media-query";
 import { AuthPermissionProvider } from "@/lib/auth-context";
+import { PlatformShell } from "./platform-shell";
 import { Sidebar } from "./sidebar";
 import { Topbar } from "./topbar";
 import { BottomNav } from "./bottom-nav";
@@ -11,16 +12,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { isMobile, isTablet } = useBreakpoint();
 
-  // Portal, login, dev and platform pages render without the admin
-  // shell. /platform is not a tenant's screen at all — it belongs to the
-  // operator above tenants — so the tenant sidebar and its theme would
-  // be actively misleading there.
-  if (
-    pathname.startsWith("/dev") ||
-    pathname.startsWith("/portal") ||
-    pathname.startsWith("/login") ||
-    pathname.startsWith("/platform")
-  ) {
+  // The platform screens get the house frame with no side navigation,
+  // and deliberately not `AuthPermissionProvider`: that fetches
+  // /api/v1/auth/me, which answers 403 for a platform token and then
+  // falls back to granting every permission, so the gating it provided
+  // here would be fabricated. See platform-shell.tsx.
+  if (pathname.startsWith("/platform")) {
+    return <PlatformShell>{children}</PlatformShell>;
+  }
+
+  // Portal, login and dev pages render without the admin shell.
+  if (pathname.startsWith("/dev") || pathname.startsWith("/portal") || pathname.startsWith("/login")) {
     return <AuthPermissionProvider>{children}</AuthPermissionProvider>;
   }
 
