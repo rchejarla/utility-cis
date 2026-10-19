@@ -24,6 +24,18 @@ import { FormField } from "@/components/ui/form-field";
  * screen exists to answer is whether the tenant can be administered.
  */
 
+interface HistoryEntry {
+  id: string;
+  createdAt: string;
+  action: "CREATE" | "UPDATE" | "DELETE";
+  entityType: string;
+  actorName: string | null;
+  source: string | null;
+  beforeState: Record<string, unknown> | null;
+  afterState: Record<string, unknown> | null;
+  metadata: { eventType?: string } | null;
+}
+
 interface UtilityDetail {
   id: string;
   name: string;
@@ -114,6 +126,40 @@ function Stat({ label, value }: { label: string; value: string | number }) {
   );
 }
 
+/**
+ * One line describing what an entry changed.
+ *
+ * The raw before/after states are small here — utility status, a module
+ * key, a role's permission map — but printing them as JSON makes a
+ * history nobody reads. This names the fields that differ, and falls
+ * back to a dash when there is nothing to compare.
+ */
+function summariseChange(h: HistoryEntry): string {
+  const before = h.beforeState ?? {};
+  const after = h.afterState ?? {};
+  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])];
+  const changed = keys.filter((k) => JSON.stringify(before[k]) !== JSON.stringify(after[k]));
+  if (changed.length === 0) return "—";
+
+  const show = (v: unknown) =>
+    v === undefined || v === null
+      ? "—"
+      : typeof v === "object"
+        ? `${Object.keys(v as object).length} modules`
+        : String(v);
+
+  return changed
+    .slice(0, 3)
+    .map((k) =>
+      h.action === "CREATE"
+        ? `${k} ${show(after[k])}`
+        : h.action === "DELETE"
+          ? `${k} ${show(before[k])}`
+          : `${k} ${show(before[k])} → ${show(after[k])}`,
+    )
+    .join(", ");
+}
+
 export default function PlatformTenantDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -130,6 +176,7 @@ export default function PlatformTenantDetailPage() {
   >(null);
   const [roleBusy, setRoleBusy] = useState(false);
   const [pendingRoleDelete, setPendingRoleDelete] = useState<{ id: string; name: string } | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[] | null>(null);
   const [activeTab, setActiveTab] = useState("staff");
 
   const load = useCallback(async () => {
@@ -147,6 +194,14 @@ export default function PlatformTenantDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (activeTab !== "history" || history !== null) return;
+    apiClient
+      .get<{ data: HistoryEntry[] }>(`/api/v1/platform/utilities/${params.id}/history`)
+      .then((res) => setHistory(res.data ?? []))
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  }, [activeTab, history, params.id]);
 
   async function saveRole() {
     if (!roleDraft) return;
@@ -313,6 +368,7 @@ export default function PlatformTenantDetailPage() {
           { key: "staff", label: `Staff (${detail.staff.length})` },
           { key: "roles", label: `Roles (${detail.roles.length})` },
           { key: "modules", label: `Modules (${detail.moduleCount})` },
+          { key: "history", label: "History" },
         ]}
         activeTab={activeTab}
         onTabChange={setActiveTab}
@@ -566,6 +622,65 @@ export default function PlatformTenantDetailPage() {
                   </button>
                 ))}
               </div>
+            </>
+          )}
+          {activeTab === "history" && (
+            <>
+              <div
+                style={{
+                  padding: "10px 14px",
+                  borderBottom: "1px solid var(--border-subtle)",
+                  fontSize: 12,
+                  color: "var(--text-muted)",
+                }}
+              >
+                What was done to this utility from outside it — by an operator here, or by a
+                command-line run. Its own staff&apos;s changes are not shown: those are the
+                utility&apos;s records, and they are readable in its own audit log.
+              </div>
+              {history === null ? (
+                <div style={{ padding: "20px 14px", fontSize: 13, color: "var(--text-muted)" }}>
+                  Loading…
+                </div>
+              ) : history.length === 0 ? (
+                <div style={{ padding: "20px 14px", fontSize: 13, color: "var(--text-muted)" }}>
+                  Nothing has been done to this utility from outside it.
+                </div>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={thCell}>When</th>
+                      <th style={thCell}>Who</th>
+                      <th style={thCell}>What</th>
+                      <th style={thCell}>Change</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map((h) => (
+                      <tr key={h.id} style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                        <td style={{ ...tdCell, color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+                          {h.createdAt.slice(0, 16).replace("T", " ")}
+                        </td>
+                        <td style={tdCell}>
+                          {h.actorName ?? "—"}
+                          {/* A CLI run has no signed-in actor; saying so
+                              beats an empty cell or a false name. */}
+                          {h.source?.startsWith("script:") && (
+                            <span style={{ fontSize: 11, color: "var(--text-muted)" }}> (script)</span>
+                          )}
+                        </td>
+                        <td style={{ ...tdCell, color: "var(--text-secondary)" }}>
+                          {h.metadata?.eventType ?? `${h.entityType} ${h.action}`}
+                        </td>
+                        <td style={{ ...tdCell, color: "var(--text-secondary)", fontSize: 12 }}>
+                          {summariseChange(h)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </>
           )}
         </div>

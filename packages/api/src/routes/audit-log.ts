@@ -42,6 +42,14 @@ const auditQuerySchema = z.object({
   // Piped through the enum per value, so a list cannot smuggle past it.
   action: csvList.pipe(z.array(z.enum(AUDIT_ACTIONS)).min(1)).optional(),
   actorId: z.string().uuid().optional(),
+  /**
+   * Where the entry came from. "platform" and "script" are actions taken
+   * on this tenant from outside it; "scheduler" is a sweep; "staff" is
+   * the tenant's own people, which the column records as NULL.
+   */
+  origin: csvList
+    .pipe(z.array(z.enum(["staff", "platform", "script", "scheduler"])).min(1))
+    .optional(),
   startDate: z.string().datetime().optional(),
   endDate: z.string().datetime().optional(),
 }).strict();
@@ -125,11 +133,14 @@ export async function auditLogRoutes(app: FastifyInstance) {
     if (!pinnedToOneEntity) {
       const userRole = await getUserRole(request.user.id, utilityId);
       /*
-       * A request whose actor has no `cisUser` row is let through by
-       * `authorizationMiddleware` as the migration path, so this guard
-       * must not become the single place that rejects it — otherwise
-       * the endpoint behaves differently from every other route for
-       * the same caller. Only a known role is held to the key.
+       * Only a known role is held to the key. This used to matter
+       * because `authorizationMiddleware` let a token with no `cisUser`
+       * row through as the RBAC migration path, and this guard must not
+       * have been the single place that rejected it. That branch was
+       * closed on 2026-10-19 — such a request is now refused upstream
+       * with USER_NOT_PROVISIONED — so `userRole` is null here only if
+       * the lookup failed, which is not a reason to deny a read the
+       * middleware already allowed.
        */
       const perms = userRole?.permissions as Record<string, string[]> | undefined;
       if (perms && !(perms[UNFILTERED_READ_MODULE] ?? []).includes("VIEW")) {
@@ -150,6 +161,23 @@ export async function auditLogRoutes(app: FastifyInstance) {
     if (query.entityId) where.entityId = query.entityId;
     if (query.action) where.action = { in: query.action };
     if (query.actorId) where.actorId = query.actorId;
+
+    /*
+     * Origin, translated to the `source` column's own convention:
+     * `platform:<actorId>` and `script:<name>` are actions taken on this
+     * tenant from outside it, `scheduler:<queue>` is a sweep, and the
+     * tenant's own staff write NULL. A tenant can therefore ask "what
+     * was done to us from outside", which is the readable half of
+     * recording platform actions in the tenant's log at all.
+     */
+    if (query.origin) {
+      const prefixes = query.origin.filter((o) => o !== "staff") as string[];
+      const clauses: Record<string, unknown>[] = prefixes.map((o) => ({
+        source: { startsWith: `${o}:` },
+      }));
+      if (query.origin.includes("staff")) clauses.push({ source: null });
+      where.OR = clauses;
+    }
 
     if (query.startDate || query.endDate) {
       const createdAt: Record<string, Date> = {};

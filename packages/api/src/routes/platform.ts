@@ -10,6 +10,7 @@ import {
   reactivateUtility,
   setUtilityModule,
   assertUtilityExists,
+  listUtilityHistory,
 } from "../services/provisioning.service.js";
 import { getPlatformActor } from "../services/rbac.service.js";
 import {
@@ -76,6 +77,10 @@ const moduleParamsSchema = z.object({
 const moduleBodySchema = z.object({ isEnabled: z.boolean() }).strict();
 
 const roleParamsSchema = z.object({ id: z.string().uuid(), roleId: z.string().uuid() });
+
+const historyQuerySchema = z
+  .object({ limit: z.coerce.number().int().positive().max(200).default(50) })
+  .strict();
 
 const platformUserBodySchema = z
   .object({
@@ -170,6 +175,18 @@ export async function platformRoutes(app: FastifyInstance) {
   // the cache invalidation for every assignee. These routes hand it the
   // id from the path rather than from the token, so there is one set of
   // rules rather than two that can drift.
+
+  app.get(
+    "/api/v1/platform/utilities/:id/history",
+    { config: { platform: true } },
+    async (request, reply) => {
+      // Only what was done from outside the utility — see
+      // `listUtilityHistory` for why this is not the tenant's audit log.
+      const { id } = tenantParamsSchema.parse(request.params);
+      const { limit } = historyQuerySchema.parse(request.query);
+      return reply.send({ data: await listUtilityHistory(id, limit) });
+    },
+  );
 
   app.get(
     "/api/v1/platform/utilities/:id/roles",

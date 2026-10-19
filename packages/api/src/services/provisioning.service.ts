@@ -462,6 +462,55 @@ export async function getUtilityDetail(utilityId: string): Promise<UtilityDetail
 }
 
 /**
+ * What was done to this utility from outside it.
+ *
+ * Deliberately *not* the tenant's audit log. Those rows carry the
+ * tenant's business data — before/after states of customers, accounts
+ * and bills — so reading them is reading the tenant's data rather than
+ * metadata about the tenant, and D6 sizes this actor by the opposite
+ * rule: every capability added to it is one that can reach every
+ * customer's data. A full audit read is the broadest such capability
+ * available, and it is impersonation's reconnaissance half without the
+ * time-box D6 says impersonation would need.
+ *
+ * So the source filter is the feature, not a convenience. `platform:`
+ * and `script:` are exactly the rows an operator or a CLI run wrote, and
+ * their states hold utility status, module keys and role names — nothing
+ * of any customer's. A tenant's own staff action writes NULL and a sweep
+ * writes `scheduler:`; neither appears here.
+ *
+ * The tenant sees these rows in its own log, which is the asymmetry the
+ * right way round: the outside actor is the accountable one, not the one
+ * with extra sight.
+ */
+export async function listUtilityHistory(utilityId: string, limit = 50) {
+  await assertUtilityExists(utilityId);
+
+  return prisma.auditLog.findMany({
+    where: {
+      utilityId,
+      OR: [{ source: { startsWith: "platform:" } }, { source: { startsWith: "script:" } }],
+    },
+    orderBy: { createdAt: "desc" },
+    take: Math.min(limit, 200),
+    select: {
+      id: true,
+      utilityId: true,
+      createdAt: true,
+      action: true,
+      entityType: true,
+      entityId: true,
+      actorId: true,
+      actorName: true,
+      source: true,
+      beforeState: true,
+      afterState: true,
+      metadata: true,
+    },
+  });
+}
+
+/**
  * Suspend a tenant, or reactivate it. D6 responsibility 5.
  *
  * Nothing is deleted and nothing cascades: suspension is reversible, and

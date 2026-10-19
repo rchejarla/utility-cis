@@ -248,4 +248,56 @@ describe("GET /api/v1/audit-log — scope required without the admin key", () =>
       (prisma.auditLog.findMany as never as ReturnType<typeof vi.fn>).mock.calls[0][0].where,
     ).toEqual({ utilityId });
   });
+
+  /**
+   * The readable half of recording platform actions in the tenant's log:
+   * a tenant can ask what was done to it from outside. `source` is the
+   * column that knows — `platform:<id>` and `script:<name>` from above
+   * the tenant, `scheduler:<queue>` for a sweep, NULL for its own staff.
+   */
+  describe("origin", () => {
+    function whereOf() {
+      return (prisma.auditLog.findMany as never as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]
+        ?.where as Record<string, unknown>;
+    }
+
+    it("asks for only the rows written from outside the tenant", async () => {
+      grant(ADMIN_LIKE);
+      const app = await createTestApp();
+      await app.inject({ method: "GET", url: "/api/v1/audit-log?origin=platform,script", headers });
+
+      expect(whereOf().OR).toEqual([
+        { source: { startsWith: "platform:" } },
+        { source: { startsWith: "script:" } },
+      ]);
+    });
+
+    it("treats the tenant's own staff as the NULL the column actually stores", async () => {
+      grant(ADMIN_LIKE);
+      const app = await createTestApp();
+      await app.inject({ method: "GET", url: "/api/v1/audit-log?origin=staff", headers });
+
+      expect(whereOf().OR).toEqual([{ source: null }]);
+    });
+
+    it("leaves the query unfiltered when no origin is asked for", async () => {
+      grant(ADMIN_LIKE);
+      const app = await createTestApp();
+      await app.inject({ method: "GET", url: "/api/v1/audit-log", headers });
+
+      expect(whereOf().OR).toBeUndefined();
+    });
+
+    it("refuses an origin it does not know, rather than ignoring it", async () => {
+      grant(ADMIN_LIKE);
+      const app = await createTestApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/v1/audit-log?origin=everything",
+        headers,
+      });
+
+      expect(res.statusCode).toBe(400);
+    });
+  });
 });
