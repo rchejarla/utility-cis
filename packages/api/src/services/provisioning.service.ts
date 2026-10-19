@@ -1,0 +1,286 @@
+import { MODULES, PRESET_ROLES } from "@utility-cis/shared";
+import { prisma } from "../lib/prisma.js";
+
+/**
+ * Bringing a tenant into existence.
+ *
+ * Build-order step 3 of
+ * docs/superpowers/specs/2026-10-17-tenancy-and-platform-admin-design.md.
+ * Before this there was no way: `utility.create` and
+ * `utilityModule.create` appeared nowhere outside tests, so a second
+ * utility meant a developer running SQL, and a freshly migrated database
+ * answered 403 on every gated route for want of `utility_module` rows.
+ *
+ * Deliberately narrow, per D1: create the tenant, enable its modules,
+ * give it the preset roles and a first admin. Suspending, purging,
+ * impersonating and cross-tenant reporting are not here and are not
+ * oversights — D6 defers each, and this is the one piece with value in
+ * both tenancy modes.
+ */
+
+export type ProvisionProfile = "minimal";
+
+const PROFILES: readonly ProvisionProfile[] = ["minimal"];
+
+export interface ProvisionTenantInput {
+  utilityId: string;
+  name: string;
+  firstAdmin?: { email: string; name: string };
+  /**
+   * Named set of reference configuration. Q4 — who chooses a profile and
+   * where the list lives — is unanswered in the spec, so only "minimal"
+   * exists and it adds nothing beyond the rest of this function. The
+   * parameter is here so the signature survives Q4 being answered, and
+   * an unknown value is refused rather than ignored: silently
+   * provisioning the wrong configuration is worse than failing.
+   */
+  profile?: ProvisionProfile;
+  /**
+   * Do everything, report it, write nothing.
+   *
+   * Implemented by rolling the transaction back at the end rather than by
+   * a second code path that predicts the outcome. A dry run that never
+   * reaches the constraints cannot warn about the collision that will
+   * stop the real one — which is most of what an operator wants it for.
+   */
+  dryRun?: boolean;
+}
+
+export interface ProvisionTenantResult {
+  utilityId: string;
+  /** False when the utility row already existed. */
+  created: boolean;
+  /** Rows created by this call, not rows present. */
+  modulesEnabled: number;
+  rolesCreated: number;
+  adminCreated: boolean;
+}
+
+export interface UtilitySummary {
+  id: string;
+  name: string;
+  status: "ACTIVE" | "SUSPENDED";
+  createdAt: Date;
+  moduleCount: number;
+  roleCount: number;
+  userCount: number;
+}
+
+/**
+ * A refusal, not a fault.
+ *
+ * `statusCode` is load-bearing: `middleware/error-handler.ts` reads
+ * `statusCode` and `code` off the error and sends the message through,
+ * and without a status code falls to its final branch — 500, logged as an
+ * unexpected failure, message replaced with "An internal server error
+ * occurred". The explanation is the whole point of refusing rather than
+ * renaming, so losing it loses the feature.
+ */
+class ProvisioningError extends Error {
+  constructor(
+    readonly code: "UTILITY_NAME_MISMATCH" | "UTILITY_NAME_TAKEN" | "UNKNOWN_PROFILE",
+    readonly statusCode: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ProvisioningError";
+  }
+}
+
+/** Thrown to roll a dry run back; never escapes this module. */
+class DryRunComplete extends Error {
+  constructor(readonly result: ProvisionTenantResult) {
+    super("dry run");
+  }
+}
+
+export async function provisionTenant(
+  input: ProvisionTenantInput,
+): Promise<ProvisionTenantResult> {
+  const profile = input.profile ?? "minimal";
+  if (!PROFILES.includes(profile)) {
+    throw new ProvisioningError("UNKNOWN_PROFILE", 400, `Unknown profile "${profile}"`);
+  }
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const existing = await tx.utility.findUnique({ where: { id: input.utilityId } });
+
+      if (existing && existing.name !== input.name) {
+        // Renaming is its own lifecycle operation. As a side effect of
+        // re-provisioning, a typo in a script would rename a live tenant.
+        throw new ProvisioningError(
+          "UTILITY_NAME_MISMATCH",
+          409,
+          `Utility ${input.utilityId} is named "${existing.name}", not "${input.name}". ` +
+            `Renaming is not part of provisioning.`,
+        );
+      }
+
+      if (!existing) {
+        // Existence is keyed on the id, and a caller that supplies no id
+        // gets a fresh one — so without this, clicking Create twice makes
+        // two tenants with one name, told apart only by a uuid. Refused
+        // rather than adopted: handing back the tenant someone else
+        // created would report success for work this call did not do, and
+        // a caller who means to re-provision names the id.
+        //
+        // Case-insensitively, because two casings of one name are one
+        // tenant to everybody reading the list.
+        const nameHolder = await tx.utility.findFirst({
+          where: { name: { equals: input.name, mode: "insensitive" } },
+          select: { id: true, name: true },
+        });
+        if (nameHolder) {
+          throw new ProvisioningError(
+            "UTILITY_NAME_TAKEN",
+            409,
+            `Utility ${nameHolder.id} is already named "${nameHolder.name}". ` +
+              `Provision a different name, or pass that id to re-provision it.`,
+          );
+        }
+
+        await tx.utility.create({ data: { id: input.utilityId, name: input.name } });
+      }
+
+      // `skipDuplicates` so a re-run adds only what is missing. Rows for
+      // keys no longer in MODULES are left alone: removing a module is
+      // its own operation, and silently disabling one a tenant is using
+      // is worse than leaving a stale row.
+      const modules = await tx.utilityModule.createMany({
+        data: MODULES.map((moduleKey) => ({
+          utilityId: input.utilityId,
+          moduleKey,
+          isEnabled: true,
+        })),
+        skipDuplicates: true,
+      });
+
+      // Never update an existing role's permissions: a tenant may have
+      // edited them, and re-provisioning must not quietly revert that.
+      const present = new Set(
+        (
+          await tx.role.findMany({
+            where: { utilityId: input.utilityId },
+            select: { name: true },
+          })
+        ).map((r) => r.name),
+      );
+
+      let rolesCreated = 0;
+      let systemAdminRoleId: string | null = null;
+      for (const preset of PRESET_ROLES) {
+        if (present.has(preset.name)) {
+          if (preset.name === "System Admin") {
+            const found = await tx.role.findFirstOrThrow({
+              where: { utilityId: input.utilityId, name: preset.name },
+              select: { id: true },
+            });
+            systemAdminRoleId = found.id;
+          }
+          continue;
+        }
+        const role = await tx.role.create({
+          data: {
+            utilityId: input.utilityId,
+            name: preset.name,
+            description: preset.description,
+            isSystem: preset.isSystem,
+            permissions: preset.permissions as object,
+          },
+          select: { id: true, name: true },
+        });
+        rolesCreated += 1;
+        if (role.name === "System Admin") systemAdminRoleId = role.id;
+      }
+
+      let adminCreated = false;
+      if (input.firstAdmin) {
+        // Lowercased because `routes/auth.ts` looks a user up by
+        // `email.toLowerCase()`: an admin stored as `Ops@City.gov` is an
+        // admin who cannot log in, and it is the only account the new
+        // tenant has. It also makes this existence check — and
+        // `@@unique([utilityId, email])` behind it — agree about what the
+        // same address is, instead of admitting one user per casing.
+        const email = input.firstAdmin.email.trim().toLowerCase();
+        const already = await tx.cisUser.findFirst({
+          where: { utilityId: input.utilityId, email },
+          select: { id: true },
+        });
+        if (!already) {
+          const user = await tx.cisUser.create({
+            data: {
+              utilityId: input.utilityId,
+              email,
+              name: input.firstAdmin.name,
+              isActive: true,
+            },
+            select: { id: true },
+          });
+          if (systemAdminRoleId) {
+            await tx.userRole.create({
+              data: {
+                utilityId: input.utilityId,
+                userId: user.id,
+                roleId: systemAdminRoleId,
+                accountId: null,
+              },
+            });
+          }
+          adminCreated = true;
+        }
+      }
+
+      const result: ProvisionTenantResult = {
+        utilityId: input.utilityId,
+        created: !existing,
+        modulesEnabled: modules.count,
+        rolesCreated,
+        adminCreated,
+      };
+
+      if (input.dryRun) throw new DryRunComplete(result);
+      return result;
+    }, {
+      // Thirteen round trips, a 32-row createMany and six role creates:
+      // comfortably inside Prisma's 5s default against a warm database,
+      // and not always against a cold container or a loaded one, where
+      // it gives up with P2028 having written nothing. The rollback is
+      // right; the message is useless — nobody reads "Transaction
+      // already closed" as "run it again". This is a one-shot lifecycle
+      // operation with nothing waiting on it, so it can afford to wait.
+      timeout: 20_000,
+    });
+  } catch (err) {
+    if (err instanceof DryRunComplete) return err.result;
+    throw err;
+  }
+}
+
+/**
+ * D6 responsibility 6. Deliberately unscoped by tenant — it is the one
+ * read whose whole purpose is to cross tenants, which is why the platform
+ * actor at build-order step 5 will be its caller. Writes nothing.
+ */
+export async function listUtilities(): Promise<UtilitySummary[]> {
+  const rows = await prisma.utility.findMany({
+    orderBy: { name: "asc" },
+    select: {
+      id: true,
+      name: true,
+      status: true,
+      createdAt: true,
+      _count: { select: { utilityModules: true, roles: true, cisUsers: true } },
+    },
+  });
+
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    status: r.status,
+    createdAt: r.createdAt,
+    moduleCount: r._count.utilityModules,
+    roleCount: r._count.roles,
+    userCount: r._count.cisUsers,
+  }));
+}

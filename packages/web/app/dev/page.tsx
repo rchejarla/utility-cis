@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { apiClient } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 
@@ -46,6 +47,11 @@ export default function DevLaunchPage() {
 
   return (
     <div style={{ maxWidth: "900px", margin: "0 auto", padding: "40px 24px" }}>
+      <div style={{ textAlign: "right", marginBottom: "8px" }}>
+        <Link href="/dev/tenants" style={{ fontSize: "13px", color: "var(--accent-primary)" }}>
+          Tenants →
+        </Link>
+      </div>
       <div style={{ textAlign: "center", marginBottom: "48px" }}>
         <div style={{ fontSize: "11px", fontFamily: "monospace", letterSpacing: "2px", textTransform: "uppercase", color: "var(--accent-primary)", marginBottom: "12px" }}>
           Dev Testing

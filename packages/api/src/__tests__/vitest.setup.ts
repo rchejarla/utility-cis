@@ -85,6 +85,11 @@ vi.mock("../lib/prisma.js", () => {
     auditLog: crud(),
     utilityTheme: crud(),
     userPreference: crud(),
+    // The tenant itself. Added 2026-10-18 with the Utility entity;
+    // omitting it made `prisma.utility` undefined for every unit test,
+    // which surfaces as "Cannot read properties of undefined" rather
+    // than as a missing mock.
+    utility: crud(),
     utilityModule: crud(),
     utilityConfig: crud(),
     customFieldSchema: crud(),
