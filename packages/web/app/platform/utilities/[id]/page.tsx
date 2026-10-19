@@ -7,6 +7,8 @@ import { apiClient } from "@/lib/api-client";
 import { PageHeader } from "@/components/ui/page-header";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
+import { PermissionMatrix } from "@/components/settings/permission-matrix";
+import { FormField } from "@/components/ui/form-field";
 
 /**
  * What one tenant holds.
@@ -31,7 +33,14 @@ interface UtilityDetail {
   userCount: number;
   portalUserCount: number;
   modules: { moduleKey: string; isEnabled: boolean }[];
-  roles: { id: string; name: string; description: string | null; isSystem: boolean; moduleCount: number }[];
+  roles: {
+    id: string;
+    name: string;
+    description: string | null;
+    isSystem: boolean;
+    moduleCount: number;
+    permissions: Record<string, string[]>;
+  }[];
   staff: { id: string; email: string; name: string; isActive: boolean; roleName: string | null }[];
 }
 
@@ -57,6 +66,18 @@ const tdCell: React.CSSProperties = {
   padding: "9px 14px",
   fontSize: 13,
   color: "var(--text-primary)",
+};
+
+const inputStyle: React.CSSProperties = {
+  padding: "8px 10px",
+  borderRadius: "var(--radius)",
+  border: "1px solid var(--border)",
+  background: "var(--bg-input, var(--bg-card))",
+  color: "var(--text-primary)",
+  fontSize: 13,
+  fontFamily: "inherit",
+  width: "100%",
+  boxSizing: "border-box",
 };
 
 const btnStyle: React.CSSProperties = {
@@ -100,6 +121,13 @@ export default function PlatformTenantDetailPage() {
   const [busy, setBusy] = useState(false);
   const [confirmSuspend, setConfirmSuspend] = useState(false);
   const [moduleBusy, setModuleBusy] = useState<string | null>(null);
+  // null = closed; { id: null } = adding; { id } = editing that role.
+  const [roleDraft, setRoleDraft] = useState<
+    | { id: string | null; name: string; description: string; permissions: Record<string, string[]> }
+    | null
+  >(null);
+  const [roleBusy, setRoleBusy] = useState(false);
+  const [pendingRoleDelete, setPendingRoleDelete] = useState<{ id: string; name: string } | null>(null);
   const [activeTab, setActiveTab] = useState("staff");
 
   const load = useCallback(async () => {
@@ -117,6 +145,44 @@ export default function PlatformTenantDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  async function saveRole() {
+    if (!roleDraft) return;
+    setRoleBusy(true);
+    setError(null);
+    try {
+      const body = {
+        name: roleDraft.name.trim(),
+        description: roleDraft.description.trim() || undefined,
+        permissions: roleDraft.permissions,
+      };
+      if (roleDraft.id) {
+        await apiClient.patch(`/api/v1/platform/utilities/${params.id}/roles/${roleDraft.id}`, body);
+      } else {
+        await apiClient.post(`/api/v1/platform/utilities/${params.id}/roles`, body);
+      }
+      setRoleDraft(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRoleBusy(false);
+    }
+  }
+
+  async function deleteRole(roleId: string) {
+    setRoleBusy(true);
+    setError(null);
+    try {
+      await apiClient.delete(`/api/v1/platform/utilities/${params.id}/roles/${roleId}`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRoleBusy(false);
+      setPendingRoleDelete(null);
+    }
+  }
 
   async function toggleModule(moduleKey: string, isEnabled: boolean) {
     setModuleBusy(moduleKey);
@@ -293,30 +359,143 @@ export default function PlatformTenantDetailPage() {
           )}
           {activeTab === "roles" && (
             <>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th style={thCell}>Name</th>
-              <th style={thCell}>Description</th>
-              <th style={thCell}>Modules granted</th>
-              <th style={thCell}>Preset</th>
-            </tr>
-          </thead>
-          <tbody>
-            {detail.roles.map((r) => (
-              <tr key={r.id} style={{ borderTop: "1px solid var(--border-subtle)" }}>
-                <td style={tdCell}>{r.name}</td>
-                <td style={{ ...tdCell, color: "var(--text-secondary)" }}>{r.description ?? "—"}</td>
-                {/* The count, because "6 roles" says nothing about what
-                    any of them can do. */}
-                <td style={{ ...tdCell, color: "var(--text-secondary)" }}>{r.moduleCount}</td>
-                <td style={{ ...tdCell, color: "var(--text-secondary)" }}>
-                  {r.isSystem ? "Yes" : "No"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+              <div
+                style={{
+                  padding: "10px 14px",
+                  borderBottom: "1px solid var(--border-subtle)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                }}
+              >
+                <span style={{ fontSize: 12, color: "var(--text-muted)", flex: 1 }}>
+                  A utility normally manages its own roles. Editing them from here is for one with
+                  no working admin — a change applies to its users immediately.
+                </span>
+                <button
+                  onClick={() =>
+                    setRoleDraft({ id: null, name: "", description: "", permissions: {} })
+                  }
+                  style={{ ...btnStyle, padding: "5px 12px", fontSize: 12 }}
+                >
+                  Add role
+                </button>
+              </div>
+
+              {roleDraft && (
+                <div style={{ padding: 14, borderBottom: "1px solid var(--border-subtle)" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+                    <FormField label="Name" required>
+                      <input
+                        style={inputStyle}
+                        value={roleDraft.name}
+                        onChange={(e) => setRoleDraft({ ...roleDraft, name: e.target.value })}
+                        placeholder="Auditor"
+                      />
+                    </FormField>
+                    <FormField label="Description">
+                      <input
+                        style={inputStyle}
+                        value={roleDraft.description}
+                        onChange={(e) => setRoleDraft({ ...roleDraft, description: e.target.value })}
+                        placeholder="What this role is for"
+                      />
+                    </FormField>
+                  </div>
+
+                  {/* The same matrix the tenant's own Users & Roles screen
+                      uses, so the two cannot disagree about what a verb
+                      means — including its rule that CREATE, EDIT or
+                      DELETE implies VIEW. */}
+                  <PermissionMatrix
+                    permissions={roleDraft.permissions}
+                    onChange={(permissions) => setRoleDraft({ ...roleDraft, permissions })}
+                  />
+
+                  <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                    <button
+                      onClick={saveRole}
+                      disabled={roleBusy || !roleDraft.name.trim()}
+                      style={{
+                        ...btnStyle,
+                        background: "var(--accent-primary)",
+                        color: "#fff",
+                        border: "none",
+                        cursor: roleBusy || !roleDraft.name.trim() ? "not-allowed" : "pointer",
+                        opacity: roleBusy || !roleDraft.name.trim() ? 0.55 : 1,
+                      }}
+                    >
+                      {roleBusy ? "Saving..." : roleDraft.id ? "Save role" : "Create role"}
+                    </button>
+                    <button
+                      onClick={() => setRoleDraft(null)}
+                      style={{ ...btnStyle, color: "var(--text-muted)" }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={thCell}>Name</th>
+                    <th style={thCell}>Description</th>
+                    <th style={thCell}>Modules granted</th>
+                    <th style={thCell}>Preset</th>
+                    <th style={{ ...thCell, textAlign: "right" }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detail.roles.map((r) => (
+                    <tr key={r.id} style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                      <td style={tdCell}>{r.name}</td>
+                      <td style={{ ...tdCell, color: "var(--text-secondary)" }}>
+                        {r.description ?? "—"}
+                      </td>
+                      <td style={{ ...tdCell, color: "var(--text-secondary)" }}>{r.moduleCount}</td>
+                      <td style={{ ...tdCell, color: "var(--text-secondary)" }}>
+                        {r.isSystem ? "Yes" : "No"}
+                      </td>
+                      <td style={{ ...tdCell, textAlign: "right", whiteSpace: "nowrap" }}>
+                        <button
+                          onClick={() =>
+                            setRoleDraft({
+                              id: r.id,
+                              name: r.name,
+                              description: r.description ?? "",
+                              permissions: r.permissions,
+                            })
+                          }
+                          style={{ ...btnStyle, padding: "4px 10px", fontSize: 12, marginRight: 6 }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => setPendingRoleDelete({ id: r.id, name: r.name })}
+                          // A preset cannot be deleted (BR-RB-002) and the
+                          // server refuses it; saying so here beats a 400
+                          // after the click.
+                          disabled={r.isSystem || roleBusy}
+                          title={r.isSystem ? "A preset role cannot be deleted" : undefined}
+                          aria-label="Delete"
+                          style={{
+                            ...btnStyle,
+                            padding: "4px 10px",
+                            fontSize: 12,
+                            color: r.isSystem ? "var(--text-muted)" : "var(--danger)",
+                            cursor: r.isSystem || roleBusy ? "not-allowed" : "pointer",
+                            opacity: r.isSystem || roleBusy ? 0.45 : 1,
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </>
           )}
           {activeTab === "modules" && (
@@ -375,6 +554,17 @@ export default function PlatformTenantDetailPage() {
           Back to utilities
         </button>
       </div>
+
+      {pendingRoleDelete && (
+        <ConfirmDialog
+          title={`Delete ${pendingRoleDelete.name}?`}
+          message="Anyone holding it loses what it granted. A role still assigned to a user cannot be deleted at all — the server refuses that."
+          confirmLabel="Delete"
+          destructive
+          onConfirm={() => deleteRole(pendingRoleDelete.id)}
+          onCancel={() => setPendingRoleDelete(null)}
+        />
+      )}
 
       {confirmSuspend && (
         <ConfirmDialog

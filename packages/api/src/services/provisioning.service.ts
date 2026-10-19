@@ -311,7 +311,15 @@ export async function listUtilities(): Promise<UtilitySummary[]> {
 
 export interface UtilityDetail extends UtilitySummary {
   modules: { moduleKey: string; isEnabled: boolean }[];
-  roles: { id: string; name: string; description: string | null; isSystem: boolean; moduleCount: number }[];
+  roles: {
+    id: string;
+    name: string;
+    description: string | null;
+    isSystem: boolean;
+    moduleCount: number;
+    /** Returned so the console can edit them without a second fetch. */
+    permissions: Record<string, string[]>;
+  }[];
   staff: { id: string; email: string; name: string; isActive: boolean; roleName: string | null }[];
   /** Counted rather than listed — see below. */
   portalUserCount: number;
@@ -382,6 +390,7 @@ export async function getUtilityDetail(utilityId: string): Promise<UtilityDetail
       description: r.description,
       isSystem: r.isSystem,
       moduleCount: Object.keys((r.permissions ?? {}) as Record<string, unknown>).length,
+      permissions: (r.permissions ?? {}) as Record<string, string[]>,
     })),
     staff: staff.map((u) => ({
       id: u.id,
@@ -454,6 +463,24 @@ async function setUtilityStatus(
  * code does not have is refused, though — a row for a module no route
  * reads would look enabled and do nothing.
  */
+/**
+ * Throw UTILITY_NOT_FOUND unless the utility exists.
+ *
+ * For routes that act on a utility named in the path and then delegate
+ * to a service scoped by it: without this, an unknown id yields an empty
+ * list or a foreign-key error rather than telling the operator they
+ * mistyped it.
+ */
+export async function assertUtilityExists(utilityId: string): Promise<void> {
+  const utility = await prisma.utility.findUnique({
+    where: { id: utilityId },
+    select: { id: true },
+  });
+  if (!utility) {
+    throw new ProvisioningError("UTILITY_NOT_FOUND", 404, `No utility with id ${utilityId}.`);
+  }
+}
+
 export async function setUtilityModule(
   utilityId: string,
   moduleKey: string,

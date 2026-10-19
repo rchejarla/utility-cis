@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { createRoleSchema, updateRoleSchema } from "@utility-cis/shared";
+import * as roleService from "../services/role.service.js";
 import {
   provisionTenant,
   listUtilities,
@@ -7,6 +9,7 @@ import {
   suspendUtility,
   reactivateUtility,
   setUtilityModule,
+  assertUtilityExists,
 } from "../services/provisioning.service.js";
 import { getPlatformActor } from "../services/rbac.service.js";
 import {
@@ -72,6 +75,8 @@ const moduleParamsSchema = z.object({
 
 const moduleBodySchema = z.object({ isEnabled: z.boolean() }).strict();
 
+const roleParamsSchema = z.object({ id: z.string().uuid(), roleId: z.string().uuid() });
+
 const platformUserBodySchema = z
   .object({
     email: z.string().email().max(255),
@@ -131,6 +136,65 @@ export async function platformRoutes(app: FastifyInstance) {
       // 200, not 201, for a dry run: nothing was created, and a client
       // reading the status rather than the body should not be told it was.
       return reply.status(body.dryRun ? 200 : 201).send(result);
+    },
+  );
+
+  // ─── a utility's roles, from above it ──────────────────────────
+  //
+  // The tenant administers its own roles at /api/v1/roles, gated on
+  // `settings`. These are the same operations against a utility named in
+  // the path, which is authority no tenant holds — and what a utility
+  // with no working admin needs, since nothing else can act on it.
+  //
+  // No new business logic: `role.service.ts` already takes utilityId as
+  // its scoping argument and already carries BR-RB-002, BR-RB-003 and
+  // the cache invalidation for every assignee. These routes hand it the
+  // id from the path rather than from the token, so there is one set of
+  // rules rather than two that can drift.
+
+  app.get(
+    "/api/v1/platform/utilities/:id/roles",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const { id } = tenantParamsSchema.parse(request.params);
+      await assertUtilityExists(id);
+      return reply.send({ data: await roleService.listRoles(id) });
+    },
+  );
+
+  app.post(
+    "/api/v1/platform/utilities/:id/roles",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const { id } = tenantParamsSchema.parse(request.params);
+      await assertUtilityExists(id);
+      const body = createRoleSchema.parse(request.body);
+      return reply.status(201).send(await roleService.createRole(id, body));
+    },
+  );
+
+  app.patch(
+    "/api/v1/platform/utilities/:id/roles/:roleId",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const { id, roleId } = roleParamsSchema.parse(request.params);
+      await assertUtilityExists(id);
+      const body = updateRoleSchema.parse(request.body);
+      // The scoping comes from the path: `updateRole` filters on
+      // { id, utilityId }, so a role belonging to another utility is not
+      // found rather than edited.
+      return reply.send(await roleService.updateRole(id, roleId, body));
+    },
+  );
+
+  app.delete(
+    "/api/v1/platform/utilities/:id/roles/:roleId",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const { id, roleId } = roleParamsSchema.parse(request.params);
+      await assertUtilityExists(id);
+      await roleService.deleteRole(id, roleId);
+      return reply.status(204).send();
     },
   );
 
