@@ -40,6 +40,10 @@ afterAll(async () => {
 
 beforeEach(async () => {
   const { prisma } = prismaImports;
+  // Before the utility: `audit_log.utility_id` is ON DELETE RESTRICT and
+  // provisioning now writes a row, so leftover history blocks the
+  // teardown and takes every test after the first one down with it.
+  await prisma.auditLog.deleteMany({ where: { utilityId: TENANT } });
   await prisma.userRole.deleteMany({ where: { utilityId: TENANT } });
   await prisma.cisUser.deleteMany({ where: { utilityId: TENANT } });
   await prisma.role.deleteMany({ where: { utilityId: TENANT } });

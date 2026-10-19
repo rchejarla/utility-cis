@@ -100,6 +100,27 @@ export async function ensurePrincipal(
       data: { utilityId, userId: actorId, accountId: null, roleId: role.id },
     });
   }
+
+  /*
+   * `getUserRole` caches its answer in Redis for 300 seconds, keyed by
+   * user and utility — so seeding the row is not enough to make it the
+   * answer the middleware gets.
+   *
+   * This is not hypothetical tidiness. A file whose `beforeEach`
+   * truncates and calls this would otherwise carry a previous test's
+   * narrowed permissions into the next one: bill-document's
+   * `grantAccounts` helper deliberately reduces this actor to
+   * `{ accounts: [...] }`, and the two portal cases that ran after it
+   * were refused `portal_billing:VIEW` by a cache the reseed never
+   * touched. The 403 arrived from a role that no longer existed in any
+   * table, which is the worst kind of fixture bug to read.
+   *
+   * It belongs here rather than in each caller: a principal reseeded
+   * after a truncate always needs it, and forgetting it fails somewhere
+   * other than the line that caused it.
+   */
+  const rbac = await import("../../services/rbac.service.js");
+  await rbac.invalidateUserRoleCache(actorId, utilityId);
 }
 
 export interface BootedContainer {
