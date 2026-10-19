@@ -211,12 +211,24 @@ export async function buildApp() {
     });
     await app.register(async (instance) => {
       instance.addHook("preHandler", async (request, reply) => {
-        const userRole = await rbacModule.getUserRole(request.user.id, request.user.utilityId);
-        const perms = userRole?.permissions ?? {};
-        const tenantProfilePerms = (perms as Record<string, string[]>).tenant_profile ?? [];
-        if (!tenantProfilePerms.includes("EDIT")) {
+        // D4. This used to require tenant_profile:EDIT — a *tenant*
+        // permission, borrowed because no better one existed, over
+        // queues that are not tenant-scoped. One tenant's admin could
+        // therefore inspect, retry and remove another tenant's jobs
+        // (§1.6). The platform actor is the authority these queues
+        // always needed.
+        //
+        // The global authorization middleware already refuses anyone
+        // else on this prefix; this stays as the gate you can see from
+        // the mount, so moving or renaming the prefix cannot quietly
+        // leave it open.
+        const actor = request.platformActor;
+        if (!actor || !(await rbacModule.getPlatformActor(actor.id))) {
           reply.status(403).send({
-            error: { code: "FORBIDDEN", message: "Bull Board access requires tenant_profile:EDIT permission" },
+            error: {
+              code: "PLATFORM_REQUIRED",
+              message: "Queue inspection is reserved to the platform operator",
+            },
           });
           return;
         }

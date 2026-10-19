@@ -3,6 +3,14 @@
 import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api-client";
 import { Topbar } from "./topbar";
+import { Breadcrumbs } from "@/components/ui/breadcrumbs";
+
+/**
+ * The content column's width. The breadcrumb is rendered inside it
+ * rather than in the header, so it lines up with the page heading; on
+ * tenant screens the sidebar does that job.
+ */
+const CONTENT_WIDTH = 1100;
 
 /**
  * Chrome for the platform operator's screens.
@@ -71,7 +79,13 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
         {/* Centred: with no sidebar there is nothing anchoring the layout
             to the left, so full-bleed content strands itself in one
             corner of a wide monitor. */}
-        <div style={{ maxWidth: 1100, margin: "0 auto" }}>{children}</div>
+        <div style={{ maxWidth: CONTENT_WIDTH, margin: "0 auto" }}>
+          {/* In the column rather than the header, so it lines up with
+              the page heading beneath it while the logo and the account
+              controls stay at the window's edges. */}
+          <Breadcrumbs style={{ marginBottom: 12 }} />
+          {children}
+        </div>
       </main>
     </div>
   );

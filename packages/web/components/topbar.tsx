@@ -2,23 +2,13 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { GlobalSearch } from "./ui/global-search";
 import { NotificationBell } from "./notifications/notification-bell";
 import { logout } from "@/lib/api-client";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { BrandMark } from "@/components/ui/brand-mark";
-
-function getBreadcrumbs(pathname: string): string[] {
-  const segments = pathname.split("/").filter(Boolean);
-  if (segments.length === 0) return ["Home"];
-  return segments.map((seg) =>
-    seg
-      .replace(/-/g, " ")
-      .replace(/\b\w/g, (c) => c.toUpperCase())
-  );
-}
+import { Breadcrumbs } from "@/components/ui/breadcrumbs";
 
 interface TopbarProps {
   compact?: boolean;
@@ -40,9 +30,7 @@ interface TopbarProps {
 
 export function Topbar({ compact = false, variant = "tenant", identity }: TopbarProps) {
   const isPlatform = variant === "platform";
-  const pathname = usePathname();
 
-  const breadcrumbs = getBreadcrumbs(pathname);
 
   if (compact) {
     return (
@@ -110,30 +98,11 @@ export function Topbar({ compact = false, variant = "tenant", identity }: Topbar
           screens have no sidebar, so it belongs here instead. */}
       {isPlatform && <BrandMark subtitle="Platform" />}
 
-      {/* Breadcrumb */}
-      <nav style={{ display: "flex", alignItems: "center", gap: "6px", flex: 1 }}>
-        {breadcrumbs.map((crumb, index) => (
-          <span key={index} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            {index > 0 && (
-              <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>
-                /
-              </span>
-            )}
-            <span
-              style={{
-                color:
-                  index === breadcrumbs.length - 1
-                    ? "var(--text-primary)"
-                    : "var(--text-secondary)",
-                fontSize: "13px",
-                fontWeight: index === breadcrumbs.length - 1 ? "500" : "400",
-              }}
-            >
-              {crumb}
-            </span>
-          </span>
-        ))}
-      </nav>
+      {/* The platform screens render their breadcrumb in the content
+          column instead, where it aligns with the page heading; here it
+          would sit at the window's edge. The spacer keeps the account
+          controls on the right either way. */}
+      {isPlatform ? <div style={{ flex: 1 }} /> : <Breadcrumbs />}
 
       {/* Global search — opens a Cmd/Ctrl+K overlay that queries the
           full-text search endpoint across customers, premises, accounts,

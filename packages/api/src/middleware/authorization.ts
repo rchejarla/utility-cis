@@ -16,6 +16,22 @@ export async function authorizationMiddleware(
     | undefined;
 
   /*
+   * Platform surfaces whose routes we do not own, and so cannot
+   * annotate. Bull Board mounts its own route tree under
+   * /admin/queues; its queues are shared rather than tenant-scoped and
+   * their payloads carry other tenants' ids (§1.6, D4), so the whole
+   * subtree is the platform operator's.
+   *
+   * A prefix list is the lesser of two evils here: the alternative is
+   * relaxing the tenant-context refusal for every route that declares
+   * no module, which would admit a platform token to /auth/me and
+   * anything else unannotated — and /auth/me reads request.user.
+   */
+  const isPlatformRoute =
+    routeConfig?.platform === true ||
+    (request.url ?? "").startsWith("/admin/queues");
+
+  /*
    * Platform routes are authorized by identity, not by permission.
    *
    * A route says `{ platform: true }` instead of naming a module,
@@ -29,7 +45,7 @@ export async function authorizationMiddleware(
    * waves through any token whose subject does not exist. A positive
    * lookup cannot have that shape.
    */
-  if (routeConfig?.platform) {
+  if (isPlatformRoute) {
     const actor = request.platformActor;
     if (!actor) {
       reply.status(403).send({

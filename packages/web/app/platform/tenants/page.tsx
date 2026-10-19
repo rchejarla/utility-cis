@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { apiClient } from "@/lib/api-client";
 import { PageHeader } from "@/components/ui/page-header";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -160,7 +161,14 @@ export default function PlatformTenantsPage() {
               {utilities.map((u) => (
                 <tr key={u.id} style={{ borderTop: "1px solid var(--border-subtle)" }}>
                   <td style={{ ...tdCell, maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis" }} title={u.id}>
-                    {u.name}
+                    {/* The counts in this row are summaries; the name is
+                        how you get to what they summarise. */}
+                    <Link
+                      href={`/platform/tenants/${u.id}`}
+                      style={{ color: "var(--accent-primary)", textDecoration: "none" }}
+                    >
+                      {u.name}
+                    </Link>
                   </td>
                   <td style={tdCell}>
                     <span

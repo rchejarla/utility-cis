@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   provisionTenant,
   listUtilities,
+  getUtilityDetail,
   suspendUtility,
   reactivateUtility,
 } from "../services/provisioning.service.js";
@@ -80,6 +81,15 @@ export async function platformRoutes(app: FastifyInstance) {
     { config: { platform: true } },
     async (_request, reply) => {
       return reply.send({ data: await listUtilities() });
+    },
+  );
+
+  app.get(
+    "/api/v1/platform/tenants/:id",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const { id } = tenantParamsSchema.parse(request.params);
+      return reply.send(await getUtilityDetail(id));
     },
   );
 

@@ -305,6 +305,91 @@ export async function listUtilities(): Promise<UtilitySummary[]> {
   return rows.map(toSummary);
 }
 
+export interface UtilityDetail extends UtilitySummary {
+  modules: { moduleKey: string; isEnabled: boolean }[];
+  roles: { id: string; name: string; description: string | null; isSystem: boolean; moduleCount: number }[];
+  staff: { id: string; email: string; name: string; isActive: boolean; roleName: string | null }[];
+  /** Counted rather than listed — see below. */
+  portalUserCount: number;
+}
+
+/**
+ * What one tenant holds. The other half of D6 responsibility 6: a list
+ * of counts you cannot open is a dead end, because "6 roles" raises the
+ * question it will not answer.
+ *
+ * **Staff, not users.** Portal customers are `cis_user` rows too, so
+ * returning "the tenant's users" would have a real utility answering
+ * with tens of thousands of them. What this screen is asked is whether
+ * the tenant can be administered, so it lists the users with no
+ * `customer_id` and counts the portal accounts instead. That keeps the
+ * payload bounded by staff headcount rather than by customer base.
+ *
+ * A role's module count is included because the number of roles says
+ * nothing about what they can do, and a staff member with no role is
+ * listed with `roleName: null` rather than omitted — a user who cannot
+ * do anything is precisely what an operator is hunting for when a tenant
+ * reports that it cannot work.
+ */
+export async function getUtilityDetail(utilityId: string): Promise<UtilityDetail> {
+  const utility = await prisma.utility.findUnique({
+    where: { id: utilityId },
+    select: SUMMARY_SELECT,
+  });
+  if (!utility) {
+    throw new ProvisioningError("UTILITY_NOT_FOUND", 404, `No utility with id ${utilityId}.`);
+  }
+
+  const [modules, roles, staff, portalUserCount] = await Promise.all([
+    prisma.utilityModule.findMany({
+      where: { utilityId },
+      select: { moduleKey: true, isEnabled: true },
+      orderBy: { moduleKey: "asc" },
+    }),
+    prisma.role.findMany({
+      where: { utilityId },
+      select: { id: true, name: true, description: true, isSystem: true, permissions: true },
+      orderBy: { name: "asc" },
+    }),
+    prisma.cisUser.findMany({
+      where: { utilityId, customerId: null },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        isActive: true,
+        userRoles: {
+          where: { accountId: null },
+          select: { role: { select: { name: true } } },
+          take: 1,
+        },
+      },
+      orderBy: { email: "asc" },
+    }),
+    prisma.cisUser.count({ where: { utilityId, customerId: { not: null } } }),
+  ]);
+
+  return {
+    ...toSummary(utility),
+    modules,
+    roles: roles.map((r) => ({
+      id: r.id,
+      name: r.name,
+      description: r.description,
+      isSystem: r.isSystem,
+      moduleCount: Object.keys((r.permissions ?? {}) as Record<string, unknown>).length,
+    })),
+    staff: staff.map((u) => ({
+      id: u.id,
+      email: u.email,
+      name: u.name,
+      isActive: u.isActive,
+      roleName: u.userRoles[0]?.role.name ?? null,
+    })),
+    portalUserCount,
+  };
+}
+
 /**
  * Suspend a tenant, or reactivate it. D6 responsibility 5.
  *

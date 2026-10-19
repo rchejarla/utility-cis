@@ -230,6 +230,80 @@ describe("POST /api/v1/platform/tenants", () => {
   });
 });
 
+describe("GET /api/v1/platform/tenants/:id", () => {
+  function mockDetail() {
+    // The detail read selects the whole summary projection, not the
+    // `{ id }` the suspend path's existence check does.
+    (prisma.utility.findUnique as Mock).mockResolvedValue(summaryRow());
+    (prisma.utilityModule.findMany as Mock).mockResolvedValue(
+      MODULES.map((moduleKey) => ({ moduleKey, isEnabled: true })),
+    );
+    (prisma.role.findMany as Mock).mockResolvedValue([
+      { id: "r1", name: "System Admin", description: "Everything", isSystem: true, permissions: { settings: ["VIEW"] } },
+    ]);
+    (prisma.cisUser.findMany as Mock).mockResolvedValue([
+      {
+        id: "u1",
+        email: "ops@example.gov",
+        name: "Pat Admin",
+        isActive: true,
+        userRoles: [{ role: { name: "System Admin" } }],
+      },
+    ]);
+    (prisma.cisUser.count as Mock).mockResolvedValue(3);
+  }
+
+  it("reports what the tenant holds", async () => {
+    mockDetail();
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/platform/tenants/${TENANT}`,
+      headers: platformHeaders,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body).toMatchObject({ name: "City of Bozeman", portalUserCount: 3 });
+    expect(body.staff[0]).toMatchObject({ email: "ops@example.gov", roleName: "System Admin" });
+  });
+
+  it("refuses a tenant admin", async () => {
+    mockDetail();
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/platform/tenants/${TENANT}`,
+      headers: tenantHeaders,
+    });
+
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("answers 404 for a tenant that does not exist", async () => {
+    (prisma.utility.findUnique as Mock).mockResolvedValue(null);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/platform/tenants/${ABSENT}`,
+      headers: platformHeaders,
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("refuses an id that is not a uuid", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/platform/tenants/not-a-uuid",
+      headers: platformHeaders,
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+});
+
 describe("suspend and reactivate", () => {
   it("suspends", async () => {
     const app = await buildApp();
