@@ -1,44 +1,70 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { faBuildingColumns, faUserShield, faLayerGroup } from "@fortawesome/pro-solid-svg-icons";
 import { apiClient } from "@/lib/api-client";
+import { useBreakpoint } from "@/lib/use-media-query";
 import { Topbar } from "./topbar";
-import { Breadcrumbs } from "@/components/ui/breadcrumbs";
-
-/**
- * The content column's width. The breadcrumb is rendered inside it
- * rather than in the header, so it lines up with the page heading; on
- * tenant screens the sidebar does that job.
- */
-const CONTENT_WIDTH = 1100;
+import { Sidebar, type NavSection } from "./sidebar";
 
 /**
  * Chrome for the platform operator's screens.
  *
- * It is `app-shell` without the sidebar, and deliberately the *same*
- * `Topbar` — an earlier version of this file hand-built its own header
- * bar, which promptly drifted: different elements in a different order
- * from the one every other screen uses. A second header is a second
- * thing to keep in step, so `Topbar` took a `variant` instead and drops
- * only the controls that mean nothing outside a tenant (global search
- * over that tenant's data, its notification bell, its settings page).
+ * It is the admin shell with a different nav: the same `Sidebar`, the
+ * same `Topbar`, assembled the same way. Two earlier versions of this
+ * file were worse — one hand-built its own header bar, the next its own
+ * side nav — and each drifted from the original it was imitating within
+ * the hour. The sidebar now takes its sections as a prop, so there is
+ * one sidebar in the product rather than one per surface, and the brand,
+ * the breadcrumb, the theme toggle and the account menu all sit where
+ * they do on every other screen.
  *
- * There is no side navigation because there is one screen above
- * tenants, and a nav of one item is furniture.
- *
- * What it does not mount is `AuthPermissionProvider`. That fetches
- * `/api/v1/auth/me`, which answers 403 for a platform token and then
- * falls back to granting every permission so a transient failure cannot
- * black out the UI — so the client-side gating it provided here would be
- * fabricated. The authority on these screens is being the platform
- * actor, enforced server-side by `{ platform: true }`.
+ * Permission filtering is off for these sections. Platform authority is
+ * not a permission matrix — being the platform actor is the whole of it
+ * — and these screens mount no `AuthPermissionProvider`, which is
+ * deliberate: it fetches `/api/v1/auth/me`, which answers 403 for a
+ * platform token and then falls back to granting every permission, so
+ * any gating it provided here would be fabricated. The real gate is
+ * `{ platform: true }`, server-side.
  */
+
+const PLATFORM_SECTIONS: NavSection[] = [
+  {
+    title: "Platform",
+    icon: faLayerGroup,
+    items: [
+      // `module` is required by the shape and unread here, since these
+      // sections are not permission-filtered. "platform" is the honest
+      // value: it names the authority these screens actually need.
+      {
+        href: "/platform/tenants",
+        label: "Utilities",
+        icon: faBuildingColumns,
+        module: "platform",
+        tooltip: "Create, suspend and inspect the utilities on this deployment",
+      },
+      {
+        href: "/platform/users",
+        label: "Operators",
+        icon: faUserShield,
+        module: "platform",
+        tooltip: "The people who may do the above",
+      },
+    ],
+  },
+];
+
 export function PlatformShell({ children }: { children: React.ReactNode }) {
   const [actor, setActor] = useState<{ name: string; email: string } | null>(null);
+  // The same breakpoints the admin shell uses: no sidebar on a phone, an
+  // icon rail on a tablet.
+  const { isMobile, isTablet } = useBreakpoint();
 
   useEffect(() => {
     // Identity belongs to the chrome, not to a page: it is a property of
-    // the session rather than of what is being shown.
+    // the session rather than of what is being shown. Without it the
+    // account menu reads the NextAuth session and falls back to
+    // "admin@utility.com", which on these screens is a lie.
     apiClient
       .get<{ actor: { name: string; email: string } | null }>("/api/v1/platform/me")
       .then((res) => setActor(res.actor ?? null))
@@ -46,7 +72,7 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+    <>
       {/* WCAG 2.4.1 Bypass Blocks — skip link, visible on focus */}
       <a
         href="#main-content"
@@ -73,20 +99,28 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
         Skip to main content
       </a>
 
-      <Topbar variant="platform" identity={actor} />
+      <div style={{ display: "flex", height: "100vh" }}>
+        {!isMobile && (
+          <Sidebar
+            sections={PLATFORM_SECTIONS}
+            filterByPermissions={false}
+            brandSubtitle="Platform"
+            defaultCollapsed={isTablet}
+          />
+        )}
 
-      <main id="main-content" tabIndex={-1} style={{ flex: 1, overflow: "auto", padding: "24px" }}>
-        {/* Centred: with no sidebar there is nothing anchoring the layout
-            to the left, so full-bleed content strands itself in one
-            corner of a wide monitor. */}
-        <div style={{ maxWidth: CONTENT_WIDTH, margin: "0 auto" }}>
-          {/* In the column rather than the header, so it lines up with
-              the page heading beneath it while the logo and the account
-              controls stay at the window's edges. */}
-          <Breadcrumbs style={{ marginBottom: 12 }} />
-          {children}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <Topbar variant="platform" identity={actor} compact={isMobile} />
+
+          <main
+            id="main-content"
+            tabIndex={-1}
+            style={{ flex: 1, overflow: "auto", padding: "24px" }}
+          >
+            {children}
+          </main>
         </div>
-      </main>
-    </div>
+      </div>
+    </>
   );
 }

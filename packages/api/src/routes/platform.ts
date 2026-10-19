@@ -8,6 +8,11 @@ import {
   reactivateUtility,
 } from "../services/provisioning.service.js";
 import { getPlatformActor } from "../services/rbac.service.js";
+import {
+  listPlatformUsers,
+  createPlatformUser,
+  setPlatformUserActive,
+} from "../services/platform-user.service.js";
 
 /**
  * The platform operator's routes: tenant lifecycle, and nothing else.
@@ -56,6 +61,13 @@ const provisionBodySchema = z
   .strict();
 
 const tenantParamsSchema = z.object({ id: z.string().uuid() });
+
+const platformUserBodySchema = z
+  .object({
+    email: z.string().email().max(255),
+    name: z.string().trim().min(1).max(255),
+  })
+  .strict();
 
 export async function platformRoutes(app: FastifyInstance) {
   app.get(
@@ -109,6 +121,43 @@ export async function platformRoutes(app: FastifyInstance) {
       // 200, not 201, for a dry run: nothing was created, and a client
       // reading the status rather than the body should not be told it was.
       return reply.status(body.dryRun ? 200 : 201).send(result);
+    },
+  );
+
+  // ─── the platform's own operators ──────────────────────────────
+
+  app.get(
+    "/api/v1/platform/users",
+    { config: { platform: true } },
+    async (_request, reply) => {
+      return reply.send({ data: await listPlatformUsers() });
+    },
+  );
+
+  app.post(
+    "/api/v1/platform/users",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const body = platformUserBodySchema.parse(request.body);
+      return reply.status(201).send(await createPlatformUser(body));
+    },
+  );
+
+  app.post(
+    "/api/v1/platform/users/:id/deactivate",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const { id } = tenantParamsSchema.parse(request.params);
+      return reply.send(await setPlatformUserActive(id, false));
+    },
+  );
+
+  app.post(
+    "/api/v1/platform/users/:id/reactivate",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const { id } = tenantParamsSchema.parse(request.params);
+      return reply.send(await setPlatformUserActive(id, true));
     },
   );
 

@@ -7,7 +7,6 @@ import { GlobalSearch } from "./ui/global-search";
 import { NotificationBell } from "./notifications/notification-bell";
 import { logout } from "@/lib/api-client";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
-import { BrandMark } from "@/components/ui/brand-mark";
 import { Breadcrumbs } from "@/components/ui/breadcrumbs";
 
 interface TopbarProps {
@@ -94,15 +93,7 @@ export function Topbar({ compact = false, variant = "tenant", identity }: Topbar
         flexShrink: 0,
       }}
     >
-      {/* The mark lives in the sidebar on tenant screens. The platform
-          screens have no sidebar, so it belongs here instead. */}
-      {isPlatform && <BrandMark subtitle="Platform" />}
-
-      {/* The platform screens render their breadcrumb in the content
-          column instead, where it aligns with the page heading; here it
-          would sit at the window's edge. The spacer keeps the account
-          controls on the right either way. */}
-      {isPlatform ? <div style={{ flex: 1 }} /> : <Breadcrumbs />}
+      <Breadcrumbs />
 
       {/* Global search — opens a Cmd/Ctrl+K overlay that queries the
           full-text search endpoint across customers, premises, accounts,

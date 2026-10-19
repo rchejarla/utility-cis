@@ -6,6 +6,7 @@ import Link from "next/link";
 import { apiClient } from "@/lib/api-client";
 import { PageHeader } from "@/components/ui/page-header";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Tabs } from "@/components/ui/tabs";
 
 /**
  * What one tenant holds.
@@ -39,16 +40,6 @@ const card: React.CSSProperties = {
   border: "1px solid var(--border)",
   borderRadius: "var(--radius)",
   overflow: "hidden",
-};
-
-const sectionTitle: React.CSSProperties = {
-  fontSize: 13,
-  fontWeight: 600,
-  color: "var(--text-primary)",
-  margin: 0,
-  padding: "12px 14px",
-  borderBottom: "1px solid var(--border-subtle)",
-  background: "var(--bg-elevated)",
 };
 
 const thCell: React.CSSProperties = {
@@ -108,6 +99,7 @@ export default function PlatformTenantDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmSuspend, setConfirmSuspend] = useState(false);
+  const [activeTab, setActiveTab] = useState("staff");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -231,8 +223,18 @@ export default function PlatformTenantDetailPage() {
         <Stat label="Portal customers" value={detail.portalUserCount} />
       </div>
 
-      <div style={{ ...card, marginBottom: 20 }}>
-        <h2 style={sectionTitle}>Staff</h2>
+      <Tabs
+        tabs={[
+          { key: "staff", label: `Staff (${detail.staff.length})` },
+          { key: "roles", label: `Roles (${detail.roles.length})` },
+          { key: "modules", label: `Modules (${detail.moduleCount})` },
+        ]}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+      >
+        <div style={card}>
+          {activeTab === "staff" && (
+            <>
         {detail.staff.length === 0 ? (
           <div style={{ padding: "20px 14px", fontSize: 13, color: "var(--text-muted)" }}>
             {/* A tenant with no staff cannot be administered into
@@ -270,10 +272,10 @@ export default function PlatformTenantDetailPage() {
             </tbody>
           </table>
         )}
-      </div>
-
-      <div style={{ ...card, marginBottom: 20 }}>
-        <h2 style={sectionTitle}>Roles</h2>
+            </>
+          )}
+          {activeTab === "roles" && (
+            <>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr>
@@ -298,10 +300,10 @@ export default function PlatformTenantDetailPage() {
             ))}
           </tbody>
         </table>
-      </div>
-
-      <div style={card}>
-        <h2 style={sectionTitle}>Enabled modules</h2>
+            </>
+          )}
+          {activeTab === "modules" && (
+            <>
         <div
           style={{
             padding: 14,
@@ -328,7 +330,10 @@ export default function PlatformTenantDetailPage() {
             </span>
           ))}
         </div>
-      </div>
+            </>
+          )}
+        </div>
+      </Tabs>
 
       <div style={{ marginTop: 20 }}>
         <button onClick={() => router.push("/platform/tenants")} style={{ ...btnStyle, color: "var(--text-muted)" }}>

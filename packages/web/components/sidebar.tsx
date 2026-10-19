@@ -65,7 +65,7 @@ import {
   faChevronRight,
 } from "@fortawesome/pro-solid-svg-icons";
 
-interface NavItem {
+export interface NavItem {
   href: string;
   label: string;
   icon: IconDefinition;
@@ -79,7 +79,7 @@ interface NavItem {
   tooltip?: string;
 }
 
-interface NavSection {
+export interface NavSection {
   title: string;
   /**
    * Shown beside the header. Seven uppercase words in a column read as
@@ -342,26 +342,46 @@ const navSections: NavSection[] = [
   },
 ];
 
-function NavItemWithPermission({
+/**
+ * One link in the sidebar, hidden when the viewer may not see where it
+ * goes.
+ *
+ * `enforcePermission` is false above a tenant: platform authority is not
+ * a permission matrix, and those screens mount no permission provider,
+ * so the check would read an empty map and hide every item. It was
+ * called `NavItemWithPermission` while the check was unconditional; the
+ * name stopped being true when it became a choice.
+ */
+function SidebarNavItem({
   item,
   collapsed,
   isActive,
+  enforcePermission,
   onNavigate,
 }: {
   item: NavItem;
   collapsed: boolean;
   isActive: boolean;
+  enforcePermission: boolean;
   /** Closes the collapsed-rail flyout once a destination is chosen. */
   onNavigate?: () => void;
 }) {
+  // Called unconditionally — hooks must be — and only its answer is
+  // conditional.
   const { canView } = usePermission(item.module);
-  if (!canView) return null;
+  if (enforcePermission && !canView) return null;
 
   return (
     <Link
       href={item.href}
       onClick={onNavigate}
       title={collapsed ? item.label : item.tooltip}
+      // Without this the tooltip becomes the link's accessible name — a
+      // `title` overrides the element's own text — so a screen reader
+      // announced "Route and Asset Management System — solid-waste field
+      // events" in place of "RAMS Events". The tooltip stays for the
+      // mouse; the name stays the label.
+      aria-label={item.label}
       style={{
         display: "flex",
         alignItems: "center",
@@ -401,6 +421,7 @@ const OPEN_SECTION_KEY = "cis_nav_open_section";
 
 function CollapsibleSection({
   section,
+  filterByPermissions,
   pathname,
   sidebarCollapsed,
   sectionOpen,
@@ -410,6 +431,7 @@ function CollapsibleSection({
   onFlyoutClose,
 }: {
   section: NavSection;
+  filterByPermissions: boolean;
   pathname: string;
   sidebarCollapsed: boolean;
   sectionOpen: boolean;
@@ -439,7 +461,9 @@ function CollapsibleSection({
   // Field Technician presets hold no key in it, so without this they
   // would get a heading that opens onto an empty list.
   const { permissions, enabledModules } = useAuth();
-  const items = visibleNavItems(section.items, permissions, enabledModules);
+  const items = filterByPermissions
+    ? visibleNavItems(section.items, permissions, enabledModules)
+    : section.items;
 
   /**
    * Longest-prefix wins, so `/delinquency/rules` does not also light up
@@ -612,7 +636,8 @@ function CollapsibleSection({
               {section.title}
             </div>
             {items.map((item) => (
-              <NavItemWithPermission
+              <SidebarNavItem
+                enforcePermission={filterByPermissions}
                 key={item.href}
                 item={item}
                 collapsed={false}
@@ -627,7 +652,8 @@ function CollapsibleSection({
       {!sidebarCollapsed &&
         sectionOpen &&
         items.map((item) => (
-          <NavItemWithPermission
+          <SidebarNavItem
+            enforcePermission={filterByPermissions}
             key={item.href}
             item={item}
             collapsed={false}
@@ -640,9 +666,30 @@ function CollapsibleSection({
 
 interface SidebarProps {
   defaultCollapsed?: boolean;
+  /**
+   * What to navigate. Defaults to the tenant's own sections; the
+   * platform operator's shell passes its own, so there is one sidebar in
+   * the product rather than one per surface.
+   */
+  sections?: NavSection[];
+  /**
+   * Hide items the signed-in user has no permission for. True inside a
+   * tenant. False above one: platform authority is not a permission
+   * matrix — being the platform actor is the whole of it — and these
+   * screens mount no `AuthPermissionProvider`, so the filter would read
+   * an empty permission map and hide everything.
+   */
+  filterByPermissions?: boolean;
+  /** The line under the product name in the brand row. */
+  brandSubtitle?: string;
 }
 
-export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
+export function Sidebar({
+  defaultCollapsed = false,
+  sections = navSections,
+  filterByPermissions = true,
+  brandSubtitle,
+}: SidebarProps) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const width = collapsed ? 64 : 240;
@@ -665,7 +712,7 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
   // the right one immediately.
   const [openSection, setOpenSection] = useState<string | null>(null);
   useEffect(() => {
-    const sectionForActive = navSections.find((s) =>
+    const sectionForActive = sections.find((s) =>
       s.items.some(
         (item) =>
           pathname === item.href ||
@@ -684,13 +731,19 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
     // to the first non-default-collapsed section.
     if (sectionForActive) {
       setOpenSection(sectionForActive.title);
-    } else if (stored && navSections.some((s) => s.title === stored)) {
+    } else if (stored && sections.some((s) => s.title === stored)) {
       setOpenSection(stored);
     } else {
-      const fallback = navSections.find((s) => !s.defaultCollapsed)?.title ?? null;
+      const fallback = sections.find((s) => !s.defaultCollapsed)?.title ?? null;
       setOpenSection(fallback);
     }
-  }, [pathname]);
+    // `sections` is in here because this effect decides which section is
+    // open and has to look in the ones actually being rendered. Reading
+    // the module-level tenant constant instead left the platform shell's
+    // only section shut: no tenant section matches /platform/*, so the
+    // route lookup found nothing and the fallbacks named sections that
+    // were not on screen.
+  }, [pathname, sections]);
 
   const toggleOpenSection = (title: string) => {
     const next = openSection === title ? null : title;
@@ -735,7 +788,7 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
       >
         {!collapsed && (
           <>
-            <BrandMark />
+            <BrandMark subtitle={brandSubtitle} />
             <div style={{ flex: 1 }} />
           </>
         )}
@@ -777,10 +830,11 @@ export function Sidebar({ defaultCollapsed = false }: SidebarProps) {
 
       {/* Nav */}
       <nav style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "12px 0" }}>
-        {navSections.map((section) => (
+        {sections.map((section) => (
           <CollapsibleSection
             key={section.title}
             section={section}
+            filterByPermissions={filterByPermissions}
             pathname={pathname}
             sidebarCollapsed={collapsed}
             sectionOpen={openSection === section.title}
