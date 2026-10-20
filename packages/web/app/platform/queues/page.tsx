@@ -594,9 +594,16 @@ export default function PlatformQueuesPage() {
   const attachedSomewhere = queues.some((q) => (q.workers ?? 0) > 0);
   const failing = (report?.totals.failed ?? 0) > 0 || (report?.totals.dlq ?? 0) > 0;
   const allUnattended = queues.length > 0 && unattended.length === queues.length;
-  /** What a newly started worker would pick up at once. */
-  const pendingOnStart =
-    (report?.totals.waiting ?? 0) + queues.reduce((n, q) => n + q.counts.delayed, 0);
+  /**
+   * What a newly started worker would pick up at once, per queue.
+   *
+   * Named rather than totalled. "5 queued jobs will start running" tells
+   * the reader nothing they can act on — which queues, and therefore
+   * what kind of work, is the whole content of the warning.
+   */
+  const queuedOnStart = queues
+    .map((q) => ({ name: q.name, jobs: q.counts.waiting + q.counts.delayed }))
+    .filter((q) => q.jobs > 0);
   const failures = troubledFirst(queues).flatMap((q) =>
     q.recentFailures.map((f) => ({ queue: q.name, failure: f })),
   );
@@ -804,30 +811,35 @@ export default function PlatformQueuesPage() {
                   <>
                     <div style={{ color: "var(--warning)" }}>Not running.</div>
                     <div>
+                      {/* The scope belongs on the control. One worker
+                          process serves every queue — that is the
+                          deployment model, and WORKER_QUEUES is where a
+                          subset is chosen — but "Start worker" alone
+                          left that to a line of prose underneath. */}
                       <Verb
-                        label="Start worker"
+                        label={`Start worker (all ${report.queues.length} queues)`}
                         busy={workerBusy}
                         onClick={() => controlWorker("start")}
                       />
                     </div>
                     <div style={{ color: "var(--text-muted)" }}>
-                      Serves all {report.queues.length} queues. It outlives this API process, so
-                      a reload will not stop it.
+                      It outlives this API process, so a reload will not stop it.
                     </div>
-                    {pendingOnStart > 0 && (
+                    {queuedOnStart.length > 0 && (
                       /*
-                       * What the button is about to do, before it is
-                       * pressed. The five cron queues go overdue as soon
-                       * as nothing is attached, so starting a worker on
-                       * an idle stack fires all of them at once —
-                       * notification-send dispatches outward and
-                       * audit-retention deletes rows. A count is the
-                       * least this can say.
+                       * What pressing it will set off, in the only terms
+                       * that are actionable: which queues, and how much
+                       * in each. A scheduled job that is past due runs
+                       * the moment a worker appears, so an idle stack
+                       * starts everything at once — and whether that
+                       * matters depends entirely on which queue it is in.
                        */
                       <div style={{ color: "var(--warning)" }}>
-                        {pendingOnStart} queued {plural(pendingOnStart, "job", "jobs")} will
-                        start running immediately, overdue scheduled sweeps included. Open a
-                        count first if you want to see what they are.
+                        Work already queued starts running at once:{" "}
+                        <span style={{ fontFamily: "monospace" }}>
+                          {queuedOnStart.map((q) => `${q.name} ${q.jobs}`).join(", ")}
+                        </span>
+                        . Click a count in the table below to see the jobs first.
                       </div>
                     )}
                   </>

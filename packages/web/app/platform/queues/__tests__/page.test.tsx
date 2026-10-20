@@ -687,20 +687,35 @@ describe("the platform queue page", () => {
     expect(screen.getByRole("button", { name: /stop worker/i })).toBeInTheDocument();
   });
 
-  it("says what will run the moment a worker starts", async () => {
+  it("says on the button itself which queues the worker will serve", async () => {
+    // One worker process serves every queue — that is the deployment
+    // model, and WORKER_QUEUES is where a subset is chosen. "Start
+    // worker" alone left the scope to a line of prose underneath.
+    get.mockResolvedValue(
+      report({ queues: [queue({ workers: 0, workerAgeSeconds: null }), queue({ name: "imports", workers: 0, workerAgeSeconds: null })] }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(
+      await screen.findByRole("button", { name: /start worker \(all 2 queues\)/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("names the queues whose jobs a start would run, not just how many", async () => {
     /*
-     * Not a detail. The five cron queues sit at one delayed job each and
-     * go overdue the moment nothing is attached, so starting a worker on
-     * a stack that has been idle fires every one of them at once —
-     * including notification-send, which dispatches outward, and
-     * audit-retention, which deletes rows. Whoever presses the button
-     * should know that before pressing it, not after.
+     * Starting a worker on a stack that has been idle runs whatever has
+     * piled up, at once. The first version of this said "5 queued jobs
+     * will start running immediately, overdue scheduled sweeps included.
+     * Open a count first" — which names no queue, and asks the reader to
+     * know what a sweep is and that a count is a thing you can open.
      */
     get.mockResolvedValue(
       report({
         queues: [
           queue({ counts: { waiting: 3, active: 0, delayed: 0, failed: 0 }, workers: 0, workerAgeSeconds: null }),
           queue({ name: "audit-retention", counts: { waiting: 0, active: 0, delayed: 1, failed: 0 }, workers: 0, workerAgeSeconds: null }),
+          queue({ name: "imports", workers: 0, workerAgeSeconds: null }),
         ],
         totals: { waiting: 3, active: 0, failed: 0, dlq: 0 },
       }),
@@ -709,7 +724,22 @@ describe("the platform queue page", () => {
     render(<PlatformQueuesPage />);
     await screen.findByRole("button", { name: /start worker/i });
 
-    expect(screen.getByText(/4 queued jobs will start running/i)).toBeInTheDocument();
+    expect(screen.getByText(/billing-runs 3/)).toBeInTheDocument();
+    expect(screen.getByText(/audit-retention 1/)).toBeInTheDocument();
+    // A queue with nothing queued is not in the list: it has nothing to
+    // warn about.
+    expect(screen.queryByText(/imports 0/)).not.toBeInTheDocument();
+  });
+
+  it("says nothing about queued work when there is none to run", async () => {
+    get.mockResolvedValue(
+      report({ queues: [queue({ workers: 0, workerAgeSeconds: null })] }),
+    );
+
+    render(<PlatformQueuesPage />);
+    await screen.findByRole("button", { name: /start worker/i });
+
+    expect(screen.queryByText(/already queued/i)).not.toBeInTheDocument();
   });
 
   it("offers to stop the worker it started, and nothing to start", async () => {
