@@ -1,4 +1,3 @@
-import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import {
   ALL_QUEUE_NAMES,
@@ -7,6 +6,7 @@ import {
   getQueue,
   type QueueName,
 } from "../lib/queues.js";
+import { utilityIdOf, utilityNames, withQueueTimeout } from "../lib/queue-inspect.js";
 
 /**
  * Reports what each queue is doing and what has recently failed.
@@ -26,14 +26,7 @@ import {
 /** Three per queue: enough to see a pattern, short enough to scan. */
 const FAILURES_PER_QUEUE = 3;
 
-/**
- * How long the whole report may take before it is called unreachable.
- *
- * A timeout rather than a try/catch, because ioredis queues commands
- * while disconnected and retries indefinitely: a call against a down
- * Redis does not reject, it simply never answers. This endpoint is read
- * on page load, so hanging would hang the page.
- */
+/** See `withQueueTimeout` for why this is a deadline and not a catch. */
 const DEFAULT_TIMEOUT_MS = 3_000;
 
 export interface QueueFailure {
@@ -71,15 +64,6 @@ type RawJob = {
   timestamp?: number | null;
   data?: unknown;
 };
-
-/** The tenant a job acts for, where its payload names one. */
-function utilityIdOf(data: unknown): string | null {
-  if (data && typeof data === "object" && "utilityId" in data) {
-    const value = (data as { utilityId?: unknown }).utilityId;
-    if (typeof value === "string" && value.length > 0) return value;
-  }
-  return null;
-}
 
 function failedAtOf(job: RawJob): number | null {
   return job.finishedOn ?? job.timestamp ?? null;
@@ -137,23 +121,11 @@ async function readQueue(name: QueueName): Promise<QueueHealth> {
   };
 }
 
-/** One query for every tenant named by a failure, not one per failure. */
+/** Fills in the names for whichever tenants the failures named. */
 async function nameTenants(queues: QueueHealth[]): Promise<void> {
-  const ids = [
-    ...new Set(
-      queues.flatMap((q) =>
-        q.recentFailures.map((f) => f.utilityId).filter((id): id is string => Boolean(id)),
-      ),
-    ),
-  ];
-  if (ids.length === 0) return;
-
-  const utilities = await prisma.utility.findMany({
-    where: { id: { in: ids } },
-    select: { id: true, name: true },
-  });
-  const names = new Map(utilities.map((u) => [u.id, u.name]));
-
+  const names = await utilityNames(
+    queues.flatMap((q) => q.recentFailures.map((f) => f.utilityId)),
+  );
   for (const queue of queues) {
     for (const failure of queue.recentFailures) {
       // A tenant that no longer exists keeps its id and no name, rather
@@ -176,18 +148,12 @@ export async function getQueueHealth(
     totals: { waiting: 0, active: 0, failed: 0, dlq: 0 },
   };
 
-  let timer: NodeJS.Timeout | undefined;
   try {
-    const queues = await Promise.race([
-      (async () => {
-        const read = await Promise.all(ALL_QUEUE_NAMES.map((name) => readQueue(name)));
-        await nameTenants(read);
-        return read;
-      })(),
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), timeoutMs);
-      }),
-    ]);
+    const queues = await withQueueTimeout(async () => {
+      const read = await Promise.all(ALL_QUEUE_NAMES.map((name) => readQueue(name)));
+      await nameTenants(read);
+      return read;
+    }, timeoutMs);
 
     if (queues === null) {
       logger.warn({ timeoutMs }, "queue health check timed out");
@@ -208,7 +174,5 @@ export async function getQueueHealth(
   } catch (err) {
     logger.warn({ err }, "queue health check failed");
     return unreachable;
-  } finally {
-    if (timer) clearTimeout(timer);
   }
 }

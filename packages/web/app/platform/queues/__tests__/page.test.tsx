@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { apiClient } from "@/lib/api-client";
 import PlatformQueuesPage from "../page";
 
@@ -39,7 +40,14 @@ function report(over: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  /*
+   * `mockReset`, not `clearAllMocks`: the latter leaves queued
+   * `mockResolvedValueOnce` values in place, so a value a failing test
+   * never consumed is served to the next one — which renders the
+   * drill-down payload where the summary belongs and fails somewhere
+   * unrelated.
+   */
+  get.mockReset();
 });
 
 describe("the platform queue page", () => {
@@ -140,16 +148,140 @@ describe("the platform queue page", () => {
     expect(screen.queryByText(/nothing failed or dead-lettered/i)).not.toBeInTheDocument();
   });
 
-  it("offers Bull Board for the things it deliberately cannot do", async () => {
+  it("does not offer a Bull Board link a browser cannot open", async () => {
+    /*
+     * `authMiddleware` reads only the `authorization` header, so a tab
+     * navigating to /admin/queues sends no token and is refused 401.
+     * A button that always fails is worse than none; the page says
+     * where Bull Board is and what it needs instead.
+     */
     get.mockResolvedValue(report());
 
     render(<PlatformQueuesPage />);
+    await screen.findByText(/nothing failed or dead-lettered/i);
 
-    await waitFor(() =>
-      expect(screen.getByRole("link", { name: /bull board/i })).toHaveAttribute(
-        "href",
-        expect.stringContaining("/admin/queues"),
-      ),
-    );
+    expect(screen.queryByRole("link", { name: /bull board/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/needs an operator token/i)).toBeInTheDocument();
+  });
+
+  it("opens a count to show the jobs behind it", async () => {
+    get.mockResolvedValueOnce(
+      report({
+        queues: [queue({ counts: { waiting: 2, active: 0, delayed: 0, failed: 0 } })],
+        totals: { waiting: 2, active: 0, failed: 0, dlq: 0 },
+      }),
+    ).mockResolvedValueOnce({
+      queue: "billing-runs",
+      state: "waiting",
+      reachable: true,
+      jobs: [
+        {
+          jobId: "7",
+          jobName: "process-billing-run",
+          utilityId: "u-1",
+          utilityName: "City of Testville",
+          enqueuedAt: "2026-10-20T09:00:00.000Z",
+          runsAt: null,
+          repeats: null,
+          attemptsMade: 0,
+          reason: null,
+        },
+      ],
+    });
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText("billing-runs");
+
+    await userEvent.click(screen.getByRole("button", { name: /2 waiting/i }));
+
+    expect(await screen.findByText("City of Testville")).toBeInTheDocument();
+    expect(get).toHaveBeenLastCalledWith("/api/v1/platform/queues/billing-runs/jobs", {
+      state: "waiting",
+      limit: "20",
+    });
+  });
+
+  it("says when a delayed job is due, so a repeatable reads as armed", async () => {
+    // One delayed job is the normal resting state of the five scheduled
+    // queues. "Delayed: 1" alone cannot tell that apart from a retry.
+    get.mockResolvedValueOnce(
+      report({
+        queues: [queue({ name: "audit-retention", counts: { waiting: 0, active: 0, delayed: 1, failed: 0 } })],
+        totals: { waiting: 0, active: 0, failed: 0, dlq: 0 },
+      }),
+    ).mockResolvedValueOnce({
+      queue: "audit-retention",
+      state: "delayed",
+      reachable: true,
+      jobs: [
+        {
+          jobId: "repeat:1",
+          jobName: "audit-retention",
+          utilityId: null,
+          utilityName: null,
+          enqueuedAt: "2026-10-20T03:00:00.000Z",
+          runsAt: "2026-10-21T03:00:00.000Z",
+          repeats: "0 3 * * *",
+          attemptsMade: 0,
+          reason: null,
+        },
+      ],
+    });
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText("audit-retention");
+
+    await userEvent.click(screen.getByRole("button", { name: /1 delayed/i }));
+
+    expect(await screen.findByText(/0 3 \* \* \*/)).toBeInTheDocument();
+    expect(screen.getByText(/due/i)).toBeInTheDocument();
+  });
+
+  it("calls a delayed job overdue once its due time has passed", async () => {
+    /*
+     * Verified against the running stack while building this:
+     * audit-retention's repeatable was due 2026-10-18 04:00 and the
+     * date was the 20th, because no worker process was up to run it and
+     * reschedule. "Due two days ago" is the whole signal, and a bare
+     * timestamp makes the reader do the subtraction.
+     */
+    get.mockResolvedValueOnce(
+      report({
+        queues: [queue({ name: "audit-retention", counts: { waiting: 0, active: 0, delayed: 1, failed: 0 } })],
+        totals: { waiting: 0, active: 0, failed: 0, dlq: 0 },
+      }),
+    ).mockResolvedValueOnce({
+      queue: "audit-retention",
+      state: "delayed",
+      reachable: true,
+      jobs: [
+        {
+          jobId: "repeat:1",
+          jobName: "sweep-expired-audits",
+          utilityId: null,
+          utilityName: null,
+          enqueuedAt: "2020-01-01T00:00:00.000Z",
+          runsAt: "2020-01-01T04:00:00.000Z",
+          repeats: "0 4 * * *",
+          attemptsMade: 0,
+          reason: null,
+        },
+      ],
+    });
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText("audit-retention");
+    await userEvent.click(screen.getByRole("button", { name: /1 delayed/i }));
+
+    expect(await screen.findByText(/overdue/i)).toBeInTheDocument();
+  });
+
+  it("does not make a count of zero clickable", async () => {
+    get.mockResolvedValue(report());
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText("billing-runs");
+
+    expect(screen.queryByRole("button", { name: /0 waiting/i })).not.toBeInTheDocument();
   });
 });

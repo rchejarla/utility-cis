@@ -34,6 +34,12 @@ vi.mock("../../services/queue-health.service.js", () => ({
   getQueueHealth: (...args: unknown[]) => getQueueHealth(...(args as [])),
 }));
 
+const getQueueJobs = vi.fn();
+vi.mock("../../services/queue-jobs.service.js", () => ({
+  QUEUE_JOB_STATES: ["waiting", "active", "delayed", "failed", "dlq"],
+  getQueueJobs: (...args: unknown[]) => getQueueJobs(...(args as [])),
+}));
+
 let app: import("fastify").FastifyInstance;
 
 beforeEach(async () => {
@@ -99,5 +105,97 @@ describe("GET /api/v1/platform/queues", () => {
 
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body).reachable).toBe(false);
+  });
+});
+
+/**
+ * Looking inside a count.
+ *
+ * Same authority as the summary — being the platform actor — and still
+ * no verbs. The state is validated rather than passed through: an
+ * unknown one would otherwise reach BullMQ and come back as an empty
+ * list, which reads as "nothing waiting" when the truth is "that is not
+ * a state".
+ */
+describe("GET /api/v1/platform/queues/:name/jobs", () => {
+  const url = (q: string) => `/api/v1/platform/queues/${q}/jobs?state=waiting`;
+
+  it("lists the jobs to the platform operator", async () => {
+    getQueueJobs.mockResolvedValueOnce({
+      queue: "billing-runs",
+      state: "waiting",
+      reachable: true,
+      jobs: [
+        {
+          jobId: "7",
+          jobName: "process-billing-run",
+          utilityId: "u-1",
+          utilityName: "City of Testville",
+          enqueuedAt: "2026-10-20T09:00:00.000Z",
+          runsAt: null,
+          repeats: null,
+          attemptsMade: 0,
+          reason: null,
+        },
+      ],
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: url("billing-runs"),
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).jobs[0].utilityName).toBe("City of Testville");
+  });
+
+  it("refuses a tenant admin", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: url("billing-runs"),
+      headers: { authorization: `Bearer ${createTestToken()}` },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(getQueueJobs).not.toHaveBeenCalled();
+  });
+
+  it("refuses a state that is not one", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/platform/queues/billing-runs/jobs?state=pending",
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(getQueueJobs).not.toHaveBeenCalled();
+  });
+
+  it("requires the state to be named at all", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/platform/queues/billing-runs/jobs",
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("passes an unknown queue through to the service's 404", async () => {
+    getQueueJobs.mockRejectedValueOnce(
+      Object.assign(new Error('No queue named "nope".'), {
+        code: "UNKNOWN_QUEUE",
+        statusCode: 404,
+      }),
+    );
+
+    const res = await app.inject({
+      method: "GET",
+      url: url("nope"),
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+    });
+
+    expect(res.statusCode).toBe(404);
   });
 });

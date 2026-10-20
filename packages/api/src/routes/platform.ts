@@ -14,6 +14,7 @@ import {
 } from "../services/provisioning.service.js";
 import { getUtilityReadiness } from "../services/utility-readiness.service.js";
 import { getQueueHealth } from "../services/queue-health.service.js";
+import { getQueueJobs, QUEUE_JOB_STATES } from "../services/queue-jobs.service.js";
 import { getPlatformActor } from "../services/rbac.service.js";
 import {
   listPlatformUsers,
@@ -150,6 +151,29 @@ export async function platformRoutes(app: FastifyInstance) {
   app.get("/api/v1/platform/queues", { config: { platform: true } }, async (_request, reply) => {
     return reply.send(await getQueueHealth());
   });
+
+  /*
+   * Inside one count. The state is validated rather than passed
+   * through: an unknown one would reach BullMQ and come back as an empty
+   * list, which reads as "nothing waiting" when the truth is "that is
+   * not a state".
+   */
+  app.get(
+    "/api/v1/platform/queues/:name/jobs",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const { name } = z.object({ name: z.string().min(1).max(64) }).parse(request.params);
+      const { state, limit } = z
+        .object({
+          state: z.enum(QUEUE_JOB_STATES),
+          limit: z.coerce.number().int().positive().max(100).default(20),
+        })
+        .strict()
+        .parse(request.query);
+
+      return reply.send(await getQueueJobs(name, state, limit));
+    },
+  );
 
   app.get(
     "/api/v1/platform/utilities/:id",
