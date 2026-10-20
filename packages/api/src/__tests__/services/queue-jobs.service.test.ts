@@ -30,6 +30,7 @@ const queueFor = (name: string) => ({
 
 vi.mock("../../lib/queues.js", () => ({
   ALL_QUEUE_NAMES: ["billing-runs", "audit-retention"],
+  QUEUE_TENANCY: { "billing-runs": "per-tenant", "audit-retention": "all-tenants" },
   dlqNameFor: (n: string) => `dlq-${n}`,
   getQueue: vi.fn((n: string) => queueFor(n)),
   getDlqQueue: vi.fn((n: string) => queueFor(`dlq-${n}`)),
@@ -64,12 +65,18 @@ function job(over: Record<string, unknown> = {}) {
   };
 }
 
+/** Both of the things a billing-run job names are present. */
+function everythingExists() {
+  vi.mocked(prisma.utility.findMany).mockResolvedValue([
+    { id: TENANT, name: "City of Testville" },
+  ] as never);
+  vi.mocked(prisma.billingRun.findMany).mockResolvedValue([{ id: "run-1" }] as never);
+}
+
 describe("getQueueJobs", () => {
   it("lists what is waiting, with the tenant named", async () => {
     jobsByQueue["billing-runs"] = [job()];
-    vi.mocked(prisma.utility.findMany).mockResolvedValue([
-      { id: TENANT, name: "City of Testville" },
-    ] as never);
+    everythingExists();
 
     const result = await svc.getQueueJobs("billing-runs", "waiting");
 
@@ -158,5 +165,103 @@ describe("getQueueJobs", () => {
 
     expect(result.reachable).toBe(false);
     expect(result.jobs).toEqual([]);
+  });
+
+  /*
+   * A parked job can already be impossible, and listing it as "waiting"
+   * says the opposite.
+   *
+   * Found in the dev stack: 80 waiting billing-run jobs naming runs that
+   * do not exist (`billing_run` is empty) and 22 waiting import jobs
+   * naming tenant …0000aa, which is not a row in `utility`. Every one of
+   * them will fail the instant a worker picks it up — the tenant FK is
+   * ON DELETE RESTRICT, so nothing can even be written for a tenant that
+   * is gone. The operator cannot see any of this: the payload is
+   * deliberately withheld, so "whose work is this and can it run" is a
+   * question only the API can answer.
+   */
+  it("marks a job whose tenant no longer exists", async () => {
+    jobsByQueue["billing-runs"] = [job()];
+    vi.mocked(prisma.utility.findMany).mockResolvedValue([] as never);
+
+    const result = await svc.getQueueJobs("billing-runs", "waiting");
+
+    expect(result.jobs[0].utilityName).toBeNull();
+    expect(result.jobs[0].invalid).toMatch(/tenant no longer exists/i);
+  });
+
+  it("marks a job whose billing run no longer exists", async () => {
+    jobsByQueue["billing-runs"] = [job()];
+    vi.mocked(prisma.utility.findMany).mockResolvedValue([
+      { id: TENANT, name: "City of Testville" },
+    ] as never);
+    vi.mocked(prisma.billingRun.findMany).mockResolvedValue([] as never);
+
+    const result = await svc.getQueueJobs("billing-runs", "waiting");
+
+    expect(result.jobs[0].invalid).toMatch(/billing run/i);
+    expect(result.jobs[0].invalid).toMatch(/no longer exists/i);
+  });
+
+  it("does not put the record's id in the problem it reports", async () => {
+    // Same line as the payload: the problem is a sentence, not an id.
+    jobsByQueue["billing-runs"] = [job()];
+    vi.mocked(prisma.utility.findMany).mockResolvedValue([
+      { id: TENANT, name: "City of Testville" },
+    ] as never);
+    vi.mocked(prisma.billingRun.findMany).mockResolvedValue([] as never);
+
+    const result = await svc.getQueueJobs("billing-runs", "waiting");
+
+    expect(result.jobs[0].invalid).not.toContain("run-1");
+  });
+
+  it("marks a per-tenant job that names no tenant at all", async () => {
+    jobsByQueue["billing-runs"] = [job({ data: {} })];
+
+    const result = await svc.getQueueJobs("billing-runs", "waiting");
+
+    expect(result.jobs[0].invalid).toMatch(/no tenant/i);
+  });
+
+  it("says nothing is wrong when the tenant and the record are both there", async () => {
+    jobsByQueue["billing-runs"] = [job()];
+    everythingExists();
+
+    const result = await svc.getQueueJobs("billing-runs", "waiting");
+
+    expect(result.jobs[0].invalid).toBeNull();
+  });
+
+  it("calls a cross-tenant sweep what it is, not a job missing its tenant", async () => {
+    /*
+     * The five cron queues are enqueued only by `worker.ts` and each runs
+     * one cross-tenant sweep — `sweepSuspensionsAllTenants`,
+     * `sweepExpiredSchedulerAudits` and so on. A blank tenant there is
+     * correct and a blank tenant on `billing-runs` is a broken job; they
+     * rendered identically, which is what made the list read as nonsense.
+     */
+    jobsByQueue["audit-retention"] = [
+      job({ name: "sweep-expired-audits", data: {}, opts: { delay: 1000 } }),
+    ];
+
+    const result = await svc.getQueueJobs("audit-retention", "delayed");
+
+    expect(result.jobs[0]).toMatchObject({ tenancy: "all-tenants", invalid: null });
+    expect(result.jobs[0].utilityId).toBeNull();
+  });
+
+  it("asks the database once for the whole page of jobs", async () => {
+    // Twenty jobs must not be twenty round trips; this is the reason the
+    // check is affordable on every open at all.
+    jobsByQueue["billing-runs"] = Array.from({ length: 20 }, (_, i) =>
+      job({ id: String(i), data: { utilityId: TENANT, runId: `run-${i}` } }),
+    );
+    everythingExists();
+
+    await svc.getQueueJobs("billing-runs", "waiting");
+
+    expect(prisma.utility.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.billingRun.findMany).toHaveBeenCalledTimes(1);
   });
 });

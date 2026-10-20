@@ -1,6 +1,19 @@
 import { logger } from "../lib/logger.js";
-import { ALL_QUEUE_NAMES, getDlqQueue, getQueue, type QueueName } from "../lib/queues.js";
-import { utilityIdOf, utilityNames, withQueueTimeout } from "../lib/queue-inspect.js";
+import { prisma } from "../lib/prisma.js";
+import {
+  ALL_QUEUE_NAMES,
+  getDlqQueue,
+  getQueue,
+  QUEUE_TENANCY,
+  type QueueName,
+} from "../lib/queues.js";
+import {
+  JOB_SUBJECT,
+  subjectIdOf,
+  utilityIdOf,
+  utilityNames,
+  withQueueTimeout,
+} from "../lib/queue-inspect.js";
 
 /**
  * Lists the jobs sitting in one state of one queue.
@@ -18,6 +31,15 @@ import { utilityIdOf, utilityNames, withQueueTimeout } from "../lib/queue-inspec
  * reason. Bull Board still shows a whole payload to an operator who
  * deliberately opens one job — a different act from a list that prints
  * everyone's data by default.
+ *
+ * **It also says when a parked job is already impossible.** Withholding
+ * the payload means the operator cannot check it themselves, and a job
+ * can reference a tenant or a record that no longer exists — 80 waiting
+ * billing-run jobs in the dev stack name runs that were never committed,
+ * and 22 import jobs name a tenant that is not a row in `utility`. Every
+ * one fails the moment a worker claims it, because the tenant FK is
+ * ON DELETE RESTRICT. Listing those as "waiting" states the opposite of
+ * the truth, so each job carries what is already wrong with it.
  */
 
 export const QUEUE_JOB_STATES = ["waiting", "active", "delayed", "failed", "dlq"] as const;
@@ -33,6 +55,18 @@ export interface QueueJobSummary {
   /** Null for the sweeps, which belong to no single tenant. */
   utilityId: string | null;
   utilityName: string | null;
+  /**
+   * Whether this queue's jobs name one tenant or sweep across all of
+   * them — the difference between a blank tenant that is correct and one
+   * that means the job has lost its owner.
+   */
+  tenancy: "all-tenants" | "per-tenant";
+  /**
+   * What is already wrong with this job, in a sentence, where that is
+   * knowable without running it. Null when nothing is. Carries no ids,
+   * for the same reason the payload is withheld.
+   */
+  invalid: string | null;
   enqueuedAt: string | null;
   /** Delayed only: when it is due to run. */
   runsAt: string | null;
@@ -110,6 +144,55 @@ function repeatsOf(job: RawJob): string | null {
   return job.repeatJobKey ?? null;
 }
 
+/**
+ * Which of the named records still exist — one query for the page, not
+ * one per job, which is what makes this check affordable on every open.
+ */
+async function existingSubjects(name: QueueName, ids: string[]): Promise<Set<string>> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return new Set();
+
+  const rows =
+    name === "billing-runs"
+      ? await prisma.billingRun.findMany({ where: { id: { in: unique } }, select: { id: true } })
+      : name === "imports"
+        ? await prisma.importBatch.findMany({
+            where: { id: { in: unique } },
+            select: { id: true },
+          })
+        : [];
+
+  return new Set(rows.map((row) => row.id));
+}
+
+/**
+ * What is already wrong with one job.
+ *
+ * Tenant first: with `ON DELETE RESTRICT` on every tenant FK, a job
+ * whose tenant is gone cannot write anything at all, which makes the
+ * state of its named record beside the point.
+ */
+function invalidityOf(
+  name: QueueName,
+  utilityId: string | null,
+  utilityName: string | null,
+  subjectId: string | null,
+  subjectExists: boolean,
+): string | null {
+  if (QUEUE_TENANCY[name] === "per-tenant") {
+    if (!utilityId) return "No tenant named in the payload; a job on this queue must name one.";
+    if (!utilityName) return "Its tenant no longer exists, so nothing can be written for it.";
+  }
+
+  const subject = JOB_SUBJECT[name];
+  if (subject) {
+    if (!subjectId) return `No ${subject.label.toLowerCase()} named in the payload.`;
+    if (!subjectExists) return `The ${subject.label.toLowerCase()} it names no longer exists.`;
+  }
+
+  return null;
+}
+
 export async function getQueueJobs(
   queueName: string,
   state: QueueJobState,
@@ -134,17 +217,35 @@ export async function getQueueJobs(
       const states = state === "dlq" ? [...DLQ_STATES] : [state];
       const raw = (await queue.getJobs(states as never, 0, take - 1)) as RawJob[];
 
-      const names = await utilityNames(raw.map((job) => utilityIdOf(job.data)));
+      const [names, subjects] = await Promise.all([
+        utilityNames(raw.map((job) => utilityIdOf(job.data))),
+        existingSubjects(
+          name,
+          raw
+            .map((job) => subjectIdOf(name, job.data))
+            .filter((id): id is string => id !== null),
+        ),
+      ]);
 
       return raw.map<QueueJobSummary>((job) => {
         const utilityId = utilityIdOf(job.data);
+        // A tenant that no longer exists keeps its id and no name: the
+        // job is still parked and still a fact.
+        const utilityName = utilityId ? (names.get(utilityId) ?? null) : null;
+        const subjectId = subjectIdOf(name, job.data);
         return {
           jobId: job.id ?? null,
           jobName: job.name ?? name,
           utilityId,
-          // A tenant that no longer exists keeps its id and no name: the
-          // job is still parked and still a fact.
-          utilityName: utilityId ? (names.get(utilityId) ?? null) : null,
+          utilityName,
+          tenancy: QUEUE_TENANCY[name],
+          invalid: invalidityOf(
+            name,
+            utilityId,
+            utilityName,
+            subjectId,
+            subjectId !== null && subjects.has(subjectId),
+          ),
           enqueuedAt: isoOf(job.timestamp),
           runsAt: state === "delayed" ? runsAtOf(job) : null,
           repeats: repeatsOf(job),

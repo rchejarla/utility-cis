@@ -103,6 +103,10 @@ vi.mock("../lib/prisma.js", () => {
     container: crud(),
     serviceEvent: crud(),
     importBatch: crud(),
+    // The two records a queue payload names (`runId`, `batchId`), which
+    // the platform job list checks still exist before calling a parked
+    // job merely "waiting".
+    billingRun: crud(),
     role: crud(),
     cisUser: crud(),
     cisRole: crud(),

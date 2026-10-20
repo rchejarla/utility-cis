@@ -30,6 +30,33 @@ export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
 
 export const ALL_QUEUE_NAMES: readonly QueueName[] = Object.values(QUEUE_NAMES);
 
+/**
+ * Whether each queue's jobs name one tenant, or sweep across all of them.
+ *
+ * Read off the handlers rather than assumed. The five `all-tenants`
+ * queues are enqueued by nothing but `worker.ts` — grep for their
+ * `QUEUE_NAMES` constants — and each fire runs a single cross-tenant
+ * sweep: `sweepSuspensionsAllTenants`, `sweepExpiredSchedulerAudits` and
+ * their siblings. `delinquency-dispatch` is the same shape: it reads
+ * every tenant's config and fans out onto `delinquency-tenant`. The
+ * other three are enqueued per tenant, from a request or from the
+ * dispatcher, and their payloads carry `utilityId`.
+ *
+ * Worth writing down because the two cases looked identical in the
+ * platform job list — a blank tenant. On a sweep that is correct; on
+ * `billing-runs` it is a job that cannot run.
+ */
+export const QUEUE_TENANCY: Record<QueueName, "all-tenants" | "per-tenant"> = {
+  "suspension-transitions": "all-tenants",
+  "notification-send": "all-tenants",
+  "sla-breach-sweep": "all-tenants",
+  "delinquency-dispatch": "all-tenants",
+  "delinquency-tenant": "per-tenant",
+  "audit-retention": "all-tenants",
+  imports: "per-tenant",
+  "billing-runs": "per-tenant",
+};
+
 const DAY_SECONDS = 86_400;
 const WEEK_SECONDS = 604_800;
 

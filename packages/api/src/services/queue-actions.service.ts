@@ -3,7 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { writeAuditRow } from "../lib/audit-wrap.js";
 import { ALL_QUEUE_NAMES, getDlqQueue, getQueue, type QueueName } from "../lib/queues.js";
-import { utilityIdOf } from "../lib/queue-inspect.js";
+import { JOB_SUBJECT, utilityIdOf } from "../lib/queue-inspect.js";
 import type { LifecycleActor } from "./provisioning.service.js";
 
 /**
@@ -26,7 +26,8 @@ export const QUEUE_ACTIONS = ["retry", "promote", "replay"] as const;
 export type QueueActionName = (typeof QUEUE_ACTIONS)[number];
 
 /**
- * Which queues can have an action recorded, and against what.
+ * Which queues can have an action recorded, and against what: whichever
+ * ones name a record, which is `JOB_SUBJECT` in `lib/queue-inspect.ts`.
  *
  * `audit_log` needs a `utility_id` and a uuid `entity_id`, and a BullMQ
  * job id is "80" or "repeat:audit-retention-cron:1792296000000" — so the
@@ -37,12 +38,8 @@ export type QueueActionName = (typeof QUEUE_ACTIONS)[number];
  *
  * Making `audit_log.utility_id`/`entity_id` nullable would close this,
  * and it is the same migration operator appoint/deactivate is waiting
- * on. Until then this map is the whole of what can be recorded.
+ * on. Until then that map is the whole of what can be recorded.
  */
-const AUDITABLE: Partial<Record<QueueName, { entityType: string; field: string }>> = {
-  "billing-runs": { entityType: "BillingRun", field: "runId" },
-  imports: { entityType: "ImportBatch", field: "batchId" },
-};
 
 /** What each verb requires of the job it is used on. */
 const REQUIRED_STATE: Record<QueueActionName, string[]> = {
@@ -76,7 +73,7 @@ function auditTargetOf(
   name: QueueName,
   data: unknown,
 ): { utilityId: string; entityType: string; entityId: string } | null {
-  const mapping = AUDITABLE[name];
+  const mapping = JOB_SUBJECT[name];
   if (!mapping) return null;
 
   const utilityId = utilityIdOf(data);

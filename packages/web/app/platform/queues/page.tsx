@@ -58,6 +58,10 @@ interface QueueJob {
   repeats: string | null;
   attemptsMade: number;
   reason: string | null;
+  /** Whether this queue's jobs name one tenant or sweep across all of them. */
+  tenancy: "all-tenants" | "per-tenant";
+  /** What is already wrong with this job; null when nothing is. */
+  invalid: string | null;
 }
 
 interface QueueJobsResult {
@@ -126,25 +130,50 @@ function shortAge(seconds: number): string {
 /**
  * The tenant a job or failure belongs to.
  *
- * Three different facts, and the middle one used to be printed as a bare
- * uuid — indistinguishable from a tenant name nobody recognises. A
- * payload naming a tenant that no longer exists is a finding: it is a
- * job left behind, and nothing will ever claim it.
+ * Four different facts, and three of them used to render the same way.
+ * A bare uuid is indistinguishable from a tenant name nobody
+ * recognises; and a blank tenant means "every tenant" on one of the five
+ * cron sweeps and "this job has lost its owner" on `billing-runs`,
+ * which read identically as an empty cell. `tenancy` is what tells those
+ * two apart, and the failure rows below do not carry it — they fall back
+ * to the sweep reading, which is what a cross-tenant failure is.
  */
-function Tenant({ utilityId, utilityName }: { utilityId: string | null; utilityName: string | null }) {
+function Tenant({
+  utilityId,
+  utilityName,
+  tenancy,
+}: {
+  utilityId: string | null;
+  utilityName: string | null;
+  tenancy?: "all-tenants" | "per-tenant";
+}) {
   if (utilityName) {
     return <strong style={{ color: "var(--text-primary)" }}>{utilityName}</strong>;
   }
   if (utilityId) {
     return (
       <span style={{ color: "var(--warning)" }} title={utilityId}>
-        {`Unknown tenant ${utilityId.slice(0, 8)}`}
+        {/* Both ends, because the seeded and test tenants differ only in
+            their last few characters — the leading eight are zeroes on
+            every one of them, so a head-only truncation told them
+            apart not at all. */}
+        {`Unknown tenant ${utilityId.slice(0, 8)}…${utilityId.slice(-4)}`}
       </span>
     );
   }
-  // A sweep belongs to no one tenant, and saying so beats leaving the
-  // column empty or guessing an owner.
-  return <span style={{ color: "var(--text-muted)" }}>All tenants</span>;
+  if (tenancy === "per-tenant") {
+    // Every job on this queue names a tenant. This one does not, so it
+    // is malformed rather than shared.
+    return <span style={{ color: "var(--danger)" }}>None named</span>;
+  }
+  return (
+    <span
+      style={{ color: "var(--text-muted)" }}
+      title="A scheduled sweep: one job, running across every tenant"
+    >
+      All tenants
+    </span>
+  );
 }
 
 /**
@@ -295,7 +324,13 @@ const JOB_COLUMNS: readonly JobColumn[] = [
   {
     header: "Tenant",
     states: ALL_STATES,
-    render: (job) => <Tenant utilityId={job.utilityId} utilityName={job.utilityName} />,
+    render: (job) => (
+      <Tenant
+        utilityId={job.utilityId}
+        utilityName={job.utilityName}
+        tenancy={job.tenancy}
+      />
+    ),
   },
   {
     header: "Job",
@@ -353,6 +388,22 @@ const JOB_COLUMNS: readonly JobColumn[] = [
     render: (job) => job.reason ?? <span style={{ color: "var(--text-muted)" }}>No reason recorded</span>,
   },
 ];
+
+/**
+ * What is already wrong with a job, in any state — added to the columns
+ * only when at least one job in the list has something wrong with it.
+ *
+ * Conditional because a column of dashes teaches the reader to ignore
+ * the column, and most lists have nothing to put in it. When it does
+ * appear, every row that can never run is named on its own line instead
+ * of the operator having to cross-check payloads they are not shown.
+ */
+const PROBLEM_COLUMN: JobColumn = {
+  header: "Problem",
+  states: ALL_STATES,
+  render: (job) =>
+    job.invalid ? <span style={{ color: "var(--danger)" }}>{job.invalid}</span> : DASH,
+};
 
 const cellStyle: React.CSSProperties = {
   padding: "6px 14px",
@@ -609,9 +660,13 @@ export default function PlatformQueuesPage() {
       {report?.reachable &&
         troubledFirst(report.queues).map((q) => {
           const verb = open?.queue === q.name ? verbFor(open.state) : null;
+          const shown = open?.queue === q.name ? jobs : null;
           const columns =
             open?.queue === q.name
-              ? JOB_COLUMNS.filter((c) => c.states.includes(open.state))
+              ? [
+                  ...JOB_COLUMNS.filter((c) => c.states.includes(open.state)),
+                  ...(shown?.jobs.some((j) => j.invalid) ? [PROBLEM_COLUMN] : []),
+                ]
               : [];
 
           return (

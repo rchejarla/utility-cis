@@ -37,6 +37,8 @@ function jobsResult(state: string, over: Record<string, unknown> = {}) {
         repeats: null,
         attemptsMade: 0,
         reason: null,
+        tenancy: "per-tenant",
+        invalid: null,
         ...over,
       },
     ],
@@ -557,6 +559,96 @@ describe("the platform queue page", () => {
     await userEvent.click(screen.getByRole("button", { name: /1 waiting/i }));
 
     expect(await screen.findByText(/unknown tenant/i)).toBeInTheDocument();
+  });
+
+  it("names what is wrong with a job that cannot run", async () => {
+    /*
+     * The 80 waiting billing-run jobs in the dev stack name runs that do
+     * not exist, and the 22 import jobs name a tenant that is not a row
+     * in `utility`. The list called all 102 of them "waiting", which is
+     * the opposite of true, and the operator cannot check: the payload is
+     * deliberately withheld.
+     */
+    get.mockResolvedValueOnce(
+      report({
+        queues: [queue({ counts: { waiting: 1, active: 0, delayed: 0, failed: 0 } })],
+        totals: { waiting: 1, active: 0, failed: 0, dlq: 0 },
+      }),
+    ).mockResolvedValueOnce(
+      jobsResult("waiting", { invalid: "The billing run it names no longer exists." }),
+    );
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText("billing-runs");
+    await userEvent.click(screen.getByRole("button", { name: /1 waiting/i }));
+
+    expect(await screen.findByRole("columnheader", { name: /problem/i })).toBeInTheDocument();
+    expect(screen.getByText(/billing run it names no longer exists/i)).toBeInTheDocument();
+  });
+
+  it("keeps the Problem column out of the way when nothing is wrong", async () => {
+    // A column of dashes teaches the reader to ignore the column.
+    get.mockResolvedValueOnce(
+      report({
+        queues: [queue({ counts: { waiting: 1, active: 0, delayed: 0, failed: 0 } })],
+        totals: { waiting: 1, active: 0, failed: 0, dlq: 0 },
+      }),
+    ).mockResolvedValueOnce(jobsResult("waiting"));
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText("billing-runs");
+    await userEvent.click(screen.getByRole("button", { name: /1 waiting/i }));
+    await screen.findByText("City of Testville");
+
+    expect(screen.queryByRole("columnheader", { name: /problem/i })).not.toBeInTheDocument();
+  });
+
+  it("tells a sweep's blank tenant apart from a job that lost its own", async () => {
+    // Identical before — both rendered as no tenant. On audit-retention a
+    // blank tenant is correct; on billing-runs it is a broken job.
+    get.mockResolvedValueOnce(
+      report({
+        queues: [queue({ counts: { waiting: 1, active: 0, delayed: 0, failed: 0 } })],
+        totals: { waiting: 1, active: 0, failed: 0, dlq: 0 },
+      }),
+    ).mockResolvedValueOnce(
+      jobsResult("waiting", {
+        utilityId: null,
+        utilityName: null,
+        tenancy: "per-tenant",
+        invalid: "No tenant named in the payload; a job on this queue must name one.",
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText("billing-runs");
+    await userEvent.click(screen.getByRole("button", { name: /1 waiting/i }));
+
+    expect(await screen.findByText(/none named/i)).toBeInTheDocument();
+    expect(screen.queryByText(/all tenants/i)).not.toBeInTheDocument();
+  });
+
+  it("calls a cross-tenant sweep's job every tenant's", async () => {
+    get.mockResolvedValueOnce(
+      report({
+        queues: [queue({ name: "audit-retention", counts: { waiting: 0, active: 0, delayed: 1, failed: 0 } })],
+      }),
+    ).mockResolvedValueOnce(
+      jobsResult("delayed", {
+        utilityId: null,
+        utilityName: null,
+        tenancy: "all-tenants",
+        repeats: "0 4 * * *",
+        runsAt: "2026-10-21T04:00:00.000Z",
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText("audit-retention");
+    await userEvent.click(screen.getByRole("button", { name: /1 delayed/i }));
+
+    expect(await screen.findByText(/all tenants/i)).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: /problem/i })).not.toBeInTheDocument();
   });
 
   it("does not make a count of zero clickable", async () => {
