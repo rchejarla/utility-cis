@@ -1,29 +1,33 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Fragment, useState, useEffect } from "react";
 import { API_URL, apiClient } from "@/lib/api-client";
 import { PageHeader } from "@/components/ui/page-header";
 
 /**
- * Whether anything in the background is stuck, and whose.
+ * Whether anything in the background is stuck, whose it is, and whether
+ * anyone is working it.
  *
- * Bull Board lists every job and is the right tool for reading a payload
- * or retrying one. It cannot answer the question an operator arrives
- * with, because it has no notion of a tenant and no summary: a dead-
- * lettered billing run looks like any other row, and finding it means
- * knowing to look. Until now it was not even in the menu — reaching it
- * meant typing the URL on the API host.
+ * Bull Board lists every job and is the right tool for reading a payload.
+ * It cannot answer the question an operator arrives with, because it has
+ * no notion of a tenant and no summary: a dead-lettered billing run
+ * looks like any other row, and finding it means knowing to look.
  *
- * So this page is a verdict, not a console. One sentence when nothing is
- * wrong, the troubled queues first when something is, each failure named
- * with its tenant and reason.
+ * So this page is a verdict first. Three things it learned the hard way:
  *
- * **The verdict counts workers, not just jobs.** Workers run in a
- * separate process from the API, and `start_dev.bat` deliberately does
- * not start them, so the ordinary state of a dev stack is queues filling
- * up with nothing attached to work them. Counts alone cannot tell that
- * apart from a healthy queue — the first version of this page said "All
- * clear" over 102 jobs that could never run.
+ *   - **Counts alone cannot say "healthy".** Workers are a separate
+ *     process and `start_dev.bat` does not start one, so the ordinary
+ *     state of a dev stack is queues filling up with nothing attached.
+ *     This page once said "All clear" over 102 jobs that could never run.
+ *
+ *   - **The worker fact belongs at the top, once.** One process serves
+ *     all eight queues, so eight per-queue labels repeated a single fact
+ *     and pushed the counts off the screen. Hence one status card and one
+ *     table, rather than eight cards.
+ *
+ *   - **A parked job can already be impossible.** The payload is withheld
+ *     on purpose, so only the API can say whether a job's tenant and
+ *     record still exist — see the Problem column.
  */
 
 interface QueueFailure {
@@ -46,6 +50,18 @@ interface QueueHealth {
   recentFailures: QueueFailure[];
 }
 
+/** The worker process on the API host, as this console can see it. */
+interface WorkerProcess {
+  controllable: boolean;
+  running: boolean;
+  pid: number | null;
+  host: string | null;
+  startedAt: string | null;
+  queues: string[] | null;
+  /** Whether a stop would drain in-flight jobs or cut them off. */
+  stopDrains: boolean;
+}
+
 type JobState = "waiting" | "active" | "delayed" | "failed" | "dlq";
 
 interface QueueJob {
@@ -58,9 +74,7 @@ interface QueueJob {
   repeats: string | null;
   attemptsMade: number;
   reason: string | null;
-  /** Whether this queue's jobs name one tenant or sweep across all of them. */
   tenancy: "all-tenants" | "per-tenant";
-  /** What is already wrong with this job; null when nothing is. */
   invalid: string | null;
 }
 
@@ -76,6 +90,7 @@ interface QueueHealthReport {
   checkedAt: string;
   queues: QueueHealth[];
   totals: { waiting: number; active: number; failed: number; dlq: number };
+  workerProcess: WorkerProcess;
 }
 
 const card: React.CSSProperties = {
@@ -115,7 +130,7 @@ function isOverdue(runsAt: string): boolean {
 /** Trouble first; the rest keep the registry's order. */
 function troubledFirst(queues: QueueHealth[]): QueueHealth[] {
   const score = (q: QueueHealth) =>
-    q.counts.failed > 0 || q.dlqDepth > 0 || q.workers === 0 || q.paused ? 0 : 1;
+    q.counts.failed > 0 || q.dlqDepth > 0 || q.paused ? 0 : 1;
   return [...queues].sort((a, b) => score(a) - score(b));
 }
 
@@ -177,10 +192,12 @@ function Tenant({
 }
 
 /**
- * A count, clickable when there is anything behind it.
+ * A count in its column, clickable when there is anything behind it.
  *
  * Zero is not a button: there is nothing to open, and a row of five
- * controls that mostly do nothing trains the eye to ignore them.
+ * controls that mostly do nothing trains the eye to ignore them. The
+ * state's name rides along for a screen reader, where the column header
+ * is not adjacent the way it is on screen.
  */
 function Count({
   label,
@@ -195,12 +212,10 @@ function Count({
   open: boolean;
   onOpen: () => void;
 }) {
-  const colour = loud && value > 0 ? "var(--danger)" : "var(--text-primary)";
-
   if (value === 0) {
     return (
-      <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-        <strong style={{ fontFamily: "monospace", fontWeight: 500 }}>0</strong> {label}
+      <span style={{ fontFamily: "monospace", fontSize: 12, color: "var(--text-muted)" }}>
+        0<span className="sr-only"> {label}</span>
       </span>
     );
   }
@@ -215,51 +230,56 @@ function Count({
         border: "none",
         borderBottom: open ? "1px solid var(--accent-primary)" : "1px dotted var(--border)",
         padding: 0,
-        fontFamily: "inherit",
+        fontFamily: "monospace",
         fontSize: 12,
-        color: "var(--text-secondary)",
+        fontWeight: 600,
+        color: loud ? "var(--danger)" : "var(--accent-primary)",
         cursor: "pointer",
       }}
     >
-      <strong style={{ fontFamily: "monospace", color: colour }}>{value}</strong> {label}
+      {value}
+      <span className="sr-only"> {label}</span>
     </button>
   );
 }
 
-/** Who is attached to one queue, beside its name. */
-function WorkerMark({ queue }: { queue: QueueHealth }) {
+/** Who is attached to one queue, in its own column. */
+function WorkerCell({ queue }: { queue: QueueHealth }) {
+  if (queue.workers === null) {
+    /* A managed Redis refuses CLIENT LIST. "No workers" would send an
+       operator chasing a worker that is running fine. */
+    return <span style={{ fontSize: 12, color: "var(--text-muted)" }}>unknown</span>;
+  }
+  if (queue.workers === 0) {
+    return <span style={{ fontSize: 12, color: "var(--warning)" }}>none</span>;
+  }
+
   const recent =
     queue.workerAgeSeconds !== null && queue.workerAgeSeconds < RECENTLY_ATTACHED_SECONDS
       ? ` · attached ${shortAge(queue.workerAgeSeconds)} ago`
       : "";
 
   return (
-    <span style={{ display: "inline-flex", gap: 8, fontSize: 12 }}>
-      {queue.workers === null ? (
-        /* A managed Redis refuses CLIENT LIST. "No workers" would send
-           an operator chasing a worker that is running fine. */
-        <span style={{ color: "var(--text-muted)" }}>workers unknown</span>
-      ) : queue.workers === 0 ? (
-        <span style={{ color: "var(--warning)" }}>no worker</span>
-      ) : (
-        <span style={{ color: "var(--text-muted)" }}>
-          {`${queue.workers} ${plural(queue.workers, "worker", "workers")}${recent}`}
-        </span>
-      )}
-      {queue.paused && <span style={{ color: "var(--danger)" }}>paused</span>}
+    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+      <span style={{ fontFamily: "monospace", color: "var(--text-primary)" }}>
+        {queue.workers}
+      </span>
+      {recent}
     </span>
   );
 }
 
-/** One job-sized action. */
+/** One job-sized action, or a worker-sized one. */
 function Verb({
   label,
   busy,
   onClick,
+  loud,
 }: {
   label: string;
   busy: boolean;
   onClick: () => void;
+  loud?: boolean;
 }) {
   return (
     <button
@@ -267,13 +287,13 @@ function Verb({
       onClick={onClick}
       disabled={busy}
       style={{
-        padding: "3px 10px",
+        padding: "4px 12px",
         borderRadius: "var(--radius)",
-        border: "1px solid var(--border)",
+        border: `1px solid ${loud ? "var(--danger)" : "var(--border)"}`,
         background: "transparent",
-        color: "var(--text-primary)",
+        color: loud ? "var(--danger)" : "var(--text-primary)",
         fontFamily: "inherit",
-        fontSize: 11,
+        fontSize: 12,
         fontWeight: 500,
         cursor: busy ? "not-allowed" : "pointer",
         whiteSpace: "nowrap",
@@ -325,11 +345,7 @@ const JOB_COLUMNS: readonly JobColumn[] = [
     header: "Tenant",
     states: ALL_STATES,
     render: (job) => (
-      <Tenant
-        utilityId={job.utilityId}
-        utilityName={job.utilityName}
-        tenancy={job.tenancy}
-      />
+      <Tenant utilityId={job.utilityId} utilityName={job.utilityName} tenancy={job.tenancy} />
     ),
   },
   {
@@ -385,7 +401,8 @@ const JOB_COLUMNS: readonly JobColumn[] = [
   {
     header: "Reason",
     states: ["failed", "dlq"],
-    render: (job) => job.reason ?? <span style={{ color: "var(--text-muted)" }}>No reason recorded</span>,
+    render: (job) =>
+      job.reason ?? <span style={{ color: "var(--text-muted)" }}>No reason recorded</span>,
   },
 ];
 
@@ -406,18 +423,26 @@ const PROBLEM_COLUMN: JobColumn = {
 };
 
 const cellStyle: React.CSSProperties = {
-  padding: "6px 14px",
+  padding: "8px 14px",
   fontSize: 12,
   borderTop: "1px solid var(--border-subtle)",
   verticalAlign: "top",
 };
 
-function Th({ children, align }: { children?: React.ReactNode; align?: "right" }) {
+function Th({
+  children,
+  align,
+  width,
+}: {
+  children?: React.ReactNode;
+  align?: "right";
+  width?: number;
+}) {
   return (
     <th
       scope="col"
       style={{
-        padding: "6px 14px",
+        padding: "8px 14px",
         textAlign: align ?? "left",
         fontSize: 11,
         fontWeight: 600,
@@ -425,6 +450,7 @@ function Th({ children, align }: { children?: React.ReactNode; align?: "right" }
         letterSpacing: "0.06em",
         color: "var(--text-muted)",
         whiteSpace: "nowrap",
+        width,
       }}
     >
       {children}
@@ -442,6 +468,8 @@ export default function PlatformQueuesPage() {
   /** Per job: what the last verb used on it came back with. */
   const [outcome, setOutcome] = useState<Record<string, string>>({});
   const [acting, setActing] = useState<string | null>(null);
+  const [workerBusy, setWorkerBusy] = useState(false);
+  const [workerSaid, setWorkerSaid] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -473,9 +501,7 @@ export default function PlatformQueuesPage() {
         limit: String(JOBS_PER_OPEN),
       })
       .then(setJobs)
-      .catch((err) =>
-        setJobsError(err instanceof Error ? err.message : "Failed to load jobs"),
-      );
+      .catch((err) => setJobsError(err instanceof Error ? err.message : "Failed to load jobs"));
   }
 
   /**
@@ -504,23 +530,56 @@ export default function PlatformQueuesPage() {
         [key]: res.audited ? `${done} — recorded` : `${done} — not recorded`,
       }));
     } catch (err) {
-      setOutcome((o) => ({
-        ...o,
-        [key]: err instanceof Error ? err.message : "Failed",
-      }));
+      setOutcome((o) => ({ ...o, [key]: err instanceof Error ? err.message : "Failed" }));
     } finally {
       setActing(null);
     }
   }
 
+  /**
+   * Start or stop the worker process on the API host.
+   *
+   * The whole queue set, every time: one worker process serves all eight,
+   * and the API records exactly one, so a per-queue button would promise
+   * something the record cannot hold. The endpoint does take a subset —
+   * the same selection `WORKER_QUEUES` already offers a replica — for an
+   * operator restarting one stuck queue from a script.
+   */
+  async function controlWorker(action: "start" | "stop") {
+    setWorkerBusy(true);
+    setWorkerSaid(null);
+    try {
+      const next = await apiClient.post<WorkerProcess>(
+        `/api/v1/platform/workers/${action}`,
+        action === "start" ? { queues: [] } : {},
+      );
+      setReport((r) => (r ? { ...r, workerProcess: next } : r));
+      setWorkerSaid(
+        next.running
+          ? `Started — pid ${next.pid}${next.host ? ` on ${next.host}` : ""}`
+          : "Stopped",
+      );
+    } catch (err) {
+      setWorkerSaid(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setWorkerBusy(false);
+    }
+  }
+
   const queues = report?.queues ?? [];
+  const worker = report?.workerProcess;
   const unattended = queues.filter((q) => q.workers === 0);
   const unknownWorkers = queues.filter((q) => q.workers === null);
   const paused = queues.filter((q) => q.paused);
+  const attachedSomewhere = queues.some((q) => (q.workers ?? 0) > 0);
   const failing = (report?.totals.failed ?? 0) > 0 || (report?.totals.dlq ?? 0) > 0;
   const allUnattended = queues.length > 0 && unattended.length === queues.length;
-  const clear =
-    report?.reachable && !failing && unattended.length === 0 && paused.length === 0;
+  /** What a newly started worker would pick up at once. */
+  const pendingOnStart =
+    (report?.totals.waiting ?? 0) + queues.reduce((n, q) => n + q.counts.delayed, 0);
+  const failures = troubledFirst(queues).flatMap((q) =>
+    q.recentFailures.map((f) => ({ queue: q.name, failure: f })),
+  );
 
   return (
     <div>
@@ -528,34 +587,6 @@ export default function PlatformQueuesPage() {
         title="Queues"
         subtitle="Background work across every tenant on this deployment"
       />
-
-      {/*
-       * Bull Board is not linked, because the link cannot work.
-       *
-       * It is mounted at /admin/queues on the API host behind the same
-       * `authMiddleware` as everything else, and that middleware reads
-       * only the `authorization` header. A browser navigating to that
-       * URL sends no header, so it answers
-       * `{"code":"UNAUTHORIZED"}` — which is what a click on the button
-       * that used to be here produced. Saying where it is and what it
-       * needs is worth more than a control that always fails.
-       */}
-      <div
-        style={{
-          ...card,
-          padding: "10px 14px",
-          marginBottom: 20,
-          fontSize: 12,
-          color: "var(--text-secondary)",
-        }}
-      >
-        Bull Board — full payloads, retry and promote — is mounted at{" "}
-        <span style={{ fontFamily: "monospace", color: "var(--text-primary)" }}>
-          {BULL_BOARD_URL}
-        </span>
-        , but it needs an operator token in an <code>Authorization</code> header, which a browser
-        tab cannot send. Opening it from here would 401, so it is not linked.
-      </div>
 
       {error && (
         <div
@@ -572,284 +603,507 @@ export default function PlatformQueuesPage() {
       )}
 
       {report && (
-        <div style={{ ...card, marginBottom: 20, padding: "12px 14px", fontSize: 13 }}>
-          <div>
-            {!report.reachable ? (
-              /* Never "all clear": an unanswered Redis and an idle one
-                 produce the same zeroes, and only one of them is good
-                 news. */
-              <>
-                <strong style={{ color: "var(--warning)" }}>
-                  The queues could not be read.
-                </strong>{" "}
-                Redis did not answer in time, so nothing here is known — this is not the same as
-                nothing being queued.
-              </>
-            ) : failing ? (
-              <>
-                <strong style={{ color: "var(--danger)" }}>Needs attention.</strong>{" "}
-                {report.totals.failed} failed and {report.totals.dlq} dead-lettered across{" "}
-                {report.queues.length} queues.
-              </>
-            ) : allUnattended ? (
-              /* The counts say nothing is wrong, and nothing can run.
-                 This is the ordinary state of a dev stack, and it looked
-                 identical to healthy until the worker count arrived. */
-              <>
-                <strong style={{ color: "var(--warning)" }}>Nothing is running.</strong> No worker
-                process is attached to any of the {report.queues.length} queues
-                {report.totals.waiting > 0
-                  ? `, and ${report.totals.waiting} ${plural(report.totals.waiting, "job is", "jobs are")} waiting.`
-                  : "."}
-              </>
-            ) : unattended.length > 0 ? (
-              <>
-                <strong style={{ color: "var(--warning)" }}>Partly unattended.</strong>{" "}
-                {unattended.length} of {report.queues.length} queues{" "}
-                {plural(unattended.length, "has", "have")} no worker attached:{" "}
-                {unattended.map((q) => q.name).join(", ")}.
-              </>
-            ) : paused.length > 0 ? (
-              <>
-                <strong style={{ color: "var(--danger)" }}>
-                  {plural(paused.length, "A queue is paused.", "Queues are paused.")}
-                </strong>{" "}
-                {paused.map((q) => q.name).join(", ")} {plural(paused.length, "is", "are")} paused,
-                so nothing in {plural(paused.length, "it", "them")} will run however many workers
-                are attached.
-              </>
-            ) : (
-              <>
-                <strong style={{ color: "var(--success)" }}>All clear.</strong> Nothing failed or
-                dead-lettered across {report.queues.length} queues
-                {report.totals.active + report.totals.waiting > 0
-                  ? `, ${report.totals.active} running and ${report.totals.waiting} waiting.`
-                  : "."}
-              </>
-            )}
-          </div>
+        <div style={{ ...card, marginBottom: 20, padding: "14px", fontSize: 13 }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 16,
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ flex: "1 1 320px" }}>
+              {!report.reachable ? (
+                /* Never "all clear": an unanswered Redis and an idle one
+                   produce the same zeroes, and only one of them is good
+                   news. */
+                <>
+                  <strong style={{ color: "var(--warning)" }}>
+                    The queues could not be read.
+                  </strong>{" "}
+                  Redis did not answer in time, so nothing here is known — this is not the same
+                  as nothing being queued.
+                </>
+              ) : failing ? (
+                <>
+                  <strong style={{ color: "var(--danger)" }}>Needs attention.</strong>{" "}
+                  {report.totals.failed} failed and {report.totals.dlq} dead-lettered across{" "}
+                  {report.queues.length} queues.
+                </>
+              ) : allUnattended ? (
+                /* The counts say nothing is wrong, and nothing can run.
+                   This is the ordinary state of a dev stack, and it
+                   looked identical to healthy until the worker count
+                   arrived. */
+                <>
+                  <strong style={{ color: "var(--warning)" }}>Nothing is running.</strong> No
+                  worker process is attached to any of the {report.queues.length} queues
+                  {report.totals.waiting > 0
+                    ? `, and ${report.totals.waiting} ${plural(report.totals.waiting, "job is", "jobs are")} waiting.`
+                    : "."}
+                </>
+              ) : unattended.length > 0 ? (
+                <>
+                  <strong style={{ color: "var(--warning)" }}>Partly unattended.</strong>{" "}
+                  {unattended.length} of {report.queues.length} queues{" "}
+                  {plural(unattended.length, "has", "have")} no worker attached:{" "}
+                  {unattended.map((q) => q.name).join(", ")}.
+                </>
+              ) : paused.length > 0 ? (
+                <>
+                  <strong style={{ color: "var(--danger)" }}>
+                    {plural(paused.length, "A queue is paused.", "Queues are paused.")}
+                  </strong>{" "}
+                  {paused.map((q) => q.name).join(", ")} {plural(paused.length, "is", "are")}{" "}
+                  paused, so nothing in {plural(paused.length, "it", "them")} will run however
+                  many workers are attached.
+                </>
+              ) : (
+                <>
+                  <strong style={{ color: "var(--success)" }}>All clear.</strong> Nothing failed
+                  or dead-lettered across {report.queues.length} queues
+                  {report.totals.active + report.totals.waiting > 0
+                    ? `, ${report.totals.active} running and ${report.totals.waiting} waiting.`
+                    : "."}
+                </>
+              )}
 
-          {/* The two facts are independent: a failure must not bury the
-              reason its retry will not run either. */}
-          {report.reachable && failing && unattended.length > 0 && (
-            <div style={{ marginTop: 6, color: "var(--warning)" }}>
-              No worker is attached to {unattended.map((q) => q.name).join(", ")}, so nothing
-              there will run — a retry included.
-            </div>
-          )}
-
-          {report.reachable && unknownWorkers.length > 0 && (
-            <div style={{ marginTop: 6, color: "var(--text-muted)" }}>
-              Worker attachment could not be read for {unknownWorkers.length} of{" "}
-              {report.queues.length} queues — this Redis does not allow listing its clients.
-            </div>
-          )}
-
-          {report.reachable && unattended.length > 0 && (
-            <div style={{ marginTop: 6, fontSize: 12, color: "var(--text-muted)" }}>
-              Workers are a separate process from the API. In development:{" "}
-              <span style={{ fontFamily: "monospace" }}>
-                pnpm --filter @utility-cis/api dev:worker
-              </span>
-              .
-            </div>
-          )}
-        </div>
-      )}
-
-      {report?.reachable &&
-        troubledFirst(report.queues).map((q) => {
-          const verb = open?.queue === q.name ? verbFor(open.state) : null;
-          const shown = open?.queue === q.name ? jobs : null;
-          const columns =
-            open?.queue === q.name
-              ? [
-                  ...JOB_COLUMNS.filter((c) => c.states.includes(open.state)),
-                  ...(shown?.jobs.some((j) => j.invalid) ? [PROBLEM_COLUMN] : []),
-                ]
-              : [];
-
-          return (
-            <div key={q.name} style={{ ...card, marginBottom: 12 }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "baseline",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  flexWrap: "wrap",
-                  padding: "10px 14px",
-                  borderBottom:
-                    q.recentFailures.length > 0 ? "1px solid var(--border-subtle)" : "none",
-                }}
-              >
-                <span style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 13, fontWeight: 500, fontFamily: "monospace" }}>
-                    {q.name}
-                  </span>
-                  <WorkerMark queue={q} />
-                </span>
-                <span style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-                  {(
-                    [
-                      ["waiting", q.counts.waiting, false],
-                      ["active", q.counts.active, false],
-                      ["delayed", q.counts.delayed, false],
-                      ["failed", q.counts.failed, true],
-                      ["dlq", q.dlqDepth, true],
-                    ] as [JobState, number, boolean][]
-                  ).map(([state, value, loud]) => (
-                    <Count
-                      key={state}
-                      label={state === "dlq" ? "dead-lettered" : state}
-                      value={value}
-                      loud={loud}
-                      open={open?.queue === q.name && open.state === state}
-                      onOpen={() => toggle(q.name, state)}
-                    />
-                  ))}
-                </span>
-              </div>
-
-              {open?.queue === q.name && (
-                <div
-                  style={{
-                    borderTop: "1px solid var(--border-subtle)",
-                    background: "var(--bg-elevated)",
-                    overflowX: "auto",
-                  }}
-                >
-                  {jobsError && (
-                    <div style={{ padding: "8px 14px", fontSize: 12, color: "var(--danger)" }}>
-                      {jobsError}
-                    </div>
-                  )}
-                  {!jobs && !jobsError && (
-                    <div style={{ padding: "8px 14px", fontSize: 12, color: "var(--text-muted)" }}>
-                      Reading {open.state === "dlq" ? "dead-lettered" : open.state} jobs…
-                    </div>
-                  )}
-                  {jobs && !jobs.reachable && (
-                    <div style={{ padding: "8px 14px", fontSize: 12, color: "var(--warning)" }}>
-                      Could not be read — Redis did not answer.
-                    </div>
-                  )}
-                  {jobs?.reachable && jobs.jobs.length === 0 && (
-                    <div style={{ padding: "8px 14px", fontSize: 12, color: "var(--text-muted)" }}>
-                      {/* The count came from a snapshot a moment earlier,
-                          so an empty list here means the jobs moved on,
-                          not that the count lied. */}
-                      Nothing there now — the jobs moved on since the count was taken.
-                    </div>
-                  )}
-                  {jobs?.reachable && jobs.jobs.length > 0 && (
-                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                      <caption
-                        style={{
-                          captionSide: "top",
-                          padding: "8px 14px 0",
-                          textAlign: "left",
-                          fontSize: 12,
-                          color: "var(--text-muted)",
-                        }}
-                      >
-                        {jobs.jobs.length} {open.state === "dlq" ? "dead-lettered" : open.state}{" "}
-                        {plural(jobs.jobs.length, "job", "jobs")} in {q.name}
-                      </caption>
-                      <thead>
-                        <tr>
-                          {columns.map((c) => (
-                            <Th key={c.header} align={c.align}>
-                              {c.header}
-                            </Th>
-                          ))}
-                          {verb && <Th align="right">Action</Th>}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {jobs.jobs.map((j) => {
-                          const key = `${q.name}:${j.jobId}`;
-                          const said = outcome[key];
-                          return (
-                            <tr key={`${j.jobId}-${j.enqueuedAt}`}>
-                              {columns.map((c) => (
-                                <td
-                                  key={c.header}
-                                  style={{ ...cellStyle, textAlign: c.align ?? "left" }}
-                                >
-                                  {c.render(j)}
-                                </td>
-                              ))}
-                              {verb && (
-                                <td style={{ ...cellStyle, textAlign: "right", whiteSpace: "nowrap" }}>
-                                  <span
-                                    style={{
-                                      display: "inline-flex",
-                                      gap: 6,
-                                      alignItems: "center",
-                                    }}
-                                  >
-                                    {said && (
-                                      <span
-                                        style={{
-                                          color: said.includes("not recorded")
-                                            ? "var(--warning)"
-                                            : /^(Retried|Promoted|Replayed)/.test(said)
-                                              ? "var(--success)"
-                                              : "var(--danger)",
-                                        }}
-                                      >
-                                        {said}
-                                      </span>
-                                    )}
-                                    <Verb
-                                      label={verb.label}
-                                      busy={acting === key}
-                                      onClick={() => act(q.name, j, verb.action)}
-                                    />
-                                  </span>
-                                </td>
-                              )}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  )}
+              {/* The two facts are independent: a failure must not bury
+                  the reason its retry will not run either. */}
+              {report.reachable && failing && unattended.length > 0 && (
+                <div style={{ marginTop: 6, color: "var(--warning)" }}>
+                  No worker is attached to {unattended.map((q) => q.name).join(", ")}, so
+                  nothing there will run — a retry included.
                 </div>
               )}
 
-              {q.recentFailures.map((f) => (
+              {report.reachable && unknownWorkers.length > 0 && (
+                <div style={{ marginTop: 6, color: "var(--text-muted)" }}>
+                  Worker attachment could not be read for {unknownWorkers.length} of{" "}
+                  {report.queues.length} queues — this Redis does not allow listing its clients.
+                </div>
+              )}
+            </div>
+
+            {/*
+             * The worker process, and the two things that can be done to
+             * it. Beside the verdict rather than below it, because
+             * "nothing is running" and "start it" are one thought.
+             */}
+            {worker && (
+              <div
+                style={{
+                  flex: "0 1 300px",
+                  borderLeft: "1px solid var(--border-subtle)",
+                  paddingLeft: 16,
+                  display: "grid",
+                  gap: 6,
+                  fontSize: 12,
+                }}
+              >
                 <div
-                  key={`${f.jobId}-${f.failedAt}`}
                   style={{
-                    padding: "8px 14px",
-                    borderTop: "1px solid var(--border-subtle)",
-                    display: "grid",
-                    gap: 2,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.06em",
+                    color: "var(--text-muted)",
                   }}
                 >
-                  <div style={{ fontSize: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {/* The tenant, which is the half Bull Board cannot show. */}
-                    <Tenant utilityId={f.utilityId} utilityName={f.utilityName} />
-                    <span style={{ color: "var(--text-muted)", fontFamily: "monospace" }}>
-                      {f.jobName}
-                      {f.jobId ? ` #${f.jobId}` : ""}
-                    </span>
-                    {f.failedAt && (
-                      <span style={{ color: "var(--text-muted)" }}>
-                        {new Date(f.failedAt).toLocaleString()}
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                    {f.reason ?? "No reason recorded"}
-                  </div>
+                  Worker process
                 </div>
-              ))}
+
+                {worker.running ? (
+                  <>
+                    <div style={{ color: "var(--text-primary)" }}>
+                      Running · pid {worker.pid}
+                      {worker.host ? ` on ${worker.host}` : ""}
+                    </div>
+                    {worker.startedAt && (
+                      <div style={{ color: "var(--text-muted)" }}>
+                        started {new Date(worker.startedAt).toLocaleString()}
+                      </div>
+                    )}
+                    <div>
+                      <Verb
+                        label="Stop worker"
+                        loud
+                        busy={workerBusy}
+                        onClick={() => controlWorker("stop")}
+                      />
+                    </div>
+                    {!worker.stopDrains && (
+                      /* Verified on Windows: SIGTERM terminates the
+                         process outright and the worker's own drain
+                         handler never runs, so an in-flight job loses its
+                         lock and is retried after the lock duration.
+                         Survivable — the handlers are idempotent — but
+                         worth knowing before the click. */
+                      <div style={{ color: "var(--warning)" }}>
+                        A stop here will not drain in-flight jobs: this host cannot deliver a
+                        signal the worker can handle, so anything running is cut off and retried
+                        after its lock expires.
+                      </div>
+                    )}
+                  </>
+                ) : attachedSomewhere ? (
+                  <div style={{ color: "var(--text-secondary)" }}>
+                    A worker is attached but was not started from here — its process id is not
+                    known to this console, so stop it where you started it.
+                  </div>
+                ) : !worker.controllable ? (
+                  <div style={{ color: "var(--text-muted)" }}>
+                    Not running. Workers are a separate deployment on this host, so starting one
+                    from here is disabled — scale the worker deployment instead.
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ color: "var(--warning)" }}>Not running.</div>
+                    <div>
+                      <Verb
+                        label="Start worker"
+                        busy={workerBusy}
+                        onClick={() => controlWorker("start")}
+                      />
+                    </div>
+                    <div style={{ color: "var(--text-muted)" }}>
+                      Serves all {report.queues.length} queues. It outlives this API process, so
+                      a reload will not stop it.
+                    </div>
+                    {pendingOnStart > 0 && (
+                      /*
+                       * What the button is about to do, before it is
+                       * pressed. The five cron queues go overdue as soon
+                       * as nothing is attached, so starting a worker on
+                       * an idle stack fires all of them at once —
+                       * notification-send dispatches outward and
+                       * audit-retention deletes rows. A count is the
+                       * least this can say.
+                       */
+                      <div style={{ color: "var(--warning)" }}>
+                        {pendingOnStart} queued {plural(pendingOnStart, "job", "jobs")} will
+                        start running immediately, overdue scheduled sweeps included. Open a
+                        count first if you want to see what they are.
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {workerSaid && (
+                  <div
+                    style={{
+                      color: /^(Started|Stopped)/.test(workerSaid)
+                        ? "var(--success)"
+                        : "var(--danger)",
+                    }}
+                  >
+                    {workerSaid}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {report?.reachable && (
+        <div style={{ ...card, marginBottom: 20, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "var(--bg-elevated)" }}>
+                <Th>Queue</Th>
+                <Th>Workers</Th>
+                <Th align="right">Waiting</Th>
+                <Th align="right">Active</Th>
+                <Th align="right">Delayed</Th>
+                <Th align="right">Failed</Th>
+                <Th align="right">Dead-lettered</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {troubledFirst(report.queues).map((q) => {
+                const isOpen = open?.queue === q.name;
+                const verb = isOpen && open ? verbFor(open.state) : null;
+                const columns =
+                  isOpen && open
+                    ? [
+                        ...JOB_COLUMNS.filter((c) => c.states.includes(open.state)),
+                        ...(jobs?.jobs.some((j) => j.invalid) ? [PROBLEM_COLUMN] : []),
+                      ]
+                    : [];
+
+                return (
+                  /* The queue's row and its expanded drill-down are two
+                     <tr>s, so the key belongs on the fragment holding
+                     both — React cannot see one on a child of a bare
+                     fragment. */
+                  <Fragment key={q.name}>
+                    <tr>
+                      <td style={{ ...cellStyle, whiteSpace: "nowrap" }}>
+                        <span
+                          style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 500 }}
+                        >
+                          {q.name}
+                        </span>
+                        {q.paused && (
+                          <span style={{ color: "var(--danger)", marginLeft: 8 }}>paused</span>
+                        )}
+                      </td>
+                      <td style={{ ...cellStyle, whiteSpace: "nowrap" }}>
+                        <WorkerCell queue={q} />
+                      </td>
+                      {(
+                        [
+                          ["waiting", q.counts.waiting, false],
+                          ["active", q.counts.active, false],
+                          ["delayed", q.counts.delayed, false],
+                          ["failed", q.counts.failed, true],
+                          ["dlq", q.dlqDepth, true],
+                        ] as [JobState, number, boolean][]
+                      ).map(([state, value, loud]) => (
+                        <td key={state} style={{ ...cellStyle, textAlign: "right" }}>
+                          <Count
+                            label={state === "dlq" ? "dead-lettered" : state}
+                            value={value}
+                            loud={loud}
+                            open={isOpen && open?.state === state}
+                            onOpen={() => toggle(q.name, state)}
+                          />
+                        </td>
+                      ))}
+                    </tr>
+
+                    {isOpen && open && (
+                      <tr>
+                        <td
+                          colSpan={7}
+                          style={{
+                            borderTop: "1px solid var(--accent-primary)",
+                            background: "var(--bg-elevated)",
+                            padding: 0,
+                          }}
+                        >
+                          {jobsError && (
+                            <div
+                              style={{ padding: "8px 14px", fontSize: 12, color: "var(--danger)" }}
+                            >
+                              {jobsError}
+                            </div>
+                          )}
+                          {!jobs && !jobsError && (
+                            <div
+                              style={{
+                                padding: "8px 14px",
+                                fontSize: 12,
+                                color: "var(--text-muted)",
+                              }}
+                            >
+                              Reading {open.state === "dlq" ? "dead-lettered" : open.state} jobs…
+                            </div>
+                          )}
+                          {jobs && !jobs.reachable && (
+                            <div
+                              style={{
+                                padding: "8px 14px",
+                                fontSize: 12,
+                                color: "var(--warning)",
+                              }}
+                            >
+                              Could not be read — Redis did not answer.
+                            </div>
+                          )}
+                          {jobs?.reachable && jobs.jobs.length === 0 && (
+                            <div
+                              style={{
+                                padding: "8px 14px",
+                                fontSize: 12,
+                                color: "var(--text-muted)",
+                              }}
+                            >
+                              {/* The count came from a snapshot a moment
+                                  earlier, so an empty list here means the
+                                  jobs moved on, not that the count lied. */}
+                              Nothing there now — the jobs moved on since the count was taken.
+                            </div>
+                          )}
+                          {jobs?.reachable && jobs.jobs.length > 0 && (
+                            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                              <caption
+                                style={{
+                                  captionSide: "top",
+                                  padding: "8px 14px 0",
+                                  textAlign: "left",
+                                  fontSize: 12,
+                                  color: "var(--text-muted)",
+                                }}
+                              >
+                                {jobs.jobs.length}{" "}
+                                {open.state === "dlq" ? "dead-lettered" : open.state}{" "}
+                                {plural(jobs.jobs.length, "job", "jobs")} in {q.name}
+                              </caption>
+                              <thead>
+                                <tr>
+                                  {columns.map((c) => (
+                                    <Th key={c.header} align={c.align}>
+                                      {c.header}
+                                    </Th>
+                                  ))}
+                                  {verb && <Th align="right">Action</Th>}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {jobs.jobs.map((j) => {
+                                  const key = `${q.name}:${j.jobId}`;
+                                  const said = outcome[key];
+                                  return (
+                                    <tr key={`${j.jobId}-${j.enqueuedAt}`}>
+                                      {columns.map((c) => (
+                                        <td
+                                          key={c.header}
+                                          style={{
+                                            ...cellStyle,
+                                            textAlign: c.align ?? "left",
+                                          }}
+                                        >
+                                          {c.render(j)}
+                                        </td>
+                                      ))}
+                                      {verb && (
+                                        <td
+                                          style={{
+                                            ...cellStyle,
+                                            textAlign: "right",
+                                            whiteSpace: "nowrap",
+                                          }}
+                                        >
+                                          <span
+                                            style={{
+                                              display: "inline-flex",
+                                              gap: 6,
+                                              alignItems: "center",
+                                            }}
+                                          >
+                                            {said && (
+                                              <span
+                                                style={{
+                                                  color: said.includes("not recorded")
+                                                    ? "var(--warning)"
+                                                    : /^(Retried|Promoted|Replayed)/.test(said)
+                                                      ? "var(--success)"
+                                                      : "var(--danger)",
+                                                }}
+                                              >
+                                                {said}
+                                              </span>
+                                            )}
+                                            <Verb
+                                              label={verb.label}
+                                              busy={acting === key}
+                                              onClick={() => act(q.name, j, verb.action)}
+                                            />
+                                          </span>
+                                        </td>
+                                      )}
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/*
+       * Recent failures, gathered rather than scattered.
+       *
+       * They used to hang under each queue's card, so reading "what has
+       * been failing" meant scrolling eight of them. Across queues and
+       * newest-first is the question actually being asked.
+       */}
+      {failures.length > 0 && (
+        <div style={{ ...card, marginBottom: 20 }}>
+          <div
+            style={{
+              padding: "8px 14px",
+              fontSize: 11,
+              fontWeight: 600,
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+              color: "var(--text-muted)",
+              background: "var(--bg-elevated)",
+            }}
+          >
+            Recent failures
+          </div>
+          {failures.map(({ queue, failure: f }) => (
+            <div
+              key={`${queue}-${f.jobId}-${f.failedAt}`}
+              style={{
+                padding: "8px 14px",
+                borderTop: "1px solid var(--border-subtle)",
+                display: "grid",
+                gap: 2,
+              }}
+            >
+              <div style={{ fontSize: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontFamily: "monospace", color: "var(--text-muted)" }}>
+                  {queue}
+                </span>
+                {/* The tenant, which is the half Bull Board cannot show. */}
+                <Tenant utilityId={f.utilityId} utilityName={f.utilityName} />
+                <span style={{ color: "var(--text-muted)", fontFamily: "monospace" }}>
+                  {f.jobName}
+                  {f.jobId ? ` #${f.jobId}` : ""}
+                </span>
+                {f.failedAt && (
+                  <span style={{ color: "var(--text-muted)" }}>
+                    {new Date(f.failedAt).toLocaleString()}
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                {f.reason ?? "No reason recorded"}
+              </div>
             </div>
-          );
-        })}
+          ))}
+        </div>
+      )}
+
+      {/*
+       * Bull Board is not linked, because the link cannot work.
+       *
+       * It is mounted at /admin/queues on the API host behind the same
+       * `authMiddleware` as everything else, and that middleware reads
+       * only the `authorization` header. A browser navigating to that URL
+       * sends no header, so it answers `{"code":"UNAUTHORIZED"}` — which
+       * is what a click on the button that used to be here produced.
+       * Saying where it is and what it needs is worth more than a control
+       * that always fails.
+       */}
+      <div
+        style={{
+          ...card,
+          padding: "10px 14px",
+          fontSize: 12,
+          color: "var(--text-secondary)",
+        }}
+      >
+        Bull Board — full payloads and every verb — is mounted at{" "}
+        <span style={{ fontFamily: "monospace", color: "var(--text-primary)" }}>
+          {BULL_BOARD_URL}
+        </span>
+        , but it needs an operator token in an <code>Authorization</code> header, which a browser
+        tab cannot send. Opening it from here would 401, so it is not linked.
+      </div>
     </div>
   );
 }

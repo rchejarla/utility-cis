@@ -61,12 +61,27 @@ function queue(over: Record<string, unknown> = {}) {
   };
 }
 
+/** The worker-process status, as the same endpoint now returns it. */
+function workerProcess(over: Record<string, unknown> = {}) {
+  return {
+    controllable: true,
+    running: false,
+    pid: null,
+    host: null,
+    startedAt: null,
+    queues: null,
+    stopDrains: true,
+    ...over,
+  };
+}
+
 function report(over: Record<string, unknown> = {}) {
   return {
     reachable: true,
     checkedAt: "2026-10-20T10:00:00.000Z",
     queues: [queue(), queue({ name: "imports" })],
     totals: { waiting: 0, active: 0, failed: 0, dlq: 0 },
+    workerProcess: workerProcess(),
     ...over,
   };
 }
@@ -470,7 +485,10 @@ describe("the platform queue page", () => {
 
     render(<PlatformQueuesPage />);
 
-    expect(await screen.findByText(/workers unknown/i)).toBeInTheDocument();
+    // Under a Workers column, the cell is the word alone. What matters is
+    // that it is not the word for zero.
+    expect(await screen.findByText("unknown")).toBeInTheDocument();
+    expect(screen.queryByText("none")).not.toBeInTheDocument();
     expect(screen.queryByText(/no worker/i)).not.toBeInTheDocument();
   });
 
@@ -649,6 +667,138 @@ describe("the platform queue page", () => {
 
     expect(await screen.findByText(/all tenants/i)).toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: /problem/i })).not.toBeInTheDocument();
+  });
+
+  it("offers to start the worker when none is attached", async () => {
+    get.mockResolvedValue(
+      report({
+        queues: [queue({ workers: 0, workerAgeSeconds: null })],
+      }),
+    );
+    post.mockResolvedValue(workerProcess({ running: true, pid: 4242, host: "dev-box" }));
+
+    render(<PlatformQueuesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /start worker/i }));
+
+    expect(post).toHaveBeenCalledWith("/api/v1/platform/workers/start", { queues: [] });
+    // Said twice on purpose — the outcome of the click, and the state the
+    // panel now reports — so this asks for the outcome line.
+    expect(await screen.findByText(/started — pid 4242 on dev-box/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /stop worker/i })).toBeInTheDocument();
+  });
+
+  it("says what will run the moment a worker starts", async () => {
+    /*
+     * Not a detail. The five cron queues sit at one delayed job each and
+     * go overdue the moment nothing is attached, so starting a worker on
+     * a stack that has been idle fires every one of them at once —
+     * including notification-send, which dispatches outward, and
+     * audit-retention, which deletes rows. Whoever presses the button
+     * should know that before pressing it, not after.
+     */
+    get.mockResolvedValue(
+      report({
+        queues: [
+          queue({ counts: { waiting: 3, active: 0, delayed: 0, failed: 0 }, workers: 0, workerAgeSeconds: null }),
+          queue({ name: "audit-retention", counts: { waiting: 0, active: 0, delayed: 1, failed: 0 }, workers: 0, workerAgeSeconds: null }),
+        ],
+        totals: { waiting: 3, active: 0, failed: 0, dlq: 0 },
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+    await screen.findByRole("button", { name: /start worker/i });
+
+    expect(screen.getByText(/4 queued jobs will start running/i)).toBeInTheDocument();
+  });
+
+  it("offers to stop the worker it started, and nothing to start", async () => {
+    get.mockResolvedValue(
+      report({
+        workerProcess: workerProcess({
+          running: true,
+          pid: 4242,
+          host: "dev-box",
+          startedAt: "2026-10-20T10:00:00.000Z",
+        }),
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findByRole("button", { name: /stop worker/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /start worker/i })).not.toBeInTheDocument();
+  });
+
+  it("warns that a stop will not drain where the signal cannot be handled", async () => {
+    /*
+     * Verified on Windows: `process.kill(pid, "SIGTERM")` terminates the
+     * worker outright and its drain handler never runs, so an in-flight
+     * job loses its lock and is retried. Worth saying before the click,
+     * not after.
+     */
+    get.mockResolvedValue(
+      report({
+        workerProcess: workerProcess({ running: true, pid: 4242, host: "dev-box", stopDrains: false }),
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findByText(/will not drain/i)).toBeInTheDocument();
+  });
+
+  it("says a worker is attached that this console did not start", async () => {
+    // Started from a terminal: attached to the same Redis, visible in the
+    // counts, but its pid is not ours to signal.
+    get.mockResolvedValue(
+      report({ queues: [queue({ workers: 1 })], workerProcess: workerProcess() }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findByText(/not started from here/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /stop worker/i })).not.toBeInTheDocument();
+  });
+
+  it("offers no worker controls on a host that does not allow them", async () => {
+    get.mockResolvedValue(
+      report({
+        queues: [queue({ workers: 0, workerAgeSeconds: null })],
+        workerProcess: workerProcess({ controllable: false }),
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText(/nothing is running/i);
+
+    expect(screen.queryByRole("button", { name: /start worker/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/separate deployment/i)).toBeInTheDocument();
+  });
+
+  it("shows the refusal when a worker is already running", async () => {
+    get.mockResolvedValue(report({ queues: [queue({ workers: 0, workerAgeSeconds: null })] }));
+    post.mockRejectedValue(
+      new Error("API error 409: A worker is already running on dev-box as pid 99"),
+    );
+
+    render(<PlatformQueuesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /start worker/i }));
+
+    expect(await screen.findByText(/already running on dev-box/i)).toBeInTheDocument();
+  });
+
+  it("lists the queues as one table rather than eight cards", async () => {
+    // Eight cards repeated the worker fact eight times and pushed the
+    // counts off a screen. One row per queue, one statement of workers.
+    get.mockResolvedValue(report());
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findByRole("columnheader", { name: /queue/i })).toBeInTheDocument();
+    for (const header of [/workers/i, /waiting/i, /failed/i, /dead-lettered/i]) {
+      expect(screen.getByRole("columnheader", { name: header })).toBeInTheDocument();
+    }
   });
 
   it("does not make a count of zero clickable", async () => {

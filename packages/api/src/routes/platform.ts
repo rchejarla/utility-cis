@@ -16,6 +16,11 @@ import { getUtilityReadiness } from "../services/utility-readiness.service.js";
 import { getQueueHealth } from "../services/queue-health.service.js";
 import { getQueueJobs, QUEUE_JOB_STATES } from "../services/queue-jobs.service.js";
 import { actOnQueueJob, QUEUE_ACTIONS } from "../services/queue-actions.service.js";
+import {
+  getWorkerProcessStatus,
+  startWorkerProcess,
+  stopWorkerProcess,
+} from "../services/worker-process.service.js";
 import { getPlatformActor } from "../services/rbac.service.js";
 import {
   listPlatformUsers,
@@ -150,8 +155,53 @@ export async function platformRoutes(app: FastifyInstance) {
    * Board.
    */
   app.get("/api/v1/platform/queues", { config: { platform: true } }, async (_request, reply) => {
-    return reply.send(await getQueueHealth());
+    /*
+     * Composed here, not inside `getQueueHealth`: one answers "what is in
+     * the queues", the other "is there a worker process on this host",
+     * and only the page needs both at once. Keeping them apart also means
+     * a Redis that will not list its clients costs the attachment and
+     * not the counts.
+     */
+    const [health, workerProcess] = await Promise.all([
+      getQueueHealth(),
+      getWorkerProcessStatus(),
+    ]);
+    return reply.send({ ...health, workerProcess });
   });
+
+  /*
+   * Start and stop the worker process on this host.
+   *
+   * The worker is a separate Node process and `start_dev.bat` does not
+   * start it, so a dev stack normally has eight queues filling up with
+   * nothing attached. `spawn` with a fixed argv and no shell: the only
+   * operator input is the queue selection, which travels in the
+   * environment after being checked against the registry.
+   *
+   * Off outside development unless `WORKER_CONTROL_ENABLED` says
+   * otherwise — see `workerControlAllowed()`. A worker an API container
+   * spawns is a process the orchestrator does not manage.
+   */
+  app.post(
+    "/api/v1/platform/workers/start",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const { queues } = z
+        .object({ queues: z.array(z.string().min(1).max(64)).max(16).default([]) })
+        .strict()
+        .parse(request.body ?? {});
+
+      return reply.send(await startWorkerProcess(queues, actorOf(request)));
+    },
+  );
+
+  app.post(
+    "/api/v1/platform/workers/stop",
+    { config: { platform: true } },
+    async (request, reply) => {
+      return reply.send(await stopWorkerProcess(actorOf(request)));
+    },
+  );
 
   /*
    * Inside one count. The state is validated rather than passed

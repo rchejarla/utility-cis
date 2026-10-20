@@ -89,6 +89,14 @@ export const configSchema = z.object({
 
   // Bull Board admin UI.
   BULL_BOARD_ENABLED: truthyString,
+
+  /**
+   * Lets the platform console start and stop the worker process on this
+   * host. See `workerControlAllowed()` for when it is needed: outside
+   * development it must be set explicitly, because a worker spawned by
+   * an API container is a process the orchestrator does not know about.
+   */
+  WORKER_CONTROL_ENABLED: truthyString,
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -136,4 +144,20 @@ export function parseWorkerQueues(raw: string): string[] | null {
  */
 export function resolveWorkerQueues(): string[] | null {
   return parseWorkerQueues(config.WORKER_QUEUES);
+}
+
+/**
+ * Whether the platform console may start and stop a worker on this host.
+ *
+ * On by default in development, where the worker is a second terminal
+ * command that is easy to forget and whose absence looks exactly like a
+ * healthy queue. Off by default everywhere else, and `WORKER_CONTROL_ENABLED`
+ * is the explicit opt-in — because a worker spawned by an API container
+ * is a process the orchestrator does not know about: it is not restarted
+ * when it dies, not drained on a rolling deploy, absent from
+ * `kubectl get pods`, and gone the next time the API pod is replaced.
+ * That is a deliberate choice to make, not a default to inherit.
+ */
+export function workerControlAllowed(): boolean {
+  return config.WORKER_CONTROL_ENABLED || config.NODE_ENV !== "production";
 }
