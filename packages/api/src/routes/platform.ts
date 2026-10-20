@@ -13,6 +13,7 @@ import {
   listUtilityHistory,
 } from "../services/provisioning.service.js";
 import { getUtilityReadiness } from "../services/utility-readiness.service.js";
+import { getQueueHealth } from "../services/queue-health.service.js";
 import { getPlatformActor } from "../services/rbac.service.js";
 import {
   listPlatformUsers,
@@ -135,6 +136,20 @@ export async function platformRoutes(app: FastifyInstance) {
       return reply.send({ data: await listUtilities() });
     },
   );
+
+  /*
+   * Queue health: counts, dead-letter depth and the newest failures,
+   * with the tenant named where a job payload names one.
+   *
+   * Reads only, and 200 even when Redis did not answer — the body says
+   * `reachable: false`. A 503 would be indistinguishable, on screen,
+   * from "nothing is queued", which is the one thing an operator must
+   * not conclude by mistake. Every verb that changes a job stays in Bull
+   * Board.
+   */
+  app.get("/api/v1/platform/queues", { config: { platform: true } }, async (_request, reply) => {
+    return reply.send(await getQueueHealth());
+  });
 
   app.get(
     "/api/v1/platform/utilities/:id",

@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { faBuildingColumns, faUserShield, faLayerGroup } from "@fortawesome/pro-solid-svg-icons";
+import {
+  faBuildingColumns,
+  faUserShield,
+  faLayerGroup,
+  faListCheck,
+} from "@fortawesome/pro-solid-svg-icons";
 import { apiClient } from "@/lib/api-client";
 import { useBreakpoint } from "@/lib/use-media-query";
 import { Topbar } from "./topbar";
@@ -49,6 +54,21 @@ const PLATFORM_SECTIONS: NavSection[] = [
         icon: faUserShield,
         module: "platform",
         tooltip: "The people who may do the above",
+      },
+      {
+        /*
+         * Until this existed, Bull Board — the only queue surface —
+         * was reachable only by typing /admin/queues on the API host.
+         * The menu entry points here rather than there: Bull Board is
+         * a separate origin with its own chrome and no way back, which
+         * makes it a fine escape hatch from inside this page and a poor
+         * nav target.
+         */
+        href: "/platform/queues",
+        label: "Queues",
+        icon: faListCheck,
+        module: "platform",
+        tooltip: "Background work across every tenant: failures, dead letters, depth",
       },
     ],
   },
