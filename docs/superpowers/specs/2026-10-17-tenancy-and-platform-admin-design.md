@@ -435,6 +435,25 @@ first.
    tenant's own roles and settings routes require. It reports; it does
    not fix, since every remedy belongs to the tenant.
 
+   **Which is why the tenant sees it too**, at `GET /api/v1/readiness`
+   (`settings:VIEW`) and on a new `/dashboard` — the first screen a
+   utility's own staff land on, where `/` previously sent them straight
+   to Premises. Same service, same checks; the asymmetry is guidance.
+   The tenant's copy carries a link per unmet check to the screen that
+   satisfies it and opens on arrival while anything is outstanding,
+   because for them the list is work rather than a diagnosis. The
+   operator's copy has no links: every one of those screens refuses a
+   platform actor, so offering them would be an invitation to a 403.
+   The destinations live in the web app (`components/readiness/
+   tenant-fixes.ts`), not in the API response — the service should not
+   be naming screens it cannot see.
+
+   The dashboard holds one widget and no widget framework. Its sidebar
+   entry declares no module, which is new: what a dashboard shows is
+   decided per widget by the key that widget needs, so gating the page
+   on whichever key came first would hide the landing screen from
+   everyone else.
+
 ---
 
 ## 5. What this does not cover

@@ -339,3 +339,101 @@ describe("through the detail route", () => {
     expect(body.readiness.checks.length).toBeGreaterThan(0);
   });
 });
+
+describe("the tenant's own readiness route", () => {
+  /*
+   * The same answer, served to the people who can act on it. The
+   * operator sees it to know why a tenant is quiet; the tenant's own
+   * admin sees it as a list of what to go and do, which is the only
+   * side that can do any of it.
+   *
+   * `settings:VIEW`, which is what /settings/bill-production already
+   * requires to show the issuer fields two of these checks are about.
+   * Deliberately not a new module key: that would need a
+   * `utility_module` row for every tenant and a place in six presets to
+   * answer a question the existing key already covers.
+   */
+  let app: import("fastify").FastifyInstance;
+  const ADMIN = "00000000-0000-4000-8000-bbbb0000f001";
+  const CSR = "00000000-0000-4000-8000-bbbb0000f002";
+
+  function token(claims: Record<string, unknown>) {
+    const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+    return `${header}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.sig`;
+  }
+  const asUser = (sub: string) => ({
+    authorization: `Bearer ${token({ sub, utility_id: UTILITY, email: "u@x.gov", name: "U" })}`,
+  });
+
+  beforeAll(async () => {
+    const appImports = await import("../../app.js");
+    app = await appImports.buildApp();
+    await app.ready();
+  }, 60_000);
+
+  /** A staff member holding exactly these permissions. */
+  async function staff(id: string, permissions: Record<string, string[]>) {
+    const { prisma } = prismaImports;
+    const role = await prisma.role.create({
+      data: { utilityId: UTILITY, name: `Fixture ${id.slice(-4)}`, permissions },
+    });
+    await prisma.cisUser.create({
+      data: { id, utilityId: UTILITY, email: `${id.slice(-4)}@x.gov`, name: "Staff", isActive: true },
+    });
+    await prisma.userRole.create({
+      data: { utilityId: UTILITY, userId: id, accountId: null, roleId: role.id },
+    });
+    const rbac = await import("../../services/rbac.service.js");
+    await rbac.invalidateUserRoleCache(id, UTILITY);
+  }
+
+  it("serves its own readiness to an admin who can view settings", async () => {
+    await staff(ADMIN, { settings: ["VIEW"] });
+
+    const res = await app.inject({ method: "GET", url: "/api/v1/readiness", headers: asUser(ADMIN) });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.ready).toBe(false);
+    expect(body.checks.map((c: { key: string }) => c.key)).toContain("issuerIdentity");
+  });
+
+  it("refuses a CSR, who cannot see settings", async () => {
+    await staff(CSR, { customers: ["VIEW"], accounts: ["VIEW"] });
+
+    const res = await app.inject({ method: "GET", url: "/api/v1/readiness", headers: asUser(CSR) });
+
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("answers for the caller's own tenant, not one named in a query", async () => {
+    // There is no utility parameter, on purpose: the only tenant this
+    // can report on is the token's own.
+    await staff(ADMIN, { settings: ["VIEW"] });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/readiness?utilityId=00000000-0000-4000-8000-0000000000ef",
+      headers: asUser(ADMIN),
+    });
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("refuses the platform actor, who has no tenant to report on", async () => {
+    const { prisma } = prismaImports;
+    const operator = "00000000-0000-4000-8000-bbbb0000f003";
+    await prisma.cisUser.deleteMany({ where: { utilityId: null } });
+    await prisma.cisUser.create({
+      data: { id: operator, utilityId: null, email: "o@x.gov", name: "Ops", isActive: true },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/readiness",
+      headers: { authorization: `Bearer ${token({ sub: operator, platform: true, email: "o@x.gov" })}` },
+    });
+
+    expect(res.statusCode).toBe(403);
+  });
+});

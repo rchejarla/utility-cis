@@ -51,6 +51,7 @@ import { accountContactRoutes } from "./routes/account-contacts.js";
 import { premiseTypeDefRoutes } from "./routes/premise-type-defs.js";
 import { accountTypeDefRoutes } from "./routes/account-type-defs.js";
 import { tenantConfigRoutes } from "./routes/tenant-config.js";
+import { readinessRoutes } from "./routes/readiness.js";
 import { automationConfigRoutes } from "./routes/automation-config.js";
 import { customFieldSchemaRoutes } from "./routes/custom-field-schemas.js";
 import { serviceEventRoutes } from "./routes/service-events.js";
@@ -171,6 +172,7 @@ export async function buildApp() {
   await app.register(accountTypeDefRoutes);
   await app.register(accountContactRoutes);
   await app.register(tenantConfigRoutes);
+  await app.register(readinessRoutes);
   await app.register(automationConfigRoutes);
   await app.register(customFieldSchemaRoutes);
   await app.register(serviceEventRoutes);

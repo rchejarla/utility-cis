@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import type { TenantFix } from "./tenant-fixes";
 
 export interface ReadinessCheck {
   key: string;
@@ -48,9 +50,25 @@ const card: React.CSSProperties = {
  * module may export only its default and the framework's own route
  * exports — a named export from `page.tsx` fails the generated type
  * check in `.next/types`, which is how this file came to exist.
+ *
+ * Two readers, and the asymmetry is in `guidance` rather than in two
+ * components. The platform operator gets the diagnosis: these checks,
+ * and what each unmet one prevents. The tenant's own admin gets the same
+ * list with a link per unmet check, because they are the only party who
+ * can satisfy any of it — and `defaultOpen`, because for them it is a
+ * to-do list rather than a status they came for something else.
  */
-export function ReadinessPanel({ readiness }: { readiness: Readiness }) {
-  const [open, setOpen] = useState(false);
+export function ReadinessPanel({
+  readiness,
+  guidance,
+  defaultOpen = false,
+}: {
+  readiness: Readiness;
+  /** Keyed by check; a check with no entry renders without a link. */
+  guidance?: Record<string, TenantFix>;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   const unmet = readiness.checks.filter((c) => !c.ok);
   const ordered = [...unmet, ...readiness.checks.filter((c) => c.ok)];
   const accent = readiness.ready ? "var(--success)" : "var(--warning)";
@@ -128,6 +146,17 @@ export function ReadinessPanel({ readiness }: { readiness: Readiness }) {
             {!c.ok && (
               <div style={{ fontSize: 12, color: "var(--text-secondary)", paddingLeft: 20 }}>
                 {c.blocks}
+                {guidance?.[c.key] && (
+                  <>
+                    {" "}
+                    <Link
+                      href={guidance[c.key].href}
+                      style={{ color: "var(--accent-primary)", textDecoration: "none" }}
+                    >
+                      {guidance[c.key].action} →
+                    </Link>
+                  </>
+                )}
               </div>
             )}
           </div>

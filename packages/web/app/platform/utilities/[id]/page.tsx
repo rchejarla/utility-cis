@@ -10,7 +10,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { PermissionMatrix } from "@/components/settings/permission-matrix";
 import { presetDrift } from "@utility-cis/shared";
 import { FormField } from "@/components/ui/form-field";
-import { ReadinessPanel, type Readiness } from "@/components/platform/readiness-panel";
+import { ReadinessPanel, type Readiness } from "@/components/readiness/readiness-panel";
 
 /**
  * What one tenant holds.

@@ -24,10 +24,19 @@ export function canViewModule(
  * the section should not render at all — otherwise its header opens
  * onto nothing.
  */
-export function visibleNavItems<T extends { module: string }>(
+/**
+ * An item with no `module` is always visible: there is no key that
+ * decides whether the destination exists for this person. The Dashboard
+ * is the case — every staff member lands there and it shows whichever
+ * widgets they can see, so gating the entry on any one key would hide
+ * the landing page from whoever lacks it.
+ */
+export function visibleNavItems<T extends { module?: string }>(
   items: readonly T[],
   permissions: PermissionMap,
   enabledModules: string[],
 ): T[] {
-  return items.filter((item) => canViewModule(permissions, enabledModules, item.module));
+  return items.filter(
+    (item) => !item.module || canViewModule(permissions, enabledModules, item.module),
+  );
 }

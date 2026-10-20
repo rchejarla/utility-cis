@@ -64,4 +64,16 @@ describe("visibleNavItems", () => {
       { module: "audit_log" },
     ]);
   });
+
+  it("keeps an entry that declares no module, whoever is looking", () => {
+    // The Dashboard. It is where every staff member lands and it holds
+    // whichever widgets that person can see, so there is no single key
+    // that decides whether the destination exists — gating it on
+    // `settings` would have hidden the landing page from a CSR.
+    const withDashboard = [{ module: undefined }, { module: "settings" }];
+
+    expect(visibleNavItems(withDashboard, CSR.permissions, CSR.enabledModules)).toEqual([
+      { module: undefined },
+    ]);
+  });
 });

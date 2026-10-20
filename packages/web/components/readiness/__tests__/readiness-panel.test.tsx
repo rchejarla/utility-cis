@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ReadinessPanel } from "@/components/platform/readiness-panel";
+import { ReadinessPanel } from "../readiness-panel";
+import { TENANT_FIXES } from "../tenant-fixes";
 
 /**
  * The panel that answers what the stats only implied.
@@ -111,5 +112,68 @@ describe("ReadinessPanel", () => {
 
     expect(toggle()).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("At least one commodity")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The tenant's copy of the panel, which is a to-do list rather than a
+ * diagnosis.
+ *
+ * Guidance is passed in rather than built in, because the two readers
+ * are not symmetrical: every remedy lives in the tenant's own screens,
+ * so a link to `/commodities` is an action for their admin and a dead
+ * end for the platform operator, who would arrive there as an identity
+ * that holds no tenant permissions at all.
+ */
+describe("ReadinessPanel with guidance", () => {
+  it("opens on arrival when asked, since here it is the task list", () => {
+    render(<ReadinessPanel readiness={panel([check()])} guidance={TENANT_FIXES} defaultOpen />);
+
+    expect(toggle()).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("At least one commodity")).toBeInTheDocument();
+  });
+
+  it("links an unmet check to the screen that fixes it", async () => {
+    render(<ReadinessPanel readiness={panel([check()])} guidance={TENANT_FIXES} />);
+    await userEvent.click(toggle());
+
+    const link = screen.getByRole("link", { name: /add a commodity/i });
+    expect(link).toHaveAttribute("href", "/commodities");
+  });
+
+  it("offers nothing to click on a check that is already met", async () => {
+    render(<ReadinessPanel readiness={panel([check({ ok: true })])} guidance={TENANT_FIXES} />);
+    await userEvent.click(toggle());
+
+    expect(screen.queryByRole("link", { name: /add a commodity/i })).not.toBeInTheDocument();
+  });
+
+  it("shows no link at all without guidance, which is the operator's view", async () => {
+    render(<ReadinessPanel readiness={panel([check()])} />);
+    await userEvent.click(toggle());
+
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("names a destination for every check the service can report", () => {
+    // A check with no entry renders as a dead end: the tenant is told
+    // something is wrong and not where to go. Pinned against the keys
+    // the service actually returns, so adding a check without its
+    // destination fails here rather than in front of a customer.
+    const KEYS = [
+      "administrable",
+      "commodity",
+      "unitOfMeasure",
+      "billingCycle",
+      "rateSchedule",
+      "issuerIdentity",
+      "billStorage",
+    ];
+
+    expect(Object.keys(TENANT_FIXES).sort()).toEqual([...KEYS].sort());
+    for (const key of KEYS) {
+      expect(TENANT_FIXES[key].href, key).toMatch(/^\//);
+      expect(TENANT_FIXES[key].action.length, key).toBeGreaterThan(0);
+    }
   });
 });

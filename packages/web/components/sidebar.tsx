@@ -63,13 +63,19 @@ import {
   faGears,
   faShieldHalved,
   faChevronRight,
+  faChartLine,
 } from "@fortawesome/pro-solid-svg-icons";
 
 export interface NavItem {
   href: string;
   label: string;
   icon: IconDefinition;
-  module: string;
+  /**
+   * The key that decides whether this entry is shown. Omitted for a
+   * destination everyone reaches — see `visibleNavItems` — which today
+   * means the Dashboard and nothing else.
+   */
+  module?: string;
   /**
    * Optional hover tooltip shown when sidebar is expanded. Useful for
    * expanding acronyms or adding clarifying context without lengthening
@@ -146,6 +152,14 @@ const navSections: NavSection[] = [
     title: "Operations",
     icon: faBriefcase,
     items: [
+      /*
+       * No module: the dashboard is where every staff member lands, and
+       * what it shows is decided per widget rather than per page. The
+       * setup check-list needs `settings` and is rendered only for
+       * whoever holds it; a second widget will answer to its own key.
+       * Gating the entry itself would hide the landing page.
+       */
+      { href: "/dashboard", label: "Dashboard", icon: faChartLine },
       { href: "/customers", label: "Customers", icon: faUsers, module: "customers" },
       { href: "/premises", label: "Premises", icon: faLocationDot, module: "premises" },
       { href: "/meters", label: "Meters", icon: faGauge, module: "meters" },
