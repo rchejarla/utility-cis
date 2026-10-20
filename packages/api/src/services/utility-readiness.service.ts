@@ -94,34 +94,48 @@ function naming(names: string[]): string {
 export async function getUtilityReadiness(utilityId: string): Promise<UtilityReadiness> {
   await assertUtilityExists(utilityId);
 
-  const [config, roles, commodities, unitCount, cycles, publishedTariffs] = await Promise.all([
-    prisma.utilityConfig.findUnique({ where: { utilityId }, select: { settings: true } }),
-    /*
-     * Permissions are Json, and "settings includes EDIT" is a question
-     * about an array inside it. Filtering in JS rather than with a
-     * jsonb path keeps the rule readable and matches how
-     * `authorizationMiddleware` evaluates it; a tenant has a handful of
-     * roles, so there is nothing to gain from pushing it down.
-     */
-    prisma.role.findMany({ where: { utilityId }, select: { id: true, permissions: true } }),
-    prisma.commodity.findMany({
-      where: { utilityId, isActive: true },
-      select: { name: true },
-      orderBy: { displayOrder: "asc" },
-    }),
-    prisma.unitOfMeasure.count({ where: { utilityId, isActive: true } }),
-    prisma.billingCycle.findMany({
-      where: { utilityId, active: true },
-      select: { cycleCode: true },
-      orderBy: { cycleCode: "asc" },
-    }),
-    /*
-     * Published only. A draft schedule is a tariff being written, not one
-     * that can rate anything: `SAScheduleAssignment` is what bills read,
-     * and an unpublished schedule is not meant to be assigned.
-     */
-    prisma.rateSchedule.count({ where: { utilityId, publishedAt: { not: null } } }),
-  ]);
+  const [config, roles, commodities, unitCount, cycles, publishedTariffs, pricedTariffs] =
+    await Promise.all([
+      prisma.utilityConfig.findUnique({ where: { utilityId }, select: { settings: true } }),
+      /*
+       * Permissions are Json, and "settings includes EDIT" is a question
+       * about an array inside it. Filtering in JS rather than with a
+       * jsonb path keeps the rule readable and matches how
+       * `authorizationMiddleware` evaluates it; a tenant has a handful of
+       * roles, so there is nothing to gain from pushing it down.
+       */
+      prisma.role.findMany({ where: { utilityId }, select: { id: true, permissions: true } }),
+      prisma.commodity.findMany({
+        where: { utilityId, isActive: true },
+        select: { name: true },
+        orderBy: { displayOrder: "asc" },
+      }),
+      prisma.unitOfMeasure.count({ where: { utilityId, isActive: true } }),
+      prisma.billingCycle.findMany({
+        where: { utilityId, active: true },
+        select: { cycleCode: true },
+        orderBy: { cycleCode: "asc" },
+      }),
+      /*
+       * Published, and carrying at least one charge.
+       *
+       * Published only was the first version and it could be satisfied
+       * falsely: `publishRateSchedule` guards against publishing twice and
+       * publishing a superseded version, and nothing requires a component,
+       * so an empty schedule can be published — and a tenant with one
+       * would have been told its usage can be priced while every bill came
+       * out at zero. Two counts rather than one so the unmet case can say
+       * which of the two states it is in.
+       *
+       * A draft schedule still does not count either way:
+       * `SAScheduleAssignment` is what bills read, and an unpublished
+       * schedule is not meant to be assigned.
+       */
+      prisma.rateSchedule.count({ where: { utilityId, publishedAt: { not: null } } }),
+      prisma.rateSchedule.count({
+        where: { utilityId, publishedAt: { not: null }, components: { some: {} } },
+      }),
+    ]);
 
   const selfAdminRoleIds = roles
     .filter((role) => {
@@ -193,10 +207,16 @@ export async function getUtilityReadiness(utilityId: string): Promise<UtilityRea
     },
     {
       key: "rateSchedule",
-      label: "A published rate schedule",
-      ok: publishedTariffs > 0,
+      label: "A published rate schedule with charges on it",
+      ok: pricedTariffs > 0,
       detail:
-        publishedTariffs > 0 ? `${publishedTariffs} published` : "none published",
+        pricedTariffs > 0
+          ? `${pricedTariffs} published`
+          : publishedTariffs > 0
+            ? // Said separately, because "none published" would send an
+              // admin to publish a second empty schedule.
+              `${publishedTariffs} published, none carrying a charge`
+            : "none published",
       blocks: "Usage cannot be priced, so a billing run would produce a bill with no charges.",
     },
     {

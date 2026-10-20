@@ -3,6 +3,8 @@
 import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { EntityListPage } from "@/components/ui/entity-list-page";
 import { PageDescription } from "@/components/ui/page-description";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { rateScheduleLifecycle } from "@/lib/rate-schedule-lifecycle";
 import type { Column } from "@/components/ui/data-table";
 
 interface RateSchedule {
@@ -12,8 +14,16 @@ interface RateSchedule {
   effectiveDate: string;
   expirationDate?: string;
   version: number;
-  isActive?: boolean;
+  /**
+   * The two columns that decide the lifecycle badge. They were already
+   * in every response — the list service includes no `select`, so Prisma
+   * returns both — and this interface simply never named them, which is
+   * why the column could not be written.
+   */
+  publishedAt?: string | null;
+  supersededById?: string | null;
   commodity?: { name: string };
+  _count?: { components: number };
 }
 
 const ACTIVE_OPTIONS = [
@@ -35,18 +45,40 @@ const columns: Column<RateSchedule>[] = [
     ),
   },
   {
+    key: "status",
+    header: "Status",
+    /*
+     * Publishing is what decides whether a schedule can price a bill,
+     * and this list showed Draft, Published and Superseded alike. The
+     * badge the detail page has always carried, read through the one
+     * shared derivation so the two screens cannot disagree.
+     */
+    render: (row) => <StatusBadge status={rateScheduleLifecycle(row)} />,
+  },
+  {
     key: "commodity",
     header: "Commodity",
     render: (row) => <CommodityBadge commodity={row.commodity?.name ?? ""} />,
   },
   {
     key: "components",
-    header: "Components",
-    render: () => (
-      <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-        Components (coming soon)
-      </span>
-    ),
+    header: "Charges",
+    /*
+     * A published schedule carrying no components prices nothing —
+     * `publishRateSchedule` does not require any — so "none" is the
+     * state worth seeing here, and this column used to read "Components
+     * (coming soon)" while the count was one `_count` away. Worded "No
+     * charges" rather than "None" so it cannot be mistaken for the
+     * Expiration column beside it.
+     */
+    render: (row) =>
+      row._count?.components ? (
+        <span style={{ fontFamily: "monospace", fontSize: "12px" }}>
+          {row._count.components}
+        </span>
+      ) : (
+        <span style={{ fontSize: "12px", color: "var(--warning)" }}>No charges</span>
+      ),
   },
   {
     key: "effectiveDate",

@@ -10,6 +10,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
+import { rateScheduleLifecycle } from "@/lib/rate-schedule-lifecycle";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { useToast } from "@/components/ui/toast";
 import { ComponentList, type RateComponent } from "@/components/rate-schedules/component-list";
@@ -77,11 +78,8 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
   const [publishing, setPublishing] = useState(false);
 
   const isEditable = !!rs && !rs.publishedAt && !rs.supersededById;
-  const lifecycleStatus: "Draft" | "Published" | "Superseded" = rs?.supersededById
-    ? "Superseded"
-    : rs?.publishedAt
-      ? "Published"
-      : "Draft";
+  // One derivation, shared with the list — see rate-schedule-lifecycle.
+  const lifecycleStatus = rateScheduleLifecycle(rs ?? {});
 
   const handleAdd = () => {
     setEditingComponent(null);

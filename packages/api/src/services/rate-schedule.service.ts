@@ -38,6 +38,13 @@ function remapComponentIds(value: unknown, idMap: Map<string, string>): unknown 
 
 const fullInclude = {
   commodity: true,
+  /*
+   * How many charges the schedule carries, for the list's Charges
+   * column. `publishRateSchedule` requires no components, so a published
+   * schedule with none is reachable and prices nothing — the count is
+   * what makes that visible on the row instead of only after opening it.
+   */
+  _count: { select: { components: true } },
 };
 
 export async function listRateSchedules(utilityId: string, query: RateScheduleQuery) {

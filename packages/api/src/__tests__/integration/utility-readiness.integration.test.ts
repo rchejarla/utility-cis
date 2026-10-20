@@ -248,7 +248,7 @@ describe("a utility with everything", () => {
         frequency: "MONTHLY",
       },
     });
-    await prisma.rateSchedule.create({
+    const schedule = await prisma.rateSchedule.create({
       data: {
         utilityId: UTILITY,
         name: "Residential Water",
@@ -258,11 +258,90 @@ describe("a utility with everything", () => {
         publishedAt: new Date("2026-01-01"),
       },
     });
+    // With a charge on it: a published schedule carrying none prices
+    // nothing, so a tenant holding only that is not ready.
+    await prisma.rateComponent.create({
+      data: {
+        utilityId: UTILITY,
+        rateScheduleId: schedule.id,
+        kindCode: "service_charge",
+        label: "Monthly service charge",
+        predicate: {},
+        quantitySource: {},
+        pricing: { amount: "12.50" },
+        effectiveDate: new Date("2026-01-01"),
+      },
+    });
 
     const result = await readiness.getUtilityReadiness(UTILITY);
 
     expect(result.checks.filter((c) => !c.ok).map((c) => c.key)).toEqual([]);
     expect(result.ready).toBe(true);
+  });
+
+  it("does not count a published tariff that carries no charges", async () => {
+    /*
+     * `publishRateSchedule` guards only against publishing twice and
+     * publishing a superseded version — nothing requires a component —
+     * so an empty schedule can be published, and counting
+     * `publishedAt != null` called such a tenant priced while its bills
+     * would still come out at zero. The check claims usage can be
+     * priced; this is what makes the claim true.
+     */
+    const { prisma } = prismaImports;
+    const commodity = await prisma.commodity.create({
+      data: { utilityId: UTILITY, code: "WATER", name: "Water", displayOrder: 1 },
+    });
+    await prisma.rateSchedule.create({
+      data: {
+        utilityId: UTILITY,
+        name: "Published but empty",
+        code: "EMPTY",
+        commodityId: commodity.id,
+        effectiveDate: new Date("2026-01-01"),
+        publishedAt: new Date("2026-01-01"),
+      },
+    });
+
+    const result = await readiness.getUtilityReadiness(UTILITY);
+    const c = check(result.checks, "rateSchedule") as unknown as { ok: boolean; detail: string };
+
+    expect(c.ok).toBe(false);
+    // And says which of the two states it is in, since "none published"
+    // would send an admin to create a second empty schedule.
+    expect(c.detail).toMatch(/charge/i);
+  });
+
+  it("counts a published tariff once it has a charge on it", async () => {
+    const { prisma } = prismaImports;
+    const commodity = await prisma.commodity.create({
+      data: { utilityId: UTILITY, code: "WATER", name: "Water", displayOrder: 1 },
+    });
+    const schedule = await prisma.rateSchedule.create({
+      data: {
+        utilityId: UTILITY,
+        name: "Residential Water",
+        code: "RES-W",
+        commodityId: commodity.id,
+        effectiveDate: new Date("2026-01-01"),
+        publishedAt: new Date("2026-01-01"),
+      },
+    });
+    await prisma.rateComponent.create({
+      data: {
+        utilityId: UTILITY,
+        rateScheduleId: schedule.id,
+        kindCode: "service_charge",
+        label: "Monthly service charge",
+        predicate: {},
+        quantitySource: {},
+        pricing: { amount: "12.50" },
+        effectiveDate: new Date("2026-01-01"),
+      },
+    });
+
+    const result = await readiness.getUtilityReadiness(UTILITY);
+    expect(check(result.checks, "rateSchedule").ok).toBe(true);
   });
 
   it("does not count an unpublished tariff, which cannot rate anything", async () => {
