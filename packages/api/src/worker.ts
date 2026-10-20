@@ -179,7 +179,19 @@ async function main(): Promise<void> {
     "Worker starting",
   );
 
-  startHealthServer(config.WORKER_HTTP_PORT);
+  /*
+   * The health server also carries the shutdown request, because a
+   * signal cannot do this job on both platforms: Windows has no POSIX
+   * signals, and Node emulates `process.kill(pid, "SIGTERM")` there as
+   * an unconditional termination — so none of the draining below would
+   * run and an in-flight job would lose its lock mid-run. Over HTTP it
+   * is the same path on Windows and Linux. SIGTERM from `docker stop` or
+   * a pod eviction still arrives at the handlers registered further
+   * down; this adds a second door to the same room.
+   */
+  startHealthServer(config.WORKER_HTTP_PORT, {
+    onShutdown: () => void shutdown("http"),
+  });
   await reconcileSchedulers(activeQueues);
   await startDlqMonitor(activeQueues);
 

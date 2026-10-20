@@ -58,8 +58,16 @@ interface WorkerProcess {
   host: string | null;
   startedAt: string | null;
   queues: string[] | null;
-  /** Whether a stop would drain in-flight jobs or cut them off. */
-  stopDrains: boolean;
+  /** A stop has been asked for and the worker is still finishing. */
+  stopping: boolean;
+  /** Where its output went, including a failure during boot. */
+  logFile: string | null;
+}
+
+/** What a stop came back with: how it was delivered, and whether it drained. */
+interface StopResult extends WorkerProcess {
+  method: "drain" | "signal" | "already-gone";
+  drained: boolean;
 }
 
 type JobState = "waiting" | "active" | "delayed" | "failed" | "dlq";
@@ -549,16 +557,28 @@ export default function PlatformQueuesPage() {
     setWorkerBusy(true);
     setWorkerSaid(null);
     try {
-      const next = await apiClient.post<WorkerProcess>(
+      const next = await apiClient.post<StopResult>(
         `/api/v1/platform/workers/${action}`,
         action === "start" ? { queues: [] } : {},
       );
       setReport((r) => (r ? { ...r, workerProcess: next } : r));
-      setWorkerSaid(
-        next.running
-          ? `Started — pid ${next.pid}${next.host ? ` on ${next.host}` : ""}`
-          : "Stopped",
-      );
+
+      if (action === "start") {
+        setWorkerSaid(`Started — pid ${next.pid}${next.host ? ` on ${next.host}` : ""}`);
+      } else if (!next.drained) {
+        /* The fallback fired: the worker never answered its own HTTP
+           server, so it got a signal — which on Windows cuts in-flight
+           jobs off, to be retried once their locks expire. */
+        setWorkerSaid(
+          "Stopped abruptly — the worker could not be reached to drain, so anything in flight will be retried after its lock expires.",
+        );
+      } else {
+        setWorkerSaid(
+          next.stopping
+            ? "Draining — it will finish its in-flight jobs and then exit."
+            : "Stopped.",
+        );
+      }
     } catch (err) {
       setWorkerSaid(err instanceof Error ? err.message : "Failed");
     } finally {
@@ -714,7 +734,21 @@ export default function PlatformQueuesPage() {
                   Worker process
                 </div>
 
-                {worker.running ? (
+                {worker.running && worker.stopping ? (
+                  /* Asked to stop and still winding down. A drain runs up
+                     to 60s per worker, so reporting "stopped" while the
+                     pid is still in the process table would have this
+                     page contradict the machine. */
+                  <>
+                    <div style={{ color: "var(--warning)" }}>
+                      Draining · pid {worker.pid}
+                      {worker.host ? ` on ${worker.host}` : ""}
+                    </div>
+                    <div style={{ color: "var(--text-muted)" }}>
+                      Finishing its in-flight jobs, then exiting. Reload to see it go.
+                    </div>
+                  </>
+                ) : worker.running ? (
                   <>
                     <div style={{ color: "var(--text-primary)" }}>
                       Running · pid {worker.pid}
@@ -733,17 +767,26 @@ export default function PlatformQueuesPage() {
                         onClick={() => controlWorker("stop")}
                       />
                     </div>
-                    {!worker.stopDrains && (
-                      /* Verified on Windows: SIGTERM terminates the
-                         process outright and the worker's own drain
-                         handler never runs, so an in-flight job loses its
-                         lock and is retried after the lock duration.
-                         Survivable — the handlers are idempotent — but
-                         worth knowing before the click. */
-                      <div style={{ color: "var(--warning)" }}>
-                        A stop here will not drain in-flight jobs: this host cannot deliver a
-                        signal the worker can handle, so anything running is cut off and retried
-                        after its lock expires.
+                    {/* Asked over the worker's own HTTP server, which is
+                        the one stop path that drains on both Windows and
+                        Linux — a signal on Windows is an unconditional
+                        termination that skips the handler entirely. */}
+                    <div style={{ color: "var(--text-muted)" }}>
+                      A stop asks it to finish what it is holding before exiting.
+                    </div>
+                    {worker.logFile && (
+                      /* It writes nowhere an operator can see otherwise:
+                         the process is detached, so its output goes to a
+                         file rather than to a terminal nobody is
+                         watching. */
+                      <div
+                        style={{
+                          color: "var(--text-muted)",
+                          fontFamily: "monospace",
+                          wordBreak: "break-all",
+                        }}
+                      >
+                        {worker.logFile}
                       </div>
                     )}
                   </>

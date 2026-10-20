@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { closeSync, openSync } from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,9 +41,16 @@ import type { LifecycleActor } from "./provisioning.service.js";
  *     The spawn is detached for the same reason: the worker should
  *     outlive the API reload that follows the next keystroke.
  *
- *   - **A stop on Windows is abrupt.** `process.kill(pid, "SIGTERM")`
- *     terminates immediately there; the drain handler never runs. See
- *     `stopIsGraceful`.
+ *   - **A signal cannot stop it on both platforms.** Windows has no
+ *     POSIX signals, and Node emulates `process.kill(pid, "SIGTERM")`
+ *     there as an unconditional termination: the worker's 60s drain, its
+ *     DLQ teardown and its Redis quit are all skipped, and an in-flight
+ *     job loses its lock mid-run. So a stop is **asked for over the
+ *     worker's own HTTP server**, which is the same path on Windows and
+ *     Linux and reaches the drain the worker already had. The signal
+ *     stays as the fallback for a worker that no longer answers, where
+ *     an abrupt stop beats none — and `signalDrains` is what lets the
+ *     operator be told which of the two they got.
  */
 
 const RECORD_KEY = "platform:worker-process";
@@ -53,6 +61,14 @@ interface WorkerRecord {
   host: string;
   startedAt: string;
   queues: QueueName[];
+  /**
+   * The port its health server is listening on, recorded at spawn so
+   * that changing `WORKER_HTTP_PORT` afterwards cannot leave a running
+   * worker unreachable.
+   */
+  healthPort: number;
+  /** Where its output went, so a worker that died at boot can be read. */
+  logFile: string;
 }
 
 export interface WorkerProcessStatus {
@@ -60,13 +76,27 @@ export interface WorkerProcessStatus {
   controllable: boolean;
   /** Running, as far as this host can tell. */
   running: boolean;
+  /** A stop has been asked for and the worker is still finishing. */
+  stopping: boolean;
   pid: number | null;
   host: string | null;
   startedAt: string | null;
   /** The queues it was started for; empty means all of them. */
   queues: QueueName[] | null;
-  /** Whether a stop would drain in-flight jobs or cut them off. */
-  stopDrains: boolean;
+  /** Where to read its output, including a failure during boot. */
+  logFile: string | null;
+}
+
+/** How a stop was delivered: the drain request, or the blunt fallback. */
+export type StopMethod = "drain" | "signal" | "already-gone";
+
+export interface StopResult extends WorkerProcessStatus {
+  method: StopMethod;
+  /**
+   * Whether in-flight jobs got to finish. True for a drain request;
+   * platform-dependent for the signal fallback.
+   */
+  drained: boolean;
 }
 
 export class WorkerControlError extends Error {
@@ -87,19 +117,32 @@ export class WorkerControlError extends Error {
 }
 
 /**
- * Whether stopping the worker lets it finish what it is holding.
+ * Whether a *signal* lets the worker finish what it is holding.
  *
  * On Windows, Node maps every signal to an immediate termination: the
  * worker's SIGTERM handler — which closes each Worker with a 60s drain,
  * stops the DLQ monitor and quits Redis — does not run. An in-flight job
  * loses its lock instead and is picked up again after
  * `WORKER_LOCK_DURATION_MS`, which is survivable precisely because the
- * handlers are required to be idempotent. It is still not the same act,
- * so the operator is told which one they got.
+ * handlers are required to be idempotent.
+ *
+ * This is why the signal is only the fallback. It still applies when the
+ * drain request cannot be delivered, and it is how the operator is told
+ * that the stop they just performed was abrupt.
  */
-export function stopIsGraceful(platform: string = process.platform): boolean {
+export function signalDrains(platform: string = process.platform): boolean {
   return platform !== "win32";
 }
+
+/**
+ * How long to wait for the worker to accept a drain request.
+ *
+ * Bounds the acceptance, not the drain: the worker answers 202 and then
+ * takes as long as its in-flight jobs need. Short, because an
+ * unanswering worker should fall through to the signal quickly rather
+ * than hold the operator's click.
+ */
+const DRAIN_REQUEST_TIMEOUT_MS = 2_000;
 
 /** Where `packages/api` is, from this file rather than from the cwd. */
 function apiRoot(): string {
@@ -142,15 +185,20 @@ function isAlive(pid: number): boolean {
   }
 }
 
-function statusOf(record: WorkerRecord | null, running: boolean): WorkerProcessStatus {
+function statusOf(
+  record: WorkerRecord | null,
+  running: boolean,
+  stopping = false,
+): WorkerProcessStatus {
   return {
     controllable: workerControlAllowed(),
     running,
+    stopping,
     pid: running && record ? record.pid : null,
     host: running && record ? record.host : null,
     startedAt: running && record ? record.startedAt : null,
     queues: running && record ? record.queues : null,
-    stopDrains: stopIsGraceful(),
+    logFile: running && record ? record.logFile : null,
   };
 }
 
@@ -169,8 +217,17 @@ async function currentStatus(): Promise<{ record: WorkerRecord | null; running: 
   return { record, running };
 }
 
+/**
+ * The worker, as this host can see it.
+ *
+ * Also where a finished drain is noticed: a stop asks and returns while
+ * the worker is still winding down, so the record outlives the process
+ * by design and is cleared here once the pid is gone. That keeps the
+ * reported state the process table's, never an intention's.
+ */
 export async function getWorkerProcessStatus(): Promise<WorkerProcessStatus> {
   const { record, running } = await currentStatus();
+  if (record && !running) await redis.del(RECORD_KEY);
   return statusOf(record, running);
 }
 
@@ -212,20 +269,38 @@ export async function startWorkerProcess(
   }
 
   const { args, cwd } = workerCommand();
-  const child = spawn(process.execPath, args, {
-    cwd,
-    env: {
-      ...process.env,
-      // "all" is what `resolveWorkerQueues` reads as every queue.
-      WORKER_QUEUES: selected.length > 0 ? selected.join(",") : "all",
-    },
-    // Detached and unreferenced, so the worker survives the API reload
-    // that `tsx watch` performs on the next file save. stdio goes
-    // nowhere: the worker logs to its own stream, and inheriting would
-    // tie it to an API process it is meant to outlive.
-    detached: true,
-    stdio: "ignore",
-  });
+
+  /*
+   * Its output goes to a file, appended.
+   *
+   * Not inherited, because the worker is meant to outlive the API
+   * process that spawned it and would be writing into a dead one's
+   * handles. And not discarded, which is what this did first: a worker
+   * that dies during boot — a bad DATABASE_URL, a missing generated
+   * Prisma client — then leaves no trace at all, and the console that
+   * started it can only report that it is no longer running.
+   */
+  const logFile = path.join(cwd, "worker.log");
+  const logFd = openSync(logFile, "a");
+
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(process.execPath, args, {
+      cwd,
+      env: {
+        ...process.env,
+        // "all" is what `resolveWorkerQueues` reads as every queue.
+        WORKER_QUEUES: selected.length > 0 ? selected.join(",") : "all",
+      },
+      // Detached and unreferenced, so the worker survives the API reload
+      // that `tsx watch` performs on the next file save.
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+    });
+  } finally {
+    // The child holds its own duplicate of the descriptor.
+    closeSync(logFd);
+  }
 
   if (!child.pid) {
     throw new WorkerControlError("SPAWN_FAILED", 500, "The worker process did not start.");
@@ -237,6 +312,8 @@ export async function startWorkerProcess(
     host: hostname(),
     startedAt: new Date().toISOString(),
     queues: selected,
+    healthPort: config.WORKER_HTTP_PORT,
+    logFile,
   };
   await redis.set(RECORD_KEY, JSON.stringify(started));
 
@@ -253,7 +330,37 @@ export async function startWorkerProcess(
   return statusOf(started, true);
 }
 
-export async function stopWorkerProcess(actor: LifecycleActor): Promise<WorkerProcessStatus> {
+/**
+ * Asks the worker to drain, over the server it already runs.
+ *
+ * Returns false when it could not be delivered — the worker is wedged,
+ * its HTTP server never came up, or the port is wrong — and the caller
+ * falls through to the signal. A refusal (403 from a non-loopback
+ * caller, 404 from a process that registered no handler) counts as
+ * undelivered too, because in both cases nothing is draining.
+ */
+async function requestDrain(record: WorkerRecord): Promise<boolean> {
+  const url = `http://127.0.0.1:${record.healthPort}/shutdown`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      signal: AbortSignal.timeout(DRAIN_REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      logger.warn(
+        { component: "worker-control", status: res.status, url },
+        "worker refused the drain request",
+      );
+      return false;
+    }
+    return true;
+  } catch (err) {
+    logger.warn({ err, component: "worker-control", url }, "could not reach the worker to drain it");
+    return false;
+  }
+}
+
+export async function stopWorkerProcess(actor: LifecycleActor): Promise<StopResult> {
   if (!workerControlAllowed()) {
     throw new WorkerControlError(
       "WORKER_CONTROL_DISABLED",
@@ -279,24 +386,41 @@ export async function stopWorkerProcess(actor: LifecycleActor): Promise<WorkerPr
     );
   }
 
-  if (isAlive(record.pid)) {
-    process.kill(record.pid, "SIGTERM");
-    logger.info(
-      {
-        component: "worker-control",
-        actor: actor.id,
-        pid: record.pid,
-        drained: stopIsGraceful(),
-      },
-      "worker process stopped from the platform console",
-    );
-  } else {
+  if (!isAlive(record.pid)) {
     logger.info(
       { component: "worker-control", actor: actor.id, pid: record.pid },
       "worker process had already gone; clearing the record",
     );
+    await redis.del(RECORD_KEY);
+    return { ...statusOf(null, false), method: "already-gone", drained: true };
   }
 
-  await redis.del(RECORD_KEY);
-  return statusOf(null, false);
+  /*
+   * Ask first, signal only if the asking fails. The request is the one
+   * path that drains on both platforms; the signal is a last resort that
+   * on Windows cuts in-flight jobs off mid-run.
+   */
+  const asked = await requestDrain(record);
+  const method: StopMethod = asked ? "drain" : "signal";
+  if (!asked) process.kill(record.pid, "SIGTERM");
+
+  logger.info(
+    { component: "worker-control", actor: actor.id, pid: record.pid, method },
+    "worker process stop requested from the platform console",
+  );
+
+  /*
+   * The record is left in place while the worker winds down — a drain
+   * can take up to a minute per worker — and `getWorkerProcessStatus`
+   * clears it once the pid is gone. Reporting "stopped" here would have
+   * the page contradict the process table.
+   */
+  const stillThere = isAlive(record.pid);
+  if (!stillThere) await redis.del(RECORD_KEY);
+
+  return {
+    ...statusOf(record, stillThere, stillThere),
+    method,
+    drained: asked || signalDrains(),
+  };
 }

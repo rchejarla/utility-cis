@@ -24,11 +24,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
  *
  *   - On Windows `process.kill(pid, "SIGTERM")` terminates immediately;
  *     the worker's own drain handler never runs. Verified by watching
- *     for the "Shutdown initiated" line that never arrived. So a stop
- *     here is abrupt, in-flight jobs lose their lock and are retried
- *     after `WORKER_LOCK_DURATION_MS` — survivable, because handlers are
- *     required to be idempotent, but not the same thing as draining, and
- *     the operator is told which they got.
+ *     for the "Shutdown initiated" line that never arrived. Which is why
+ *     a stop is **asked for over the worker's own HTTP server** rather
+ *     than signalled: that is the same path on Windows and Linux, and it
+ *     reaches the drain this process already had. The signal remains as
+ *     the fallback for a worker whose HTTP server cannot be reached,
+ *     where an abrupt stop beats no stop.
  */
 
 const spawn = vi.fn();
@@ -62,9 +63,13 @@ vi.mock("../../lib/logger.js", () => ({
 let controlAllowed = true;
 
 vi.mock("../../config.js", () => ({
-  config: { NODE_ENV: "development", WORKER_CONTROL_ENABLED: false },
+  config: { NODE_ENV: "development", WORKER_CONTROL_ENABLED: false, WORKER_HTTP_PORT: 3002 },
   workerControlAllowed: () => controlAllowed,
 }));
+
+/** The worker's HTTP server, as the drain request reaches it. */
+const fetchMock = vi.fn();
+vi.stubGlobal("fetch", fetchMock);
 
 const OPERATOR = "00000000-0000-4000-8000-aaaa0000e001";
 const actor = { id: OPERATOR, name: "Pat Operator", source: `platform:${OPERATOR}` };
@@ -80,6 +85,7 @@ beforeEach(async () => {
   alive = new Set<number>();
 
   spawn.mockReturnValue({ pid: 4242, unref: vi.fn() });
+  fetchMock.mockResolvedValue({ ok: true, status: 202 });
   vi.spyOn(process, "kill").mockImplementation(((pid: number) => {
     if (!alive.has(pid)) {
       const err = new Error("no such process") as Error & { code: string };
@@ -126,6 +132,24 @@ describe("startWorkerProcess", () => {
     expect(opts.env.WORKER_QUEUES).toBe("imports,billing-runs");
     expect(opts.shell).not.toBe(true);
     expect(status.queues).toEqual(["imports", "billing-runs"]);
+  });
+
+  it("sends its output to a file, so a worker that dies at boot can be read", async () => {
+    /*
+     * This discarded stdio first. A worker that fails during boot — a
+     * bad DATABASE_URL, a stale generated Prisma client — then leaves no
+     * trace anywhere, and the console that started it can only report
+     * that it is no longer running. Inheriting is not the answer either:
+     * the worker outlives the API process on purpose.
+     */
+    const status = await svc.startWorkerProcess([], actor);
+
+    const opts = spawn.mock.calls[0][2];
+    expect(opts.stdio[0]).toBe("ignore");
+    // Both streams to the same descriptor, so interleaving is preserved.
+    expect(typeof opts.stdio[1]).toBe("number");
+    expect(opts.stdio[2]).toBe(opts.stdio[1]);
+    expect(status.logFile).toMatch(/worker\.log$/);
   });
 
   it("refuses a queue name that is not in the registry", async () => {
@@ -179,14 +203,89 @@ describe("startWorkerProcess", () => {
 });
 
 describe("stopWorkerProcess", () => {
-  it("stops the worker it started and forgets it", async () => {
+  it("asks the worker to drain over its own HTTP server, not with a signal", async () => {
+    /*
+     * The whole point: this is the one stop path that works the same on
+     * Windows and Linux. A signal would be an unconditional termination
+     * on Windows, skipping the 60s drain the worker already implements.
+     */
     alive.add(4242);
     await svc.startWorkerProcess([], actor);
 
     const status = await svc.stopWorkerProcess(actor);
 
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:3002/shutdown");
+    expect(init).toMatchObject({ method: "POST" });
+    expect(process.kill).not.toHaveBeenCalledWith(4242, "SIGTERM");
+    expect(status.method).toBe("drain");
+  });
+
+  it("reports the stop as in progress while the worker is still draining", async () => {
+    // The drain can take up to a minute. Reporting "stopped" while it
+    // runs would have the page contradict the process list.
+    alive.add(4242);
+    await svc.startWorkerProcess([], actor);
+
+    const status = await svc.stopWorkerProcess(actor);
+
+    expect(status).toMatchObject({ running: true, stopping: true, pid: 4242 });
+    // The record stays, so the next status read is the thing that
+    // notices it has gone.
+    expect(store.get("platform:worker-process")).toBeTruthy();
+  });
+
+  it("forgets the worker once the drain has finished", async () => {
+    alive.add(4242);
+    await svc.startWorkerProcess([], actor);
+    await svc.stopWorkerProcess(actor);
+
+    alive.delete(4242);
+    const status = await svc.getWorkerProcessStatus();
+
+    expect(status).toMatchObject({ running: false, stopping: false, pid: null });
+    expect(store.get("platform:worker-process")).toBeUndefined();
+  });
+
+  it("falls back to a signal when the worker's HTTP server cannot be reached", async () => {
+    // A wedged worker that no longer answers still has to be stoppable;
+    // an abrupt stop beats none. The caller is told which it got.
+    alive.add(4242);
+    await svc.startWorkerProcess([], actor);
+    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+
+    const status = await svc.stopWorkerProcess(actor);
+
     expect(process.kill).toHaveBeenCalledWith(4242, "SIGTERM");
-    expect(status).toMatchObject({ running: false, pid: null });
+    expect(status.method).toBe("signal");
+  });
+
+  it("falls back when the worker answers the drain request with a refusal", async () => {
+    alive.add(4242);
+    await svc.startWorkerProcess([], actor);
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+
+    const status = await svc.stopWorkerProcess(actor);
+
+    expect(process.kill).toHaveBeenCalledWith(4242, "SIGTERM");
+    expect(status.method).toBe("signal");
+  });
+
+  it("asks the port the worker was actually started on", async () => {
+    // Recorded at spawn, so changing WORKER_HTTP_PORT afterwards cannot
+    // leave a running worker unreachable.
+    alive.add(4242);
+    await svc.startWorkerProcess([], actor);
+    const record = JSON.parse(store.get("platform:worker-process") as string);
+    expect(record.healthPort).toBe(3002);
+
+    store.set(
+      "platform:worker-process",
+      JSON.stringify({ ...record, healthPort: 3999 }),
+    );
+    await svc.stopWorkerProcess(actor);
+
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:3999/shutdown");
   });
 
   it("refuses to stop a worker it did not start", async () => {
@@ -224,19 +323,23 @@ describe("stopWorkerProcess", () => {
 
     expect(status.running).toBe(false);
     expect(store.get("platform:worker-process")).toBeUndefined();
+    // Nothing to ask and nothing to signal: it is already gone.
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
-describe("stopIsGraceful", () => {
-  it("is false on Windows, where SIGTERM cannot be handled", () => {
+describe("signalDrains", () => {
+  // Only the fallback path is platform-dependent now, and this is what
+  // lets the page say whether the stop it just performed drained.
+  it("is false on Windows, where a signal cannot be handled", () => {
     // Verified against a running worker: the process vanished and its
     // "Shutdown initiated" line never appeared.
-    expect(svc.stopIsGraceful("win32")).toBe(false);
+    expect(svc.signalDrains("win32")).toBe(false);
   });
 
   it("is true where SIGTERM reaches the worker's own handler", () => {
-    expect(svc.stopIsGraceful("linux")).toBe(true);
-    expect(svc.stopIsGraceful("darwin")).toBe(true);
+    expect(svc.signalDrains("linux")).toBe(true);
+    expect(svc.signalDrains("darwin")).toBe(true);
   });
 });
 

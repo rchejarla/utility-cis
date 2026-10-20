@@ -70,7 +70,7 @@ function workerProcess(over: Record<string, unknown> = {}) {
     host: null,
     startedAt: null,
     queues: null,
-    stopDrains: true,
+    stopping: false,
     ...over,
   };
 }
@@ -730,22 +730,58 @@ describe("the platform queue page", () => {
     expect(screen.queryByRole("button", { name: /start worker/i })).not.toBeInTheDocument();
   });
 
-  it("warns that a stop will not drain where the signal cannot be handled", async () => {
+  it("says a stop lets the worker finish what it is holding", async () => {
     /*
-     * Verified on Windows: `process.kill(pid, "SIGTERM")` terminates the
-     * worker outright and its drain handler never runs, so an in-flight
-     * job loses its lock and is retried. Worth saying before the click,
-     * not after.
+     * It does so on both platforms now, which is the point of asking
+     * over the worker's own HTTP server rather than signalling: Windows
+     * has no POSIX signals, and a signal there is an unconditional
+     * termination that skips the 60s drain entirely.
      */
     get.mockResolvedValue(
+      report({ workerProcess: workerProcess({ running: true, pid: 4242, host: "dev-box" }) }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findByText(/finish what it is holding/i)).toBeInTheDocument();
+  });
+
+  it("reports a drain in progress rather than claiming it has stopped", async () => {
+    // A drain runs up to 60s per worker. "Stopped" while the process is
+    // still in the process table is the page contradicting the machine.
+    get.mockResolvedValue(
       report({
-        workerProcess: workerProcess({ running: true, pid: 4242, host: "dev-box", stopDrains: false }),
+        workerProcess: workerProcess({
+          running: true,
+          stopping: true,
+          pid: 4242,
+          host: "dev-box",
+        }),
       }),
     );
 
     render(<PlatformQueuesPage />);
 
-    expect(await screen.findByText(/will not drain/i)).toBeInTheDocument();
+    expect(await screen.findByText(/draining/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /stop worker/i })).not.toBeInTheDocument();
+  });
+
+  it("says plainly when a worker had to be cut off instead of drained", async () => {
+    // The fallback: a wedged worker that no longer answers its own HTTP
+    // server gets a signal, which on Windows is abrupt.
+    get.mockResolvedValue(
+      report({ workerProcess: workerProcess({ running: true, pid: 4242, host: "dev-box" }) }),
+    );
+    post.mockResolvedValue({
+      ...workerProcess(),
+      method: "signal",
+      drained: false,
+    });
+
+    render(<PlatformQueuesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /stop worker/i }));
+
+    expect(await screen.findByText(/could not be reached/i)).toBeInTheDocument();
   });
 
   it("says a worker is attached that this console did not start", async () => {
