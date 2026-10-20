@@ -274,3 +274,101 @@ describe("GET /api/v1/rate-schedules", () => {
     expect(row._count.components).toBe(0);
   });
 });
+
+/**
+ * Filtering by lifecycle, which is what the list offers now.
+ *
+ * The old `active` filter asked the database about expiration dates
+ * while the screen said Active/Inactive, and its "false" could not
+ * arrive as false at all. These cases pin the three states against real
+ * rows — including the one that made the boolean wrong in principle: a
+ * superseded version is still published, so "published" must not return
+ * it.
+ */
+describe("GET /api/v1/rate-schedules?status=", () => {
+  async function rows(status: string) {
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/rate-schedules?status=${status}`,
+      headers: headers(),
+    });
+    expect(res.statusCode).toBe(200);
+    return JSON.parse(res.body).data as { id: string; code: string }[];
+  }
+
+  /** A draft, a published one, and a superseded v1 with its v2. */
+  async function threeStates() {
+    const draft = await createDraftSchedule("ST-DRAFT", "Still Drafting");
+
+    const live = await createDraftSchedule("ST-LIVE", "Live Tariff");
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/rate-schedules/${live.id}/publish`,
+      headers: headers(),
+    });
+
+    const old = await createDraftSchedule("ST-OLD", "Superseded Tariff");
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/rate-schedules/${old.id}/publish`,
+      headers: headers(),
+    });
+    const revised = await app.inject({
+      method: "POST",
+      url: `/api/v1/rate-schedules/${old.id}/revise`,
+      headers: headers(),
+      payload: { effectiveDate: "2027-01-01" },
+    });
+    expect(revised.statusCode).toBe(201);
+
+    return { draft, live, old, v2: JSON.parse(revised.body) };
+  }
+
+  it("returns only the drafts", async () => {
+    const { draft, v2 } = await threeStates();
+
+    const ids = (await rows("draft")).map((r) => r.id);
+
+    // The revision is a draft too: revise creates v2 unpublished.
+    expect(ids).toContain(draft.id);
+    expect(ids).toContain(v2.id);
+    expect(ids).toHaveLength(2);
+  });
+
+  it("returns the live published ones and not a superseded version", async () => {
+    const { live, old } = await threeStates();
+
+    const ids = (await rows("published")).map((r) => r.id);
+
+    expect(ids).toEqual([live.id]);
+    expect(ids).not.toContain(old.id);
+  });
+
+  it("returns the superseded version when asked for it", async () => {
+    const { old } = await threeStates();
+
+    expect((await rows("superseded")).map((r) => r.id)).toEqual([old.id]);
+  });
+
+  it("refuses a state it cannot honour", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/rate-schedules?status=retired",
+      headers: headers(),
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("refuses the old active parameter rather than ignoring it", async () => {
+    // `.strict()`: a bookmarked `?active=false` fails loudly instead of
+    // quietly returning everything, which is what it did before.
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/rate-schedules?active=false",
+      headers: headers(),
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+});

@@ -51,8 +51,23 @@ export async function listRateSchedules(utilityId: string, query: RateScheduleQu
   const where: Record<string, unknown> = { utilityId };
 
   if (query.commodityId) where.commodityId = query.commodityId;
-  if (query.active === true) where.expirationDate = null;
-  if (query.active === false) where.expirationDate = { not: null };
+
+  /*
+   * The same three states the badge derives, in the same order:
+   * supersession first, because a replaced version still carries its
+   * `publishedAt` and would otherwise answer to "published". Mutually
+   * exclusive, so the filter and the Status column cannot disagree about
+   * a row.
+   */
+  if (query.status === "draft") {
+    where.publishedAt = null;
+    where.supersededById = null;
+  } else if (query.status === "published") {
+    where.publishedAt = { not: null };
+    where.supersededById = null;
+  } else if (query.status === "superseded") {
+    where.supersededById = { not: null };
+  }
 
   return paginatedTenantList(prisma.rateSchedule, where, query, { include: fullInclude });
 }

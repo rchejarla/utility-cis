@@ -26,9 +26,20 @@ interface RateSchedule {
   _count?: { components: number };
 }
 
-const ACTIVE_OPTIONS = [
-  { label: "Active", value: "true" },
-  { label: "Inactive", value: "false" },
+/**
+ * The lifecycle, which is what this list is read for.
+ *
+ * It replaced Active/Inactive, which was broken in both halves: the API
+ * translated `active` to "has no expiration date" rather than anything
+ * the label claimed, and the value a select box sends for Inactive —
+ * the string "false" — parsed as `true` through `z.coerce.boolean()`, so
+ * both options returned the same rows. These three are the states the
+ * Status column shows, by the same definitions.
+ */
+const STATUS_OPTIONS = [
+  { label: "Draft", value: "draft" },
+  { label: "Published", value: "published" },
+  { label: "Superseded", value: "superseded" },
 ];
 
 const columns: Column<RateSchedule>[] = [
@@ -136,7 +147,7 @@ export default function RateSchedulesPage() {
           optionsEndpoint: "/api/v1/commodities",
           mapOption: (c) => ({ label: String(c.name), value: String(c.id) }),
         },
-        { key: "active", label: "Active", options: ACTIVE_OPTIONS },
+        { key: "status", label: "Status", options: STATUS_OPTIONS },
       ]}
     />
   );

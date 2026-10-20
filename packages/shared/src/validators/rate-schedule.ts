@@ -46,7 +46,20 @@ export const rateScheduleQuerySchema = z.object({
   sort: z.enum(rateScheduleSortFields).default("effectiveDate"),
   order: z.enum(["asc", "desc"]).default("desc"),
   commodityId: z.string().uuid().optional(),
-  active: z.coerce.boolean().optional(),
+  /**
+   * The lifecycle, which is what the list shows and what decides
+   * whether a schedule can price a bill.
+   *
+   * This replaced `active: z.coerce.boolean()`, which was wrong twice
+   * over: the service translated it to "has no expiration date", so the
+   * label promised something the query never asked, and
+   * `z.coerce.boolean()` is `Boolean(input)` — the string "false" that a
+   * select box sends parses as **true**, so the Inactive option returned
+   * the active set. The states are mutually exclusive and defined
+   * exactly as the badge derives them, supersession first, so the filter
+   * and the column cannot disagree about a row.
+   */
+  status: z.enum(["draft", "published", "superseded"]).optional(),
 }).strict();
 
 export type CreateRateScheduleInput = z.infer<typeof createRateScheduleSchema>;
