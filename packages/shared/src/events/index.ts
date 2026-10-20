@@ -22,6 +22,18 @@ export const EVENT_TYPES = {
   UTILITY_SUSPENDED: "utility.suspended",
   UTILITY_REACTIVATED: "utility.reactivated",
   UTILITY_MODULE_CHANGED: "utility_module.updated",
+  /**
+   * A platform operator pushed a job along: retried a failed one,
+   * promoted a delayed one, or replayed a dead-lettered one.
+   *
+   * Recorded against the entity the job acts on — a BillingRun or an
+   * ImportBatch — because `audit_log.entity_id` is a uuid column and a
+   * BullMQ job id is "80" or "repeat:audit-retention-cron:…". Which also
+   * means the queues whose payloads name no such entity cannot be
+   * audited at all; the API says so per action rather than implying
+   * every one was recorded.
+   */
+  QUEUE_JOB_PUSHED: "queue_job.pushed",
   ROLE_CREATED: "role.created",
   ROLE_UPDATED: "role.updated",
   ROLE_DELETED: "role.deleted",

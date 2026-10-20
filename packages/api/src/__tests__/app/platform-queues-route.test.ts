@@ -34,6 +34,12 @@ vi.mock("../../services/queue-health.service.js", () => ({
   getQueueHealth: (...args: unknown[]) => getQueueHealth(...(args as [])),
 }));
 
+const actOnQueueJob = vi.fn();
+vi.mock("../../services/queue-actions.service.js", () => ({
+  QUEUE_ACTIONS: ["retry", "promote", "replay"],
+  actOnQueueJob: (...args: unknown[]) => actOnQueueJob(...(args as [])),
+}));
+
 const getQueueJobs = vi.fn();
 vi.mock("../../services/queue-jobs.service.js", () => ({
   QUEUE_JOB_STATES: ["waiting", "active", "delayed", "failed", "dlq"],
@@ -197,5 +203,83 @@ describe("GET /api/v1/platform/queues/:name/jobs", () => {
     });
 
     expect(res.statusCode).toBe(404);
+  });
+});
+
+/**
+ * The verbs, which is the one part of this that changes anything.
+ *
+ * A POST, so it carries the operator's bearer token exactly like every
+ * other call the console makes — no cookie, and therefore no CSRF
+ * question for a control that re-runs work. The actor goes through to
+ * the service, because the point of moving these out of Bull Board is
+ * that the row says who.
+ */
+describe("POST /api/v1/platform/queues/:name/jobs/:id/:action", () => {
+  it("retries a job as the operator who asked", async () => {
+    actOnQueueJob.mockResolvedValueOnce({
+      queue: "billing-runs",
+      jobId: "80",
+      action: "retry",
+      audited: true,
+      auditedAs: { entityType: "BillingRun", entityId: "run-1" },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/platform/queues/billing-runs/jobs/80/retry",
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).audited).toBe(true);
+    expect(actOnQueueJob).toHaveBeenCalledWith(
+      "billing-runs",
+      "80",
+      "retry",
+      expect.objectContaining({ id: "test-platform-001", source: "platform:test-platform-001" }),
+    );
+  });
+
+  it("refuses a tenant admin", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/platform/queues/billing-runs/jobs/80/retry",
+      headers: { authorization: `Bearer ${createTestToken()}` },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(actOnQueueJob).not.toHaveBeenCalled();
+  });
+
+  it("refuses a verb it does not have", async () => {
+    // Pause, drain and clean are deliberately absent, and an unknown
+    // one must not reach the service as a string.
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/platform/queues/billing-runs/jobs/80/drain",
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(actOnQueueJob).not.toHaveBeenCalled();
+  });
+
+  it("passes the service's refusal through with its own status", async () => {
+    actOnQueueJob.mockRejectedValueOnce(
+      Object.assign(new Error("Job 80 is waiting; retry applies to a job that is failed"), {
+        code: "WRONG_STATE",
+        statusCode: 409,
+      }),
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/platform/queues/billing-runs/jobs/80/retry",
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res.body).error.message).toMatch(/retry applies/);
   });
 });

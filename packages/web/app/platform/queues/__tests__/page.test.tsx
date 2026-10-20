@@ -18,6 +18,30 @@ import PlatformQueuesPage from "../page";
  */
 
 const get = apiClient.get as unknown as ReturnType<typeof vi.fn>;
+const post = apiClient.post as unknown as ReturnType<typeof vi.fn>;
+
+/** One job in the given state, as the drill-down endpoint returns it. */
+function jobsResult(state: string, over: Record<string, unknown> = {}) {
+  return {
+    queue: "billing-runs",
+    state,
+    reachable: true,
+    jobs: [
+      {
+        jobId: "7",
+        jobName: "process-billing-run",
+        utilityId: "u-1",
+        utilityName: "City of Testville",
+        enqueuedAt: "2026-10-20T09:00:00.000Z",
+        runsAt: null,
+        repeats: null,
+        attemptsMade: 0,
+        reason: null,
+        ...over,
+      },
+    ],
+  };
+}
 
 function queue(over: Record<string, unknown> = {}) {
   return {
@@ -48,6 +72,7 @@ beforeEach(() => {
    * unrelated.
    */
   get.mockReset();
+  post.mockReset();
 });
 
 describe("the platform queue page", () => {
@@ -274,6 +299,91 @@ describe("the platform queue page", () => {
     await userEvent.click(screen.getByRole("button", { name: /1 delayed/i }));
 
     expect(await screen.findByText(/overdue/i)).toBeInTheDocument();
+  });
+
+  it("offers Retry on a failed job, and records what came back", async () => {
+    get.mockResolvedValueOnce(
+      report({
+        queues: [queue({ counts: { waiting: 0, active: 0, delayed: 0, failed: 1 } })],
+        totals: { waiting: 0, active: 0, failed: 1, dlq: 0 },
+      }),
+    ).mockResolvedValueOnce(jobsResult("failed", { jobId: "80" }));
+    post.mockResolvedValue({
+      queue: "billing-runs",
+      jobId: "80",
+      action: "retry",
+      audited: true,
+      auditedAs: { entityType: "BillingRun", entityId: "run-1" },
+    });
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText("billing-runs");
+    await userEvent.click(screen.getByRole("button", { name: /1 failed/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^retry$/i }));
+
+    expect(post).toHaveBeenCalledWith(
+      "/api/v1/platform/queues/billing-runs/jobs/80/retry",
+      {},
+    );
+    expect(await screen.findByText(/retried/i)).toBeInTheDocument();
+  });
+
+  it("says when an action happened but could not be recorded", async () => {
+    // A sweep names no tenant, and `audit_log` needs one. Telling the
+    // operator beats implying every action is on the record.
+    get.mockResolvedValueOnce(
+      report({
+        queues: [queue({ name: "audit-retention", counts: { waiting: 0, active: 0, delayed: 1, failed: 0 } })],
+        totals: { waiting: 0, active: 0, failed: 0, dlq: 0 },
+      }),
+    ).mockResolvedValueOnce(jobsResult("delayed", { jobId: "repeat:1", runsAt: "2020-01-01T04:00:00.000Z" }));
+    post.mockResolvedValue({
+      queue: "audit-retention",
+      jobId: "repeat:1",
+      action: "promote",
+      audited: false,
+    });
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText("audit-retention");
+    await userEvent.click(screen.getByRole("button", { name: /1 delayed/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /run now/i }));
+
+    expect(await screen.findByText(/not recorded/i)).toBeInTheDocument();
+  });
+
+  it("shows the refusal when a job has moved on", async () => {
+    get.mockResolvedValueOnce(
+      report({
+        queues: [queue({ counts: { waiting: 0, active: 0, delayed: 0, failed: 1 } })],
+        totals: { waiting: 0, active: 0, failed: 1, dlq: 0 },
+      }),
+    ).mockResolvedValueOnce(jobsResult("failed", { jobId: "80" }));
+    post.mockRejectedValue(new Error("API error 409: Job 80 is waiting; retry applies to a job that is failed"));
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText("billing-runs");
+    await userEvent.click(screen.getByRole("button", { name: /1 failed/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^retry$/i }));
+
+    expect(await screen.findByText(/retry applies/i)).toBeInTheDocument();
+  });
+
+  it("offers no verb on a waiting job, which needs no pushing", async () => {
+    get.mockResolvedValueOnce(
+      report({
+        queues: [queue({ counts: { waiting: 1, active: 0, delayed: 0, failed: 0 } })],
+        totals: { waiting: 1, active: 0, failed: 0, dlq: 0 },
+      }),
+    ).mockResolvedValueOnce(jobsResult("waiting", { jobId: "80" }));
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText("billing-runs");
+    await userEvent.click(screen.getByRole("button", { name: /1 waiting/i }));
+    await screen.findByText(/City of Testville/);
+
+    expect(screen.queryByRole("button", { name: /^retry$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /run now/i })).not.toBeInTheDocument();
   });
 
   it("does not make a count of zero clickable", async () => {

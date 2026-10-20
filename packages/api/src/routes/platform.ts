@@ -15,6 +15,7 @@ import {
 import { getUtilityReadiness } from "../services/utility-readiness.service.js";
 import { getQueueHealth } from "../services/queue-health.service.js";
 import { getQueueJobs, QUEUE_JOB_STATES } from "../services/queue-jobs.service.js";
+import { actOnQueueJob, QUEUE_ACTIONS } from "../services/queue-actions.service.js";
 import { getPlatformActor } from "../services/rbac.service.js";
 import {
   listPlatformUsers,
@@ -172,6 +173,34 @@ export async function platformRoutes(app: FastifyInstance) {
         .parse(request.query);
 
       return reply.send(await getQueueJobs(name, state, limit));
+    },
+  );
+
+  /*
+   * The three verbs Bull Board holds and cannot be reached to use.
+   *
+   * A POST carrying the operator's bearer token, like every other call
+   * this console makes — which is the whole reason they are here rather
+   * than behind a cookie that would let any page re-run work. The action
+   * is validated against a closed list: pause, drain and clean are
+   * deliberately absent, each being a decision about a queue rather than
+   * about the job an operator is looking at.
+   */
+  app.post(
+    "/api/v1/platform/queues/:name/jobs/:id/:action",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const { name, id, action } = z
+        .object({
+          name: z.string().min(1).max(64),
+          // Not a uuid: BullMQ ids are "80" and
+          // "repeat:audit-retention-cron:1792296000000".
+          id: z.string().min(1).max(200),
+          action: z.enum(QUEUE_ACTIONS),
+        })
+        .parse(request.params);
+
+      return reply.send(await actOnQueueJob(name, id, action, actorOf(request)));
     },
   );
 

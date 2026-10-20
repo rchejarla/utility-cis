@@ -145,6 +145,40 @@ function Count({
   );
 }
 
+/** One job-sized action. */
+function Verb({
+  label,
+  busy,
+  onClick,
+}: {
+  label: string;
+  busy: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      style={{
+        padding: "3px 10px",
+        borderRadius: "var(--radius)",
+        border: "1px solid var(--border)",
+        background: "transparent",
+        color: "var(--text-primary)",
+        fontFamily: "inherit",
+        fontSize: 11,
+        fontWeight: 500,
+        cursor: busy ? "not-allowed" : "pointer",
+        opacity: busy ? 0.6 : 1,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {busy ? "…" : label}
+    </button>
+  );
+}
+
 export default function PlatformQueuesPage() {
   const [report, setReport] = useState<QueueHealthReport | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -152,6 +186,9 @@ export default function PlatformQueuesPage() {
   const [open, setOpen] = useState<{ queue: string; state: JobState } | null>(null);
   const [jobs, setJobs] = useState<QueueJobsResult | null>(null);
   const [jobsError, setJobsError] = useState<string | null>(null);
+  /** Per job: what the last verb used on it came back with. */
+  const [outcome, setOutcome] = useState<Record<string, string>>({});
+  const [acting, setActing] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -186,6 +223,41 @@ export default function PlatformQueuesPage() {
       .catch((err) =>
         setJobsError(err instanceof Error ? err.message : "Failed to load jobs"),
       );
+  }
+
+  /**
+   * The verb, and what it reports back.
+   *
+   * The counts behind this are a snapshot, so a job can move between the
+   * list being drawn and the button being pressed — a 409 saying so is
+   * the normal case, not an error worth a toast. It is shown on the row
+   * it belongs to.
+   */
+  async function act(queue: string, job: QueueJob, action: "retry" | "promote" | "replay") {
+    const key = `${queue}:${job.jobId}`;
+    setActing(key);
+    setOutcome((o) => ({ ...o, [key]: "" }));
+    try {
+      const res = await apiClient.post<{ audited: boolean }>(
+        `/api/v1/platform/queues/${queue}/jobs/${job.jobId}/${action}`,
+        {},
+      );
+      const done = action === "retry" ? "Retried" : action === "promote" ? "Promoted" : "Replayed";
+      setOutcome((o) => ({
+        ...o,
+        // The audit half is said out loud: a sweep names no tenant, and
+        // `audit_log` needs one, so some of these actions genuinely
+        // cannot be put on the record.
+        [key]: res.audited ? `${done} — recorded` : `${done} — not recorded`,
+      }));
+    } catch (err) {
+      setOutcome((o) => ({
+        ...o,
+        [key]: err instanceof Error ? err.message : "Failed",
+      }));
+    } finally {
+      setActing(null);
+    }
   }
 
   const clear = report?.reachable && report.totals.failed === 0 && report.totals.dlq === 0;
@@ -390,6 +462,48 @@ export default function PlatformQueuesPage() {
                       {j.reason && (
                         <span style={{ color: "var(--text-secondary)" }}>{j.reason}</span>
                       )}
+
+                      {/*
+                       * The verbs, on the job they apply to. Nothing for
+                       * a waiting job: it needs no pushing, and a button
+                       * that only ever answers 409 is noise.
+                       */}
+                      <span style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+                        {outcome[`${q.name}:${j.jobId}`] && (
+                          <span
+                            style={{
+                              color: outcome[`${q.name}:${j.jobId}`].includes("not recorded")
+                                ? "var(--warning)"
+                                : outcome[`${q.name}:${j.jobId}`].match(/^(Retried|Promoted|Replayed)/)
+                                  ? "var(--success)"
+                                  : "var(--danger)",
+                            }}
+                          >
+                            {outcome[`${q.name}:${j.jobId}`]}
+                          </span>
+                        )}
+                        {open.state === "failed" && (
+                          <Verb
+                            label="Retry"
+                            busy={acting === `${q.name}:${j.jobId}`}
+                            onClick={() => act(q.name, j, "retry")}
+                          />
+                        )}
+                        {open.state === "delayed" && (
+                          <Verb
+                            label="Run now"
+                            busy={acting === `${q.name}:${j.jobId}`}
+                            onClick={() => act(q.name, j, "promote")}
+                          />
+                        )}
+                        {open.state === "dlq" && (
+                          <Verb
+                            label="Replay"
+                            busy={acting === `${q.name}:${j.jobId}`}
+                            onClick={() => act(q.name, j, "replay")}
+                          />
+                        )}
+                      </span>
                     </div>
                   ))}
               </div>
