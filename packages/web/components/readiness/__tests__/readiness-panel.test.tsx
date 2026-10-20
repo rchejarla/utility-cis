@@ -148,6 +148,36 @@ describe("ReadinessPanel with guidance", () => {
     expect(screen.queryByRole("link", { name: /add a commodity/i })).not.toBeInTheDocument();
   });
 
+  it("puts the action outside the sentence rather than trailing it", async () => {
+    // It used to be the last few words of the grey "what this blocks"
+    // line, which reads as punctuation on a paragraph instead of the
+    // thing to do about it.
+    render(<ReadinessPanel readiness={panel([check()])} guidance={TENANT_FIXES} />);
+    await userEvent.click(toggle());
+
+    const blocks = screen.getByText("Nothing can be metered, agreed or priced.");
+    expect(blocks).not.toContainElement(screen.getByRole("link", { name: /add a commodity/i }));
+  });
+
+  it("gives one action per outstanding check and none to the rest", async () => {
+    // The mixed case, which is the normal one: a part-configured tenant.
+    // Actions are per row, so the count has to track the unmet checks
+    // rather than the list.
+    render(
+      <ReadinessPanel
+        readiness={panel([
+          check(),
+          check({ key: "billingCycle", label: "At least one billing cycle" }),
+          check({ key: "issuerIdentity", label: "Issuer identity", ok: true }),
+        ])}
+        guidance={TENANT_FIXES}
+      />,
+    );
+    await userEvent.click(toggle());
+
+    expect(screen.getAllByRole("link")).toHaveLength(2);
+  });
+
   it("shows no link at all without guidance, which is the operator's view", async () => {
     render(<ReadinessPanel readiness={panel([check()])} />);
     await userEvent.click(toggle());

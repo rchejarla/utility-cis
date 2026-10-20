@@ -121,43 +121,68 @@ export function ReadinessPanel({
             style={{
               padding: c.ok ? "8px 14px" : "10px 14px",
               borderTop: "1px solid var(--border-subtle)",
-              display: "grid",
-              gap: 2,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
             }}
           >
-            <div
-              style={{
-                fontSize: 13,
-                color: c.ok ? "var(--text-secondary)" : "var(--text-primary)",
-              }}
-            >
-              <span
-                aria-hidden
-                style={{ color: c.ok ? "var(--success)" : "var(--warning)", marginRight: 8 }}
+            <div style={{ display: "grid", gap: 2, minWidth: 220, flex: 1 }}>
+              <div
+                style={{
+                  fontSize: 13,
+                  color: c.ok ? "var(--text-secondary)" : "var(--text-primary)",
+                }}
               >
-                {c.ok ? "✓" : "✕"}
-              </span>
-              {c.label}
-              <span style={{ color: "var(--text-muted)" }}> — {c.detail}</span>
-            </div>
-            {/* Why it matters, which is the half an operator cannot infer
-                from the label. Only for what is missing: a met check
-                needs no argument. */}
-            {!c.ok && (
-              <div style={{ fontSize: 12, color: "var(--text-secondary)", paddingLeft: 20 }}>
-                {c.blocks}
-                {guidance?.[c.key] && (
-                  <>
-                    {" "}
-                    <Link
-                      href={guidance[c.key].href}
-                      style={{ color: "var(--accent-primary)", textDecoration: "none" }}
-                    >
-                      {guidance[c.key].action} →
-                    </Link>
-                  </>
-                )}
+                <span
+                  aria-hidden
+                  style={{ color: c.ok ? "var(--success)" : "var(--warning)", marginRight: 8 }}
+                >
+                  {c.ok ? "✓" : "✕"}
+                </span>
+                {c.label}
+                <span style={{ color: "var(--text-muted)" }}> — {c.detail}</span>
               </div>
+              {/* Why it matters, which is the half nobody can infer from
+                  the label. Only for what is missing: a met check needs
+                  no argument. */}
+              {!c.ok && (
+                <div style={{ fontSize: 12, color: "var(--text-secondary)", paddingLeft: 20 }}>
+                  {c.blocks}
+                </div>
+              )}
+            </div>
+
+            {/*
+             * The action, as its own control at the end of the row.
+             *
+             * It used to trail the sentence above as an inline link,
+             * which read as part of a grey paragraph rather than as the
+             * thing to do about it — a to-do list whose actions are
+             * punctuation. Still an anchor, not a button, so it can be
+             * opened in a new tab; `flexShrink: 0` and `nowrap` keep it
+             * whole, and the row wraps under it on a narrow screen
+             * instead of squeezing it.
+             */}
+            {!c.ok && guidance?.[c.key] && (
+              <Link
+                href={guidance[c.key].href}
+                style={{
+                  flexShrink: 0,
+                  whiteSpace: "nowrap",
+                  padding: "6px 12px",
+                  borderRadius: "var(--radius)",
+                  border: "1px solid var(--accent-primary)",
+                  color: "var(--accent-primary)",
+                  background: "transparent",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  textDecoration: "none",
+                }}
+              >
+                {guidance[c.key].action} →
+              </Link>
             )}
           </div>
         ))}
