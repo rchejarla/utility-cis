@@ -9,7 +9,8 @@ import {
 import { utilityIdOf, utilityNames, withQueueTimeout } from "../lib/queue-inspect.js";
 
 /**
- * Reports what each queue is doing and what has recently failed.
+ * Reports what is in each queue, who is attached to work it, and what
+ * has recently failed.
  *
  * Bull Board already lists every job and is the right tool for the deep
  * verbs — read a payload, retry, promote. What it cannot answer is the
@@ -18,9 +19,12 @@ import { utilityIdOf, utilityNames, withQueueTimeout } from "../lib/queue-inspec
  * increments `dlqDepthGauge` and writes a log line, so nobody learns of
  * it unless they think to go looking.
  *
- * Reads only. Every verb that changes a job stays in Bull Board, where
- * it is one operator acting deliberately on one job rather than a button
- * on a dashboard.
+ * **Worker attachment is read with the counts, not beside them.** The
+ * counts alone cannot answer "why is nothing moving": workers are a
+ * separate process from the API (`src/worker.ts`, started by
+ * `pnpm dev:worker` — `start_dev.bat` deliberately does not), so an
+ * unattended queue fills up and sits, and its counts look identical to a
+ * healthy queue's. Same page, same question, so the same call.
  */
 
 /** Three per queue: enough to see a pattern, short enough to scan. */
@@ -45,6 +49,20 @@ export interface QueueHealth {
   counts: { waiting: number; active: number; delayed: number; failed: number };
   /** Jobs parked in `dlq-<name>` awaiting manual replay. */
   dlqDepth: number;
+  /**
+   * Worker processes attached to this queue, or null where Redis would
+   * not say. Zero means nothing in it will run.
+   */
+  workers: number | null;
+  /**
+   * How long the longest-attached worker's connection has been open, in
+   * seconds — null when none is attached. A value that keeps resetting
+   * across reloads is a worker restarting, or a Redis that keeps
+   * dropping it; a single long-lived number is a worker that has been up.
+   */
+  workerAgeSeconds: number | null;
+  /** A paused queue processes nothing, however many workers are attached. */
+  paused: boolean;
   recentFailures: QueueFailure[];
 }
 
@@ -81,11 +99,66 @@ function depthOf(counts: Record<string, number>): number {
   );
 }
 
+/** One row of Redis's `CLIENT LIST`, as BullMQ hands it over. */
+type RawWorker = { addr?: string; age?: string };
+
+type Attachment = Pick<QueueHealth, "workers" | "workerAgeSeconds" | "paused">;
+
+const UNKNOWN_ATTACHMENT: Attachment = {
+  workers: null,
+  workerAgeSeconds: null,
+  paused: false,
+};
+
+/**
+ * Who is attached to this queue, and whether it is accepting work.
+ *
+ * `getWorkers()` rather than a hand-rolled `CLIENT LIST` scan, because
+ * the name to match on is not the queue's: BullMQ sets a worker's
+ * connection name to `bull:<base64 of the queue name>` — verified
+ * against a running worker, which showed up as
+ * `bull:ZGVsaW5xdWVuY3ktdGVuYW50`. Matching the plain name would have
+ * found nothing, forever, and read as "no workers".
+ *
+ * Tolerant on its own, so an unlistable Redis costs the attachment and
+ * not the whole report: a managed Redis (GCP Memorystore) refuses
+ * CLIENT LIST, and BullMQ answers that either by throwing or by
+ * returning one entry that carries a message and no address. Counting
+ * that array would report a phantom worker, so an entry without an
+ * `addr` means "not known".
+ */
+async function attachmentOf(name: QueueName): Promise<Attachment> {
+  try {
+    const queue = getQueue(name);
+    const [clients, paused] = await Promise.all([
+      queue.getWorkers() as Promise<RawWorker[]>,
+      queue.isPaused(),
+    ]);
+
+    if (clients.some((client) => !client.addr)) {
+      return { ...UNKNOWN_ATTACHMENT, paused };
+    }
+
+    const ages = clients
+      .map((client) => Number(client.age))
+      .filter((age) => Number.isFinite(age));
+
+    return {
+      workers: clients.length,
+      workerAgeSeconds: ages.length > 0 ? Math.max(...ages) : null,
+      paused,
+    };
+  } catch (err) {
+    logger.warn({ err, queue: name }, "could not read queue worker attachment");
+    return UNKNOWN_ATTACHMENT;
+  }
+}
+
 async function readQueue(name: QueueName): Promise<QueueHealth> {
   const queue = getQueue(name);
   const dlq = getDlqQueue(name);
 
-  const [counts, dlqCounts, failedJobs] = await Promise.all([
+  const [counts, dlqCounts, failedJobs, attachment] = await Promise.all([
     queue.getJobCounts(),
     dlq.getJobCounts(),
     /*
@@ -95,6 +168,7 @@ async function readQueue(name: QueueName): Promise<QueueHealth> {
      * first.
      */
     queue.getFailed(0, 19) as Promise<RawJob[]>,
+    attachmentOf(name),
   ]);
 
   const ordered = [...failedJobs]
@@ -110,6 +184,7 @@ async function readQueue(name: QueueName): Promise<QueueHealth> {
       failed: counts.failed ?? 0,
     },
     dlqDepth: depthOf(dlqCounts as Record<string, number>),
+    ...attachment,
     recentFailures: ordered.map((job) => ({
       jobId: job.id ?? null,
       jobName: job.name ?? dlqNameFor(name),

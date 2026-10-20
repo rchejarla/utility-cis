@@ -21,8 +21,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const counts: Record<string, Record<string, number>> = {};
 const failed: Record<string, unknown[]> = {};
+/**
+ * What `CLIENT LIST` reports for each queue, keyed by queue name. A
+ * worker entry is a Redis client row; `age` arrives as a string, as
+ * Redis prints it.
+ */
+const workers: Record<string, { addr?: string; age?: string }[]> = {};
+const pausedQueues = new Set<string>();
 /** Set to make a queue call hang forever, as a down Redis does. */
 let hangingQueue: string | null = null;
+/** Set to make the worker listing throw, as a Redis without the command does. */
+let workerListFails = false;
 
 const queueFor = (name: string) => ({
   getJobCounts: vi.fn(async () => {
@@ -30,6 +39,11 @@ const queueFor = (name: string) => ({
     return counts[name] ?? { waiting: 0, active: 0, delayed: 0, failed: 0, completed: 0 };
   }),
   getFailed: vi.fn(async () => failed[name] ?? []),
+  getWorkers: vi.fn(async () => {
+    if (workerListFails) throw new Error("ERR unknown command 'client'");
+    return workers[name] ?? [];
+  }),
+  isPaused: vi.fn(async () => pausedQueues.has(name)),
 });
 
 vi.mock("../../lib/queues.js", () => ({
@@ -52,7 +66,10 @@ beforeEach(async () => {
   vi.clearAllMocks();
   for (const key of Object.keys(counts)) delete counts[key];
   for (const key of Object.keys(failed)) delete failed[key];
+  for (const key of Object.keys(workers)) delete workers[key];
+  pausedQueues.clear();
   hangingQueue = null;
+  workerListFails = false;
   svc = await import("../../services/queue-health.service.js");
   prisma = (await import("../../lib/prisma.js")).prisma;
 });
@@ -148,6 +165,73 @@ describe("getQueueHealth", () => {
 
     expect(report.reachable).toBe(false);
     expect(report.queues).toEqual([]);
+  });
+
+  it("counts the worker processes attached to each queue", async () => {
+    /*
+     * The counts alone cannot answer "why is nothing moving". Workers are
+     * a separate process from the API — `start_dev.bat` says so out loud
+     * and does not start them — so zero attached is the ordinary
+     * development state and the reason a queue fills up and sits.
+     */
+    workers["billing-runs"] = [
+      { addr: "172.24.0.1:42484", age: "900" },
+      { addr: "172.24.0.1:42488", age: "30" },
+    ];
+
+    const report = await svc.getQueueHealth();
+
+    expect(report.queues.find((q) => q.name === "billing-runs")).toMatchObject({
+      workers: 2,
+      // The longest-attached one: a number that keeps resetting on reload
+      // is a worker restarting, which one attached-for-30s row hides.
+      workerAgeSeconds: 900,
+    });
+    expect(report.queues.find((q) => q.name === "imports")).toMatchObject({
+      workers: 0,
+      workerAgeSeconds: null,
+    });
+  });
+
+  it("reports a paused queue, which processes nothing however many workers are attached", async () => {
+    // Nothing in this codebase pauses a queue; Bull Board's buttons and
+    // redis-cli do. An operator looking at "2 workers, 80 waiting,
+    // nothing happening" has no other way to find out.
+    workers["imports"] = [{ addr: "172.24.0.1:1", age: "10" }];
+    pausedQueues.add("imports");
+
+    const report = await svc.getQueueHealth();
+
+    expect(report.queues.find((q) => q.name === "imports")!.paused).toBe(true);
+    expect(report.queues.find((q) => q.name === "billing-runs")!.paused).toBe(false);
+  });
+
+  it("says worker attachment is unknown rather than zero when Redis will not list clients", async () => {
+    /*
+     * Managed Redis (GCP Memorystore) refuses CLIENT LIST. BullMQ
+     * swallows that and returns a single entry carrying only a message,
+     * so counting the array would report one phantom worker; a thrown
+     * error would otherwise sink the whole report. Both must come back as
+     * "not known" — which the page says, instead of "no workers".
+     */
+    workerListFails = true;
+
+    const report = await svc.getQueueHealth();
+
+    expect(report.reachable).toBe(true);
+    expect(report.queues.find((q) => q.name === "billing-runs")).toMatchObject({
+      workers: null,
+      workerAgeSeconds: null,
+    });
+  });
+
+  it("does not count a client-list refusal notice as an attached worker", async () => {
+    // BullMQ's own fallback shape: one entry, a message, no address.
+    workers["billing-runs"] = [{ age: undefined } as never];
+
+    const report = await svc.getQueueHealth();
+
+    expect(report.queues.find((q) => q.name === "billing-runs")!.workers).toBeNull();
   });
 
   it("says unreachable when a queue call fails outright", async () => {

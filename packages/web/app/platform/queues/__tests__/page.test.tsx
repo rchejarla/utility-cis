@@ -48,6 +48,12 @@ function queue(over: Record<string, unknown> = {}) {
     name: "billing-runs",
     counts: { waiting: 0, active: 0, delayed: 0, failed: 0 },
     dlqDepth: 0,
+    // One worker, attached a while ago: the healthy default, so a test
+    // that says nothing about workers is not accidentally testing an
+    // unattended queue.
+    workers: 1,
+    workerAgeSeconds: 900,
+    paused: false,
     recentFailures: [],
     ...over,
   };
@@ -384,6 +390,173 @@ describe("the platform queue page", () => {
 
     expect(screen.queryByRole("button", { name: /^retry$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /run now/i })).not.toBeInTheDocument();
+  });
+
+  it("refuses to call it all clear when no worker is attached to anything", async () => {
+    /*
+     * The state of the dev stack while this was written: 102 jobs waiting
+     * across two queues, nothing failed, and no worker process running —
+     * because workers are a separate process and `start_dev.bat` says so
+     * and does not start them. The page said "All clear", which was the
+     * most misleading thing it could have said.
+     */
+    get.mockResolvedValue(
+      report({
+        queues: [
+          queue({ counts: { waiting: 80, active: 0, delayed: 0, failed: 0 }, workers: 0, workerAgeSeconds: null }),
+          queue({ name: "imports", counts: { waiting: 22, active: 0, delayed: 0, failed: 0 }, workers: 0, workerAgeSeconds: null }),
+        ],
+        totals: { waiting: 102, active: 0, failed: 0, dlq: 0 },
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findByText(/nothing is running/i)).toBeInTheDocument();
+    expect(screen.getByText(/102 jobs are waiting/i)).toBeInTheDocument();
+    expect(screen.queryByText(/all clear/i)).not.toBeInTheDocument();
+  });
+
+  it("says how many queues are unattended when only some are", async () => {
+    get.mockResolvedValue(
+      report({
+        queues: [queue(), queue({ name: "imports", workers: 0, workerAgeSeconds: null })],
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findByText(/1 of 2 queues has no worker/i)).toBeInTheDocument();
+  });
+
+  it("still names the missing workers when something has also failed", async () => {
+    // The two facts are independent, and the failure must not bury the
+    // reason the retry will not run either.
+    get.mockResolvedValue(
+      report({
+        queues: [
+          queue({ counts: { waiting: 0, active: 0, delayed: 0, failed: 2 }, workers: 0, workerAgeSeconds: null }),
+        ],
+        totals: { waiting: 0, active: 0, failed: 2, dlq: 0 },
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findByText(/needs attention/i)).toBeInTheDocument();
+    expect(screen.getByText(/no worker is attached/i)).toBeInTheDocument();
+  });
+
+  it("flags a paused queue, which processes nothing with workers attached", async () => {
+    get.mockResolvedValue(report({ queues: [queue({ paused: true })] }));
+
+    render(<PlatformQueuesPage />);
+
+    // Twice over, deliberately: the verdict, and the mark on the queue it
+    // applies to.
+    expect(await screen.findByText(/a queue is paused/i)).toBeInTheDocument();
+    expect(screen.getByText(/^paused$/i)).toBeInTheDocument();
+    expect(screen.queryByText(/all clear/i)).not.toBeInTheDocument();
+  });
+
+  it("says worker attachment is unknown, which is not the same as none", async () => {
+    // A managed Redis refuses CLIENT LIST. "No workers" would send an
+    // operator chasing a worker that is running fine.
+    get.mockResolvedValue(
+      report({ queues: [queue({ workers: null, workerAgeSeconds: null })] }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findByText(/workers unknown/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no worker/i)).not.toBeInTheDocument();
+  });
+
+  it("shows how long ago a worker attached only when it just did", async () => {
+    // A worker that reattaches every few seconds is crash-looping, and
+    // reads as "1 worker" otherwise. An hours-old connection's exact age
+    // is noise, so it stays out.
+    get.mockResolvedValue(
+      report({
+        queues: [
+          queue({ workerAgeSeconds: 12 }),
+          queue({ name: "imports", workerAgeSeconds: 9000 }),
+        ],
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findByText(/attached 12s ago/i)).toBeInTheDocument();
+    expect(screen.queryByText(/9000/)).not.toBeInTheDocument();
+  });
+
+  it("labels the columns of the job list", async () => {
+    // Opened as a bare row of values, the drill-down is a bag of
+    // timestamps and ids: the first thing asked of it was "what are
+    // those columns".
+    get.mockResolvedValueOnce(
+      report({
+        queues: [queue({ counts: { waiting: 0, active: 0, delayed: 0, failed: 1 } })],
+        totals: { waiting: 0, active: 0, failed: 1, dlq: 0 },
+      }),
+    ).mockResolvedValueOnce(jobsResult("failed", { jobId: "80", reason: "boom" }));
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText("billing-runs");
+    await userEvent.click(screen.getByRole("button", { name: /1 failed/i }));
+
+    expect(await screen.findByRole("columnheader", { name: /tenant/i })).toBeInTheDocument();
+    for (const header of [/^job$/i, /queued/i, /attempts/i, /reason/i]) {
+      expect(screen.getByRole("columnheader", { name: header })).toBeInTheDocument();
+    }
+    // Due and Repeats belong to a delayed job; an empty column teaches
+    // the reader nothing.
+    expect(screen.queryByRole("columnheader", { name: /^due$/i })).not.toBeInTheDocument();
+  });
+
+  it("gives a delayed job the columns that apply to it", async () => {
+    get.mockResolvedValueOnce(
+      report({
+        queues: [queue({ name: "audit-retention", counts: { waiting: 0, active: 0, delayed: 1, failed: 0 } })],
+      }),
+    ).mockResolvedValueOnce(
+      jobsResult("delayed", { runsAt: "2026-10-21T04:00:00.000Z", repeats: "0 4 * * *" }),
+    );
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText("audit-retention");
+    await userEvent.click(screen.getByRole("button", { name: /1 delayed/i }));
+
+    expect(await screen.findByRole("columnheader", { name: /^due$/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /repeats/i })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: /reason/i })).not.toBeInTheDocument();
+  });
+
+  it("calls a job's tenant unknown when its id matches no tenant", async () => {
+    /*
+     * Real case in the dev stack: 22 waiting import jobs carrying
+     * `utilityId` 00000000-0000-4000-8000-0000000000aa, a tenant that no
+     * longer exists. The page printed the bare uuid, which reads as a
+     * tenant name nobody recognises rather than as the finding it is.
+     */
+    get.mockResolvedValueOnce(
+      report({
+        queues: [queue({ name: "imports", counts: { waiting: 1, active: 0, delayed: 0, failed: 0 } })],
+        totals: { waiting: 1, active: 0, failed: 0, dlq: 0 },
+      }),
+    ).mockResolvedValueOnce(
+      jobsResult("waiting", {
+        utilityId: "00000000-0000-4000-8000-0000000000aa",
+        utilityName: null,
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText("imports");
+    await userEvent.click(screen.getByRole("button", { name: /1 waiting/i }));
+
+    expect(await screen.findByText(/unknown tenant/i)).toBeInTheDocument();
   });
 
   it("does not make a count of zero clickable", async () => {

@@ -92,6 +92,7 @@ Single overarching architecture and data model reference for the entire system (
 - `seed_db.bat` — Seed test data
 - `node seed.js` — Alternative seed (CommonJS, so no `tsx` to run it — but it shells out to `scripts/provision-tenant.ts` for the tenant, and resolves `tsx` from the pnpm store, so a non-pnpm install fails here)
 - `start_prod.bat` — Build + run in production mode
+- `pnpm --filter @utility-cis/api dev:worker` — the BullMQ worker process. **`start_dev.bat` does not start it**, so by default every queue fills up and nothing in it ever runs: the repeatable schedulers go overdue, and enqueued billing runs and imports sit in `waiting` indefinitely. That is why `/platform/queues` reports worker attachment per queue — zero workers and a healthy-looking set of counts are the same picture otherwise. `WORKER_QUEUES=<comma-list>` serves a subset; **starting it will run whatever has accumulated**, so check what is waiting first.
 - `npx tsx scripts/provision-tenant.ts --list` — list tenants with their module, role and user counts
 - `npx tsx scripts/provision-tenant.ts --name "<name>" [--dry-run]` — create a tenant: utility row, all 32 modules, the six preset roles, optionally a first admin (`--admin-email`, `--admin-name`). On Windows `tsx` resolves at `node_modules/.pnpm/node_modules/.bin/tsx.cmd`.
 
