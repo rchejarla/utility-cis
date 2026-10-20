@@ -1,10 +1,31 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { bootPostgres, ensurePrincipal } from "./_effective-dating-fixtures.js";
+
+/**
+ * Nothing this file does reaches Redis.
+ *
+ * `enqueueSafely` swallows an unreachable Redis and returns null, which
+ * is why these tests need no worker — and on CI, where no Redis is up,
+ * that is what happens. On a machine where the dev Redis IS running the
+ * enqueue succeeds instead, and the job outlives the Postgres container
+ * whose rows it names: 80 waiting billing-run jobs naming runs that no
+ * longer existed, and 22 import jobs naming a torn-down tenant, had
+ * collected in the dev queues, where the platform console listed every
+ * one as work waiting to run.
+ *
+ * The enqueue is this file's side effect, never its subject, so it stops
+ * here and the tests behave the same way on both machines.
+ */
+vi.mock("../../lib/queues.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/queues.js")>()),
+  enqueueSafely: vi.fn(async () => "test-job-id"),
+}));
+
 
 /**
  * The billing run: one initiated pass over a cycle, account by account.
