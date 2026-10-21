@@ -233,6 +233,10 @@ const JOB_COLUMNS: readonly JobColumn[] = [
   {
     header: "Result",
     states: ["completed"],
+    // Dropped with the other secondary columns on a narrow screen: "Ran
+    // at" already answers whether the sweep fired, and the table scrolls
+    // sideways for the counts.
+    hide: "md",
     nowrap: true,
     /*
      * What the handler returned. For a quiet cron queue this is the only
