@@ -347,7 +347,7 @@ describe("the platform queue page", () => {
     render(<PlatformQueuesPage />);
     await screen.findByText("billing-runs");
     await userEvent.click(screen.getByRole("button", { name: /1 failed/i }));
-    await userEvent.click(await screen.findByRole("button", { name: /^retry$/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^retry job /i }));
 
     expect(post).toHaveBeenCalledWith(
       "/api/v1/platform/queues/billing-runs/jobs/80/retry",
@@ -375,7 +375,7 @@ describe("the platform queue page", () => {
     render(<PlatformQueuesPage />);
     await screen.findByText("audit-retention");
     await userEvent.click(screen.getByRole("button", { name: /1 delayed/i }));
-    await userEvent.click(await screen.findByRole("button", { name: /run now/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^run now job /i }));
 
     expect(await screen.findByText(/not recorded/i)).toBeInTheDocument();
   });
@@ -392,7 +392,7 @@ describe("the platform queue page", () => {
     render(<PlatformQueuesPage />);
     await screen.findByText("billing-runs");
     await userEvent.click(screen.getByRole("button", { name: /1 failed/i }));
-    await userEvent.click(await screen.findByRole("button", { name: /^retry$/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^retry job /i }));
 
     expect(await screen.findByText(/retry applies/i)).toBeInTheDocument();
   });
@@ -410,8 +410,8 @@ describe("the platform queue page", () => {
     await userEvent.click(screen.getByRole("button", { name: /1 waiting/i }));
     await screen.findByText(/City of Testville/);
 
-    expect(screen.queryByRole("button", { name: /^retry$/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /run now/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^retry job /i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^run now job /i })).not.toBeInTheDocument();
   });
 
   it("refuses to call it all clear when no worker is attached to anything", async () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { API_URL, apiClient } from "@/lib/api-client";
 import { PageHeader } from "@/components/ui/page-header";
 
@@ -659,6 +659,20 @@ export default function PlatformQueuesPage() {
     worker: workers.find((w) => w.node === host),
   }));
   const unattendedNodes = nodeRows.filter((r) => !r.worker).length;
+  /**
+   * The columns and the verb for whichever count is open.
+   *
+   * Computed here rather than inside the queue-row loop, because the jobs
+   * are no longer rendered inside that table — a second header row among
+   * the queue rows read as though it described them.
+   */
+  const openColumns = open
+    ? [
+        ...JOB_COLUMNS.filter((c) => c.states.includes(open.state)),
+        ...(jobs?.jobs.some((j) => j.invalid) ? [PROBLEM_COLUMN] : []),
+      ]
+    : [];
+  const openVerb = open ? verbFor(open.state) : null;
   const unattended = queues.filter((q) => q.workers === 0);
   const unknownWorkers = queues.filter((q) => q.workers === null);
   const paused = queues.filter((q) => q.paused);
@@ -1029,22 +1043,18 @@ export default function PlatformQueuesPage() {
             <tbody>
               {troubledFirst(report.queues).map((q) => {
                 const isOpen = open?.queue === q.name;
-                const verb = isOpen && open ? verbFor(open.state) : null;
-                const columns =
-                  isOpen && open
-                    ? [
-                        ...JOB_COLUMNS.filter((c) => c.states.includes(open.state)),
-                        ...(jobs?.jobs.some((j) => j.invalid) ? [PROBLEM_COLUMN] : []),
-                      ]
-                    : [];
 
                 return (
-                  /* The queue's row and its expanded drill-down are two
-                     <tr>s, so the key belongs on the fragment holding
-                     both — React cannot see one on a child of a bare
-                     fragment. */
-                  <Fragment key={q.name}>
-                    <tr>
+                  <tr
+                    key={q.name}
+                    style={
+                      isOpen
+                        ? /* Which count is open, now that the jobs are
+                             shown below the table rather than inside it. */
+                          { background: "var(--bg-elevated)" }
+                        : undefined
+                    }
+                  >
                       <td style={{ ...cellStyle, whiteSpace: "nowrap" }}>
                         <span
                           style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 500 }}
@@ -1077,153 +1087,152 @@ export default function PlatformQueuesPage() {
                           />
                         </td>
                       ))}
-                    </tr>
-
-                    {isOpen && open && (
-                      <tr>
-                        <td
-                          colSpan={7}
-                          style={{
-                            borderTop: "1px solid var(--accent-primary)",
-                            background: "var(--bg-elevated)",
-                            padding: 0,
-                          }}
-                        >
-                          {jobsError && (
-                            <div
-                              style={{ padding: "8px 14px", fontSize: 12, color: "var(--danger)" }}
-                            >
-                              {jobsError}
-                            </div>
-                          )}
-                          {!jobs && !jobsError && (
-                            <div
-                              style={{
-                                padding: "8px 14px",
-                                fontSize: 12,
-                                color: "var(--text-muted)",
-                              }}
-                            >
-                              Reading {open.state === "dlq" ? "dead-lettered" : open.state} jobs…
-                            </div>
-                          )}
-                          {jobs && !jobs.reachable && (
-                            <div
-                              style={{
-                                padding: "8px 14px",
-                                fontSize: 12,
-                                color: "var(--warning)",
-                              }}
-                            >
-                              Could not be read — Redis did not answer.
-                            </div>
-                          )}
-                          {jobs?.reachable && jobs.jobs.length === 0 && (
-                            <div
-                              style={{
-                                padding: "8px 14px",
-                                fontSize: 12,
-                                color: "var(--text-muted)",
-                              }}
-                            >
-                              {/* The count came from a snapshot a moment
-                                  earlier, so an empty list here means the
-                                  jobs moved on, not that the count lied. */}
-                              Nothing there now — the jobs moved on since the count was taken.
-                            </div>
-                          )}
-                          {jobs?.reachable && jobs.jobs.length > 0 && (
-                            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                              <caption
-                                style={{
-                                  captionSide: "top",
-                                  padding: "8px 14px 0",
-                                  textAlign: "left",
-                                  fontSize: 12,
-                                  color: "var(--text-muted)",
-                                }}
-                              >
-                                {jobs.jobs.length}{" "}
-                                {open.state === "dlq" ? "dead-lettered" : open.state}{" "}
-                                {plural(jobs.jobs.length, "job", "jobs")} in {q.name}
-                              </caption>
-                              <thead>
-                                <tr>
-                                  {columns.map((c) => (
-                                    <Th key={c.header} align={c.align}>
-                                      {c.header}
-                                    </Th>
-                                  ))}
-                                  {verb && <Th align="right">Action</Th>}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {jobs.jobs.map((j) => {
-                                  const key = `${q.name}:${j.jobId}`;
-                                  const said = outcome[key];
-                                  return (
-                                    <tr key={`${j.jobId}-${j.enqueuedAt}`}>
-                                      {columns.map((c) => (
-                                        <td
-                                          key={c.header}
-                                          style={{
-                                            ...cellStyle,
-                                            textAlign: c.align ?? "left",
-                                          }}
-                                        >
-                                          {c.render(j)}
-                                        </td>
-                                      ))}
-                                      {verb && (
-                                        <td
-                                          style={{
-                                            ...cellStyle,
-                                            textAlign: "right",
-                                            whiteSpace: "nowrap",
-                                          }}
-                                        >
-                                          <span
-                                            style={{
-                                              display: "inline-flex",
-                                              gap: 6,
-                                              alignItems: "center",
-                                            }}
-                                          >
-                                            {said && (
-                                              <span
-                                                style={{
-                                                  color: said.includes("not recorded")
-                                                    ? "var(--warning)"
-                                                    : /^(Retried|Promoted|Replayed)/.test(said)
-                                                      ? "var(--success)"
-                                                      : "var(--danger)",
-                                                }}
-                                              >
-                                                {said}
-                                              </span>
-                                            )}
-                                            <Verb
-                                              label={verb.label}
-                                              busy={acting === key}
-                                              onClick={() => act(q.name, j, verb.action)}
-                                            />
-                                          </span>
-                                        </td>
-                                      )}
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          )}
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
+                  </tr>
                 );
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/*
+       * The jobs behind one count — its own card, below the queue table.
+       *
+       * It used to be a `<tr><td colSpan={7}>` holding a second table
+       * *inside* the first, so its header row (TENANT, JOB, QUEUED …)
+       * landed in the middle of the queue rows and read as though those
+       * columns described the queues beneath it. Two tables with
+       * different columns cannot share one frame. The open row is tinted
+       * instead, which is what ties this card to the count that opened it.
+       */}
+      {open && (
+        <div style={{ ...card, marginBottom: 20 }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+              padding: "10px 14px",
+              background: "var(--bg-elevated)",
+              borderBottom: "1px solid var(--border-subtle)",
+            }}
+          >
+            <span style={{ fontSize: 13 }}>
+              <span style={{ fontFamily: "monospace", fontWeight: 500 }}>{open.queue}</span>
+              <span style={{ color: "var(--text-muted)" }}>
+                {" · "}
+                {open.state === "dlq" ? "dead-lettered" : open.state} jobs
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(null);
+                setJobs(null);
+              }}
+              style={{
+                background: "transparent",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+                padding: "2px 10px",
+                fontFamily: "inherit",
+                fontSize: 11,
+                color: "var(--text-secondary)",
+                cursor: "pointer",
+              }}
+            >
+              Close
+            </button>
+          </div>
+
+          {jobsError && (
+            <div style={{ padding: "8px 14px", fontSize: 12, color: "var(--danger)" }}>
+              {jobsError}
+            </div>
+          )}
+          {!jobs && !jobsError && (
+            <div style={{ padding: "8px 14px", fontSize: 12, color: "var(--text-muted)" }}>
+              Reading {open.state === "dlq" ? "dead-lettered" : open.state} jobs…
+            </div>
+          )}
+          {jobs && !jobs.reachable && (
+            <div style={{ padding: "8px 14px", fontSize: 12, color: "var(--warning)" }}>
+              Could not be read — Redis did not answer.
+            </div>
+          )}
+          {jobs?.reachable && jobs.jobs.length === 0 && (
+            <div style={{ padding: "8px 14px", fontSize: 12, color: "var(--text-muted)" }}>
+              {/* The count came from a snapshot a moment earlier, so an
+                  empty list here means the jobs moved on, not that the
+                  count lied. */}
+              Nothing there now — the jobs moved on since the count was taken.
+            </div>
+          )}
+          {jobs?.reachable && jobs.jobs.length > 0 && (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    {openColumns.map((c) => (
+                      <Th key={c.header} align={c.align}>
+                        {c.header}
+                      </Th>
+                    ))}
+                    {openVerb && <Th align="right">Action</Th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {jobs.jobs.map((j) => {
+                    const key = `${open.queue}:${j.jobId}`;
+                    const said = outcome[key];
+                    return (
+                      <tr key={`${j.jobId}-${j.enqueuedAt}`}>
+                        {openColumns.map((c) => (
+                          <td
+                            key={c.header}
+                            style={{ ...cellStyle, textAlign: c.align ?? "left" }}
+                          >
+                            {c.render(j)}
+                          </td>
+                        ))}
+                        {openVerb && (
+                          <td
+                            style={{ ...cellStyle, textAlign: "right", whiteSpace: "nowrap" }}
+                          >
+                            <span
+                              style={{ display: "inline-flex", gap: 6, alignItems: "center" }}
+                            >
+                              {said && (
+                                <span
+                                  style={{
+                                    color: said.includes("not recorded")
+                                      ? "var(--warning)"
+                                      : /^(Retried|Promoted|Replayed)/.test(said)
+                                        ? "var(--success)"
+                                        : "var(--danger)",
+                                  }}
+                                >
+                                  {said}
+                                </span>
+                              )}
+                              <Verb
+                                label={openVerb.label}
+                                ariaLabel={`${openVerb.label} job ${j.jobId ?? ""} in ${open.queue}`}
+                                busy={acting === key}
+                                onClick={() => act(open.queue, j, openVerb.action)}
+                              />
+                            </span>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
