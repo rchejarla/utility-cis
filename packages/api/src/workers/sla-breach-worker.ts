@@ -1,8 +1,11 @@
 import { Worker } from "bullmq";
-import { queueRedisConnection } from "../lib/queue-redis.js";
 import { logger } from "../lib/logger.js";
 import { withTelemetry } from "../lib/telemetry.js";
-import { QUEUE_NAMES, QUEUE_DEFAULTS, WORKER_LOCK_DURATION_MS, getQueue } from "../lib/queues.js";
+import {
+  QUEUE_NAMES,
+  getQueue,
+  workerOptions,
+} from "../lib/queues.js";
 import { sweepBreachedSRs } from "../services/service-request.service.js";
 
 /**
@@ -36,9 +39,7 @@ export function buildSlaBreachWorker(): Worker {
       return result;
     },
     {
-      connection: queueRedisConnection.duplicate(),
-      concurrency: QUEUE_DEFAULTS[QUEUE_NAMES.slaBreachSweep].concurrency,
-      lockDuration: WORKER_LOCK_DURATION_MS,
+      ...workerOptions(QUEUE_NAMES.slaBreachSweep),
     },
   );
 

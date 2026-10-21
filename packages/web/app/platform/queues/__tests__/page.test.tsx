@@ -61,16 +61,18 @@ function queue(over: Record<string, unknown> = {}) {
   };
 }
 
-/** The worker-process status, as the same endpoint now returns it. */
-function workerProcess(over: Record<string, unknown> = {}) {
+/** One worker, as the registry reports it. */
+function workerView(over: Record<string, unknown> = {}) {
   return {
-    controllable: true,
-    running: false,
-    pid: null,
-    host: null,
-    startedAt: null,
-    queues: null,
-    stopping: false,
+    id: "4a1f",
+    node: "dev-box",
+    pid: 4242,
+    queues: [],
+    startedAt: "2026-10-20T10:00:00.000Z",
+    healthPort: 3002,
+    logFile: "C:/dev/worker.log",
+    attached: true,
+    stoppable: true,
     ...over,
   };
 }
@@ -81,7 +83,10 @@ function report(over: Record<string, unknown> = {}) {
     checkedAt: "2026-10-20T10:00:00.000Z",
     queues: [queue(), queue({ name: "imports" })],
     totals: { waiting: 0, active: 0, failed: 0, dlq: 0 },
-    workerProcess: workerProcess(),
+    controllable: true,
+    thisNode: "dev-box",
+    workers: [],
+    nodes: [{ host: "dev-box", ageSeconds: 900 }],
     ...over,
   };
 }
@@ -282,7 +287,7 @@ describe("the platform queue page", () => {
     await userEvent.click(screen.getByRole("button", { name: /1 delayed/i }));
 
     expect(await screen.findByText(/0 3 \* \* \*/)).toBeInTheDocument();
-    expect(screen.getByText(/due/i)).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /^due$/i })).toBeInTheDocument();
   });
 
   it("calls a delayed job overdue once its due time has passed", async () => {
@@ -486,10 +491,12 @@ describe("the platform queue page", () => {
     render(<PlatformQueuesPage />);
 
     // Under a Workers column, the cell is the word alone. What matters is
-    // that it is not the word for zero.
-    expect(await screen.findByText("unknown")).toBeInTheDocument();
-    expect(screen.queryByText("none")).not.toBeInTheDocument();
-    expect(screen.queryByText(/no worker/i)).not.toBeInTheDocument();
+    // that it is not the word for zero. Scoped to the table, because the
+    // node list beside it says "no worker" about a node, which is a
+    // different statement about a different thing.
+    const table = (await screen.findByRole("columnheader", { name: /workers/i })).closest("table")!;
+    expect(table.textContent).toContain("unknown");
+    expect(table.textContent).not.toContain("none");
   });
 
   it("shows how long ago a worker attached only when it just did", async () => {
@@ -669,37 +676,185 @@ describe("the platform queue page", () => {
     expect(screen.queryByRole("columnheader", { name: /problem/i })).not.toBeInTheDocument();
   });
 
-  it("offers to start the worker when none is attached", async () => {
+  it("offers to start a worker on the node that answered", async () => {
+    // Start is node-local: nothing portable spawns a process on another
+    // machine, so the control names the node it will act on rather than
+    // implying a choice.
+    get.mockResolvedValue(report({ queues: [queue({ workers: 0, workerAgeSeconds: null })] }));
+    post.mockResolvedValue(workerView({ node: "dev-box" }));
+
+    render(<PlatformQueuesPage />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: /start worker on dev-box/i }),
+    );
+
+    expect(post).toHaveBeenCalledWith("/api/v1/platform/workers/start", { queues: [] });
+    expect(await screen.findByText(/started — pid 4242 on dev-box/i)).toBeInTheDocument();
+  });
+
+  it("lists every connected node, including ones running no worker", async () => {
+    /*
+     * "Which nodes have nothing attached" is the useful question, and a
+     * node is invisible if it is only learned about through its workers.
+     * The node list comes from Redis's client list, so this is correct
+     * from whichever node happens to serve the page.
+     */
+    get.mockResolvedValue(
+      report({
+        thisNode: "api-7f3c",
+        nodes: [
+          { host: "api-7f3c", ageSeconds: 3600 },
+          { host: "api-9b21", ageSeconds: 120 },
+          { host: "api-2d08", ageSeconds: 90 },
+        ],
+        workers: [
+          workerView({ id: "4a1f", node: "api-7f3c", pid: 4242, stoppable: true }),
+          workerView({ id: "9c02", node: "api-9b21", pid: 881, stoppable: false }),
+        ],
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findByText("api-2d08")).toBeInTheDocument();
+    expect(screen.getByText("api-9b21")).toBeInTheDocument();
+    // And says which one you are talking to, since a start lands there.
+    expect(screen.getByText(/you are here/i)).toBeInTheDocument();
+  });
+
+  it("offers Stop only for a worker this node can actually signal", async () => {
+    // A pid means nothing on another host. Offering a button that can
+    // only answer 409 is worse than offering none.
+    get.mockResolvedValue(
+      report({
+        thisNode: "api-7f3c",
+        nodes: [
+          { host: "api-7f3c", ageSeconds: 3600 },
+          { host: "api-9b21", ageSeconds: 120 },
+        ],
+        workers: [
+          workerView({ id: "4a1f", node: "api-7f3c", pid: 4242, stoppable: true }),
+          workerView({ id: "9c02", node: "api-9b21", pid: 881, stoppable: false }),
+        ],
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findAllByRole("button", { name: /^stop$/i })).toHaveLength(1);
+    expect(screen.getByText(/stop it from api-9b21/i)).toBeInTheDocument();
+  });
+
+  it("stops a worker by its own id", async () => {
+    get.mockResolvedValue(
+      report({
+        thisNode: "dev-box",
+        workers: [workerView({ id: "4a1f", node: "dev-box", stoppable: true })],
+      }),
+    );
+    post.mockResolvedValue({
+      id: "4a1f",
+      node: "dev-box",
+      pid: 4242,
+      stopping: true,
+      method: "drain",
+      drained: true,
+    });
+
+    render(<PlatformQueuesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^stop$/i }));
+
+    expect(post).toHaveBeenCalledWith("/api/v1/platform/workers/4a1f/stop", {});
+    expect(await screen.findByText(/draining/i)).toBeInTheDocument();
+  });
+
+  it("says plainly when a worker had to be cut off instead of drained", async () => {
+    // The fallback: a wedged worker that no longer answers its own HTTP
+    // server gets a signal, which on Windows is abrupt.
+    get.mockResolvedValue(
+      report({
+        thisNode: "dev-box",
+        workers: [workerView({ id: "4a1f", node: "dev-box", stoppable: true })],
+      }),
+    );
+    post.mockResolvedValue({
+      id: "4a1f",
+      node: "dev-box",
+      pid: null,
+      stopping: false,
+      method: "signal",
+      drained: false,
+    });
+
+    render(<PlatformQueuesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^stop$/i }));
+
+    expect(await screen.findByText(/could not be reached/i)).toBeInTheDocument();
+  });
+
+  it("shows a worker as not attached, which is not the same as absent", async () => {
+    // Either still booting, or dead on a node whose pid this one cannot
+    // check. Both are worth seeing; neither is "running".
+    get.mockResolvedValue(
+      report({
+        thisNode: "api-7f3c",
+        workers: [workerView({ id: "9c02", node: "api-9b21", attached: false, stoppable: false })],
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findByText(/not attached/i)).toBeInTheDocument();
+  });
+
+  it("says a worker is attached that this console did not start", async () => {
+    // Started from a terminal: attached to the same Redis and visible in
+    // the queue counts, but with no record, so nothing to stop here.
+    get.mockResolvedValue(
+      report({ queues: [queue({ workers: 1 })], workers: [] }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findByText(/not started from here/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^stop$/i })).not.toBeInTheDocument();
+  });
+
+  it("offers no worker controls on a node that does not allow them", async () => {
     get.mockResolvedValue(
       report({
         queues: [queue({ workers: 0, workerAgeSeconds: null })],
+        controllable: false,
       }),
     );
-    post.mockResolvedValue(workerProcess({ running: true, pid: 4242, host: "dev-box" }));
+
+    render(<PlatformQueuesPage />);
+    await screen.findByText(/nothing is running/i);
+
+    expect(screen.queryByRole("button", { name: /start worker/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/separate deployment/i)).toBeInTheDocument();
+  });
+
+  it("shows the refusal when a worker is already running on this node", async () => {
+    get.mockResolvedValue(report({ queues: [queue({ workers: 0, workerAgeSeconds: null })] }));
+    post.mockRejectedValue(
+      new Error("API error 409: A worker is already running on dev-box as pid 99"),
+    );
 
     render(<PlatformQueuesPage />);
     await userEvent.click(await screen.findByRole("button", { name: /start worker/i }));
 
-    expect(post).toHaveBeenCalledWith("/api/v1/platform/workers/start", { queues: [] });
-    // Said twice on purpose — the outcome of the click, and the state the
-    // panel now reports — so this asks for the outcome line.
-    expect(await screen.findByText(/started — pid 4242 on dev-box/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /stop worker/i })).toBeInTheDocument();
+    expect(await screen.findByText(/already running on dev-box/i)).toBeInTheDocument();
   });
 
-  it("says on the button itself which queues the worker will serve", async () => {
-    // One worker process serves every queue — that is the deployment
-    // model, and WORKER_QUEUES is where a subset is chosen. "Start
-    // worker" alone left the scope to a line of prose underneath.
-    get.mockResolvedValue(
-      report({ queues: [queue({ workers: 0, workerAgeSeconds: null }), queue({ name: "imports", workers: 0, workerAgeSeconds: null })] }),
-    );
+  it("says the node list is unknown rather than showing none", async () => {
+    // Managed Redis refuses CLIENT LIST. "No nodes" is never true of a
+    // deployment that is serving this page.
+    get.mockResolvedValue(report({ nodes: null }));
 
     render(<PlatformQueuesPage />);
 
-    expect(
-      await screen.findByRole("button", { name: /start worker \(all 2 queues\)/i }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/could not be listed/i)).toBeInTheDocument();
   });
 
   it("names the queues whose jobs a start would run, not just how many", async () => {
@@ -726,132 +881,17 @@ describe("the platform queue page", () => {
 
     expect(screen.getByText(/billing-runs 3/)).toBeInTheDocument();
     expect(screen.getByText(/audit-retention 1/)).toBeInTheDocument();
-    // A queue with nothing queued is not in the list: it has nothing to
-    // warn about.
+    // A queue with nothing queued has nothing to warn about.
     expect(screen.queryByText(/imports 0/)).not.toBeInTheDocument();
   });
 
   it("says nothing about queued work when there is none to run", async () => {
-    get.mockResolvedValue(
-      report({ queues: [queue({ workers: 0, workerAgeSeconds: null })] }),
-    );
+    get.mockResolvedValue(report({ queues: [queue({ workers: 0, workerAgeSeconds: null })] }));
 
     render(<PlatformQueuesPage />);
     await screen.findByRole("button", { name: /start worker/i });
 
     expect(screen.queryByText(/already queued/i)).not.toBeInTheDocument();
-  });
-
-  it("offers to stop the worker it started, and nothing to start", async () => {
-    get.mockResolvedValue(
-      report({
-        workerProcess: workerProcess({
-          running: true,
-          pid: 4242,
-          host: "dev-box",
-          startedAt: "2026-10-20T10:00:00.000Z",
-        }),
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByRole("button", { name: /stop worker/i })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /start worker/i })).not.toBeInTheDocument();
-  });
-
-  it("says a stop lets the worker finish what it is holding", async () => {
-    /*
-     * It does so on both platforms now, which is the point of asking
-     * over the worker's own HTTP server rather than signalling: Windows
-     * has no POSIX signals, and a signal there is an unconditional
-     * termination that skips the 60s drain entirely.
-     */
-    get.mockResolvedValue(
-      report({ workerProcess: workerProcess({ running: true, pid: 4242, host: "dev-box" }) }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText(/finish what it is holding/i)).toBeInTheDocument();
-  });
-
-  it("reports a drain in progress rather than claiming it has stopped", async () => {
-    // A drain runs up to 60s per worker. "Stopped" while the process is
-    // still in the process table is the page contradicting the machine.
-    get.mockResolvedValue(
-      report({
-        workerProcess: workerProcess({
-          running: true,
-          stopping: true,
-          pid: 4242,
-          host: "dev-box",
-        }),
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText(/draining/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /stop worker/i })).not.toBeInTheDocument();
-  });
-
-  it("says plainly when a worker had to be cut off instead of drained", async () => {
-    // The fallback: a wedged worker that no longer answers its own HTTP
-    // server gets a signal, which on Windows is abrupt.
-    get.mockResolvedValue(
-      report({ workerProcess: workerProcess({ running: true, pid: 4242, host: "dev-box" }) }),
-    );
-    post.mockResolvedValue({
-      ...workerProcess(),
-      method: "signal",
-      drained: false,
-    });
-
-    render(<PlatformQueuesPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /stop worker/i }));
-
-    expect(await screen.findByText(/could not be reached/i)).toBeInTheDocument();
-  });
-
-  it("says a worker is attached that this console did not start", async () => {
-    // Started from a terminal: attached to the same Redis, visible in the
-    // counts, but its pid is not ours to signal.
-    get.mockResolvedValue(
-      report({ queues: [queue({ workers: 1 })], workerProcess: workerProcess() }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText(/not started from here/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /stop worker/i })).not.toBeInTheDocument();
-  });
-
-  it("offers no worker controls on a host that does not allow them", async () => {
-    get.mockResolvedValue(
-      report({
-        queues: [queue({ workers: 0, workerAgeSeconds: null })],
-        workerProcess: workerProcess({ controllable: false }),
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-    await screen.findByText(/nothing is running/i);
-
-    expect(screen.queryByRole("button", { name: /start worker/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/separate deployment/i)).toBeInTheDocument();
-  });
-
-  it("shows the refusal when a worker is already running", async () => {
-    get.mockResolvedValue(report({ queues: [queue({ workers: 0, workerAgeSeconds: null })] }));
-    post.mockRejectedValue(
-      new Error("API error 409: A worker is already running on dev-box as pid 99"),
-    );
-
-    render(<PlatformQueuesPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /start worker/i }));
-
-    expect(await screen.findByText(/already running on dev-box/i)).toBeInTheDocument();
   });
 
   it("lists the queues as one table rather than eight cards", async () => {

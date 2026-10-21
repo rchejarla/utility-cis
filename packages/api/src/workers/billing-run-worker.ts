@@ -1,12 +1,10 @@
 import { Worker } from "bullmq";
-import { queueRedisConnection } from "../lib/queue-redis.js";
 import { logger } from "../lib/logger.js";
 import { withTelemetry } from "../lib/telemetry.js";
 import {
   QUEUE_NAMES,
-  QUEUE_DEFAULTS,
-  WORKER_LOCK_DURATION_MS,
   enqueueSafely,
+  workerOptions,
 } from "../lib/queues.js";
 import { processBillingRun } from "../services/billing-run.service.js";
 import { prisma } from "../lib/prisma.js";
@@ -62,9 +60,7 @@ export function buildBillingRunWorker(): Worker<BillingRunJobData> {
       return result;
     },
     {
-      connection: queueRedisConnection.duplicate(),
-      concurrency: QUEUE_DEFAULTS[QUEUE_NAMES.billingRuns].concurrency,
-      lockDuration: WORKER_LOCK_DURATION_MS,
+      ...workerOptions(QUEUE_NAMES.billingRuns),
     },
   );
 

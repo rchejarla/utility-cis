@@ -2,7 +2,14 @@ import { config, resolveWorkerQueues } from "./config.js";
 import { logger } from "./lib/logger.js";
 import { queueRedisConnection } from "./lib/queue-redis.js";
 import { startHealthServer } from "./lib/health-server.js";
-import { ALL_QUEUE_NAMES, closeAllQueues, getQueue, QUEUE_NAMES, type QueueName } from "./lib/queues.js";
+import {
+  ALL_QUEUE_NAMES,
+  closeAllQueues,
+  getQueue,
+  QUEUE_NAMES,
+  workerId,
+  type QueueName,
+} from "./lib/queues.js";
 import { startDlqMonitor, stopDlqMonitor } from "./workers/dlq-monitor.js";
 import {
   buildSuspensionWorker,
@@ -174,8 +181,19 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  /*
+   * The id goes in the log because it is the name every other view of
+   * this process uses: the platform registry's key, and the `:w:<id>`
+   * suffix BullMQ puts on each of this worker's Redis connections. One
+   * grep ties a log line to a row on the console.
+   */
   logger.info(
-    { component: "worker", activeQueues, replicaSelective: requestedQueues !== null },
+    {
+      component: "worker",
+      workerId: workerId(),
+      activeQueues,
+      replicaSelective: requestedQueues !== null,
+    },
     "Worker starting",
   );
 

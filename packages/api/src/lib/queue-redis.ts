@@ -1,3 +1,5 @@
+import path from "node:path";
+import { hostname } from "node:os";
 import Redis from "ioredis";
 import { config } from "../config.js";
 import { logger } from "./logger.js";
@@ -22,10 +24,37 @@ import { logger } from "./logger.js";
 
 const isProduction = config.NODE_ENV === "production";
 
+/**
+ * What this process calls itself in Redis's client list.
+ *
+ * An unnamed connection shows `name=` empty and is indistinguishable
+ * from anyone else's, which is why the platform console could not
+ * enumerate API nodes. Naming it makes `CLIENT LIST` the node registry —
+ * with the TCP connection as the liveness signal, so there is no
+ * heartbeat to tune and no stale row to age out. BullMQ does the same
+ * thing for its workers (`bull:<queue>:w:<id>`).
+ *
+ * `connectionName` rather than a `CLIENT SETNAME` after connecting,
+ * because ioredis re-applies it on every reconnect; a name set by hand
+ * is lost the first time the socket drops.
+ *
+ * The role comes from the entry point's filename. `PROCESS_ROLE`
+ * overrides it for anything launched differently — the cost of getting
+ * it wrong is a mislabelled row on a diagnostic page, not a malfunction,
+ * so a heuristic with an override beats threading a parameter through
+ * every launcher.
+ */
+function clientRole(): string {
+  if (process.env.PROCESS_ROLE) return process.env.PROCESS_ROLE;
+  const entry = path.basename(process.argv[1] ?? "");
+  return entry.startsWith("worker") ? "worker" : "api";
+}
+
 export const queueRedisConnection = new Redis(config.REDIS_URL, {
   maxRetriesPerRequest: null,
   enableOfflineQueue: !isProduction,
   reconnectOnError: () => true,
+  connectionName: `${clientRole()}:${hostname()}`,
 });
 
 let healthy = false;

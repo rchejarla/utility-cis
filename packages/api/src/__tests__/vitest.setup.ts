@@ -7,6 +7,13 @@ vi.mock("../lib/cache-redis.js", () => ({
     get: vi.fn().mockResolvedValue(null),
     setex: vi.fn().mockResolvedValue("OK"),
     del: vi.fn().mockResolvedValue(1),
+    // The worker registry is a hash (`platform:workers`), so a route
+    // that reports workers reaches these. An empty object is "no workers
+    // recorded", which is the right default for a test that is not about
+    // them — without it the route 500s on `hgetall is not a function`.
+    hgetall: vi.fn().mockResolvedValue({}),
+    hset: vi.fn().mockResolvedValue(1),
+    hdel: vi.fn().mockResolvedValue(1),
     // The real client's connection state, which /health reports and the
     // cache helpers consult before calling. A mock without it reports
     // `undefined`, which JSON drops — so the endpoint would look correct

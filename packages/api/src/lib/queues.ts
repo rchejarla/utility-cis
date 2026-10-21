@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Queue, type JobsOptions } from "bullmq";
 import { queueRedisConnection } from "./queue-redis.js";
 import { logger } from "./logger.js";
@@ -160,6 +161,49 @@ export const QUEUE_DEFAULTS: Record<QueueName, QueueDefaults> = {
     },
   },
 };
+
+/**
+ * This worker process's own id.
+ *
+ * Handed to every `Worker` as its `name`, which makes BullMQ name that
+ * connection `bull:<queue>:w:<id>` — and that is how a worker's liveness
+ * becomes readable from another host, where `process.kill(pid, 0)` means
+ * nothing at all. See `lib/connected-clients.ts`.
+ *
+ * `WORKER_ID` from the environment when something started this process
+ * deliberately (the platform console does), and a fresh uuid otherwise,
+ * so a worker launched by hand is still identifiable. Read from the
+ * environment rather than from `config`, because `config` parses at
+ * import and the id may be set after that.
+ */
+let cachedWorkerId: string | undefined;
+
+export function workerId(): string {
+  cachedWorkerId ??= process.env.WORKER_ID || randomUUID();
+  return cachedWorkerId;
+}
+
+/**
+ * The options every `Worker` in this codebase takes, in one place.
+ *
+ * All four were repeated in all eight worker files, which is how the
+ * identity above would otherwise have been eight separate edits — and
+ * eight chances to miss one, where a missed one is a worker that cannot
+ * be seen from another node.
+ */
+export function workerOptions(name: QueueName): {
+  connection: ReturnType<typeof queueRedisConnection.duplicate>;
+  concurrency: number;
+  lockDuration: number;
+  name: string;
+} {
+  return {
+    connection: queueRedisConnection.duplicate(),
+    concurrency: QUEUE_DEFAULTS[name].concurrency,
+    lockDuration: WORKER_LOCK_DURATION_MS,
+    name: workerId(),
+  };
+}
 
 const queueCache = new Map<QueueName, Queue>();
 

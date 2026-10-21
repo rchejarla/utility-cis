@@ -17,7 +17,7 @@ import { getQueueHealth } from "../services/queue-health.service.js";
 import { getQueueJobs, QUEUE_JOB_STATES } from "../services/queue-jobs.service.js";
 import { actOnQueueJob, QUEUE_ACTIONS } from "../services/queue-actions.service.js";
 import {
-  getWorkerProcessStatus,
+  getWorkerControlStatus,
   startWorkerProcess,
   stopWorkerProcess,
 } from "../services/worker-process.service.js";
@@ -162,11 +162,11 @@ export async function platformRoutes(app: FastifyInstance) {
      * a Redis that will not list its clients costs the attachment and
      * not the counts.
      */
-    const [health, workerProcess] = await Promise.all([
+    const [health, workerControl] = await Promise.all([
       getQueueHealth(),
-      getWorkerProcessStatus(),
+      getWorkerControlStatus(),
     ]);
-    return reply.send({ ...health, workerProcess });
+    return reply.send({ ...health, ...workerControl });
   });
 
   /*
@@ -195,11 +195,23 @@ export async function platformRoutes(app: FastifyInstance) {
     },
   );
 
+  /*
+   * Stop one worker, by its own id.
+   *
+   * By id rather than "the worker", because the registry holds one record
+   * per worker and a deployment may have several — one per API node. A
+   * worker belonging to another node is refused rather than signalled:
+   * a pid only means something on its own host.
+   */
   app.post(
-    "/api/v1/platform/workers/stop",
+    "/api/v1/platform/workers/:id/stop",
     { config: { platform: true } },
     async (request, reply) => {
-      return reply.send(await stopWorkerProcess(actorOf(request)));
+      const { id } = z
+        .object({ id: z.string().min(1).max(64) })
+        .parse(request.params);
+
+      return reply.send(await stopWorkerProcess(id, actorOf(request)));
     },
   );
 

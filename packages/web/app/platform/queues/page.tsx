@@ -50,22 +50,35 @@ interface QueueHealth {
   recentFailures: QueueFailure[];
 }
 
-/** The worker process on the API host, as this console can see it. */
-interface WorkerProcess {
-  controllable: boolean;
-  running: boolean;
-  pid: number | null;
-  host: string | null;
-  startedAt: string | null;
-  queues: string[] | null;
-  /** A stop has been asked for and the worker is still finishing. */
-  stopping: boolean;
+/** One worker process, wherever in the deployment it runs. */
+interface WorkerView {
+  id: string;
+  /** The API node that spawned it. */
+  node: string;
+  pid: number;
+  queues: string[];
+  startedAt: string;
+  healthPort: number;
   /** Where its output went, including a failure during boot. */
-  logFile: string | null;
+  logFile: string;
+  /** Holding its BullMQ connections right now — readable from any node. */
+  attached: boolean;
+  /** Whether the node serving this page can stop it. */
+  stoppable: boolean;
+}
+
+/** An API node, as Redis's client list reports it. */
+interface ConnectedNode {
+  host: string;
+  ageSeconds: number;
 }
 
 /** What a stop came back with: how it was delivered, and whether it drained. */
-interface StopResult extends WorkerProcess {
+interface StopResult {
+  id: string;
+  node: string;
+  pid: number | null;
+  stopping: boolean;
   method: "drain" | "signal" | "already-gone";
   drained: boolean;
 }
@@ -98,7 +111,13 @@ interface QueueHealthReport {
   checkedAt: string;
   queues: QueueHealth[];
   totals: { waiting: number; active: number; failed: number; dlq: number };
-  workerProcess: WorkerProcess;
+  /** Whether the node serving this page may start or stop a worker. */
+  controllable: boolean;
+  /** Which node answered, since a start lands there and nowhere else. */
+  thisNode: string;
+  workers: WorkerView[];
+  /** Every connected API node; null when Redis would not list clients. */
+  nodes: ConnectedNode[] | null;
 }
 
 const card: React.CSSProperties = {
@@ -545,27 +564,45 @@ export default function PlatformQueuesPage() {
   }
 
   /**
-   * Start or stop the worker process on the API host.
+   * Start a worker on the node serving this page.
    *
-   * The whole queue set, every time: one worker process serves all eight,
-   * and the API records exactly one, so a per-queue button would promise
-   * something the record cannot hold. The endpoint does take a subset —
-   * the same selection `WORKER_QUEUES` already offers a replica — for an
-   * operator restarting one stuck queue from a script.
+   * No node parameter, because nothing portable starts a process on
+   * another machine — the request lands wherever the load balancer sent
+   * it, and the button says which node that is rather than implying a
+   * choice. One worker per node is a constraint, not a policy: a second
+   * one would fail to bind the health port.
+   *
+   * The whole queue set, every time. The endpoint does take a subset —
+   * the same selection `WORKER_QUEUES` already offers a replica — which
+   * is how the billing-runs split would be expressed when it is needed.
    */
-  async function controlWorker(action: "start" | "stop") {
+  async function startWorker() {
     setWorkerBusy(true);
     setWorkerSaid(null);
     try {
-      const next = await apiClient.post<StopResult>(
-        `/api/v1/platform/workers/${action}`,
-        action === "start" ? { queues: [] } : {},
-      );
-      setReport((r) => (r ? { ...r, workerProcess: next } : r));
+      const started = await apiClient.post<WorkerView>("/api/v1/platform/workers/start", {
+        queues: [],
+      });
+      setReport((r) => (r ? { ...r, workers: [...r.workers, started] } : r));
+      setWorkerSaid(`Started — pid ${started.pid} on ${started.node}`);
+    } catch (err) {
+      setWorkerSaid(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setWorkerBusy(false);
+    }
+  }
 
-      if (action === "start") {
-        setWorkerSaid(`Started — pid ${next.pid}${next.host ? ` on ${next.host}` : ""}`);
-      } else if (!next.drained) {
+  /** Stop one worker, named by its own id. */
+  async function stopWorker(id: string) {
+    setWorkerBusy(true);
+    setWorkerSaid(null);
+    try {
+      const result = await apiClient.post<StopResult>(
+        `/api/v1/platform/workers/${id}/stop`,
+        {},
+      );
+
+      if (!result.drained) {
         /* The fallback fired: the worker never answered its own HTTP
            server, so it got a signal — which on Windows cuts in-flight
            jobs off, to be retried once their locks expire. */
@@ -574,10 +611,16 @@ export default function PlatformQueuesPage() {
         );
       } else {
         setWorkerSaid(
-          next.stopping
+          result.stopping
             ? "Draining — it will finish its in-flight jobs and then exit."
             : "Stopped.",
         );
+      }
+
+      // Gone only when the process has actually left; a drain can take a
+      // minute, and the next status read is what notices.
+      if (!result.stopping) {
+        setReport((r) => (r ? { ...r, workers: r.workers.filter((w) => w.id !== id) } : r));
       }
     } catch (err) {
       setWorkerSaid(err instanceof Error ? err.message : "Failed");
@@ -587,7 +630,9 @@ export default function PlatformQueuesPage() {
   }
 
   const queues = report?.queues ?? [];
-  const worker = report?.workerProcess;
+  const workers = report?.workers ?? [];
+  /** A worker this node spawned, if any. At most one — the health port. */
+  const ourWorker = workers.find((w) => w.node === report?.thisNode);
   const unattended = queues.filter((q) => q.workers === 0);
   const unknownWorkers = queues.filter((q) => q.workers === null);
   const paused = queues.filter((q) => q.paused);
@@ -714,14 +759,19 @@ export default function PlatformQueuesPage() {
             </div>
 
             {/*
-             * The worker process, and the two things that can be done to
-             * it. Beside the verdict rather than below it, because
-             * "nothing is running" and "start it" are one thought.
+             * The nodes, and the workers on them.
+             *
+             * Beside the verdict rather than below it, because "nothing
+             * is running" and "start it" are one thought. A list rather
+             * than a single slot, because a deployment may have a worker
+             * per API node — and the version that kept one record let the
+             * first node that started one block every other node from
+             * starting any, anywhere.
              */}
-            {worker && (
+            {report && (
               <div
                 style={{
-                  flex: "0 1 300px",
+                  flex: "0 1 340px",
                   borderLeft: "1px solid var(--border-subtle)",
                   paddingLeft: 16,
                   display: "grid",
@@ -738,42 +788,102 @@ export default function PlatformQueuesPage() {
                     color: "var(--text-muted)",
                   }}
                 >
-                  Worker process
+                  Worker processes
                 </div>
 
-                {worker.running && worker.stopping ? (
-                  /* Asked to stop and still winding down. A drain runs up
-                     to 60s per worker, so reporting "stopped" while the
-                     pid is still in the process table would have this
-                     page contradict the machine. */
-                  <>
-                    <div style={{ color: "var(--warning)" }}>
-                      Draining · pid {worker.pid}
-                      {worker.host ? ` on ${worker.host}` : ""}
-                    </div>
-                    <div style={{ color: "var(--text-muted)" }}>
-                      Finishing its in-flight jobs, then exiting. Reload to see it go.
-                    </div>
-                  </>
-                ) : worker.running ? (
-                  <>
-                    <div style={{ color: "var(--text-primary)" }}>
-                      Running · pid {worker.pid}
-                      {worker.host ? ` on ${worker.host}` : ""}
-                    </div>
-                    {worker.startedAt && (
-                      <div style={{ color: "var(--text-muted)" }}>
-                        started {new Date(worker.startedAt).toLocaleString()}
+                {report.nodes === null ? (
+                  /* A managed Redis refuses CLIENT LIST, which is where
+                     the node list comes from. "No nodes" is never true of
+                     a deployment that is serving this page. */
+                  <div style={{ color: "var(--text-muted)" }}>
+                    The API nodes could not be listed — this Redis does not allow reading its
+                    clients. Any worker below is still reported from its own record.
+                  </div>
+                ) : (
+                  /*
+                   * Every connected node, plus any node that holds a
+                   * worker record. The union matters: a node that has
+                   * dropped off the client list still has its worker in
+                   * the registry, and that is exactly the moment someone
+                   * wants to see it rather than have it vanish.
+                   */
+                  [...new Set([...report.nodes.map((n) => n.host), ...workers.map((w) => w.node)])]
+                    .map((host) => {
+                      const on = workers.filter((w) => w.node === host);
+                      const here = host === report.thisNode;
+                      const connected = report.nodes?.some((n) => n.host === host) ?? false;
+                      return (
+                      <div key={host} style={{ display: "grid", gap: 2 }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                          <span style={{ fontFamily: "monospace", color: "var(--text-primary)" }}>
+                            {host}
+                          </span>
+                          {!connected && (
+                            <span style={{ color: "var(--danger)" }}>not connected</span>
+                          )}
+                          {here && (
+                            /* A start lands on whichever node the load
+                               balancer picked, so which one that is has
+                               to be visible rather than surprising. */
+                            <span style={{ color: "var(--accent-primary)" }}>← you are here</span>
+                          )}
+                        </div>
+                        {on.length === 0 ? (
+                          <div style={{ color: "var(--warning)", paddingLeft: 10 }}>no worker</div>
+                        ) : (
+                          on.map((w) => (
+                            <div
+                              key={w.id}
+                              style={{
+                                paddingLeft: 10,
+                                display: "flex",
+                                gap: 8,
+                                alignItems: "baseline",
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              <span style={{ color: "var(--text-secondary)" }}>
+                                pid {w.pid}
+                              </span>
+                              {w.attached ? (
+                                <span style={{ color: "var(--success)" }}>attached</span>
+                              ) : (
+                                /* Either still opening its connections, or
+                                   gone on a node whose pid this one cannot
+                                   check. Both are worth seeing; neither is
+                                   "running". */
+                                <span style={{ color: "var(--warning)" }}>not attached</span>
+                              )}
+                              <span style={{ color: "var(--text-muted)" }}>
+                                since {new Date(w.startedAt).toLocaleTimeString()}
+                              </span>
+                              {w.stoppable ? (
+                                <Verb
+                                  label="Stop"
+                                  loud
+                                  busy={workerBusy}
+                                  onClick={() => stopWorker(w.id)}
+                                />
+                              ) : (
+                                /* A pid means nothing off its host, so a
+                                   button here could only ever answer 409.
+                                   Routing the command through Redis is the
+                                   next step of the design; until then this
+                                   says where to go. */
+                                <span style={{ color: "var(--text-muted)" }}>
+                                  stop it from {w.node}
+                                </span>
+                              )}
+                            </div>
+                          ))
+                        )}
                       </div>
-                    )}
-                    <div>
-                      <Verb
-                        label="Stop worker"
-                        loud
-                        busy={workerBusy}
-                        onClick={() => controlWorker("stop")}
-                      />
-                    </div>
+                      );
+                    })
+                )}
+
+                {ourWorker ? (
+                  <>
                     {/* Asked over the worker's own HTTP server, which is
                         the one stop path that drains on both Windows and
                         Linux — a signal on Windows is an unconditional
@@ -781,58 +891,47 @@ export default function PlatformQueuesPage() {
                     <div style={{ color: "var(--text-muted)" }}>
                       A stop asks it to finish what it is holding before exiting.
                     </div>
-                    {worker.logFile && (
-                      /* It writes nowhere an operator can see otherwise:
-                         the process is detached, so its output goes to a
-                         file rather than to a terminal nobody is
-                         watching. */
-                      <div
-                        style={{
-                          color: "var(--text-muted)",
-                          fontFamily: "monospace",
-                          wordBreak: "break-all",
-                        }}
-                      >
-                        {worker.logFile}
-                      </div>
-                    )}
+                    <div
+                      style={{
+                        color: "var(--text-muted)",
+                        fontFamily: "monospace",
+                        wordBreak: "break-all",
+                      }}
+                    >
+                      {ourWorker.logFile}
+                    </div>
                   </>
-                ) : attachedSomewhere ? (
+                ) : attachedSomewhere && workers.length === 0 ? (
                   <div style={{ color: "var(--text-secondary)" }}>
-                    A worker is attached but was not started from here — its process id is not
-                    known to this console, so stop it where you started it.
+                    A worker is attached but was not started from here — it has no record, so
+                    there is nothing for this console to stop.
                   </div>
-                ) : !worker.controllable ? (
+                ) : !report.controllable ? (
                   <div style={{ color: "var(--text-muted)" }}>
-                    Not running. Workers are a separate deployment on this host, so starting one
-                    from here is disabled — scale the worker deployment instead.
+                    Workers are a separate deployment here, so starting one from this console is
+                    disabled — scale the worker deployment instead.
                   </div>
                 ) : (
                   <>
-                    <div style={{ color: "var(--warning)" }}>Not running.</div>
                     <div>
-                      {/* The scope belongs on the control. One worker
-                          process serves every queue — that is the
-                          deployment model, and WORKER_QUEUES is where a
-                          subset is chosen — but "Start worker" alone
-                          left that to a line of prose underneath. */}
+                      {/* Node-local, and the control says so: nothing
+                          portable starts a process on another machine. */}
                       <Verb
-                        label={`Start worker (all ${report.queues.length} queues)`}
+                        label={`Start worker on ${report.thisNode}`}
                         busy={workerBusy}
-                        onClick={() => controlWorker("start")}
+                        onClick={startWorker}
                       />
                     </div>
                     <div style={{ color: "var(--text-muted)" }}>
-                      It outlives this API process, so a reload will not stop it.
+                      Serves all {report.queues.length} queues, and outlives this API process, so
+                      a reload will not stop it.
                     </div>
                     {queuedOnStart.length > 0 && (
                       /*
                        * What pressing it will set off, in the only terms
                        * that are actionable: which queues, and how much
-                       * in each. A scheduled job that is past due runs
-                       * the moment a worker appears, so an idle stack
-                       * starts everything at once — and whether that
-                       * matters depends entirely on which queue it is in.
+                       * in each. Whether that matters depends entirely on
+                       * which queue it is.
                        */
                       <div style={{ color: "var(--warning)" }}>
                         Work already queued starts running at once:{" "}
@@ -848,7 +947,7 @@ export default function PlatformQueuesPage() {
                 {workerSaid && (
                   <div
                     style={{
-                      color: /^(Started|Stopped)/.test(workerSaid)
+                      color: /^(Started|Stopped\.|Draining)/.test(workerSaid)
                         ? "var(--success)"
                         : "var(--danger)",
                     }}
