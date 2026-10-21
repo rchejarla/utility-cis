@@ -147,7 +147,9 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
       </nav>
 
       <style>{`
-        @media (max-width: 767px) {
+        /* 959, not 767: --app-zoom scales the content but not what a
+           media query reads. See the breakpoint note in globals.css. */
+        @media (max-width: 959px) {
           .portal-bottom-nav { display: flex !important; }
         }
       `}</style>

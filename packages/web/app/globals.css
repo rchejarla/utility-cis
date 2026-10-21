@@ -209,8 +209,11 @@ textarea::placeholder {
    This is the fallback for a table that has not said which of its
    columns matter. Scrolling sideways to reach a total is poor, so a wide
    table should drop columns with the classes below rather than rely on
-   it. */
-@media (max-width: 1199px) {
+   it.
+
+   1499 rather than 1199 for the reason given below: the width a query
+   reads is a quarter more than the width the content gets. */
+@media (max-width: 1499px) {
   table {
     display: block;
     overflow-x: auto;
@@ -242,20 +245,37 @@ textarea::placeholder {
  * open the row, or a detail view -- because this hides data rather than
  * reflowing it.
  */
-@media (max-width: 1199px) {
+/* The breakpoints below are the layout widths multiplied by --app-zoom.
+ *
+ * `zoom` scales what it renders but does not change what a media query
+ * sees, so a 1000px window under `zoom: 1.25` offers 800px of usable
+ * width while every query still reads 1000. Breakpoints written for the
+ * unzoomed width therefore fire a quarter too late: a table stayed at
+ * its full column count on a window that already looked like a phone.
+ *
+ *   phone   below  768 of space  ->  max-width:  959px   (768 * 1.25 - 1)
+ *   tablet  below 1200 of space  ->  max-width: 1499px  (1200 * 1.25 - 1)
+ *
+ * `lib/use-media-query.ts` carries the same two numbers for the JS side —
+ * a media query cannot read a custom property, so they cannot be derived
+ * from --app-zoom here. If the zoom changes, both move together or the
+ * sidebar starts collapsing at a different width than the tables. */
+@media (max-width: 1499px) {
   .col-hide-md {
     display: none;
   }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 959px) {
   .col-hide-sm {
     display: none;
   }
 }
 
-/* Mobile: single-column forms, stacked stats, stacked page headers */
-@media (max-width: 767px) {
+/* Mobile: single-column forms, stacked stats, stacked page headers.
+   959 for the same reason as the rules above: the width a query reads is
+   a quarter more than the width the content gets. */
+@media (max-width: 959px) {
   .responsive-grid {
     grid-template-columns: 1fr !important;
   }

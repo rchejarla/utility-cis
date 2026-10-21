@@ -13,12 +13,20 @@ import { DataTable, type Column } from "../data-table";
  * source is actually used in all four places.
  */
 
-/** Drive `useBreakpoint`, which reads window.matchMedia. */
+/**
+ * Drive `useBreakpoint`, which reads window.matchMedia.
+ *
+ * The widths are the layout widths times `--app-zoom`: `zoom` scales what
+ * it renders without changing what a query reads, so a breakpoint written
+ * for the unzoomed width fires a quarter too late. Matching on the
+ * boundary numbers rather than on "the first query asked" keeps this
+ * honest about which one it is answering — see `lib/use-media-query.ts`.
+ */
 function atWidth(kind: "phone" | "tablet" | "desktop") {
   const matchesFor = (q: string) => {
-    if (q.includes("max-width: 767px")) return kind === "phone";
-    if (q.includes("min-width: 768px")) return kind === "tablet";
-    if (q.includes("min-width: 1200px")) return kind === "desktop";
+    if (q.includes("max-width: 959px")) return kind === "phone";
+    if (q.includes("min-width: 960px")) return kind === "tablet";
+    if (q.includes("min-width: 1500px")) return kind === "desktop";
     return false;
   };
   (window.matchMedia as unknown as ReturnType<typeof vi.fn>).mockImplementation(
