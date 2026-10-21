@@ -54,7 +54,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     >
       Skip to main content
     </a>
-    <div style={{ display: "flex", height: "100vh" }}>
+    <div style={{ display: "flex", height: "var(--screen-h)" }}>
       {/* Sidebar: hidden on mobile, icon-only on tablet */}
       {!isMobile && <Sidebar defaultCollapsed={isTablet} />}
 

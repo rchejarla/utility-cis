@@ -781,7 +781,7 @@ export function Sidebar({
         flexDirection: "column",
         transition: "width 0.2s ease, min-width 0.2s ease",
         overflow: "hidden",
-        height: "100vh",
+        height: "var(--screen-h)",
         position: "relative",
       }}
     >

@@ -27,6 +27,29 @@ interface TopbarProps {
   identity?: { name: string; email: string } | null;
 }
 
+/**
+ * Pinned to the top of the viewport.
+ *
+ * Both shells already meant to pin it, by shape: a `height: 100vh` flex
+ * column whose `<main>` owned the scroll. That cannot work under the
+ * `zoom: 1.25` this app sets on `:root` — a 100vh box inside a zoomed
+ * root renders a quarter taller than the visible height, so the document
+ * itself scrolled and the header rode up with it, on every page.
+ *
+ * Sticky pins against the viewport whatever zoom does to lengths, which
+ * is the same reason the modal backdrops use fixed positioning rather
+ * than a measured one (see the note on `html { zoom }` in globals.css).
+ */
+const PINNED: React.CSSProperties = {
+  position: "sticky",
+  top: 0,
+  /*
+   * Above page content and any sticky table header, below the Cmd-K
+   * overlay and the modal backdrops, which sit at 9999 and above.
+   */
+  zIndex: 20,
+};
+
 export function Topbar({ compact = false, variant = "tenant", identity }: TopbarProps) {
   const isPlatform = variant === "platform";
 
@@ -35,6 +58,7 @@ export function Topbar({ compact = false, variant = "tenant", identity }: Topbar
     return (
       <header
         style={{
+          ...PINNED,
           height: "56px",
           background: "var(--header-bg)",
           borderBottom: "1px solid var(--border)",
@@ -83,6 +107,7 @@ export function Topbar({ compact = false, variant = "tenant", identity }: Topbar
   return (
     <header
       style={{
+        ...PINNED,
         height: "56px",
         background: "var(--header-bg)",
         borderBottom: "1px solid var(--border)",

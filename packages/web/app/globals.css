@@ -141,7 +141,27 @@
    backdrops still cover the whole viewport. Under `body { zoom }` they
    would fall short of the right and bottom edges. */
 html {
-  zoom: 1.25;
+  zoom: var(--app-zoom);
+}
+
+/* The zoom factor and the viewport height that accounts for it.
+
+   `zoom` scales what it renders, but `100vh` still resolves against the
+   unzoomed viewport, so a `height: 100vh` box inside this root renders a
+   quarter taller than the screen. Every full-height shell did exactly
+   that, which made the document itself scroll and carried the fixed
+   header up with it, on every page in the app.
+
+   So `--screen-h` is what "the visible height" means here, and the two
+   are declared together because they must change together: raising the
+   zoom without raising the divisor reintroduces the same scroll.
+
+   `position: fixed` is unaffected — it resolves against the viewport
+   whatever the zoom — which is why the modal backdrops are fine, and why
+   the header is pinned with `sticky` rather than with a measured height. */
+:root {
+  --app-zoom: 1.25;
+  --screen-h: calc(100vh / var(--app-zoom));
 }
 
 body {

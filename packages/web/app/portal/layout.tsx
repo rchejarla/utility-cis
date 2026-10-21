@@ -21,7 +21,7 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+    <div style={{ minHeight: "var(--screen-h)", display: "flex", flexDirection: "column" }}>
       <header
         style={{
           height: 56,

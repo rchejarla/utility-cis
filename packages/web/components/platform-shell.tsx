@@ -163,7 +163,7 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
         Skip to main content
       </a>
 
-      <div style={{ display: "flex", height: "100vh" }}>
+      <div style={{ display: "flex", height: "var(--screen-h)" }}>
         {!isMobile && (
           <Sidebar
             sections={PLATFORM_SECTIONS}
