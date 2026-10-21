@@ -172,7 +172,7 @@ const JOB_COLUMNS: readonly JobColumn[] = [
     header: "Queued",
     states: ["waiting", "active", "delayed", "failed", "dlq"],
     nowrap: true,
-    hide: "sm",
+    hide: "md",
     render: (job) => (job.enqueuedAt ? new Date(job.enqueuedAt).toLocaleString() : DASH),
   },
   {
@@ -195,7 +195,7 @@ const JOB_COLUMNS: readonly JobColumn[] = [
     header: "Repeats",
     states: ["delayed"],
     nowrap: true,
-    hide: "sm",
+    hide: "md",
     // A repeatable job is the scheduler at rest; a delayed one without a
     // pattern is a retry backing off, and they read identically as a count.
     render: (job) =>

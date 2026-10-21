@@ -629,13 +629,16 @@ describe("the cluster jobs page", () => {
     const named = (cls: string) => hiddenAt(headers, cls).map((i) => headers[i].textContent);
 
     /*
-     * Two tiers, because ten columns shedding nothing until phone width
-     * meant a narrowed window carried all ten. Took and Attempts go
-     * first; Queued waits for a phone; the tenant, the job and the
-     * reason never go.
+     * Every secondary column goes at the narrow tier, not the phone one.
+     *
+     * They were split across the two, and on a display where a
+     * three-quarter-width window is still 1600 CSS pixels that meant one
+     * column dropped and the rest waited for a width nobody reaches by
+     * dragging. The tenant, the job, the reason and the action stay to
+     * the end; the rest are secondary and go together.
      */
     expect(named("col-hide-md")).toContain("Attempts");
-    expect(named("col-hide-sm")).toContain("Queued");
+    expect(named("col-hide-md")).toContain("Queued");
     const everHidden = [...named("col-hide-md"), ...named("col-hide-sm")];
     expect(everHidden).not.toContain("Tenant");
     expect(everHidden).not.toContain("Job");
