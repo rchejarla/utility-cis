@@ -93,22 +93,30 @@ interface JobColumn {
   mergedOnly?: boolean;
   align?: "right";
   /**
-   * Dropped on a phone. Chosen by what the question cannot be answered
-   * without, as globals.css asks: a tenant, a job id, why it is stuck
-   * and what can be done about it stay; a timestamp, a duration and an
-   * attempt count go. The class lands on the header and the cell from
-   * this one entry, which is the point of declaring columns rather than
-   * writing them twice — the note on `.col-hide-sm` warns that missing
-   * one shifts every column after it.
+   * When this column is dropped: `md` below 1499px of viewport, `sm`
+   * below 959 — which are the layout widths times the root zoom, see
+   * globals.css.
+   *
+   * Two tiers because this table runs to ten columns, and one tier meant
+   * it carried all ten until the viewport reached phone width: on a
+   * display where a window that looks narrow still reports a thousand
+   * pixels, nothing ever dropped. Chosen by what the question cannot be
+   * answered without, as globals.css asks — a tenant, a job id, why it
+   * is stuck and what can be done about it stay to the end.
+   *
+   * The class lands on the header and the cell from this one entry,
+   * which is the point of declaring columns rather than writing them
+   * twice: the note on `.col-hide-sm` warns that missing one shifts
+   * every column after it.
    */
-  hideOnPhone?: boolean;
+  hide?: "sm" | "md";
   /** Keep the cell on one line; the table scrolls sideways instead. */
   nowrap?: boolean;
   render: (job: QueueJob) => React.ReactNode;
 }
 
-/** See the note on `.col-hide-sm` in globals.css. */
-const HIDE_SM = "col-hide-sm";
+/** See the breakpoint note in globals.css. */
+const HIDE = { sm: "col-hide-sm", md: "col-hide-md" } as const;
 
 /**
  * The columns, declared once.
@@ -164,7 +172,7 @@ const JOB_COLUMNS: readonly JobColumn[] = [
     header: "Queued",
     states: ["waiting", "active", "delayed", "failed", "dlq"],
     nowrap: true,
-    hideOnPhone: true,
+    hide: "sm",
     render: (job) => (job.enqueuedAt ? new Date(job.enqueuedAt).toLocaleString() : DASH),
   },
   {
@@ -187,7 +195,7 @@ const JOB_COLUMNS: readonly JobColumn[] = [
     header: "Repeats",
     states: ["delayed"],
     nowrap: true,
-    hideOnPhone: true,
+    hide: "sm",
     // A repeatable job is the scheduler at rest; a delayed one without a
     // pattern is a retry backing off, and they read identically as a count.
     render: (job) =>
@@ -210,7 +218,7 @@ const JOB_COLUMNS: readonly JobColumn[] = [
     states: ["completed"],
     align: "right",
     nowrap: true,
-    hideOnPhone: true,
+    hide: "md",
     render: (job) =>
       job.durationMs === null ? (
         DASH
@@ -248,7 +256,7 @@ const JOB_COLUMNS: readonly JobColumn[] = [
     states: STATES,
     align: "right",
     nowrap: true,
-    hideOnPhone: true,
+    hide: "md",
     render: (job) => (job.attemptsMade > 0 ? job.attemptsMade : DASH),
   },
   {
@@ -542,7 +550,7 @@ function ClusterJobs() {
                     <Th
                       key={c.header}
                       align={c.align}
-                      className={c.hideOnPhone ? HIDE_SM : undefined}
+                      className={c.hide ? HIDE[c.hide] : undefined}
                     >
                       {c.header}
                     </Th>
@@ -563,7 +571,7 @@ function ClusterJobs() {
                           // entry: globals.css warns that a column hidden
                           // on one and not the other shifts every column
                           // after it, which reads as wrong data.
-                          className={c.hideOnPhone ? HIDE_SM : undefined}
+                          className={c.hide ? HIDE[c.hide] : undefined}
                           style={{
                             ...cellStyle,
                             textAlign: c.align ?? "left",

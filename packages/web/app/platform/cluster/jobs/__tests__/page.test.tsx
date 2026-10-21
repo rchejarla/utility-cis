@@ -618,22 +618,28 @@ describe("the cluster jobs page", () => {
     const cells = [...table.querySelectorAll("tbody tr:first-child td")];
     expect(headers).toHaveLength(cells.length);
 
-    const hiddenHeaders = headers
-      .map((h, i) => [h.textContent, i] as const)
-      .filter(([, i]) => headers[i].classList.contains("col-hide-sm"))
-      .map(([text]) => text);
-    const hiddenCells = cells
-      .map((_, i) => i)
-      .filter((i) => cells[i].classList.contains("col-hide-sm"))
-      .map((i) => headers[i].textContent);
+    // The same positions on both halves, for each tier — which is the
+    // whole of what keeps a cell from reading under the wrong heading.
+    const hiddenAt = (els: Element[], cls: string) =>
+      els.map((_, i) => i).filter((i) => els[i].classList.contains(cls));
+    for (const cls of ["col-hide-sm", "col-hide-md"]) {
+      expect(hiddenAt(cells, cls)).toEqual(hiddenAt(headers, cls));
+    }
 
-    // The same columns, by position, on both halves of the table.
-    expect(hiddenCells).toEqual(hiddenHeaders);
-    // And they are the secondary ones, not the tenant or the reason.
-    expect(hiddenHeaders).toContain("Queued");
-    expect(hiddenHeaders).toContain("Attempts");
-    expect(hiddenHeaders).not.toContain("Tenant");
-    expect(hiddenHeaders).not.toContain("Reason");
+    const named = (cls: string) => hiddenAt(headers, cls).map((i) => headers[i].textContent);
+
+    /*
+     * Two tiers, because ten columns shedding nothing until phone width
+     * meant a narrowed window carried all ten. Took and Attempts go
+     * first; Queued waits for a phone; the tenant, the job and the
+     * reason never go.
+     */
+    expect(named("col-hide-md")).toContain("Attempts");
+    expect(named("col-hide-sm")).toContain("Queued");
+    const everHidden = [...named("col-hide-md"), ...named("col-hide-sm")];
+    expect(everHidden).not.toContain("Tenant");
+    expect(everHidden).not.toContain("Job");
+    expect(everHidden).not.toContain("Reason");
   });
 
   it("links back to the queue list", async () => {
