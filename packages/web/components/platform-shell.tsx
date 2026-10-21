@@ -9,6 +9,7 @@ import {
   faServer,
   faGaugeHigh,
   faMicrochip,
+  faRectangleList,
 } from "@fortawesome/pro-solid-svg-icons";
 import { apiClient } from "@/lib/api-client";
 import { useBreakpoint } from "@/lib/use-media-query";
@@ -99,6 +100,19 @@ const PLATFORM_SECTIONS: NavSection[] = [
         icon: faListCheck,
         module: "platform",
         tooltip: "What is waiting, running, scheduled, failed and done",
+      },
+      {
+        /*
+         * In the menu as well as behind a count, because a page with a
+         * queue filter and a status filter is somewhere to go, not only
+         * somewhere you land. A bare visit picks the first queue and
+         * waiting; the counts in the filters say where the jobs are.
+         */
+        href: "/platform/cluster/jobs",
+        label: "Jobs",
+        icon: faRectangleList,
+        module: "platform",
+        tooltip: "The jobs in one queue and one state, with retry and replay",
       },
     ],
   },
