@@ -719,7 +719,61 @@ describe("the platform queue page", () => {
     expect(await screen.findByText("api-2d08")).toBeInTheDocument();
     expect(screen.getByText("api-9b21")).toBeInTheDocument();
     // And says which one you are talking to, since a start lands there.
-    expect(screen.getByText(/you are here/i)).toBeInTheDocument();
+    expect(screen.getByText(/serving this page/i)).toBeInTheDocument();
+  });
+
+  it("labels the columns of the worker table", async () => {
+    /*
+     * The same fault the job list had: the first version of this panel
+     * rendered `pid 4242 attached since 9:02:00 AM` as a bare run of
+     * values, under a node name, with the notes for one worker floating
+     * below every node at once.
+     */
+    get.mockResolvedValue(
+      report({ workers: [workerView({ node: "dev-box" })] }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    for (const header of [/^node$/i, /^worker$/i, /^state$/i, /^since$/i, /^action$/i]) {
+      expect(await screen.findByRole("columnheader", { name: header })).toBeInTheDocument();
+    }
+  });
+
+  it("counts the nodes and workers above the table", async () => {
+    get.mockResolvedValue(
+      report({
+        nodes: [
+          { host: "api-7f3c", ageSeconds: 3600 },
+          { host: "api-9b21", ageSeconds: 120 },
+          { host: "api-2d08", ageSeconds: 90 },
+        ],
+        workers: [workerView({ node: "api-7f3c" })],
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findByText(/3 nodes/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 worker/i)).toBeInTheDocument();
+    expect(screen.getByText(/2 with none/i)).toBeInTheDocument();
+  });
+
+  it("keeps a worker whose node has dropped off the client list", async () => {
+    // Its record is all that is left of it, and that is exactly when it
+    // must not vanish from the table.
+    get.mockResolvedValue(
+      report({
+        thisNode: "api-7f3c",
+        nodes: [{ host: "api-7f3c", ageSeconds: 3600 }],
+        workers: [workerView({ id: "9c02", node: "api-gone", stoppable: false })],
+      }),
+    );
+
+    render(<PlatformQueuesPage />);
+
+    expect(await screen.findByText("api-gone")).toBeInTheDocument();
+    expect(screen.getByText(/not connected/i)).toBeInTheDocument();
   });
 
   it("offers Stop only for a worker this node can actually signal", async () => {
@@ -741,7 +795,7 @@ describe("the platform queue page", () => {
 
     render(<PlatformQueuesPage />);
 
-    expect(await screen.findAllByRole("button", { name: /^stop$/i })).toHaveLength(1);
+    expect(await screen.findAllByRole("button", { name: /^stop worker on /i })).toHaveLength(1);
     expect(screen.getByText(/stop it from api-9b21/i)).toBeInTheDocument();
   });
 
@@ -762,7 +816,7 @@ describe("the platform queue page", () => {
     });
 
     render(<PlatformQueuesPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /^stop$/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /stop worker on dev-box/i }));
 
     expect(post).toHaveBeenCalledWith("/api/v1/platform/workers/4a1f/stop", {});
     expect(await screen.findByText(/draining/i)).toBeInTheDocument();
@@ -787,7 +841,7 @@ describe("the platform queue page", () => {
     });
 
     render(<PlatformQueuesPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /^stop$/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /stop worker on dev-box/i }));
 
     expect(await screen.findByText(/could not be reached/i)).toBeInTheDocument();
   });
@@ -817,7 +871,7 @@ describe("the platform queue page", () => {
     render(<PlatformQueuesPage />);
 
     expect(await screen.findByText(/not started from here/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^stop$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^stop worker on /i })).not.toBeInTheDocument();
   });
 
   it("offers no worker controls on a node that does not allow them", async () => {

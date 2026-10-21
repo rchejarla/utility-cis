@@ -302,16 +302,24 @@ function Verb({
   busy,
   onClick,
   loud,
+  ariaLabel,
 }: {
   label: string;
   busy: boolean;
   onClick: () => void;
   loud?: boolean;
+  /**
+   * What the button is called when the row it sits in is not available
+   * to say it. Several rows each hold a "Stop", and "Stop" alone does not
+   * tell a screen reader which node it belongs to.
+   */
+  ariaLabel?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      aria-label={ariaLabel}
       disabled={busy}
       style={{
         padding: "4px 12px",
@@ -633,6 +641,24 @@ export default function PlatformQueuesPage() {
   const workers = report?.workers ?? [];
   /** A worker this node spawned, if any. At most one — the health port. */
   const ourWorker = workers.find((w) => w.node === report?.thisNode);
+  /**
+   * One row per node: every node Redis reports as connected, plus any
+   * node that holds a worker record.
+   *
+   * The union matters. A node that has dropped off the client list still
+   * has its worker in the registry, and that is precisely when it must
+   * stay on screen rather than vanish — so such a row is marked rather
+   * than omitted.
+   */
+  const nodeRows = [
+    ...new Set([...(report?.nodes ?? []).map((n) => n.host), ...workers.map((w) => w.node)]),
+  ].map((host) => ({
+    host,
+    connected: report?.nodes?.some((n) => n.host === host) ?? false,
+    // At most one per node: a second would fail to bind the health port.
+    worker: workers.find((w) => w.node === host),
+  }));
+  const unattendedNodes = nodeRows.filter((r) => !r.worker).length;
   const unattended = queues.filter((q) => q.workers === 0);
   const unknownWorkers = queues.filter((q) => q.workers === null);
   const paused = queues.filter((q) => q.paused);
@@ -676,16 +702,6 @@ export default function PlatformQueuesPage() {
 
       {report && (
         <div style={{ ...card, marginBottom: 20, padding: "14px", fontSize: 13 }}>
-          <div
-            style={{
-              display: "flex",
-              gap: 16,
-              alignItems: "flex-start",
-              justifyContent: "space-between",
-              flexWrap: "wrap",
-            }}
-          >
-            <div style={{ flex: "1 1 320px" }}>
               {!report.reachable ? (
                 /* Never "all clear": an unanswered Redis and an idle one
                    produce the same zeroes, and only one of them is good
@@ -756,205 +772,240 @@ export default function PlatformQueuesPage() {
                   {report.queues.length} queues — this Redis does not allow listing its clients.
                 </div>
               )}
+        </div>
+      )}
+
+      {/*
+       * The nodes, and the worker on each.
+       *
+       * A table at any node count, rather than a sentence for one node
+       * and a table for several: one layout to learn, and a single code
+       * path. Its own card, because five columns do not fit the 340px
+       * column this lived in — where it rendered as an unlabelled run of
+       * values, which is the same fault the job list had before it got
+       * headers.
+       *
+       * One row per node, never a tree. A deployment may have a worker
+       * per API node, and the version that kept one record let the first
+       * node that started one block every other node from starting any.
+       */}
+      {report && (
+        <div style={{ ...card, marginBottom: 20 }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+              padding: "10px 14px",
+              background: "var(--bg-elevated)",
+            }}
+          >
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                textTransform: "uppercase",
+                letterSpacing: "0.06em",
+                color: "var(--text-muted)",
+              }}
+            >
+              Worker processes
+            </span>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              {nodeRows.length} {plural(nodeRows.length, "node", "nodes")} ·{" "}
+              {workers.length} {plural(workers.length, "worker", "workers")}
+              {unattendedNodes > 0 && (
+                <span style={{ color: "var(--warning)" }}>
+                  {" "}
+                  · {unattendedNodes} with none
+                </span>
+              )}
+            </span>
+          </div>
+
+          {report.nodes === null ? (
+            /* A managed Redis refuses CLIENT LIST, which is where the
+               node list comes from. "No nodes" is never true of a
+               deployment that is serving this page, so the table is
+               replaced rather than drawn empty. */
+            <div style={{ padding: "10px 14px", fontSize: 12, color: "var(--text-muted)" }}>
+              The API nodes could not be listed — this Redis does not allow reading its clients.
+              Any worker below is still reported from its own record.
             </div>
-
-            {/*
-             * The nodes, and the workers on them.
-             *
-             * Beside the verdict rather than below it, because "nothing
-             * is running" and "start it" are one thought. A list rather
-             * than a single slot, because a deployment may have a worker
-             * per API node — and the version that kept one record let the
-             * first node that started one block every other node from
-             * starting any, anywhere.
-             */}
-            {report && (
-              <div
-                style={{
-                  flex: "0 1 340px",
-                  borderLeft: "1px solid var(--border-subtle)",
-                  paddingLeft: 16,
-                  display: "grid",
-                  gap: 6,
-                  fontSize: 12,
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 600,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.06em",
-                    color: "var(--text-muted)",
-                  }}
-                >
-                  Worker processes
-                </div>
-
-                {report.nodes === null ? (
-                  /* A managed Redis refuses CLIENT LIST, which is where
-                     the node list comes from. "No nodes" is never true of
-                     a deployment that is serving this page. */
-                  <div style={{ color: "var(--text-muted)" }}>
-                    The API nodes could not be listed — this Redis does not allow reading its
-                    clients. Any worker below is still reported from its own record.
-                  </div>
-                ) : (
-                  /*
-                   * Every connected node, plus any node that holds a
-                   * worker record. The union matters: a node that has
-                   * dropped off the client list still has its worker in
-                   * the registry, and that is exactly the moment someone
-                   * wants to see it rather than have it vanish.
-                   */
-                  [...new Set([...report.nodes.map((n) => n.host), ...workers.map((w) => w.node)])]
-                    .map((host) => {
-                      const on = workers.filter((w) => w.node === host);
-                      const here = host === report.thisNode;
-                      const connected = report.nodes?.some((n) => n.host === host) ?? false;
-                      return (
-                      <div key={host} style={{ display: "grid", gap: 2 }}>
-                        <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-                          <span style={{ fontFamily: "monospace", color: "var(--text-primary)" }}>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <Th>Node</Th>
+                    <Th>Worker</Th>
+                    <Th>State</Th>
+                    <Th>Since</Th>
+                    <Th align="right">Action</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {nodeRows.map(({ host, connected, worker }) => {
+                    const here = host === report.thisNode;
+                    return (
+                      <tr key={host}>
+                        <td style={{ ...cellStyle, whiteSpace: "nowrap" }}>
+                          <span
+                            style={{ fontFamily: "monospace", color: "var(--text-primary)" }}
+                          >
                             {host}
                           </span>
-                          {!connected && (
-                            <span style={{ color: "var(--danger)" }}>not connected</span>
-                          )}
                           {here && (
                             /* A start lands on whichever node the load
-                               balancer picked, so which one that is has
-                               to be visible rather than surprising. */
-                            <span style={{ color: "var(--accent-primary)" }}>← you are here</span>
+                               balancer picked, so which one that is has to
+                               be visible rather than surprising. */
+                            <span style={{ color: "var(--accent-primary)", marginLeft: 8 }}>
+                              serving this page
+                            </span>
                           )}
-                        </div>
-                        {on.length === 0 ? (
-                          <div style={{ color: "var(--warning)", paddingLeft: 10 }}>no worker</div>
-                        ) : (
-                          on.map((w) => (
-                            <div
-                              key={w.id}
-                              style={{
-                                paddingLeft: 10,
-                                display: "flex",
-                                gap: 8,
-                                alignItems: "baseline",
-                                flexWrap: "wrap",
-                              }}
-                            >
-                              <span style={{ color: "var(--text-secondary)" }}>
-                                pid {w.pid}
-                              </span>
-                              {w.attached ? (
-                                <span style={{ color: "var(--success)" }}>attached</span>
-                              ) : (
-                                /* Either still opening its connections, or
-                                   gone on a node whose pid this one cannot
-                                   check. Both are worth seeing; neither is
-                                   "running". */
-                                <span style={{ color: "var(--warning)" }}>not attached</span>
-                              )}
-                              <span style={{ color: "var(--text-muted)" }}>
-                                since {new Date(w.startedAt).toLocaleTimeString()}
-                              </span>
-                              {w.stoppable ? (
-                                <Verb
-                                  label="Stop"
-                                  loud
-                                  busy={workerBusy}
-                                  onClick={() => stopWorker(w.id)}
-                                />
-                              ) : (
-                                /* A pid means nothing off its host, so a
-                                   button here could only ever answer 409.
-                                   Routing the command through Redis is the
-                                   next step of the design; until then this
-                                   says where to go. */
-                                <span style={{ color: "var(--text-muted)" }}>
-                                  stop it from {w.node}
-                                </span>
-                              )}
-                            </div>
-                          ))
-                        )}
-                      </div>
-                      );
-                    })
-                )}
+                          {!connected && (
+                            /* Holds a worker record but is not in the
+                               client list: the node has gone while its
+                               worker's record remains, which is exactly
+                               when it must not vanish from the table. */
+                            <span style={{ color: "var(--danger)", marginLeft: 8 }}>
+                              not connected
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ ...cellStyle, whiteSpace: "nowrap" }}>
+                          {worker ? (
+                            <span style={{ fontFamily: "monospace" }}>pid {worker.pid}</span>
+                          ) : (
+                            DASH
+                          )}
+                        </td>
+                        <td style={{ ...cellStyle, whiteSpace: "nowrap" }}>
+                          {!worker ? (
+                            <span style={{ color: "var(--warning)" }}>no worker</span>
+                          ) : worker.attached ? (
+                            <span style={{ color: "var(--success)" }}>attached</span>
+                          ) : (
+                            /* Either still opening its connections, or
+                               gone on a node whose pid this one cannot
+                               check. Both are worth seeing; neither is
+                               "running". */
+                            <span style={{ color: "var(--warning)" }}>not attached</span>
+                          )}
+                        </td>
+                        <td style={{ ...cellStyle, whiteSpace: "nowrap" }}>
+                          {worker ? new Date(worker.startedAt).toLocaleString() : DASH}
+                        </td>
+                        <td style={{ ...cellStyle, textAlign: "right", whiteSpace: "nowrap" }}>
+                          {worker && worker.stoppable ? (
+                            <Verb
+                              label="Stop"
+                              ariaLabel={`Stop worker on ${host}`}
+                              loud
+                              busy={workerBusy}
+                              onClick={() => stopWorker(worker.id)}
+                            />
+                          ) : worker ? (
+                            /* A pid means nothing off its host, so a
+                               button here could only ever answer 409.
+                               Routing the command through Redis is the
+                               next step of the design; until then this
+                               says where to go. */
+                            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                              stop it from {host}
+                            </span>
+                          ) : here && report.controllable ? (
+                            <Verb
+                              label="Start"
+                              ariaLabel={`Start worker on ${host}`}
+                              busy={workerBusy}
+                              onClick={startWorker}
+                            />
+                          ) : (
+                            DASH
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
 
-                {ourWorker ? (
-                  <>
-                    {/* Asked over the worker's own HTTP server, which is
-                        the one stop path that drains on both Windows and
-                        Linux — a signal on Windows is an unconditional
-                        termination that skips the handler entirely. */}
-                    <div style={{ color: "var(--text-muted)" }}>
-                      A stop asks it to finish what it is holding before exiting.
-                    </div>
-                    <div
-                      style={{
-                        color: "var(--text-muted)",
-                        fontFamily: "monospace",
-                        wordBreak: "break-all",
-                      }}
-                    >
-                      {ourWorker.logFile}
-                    </div>
-                  </>
-                ) : attachedSomewhere && workers.length === 0 ? (
-                  <div style={{ color: "var(--text-secondary)" }}>
-                    A worker is attached but was not started from here — it has no record, so
-                    there is nothing for this console to stop.
+          {/*
+           * The notes, under the table and naming the node they are
+           * about. They used to sit below every node at once, so with
+           * three nodes the log path of the one worker read as if it
+           * belonged to a node that had none.
+           */}
+          <div
+            style={{
+              padding: "8px 14px",
+              borderTop: "1px solid var(--border-subtle)",
+              display: "grid",
+              gap: 4,
+              fontSize: 12,
+              color: "var(--text-muted)",
+            }}
+          >
+            {!report.controllable ? (
+              <div>
+                Workers are a separate deployment here, so starting one from this console is
+                disabled — scale the worker deployment instead.
+              </div>
+            ) : ourWorker ? (
+              <>
+                {/* Asked over the worker's own HTTP server, which is the
+                    one stop path that drains on both Windows and Linux —
+                    a signal on Windows is an unconditional termination
+                    that skips the handler entirely. */}
+                <div>Stopping asks the worker to finish what it is holding first.</div>
+                <div style={{ fontFamily: "monospace", wordBreak: "break-all" }}>
+                  {ourWorker.node}&rsquo;s log: {ourWorker.logFile}
+                </div>
+              </>
+            ) : attachedSomewhere && workers.length === 0 ? (
+              <div>
+                A worker is attached but was not started from here — it has no record, so there
+                is nothing for this console to stop.
+              </div>
+            ) : (
+              <>
+                <div>
+                  Start acts on {report.thisNode}, the node serving this page — nothing portable
+                  starts a process on another machine. It serves all {report.queues.length}{" "}
+                  {plural(report.queues.length, "queue", "queues")} and outlives this API
+                  process, so a reload will not stop it.
+                </div>
+                {queuedOnStart.length > 0 && (
+                  /*
+                   * What pressing it will set off, in the only terms that
+                   * are actionable: which queues, and how much in each.
+                   * Whether that matters depends entirely on which queue.
+                   */
+                  <div style={{ color: "var(--warning)" }}>
+                    Work already queued starts running at once:{" "}
+                    <span style={{ fontFamily: "monospace" }}>
+                      {queuedOnStart.map((q) => `${q.name} ${q.jobs}`).join(", ")}
+                    </span>
+                    . Click a count in the table below to see the jobs first.
                   </div>
-                ) : !report.controllable ? (
-                  <div style={{ color: "var(--text-muted)" }}>
-                    Workers are a separate deployment here, so starting one from this console is
-                    disabled — scale the worker deployment instead.
-                  </div>
-                ) : (
-                  <>
-                    <div>
-                      {/* Node-local, and the control says so: nothing
-                          portable starts a process on another machine. */}
-                      <Verb
-                        label={`Start worker on ${report.thisNode}`}
-                        busy={workerBusy}
-                        onClick={startWorker}
-                      />
-                    </div>
-                    <div style={{ color: "var(--text-muted)" }}>
-                      Serves all {report.queues.length} queues, and outlives this API process, so
-                      a reload will not stop it.
-                    </div>
-                    {queuedOnStart.length > 0 && (
-                      /*
-                       * What pressing it will set off, in the only terms
-                       * that are actionable: which queues, and how much
-                       * in each. Whether that matters depends entirely on
-                       * which queue it is.
-                       */
-                      <div style={{ color: "var(--warning)" }}>
-                        Work already queued starts running at once:{" "}
-                        <span style={{ fontFamily: "monospace" }}>
-                          {queuedOnStart.map((q) => `${q.name} ${q.jobs}`).join(", ")}
-                        </span>
-                        . Click a count in the table below to see the jobs first.
-                      </div>
-                    )}
-                  </>
                 )}
+              </>
+            )}
 
-                {workerSaid && (
-                  <div
-                    style={{
-                      color: /^(Started|Stopped\.|Draining)/.test(workerSaid)
-                        ? "var(--success)"
-                        : "var(--danger)",
-                    }}
-                  >
-                    {workerSaid}
-                  </div>
-                )}
+            {workerSaid && (
+              <div
+                style={{
+                  color: /^(Started|Stopped\.|Draining)/.test(workerSaid)
+                    ? "var(--success)"
+                    : "var(--danger)",
+                }}
+              >
+                {workerSaid}
               </div>
             )}
           </div>
