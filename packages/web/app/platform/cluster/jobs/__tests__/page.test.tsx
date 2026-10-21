@@ -574,6 +574,68 @@ describe("the cluster jobs page", () => {
     expect(screen.getByText(/^Failed/)).toBeInTheDocument();
   });
 
+  it("cuts a long job id rather than wrapping it, and keeps the whole of it", async () => {
+    /*
+     * A repeatable's id is `repeat:notification-send-cron:1792590070000`
+     * — 43 characters, which wrapped to three lines beside rows of one.
+     * Cut with an ellipsis, with the full value on hover, because it is
+     * the thing an operator reads off to act on the job.
+     */
+    arriveAt("audit-retention", "delayed");
+    serve(
+      report(),
+      jobsResult("delayed", {
+        jobId: "repeat:notification-send-cron:1792590070000",
+        jobName: "process-notification-batch",
+        runsAt: "2026-10-22T04:00:00.000Z",
+      }),
+    );
+
+    render(<ClusterJobsPage />);
+
+    const cell = await screen.findByTitle(
+      "process-notification-batch #repeat:notification-send-cron:1792590070000",
+    );
+    expect(cell).toHaveStyle({ textOverflow: "ellipsis", whiteSpace: "nowrap" });
+  });
+
+  it("hides a column from a phone on its header and its cells together", async () => {
+    /*
+     * The one way this can go wrong is hiding a header without its cells
+     * or the reverse: globals.css warns that every column after it then
+     * shifts left, which reads as wrong data rather than as a narrow
+     * table. Both come from one column entry, and this is the assertion
+     * that they still agree.
+     */
+    arriveAt("billing-runs", "failed");
+    serve(report(), jobsResult("failed", { jobId: "80", reason: "boom", attemptsMade: 2 }));
+
+    render(<ClusterJobsPage />);
+    await screen.findByRole("columnheader", { name: /attempts/i });
+
+    const table = screen.getByRole("columnheader", { name: /attempts/i }).closest("table")!;
+    const headers = [...table.querySelectorAll("thead th")];
+    const cells = [...table.querySelectorAll("tbody tr:first-child td")];
+    expect(headers).toHaveLength(cells.length);
+
+    const hiddenHeaders = headers
+      .map((h, i) => [h.textContent, i] as const)
+      .filter(([, i]) => headers[i].classList.contains("col-hide-sm"))
+      .map(([text]) => text);
+    const hiddenCells = cells
+      .map((_, i) => i)
+      .filter((i) => cells[i].classList.contains("col-hide-sm"))
+      .map((i) => headers[i].textContent);
+
+    // The same columns, by position, on both halves of the table.
+    expect(hiddenCells).toEqual(hiddenHeaders);
+    // And they are the secondary ones, not the tenant or the reason.
+    expect(hiddenHeaders).toContain("Queued");
+    expect(hiddenHeaders).toContain("Attempts");
+    expect(hiddenHeaders).not.toContain("Tenant");
+    expect(hiddenHeaders).not.toContain("Reason");
+  });
+
   it("links back to the queue list", async () => {
     serve(report(), jobsResult("waiting"));
 

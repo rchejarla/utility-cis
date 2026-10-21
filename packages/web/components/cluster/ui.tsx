@@ -27,6 +27,31 @@ export const cellStyle: React.CSSProperties = {
 
 export const DASH = <span style={{ color: "var(--text-muted)" }}>—</span>;
 
+/**
+ * A long value cut with an ellipsis, with the whole of it on hover.
+ *
+ * A `max-width` on a `<td>` is ignored under `table-layout: auto`, so the
+ * clipping has to happen on a block inside the cell. Used for a BullMQ
+ * job id, which runs to `repeat:notification-send-cron:1792590070000` and
+ * wrapped to three lines in a column where every other row was one.
+ */
+export function Clipped({ text, width }: { text: string; width: number }) {
+  return (
+    <span
+      title={text}
+      style={{
+        display: "block",
+        maxWidth: width,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {text}
+    </span>
+  );
+}
+
 export function plural(n: number, one: string, many: string): string {
   return n === 1 ? one : many;
 }
@@ -58,13 +83,17 @@ export function troubledFirst(queues: QueueHealth[]): QueueHealth[] {
 export function Th({
   children,
   align,
+  className,
 }: {
   children?: React.ReactNode;
   align?: "right";
+  /** `col-hide-sm` / `col-hide-md`; see the note in globals.css. */
+  className?: string;
 }) {
   return (
     <th
       scope="col"
+      className={className}
       style={{
         padding: "8px 14px",
         textAlign: align ?? "left",

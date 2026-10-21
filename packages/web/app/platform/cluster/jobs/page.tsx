@@ -11,6 +11,7 @@ import {
   card,
   CardHead,
   cellStyle,
+  Clipped,
   DASH,
   isOverdue,
   plural,
@@ -91,8 +92,23 @@ interface JobColumn {
   /** Only shown when several queues are merged into one list. */
   mergedOnly?: boolean;
   align?: "right";
+  /**
+   * Dropped on a phone. Chosen by what the question cannot be answered
+   * without, as globals.css asks: a tenant, a job id, why it is stuck
+   * and what can be done about it stay; a timestamp, a duration and an
+   * attempt count go. The class lands on the header and the cell from
+   * this one entry, which is the point of declaring columns rather than
+   * writing them twice — the note on `.col-hide-sm` warns that missing
+   * one shifts every column after it.
+   */
+  hideOnPhone?: boolean;
+  /** Keep the cell on one line; the table scrolls sideways instead. */
+  nowrap?: boolean;
   render: (job: QueueJob) => React.ReactNode;
 }
+
+/** See the note on `.col-hide-sm` in globals.css. */
+const HIDE_SM = "col-hide-sm";
 
 /**
  * The columns, declared once.
@@ -113,6 +129,7 @@ const JOB_COLUMNS: readonly JobColumn[] = [
     header: "Queue",
     states: STATES,
     mergedOnly: true,
+    nowrap: true,
     render: (job) => (
       <span style={{ fontFamily: "monospace", color: "var(--text-primary)" }}>{job.queue}</span>
     ),
@@ -120,6 +137,7 @@ const JOB_COLUMNS: readonly JobColumn[] = [
   {
     header: "Tenant",
     states: STATES,
+    nowrap: true,
     render: (job) => (
       <Tenant utilityId={job.utilityId} utilityName={job.utilityName} tenancy={job.tenancy} />
     ),
@@ -127,21 +145,32 @@ const JOB_COLUMNS: readonly JobColumn[] = [
   {
     header: "Job",
     states: STATES,
+    /*
+     * Cut rather than wrapped. A repeatable's id is
+     * `repeat:notification-send-cron:1792590070000` — 43 characters that
+     * wrapped to three lines beside rows of one. The whole of it is on
+     * hover, and it is also in the URL of the action taken on it.
+     */
     render: (job) => (
       <span style={{ fontFamily: "monospace", color: "var(--text-secondary)" }}>
-        {job.jobName}
-        {job.jobId ? ` #${job.jobId}` : ""}
+        <Clipped
+          text={`${job.jobName}${job.jobId ? ` #${job.jobId}` : ""}`}
+          width={260}
+        />
       </span>
     ),
   },
   {
     header: "Queued",
     states: ["waiting", "active", "delayed", "failed", "dlq"],
+    nowrap: true,
+    hideOnPhone: true,
     render: (job) => (job.enqueuedAt ? new Date(job.enqueuedAt).toLocaleString() : DASH),
   },
   {
     header: "Due",
     states: ["delayed"],
+    nowrap: true,
     render: (job) =>
       job.runsAt ? (
         <span
@@ -157,6 +186,8 @@ const JOB_COLUMNS: readonly JobColumn[] = [
   {
     header: "Repeats",
     states: ["delayed"],
+    nowrap: true,
+    hideOnPhone: true,
     // A repeatable job is the scheduler at rest; a delayed one without a
     // pattern is a retry backing off, and they read identically as a count.
     render: (job) =>
@@ -171,12 +202,15 @@ const JOB_COLUMNS: readonly JobColumn[] = [
   {
     header: "Ran at",
     states: ["completed"],
+    nowrap: true,
     render: (job) => (job.finishedAt ? new Date(job.finishedAt).toLocaleString() : DASH),
   },
   {
     header: "Took",
     states: ["completed"],
     align: "right",
+    nowrap: true,
+    hideOnPhone: true,
     render: (job) =>
       job.durationMs === null ? (
         DASH
@@ -191,6 +225,7 @@ const JOB_COLUMNS: readonly JobColumn[] = [
   {
     header: "Result",
     states: ["completed"],
+    nowrap: true,
     /*
      * What the handler returned. For a quiet cron queue this is the only
      * evidence it is working at all: the handler logs nothing on an empty
@@ -212,6 +247,8 @@ const JOB_COLUMNS: readonly JobColumn[] = [
     header: "Attempts",
     states: STATES,
     align: "right",
+    nowrap: true,
+    hideOnPhone: true,
     render: (job) => (job.attemptsMade > 0 ? job.attemptsMade : DASH),
   },
   {
@@ -502,7 +539,11 @@ function ClusterJobs() {
               <thead>
                 <tr>
                   {columns.map((c) => (
-                    <Th key={c.header} align={c.align}>
+                    <Th
+                      key={c.header}
+                      align={c.align}
+                      className={c.hideOnPhone ? HIDE_SM : undefined}
+                    >
                       {c.header}
                     </Th>
                   ))}
@@ -516,7 +557,19 @@ function ClusterJobs() {
                   return (
                     <tr key={`${j.jobId}-${j.enqueuedAt}-${j.finishedAt ?? ""}`}>
                       {columns.map((c) => (
-                        <td key={c.header} style={{ ...cellStyle, textAlign: c.align ?? "left" }}>
+                        <td
+                          key={c.header}
+                          // The same class as its header, from the same
+                          // entry: globals.css warns that a column hidden
+                          // on one and not the other shifts every column
+                          // after it, which reads as wrong data.
+                          className={c.hideOnPhone ? HIDE_SM : undefined}
+                          style={{
+                            ...cellStyle,
+                            textAlign: c.align ?? "left",
+                            ...(c.nowrap ? { whiteSpace: "nowrap" } : null),
+                          }}
+                        >
                           {c.render(j)}
                         </td>
                       ))}
