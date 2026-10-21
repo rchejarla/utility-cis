@@ -226,15 +226,24 @@ export async function platformRoutes(app: FastifyInstance) {
     { config: { platform: true } },
     async (request, reply) => {
       const { name } = z.object({ name: z.string().min(1).max(64) }).parse(request.params);
-      const { state, limit } = z
+      const { state, limit, offset } = z
         .object({
           state: z.enum(QUEUE_JOB_STATES),
           limit: z.coerce.number().int().positive().max(100).default(20),
+          /*
+           * Paging, because the page cannot show a hundred rows and a
+           * queue can hold more. Capped with the limit at MAX_JOBS per
+           * queue inside the service — this is a console for finding a
+           * stuck job, not a job archive.
+           */
+          offset: z.coerce.number().int().min(0).max(1000).default(0),
         })
         .strict()
         .parse(request.query);
 
-      return reply.send(await getQueueJobs(name, state, limit));
+      // `name` may be `all`; the service holds that sentinel and the
+      // guard that keeps it from colliding with a real queue.
+      return reply.send(await getQueueJobs(name, state, limit, { offset }));
     },
   );
 

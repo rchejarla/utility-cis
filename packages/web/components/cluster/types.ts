@@ -74,6 +74,8 @@ export interface StopResult {
 export type JobState = "waiting" | "active" | "delayed" | "failed" | "completed" | "dlq";
 
 export interface QueueJob {
+  /** Which queue it is in — the whole point of a merged list. */
+  queue: string;
   jobId: string | null;
   jobName: string;
   utilityId: string | null;
@@ -87,17 +89,20 @@ export interface QueueJob {
   tenancy: "all-tenants" | "per-tenant";
   /** What is already wrong with this job; null when nothing is. */
   invalid: string | null;
-  /** Completed only. */
+  /** When it last finished: succeeded, or stopped trying. */
   finishedAt: string | null;
   durationMs: number | null;
   result: Record<string, string | number | boolean> | null;
 }
 
 export interface QueueJobsResult {
+  /** The queue asked for, or `all`. */
   queue: string;
   state: JobState;
   reachable: boolean;
   jobs: QueueJob[];
+  /** Whether a further page exists, answered by fetching one extra. */
+  hasMore: boolean;
 }
 
 export interface ClusterReport {

@@ -57,6 +57,12 @@ const MAX_JOBS = 100;
 const DEFAULT_TIMEOUT_MS = 3_000;
 
 export interface QueueJobSummary {
+  /**
+   * Which queue it is in. Redundant for a single-queue read and the
+   * whole point of a merged one — a list of failures across the
+   * deployment is unreadable without it.
+   */
+  queue: QueueName;
   jobId: string | null;
   jobName: string;
   /** Null for the sweeps, which belong to no single tenant. */
@@ -82,7 +88,11 @@ export interface QueueJobSummary {
   attemptsMade: number;
   /** Failed and dead-lettered only. */
   reason: string | null;
-  /** Completed only: when it finished. */
+  /**
+   * When it last finished — successfully for a completed job, by failing
+   * for a failed or dead-lettered one. Both senses, because it is the
+   * same field on the job and it is what a merged list sorts by.
+   */
   finishedAt: string | null;
   /** Completed only: how long the handler took. */
   durationMs: number | null;
@@ -99,11 +109,30 @@ export interface QueueJobSummary {
 }
 
 export interface QueueJobsResult {
+  /** The queue asked for, or `all`. */
   queue: string;
   state: QueueJobState;
   reachable: boolean;
   jobs: QueueJobSummary[];
+  /**
+   * Whether there is a further page. Asked by fetching one more than the
+   * page and seeing whether it arrived, which beats a count: the sets
+   * move under us, and a total that was true a second ago is a worse
+   * answer than "there is more".
+   */
+  hasMore: boolean;
 }
+
+/**
+ * Every queue at once.
+ *
+ * The same sentinel `WORKER_QUEUES` already uses, rather than a second
+ * endpoint: "where are all the failures" is a question about the
+ * deployment, and making an operator try eight queues in turn is not an
+ * answer to it. Not a queue name, and `ALL_QUEUE_NAMES` is the guard
+ * that keeps it from becoming one.
+ */
+export const ALL_QUEUES = "all";
 
 class QueueInspectionError extends Error {
   constructor(
@@ -241,57 +270,54 @@ function invalidityOf(
   return null;
 }
 
-export async function getQueueJobs(
-  queueName: string,
+/**
+ * When a job last mattered, for ordering a merged list.
+ *
+ * One rule across every state rather than a field per state: finished if
+ * it has, else due if it is waiting on a clock, else enqueued. Descending
+ * by this is "most recently relevant first", which is the order each
+ * queue's own page already arrives in.
+ */
+function sortKeyOf(job: QueueJobSummary): number {
+  const when = job.finishedAt ?? job.runsAt ?? job.enqueuedAt;
+  return when ? Date.parse(when) : 0;
+}
+
+/** One queue's page, mapped to summaries. */
+async function readOneQueue(
+  name: QueueName,
   state: QueueJobState,
-  limit = 20,
-  opts: { timeoutMs?: number } = {},
-): Promise<QueueJobsResult> {
-  if (!(ALL_QUEUE_NAMES as readonly string[]).includes(queueName)) {
-    throw new QueueInspectionError(
-      "UNKNOWN_QUEUE",
-      404,
-      `No queue named "${queueName}". Adding a queue means adding it to QUEUE_NAMES.`,
-    );
-  }
-  const name = queueName as QueueName;
-  const take = Math.min(Math.max(limit, 1), MAX_JOBS);
+  start: number,
+  end: number,
+): Promise<QueueJobSummary[]> {
+  const queue = state === "dlq" ? getDlqQueue(name) : getQueue(name);
+  const states = state === "dlq" ? [...DLQ_STATES] : [state];
+  /*
+   * `asc: false` explicitly, not by default. With it BullMQ's Lua reads
+   * a set with ZREVRANGE — verified in `getRanges-1.lua` — so each page
+   * is newest-first and page two continues where page one stopped. A
+   * local sort cannot do that job: it can only order the page it is
+   * given, and layering one on top would quietly become wrong the day
+   * this flag changed.
+   */
+  const raw = (await queue.getJobs(states as never, start, end, false)) as RawJob[];
 
-  const unreachable: QueueJobsResult = { queue: name, state, reachable: false, jobs: [] };
+  const [names, subjects] = await Promise.all([
+    utilityNames(raw.map((job) => utilityIdOf(job.data))),
+    existingSubjects(
+      name,
+      raw.map((job) => subjectIdOf(name, job.data)).filter((id): id is string => id !== null),
+    ),
+  ]);
 
-  try {
-    const summaries = await withQueueTimeout(async () => {
-      const queue = state === "dlq" ? getDlqQueue(name) : getQueue(name);
-      const states = state === "dlq" ? [...DLQ_STATES] : [state];
-      const raw = (await queue.getJobs(states as never, 0, take - 1)) as RawJob[];
-
-      const [names, subjects] = await Promise.all([
-        utilityNames(raw.map((job) => utilityIdOf(job.data))),
-        existingSubjects(
-          name,
-          raw
-            .map((job) => subjectIdOf(name, job.data))
-            .filter((id): id is string => id !== null),
-        ),
-      ]);
-
-      /*
-       * Newest first for what has already run. BullMQ reads the set with
-       * a range query whose direction is its own business, and the only
-       * useful order for "what happened" is most recent.
-       */
-      const ordered =
-        state === "completed"
-          ? [...raw].sort((a, b) => (b.finishedOn ?? 0) - (a.finishedOn ?? 0))
-          : raw;
-
-      return ordered.map<QueueJobSummary>((job) => {
+  return raw.map<QueueJobSummary>((job) => {
         const utilityId = utilityIdOf(job.data);
         // A tenant that no longer exists keeps its id and no name: the
         // job is still parked and still a fact.
         const utilityName = utilityId ? (names.get(utilityId) ?? null) : null;
         const subjectId = subjectIdOf(name, job.data);
         return {
+          queue: name,
           jobId: job.id ?? null,
           jobName: job.name ?? name,
           utilityId,
@@ -319,7 +345,11 @@ export async function getQueueJobs(
           repeats: repeatsOf(job),
           attemptsMade: job.attemptsMade ?? 0,
           reason: job.failedReason ?? null,
-          finishedAt: state === "completed" ? isoOf(job.finishedOn) : null,
+          // Both senses of finished: succeeded, or stopped trying.
+          finishedAt:
+            state === "completed" || state === "failed" || state === "dlq"
+              ? isoOf(job.finishedOn)
+              : null,
           durationMs:
             state === "completed" &&
             typeof job.finishedOn === "number" &&
@@ -329,17 +359,78 @@ export async function getQueueJobs(
           result: state === "completed" ? scalarsOf(job.returnvalue) : null,
         };
       });
+}
+
+export async function getQueueJobs(
+  queueName: string,
+  state: QueueJobState,
+  limit = 20,
+  opts: { timeoutMs?: number; offset?: number } = {},
+): Promise<QueueJobsResult> {
+  const everyQueue = queueName === ALL_QUEUES;
+  if (!everyQueue && !(ALL_QUEUE_NAMES as readonly string[]).includes(queueName)) {
+    throw new QueueInspectionError(
+      "UNKNOWN_QUEUE",
+      404,
+      `No queue named "${queueName}". Adding a queue means adding it to QUEUE_NAMES.`,
+    );
+  }
+
+  const take = Math.min(Math.max(limit, 1), MAX_JOBS);
+  const offset = Math.max(opts.offset ?? 0, 0);
+
+  const unreachable: QueueJobsResult = {
+    queue: queueName,
+    state,
+    reachable: false,
+    jobs: [],
+    hasMore: false,
+  };
+
+  try {
+    const summaries = await withQueueTimeout(async () => {
+      /*
+       * One past the page, so "is there more" is answered by whether it
+       * arrived. A count would be a worse answer: these sets move under
+       * us, and a total that was true a second ago is not a total.
+       */
+      if (!everyQueue) {
+        return readOneQueue(queueName as QueueName, state, offset, offset + take);
+      }
+
+      /*
+       * Every queue, merged. Each is read from the start of its own set
+       * up to the page's end, because the merged order is not any one
+       * queue's — then sorted and sliced. Bounded by MAX_JOBS per queue,
+       * which is also why deep paging across all of them is not offered:
+       * "the newest hundred failures anywhere" is the question, and page
+       * fifty of it is not.
+       */
+      const perQueue = Math.min(offset + take + 1, MAX_JOBS);
+      const pages = await Promise.all(
+        ALL_QUEUE_NAMES.map((name) => readOneQueue(name, state, 0, perQueue - 1)),
+      );
+      return pages
+        .flat()
+        .sort((a, b) => sortKeyOf(b) - sortKeyOf(a))
+        .slice(offset, offset + take + 1);
     }, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
     if (summaries === null) {
-      logger.warn({ queue: name, state }, "queue job listing timed out");
+      logger.warn({ queue: queueName, state }, "queue job listing timed out");
       return unreachable;
     }
 
-    return { queue: name, state, reachable: true, jobs: summaries };
+    return {
+      queue: queueName,
+      state,
+      reachable: true,
+      jobs: summaries.slice(0, take),
+      hasMore: summaries.length > take,
+    };
   } catch (err) {
     if (err instanceof QueueInspectionError) throw err;
-    logger.warn({ err, queue: name, state }, "queue job listing failed");
+    logger.warn({ err, queue: queueName, state }, "queue job listing failed");
     return unreachable;
   }
 }

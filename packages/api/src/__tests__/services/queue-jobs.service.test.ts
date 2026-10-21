@@ -20,9 +20,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const jobsByQueue: Record<string, unknown[]> = {};
 let hangingQueue: string | null = null;
+/** Every `getJobs` call, so the range and the sort order can be asserted. */
+const getJobsCalls: [unknown, number, number, boolean][] = [];
 
 const queueFor = (name: string) => ({
-  getJobs: vi.fn(async () => {
+  getJobs: vi.fn(async (states: unknown, start: number, end: number, asc: boolean) => {
+    getJobsCalls.push([states, start, end, asc]);
     if (hangingQueue === name) return new Promise<never>(() => {});
     return jobsByQueue[name] ?? [];
   }),
@@ -48,6 +51,7 @@ let prisma: typeof import("../../lib/prisma.js").prisma;
 beforeEach(async () => {
   vi.clearAllMocks();
   for (const key of Object.keys(jobsByQueue)) delete jobsByQueue[key];
+  getJobsCalls.length = 0;
   hangingQueue = null;
   svc = await import("../../services/queue-jobs.service.js");
   prisma = (await import("../../lib/prisma.js")).prisma;
@@ -200,15 +204,86 @@ describe("getQueueJobs", () => {
     expect(JSON.stringify(result)).not.toContain("jane@example.com");
   });
 
-  it("puts the newest completed job first", async () => {
+  it("asks Redis for newest-first and does not reorder what comes back", async () => {
+    /*
+     * Ordering is BullMQ's job, and it must be, because a local sort can
+     * only order one page. With `asc=false` its Lua reads a completed set
+     * with ZREVRANGE — verified in `getRanges-1.lua` — so page two is the
+     * next-oldest twenty, still descending. An in-page sort on top of
+     * that is a no-op that would quietly become wrong the day the
+     * underlying order changed, so the flag is passed explicitly and the
+     * service passes the result through.
+     */
     jobsByQueue["audit-retention"] = [
-      job({ id: "old", finishedOn: Date.parse("2026-10-20T04:00:00.000Z"), data: {} }),
-      job({ id: "new", finishedOn: Date.parse("2026-10-21T04:00:00.000Z"), data: {} }),
+      job({ id: "newest", finishedOn: Date.parse("2026-10-21T04:00:00.000Z"), data: {} }),
+      job({ id: "older", finishedOn: Date.parse("2026-10-20T04:00:00.000Z"), data: {} }),
     ];
 
     const result = await svc.getQueueJobs("audit-retention", "completed");
 
-    expect(result.jobs.map((j) => j.jobId)).toEqual(["new", "old"]);
+    expect(result.jobs.map((j) => j.jobId)).toEqual(["newest", "older"]);
+    const [, , , asc] = getJobsCalls[0];
+    expect(asc).toBe(false);
+  });
+
+  it("takes a page from further in when given an offset", async () => {
+    jobsByQueue["billing-runs"] = [job({ id: "21" })];
+
+    const result = await svc.getQueueJobs("billing-runs", "waiting", 20, { offset: 20 });
+
+    /*
+     * 20..40 inclusive — twenty-one, one past the page. Whether that
+     * extra one arrives is how `hasMore` is answered, which beats a
+     * count: these sets move under us, so a total that was true a second
+     * ago is not a total.
+     */
+    const [, start, end] = getJobsCalls[0];
+    expect(start).toBe(20);
+    expect(end).toBe(40);
+    // And the extra one is not shown.
+    expect(result.jobs).toHaveLength(1);
+    expect(result.hasMore).toBe(false);
+  });
+
+  it("says there is another page when one more job came back than asked for", async () => {
+    jobsByQueue["billing-runs"] = Array.from({ length: 4 }, (_, i) => job({ id: String(i) }));
+
+    const result = await svc.getQueueJobs("billing-runs", "waiting", 3);
+
+    expect(result.jobs.map((j) => j.jobId)).toEqual(["0", "1", "2"]);
+    expect(result.hasMore).toBe(true);
+  });
+
+  it("reads every queue when the name is `all`", async () => {
+    /*
+     * `all` rather than a second endpoint, and the same sentinel
+     * `WORKER_QUEUES` already uses for every queue. "Where are all the
+     * failures" is a question about the deployment, not about a queue,
+     * and making the operator try eight in turn is not an answer.
+     */
+    jobsByQueue["billing-runs"] = [
+      job({ id: "b1", finishedOn: Date.parse("2026-10-21T10:00:00.000Z") }),
+    ];
+    jobsByQueue["audit-retention"] = [
+      job({ id: "a1", data: {}, finishedOn: Date.parse("2026-10-21T11:00:00.000Z") }),
+    ];
+
+    const result = await svc.getQueueJobs("all", "failed");
+
+    expect(result.queue).toBe("all");
+    // Merged newest-first across queues, and each job says which it is in.
+    expect(result.jobs.map((j) => `${j.queue}:${j.jobId}`)).toEqual([
+      "audit-retention:a1",
+      "billing-runs:b1",
+    ]);
+  });
+
+  it("names the queue on every job, so a merged list can say where each came from", async () => {
+    jobsByQueue["billing-runs"] = [job()];
+
+    const result = await svc.getQueueJobs("billing-runs", "waiting");
+
+    expect(result.jobs[0].queue).toBe("billing-runs");
   });
 
   it("does not call a completed job invalid for a record that has since gone", async () => {

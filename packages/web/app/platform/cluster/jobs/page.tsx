@@ -56,8 +56,19 @@ const STATE_LABELS: Record<JobState, string> = {
   dlq: "Dead-lettered",
 };
 
-/** A screenful. Past this, Bull Board is the tool. */
+/** A screenful. Pages beyond it are reachable; a hundred rows is not. */
 const JOBS_PER_PAGE = 20;
+
+/**
+ * Every queue at once — the same sentinel the API takes, and the one
+ * `WORKER_QUEUES` already uses.
+ *
+ * "Where are all the failures" is a question about the deployment, and
+ * making the operator try eight queues in turn is not an answer. Merged
+ * newest-first, which is why each row then has to say which queue it
+ * came from.
+ */
+const ALL_QUEUES = "all";
 
 type ActionName = "retry" | "promote" | "replay";
 
@@ -77,6 +88,8 @@ interface JobColumn {
   header: string;
   /** The states this column means something in. */
   states: readonly JobState[];
+  /** Only shown when several queues are merged into one list. */
+  mergedOnly?: boolean;
   align?: "right";
   render: (job: QueueJob) => React.ReactNode;
 }
@@ -91,6 +104,19 @@ interface JobColumn {
  * fill one it does not label.
  */
 const JOB_COLUMNS: readonly JobColumn[] = [
+  {
+    /*
+     * Only when the list is merged. On a single queue every row would
+     * say the same thing, which is a column that teaches nothing — and
+     * on a merged list it is the first thing the eye needs.
+     */
+    header: "Queue",
+    states: STATES,
+    mergedOnly: true,
+    render: (job) => (
+      <span style={{ fontFamily: "monospace", color: "var(--text-primary)" }}>{job.queue}</span>
+    ),
+  },
   {
     header: "Tenant",
     states: STATES,
@@ -226,10 +252,14 @@ function ClusterJobs() {
    */
   const requestedQueue = params.get("queue");
   const queue =
-    requestedQueue && queueNames.includes(requestedQueue) ? requestedQueue : queueNames[0];
+    requestedQueue === ALL_QUEUES || (requestedQueue && queueNames.includes(requestedQueue))
+      ? requestedQueue
+      : queueNames[0];
   const requestedState = params.get("state") as JobState | null;
   const state: JobState =
     requestedState && STATES.includes(requestedState) ? requestedState : "waiting";
+  const offset = Math.max(Number(params.get("offset") ?? 0) || 0, 0);
+  const merged = queue === ALL_QUEUES;
 
   const [jobs, setJobs] = useState<QueueJobsResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -243,6 +273,7 @@ function ClusterJobs() {
       .get<QueueJobsResult>(`/api/v1/platform/queues/${queue}/jobs`, {
         state,
         limit: String(JOBS_PER_PAGE),
+        offset: String(offset),
       })
       .then((data) => {
         if (live) setJobs(data);
@@ -253,7 +284,7 @@ function ClusterJobs() {
     return () => {
       live = false;
     };
-  }, [queue, state]);
+  }, [queue, state, offset]);
 
   /** Per job: what the last verb used on it came back with. */
   const [outcome, setOutcome] = useState<Record<string, string>>({});
@@ -291,10 +322,14 @@ function ClusterJobs() {
     }
   }
 
-  function go(next: { queue?: string; state?: string }) {
+  function go(next: { queue?: string; state?: string; offset?: number }) {
     const q = next.queue ?? queue ?? "";
     const s = next.state ?? state;
-    router.push(`/platform/cluster/jobs?queue=${encodeURIComponent(q)}&state=${s}`);
+    // Back to the first page whenever the filters change: page four of
+    // the old selection is not page four of the new one.
+    const o = next.offset ?? (next.queue || next.state ? 0 : offset);
+    const page = o > 0 ? `&offset=${o}` : "";
+    router.push(`/platform/cluster/jobs?queue=${encodeURIComponent(q)}&state=${s}${page}`);
   }
 
   /*
@@ -302,15 +337,19 @@ function ClusterJobs() {
    * whole reason to open a filter — otherwise choosing a queue is
    * guesswork, and most combinations are empty.
    */
-  const health = report?.queues.find((q) => q.name === queue);
   const countFor = (s: JobState): number | null => {
-    if (!health) return null;
-    if (s === "dlq") return health.dlqDepth;
-    return health.counts[s as keyof typeof health.counts] ?? 0;
+    const queues = merged ? report?.queues : report?.queues.filter((q) => q.name === queue);
+    if (!queues || queues.length === 0) return null;
+    // Summed across the selection, so "All queues · Failed (3)" means
+    // three failures somewhere rather than three in one unnamed place.
+    return queues.reduce(
+      (n, q) => n + (s === "dlq" ? q.dlqDepth : (q.counts[s as keyof typeof q.counts] ?? 0)),
+      0,
+    );
   };
 
   const columns = [
-    ...JOB_COLUMNS.filter((c) => c.states.includes(state)),
+    ...JOB_COLUMNS.filter((c) => c.states.includes(state) && (merged || !c.mergedOnly)),
     ...(jobs?.jobs.some((j) => j.invalid) ? [PROBLEM_COLUMN] : []),
   ];
   const verb = verbFor(state);
@@ -332,10 +371,10 @@ function ClusterJobs() {
               key: "queue",
               label: "Queue",
               value: queue,
-              options: (report?.queues ?? []).map((q) => ({
-                value: q.name,
-                label: q.name,
-              })),
+              options: [
+                { value: ALL_QUEUES, label: "All queues" },
+                ...(report?.queues ?? []).map((q) => ({ value: q.name, label: q.name })),
+              ],
               onChange: (value) => value && go({ queue: value }),
             },
             {
@@ -373,16 +412,23 @@ function ClusterJobs() {
         <CardHead
           left={
             <>
-              <span style={{ fontFamily: "monospace", textTransform: "none" }}>
-                {queue ?? "no queue"}
-              </span>
+              {merged ? (
+                "All queues"
+              ) : (
+                <span style={{ fontFamily: "monospace", textTransform: "none" }}>
+                  {queue ?? "no queue"}
+                </span>
+              )}
               {" · "}
               {STATE_LABELS[state].toLowerCase()}
             </>
           }
           right={
             jobs?.reachable
-              ? `${jobs.jobs.length} ${plural(jobs.jobs.length, "job", "jobs")}`
+              ? /* Where the page starts, not just how long it is: "1–20"
+                   on its own would read the same on page one and page
+                   four. */
+                `${offset + 1}–${offset + jobs.jobs.length}`
               : undefined
           }
         />
@@ -403,8 +449,33 @@ function ClusterJobs() {
             {/* The count came from a snapshot a moment earlier, so an
                 empty list here means the jobs moved on, not that the
                 count lied. */}
-            Nothing {STATE_LABELS[state].toLowerCase()} in {queue} — either there never was, or
-            the jobs moved on since the count was taken.
+            {offset > 0 ? (
+              <>
+                Nothing on this page any more — the jobs moved on since it was reached.{" "}
+                <button
+                  type="button"
+                  onClick={() => go({ offset: 0 })}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    padding: 0,
+                    fontFamily: "inherit",
+                    fontSize: 12,
+                    color: "var(--accent-primary)",
+                    cursor: "pointer",
+                  }}
+                >
+                  Back to the first page
+                </button>
+                .
+              </>
+            ) : (
+              <>
+                Nothing {STATE_LABELS[state].toLowerCase()} in{" "}
+                {merged ? "any queue" : queue} — either there never was, or the jobs moved on
+                since the count was taken.
+              </>
+            )}
           </div>
         )}
         {jobs?.reachable && jobs.jobs.length > 0 && (
@@ -461,6 +532,38 @@ function ClusterJobs() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/*
+         * Prev and Next rather than numbered pages, because there is no
+         * total to number against: the sets move under us, and `hasMore`
+         * is answered by fetching one job past the page rather than by
+         * counting a set that will have changed by the time it is drawn.
+         */}
+        {jobs?.reachable && (offset > 0 || jobs.hasMore) && (
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              alignItems: "center",
+              justifyContent: "flex-end",
+              padding: "8px 14px",
+              borderTop: "1px solid var(--border-subtle)",
+            }}
+          >
+            <Verb
+              label="← Newer"
+              ariaLabel="Previous page"
+              busy={offset === 0}
+              onClick={() => go({ offset: Math.max(offset - JOBS_PER_PAGE, 0) })}
+            />
+            <Verb
+              label="Older →"
+              ariaLabel="Next page"
+              busy={!jobs.hasMore}
+              onClick={() => go({ offset: offset + JOBS_PER_PAGE })}
+            />
           </div>
         )}
       </div>

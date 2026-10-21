@@ -65,6 +65,7 @@ function jobsResult(state: string, over: Record<string, unknown> = {}) {
     queue: "billing-runs",
     state,
     reachable: true,
+    hasMore: false,
     jobs: [
       {
         jobId: "7",
@@ -121,7 +122,93 @@ describe("the cluster jobs page", () => {
     expect(get).toHaveBeenCalledWith("/api/v1/platform/queues/billing-runs/jobs", {
       state: "waiting",
       limit: "20",
+      offset: "0",
     });
+  });
+
+  it("pages forward and back, without pretending to know a total", async () => {
+    /*
+     * Prev and Next rather than numbered pages. There is no total to
+     * number against: these sets move under us, so `hasMore` comes from
+     * fetching one job past the page rather than from counting a set that
+     * will have changed by the time it is drawn.
+     */
+    serve(report(), { ...jobsResult("waiting"), hasMore: true });
+
+    render(<ClusterJobsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /next page/i }));
+
+    expect(push).toHaveBeenCalledWith(
+      "/platform/cluster/jobs?queue=billing-runs&state=waiting&offset=20",
+    );
+  });
+
+  it("has nothing to go back to on the first page", async () => {
+    serve(report(), { ...jobsResult("waiting"), hasMore: true });
+
+    render(<ClusterJobsPage />);
+
+    expect(await screen.findByRole("button", { name: /previous page/i })).toBeDisabled();
+  });
+
+  it("offers no pager at all when one page is the whole of it", async () => {
+    serve(report(), jobsResult("waiting"));
+
+    render(<ClusterJobsPage />);
+    await screen.findByText("City of Testville");
+
+    expect(screen.queryByRole("button", { name: /next page/i })).not.toBeInTheDocument();
+  });
+
+  it("reads every queue at once, and says which one each job is in", async () => {
+    /*
+     * "Where are all the failures" is a question about the deployment,
+     * and trying eight queues in turn is not an answer. The Queue column
+     * appears only here: on a single queue every row would say the same
+     * thing.
+     */
+    arriveAt("all", "failed");
+    serve(report(), {
+      queue: "all",
+      state: "failed",
+      reachable: true,
+      hasMore: false,
+      jobs: [
+        { ...jobsResult("failed").jobs[0], queue: "imports", jobId: "9" },
+        { ...jobsResult("failed").jobs[0], queue: "billing-runs", jobId: "80" },
+      ],
+    });
+
+    render(<ClusterJobsPage />);
+
+    expect(await screen.findByRole("columnheader", { name: /^queue$/i })).toBeInTheDocument();
+    expect(screen.getByText("imports")).toBeInTheDocument();
+    expect(get).toHaveBeenCalledWith("/api/v1/platform/queues/all/jobs", {
+      state: "failed",
+      limit: "20",
+      offset: "0",
+    });
+  });
+
+  it("does not show a Queue column when one queue was asked for", async () => {
+    serve(report(), jobsResult("waiting"));
+
+    render(<ClusterJobsPage />);
+    await screen.findByText("City of Testville");
+
+    expect(screen.queryByRole("columnheader", { name: /^queue$/i })).not.toBeInTheDocument();
+  });
+
+  it("starts over at page one when the filters change", async () => {
+    // Page four of the old selection is not page four of the new one.
+    search = new URLSearchParams({ queue: "billing-runs", state: "waiting", offset: "60" });
+    serve(report(), { ...jobsResult("waiting"), hasMore: true });
+
+    render(<ClusterJobsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /status/i }));
+    await userEvent.click(await screen.findByText(/^Failed/));
+
+    expect(push).toHaveBeenCalledWith("/platform/cluster/jobs?queue=billing-runs&state=failed");
   });
 
   it("labels its columns", async () => {
