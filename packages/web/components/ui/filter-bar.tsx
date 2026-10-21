@@ -11,6 +11,17 @@ interface FilterConfigBase {
   key: string;
   label: string;
   options: FilterOption[];
+  /**
+   * Whether "All <label>" is offered. True unless said otherwise.
+   *
+   * False for a filter that must always hold a value — the platform job
+   * list asks the API for one state, and there is no "all states" to
+   * ask for. Offering the item there rendered one that called
+   * `onChange(undefined)`, which such a page can only ignore: an option
+   * that cannot be chosen reads as a broken control rather than as an
+   * unavailable one.
+   */
+  clearable?: boolean;
 }
 
 interface SingleFilterConfig extends FilterConfigBase {
@@ -208,12 +219,14 @@ function FilterPill({ filter }: { filter: FilterConfig }) {
 
             {/* "All" stays put rather than scrolling away, and is never
                 filtered out — clearing the filter must always be one
-                click. */}
-            <DropdownItem
-              label={`All ${filter.label}`}
-              active={!isActive}
-              onClick={clear}
-            />
+                click, where clearing means anything at all. */}
+            {filter.clearable !== false && (
+              <DropdownItem
+                label={`All ${filter.label}`}
+                active={!isActive}
+                onClick={clear}
+              />
+            )}
 
             <div style={{ maxHeight: "260px", overflowY: "auto" }}>
               {visibleOptions.map((opt) => (

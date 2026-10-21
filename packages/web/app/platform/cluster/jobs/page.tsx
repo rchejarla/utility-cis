@@ -359,8 +359,12 @@ function ClusterJobs() {
       <PageHeader title="Jobs" subtitle="What is in one queue, in one state" />
 
       <div style={{ marginBottom: 12, fontSize: 12 }}>
+        {/* "Queues", not "All queues": that is the page's name, and the
+            queue filter already uses those words for every queue at
+            once. Two different things in the same words is how this read
+            as a duplicate. */}
         <Link href="/platform/cluster/queues" style={{ color: "var(--accent-primary)" }}>
-          ← All queues
+          ← Queues
         </Link>
       </div>
 
@@ -369,18 +373,26 @@ function ClusterJobs() {
           filters={[
             {
               key: "queue",
-              label: "Queue",
-              value: queue,
-              options: [
-                { value: ALL_QUEUES, label: "All queues" },
-                ...(report?.queues ?? []).map((q) => ({ value: q.name, label: q.name })),
-              ],
-              onChange: (value) => value && go({ queue: value }),
+              /*
+               * "Queues", so FilterBar's clear item reads "All queues" —
+               * which is the whole of how every queue is chosen. This
+               * page used to add an option of its own saying the same
+               * thing, so the dropdown offered it twice.
+               */
+              label: "Queues",
+              value: merged ? undefined : queue,
+              options: (report?.queues ?? []).map((q) => ({ value: q.name, label: q.name })),
+              // Cleared means all of them, which here is a selection
+              // rather than the absence of one.
+              onChange: (value) => go({ queue: value ?? ALL_QUEUES }),
             },
             {
               key: "state",
               label: "Status",
               value: state,
+              // A job is always in exactly one state, and the endpoint
+              // takes exactly one, so there is no "All" to offer.
+              clearable: false,
               options: STATES.map((s) => {
                 const n = countFor(s);
                 return {

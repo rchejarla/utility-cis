@@ -512,12 +512,59 @@ describe("the cluster jobs page", () => {
     expect(screen.getByText(/completed \(17\)/i)).toBeInTheDocument();
   });
 
+  it("offers All queues exactly once", async () => {
+    /*
+     * It appeared twice: FilterBar renders its own `All {label}` as the
+     * way to clear a filter, and this page had added another one of its
+     * own. Two items, the same words, one of them doing nothing the
+     * other did not.
+     */
+    serve(report(), jobsResult("waiting"));
+
+    render(<ClusterJobsPage />);
+    await screen.findByText("City of Testville");
+    await userEvent.click(screen.getByRole("button", { name: /queues/i }));
+
+    expect(screen.getAllByText(/all queues/i)).toHaveLength(1);
+  });
+
+  it("reads every queue when All queues is chosen", async () => {
+    // Clearing the queue filter means all of them, which is a real
+    // selection here rather than the absence of one.
+    serve(report(), jobsResult("waiting"));
+
+    render(<ClusterJobsPage />);
+    await screen.findByText("City of Testville");
+    await userEvent.click(screen.getByRole("button", { name: /queues/i }));
+    await userEvent.click(screen.getByText(/all queues/i));
+
+    expect(push).toHaveBeenCalledWith("/platform/cluster/jobs?queue=all&state=waiting");
+  });
+
+  it("gives the status filter no All, because a job is always in one state", async () => {
+    /*
+     * It had one, and clicking it did nothing: FilterBar's clear calls
+     * `onChange(undefined)`, and there is no "all statuses" to ask the
+     * API for — the endpoint takes exactly one. An option that cannot be
+     * chosen is worse than no option.
+     */
+    serve(report(), jobsResult("waiting"));
+
+    render(<ClusterJobsPage />);
+    await screen.findByText("City of Testville");
+    await userEvent.click(screen.getByRole("button", { name: /status/i }));
+
+    expect(screen.queryByText(/all status/i)).not.toBeInTheDocument();
+    // The states themselves are all still there to choose between.
+    expect(screen.getByText(/^Failed/)).toBeInTheDocument();
+  });
+
   it("links back to the queue list", async () => {
     serve(report(), jobsResult("waiting"));
 
     render(<ClusterJobsPage />);
 
-    const back = await screen.findByRole("link", { name: /all queues/i });
+    const back = await screen.findByRole("link", { name: /^← Queues$/i });
     expect(back).toHaveAttribute("href", "/platform/cluster/queues");
   });
 });
