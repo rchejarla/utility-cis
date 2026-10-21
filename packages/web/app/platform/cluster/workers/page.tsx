@@ -15,6 +15,9 @@ import {
 } from "@/components/cluster/ui";
 import type { StopResult, WorkerView } from "@/components/cluster/types";
 
+/** See the note on `.col-hide-sm` in globals.css. */
+const HIDE_SM = "col-hide-sm";
+
 /**
  * The nodes, and the worker process on each.
  *
@@ -166,7 +169,10 @@ export default function ClusterWorkersPage() {
                     <Th>Node</Th>
                     <Th>Worker</Th>
                     <Th>State</Th>
-                    <Th>Since</Th>
+                    {/* The one column a phone can do without here: the
+                        node, whether a worker is attached, and what can
+                        be done about it are the question. */}
+                    <Th className={HIDE_SM}>Since</Th>
                     <Th align="right">Action</Th>
                   </tr>
                 </thead>
@@ -217,7 +223,10 @@ export default function ClusterWorkersPage() {
                             <span style={{ color: "var(--warning)" }}>not attached</span>
                           )}
                         </td>
-                        <td style={{ ...cellStyle, whiteSpace: "nowrap" }}>
+                        <td
+                          className={HIDE_SM}
+                          style={{ ...cellStyle, whiteSpace: "nowrap" }}
+                        >
                           {worker ? new Date(worker.startedAt).toLocaleString() : DASH}
                         </td>
                         <td style={{ ...cellStyle, textAlign: "right", whiteSpace: "nowrap" }}>

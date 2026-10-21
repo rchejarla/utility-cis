@@ -264,4 +264,36 @@ describe("the cluster queues page", () => {
     }
   });
 
+
+  it("hides the same count columns from a phone on headers and cells alike", async () => {
+    /*
+     * Eight numeric columns, and all eight showed on a phone — the
+     * classes went on the Jobs table and never on this one, which is the
+     * widest table in the console. The one way the fix breaks is hiding
+     * a header without its cells, which globals.css warns shifts every
+     * column after it: a silent misread rather than a narrow table.
+     */
+    get.mockResolvedValue(report());
+
+    render(<ClusterQueuesPage />);
+    const table = (await screen.findByRole("columnheader", { name: /^queue$/i })).closest(
+      "table",
+    )!;
+    const headers = [...table.querySelectorAll("thead th")];
+    const cells = [...table.querySelectorAll("tbody tr:first-child td")];
+    expect(headers).toHaveLength(cells.length);
+
+    // The same positions on both halves — which is the whole of what
+    // keeps a cell from reading under the wrong heading.
+    const hiddenAt = (els: Element[]) =>
+      els.map((e, i) => i).filter((i) => els[i].classList.contains("col-hide-sm"));
+    expect(hiddenAt(cells)).toEqual(hiddenAt(headers));
+
+    const names = hiddenAt(headers).map((i) => headers[i].textContent);
+    expect(names).toEqual(["Active", "Delayed", "Completed"]);
+    // What a phone must keep: whose queue, who is working it, what broke.
+    expect(names).not.toContain("Queue");
+    expect(names).not.toContain("Failed");
+    expect(names).not.toContain("Dead-lettered");
+  });
 });

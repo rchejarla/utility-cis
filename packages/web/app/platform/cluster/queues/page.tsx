@@ -21,6 +21,36 @@ import type { JobState, QueueHealth } from "@/components/cluster/types";
 
 const BULL_BOARD_URL = `${API_URL}/admin/queues`;
 
+/** See the note on `.col-hide-sm` in globals.css. */
+const HIDE_SM = "col-hide-sm";
+
+/**
+ * The count columns, declared once so the header and the cell cannot
+ * disagree about which of them a phone drops.
+ *
+ * Eight numeric columns is the widest table in the console, and on a
+ * phone the question is only "is anything wrong, and is anyone working
+ * it" — so the queue, its workers, what is piling up and what has broken
+ * stay. Active is almost always zero, Delayed is the armed cron rather
+ * than a problem, and Completed is evidence of health rather than of
+ * trouble; those three go.
+ */
+const COUNT_COLUMNS: readonly {
+  state: JobState;
+  header: string;
+  /** The screen-reader label, where the header is not adjacent. */
+  label: string;
+  loud?: boolean;
+  hideOnPhone?: boolean;
+}[] = [
+  { state: "waiting", header: "Waiting", label: "waiting" },
+  { state: "active", header: "Active", label: "active", hideOnPhone: true },
+  { state: "delayed", header: "Delayed", label: "delayed", hideOnPhone: true },
+  { state: "failed", header: "Failed", label: "failed", loud: true },
+  { state: "dlq", header: "Dead-lettered", label: "dead-lettered", loud: true },
+  { state: "completed", header: "Completed", label: "completed", hideOnPhone: true },
+];
+
 /**
  * Below this, how long ago a worker attached is worth printing.
  *
@@ -144,12 +174,15 @@ export default function ClusterQueuesPage() {
               <tr style={{ background: "var(--bg-elevated)" }}>
                 <Th>Queue</Th>
                 <Th>Workers</Th>
-                <Th align="right">Waiting</Th>
-                <Th align="right">Active</Th>
-                <Th align="right">Delayed</Th>
-                <Th align="right">Failed</Th>
-                <Th align="right">Dead-lettered</Th>
-                <Th align="right">Completed</Th>
+                {COUNT_COLUMNS.map((c) => (
+                  <Th
+                    key={c.state}
+                    align="right"
+                    className={c.hideOnPhone ? HIDE_SM : undefined}
+                  >
+                    {c.header}
+                  </Th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -166,23 +199,22 @@ export default function ClusterQueuesPage() {
                   <td style={{ ...cellStyle, whiteSpace: "nowrap" }}>
                     <WorkerCell queue={q} />
                   </td>
-                  {(
-                    [
-                      ["waiting", q.counts.waiting, false],
-                      ["active", q.counts.active, false],
-                      ["delayed", q.counts.delayed, false],
-                      ["failed", q.counts.failed, true],
-                      ["dlq", q.dlqDepth, true],
-                      ["completed", q.counts.completed, false],
-                    ] as [JobState, number, boolean][]
-                  ).map(([state, value, loud]) => (
-                    <td key={state} style={{ ...cellStyle, textAlign: "right" }}>
+                  {COUNT_COLUMNS.map((c) => (
+                    <td
+                      key={c.state}
+                      // The same class as its header, from the same
+                      // entry: globals.css warns that a column hidden on
+                      // one and not the other shifts every column after
+                      // it, which reads as wrong data.
+                      className={c.hideOnPhone ? HIDE_SM : undefined}
+                      style={{ ...cellStyle, textAlign: "right" }}
+                    >
                       <Count
                         queue={q.name}
-                        state={state}
-                        label={state === "dlq" ? "dead-lettered" : state}
-                        value={value}
-                        loud={loud}
+                        state={c.state}
+                        label={c.label}
+                        value={c.state === "dlq" ? q.dlqDepth : q.counts[c.state]}
+                        loud={c.loud}
                       />
                     </td>
                   ))}
