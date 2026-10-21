@@ -205,7 +205,7 @@ describe("the cluster jobs page", () => {
     serve(report(), { ...jobsResult("waiting"), hasMore: true });
 
     render(<ClusterJobsPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /status/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^Status/i }));
     await userEvent.click(await screen.findByText(/^Failed/));
 
     expect(push).toHaveBeenCalledWith("/platform/cluster/jobs?queue=billing-runs&state=failed");
@@ -506,10 +506,25 @@ describe("the cluster jobs page", () => {
 
     render(<ClusterJobsPage />);
     await screen.findByText("City of Testville");
-    await userEvent.click(screen.getByRole("button", { name: /status/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^Status/i }));
 
     expect(await screen.findByText(/failed \(2\)/i)).toBeInTheDocument();
     expect(screen.getByText(/completed \(17\)/i)).toBeInTheDocument();
+  });
+
+  it("shows All queues on the filter when that is what is selected", async () => {
+    /*
+     * It was modelled as FilterBar's "clear" for a moment, which reads as
+     * no selection: the pill showed the bare label "Queue" while the page
+     * was filtering across all eight. A selection the control does not
+     * name is worse than one it does.
+     */
+    arriveAt("all", "failed");
+    serve(report(), { ...jobsResult("failed"), queue: "all" });
+
+    render(<ClusterJobsPage />);
+
+    expect(await screen.findByRole("button", { name: /Queue.*All queues/i })).toBeInTheDocument();
   });
 
   it("offers All queues exactly once", async () => {
@@ -523,7 +538,7 @@ describe("the cluster jobs page", () => {
 
     render(<ClusterJobsPage />);
     await screen.findByText("City of Testville");
-    await userEvent.click(screen.getByRole("button", { name: /queues/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^Queue/i }));
 
     expect(screen.getAllByText(/all queues/i)).toHaveLength(1);
   });
@@ -535,7 +550,7 @@ describe("the cluster jobs page", () => {
 
     render(<ClusterJobsPage />);
     await screen.findByText("City of Testville");
-    await userEvent.click(screen.getByRole("button", { name: /queues/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^Queue/i }));
     await userEvent.click(screen.getByText(/all queues/i));
 
     expect(push).toHaveBeenCalledWith("/platform/cluster/jobs?queue=all&state=waiting");
@@ -552,7 +567,7 @@ describe("the cluster jobs page", () => {
 
     render(<ClusterJobsPage />);
     await screen.findByText("City of Testville");
-    await userEvent.click(screen.getByRole("button", { name: /status/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^Status/i }));
 
     expect(screen.queryByText(/all status/i)).not.toBeInTheDocument();
     // The states themselves are all still there to choose between.

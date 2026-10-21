@@ -373,18 +373,24 @@ function ClusterJobs() {
           filters={[
             {
               key: "queue",
+              label: "Queue",
+              value: queue,
               /*
-               * "Queues", so FilterBar's clear item reads "All queues" —
-               * which is the whole of how every queue is chosen. This
-               * page used to add an option of its own saying the same
-               * thing, so the dropdown offered it twice.
+               * Every queue is an option, not the absence of one.
+               *
+               * It was FilterBar's clear item for a moment, which read
+               * as cleared: the pill showed the bare label while the
+               * page was in fact filtering across all eight. A selection
+               * the control does not show is worse than one it names, so
+               * `all` is a value here and the built-in All is suppressed
+               * — which is also what keeps it from appearing twice.
                */
-              label: "Queues",
-              value: merged ? undefined : queue,
-              options: (report?.queues ?? []).map((q) => ({ value: q.name, label: q.name })),
-              // Cleared means all of them, which here is a selection
-              // rather than the absence of one.
-              onChange: (value) => go({ queue: value ?? ALL_QUEUES }),
+              clearable: false,
+              options: [
+                { value: ALL_QUEUES, label: "All queues" },
+                ...(report?.queues ?? []).map((q) => ({ value: q.name, label: q.name })),
+              ],
+              onChange: (value) => value && go({ queue: value }),
             },
             {
               key: "state",
