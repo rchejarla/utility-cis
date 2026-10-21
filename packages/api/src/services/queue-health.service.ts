@@ -46,7 +46,18 @@ export interface QueueFailure {
 
 export interface QueueHealth {
   name: string;
-  counts: { waiting: number; active: number; delayed: number; failed: number };
+  /**
+   * `completed` is retained by `removeOnComplete` — 24h, 1000 max — and
+   * is the only evidence a quiet cron queue is working: its handler logs
+   * nothing on an empty tick, deliberately, at up to 8,640 ticks a day.
+   */
+  counts: {
+    waiting: number;
+    active: number;
+    delayed: number;
+    failed: number;
+    completed: number;
+  };
   /** Jobs parked in `dlq-<name>` awaiting manual replay. */
   dlqDepth: number;
   /**
@@ -182,6 +193,7 @@ async function readQueue(name: QueueName): Promise<QueueHealth> {
       active: counts.active ?? 0,
       delayed: counts.delayed ?? 0,
       failed: counts.failed ?? 0,
+      completed: counts.completed ?? 0,
     },
     dlqDepth: depthOf(dlqCounts as Record<string, number>),
     ...attachment,

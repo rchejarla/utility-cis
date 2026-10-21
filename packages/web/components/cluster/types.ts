@@ -1,0 +1,116 @@
+/**
+ * What `GET /api/v1/platform/queues` answers with.
+ *
+ * One call serves all three Cluster pages — Overview, Workers, Queues —
+ * because the verdict needs both halves: "nothing is running" is a fact
+ * about workers *and* about what is queued behind them. Splitting the
+ * endpoint would mean two calls to answer one question.
+ */
+
+export interface QueueFailure {
+  jobId: string | null;
+  jobName: string;
+  failedAt: string | null;
+  reason: string | null;
+  utilityId: string | null;
+  utilityName: string | null;
+}
+
+export interface QueueHealth {
+  name: string;
+  counts: {
+    waiting: number;
+    active: number;
+    delayed: number;
+    failed: number;
+    /**
+     * Retained by `removeOnComplete` — 24h, 1000 max — and the only
+     * evidence a quiet cron queue is working: its handler logs nothing
+     * on an empty tick, deliberately, at up to 8,640 ticks a day.
+     */
+    completed: number;
+  };
+  dlqDepth: number;
+  /** Attached worker processes; null where Redis would not list clients. */
+  workers: number | null;
+  workerAgeSeconds: number | null;
+  paused: boolean;
+  recentFailures: QueueFailure[];
+}
+
+/** One worker process, wherever in the deployment it runs. */
+export interface WorkerView {
+  id: string;
+  /** The API node that spawned it. */
+  node: string;
+  pid: number;
+  queues: string[];
+  startedAt: string;
+  healthPort: number;
+  /** Where its output went, including a failure during boot. */
+  logFile: string;
+  /** Holding its BullMQ connections right now — readable from any node. */
+  attached: boolean;
+  /** Whether the node serving this page can stop it. */
+  stoppable: boolean;
+}
+
+/** An API node, as Redis's client list reports it. */
+export interface ConnectedNode {
+  host: string;
+  ageSeconds: number;
+}
+
+/** What a stop came back with: how it was delivered, and whether it drained. */
+export interface StopResult {
+  id: string;
+  node: string;
+  pid: number | null;
+  stopping: boolean;
+  method: "drain" | "signal" | "already-gone";
+  drained: boolean;
+}
+
+export type JobState = "waiting" | "active" | "delayed" | "failed" | "completed" | "dlq";
+
+export interface QueueJob {
+  jobId: string | null;
+  jobName: string;
+  utilityId: string | null;
+  utilityName: string | null;
+  enqueuedAt: string | null;
+  runsAt: string | null;
+  repeats: string | null;
+  attemptsMade: number;
+  reason: string | null;
+  /** Whether this queue's jobs name one tenant or sweep across all of them. */
+  tenancy: "all-tenants" | "per-tenant";
+  /** What is already wrong with this job; null when nothing is. */
+  invalid: string | null;
+  /** Completed only. */
+  finishedAt: string | null;
+  durationMs: number | null;
+  result: Record<string, string | number | boolean> | null;
+}
+
+export interface QueueJobsResult {
+  queue: string;
+  state: JobState;
+  reachable: boolean;
+  jobs: QueueJob[];
+}
+
+export interface ClusterReport {
+  /** False when Redis did not answer — not an empty deployment. */
+  reachable: boolean;
+  checkedAt: string;
+  queues: QueueHealth[];
+  totals: { waiting: number; active: number; failed: number; dlq: number };
+  /** Whether the node serving this page may start or stop a worker. */
+  controllable: boolean;
+  /** Which node answered, since a start lands there and nowhere else. */
+  thisNode: string;
+  workers: WorkerView[];
+  /** Every connected API node; null when Redis would not list clients. */
+  nodes: ConnectedNode[] | null;
+}

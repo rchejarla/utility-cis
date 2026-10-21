@@ -135,6 +135,95 @@ describe("getQueueJobs", () => {
     expect(result.jobs[0]).toMatchObject({ reason: "Bill 7 has no charges", attemptsMade: 3 });
   });
 
+  /*
+   * What has already run, which is the only evidence a quiet cron queue
+   * is working at all.
+   *
+   * `notification-send` had completed 255 jobs in its retention window
+   * while `worker.log` held not one line about any of them, because the
+   * handler logs only a non-empty tick — deliberately, at 8,640 ticks a
+   * day. So "is the notification pipeline alive" had no answer anywhere
+   * except sampling the delayed set twice by hand and watching the due
+   * time advance.
+   */
+  it("lists what has run, with when and how long it took", async () => {
+    jobsByQueue["audit-retention"] = [
+      job({
+        name: "sweep-expired-audits",
+        data: {},
+        timestamp: Date.parse("2026-10-21T04:00:00.000Z"),
+        processedOn: Date.parse("2026-10-21T04:00:01.000Z"),
+        finishedOn: Date.parse("2026-10-21T04:00:01.250Z"),
+        returnvalue: { deleted: 12, batches: 1, timedOut: false },
+      }),
+    ];
+
+    const result = await svc.getQueueJobs("audit-retention", "completed");
+
+    expect(result.jobs[0]).toMatchObject({
+      finishedAt: "2026-10-21T04:00:01.250Z",
+      durationMs: 250,
+      result: { deleted: 12, batches: 1, timedOut: false },
+    });
+  });
+
+  it("returns only the scalar fields of a result", async () => {
+    /*
+     * `returnvalue` is whatever the handler returned. Today every one of
+     * them returns aggregate counts, which is exactly what an operator
+     * wants — but it is a generic field, and the rule that this service
+     * never returns a payload exists because a future handler could put
+     * ids in it. Enforced rather than assumed.
+     */
+    jobsByQueue["billing-runs"] = [
+      job({
+        finishedOn: Date.parse("2026-10-21T04:00:01.000Z"),
+        processedOn: Date.parse("2026-10-21T04:00:00.000Z"),
+        returnvalue: {
+          status: "COMPLETED",
+          billedCount: 412,
+          dryRun: false,
+          accountIds: ["acct-9", "acct-10"],
+          detail: { customerEmail: "jane@example.com" },
+        },
+      }),
+    ];
+
+    const result = await svc.getQueueJobs("billing-runs", "completed");
+
+    expect(result.jobs[0].result).toEqual({
+      status: "COMPLETED",
+      billedCount: 412,
+      dryRun: false,
+    });
+    expect(JSON.stringify(result)).not.toContain("acct-9");
+    expect(JSON.stringify(result)).not.toContain("jane@example.com");
+  });
+
+  it("puts the newest completed job first", async () => {
+    jobsByQueue["audit-retention"] = [
+      job({ id: "old", finishedOn: Date.parse("2026-10-20T04:00:00.000Z"), data: {} }),
+      job({ id: "new", finishedOn: Date.parse("2026-10-21T04:00:00.000Z"), data: {} }),
+    ];
+
+    const result = await svc.getQueueJobs("audit-retention", "completed");
+
+    expect(result.jobs.map((j) => j.jobId)).toEqual(["new", "old"]);
+  });
+
+  it("does not call a completed job invalid for a record that has since gone", async () => {
+    // It already ran. The run it names may well have been cleaned up
+    // since, and calling that a problem would be backwards.
+    jobsByQueue["billing-runs"] = [
+      job({ finishedOn: Date.parse("2026-10-21T04:00:00.000Z") }),
+    ];
+    vi.mocked(prisma.billingRun.findMany).mockResolvedValue([] as never);
+
+    const result = await svc.getQueueJobs("billing-runs", "completed");
+
+    expect(result.jobs[0].invalid).toBeNull();
+  });
+
   it("reads the paired dead-letter queue for the dlq state", async () => {
     jobsByQueue["dlq-billing-runs"] = [job({ id: "dead-1" })];
 

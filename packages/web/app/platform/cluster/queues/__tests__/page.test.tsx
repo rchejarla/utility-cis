@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { apiClient } from "@/lib/api-client";
-import PlatformQueuesPage from "../page";
+import ClusterQueuesPage from "../page";
 
 /**
  * The page an operator opens to ask "is anything stuck".
@@ -48,7 +48,7 @@ function jobsResult(state: string, over: Record<string, unknown> = {}) {
 function queue(over: Record<string, unknown> = {}) {
   return {
     name: "billing-runs",
-    counts: { waiting: 0, active: 0, delayed: 0, failed: 0 },
+    counts: { waiting: 0, active: 0, delayed: 0, failed: 0, completed: 0 },
     dlqDepth: 0,
     // One worker, attached a while ago: the healthy default, so a test
     // that says nothing about workers is not accidentally testing an
@@ -103,99 +103,11 @@ beforeEach(() => {
   post.mockReset();
 });
 
-describe("the platform queue page", () => {
-  it("says everything is clear in a sentence, not a table of zeroes", async () => {
-    get.mockResolvedValue(report());
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText(/nothing failed or dead-lettered/i)).toBeInTheDocument();
-  });
-
-  it("leads with what failed when something has", async () => {
-    get.mockResolvedValue(
-      report({
-        queues: [
-          queue({ name: "imports" }),
-          queue({
-            name: "billing-runs",
-            counts: { waiting: 1, active: 0, delayed: 0, failed: 2 },
-            dlqDepth: 1,
-          }),
-        ],
-        totals: { waiting: 1, active: 0, failed: 2, dlq: 1 },
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText(/2 failed/i)).toBeInTheDocument();
-    expect(screen.getByText(/1 dead-lettered/i)).toBeInTheDocument();
-    // The troubled queue is listed before the quiet one.
-    const body = document.body.textContent ?? "";
-    expect(body.indexOf("billing-runs")).toBeLessThan(body.indexOf("imports"));
-  });
-
-  it("names the tenant behind a failure", async () => {
-    get.mockResolvedValue(
-      report({
-        queues: [
-          queue({
-            counts: { waiting: 0, active: 0, delayed: 0, failed: 1 },
-            recentFailures: [
-              {
-                jobId: "42",
-                jobName: "process-billing-run",
-                failedAt: "2026-10-20T09:30:00.000Z",
-                reason: "Bill 7 has no charges",
-                utilityId: "u-1",
-                utilityName: "City of Testville",
-              },
-            ],
-          }),
-        ],
-        totals: { waiting: 0, active: 0, failed: 1, dlq: 0 },
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText("City of Testville")).toBeInTheDocument();
-    expect(screen.getByText(/Bill 7 has no charges/)).toBeInTheDocument();
-  });
-
-  it("calls a sweep's failure what it is rather than inventing an owner", async () => {
-    get.mockResolvedValue(
-      report({
-        queues: [
-          queue({
-            name: "audit-retention",
-            counts: { waiting: 0, active: 0, delayed: 0, failed: 1 },
-            recentFailures: [
-              {
-                jobId: "9",
-                jobName: "audit-retention",
-                failedAt: "2026-10-20T09:30:00.000Z",
-                reason: "deadlock detected",
-                utilityId: null,
-                utilityName: null,
-              },
-            ],
-          }),
-        ],
-        totals: { waiting: 0, active: 0, failed: 1, dlq: 0 },
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText(/all tenants/i)).toBeInTheDocument();
-  });
-
+describe("the cluster queues page", () => {
   it("says the queues could not be read, which is not the same as nothing queued", async () => {
     get.mockResolvedValue(report({ reachable: false, queues: [], totals: { waiting: 0, active: 0, failed: 0, dlq: 0 } }));
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
 
     expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
     expect(screen.queryByText(/nothing failed or dead-lettered/i)).not.toBeInTheDocument();
@@ -210,8 +122,8 @@ describe("the platform queue page", () => {
      */
     get.mockResolvedValue(report());
 
-    render(<PlatformQueuesPage />);
-    await screen.findByText(/nothing failed or dead-lettered/i);
+    render(<ClusterQueuesPage />);
+    await screen.findByText("billing-runs");
 
     expect(screen.queryByRole("link", { name: /bull board/i })).not.toBeInTheDocument();
     expect(screen.getByText(/needs an operator token/i)).toBeInTheDocument();
@@ -242,7 +154,7 @@ describe("the platform queue page", () => {
       ],
     });
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
     await screen.findByText("billing-runs");
 
     await userEvent.click(screen.getByRole("button", { name: /2 waiting/i }));
@@ -281,7 +193,7 @@ describe("the platform queue page", () => {
       ],
     });
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
     await screen.findByText("audit-retention");
 
     await userEvent.click(screen.getByRole("button", { name: /1 delayed/i }));
@@ -322,7 +234,7 @@ describe("the platform queue page", () => {
       ],
     });
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
     await screen.findByText("audit-retention");
     await userEvent.click(screen.getByRole("button", { name: /1 delayed/i }));
 
@@ -344,7 +256,7 @@ describe("the platform queue page", () => {
       auditedAs: { entityType: "BillingRun", entityId: "run-1" },
     });
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
     await screen.findByText("billing-runs");
     await userEvent.click(screen.getByRole("button", { name: /1 failed/i }));
     await userEvent.click(await screen.findByRole("button", { name: /^retry job /i }));
@@ -372,7 +284,7 @@ describe("the platform queue page", () => {
       audited: false,
     });
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
     await screen.findByText("audit-retention");
     await userEvent.click(screen.getByRole("button", { name: /1 delayed/i }));
     await userEvent.click(await screen.findByRole("button", { name: /^run now job /i }));
@@ -389,7 +301,7 @@ describe("the platform queue page", () => {
     ).mockResolvedValueOnce(jobsResult("failed", { jobId: "80" }));
     post.mockRejectedValue(new Error("API error 409: Job 80 is waiting; retry applies to a job that is failed"));
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
     await screen.findByText("billing-runs");
     await userEvent.click(screen.getByRole("button", { name: /1 failed/i }));
     await userEvent.click(await screen.findByRole("button", { name: /^retry job /i }));
@@ -405,80 +317,13 @@ describe("the platform queue page", () => {
       }),
     ).mockResolvedValueOnce(jobsResult("waiting", { jobId: "80" }));
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
     await screen.findByText("billing-runs");
     await userEvent.click(screen.getByRole("button", { name: /1 waiting/i }));
     await screen.findByText(/City of Testville/);
 
     expect(screen.queryByRole("button", { name: /^retry job /i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^run now job /i })).not.toBeInTheDocument();
-  });
-
-  it("refuses to call it all clear when no worker is attached to anything", async () => {
-    /*
-     * The state of the dev stack while this was written: 102 jobs waiting
-     * across two queues, nothing failed, and no worker process running —
-     * because workers are a separate process and `start_dev.bat` says so
-     * and does not start them. The page said "All clear", which was the
-     * most misleading thing it could have said.
-     */
-    get.mockResolvedValue(
-      report({
-        queues: [
-          queue({ counts: { waiting: 80, active: 0, delayed: 0, failed: 0 }, workers: 0, workerAgeSeconds: null }),
-          queue({ name: "imports", counts: { waiting: 22, active: 0, delayed: 0, failed: 0 }, workers: 0, workerAgeSeconds: null }),
-        ],
-        totals: { waiting: 102, active: 0, failed: 0, dlq: 0 },
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText(/nothing is running/i)).toBeInTheDocument();
-    expect(screen.getByText(/102 jobs are waiting/i)).toBeInTheDocument();
-    expect(screen.queryByText(/all clear/i)).not.toBeInTheDocument();
-  });
-
-  it("says how many queues are unattended when only some are", async () => {
-    get.mockResolvedValue(
-      report({
-        queues: [queue(), queue({ name: "imports", workers: 0, workerAgeSeconds: null })],
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText(/1 of 2 queues has no worker/i)).toBeInTheDocument();
-  });
-
-  it("still names the missing workers when something has also failed", async () => {
-    // The two facts are independent, and the failure must not bury the
-    // reason the retry will not run either.
-    get.mockResolvedValue(
-      report({
-        queues: [
-          queue({ counts: { waiting: 0, active: 0, delayed: 0, failed: 2 }, workers: 0, workerAgeSeconds: null }),
-        ],
-        totals: { waiting: 0, active: 0, failed: 2, dlq: 0 },
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText(/needs attention/i)).toBeInTheDocument();
-    expect(screen.getByText(/no worker is attached/i)).toBeInTheDocument();
-  });
-
-  it("flags a paused queue, which processes nothing with workers attached", async () => {
-    get.mockResolvedValue(report({ queues: [queue({ paused: true })] }));
-
-    render(<PlatformQueuesPage />);
-
-    // Twice over, deliberately: the verdict, and the mark on the queue it
-    // applies to.
-    expect(await screen.findByText(/a queue is paused/i)).toBeInTheDocument();
-    expect(screen.getByText(/^paused$/i)).toBeInTheDocument();
-    expect(screen.queryByText(/all clear/i)).not.toBeInTheDocument();
   });
 
   it("says worker attachment is unknown, which is not the same as none", async () => {
@@ -488,7 +333,7 @@ describe("the platform queue page", () => {
       report({ queues: [queue({ workers: null, workerAgeSeconds: null })] }),
     );
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
 
     // Under a Workers column, the cell is the word alone. What matters is
     // that it is not the word for zero. Scoped to the table, because the
@@ -512,7 +357,7 @@ describe("the platform queue page", () => {
       }),
     );
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
 
     expect(await screen.findByText(/attached 12s ago/i)).toBeInTheDocument();
     expect(screen.queryByText(/9000/)).not.toBeInTheDocument();
@@ -529,7 +374,7 @@ describe("the platform queue page", () => {
       }),
     ).mockResolvedValueOnce(jobsResult("failed", { jobId: "80", reason: "boom" }));
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
     await screen.findByText("billing-runs");
     await userEvent.click(screen.getByRole("button", { name: /1 failed/i }));
 
@@ -551,7 +396,7 @@ describe("the platform queue page", () => {
       jobsResult("delayed", { runsAt: "2026-10-21T04:00:00.000Z", repeats: "0 4 * * *" }),
     );
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
     await screen.findByText("audit-retention");
     await userEvent.click(screen.getByRole("button", { name: /1 delayed/i }));
 
@@ -579,7 +424,7 @@ describe("the platform queue page", () => {
       }),
     );
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
     await screen.findByText("imports");
     await userEvent.click(screen.getByRole("button", { name: /1 waiting/i }));
 
@@ -603,7 +448,7 @@ describe("the platform queue page", () => {
       jobsResult("waiting", { invalid: "The billing run it names no longer exists." }),
     );
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
     await screen.findByText("billing-runs");
     await userEvent.click(screen.getByRole("button", { name: /1 waiting/i }));
 
@@ -620,7 +465,7 @@ describe("the platform queue page", () => {
       }),
     ).mockResolvedValueOnce(jobsResult("waiting"));
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
     await screen.findByText("billing-runs");
     await userEvent.click(screen.getByRole("button", { name: /1 waiting/i }));
     await screen.findByText("City of Testville");
@@ -645,7 +490,7 @@ describe("the platform queue page", () => {
       }),
     );
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
     await screen.findByText("billing-runs");
     await userEvent.click(screen.getByRole("button", { name: /1 waiting/i }));
 
@@ -668,7 +513,7 @@ describe("the platform queue page", () => {
       }),
     );
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
     await screen.findByText("audit-retention");
     await userEvent.click(screen.getByRole("button", { name: /1 delayed/i }));
 
@@ -676,284 +521,12 @@ describe("the platform queue page", () => {
     expect(screen.queryByRole("columnheader", { name: /problem/i })).not.toBeInTheDocument();
   });
 
-  it("offers to start a worker on the node that answered", async () => {
-    // Start is node-local: nothing portable spawns a process on another
-    // machine, so the control names the node it will act on rather than
-    // implying a choice.
-    get.mockResolvedValue(report({ queues: [queue({ workers: 0, workerAgeSeconds: null })] }));
-    post.mockResolvedValue(workerView({ node: "dev-box" }));
-
-    render(<PlatformQueuesPage />);
-    await userEvent.click(
-      await screen.findByRole("button", { name: /start worker on dev-box/i }),
-    );
-
-    expect(post).toHaveBeenCalledWith("/api/v1/platform/workers/start", { queues: [] });
-    expect(await screen.findByText(/started — pid 4242 on dev-box/i)).toBeInTheDocument();
-  });
-
-  it("lists every connected node, including ones running no worker", async () => {
-    /*
-     * "Which nodes have nothing attached" is the useful question, and a
-     * node is invisible if it is only learned about through its workers.
-     * The node list comes from Redis's client list, so this is correct
-     * from whichever node happens to serve the page.
-     */
-    get.mockResolvedValue(
-      report({
-        thisNode: "api-7f3c",
-        nodes: [
-          { host: "api-7f3c", ageSeconds: 3600 },
-          { host: "api-9b21", ageSeconds: 120 },
-          { host: "api-2d08", ageSeconds: 90 },
-        ],
-        workers: [
-          workerView({ id: "4a1f", node: "api-7f3c", pid: 4242, stoppable: true }),
-          workerView({ id: "9c02", node: "api-9b21", pid: 881, stoppable: false }),
-        ],
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText("api-2d08")).toBeInTheDocument();
-    expect(screen.getByText("api-9b21")).toBeInTheDocument();
-    // And says which one you are talking to, since a start lands there.
-    expect(screen.getByText(/serving this page/i)).toBeInTheDocument();
-  });
-
-  it("labels the columns of the worker table", async () => {
-    /*
-     * The same fault the job list had: the first version of this panel
-     * rendered `pid 4242 attached since 9:02:00 AM` as a bare run of
-     * values, under a node name, with the notes for one worker floating
-     * below every node at once.
-     */
-    get.mockResolvedValue(
-      report({ workers: [workerView({ node: "dev-box" })] }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    for (const header of [/^node$/i, /^worker$/i, /^state$/i, /^since$/i, /^action$/i]) {
-      expect(await screen.findByRole("columnheader", { name: header })).toBeInTheDocument();
-    }
-  });
-
-  it("counts the nodes and workers above the table", async () => {
-    get.mockResolvedValue(
-      report({
-        nodes: [
-          { host: "api-7f3c", ageSeconds: 3600 },
-          { host: "api-9b21", ageSeconds: 120 },
-          { host: "api-2d08", ageSeconds: 90 },
-        ],
-        workers: [workerView({ node: "api-7f3c" })],
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText(/3 nodes/i)).toBeInTheDocument();
-    expect(screen.getByText(/1 worker/i)).toBeInTheDocument();
-    expect(screen.getByText(/2 with none/i)).toBeInTheDocument();
-  });
-
-  it("keeps a worker whose node has dropped off the client list", async () => {
-    // Its record is all that is left of it, and that is exactly when it
-    // must not vanish from the table.
-    get.mockResolvedValue(
-      report({
-        thisNode: "api-7f3c",
-        nodes: [{ host: "api-7f3c", ageSeconds: 3600 }],
-        workers: [workerView({ id: "9c02", node: "api-gone", stoppable: false })],
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText("api-gone")).toBeInTheDocument();
-    expect(screen.getByText(/not connected/i)).toBeInTheDocument();
-  });
-
-  it("offers Stop only for a worker this node can actually signal", async () => {
-    // A pid means nothing on another host. Offering a button that can
-    // only answer 409 is worse than offering none.
-    get.mockResolvedValue(
-      report({
-        thisNode: "api-7f3c",
-        nodes: [
-          { host: "api-7f3c", ageSeconds: 3600 },
-          { host: "api-9b21", ageSeconds: 120 },
-        ],
-        workers: [
-          workerView({ id: "4a1f", node: "api-7f3c", pid: 4242, stoppable: true }),
-          workerView({ id: "9c02", node: "api-9b21", pid: 881, stoppable: false }),
-        ],
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findAllByRole("button", { name: /^stop worker on /i })).toHaveLength(1);
-    expect(screen.getByText(/stop it from api-9b21/i)).toBeInTheDocument();
-  });
-
-  it("stops a worker by its own id", async () => {
-    get.mockResolvedValue(
-      report({
-        thisNode: "dev-box",
-        workers: [workerView({ id: "4a1f", node: "dev-box", stoppable: true })],
-      }),
-    );
-    post.mockResolvedValue({
-      id: "4a1f",
-      node: "dev-box",
-      pid: 4242,
-      stopping: true,
-      method: "drain",
-      drained: true,
-    });
-
-    render(<PlatformQueuesPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /stop worker on dev-box/i }));
-
-    expect(post).toHaveBeenCalledWith("/api/v1/platform/workers/4a1f/stop", {});
-    expect(await screen.findByText(/draining/i)).toBeInTheDocument();
-  });
-
-  it("says plainly when a worker had to be cut off instead of drained", async () => {
-    // The fallback: a wedged worker that no longer answers its own HTTP
-    // server gets a signal, which on Windows is abrupt.
-    get.mockResolvedValue(
-      report({
-        thisNode: "dev-box",
-        workers: [workerView({ id: "4a1f", node: "dev-box", stoppable: true })],
-      }),
-    );
-    post.mockResolvedValue({
-      id: "4a1f",
-      node: "dev-box",
-      pid: null,
-      stopping: false,
-      method: "signal",
-      drained: false,
-    });
-
-    render(<PlatformQueuesPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /stop worker on dev-box/i }));
-
-    expect(await screen.findByText(/could not be reached/i)).toBeInTheDocument();
-  });
-
-  it("shows a worker as not attached, which is not the same as absent", async () => {
-    // Either still booting, or dead on a node whose pid this one cannot
-    // check. Both are worth seeing; neither is "running".
-    get.mockResolvedValue(
-      report({
-        thisNode: "api-7f3c",
-        workers: [workerView({ id: "9c02", node: "api-9b21", attached: false, stoppable: false })],
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText(/not attached/i)).toBeInTheDocument();
-  });
-
-  it("says a worker is attached that this console did not start", async () => {
-    // Started from a terminal: attached to the same Redis and visible in
-    // the queue counts, but with no record, so nothing to stop here.
-    get.mockResolvedValue(
-      report({ queues: [queue({ workers: 1 })], workers: [] }),
-    );
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText(/not started from here/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^stop worker on /i })).not.toBeInTheDocument();
-  });
-
-  it("offers no worker controls on a node that does not allow them", async () => {
-    get.mockResolvedValue(
-      report({
-        queues: [queue({ workers: 0, workerAgeSeconds: null })],
-        controllable: false,
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-    await screen.findByText(/nothing is running/i);
-
-    expect(screen.queryByRole("button", { name: /start worker/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/separate deployment/i)).toBeInTheDocument();
-  });
-
-  it("shows the refusal when a worker is already running on this node", async () => {
-    get.mockResolvedValue(report({ queues: [queue({ workers: 0, workerAgeSeconds: null })] }));
-    post.mockRejectedValue(
-      new Error("API error 409: A worker is already running on dev-box as pid 99"),
-    );
-
-    render(<PlatformQueuesPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /start worker/i }));
-
-    expect(await screen.findByText(/already running on dev-box/i)).toBeInTheDocument();
-  });
-
-  it("says the node list is unknown rather than showing none", async () => {
-    // Managed Redis refuses CLIENT LIST. "No nodes" is never true of a
-    // deployment that is serving this page.
-    get.mockResolvedValue(report({ nodes: null }));
-
-    render(<PlatformQueuesPage />);
-
-    expect(await screen.findByText(/could not be listed/i)).toBeInTheDocument();
-  });
-
-  it("names the queues whose jobs a start would run, not just how many", async () => {
-    /*
-     * Starting a worker on a stack that has been idle runs whatever has
-     * piled up, at once. The first version of this said "5 queued jobs
-     * will start running immediately, overdue scheduled sweeps included.
-     * Open a count first" — which names no queue, and asks the reader to
-     * know what a sweep is and that a count is a thing you can open.
-     */
-    get.mockResolvedValue(
-      report({
-        queues: [
-          queue({ counts: { waiting: 3, active: 0, delayed: 0, failed: 0 }, workers: 0, workerAgeSeconds: null }),
-          queue({ name: "audit-retention", counts: { waiting: 0, active: 0, delayed: 1, failed: 0 }, workers: 0, workerAgeSeconds: null }),
-          queue({ name: "imports", workers: 0, workerAgeSeconds: null }),
-        ],
-        totals: { waiting: 3, active: 0, failed: 0, dlq: 0 },
-      }),
-    );
-
-    render(<PlatformQueuesPage />);
-    await screen.findByRole("button", { name: /start worker/i });
-
-    expect(screen.getByText(/billing-runs 3/)).toBeInTheDocument();
-    expect(screen.getByText(/audit-retention 1/)).toBeInTheDocument();
-    // A queue with nothing queued has nothing to warn about.
-    expect(screen.queryByText(/imports 0/)).not.toBeInTheDocument();
-  });
-
-  it("says nothing about queued work when there is none to run", async () => {
-    get.mockResolvedValue(report({ queues: [queue({ workers: 0, workerAgeSeconds: null })] }));
-
-    render(<PlatformQueuesPage />);
-    await screen.findByRole("button", { name: /start worker/i });
-
-    expect(screen.queryByText(/already queued/i)).not.toBeInTheDocument();
-  });
-
   it("lists the queues as one table rather than eight cards", async () => {
     // Eight cards repeated the worker fact eight times and pushed the
     // counts off a screen. One row per queue, one statement of workers.
     get.mockResolvedValue(report());
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
 
     expect(await screen.findByRole("columnheader", { name: /queue/i })).toBeInTheDocument();
     for (const header of [/workers/i, /waiting/i, /failed/i, /dead-lettered/i]) {
@@ -961,12 +534,120 @@ describe("the platform queue page", () => {
     }
   });
 
-  it("does not make a count of zero clickable", async () => {
-    get.mockResolvedValue(report());
+  it("puts a troubled queue above a quiet one", async () => {
+    // Moved here with the table from the old single page, where it sat
+    // beside the verdict.
+    get.mockResolvedValue(
+      report({
+        queues: [
+          queue({ name: "imports" }),
+          queue({
+            name: "billing-runs",
+            counts: { waiting: 1, active: 0, delayed: 0, failed: 2, completed: 0 },
+            dlqDepth: 1,
+          }),
+        ],
+        totals: { waiting: 1, active: 0, failed: 2, dlq: 1 },
+      }),
+    );
 
-    render(<PlatformQueuesPage />);
+    render(<ClusterQueuesPage />);
     await screen.findByText("billing-runs");
 
-    expect(screen.queryByRole("button", { name: /0 waiting/i })).not.toBeInTheDocument();
+    const body = document.body.textContent ?? "";
+    expect(body.indexOf("billing-runs")).toBeLessThan(body.indexOf("imports"));
   });
+
+  it("marks a paused queue on its own row", async () => {
+    get.mockResolvedValue(report({ queues: [queue({ paused: true })] }));
+
+    render(<ClusterQueuesPage />);
+
+    expect(await screen.findByText(/^paused$/i)).toBeInTheDocument();
+  });
+
+  it("opens what has already run, with when, how long and what it returned", async () => {
+    /*
+     * The only evidence a quiet cron queue is working. notification-send
+     * had completed 255 jobs while worker.log held not one line about
+     * any of them, because the handler logs only a non-empty tick — at
+     * 8,640 ticks a day, deliberately. So "is it alive" had no answer
+     * except sampling the delayed set twice by hand.
+     */
+    get.mockResolvedValueOnce(
+      report({
+        queues: [
+          queue({
+            name: "notification-send",
+            counts: { waiting: 0, active: 0, delayed: 1, failed: 0, completed: 255 },
+          }),
+        ],
+      }),
+    ).mockResolvedValueOnce(
+      jobsResult("completed", {
+        jobName: "process-notification-batch",
+        utilityId: null,
+        utilityName: null,
+        tenancy: "all-tenants",
+        enqueuedAt: null,
+        finishedAt: "2026-10-21T14:20:30.250Z",
+        durationMs: 250,
+        result: { attempted: 0, sent: 0, failed: 0, skippedQuietHours: 0 },
+      }),
+    );
+
+    render(<ClusterQueuesPage />);
+    await screen.findByText("notification-send");
+    await userEvent.click(screen.getByRole("button", { name: /255 completed/i }));
+
+    for (const header of [/ran at/i, /^took$/i, /^result$/i]) {
+      expect(await screen.findByRole("columnheader", { name: header })).toBeInTheDocument();
+    }
+    expect(screen.getByText("250ms")).toBeInTheDocument();
+    expect(screen.getByText(/attempted 0 · sent 0/)).toBeInTheDocument();
+  });
+
+  it("offers no verb on a completed job, which is already done", async () => {
+    get.mockResolvedValueOnce(
+      report({
+        queues: [
+          queue({ counts: { waiting: 0, active: 0, delayed: 0, failed: 0, completed: 3 } }),
+        ],
+      }),
+    ).mockResolvedValueOnce(
+      jobsResult("completed", { finishedAt: "2026-10-21T14:20:30.000Z", durationMs: 40 }),
+    );
+
+    render(<ClusterQueuesPage />);
+    await screen.findByText("billing-runs");
+    await userEvent.click(screen.getByRole("button", { name: /3 completed/i }));
+    await screen.findByRole("columnheader", { name: /ran at/i });
+
+    expect(screen.queryByRole("columnheader", { name: /^action$/i })).not.toBeInTheDocument();
+  });
+
+  it("does not make a count of zero clickable, in any column", async () => {
+    /*
+     * Every column, not just the first. `completed` arrived after this
+     * test did, and the fixtures did not carry it — so the cell rendered
+     * `undefined`, which is not `0`, which made it a clickable button
+     * with no number in it. Nothing caught that until the fixture was
+     * fixed, so the assertion now covers the whole row.
+     */
+    get.mockResolvedValue(report());
+
+    render(<ClusterQueuesPage />);
+    await screen.findByText("billing-runs");
+
+    for (const state of ["waiting", "active", "delayed", "failed", "dead-lettered", "completed"]) {
+      expect(
+        screen.queryByRole("button", { name: new RegExp(`0 ${state}`, "i") }),
+      ).not.toBeInTheDocument();
+    }
+    // And nothing clickable that says nothing at all.
+    for (const button of screen.queryAllByRole("button")) {
+      expect(button.textContent?.trim()).not.toBe("");
+    }
+  });
+
 });

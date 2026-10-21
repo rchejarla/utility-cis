@@ -6,6 +6,9 @@ import {
   faUserShield,
   faLayerGroup,
   faListCheck,
+  faServer,
+  faGaugeHigh,
+  faMicrochip,
 } from "@fortawesome/pro-solid-svg-icons";
 import { apiClient } from "@/lib/api-client";
 import { useBreakpoint } from "@/lib/use-media-query";
@@ -55,20 +58,47 @@ const PLATFORM_SECTIONS: NavSection[] = [
         module: "platform",
         tooltip: "The people who may do the above",
       },
+    ],
+  },
+  {
+    /*
+     * The deployment itself, rather than any tenant in it.
+     *
+     * One page held all of this — the verdict, the nodes, the worker
+     * processes, the eight queues and the jobs behind one count — and
+     * each thing added made the others harder to find. Three pages,
+     * because they answer three questions: is anything wrong, who is
+     * doing the work, and what is the work.
+     *
+     * Bull Board, the only queue surface before these existed, is
+     * reachable only by typing /admin/queues on the API host. It is not
+     * a nav target: a separate origin with its own chrome and no way
+     * back makes a fine escape hatch from inside a page and a poor menu
+     * entry, so the Queues page names it instead.
+     */
+    title: "Cluster",
+    icon: faServer,
+    items: [
       {
-        /*
-         * Until this existed, Bull Board — the only queue surface —
-         * was reachable only by typing /admin/queues on the API host.
-         * The menu entry points here rather than there: Bull Board is
-         * a separate origin with its own chrome and no way back, which
-         * makes it a fine escape hatch from inside this page and a poor
-         * nav target.
-         */
-        href: "/platform/queues",
+        href: "/platform/cluster",
+        label: "Overview",
+        icon: faGaugeHigh,
+        module: "platform",
+        tooltip: "Whether anything is stuck, and what has failed recently",
+      },
+      {
+        href: "/platform/cluster/workers",
+        label: "Workers",
+        icon: faMicrochip,
+        module: "platform",
+        tooltip: "The API nodes, and the worker process on each",
+      },
+      {
+        href: "/platform/cluster/queues",
         label: "Queues",
         icon: faListCheck,
         module: "platform",
-        tooltip: "Background work across every tenant: failures, dead letters, depth",
+        tooltip: "What is waiting, running, scheduled, failed and done",
       },
     ],
   },

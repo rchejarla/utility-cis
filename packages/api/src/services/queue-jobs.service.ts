@@ -42,7 +42,14 @@ import {
  * the truth, so each job carries what is already wrong with it.
  */
 
-export const QUEUE_JOB_STATES = ["waiting", "active", "delayed", "failed", "dlq"] as const;
+export const QUEUE_JOB_STATES = [
+  "waiting",
+  "active",
+  "delayed",
+  "failed",
+  "completed",
+  "dlq",
+] as const;
 export type QueueJobState = (typeof QUEUE_JOB_STATES)[number];
 
 /** Enough to see a pattern; past this, Bull Board is the tool. */
@@ -75,6 +82,20 @@ export interface QueueJobSummary {
   attemptsMade: number;
   /** Failed and dead-lettered only. */
   reason: string | null;
+  /** Completed only: when it finished. */
+  finishedAt: string | null;
+  /** Completed only: how long the handler took. */
+  durationMs: number | null;
+  /**
+   * Completed only: what the handler returned, scalar fields only.
+   *
+   * Every handler returns aggregate counts — `{attempted, sent, failed}`,
+   * `{deleted, batches, timedOut}`, `{status, billedCount}` — which is
+   * exactly what an operator needs and the only evidence a quiet cron
+   * queue is working. But it is a generic field, so it is filtered
+   * rather than trusted: see `scalarsOf`.
+   */
+  result: Record<string, string | number | boolean> | null;
 }
 
 export interface QueueJobsResult {
@@ -106,7 +127,34 @@ type RawJob = {
   repeatJobKey?: string | null;
   opts?: { delay?: number; repeat?: { pattern?: string; every?: number } };
   data?: unknown;
+  returnvalue?: unknown;
 };
+
+/** How many fields of a result to carry; a handler returns a handful. */
+const MAX_RESULT_FIELDS = 12;
+/** Long enough for a status, short enough not to be a payload. */
+const MAX_RESULT_STRING = 80;
+
+/**
+ * The scalar fields of a handler's return value, and nothing else.
+ *
+ * Objects and arrays are dropped rather than rendered: they are where an
+ * id, an address or a file name would be, and this service's whole line
+ * is that it never returns a payload. A count is not a payload; a nested
+ * object might be, and the boundary is enforced here instead of being
+ * re-decided every time a handler's return type changes.
+ */
+function scalarsOf(value: unknown): Record<string, string | number | boolean> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  const out: Record<string, string | number | boolean> = {};
+  for (const [key, field] of Object.entries(value as Record<string, unknown>)) {
+    if (Object.keys(out).length >= MAX_RESULT_FIELDS) break;
+    if (typeof field === "number" || typeof field === "boolean") out[key] = field;
+    else if (typeof field === "string" && field.length <= MAX_RESULT_STRING) out[key] = field;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
 
 /**
  * BullMQ's own state names, except `dlq` — which is not a state at all
@@ -227,7 +275,17 @@ export async function getQueueJobs(
         ),
       ]);
 
-      return raw.map<QueueJobSummary>((job) => {
+      /*
+       * Newest first for what has already run. BullMQ reads the set with
+       * a range query whose direction is its own business, and the only
+       * useful order for "what happened" is most recent.
+       */
+      const ordered =
+        state === "completed"
+          ? [...raw].sort((a, b) => (b.finishedOn ?? 0) - (a.finishedOn ?? 0))
+          : raw;
+
+      return ordered.map<QueueJobSummary>((job) => {
         const utilityId = utilityIdOf(job.data);
         // A tenant that no longer exists keeps its id and no name: the
         // job is still parked and still a fact.
@@ -239,18 +297,36 @@ export async function getQueueJobs(
           utilityId,
           utilityName,
           tenancy: QUEUE_TENANCY[name],
-          invalid: invalidityOf(
-            name,
-            utilityId,
-            utilityName,
-            subjectId,
-            subjectId !== null && subjects.has(subjectId),
-          ),
+          /*
+           * Not asked of a job that has already run. The record it names
+           * may well have been cleaned up since, and calling a finished
+           * job invalid because its billing run is gone would be
+           * backwards — the point of the check is work that cannot
+           * succeed, and this already did.
+           */
+          invalid:
+            state === "completed"
+              ? null
+              : invalidityOf(
+                  name,
+                  utilityId,
+                  utilityName,
+                  subjectId,
+                  subjectId !== null && subjects.has(subjectId),
+                ),
           enqueuedAt: isoOf(job.timestamp),
           runsAt: state === "delayed" ? runsAtOf(job) : null,
           repeats: repeatsOf(job),
           attemptsMade: job.attemptsMade ?? 0,
           reason: job.failedReason ?? null,
+          finishedAt: state === "completed" ? isoOf(job.finishedOn) : null,
+          durationMs:
+            state === "completed" &&
+            typeof job.finishedOn === "number" &&
+            typeof job.processedOn === "number"
+              ? job.finishedOn - job.processedOn
+              : null,
+          result: state === "completed" ? scalarsOf(job.returnvalue) : null,
         };
       });
     }, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
