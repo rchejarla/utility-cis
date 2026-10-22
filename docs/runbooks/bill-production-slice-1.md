@@ -110,6 +110,24 @@ Production**:
 These do not travel with the deploy. A tenant migrated but not configured
 has a working application that cannot produce a bill.
 
+> **On a dev machine, `node seed.js` now configures the dev tenant** —
+> `dev-files` as the integration plus demo issuer identity — so a reseed
+> leaves bill production working. It did not until 2026-10-22: the wipe
+> deletes `utility_config` and nothing recreated it, so reseeding
+> silently took bill production away from a database where it had been
+> set up by hand, and the next attempt answered
+> `STORAGE_NOT_CONFIGURED`, which reads like an apptor-connect fault and
+> is not one. `dev-files` works against both the real local instance and
+> `scripts/fake-files-plane.mjs`, which treats the name as a directory.
+>
+> **Provisioning a real tenant still creates no config row, deliberately.**
+> Every reader copes with its absence — `getAutomationConfig` upserts on
+> read, posting falls back to the column defaults, and readiness reports
+> the issuer and storage checks as unmet, which is the right answer for a
+> tenant nobody has configured yet. An empty row would decide nothing,
+> and pre-filling issuer identity would be worse than leaving it blank: a
+> remittance address is the one field on a bill that must not be invented.
+
 Accounts also need a customer with a name and a billing address, or that
 bill answers 422 `RECIPIENT_INCOMPLETE` — a data condition, not config,
 and correct behaviour: a bill with a blank recipient should not be

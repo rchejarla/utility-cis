@@ -869,6 +869,46 @@ async function main() {
   });
   console.log("  theme");
 
+  // Bill production needs two pieces of per-tenant configuration, and
+  // without them a posted bill answers 422 rather than producing: the
+  // apptor-connect integration its PDFs are written to, and the five
+  // issuer fields that make a bill a valid document
+  // (REQUIRED_ISSUER_FIELDS in packages/shared/src/validators/
+  // tenant-settings.ts).
+  //
+  // This block exists because the wipe above deletes `utility_config`
+  // and nothing recreated it, so every reseed silently took bill
+  // production away from a database where it had been configured by
+  // hand — the failure then reads as "storage is not configured",
+  // which sounds like an apptor-connect problem and is not.
+  //
+  // `dev-files` is deliberate: it is both the integration name on the
+  // local apptor-connect instance and just a directory name to
+  // scripts/fake-files-plane.mjs, so the same value works whichever of
+  // the two is running.
+  //
+  // Other readers of this table do not need the row — getAutomationConfig
+  // upserts on read and posting falls back to its column defaults — so
+  // this is here for bill production specifically, and the issuer values
+  // are demo data like everything else in this file.
+  await p.utilityConfig.create({
+    data: {
+      utilityId: UID,
+      settings: {
+        billDocuments: { storageIntegration: "dev-files" },
+        issuer: {
+          utilityName: "City of Bozeman Utilities",
+          remittanceAddressLine1: "PO Box 1230",
+          remittanceCity: "Bozeman",
+          remittanceState: "MT",
+          remittancePostalCode: "59771",
+          billingPhone: "406-582-2000",
+        },
+      },
+    },
+  });
+  console.log("  utility config (bill storage + issuer identity)");
+
   // Seed preset roles — MUST stay in sync with packages/shared/src/modules/constants.ts MODULES
   // Must stay in step with MODULES in packages/shared/src/modules/constants.ts.
   // A module missing here is enabled for no tenant, so its routes answer
