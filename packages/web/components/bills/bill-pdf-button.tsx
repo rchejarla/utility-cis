@@ -90,9 +90,16 @@ export function BillPdfButton({
       // 404 is not a failure here, it is "not generated yet".
       if (!(err instanceof DownloadError) || err.status !== 404) throw err;
       if (surface === "portal") {
-        // Said in the customer's terms. They cannot generate it and
-        // there is nothing for them to do about it.
-        throw new Error("This bill is not available to view yet. Please try again later.");
+        // Not "try again later": nothing will produce it in the
+        // meantime. `generateBillDocument` has exactly one caller — the
+        // staff `POST`, on `accounts:EDIT` — so until someone here
+        // presses PDF on this bill there is no document and no process
+        // that will make one. Telling the customer to wait sends them
+        // away for something that is never coming, so the message
+        // offers the only route that works.
+        throw new Error(
+          "This bill is not available to download. Please contact us for a copy.",
+        );
       }
       await apiClient.post(path, {});
       const file = await authFetchFile(path);

@@ -152,3 +152,50 @@ describe("BillPdfButton", () => {
     expect(screen.queryByRole("button", { name: "View bill" })).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The same button on the customer's own side of the app.
+ *
+ * It reads a different route and, crucially, never generates: producing
+ * a document is `accounts:EDIT`, which no portal token holds, so the
+ * staff fetch-then-generate fallback would answer a customer with an
+ * authorization error for a bill that is legitimately theirs.
+ */
+describe("BillPdfButton on the portal", () => {
+  it("reads the portal route, not the staff one", async () => {
+    renderButton({ surface: "portal" });
+
+    await userEvent.click(screen.getByRole("button", { name: "View bill" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      "/portal/api/bills/bill-1/document",
+    );
+  });
+
+  it("never asks for a document to be generated", async () => {
+    fetchMock.mockResolvedValue(notGenerated());
+
+    renderButton({ surface: "portal" });
+    await userEvent.click(screen.getByRole("button", { name: "View bill" }));
+
+    await waitFor(() => expect(screen.getByText(/not available/i)).toBeInTheDocument());
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("does not promise the bill will turn up on its own", async () => {
+    // Nothing generates a document except a staff member pressing PDF:
+    // `generateBillDocument` has one caller, and it is `accounts:EDIT`.
+    // So "try again later" — which this said until 2026-10-22 — sends the
+    // customer away to wait for something that is never coming. The
+    // message has to offer the one thing that does work: asking us.
+    fetchMock.mockResolvedValue(notGenerated());
+
+    renderButton({ surface: "portal" });
+    await userEvent.click(screen.getByRole("button", { name: "View bill" }));
+
+    const msg = await screen.findByText(/not available/i);
+    expect(msg).toHaveTextContent(/contact us/i);
+    expect(msg).not.toHaveTextContent(/try again/i);
+  });
+});
