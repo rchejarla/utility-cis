@@ -14,7 +14,6 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { MeterManagementTab } from "@/components/service-agreements/meters-tab";
-import { AgreementBillingTab } from "@/components/billing/agreement-billing-tab";
 import { BillSegmentsTab } from "@/components/bill-segments/bill-segments-tab";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
 import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
@@ -397,7 +396,6 @@ export default function ServiceAgreementDetailPage({
           { key: "overview", label: "Overview" },
           { key: "meters", label: `Meters (${sa.meters?.length ?? 0})` },
           { key: "bills", label: "Bills" },
-          { key: "billing", label: "Billing" },
           { key: "attachments", label: "Attachments" },
           { key: "audit", label: "Audit" },
         ]}
@@ -868,7 +866,6 @@ export default function ServiceAgreementDetailPage({
 
         {activeTab === "bills" && <BillSegmentsTab saId={id} canEdit={canEdit} />}
 
-        {activeTab === "billing" && <AgreementBillingTab agreementId={sa.id} />}
 
         {activeTab === "attachments" && (
           <AttachmentsTab entityType="ServiceAgreement" entityId={id} showForm={showUpload} onShowFormChange={setShowUpload} />

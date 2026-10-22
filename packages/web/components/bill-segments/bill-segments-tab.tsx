@@ -12,6 +12,13 @@ interface BillSegmentSummary {
   periodStart: string;
   periodEnd: string;
   total: string;
+  /**
+   * The charge is the tariff's floor rather than the metered amount.
+   * Marked in the table because the figure alone looks like ordinary
+   * usage, and this is what answers "why is my bill the same every
+   * month".
+   */
+  minimumFloorApplied: boolean;
   createdAt: string;
 }
 
@@ -91,9 +98,37 @@ export function BillSegmentsTab({ saId, canEdit }: { saId: string; canEdit: bool
     }
   };
 
+  // What this agreement has cost, so the question does not require
+  // adding the column up by hand.
+  const charged = segments.reduce((sum, s) => sum + parseFloat(s.total), 0);
+
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: "12px",
+        }}
+      >
+        <div
+          data-testid="segment-summary"
+          style={{ fontSize: 12, color: "var(--text-secondary)" }}
+        >
+          {loading ? (
+            " "
+          ) : (
+            <>
+              <b style={{ color: "var(--text-primary)" }}>{segments.length}</b>{" "}
+              billed {segments.length === 1 ? "period" : "periods"} ·{" "}
+              <b style={{ fontFamily: "monospace", color: "var(--text-primary)" }}>
+                {fmt(charged.toFixed(4))}
+              </b>{" "}
+              charged
+            </>
+          )}
+        </div>
         {canEdit && (
           <button
             onClick={openDialog}
@@ -134,6 +169,7 @@ export function BillSegmentsTab({ saId, canEdit }: { saId: string; canEdit: bool
               <th style={th}>Bill #</th>
               <th style={th}>Period</th>
               <th style={{ ...th, textAlign: "right" }}>Total</th>
+              <th style={th}>Basis</th>
               <th style={th}>Created</th>
               <th style={th}></th>
             </tr>
@@ -147,6 +183,30 @@ export function BillSegmentsTab({ saId, canEdit }: { saId: string; canEdit: bool
                 </td>
                 <td style={{ ...td, textAlign: "right", fontFamily: "monospace", fontWeight: 600 }}>
                   {fmt(s.total)}
+                </td>
+                <td style={td}>
+                  {s.minimumFloorApplied ? (
+                    <span
+                      style={{
+                        display: "inline-block",
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.05em",
+                        color: "var(--warning)",
+                        background: "color-mix(in srgb, var(--warning) 9%, transparent)",
+                        border: "1px solid color-mix(in srgb, var(--warning) 25%, transparent)",
+                        whiteSpace: "nowrap",
+                      }}
+                      title="Charged at the tariff minimum, not on metered usage"
+                    >
+                      Minimum applied
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>Metered</span>
+                  )}
                 </td>
                 <td style={{ ...td, color: "var(--text-muted)", fontSize: "12px" }}>
                   {new Date(s.createdAt).toLocaleString()}
