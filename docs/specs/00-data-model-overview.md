@@ -6,7 +6,7 @@
 
 ## Overview
 
-This document is the master entity reference for the Utility CIS data model. It describes the 34 core domain entities, their database tables, categories, the phase in which they were built, and their key relationships. Use this as the index when navigating module-level specs.
+This document is the master entity reference for the Utility CIS data model. It describes the 35 core domain entities, their database tables, categories, the phase in which they were built, and their key relationships. Use this as the index when navigating module-level specs.
 
 The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isolation is enforced at the database level via PostgreSQL Row-Level Security (RLS) policies, with the `utility_id` claim from the JWT applied per-request.
 
@@ -31,7 +31,7 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 | 13 | BillingCycle | `billing_cycle` | Configuration | Phase 1 | Referenced by ServiceAgreement |
 | 14 | MeterRead | `meter_read` | Operations | Phase 1 | Belongs to Meter + ServiceAgreement + UnitOfMeasure; optionally linked to MeterRegister. `uom_id` frozen at write time from the meter's UOM. Phase 2.5: gains nullable `read_event_id` UUID that groups sibling rows from the same multi-register read event (one row per active register per event). |
 | 15 | AuditLog | `audit_log` | System | Phase 1 | Records all entity state changes; references actor by user UUID |
-| 15a | Utility | `utility` | System | 2026-10-18 | **The tenant.** Every other table's `utility_id` is a foreign key to this row, `ON DELETE RESTRICT`. Holds id, display name, `status` (`ACTIVE \| SUSPENDED`) and created-at. Nothing reads `status` yet — suspension is build-order step 5 of the tenancy design note, so setting it today changes no behaviour. RLS keys on `id`, since this table's primary key *is* the tenant. |
+| 15a | Utility | `utility` | System | 2026-10-18 | **The tenant.** Every other table's `utility_id` is a foreign key to this row, `ON DELETE RESTRICT`. Holds id, display name, `status` (`ACTIVE \| SUSPENDED`) and created-at. `status` is read on **every** request by the authorization pass, before the module check, so suspending a tenant takes effect immediately rather than when its tokens expire. No unique index on `name`; uniqueness is a provisioning rule (`UTILITY_NAME_TAKEN`, case-insensitive). RLS keys on `id`, since this table's primary key *is* the tenant. |
 | 16 | UtilityTheme | `utility_theme` | System | Phase 1 | One per utility (unique on utility_id) |
 | 17 | UserPreference | `user_preference` | System | Phase 1 | One per user per utility (unique on utility_id + user_id) |
 | 18 | Attachment | `attachment` | Operations | Phase 2 | Generic file attachment for any entity (entityType + entityId pattern); RLS enforced |
@@ -41,7 +41,7 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 | 22 | UtilityConfig | `utility_config` | System | Phase 2 | One per utility (unique on utility_id); holds `require_hold_approval` and an extensible `settings` JSONB bucket carrying `numberFormats` (identifier generation), `branding`, `notifications`, `retention`, and `billing` namespaces (see spec 18). |
 | 23 | SuspensionTypeDef | `suspension_type_def` | Reference | Phase 2 | Per-tenant (or global, with `utility_id IS NULL`) reference table for service-hold type codes. Replaces the former `SuspensionType` Prisma enum. RLS policy allows global rows to be visible across all tenants. |
 | 24 | CustomFieldSchema | `custom_field_schema` | System | Phase 2 | One row per (utility, entity_type) holding the tenant's custom-field schema as a JSONB FieldDefinition array. Powers the `custom_fields` JSONB column on Customer/Account/Premise/ServiceAgreement/Meter. See spec 20. |
-| 25 | NotificationTemplate | `notification_template` | Notifications | Phase 3 | Per-tenant template with channel (EMAIL/SMS/MAIL), Mustache body, variable interpolation, optional event-trigger binding. See spec 13. |
+| 25 | NotificationTemplate | `notification_template` | Notifications | Phase 3 | Per-tenant template with channel (`EMAIL` and `SMS` only — `NotificationChannel` has no postal member; this row claimed MAIL until 2026-10-21), Mustache body, variable interpolation, optional event-trigger binding. See spec 13. |
 | 26 | Notification | `notification` | Notifications | Phase 3 | Individual notification instance sent from a template; tracks recipient, channel, status (PENDING/SENT/FAILED), and send timestamp. See spec 13. |
 | 27 | DelinquencyRule | `delinquency_rule` | Delinquency | Phase 3 | Per-tenant rule with configurable thresholds (days past due, minimum balance), escalation tier, and linked notification template. See spec 11. |
 | 28 | DelinquencyAction | `delinquency_action` | Delinquency | Phase 3 | Log of delinquency rule firings per account; records rule, account, action taken, and timestamp. See spec 11. |

@@ -1,11 +1,17 @@
 # 24 — Platform Worker Control
 
-**Status:** design, not built. "What exists today" is shipped; everything
-under "Design" is proposed.
+**Status:** partly built. **Step 1 (D1 + D2) and D6 are shipped** —
+worker ids, named API connections, the registry as a hash, cluster-wide
+reporting, and the Workers page. Steps 2–4 (**D3** pub/sub, **D4**
+signing, **D5** the outcome record) are not built, so **control is still
+single-host**: a start lands on the node serving the request, and a stop
+is offered only for a worker whose pid that node can signal.
 
 **Audience:** the platform operator — a `CisUser` with a null
 `utility_id` (tenancy design note, Q2). Every route here is
-`{ config: { platform: true } }`.
+`{ config: { platform: true } }`. The console these routes serve is
+[25 — Platform Console](25-platform-console.md); this file is the worker
+lifecycle alone.
 
 **Revision 2.** Revision 1 proposed one worker process per queue and
 host-local control. Both were wrong, for reasons recorded under
@@ -27,15 +33,44 @@ when there is more than one API node.
 
 | | |
 |---|---|
-| `GET /api/v1/platform/queues` | counts, DLQ depth, recent failures, per-queue worker attachment, `workerProcess` |
-| `POST /api/v1/platform/workers/start` | `{queues?}` — spawns one process (empty means all) |
-| `POST /api/v1/platform/workers/stop` | asks that process to drain |
+| `GET /api/v1/platform/queues` | counts, DLQ depth, recent failures with tenant names, per-queue worker attachment and age, `paused`, every connected API node, every registered worker, `thisNode`, `controllable` |
+| `POST /api/v1/platform/workers/start` | `{queues?}` — spawns one process on **this** node (empty means all eight) |
+| `POST /api/v1/platform/workers/:id/stop` | asks that worker to drain, by its own id |
 
-One worker, one Redis key (`platform:worker-process`). Start spawns
-`node --import tsx --env-file=.env src/worker.ts` detached, `WORKER_QUEUES`
-in the environment, stdio to `worker.log`. Stop asks the worker's own
-HTTP server (`POST /shutdown`, loopback only) and falls back to SIGTERM.
-`workerControlAllowed()` is true in development, opt-in elsewhere.
+Start spawns `process.execPath --import tsx --env-file=.env src/worker.ts`
+detached with `WORKER_ID`, `PROCESS_ROLE` and `WORKER_QUEUES` in the
+environment and stdio to `worker.log`. Stop asks the worker's own HTTP
+server (`POST /shutdown`, loopback only, 202) and falls back to SIGTERM.
+`workerControlAllowed()` is `WORKER_CONTROL_ENABLED || NODE_ENV !==
+"production"` — allowed everywhere but production, where it must be set
+explicitly.
+
+Shipped since revision 2 was written:
+
+- **Worker identity (D1).** `workerId()` in `lib/queues.ts` resolves
+  `WORKER_ID` or mints a uuid, once per process, and `workerOptions(name)`
+  passes it as `name` to every `Worker` — so a worker's connections appear
+  in `CLIENT LIST` as `bull:<base64 queue>:w:<id>` and are readable from
+  any node (C4).
+- **The registry is a hash (D1).** `platform:workers`, field = worker id,
+  value `{ id, node, pid, queues[], startedAt, healthPort, logFile }`. The
+  single-key version let the first node to start a worker block every
+  other node from starting any.
+- **Node discovery (D2).** Every Redis connection is named
+  `<role>:<hostname>` at construction, and `lib/connected-clients.ts`
+  derives both the API nodes and the attached worker ids from one
+  `CLIENT LIST`. It returns **null**, not an empty list, when Redis
+  refuses — "unknown" and "none" must not print the same.
+- **Liveness in three tiers.** A worker is alive if it is attached in
+  `CLIENT LIST`; failing that, if its pid is alive on this node; failing
+  that, if it belongs to another node and is younger than
+  `FOREIGN_GRACE_MS` (120s), which covers a worker still booting
+  elsewhere. Past that, with no attachment, it is gone.
+- **C1 is enforced rather than discovered.** A second start on a node that
+  already has a worker is refused by name — "a second one on the same
+  node would fail to bind port 3002" — instead of spawning a process that
+  exits 1.
+- **The page (D6)** is `/platform/cluster/workers`, one row per node.
 
 ## Constraints, measured
 
@@ -208,6 +243,12 @@ WORKER PROCESSES                              attached: 8 of 8 queues
 Every node from D2, every worker from D1. Stop is offered for any worker,
 because D3 can reach any node. Start names the node it will act on.
 
+**As shipped**, the page is a table rather than the list above — one
+layout to learn at every node count — and Stop is offered only where
+`stoppable`, which is where the pid is this node's to signal. A worker on
+another node shows its state and no control, which is honest until D3
+lands.
+
 ### D7 — What the console still will not do
 
 - Pause or resume a queue. That is a decision about a queue, not a
@@ -237,13 +278,23 @@ columns nullable is the migration that would close both.
 
 1. **D1 + D2** — worker ids, named API connections, registry as a hash.
    Pure reporting: the page starts listing every node and worker, and
-   this is correct in a cluster on its own.
+   this is correct in a cluster on its own. — **done**
 2. **D4** — the secret and the signing helper, before anything listens.
+   — not started
 3. **D3 + D5** — the subscriber, the command path, the outcome record.
-4. **D6** — the page.
+   — not started
+4. **D6** — the page. — **done**, with control limited to this node
+   until step 3
 
 Step 1 is worth shipping alone and changes no behaviour. Nothing after it
 is worth shipping without step 2.
+
+D6 shipped ahead of steps 2 and 3 because its reporting half is step 1's
+output and needed somewhere to be shown; its control half is the
+single-host behaviour that already existed. Nothing about that order
+weakens the gate — a node that does not allow worker control still does
+not act, and with no subscriber there is nothing for an unsigned command
+to reach.
 
 ## If this is not wanted
 

@@ -126,11 +126,59 @@ app.patch("/api/v1/customers/:id", {
 Runs after auth + tenant middleware, before route handler:
 
 ```
-1. Extract module + permission from route config
-2. If no module declared → allow (unprotected route, log warning in dev for /api/v1/* routes)
-3. Check tenant module enabled (Redis cached) → 403 MODULE_DISABLED
-4. Check user role has permission (Redis cached) → 403 FORBIDDEN
+1. Platform route? (`{ platform: true }`, or any URL under /admin/queues)
+   → require a real platform-actor row: no row → 403 PLATFORM_REQUIRED /
+     FORBIDDEN; a valid one → allow, and stop here. No module, no
+     permission: identity is the whole authority.
+2. Platform token on a tenant route → 403 TENANT_CONTEXT_REQUIRED
+3. No module declared → allow (unprotected route, log warning in dev for
+   /api/v1/* routes except /api/v1/auth/*)
+4. Fetch utility status, enabled modules and user role in parallel, then
+   check in this order:
+   a. Utility SUSPENDED            → 403 UTILITY_SUSPENDED
+   b. Module not enabled           → 403 MODULE_DISABLED
+   c. No cis_user row / no role    → 403 USER_NOT_PROVISIONED
+   d. Role inactive                → 403 USER_INACTIVE (BR-RB-009)
+   e. Permission not in role       → 403 FORBIDDEN
 ```
+
+Three notes on that order, each of which was a bug once:
+
+- **Suspension is checked before the module.** "Module not enabled" for a
+  suspended tenant sends an operator to the wrong screen entirely. A
+  **null** status means the status could not be read, which is not a
+  suspension.
+- **The lookups are parallel, the checks are sequential.** Neither lookup
+  depends on the other, and awaiting them in sequence was adding a flat
+  two seconds to every authenticated request on a sick cache. The check
+  order is unchanged, so the error a caller gets is the same.
+- **4c used to return early and *allow* the request** — "backwards
+  compatibility during migration", long done. What it did was hand every
+  permission on every tenant route to any token whose subject had no
+  `cis_user` row, which is exactly what the web login form mints.
+
+### The platform actor sits outside this model
+
+A `CisUser` with a **null `utility_id`** — the one identity above tenants.
+It holds no `user_role` row, because being the platform actor *is* the
+authority, so its routes declare `{ config: { platform: true } }` instead
+of a module and a permission.
+
+A tenant's own System Admin is refused on those routes, which is the
+point: it holds every permission a *tenant* can grant, which is not the
+same authority. And a platform token is refused on tenant routes, which
+is what lets `request.user.utilityId` stay a non-nullable string at all
+243 of its read sites — `request.user` is not set on a platform request;
+`request.platformActor` is.
+
+`getPlatformActor` is the gate: a real row, no tenant, active. The token's
+claim only chose the branch. Note what is deliberately absent — the tenant
+path's 4c fallback above. A positive lookup cannot have that shape.
+
+What the platform actor does with that authority is
+[25 — Platform Console](25-platform-console.md); the tenancy model behind
+it is
+[`docs/superpowers/specs/2026-10-17-tenancy-and-platform-admin-design.md`](../superpowers/specs/2026-10-17-tenancy-and-platform-admin-design.md).
 
 ### Caching
 
@@ -219,6 +267,21 @@ const { canCreate: canCreateMeter } = usePermission("meters");
 const { canView } = usePermission();
 if (!canView) return <AccessDenied />;
 ```
+
+**`<AccessDenied />` renders nothing while the permissions are in
+flight.** `auth-context` starts at `loading: true` with no permissions
+and no enabled modules, and `usePermission` reads those directly — so for
+the width of the `/auth/me` round trip, every one of the 47 pages with
+the guard above asks a question whose answer is not known yet and gets
+"no". That flashed a lock and "Access Denied" on every login, before the
+page the person was entitled to appeared.
+
+The fix lives in the component rather than in `usePermission`,
+deliberately: the 47 call sites all read the same way, and the claim is
+the component's to make. A page cannot render "denied" too early if the
+thing that renders "denied" refuses to do so without the facts. It holds
+a 400px placeholder either way so the layout does not jump when the
+answer arrives.
 
 ---
 

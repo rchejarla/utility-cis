@@ -190,9 +190,10 @@ export async function buildApp() {
 
   // Bull Board admin UI for queue inspection. Off by default; flipping
   // BULL_BOARD_ENABLED=true mounts it at /admin/queues. Auth middleware
-  // (already global) ensures the user is logged in; the preHandler hook
-  // below additionally requires tenant_profile/EDIT — same gate used by
-  // automation-config since both expose tenant-wide operational controls.
+  // (already global) ensures the caller is logged in; the preHandler hook
+  // below additionally requires the platform actor — these queues are
+  // shared across tenants, so no tenant permission is the right gate.
+  // See the hook itself and spec 25 § "Authority".
   //
   // Imports are deferred to runtime so the test suite (which never sets
   // BULL_BOARD_ENABLED) doesn't pay the bull-board CJS module-graph cost
