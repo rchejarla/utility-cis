@@ -1,9 +1,9 @@
 # SaaSLogic Payment Collection
 
 **Module:** 21 — SaaSLogic Payment Collection
-**Status:** Design — scope reduced 2026-10-09 (see Decision below). Implementation pending; blocked on payment recording in module 23 (the ledger and posting have shipped).
-**External system:** [SaaSLogic](https://docs.saaslogic.io) — used here as a payment rail only
-**Entities:** new columns on `Customer` and `Bill`; `SaaslogicCallLog`, `PollCursor` retained from the prior design
+**Status:** Design — scope reduced 2026-10-09, transport settled 2026-10-21 (see Decision and Transport below). **Unblocked:** this spec said until 2026-10-21 that it waited on payment recording in module 23; that shipped on 2026-10-09/10. Implementation pending on the open items below, which need SaaSLogic sandbox access rather than more CIS work.
+**External system:** [SaaSLogic](https://docs.saaslogic.io) — used here as a payment rail only, reached through apptor-connect
+**Entities:** new columns on `Customer` and `Bill`. `SaaslogicCallLog` and `PollCursor` are **dropped** — see Transport.
 
 ## Decision — 2026-10-09
 
@@ -21,6 +21,25 @@ This reverses the original scope of this module, which had SaaSLogic acting as t
 | Card data, hosted payment page, settlement | **SaaSLogic** |
 
 CIS is the system of record for what is owed. SaaSLogic is told an amount and reports back whether it was paid.
+
+## Transport — 2026-10-21
+
+**SaaSLogic is reached through apptor-connect, not by a client of our own.** It is one vendor on the same rail as everything else that leaves this process (see CLAUDE.md § Integrations):
+
+| Direction | Plane | What we write |
+|---|---|---|
+| Register an amount, provision a payer, fetch the hosted-page URL | `proxy` — `POST /proxy/v1/{integration}` | Request and response types, and the bill-keyed idempotency value. Nothing about auth, retries, backoff or rate limits. |
+| Learn a payment settled | `events` — `POST /events/v1/{token}` | A handler and a status mapping, read by cursor. |
+
+This replaces the client package the prior design asked for — "typed REST client, bearer-token auth, retry with backoff, idempotency keys, call-log emission". Four of those five are the proxy plane's job, and the fifth (an idempotency key anchored on the `Bill`) is one column, already specified below. A second integration mechanism alongside the rail would mean a second credential store, a second retry policy and a second audit trail, to reach one vendor.
+
+Three consequences, each of which deletes something this spec previously asked for:
+
+- **`SaaslogicCallLog` is dropped.** The proxy plane records the call; a parallel log in our database is a second copy of the same facts, free to disagree with it, with its own 90-day trim job to write and run.
+- **`PollCursor` is dropped.** It existed because the prior design "found no webhook catalog in the public docs". The events plane is the inbound half and is verified and deduplicated already; if SaaSLogic cannot call out at all, the fallback is a scheduled pull through the `proxy` plane, whose watermark is one row in the existing settings namespace rather than an entity.
+- **`billingIntegrationSettings` no longer describes this module.** `saaslogicBaseUrl`, `sandbox` and `pollMinutes` (schema at `packages/shared/src/validators/tenant-settings.ts:58`, UI at `/settings/billing`) each presuppose CIS dialling the vendor itself. Under the rail the operator's question is *which integration name collects payments*, exactly as bill storage already works — one name selects the instance, sandbox included. **Those three fields, their route and their page are still live and now contradict this spec**; changing them is a code task, not a doc one, and is not done.
+
+**What would overturn this.** If SaaSLogic's hosted payment page requires a session our proxy cannot carry on the customer's behalf, the answer is the `resolve` plane — connection details plus a short-lived token — and still not a stored credential. The redirect itself is unaffected either way: that is the customer's browser talking to SaaSLogic, not this process, so no credential of ours is in it.
 
 ## Scope
 
@@ -48,32 +67,34 @@ The prior design is superseded. Removed, with reasons:
 | Tax owned by SaaSLogic | The rate engine already emits tax lines. Sending untaxed amounts to be taxed elsewhere would double-own the calculation. |
 | Plan catalog lookups, `GET /products/{id}/plans` | Nothing to look up. |
 
+Three more were dropped on 2026-10-21 for a different reason — not because the pricing premise fell, but because the integration rail already does them: the `@utility-cis/saaslogic` client package, `SaaslogicCallLog`, and the per-tenant encrypted credential store. See Transport above.
+
 `MeterIntervalRead` from the prior design is **not** dropped — interval reads are independently valuable to the native rate engine (`quantity-source` already resolves consumption). It is not a SaaSLogic concern, so it belongs with meter reading in module 08 rather than here.
 
-## Prerequisite — payment recording does not exist yet
+## Prerequisite — satisfied 2026-10-21
 
-This module cannot be built first. The billing chain now reaches the ledger, but stops short of payments:
+This module could not be built first, and for three slices it was genuinely blocked: the billing chain reached the ledger and stopped, so there was nothing for a payment result to call into. **That is no longer true.** Module 23 slices 2–4c shipped on 2026-10-09/10, and the loop closes:
 
 ```
 rate() -> BillSegment -> Bill -> LedgerEntry -> Account.balance
+                                      ^
+            POST /accounts/:id/payments -+  (allocated oldest-first by LedgerApplication)
 ```
 
-AR posting writes `Account.balance` inside the same transaction that creates the receivable, so delinquency sweeps real balances rather than seeded ones. What still blocks this module is the rest of the loop: there is no `Payment` entity, no allocation, and no way to record money received. Those arrive in the AR slices that follow.
+Money received is recorded as a signed `LedgerEntry` and allocated against open charges, with reversal for NSF, refunds, fees, waivers and write-offs alongside it (`packages/api/src/routes/ar.ts`). There is deliberately **no `Payment` entity** — the earlier text here demanded one, which is why this section read as blocked long after it wasn't: a payment is a ledger entry, and the spec was waiting for a noun that the AR design had decided against.
 
-So the order is:
-
-1. **Module 23 — Accounts Receivable (ledger shipped; payments outstanding).** Still needed: a `Payment` entity, recording of money received, and allocation of payments against open ledger entries. The posting rule and the choice of a materialized `Account.balance` are already settled (see module 23 and the AR design doc). Payment plans and the collections workflow follow, in module 10.
-2. **This module.** Once CIS can record a payment, SaaSLogic becomes a thin adapter: register an amount, receive a result, call AR posting.
-
-Building the adapter before payments can be recorded would mean inventing AR semantics inside an integration, which is the wrong place for them.
+So what remains is this module itself, and it is now a thin adapter: register an amount over the proxy plane, receive a result over the events plane, call the posting that already exists. The open items below are the only thing holding it, and every one of them is a question for SaaSLogic rather than work in CIS.
 
 ## Data model
 
 ### Retained from the prior design
 
 - **`customer.saaslogic_customer_id`** — VARCHAR, null until first charge. Set by lazy upsert.
-- **`SaaslogicCallLog`** — outbound API audit trail; every mutating call. 90-day retention, nightly trim. Request bodies sanitized, credentials never logged.
-- **`PollCursor`** — `(utility_id, job_name)` watermark for polling payment status, if webhooks remain unavailable.
+
+### Dropped 2026-10-21
+
+- **`SaaslogicCallLog`** — the proxy plane is the outbound audit trail. See Transport.
+- **`PollCursor`** — the events plane is the return path. See Transport.
 
 ### New
 
@@ -85,15 +106,15 @@ Payment records themselves are **not** defined here — they belong to module 23
 
 - **PCI:** no cardholder data path in CIS. Hosted payment page behind a redirect. Scope effectively zero.
 - **RLS:** new tables and columns carry `utility_id` and use the standard tenant policy. Note the caveat in module 19 — the policies do not currently enforce, because the application role bypasses RLS.
-- **Secrets:** SaaSLogic credentials stored per tenant, encrypted, never logged, redacted from `saaslogic_call_log.request_body`.
-- **Webhooks (future):** HMAC signature verification required before any state change.
+- **Secrets:** **no SaaSLogic credential is stored in CIS at all** — apptor-connect holds it and never hands it out. This reverses the prior line here, which specified per-tenant encrypted credential storage and redaction from `saaslogic_call_log.request_body`; there is neither a credential nor that table to redact. The comment at `packages/shared/src/validators/tenant-settings.ts:22-24` still promises "a separate entity" for encrypted API-key storage and is wrong as of 2026-10-21.
+- **Webhooks:** signature verification is the events plane's, not ours — it delivers verified, deduplicated events read by cursor. What we verify is that the event names a bill and an amount we recognise before anything posts.
 
 ## Open items
 
 Unverified; needs SaaSLogic sandbox access or partner contact:
 
 1. **How to register a one-off payable amount.** The prior design assumed subscriptions and `POST /invoices/on-demand`. With no subscription, confirm the right primitive for "charge this customer this amount, here is my reference."
-2. **Payment result delivery.** Webhook or polling. The prior design found no webhook catalog in the public docs; polling via `PollCursor` is the fallback.
+2. **Payment result delivery.** Whether SaaSLogic can call out at all. The prior design found no webhook catalog in the public docs. If it can, the events plane receives it; if it cannot, a scheduled pull through the proxy plane does — either way no `PollCursor`, and the question is now about the vendor rather than about our mechanism.
 3. **Hosted payment page URL.** The prior design assumed `GET /subscriptions/url`. Without subscriptions, confirm the equivalent.
 4. **Partial payments and refunds.** Does SaaSLogic report partial settlement? CIS's AR design needs to know before it decides how to apply payments.
 5. **Processing fees.** Who absorbs them, and does CIS need to record them as a separate AR line.

@@ -19,9 +19,16 @@ import { z } from "zod";
  *    attachment retention in years since that's how operators think
  *    about it. All values are bounded so a typo cannot shrink retention
  *    to 1 day or balloon it past what the DB can sustain.
- *  - Billing: points at the SaaSLogic instance CIS should talk to. API
- *    key storage is NOT in this schema — that needs encryption at rest
- *    and rotation, which is a separate entity.
+ *  - Billing: points at the SaaSLogic instance CIS should talk to.
+ *    STALE as of 2026-10-21 — SaaSLogic is reached over apptor-connect's
+ *    proxy plane, so a base URL, a sandbox flag and a poll interval are
+ *    all the rail's business and an integration name replaces them, the
+ *    way `billStorage` below already works. No encrypted-credential
+ *    entity is coming either; the earlier note here promised one, and
+ *    the rule is now that no vendor credential lives in this codebase
+ *    at all. See CLAUDE.md § Integrations and docs/specs/21 § Transport.
+ *    The three fields stay for now because a route, a page and two
+ *    integration tests read them.
  */
 
 export const brandingSettingsSchema = z

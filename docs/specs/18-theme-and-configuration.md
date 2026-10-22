@@ -180,13 +180,41 @@ Tenant-wide configuration flags that don't belong to the theme module. One row p
     "saaslogicBaseUrl": "https://api-sandbox.saaslogic.io/v1",
     "sandbox": true,
     "pollMinutes": 5
+  },
+  "issuer": {
+    "utilityName": "City of Bozeman Utilities",
+    "remittanceAddressLine1": "PO Box 1230",
+    "remittanceCity": "Bozeman",
+    "remittanceState": "MT",
+    "remittancePostalCode": "59771",
+    "billingPhone": "406-582-2000"
+  },
+  "billDocuments": {
+    "storageIntegration": "bill-pdfs",
+    "storageConnection": ""
   }
 }
 ```
 
 The `numberFormats` key controls auto-generation of human-readable identifiers on create forms — see the Identifier Generation section below.
 
-Four additional namespaces are reserved for the Settings sub-pages (`/settings/branding`, `/settings/notifications`, `/settings/retention`, `/settings/billing`). Each has a typed Zod schema in `packages/shared/src/validators/tenant-settings.ts` (`brandingSettingsSchema`, `notificationSettingsSchema`, `retentionSettingsSchema`, `billingIntegrationSettingsSchema`) and is patched through the top-level fields `branding`, `notifications`, `retention`, and `billing` on `PATCH /api/v1/tenant-config`. The route shallow-merges each namespace so partial updates preserve unrelated keys, and individual field validators enforce bounds (e.g. `auditRetentionDays` must be between 365 and 3650).
+**Six** namespaces sit alongside the top-level keys, each with a typed `.strict()` Zod schema in `packages/shared/src/validators/tenant-settings.ts` and each patched through its own top-level field on `PATCH /api/v1/tenant-config`. The route shallow-merges each namespace so partial updates preserve unrelated keys, and individual field validators enforce bounds (e.g. `auditRetentionDays` must be between 365 and 3650). `.strict()` is load-bearing rather than tidy: a misspelled key is rejected at the API boundary instead of going quietly missing and surfacing much later as an unexplained render failure.
+
+| Namespace | Schema | Edited at | Read by |
+|---|---|---|---|
+| `branding` | `brandingSettingsSchema` | `/settings/branding` | App chrome |
+| `notifications` | `notificationSettingsSchema` | `/settings/notifications` | Notification send |
+| `retention` | `retentionSettingsSchema` | `/settings/retention` | The purge and trim jobs |
+| `billing` | `billingIntegrationSettingsSchema` | `/settings/billing` | Nothing yet — see the note below |
+| `issuer` | `issuerSettingsSchema` | `/settings/bill-production` | The bill presentation loader; the platform console's tenant-readiness panel |
+| `billDocuments` | `billDocumentSettingsSchema` | `/settings/bill-production` | The bill-document service, via apptor-connect's files plane |
+
+The last two shipped with bill production and were undocumented here until 2026-10-21, which is why this section said "four". Two things about them are worth carrying:
+
+- **`issuer` is a namespace rather than columns** because nothing queries a remittance address — it is edited in Settings and read by one loader. Five of its fields are required for a bill to be a valid document (`REQUIRED_ISSUER_FIELDS`: `utilityName`, `remittanceAddressLine1`, `remittanceCity`, `remittanceState`, `remittancePostalCode`), and the predicate for "set" travels with that list, because the settings page writes `""` for a cleared field and anything testing for mere key presence would call such a tenant complete while its bills refused to render.
+- **`billDocuments` carries an integration name, not a location.** `storageIntegration` selects S3, Azure Blob or GCS on apptor-connect's side; no bucket, region or credential belongs here. This is the shape every integration setting should take.
+
+> **The `billing` namespace is stale as of 2026-10-21 and is not yet fixed.** All three of its fields assume CIS dials SaaSLogic itself: a base URL to call, a sandbox flag, and a polling interval. SaaSLogic is now reached over apptor-connect's proxy plane (`docs/specs/21-saaslogic-billing.md` § Transport), where one integration name selects the instance — sandbox included — and the events plane replaces polling. The replacement is a single integration-name field, exactly as `billDocuments` above already does it. Nothing reads these three fields today, so the staleness costs an operator a page of questions with no effect rather than wrong behaviour. Changing it touches the schema, the route, `/settings/billing` and two integration tests, so it is build work and has not been done.
 
 Additional keys can be added to the bucket for future tenant-level flags without schema changes.
 
