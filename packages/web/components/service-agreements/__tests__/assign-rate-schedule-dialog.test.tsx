@@ -86,23 +86,27 @@ describe("Assign rate schedule", () => {
     expect(url).toContain("commodityId=com-water");
   });
 
-  it("marks a draft schedule and says bills will refuse it", async () => {
+  it("does not offer a draft schedule at all", async () => {
+    // A draft assignment is a configuration that looks complete and
+    // cannot bill. Publishing is not activation — the assignment's own
+    // date window decides when a schedule applies, and the publish gate
+    // in bill-segment.service decides whether it may be billed ever —
+    // so "assign now, publish later" buys nothing that "publish now,
+    // assign from a future date" does not. Offering one only moves the
+    // failure to a billing run hours later.
     renderDialog([schedule({ publishedAt: null })]);
 
-    // Assigning a draft is legal and sometimes intended — assign now,
-    // publish later — so it is offered rather than hidden. What must
-    // not happen is assigning one without knowing: the failure
-    // otherwise surfaces as SCHEDULE_NOT_PUBLISHED in a billing run
-    // long afterwards.
-    expect(await screen.findByText(/draft/i)).toBeInTheDocument();
-    expect(screen.getByText(/until (it is |they are )?published/i)).toBeInTheDocument();
+    await waitFor(() => expect(get).toHaveBeenCalled());
+    expect(screen.queryByText(/BZN-WATER/)).toBeNull();
   });
 
-  it("does not warn when every offered schedule is published", async () => {
-    renderDialog([schedule()]);
+  it("sends someone to publish when every schedule for the commodity is a draft", async () => {
+    renderDialog([schedule({ publishedAt: null })]);
 
-    await waitFor(() => expect(get).toHaveBeenCalled());
-    expect(screen.queryByText(/until (it is |they are )?published/i)).toBeNull();
+    // Distinct from having no schedules at all: the tariff exists and
+    // one click fixes it, so say which thing to do.
+    expect(await screen.findByText(/no published rate schedules/i)).toBeInTheDocument();
+    expect(screen.getByText(/draft/i)).toBeInTheDocument();
   });
 
   it("assigns the chosen schedule with a role and an effective date", async () => {

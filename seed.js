@@ -549,7 +549,26 @@ async function main() {
     },
   });
 
-  console.log("  7 rate schedules with components");
+  // Published, because a draft schedule cannot be billed against:
+  // `bill-segment.service` picks assignments by their own date window
+  // and then refuses any schedule with no publishedAt
+  // (SCHEDULE_NOT_PUBLISHED). Left as drafts, a seeded database could
+  // not complete a single billing run — which is what happened on
+  // 2026-10-22: a run over four accounts failed two on this and skipped
+  // the other two, so nothing billed.
+  //
+  // The seed writes publishedAt directly rather than calling
+  // publishRateSchedule, in keeping with how it writes its bills: it
+  // does not go through the services. These are the golden-test tariffs
+  // and each carries its components, so publishing them is not
+  // publishing an empty schedule — the thing utility-readiness warns
+  // about separately.
+  await p.rateSchedule.updateMany({
+    where: { utilityId: UID, publishedAt: null },
+    data: { publishedAt: new Date() },
+  });
+
+  console.log("  7 rate schedules with components, published");
 
   const premiseData = [
     { addressLine1: "742 Evergreen Terrace", city: "Springfield", state: "IL", zip: "62704", geoLat: 39.7817, geoLng: -89.6501, premiseType: "RESIDENTIAL", commodityIds: [water.id, sewer.id, stormwater.id, solidWaste.id], eruCount: 1, hasStormwaterInfra: true },

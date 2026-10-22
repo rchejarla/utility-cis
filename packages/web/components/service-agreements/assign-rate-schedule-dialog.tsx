@@ -24,6 +24,17 @@ import { RATE_ASSIGNMENT_ROLE_CODES } from "@utility-cis/shared";
  * `SCHEDULE_NOT_PUBLISHED`. The third is genuinely unimplemented
  * (schema note: "Overlap exclusion is deferred to slice 2/3") and this
  * dialog does not pretend otherwise.
+ *
+ * **Drafts are not offered.** This briefly allowed them with a warning,
+ * on the reasoning that "assign now, publish later" was a real
+ * workflow. It is not: `bill-segment.service` picks assignments by the
+ * assignment's own date window and *then* rejects any schedule with no
+ * `publishedAt`, so publishing is a release gate and not an activation
+ * date. "Publish now, assign from a future date" covers every case,
+ * while a draft assignment is a configuration that looks complete,
+ * cannot bill, and reports that only when a run fails. An existing
+ * assignment pointing at a draft is still marked on the agreement's
+ * panel, because that diagnosis is needed for rows made before this.
  */
 
 interface RateScheduleOption {
@@ -68,6 +79,8 @@ export function AssignRateScheduleDialog({
 }: AssignRateScheduleDialogProps) {
   const { toast } = useToast();
   const [schedules, setSchedules] = useState<RateScheduleOption[]>([]);
+  /** Drafts are not offered, but their count explains an empty picker. */
+  const [draftCount, setDraftCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [scheduleId, setScheduleId] = useState<string | undefined>();
   const [roleCode, setRoleCode] = useState<string>("primary");
@@ -76,14 +89,20 @@ export function AssignRateScheduleDialog({
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    // Narrowed to the commodity, and superseded versions are dropped:
-    // a replaced version keeps its publishedAt, so it would otherwise
-    // read as a legitimate choice.
+    // Narrowed to the commodity. Superseded versions are dropped — a
+    // replaced version keeps its publishedAt, so it would otherwise
+    // read as a legitimate choice — and so are drafts, which cannot be
+    // billed against. The draft count is kept so an empty picker can
+    // say to publish rather than to create.
     apiClient
       .get<{ data: RateScheduleOption[] }>(
         `/api/v1/rate-schedules?commodityId=${encodeURIComponent(commodityId)}&limit=200`,
       )
-      .then((r) => setSchedules((r.data ?? []).filter((s) => !s.supersededById)))
+      .then((r) => {
+        const live = (r.data ?? []).filter((s) => !s.supersededById);
+        setSchedules(live.filter((s) => s.publishedAt));
+        setDraftCount(live.filter((s) => !s.publishedAt).length);
+      })
       .catch(() => setSchedules([]))
       .finally(() => setLoading(false));
   }, [commodityId]);
@@ -94,21 +113,15 @@ export function AssignRateScheduleDialog({
         const held = existing.some((e) => e.rateScheduleId === s.id);
         return {
           value: s.id,
-          // Both markers live in the label because that is the only
-          // text a combobox shows while collapsed. A commodity often has
+          // The marker is in the label because that is the only text a
+          // combobox shows while collapsed. A commodity often has
           // exactly one schedule, so the single option offered is
           // frequently the one already assigned.
-          label:
-            `${s.code} · v${s.version} — ${s.name}` +
-            `${s.publishedAt ? "" : "  [DRAFT]"}` +
-            `${held ? " — already assigned" : ""}`,
+          label: `${s.code} · v${s.version} — ${s.name}${held ? " — already assigned" : ""}`,
         };
       }),
     [schedules, existing],
   );
-
-  const chosen = schedules.find((s) => s.id === scheduleId);
-  const anyDraft = schedules.some((s) => !s.publishedAt);
 
   /**
    * An assignment already holding this role over an open or overlapping
@@ -162,9 +175,13 @@ export function AssignRateScheduleDialog({
     <ConfirmDialog
       title="Assign a rate schedule"
       message={
-        nothingToAssign
-          ? `There are no rate schedules for ${commodityName ?? "this commodity"}. Create one under Rate Schedules first.`
-          : "An agreement can hold several schedules at once — one per role."
+        !nothingToAssign
+          ? "An agreement can hold several schedules at once — one per role."
+          : draftCount > 0
+            ? // Distinct from having none: the tariff exists and one
+              // click fixes it, so say which thing to do.
+              `No published rate schedules for ${commodityName ?? "this commodity"} — ${draftCount} ${draftCount === 1 ? "exists as a draft" : "exist as drafts"}. A bill cannot price against a draft, so publish one under Rate Schedules first.`
+            : `There are no rate schedules for ${commodityName ?? "this commodity"}. Create one under Rate Schedules first.`
       }
       confirmLabel={saving ? "Assigning…" : "Assign"}
       confirmDisabled={saving || nothingToAssign || !scheduleId || !effectiveDate}
@@ -180,27 +197,6 @@ export function AssignRateScheduleDialog({
             onChange={setScheduleId}
             placeholder={loading ? "Loading…" : "Choose a rate schedule"}
           />
-
-          {anyDraft && (
-            /* Assigning a draft is legal and sometimes intended, so it
-               is offered rather than hidden. What must not happen is
-               assigning one unknowingly: the consequence appears much
-               later as a failed billing run. */
-            <p
-              style={{
-                margin: 0,
-                fontSize: 12,
-                color: "var(--warning)",
-                background: "color-mix(in srgb, var(--warning) 9%, transparent)",
-                border: "1px solid color-mix(in srgb, var(--warning) 25%, transparent)",
-                borderRadius: "var(--radius)",
-                padding: "8px 10px",
-              }}
-            >
-              Schedules marked <b>DRAFT</b> can be assigned, but a bill will refuse to
-              price against one until it is published.
-            </p>
-          )}
 
           <label style={{ display: "grid", gap: 4, fontSize: 12, color: "var(--text-muted)" }}>
             Role
@@ -260,12 +256,6 @@ export function AssignRateScheduleDialog({
               }}
             />
           </label>
-
-          {chosen && !chosen.publishedAt && (
-            <p style={{ margin: 0, fontSize: 12, color: "var(--warning)" }}>
-              {chosen.code} v{chosen.version} is a draft.
-            </p>
-          )}
 
           {roleClash && (
             /* Allowed, not blocked: the API permits it and a deliberate
