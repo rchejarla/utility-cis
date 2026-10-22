@@ -295,3 +295,68 @@ describe("Billing run detail — exceptions", () => {
     expect(screen.getByText("$64.20")).toBeInTheDocument();
   });
 });
+
+/**
+ * Resume is the only way forward from a run that did not finish.
+ *
+ * One run per cycle window is a database constraint
+ * (`@@unique([utilityId, billingCycleId, windowEnd])`), so the period
+ * cannot be started again. Before this button existed, a FAILED run
+ * closed its window permanently and the refusal told the operator to
+ * "resume or cancel" — neither of which was possible.
+ */
+describe("resuming a run", () => {
+  const resumable = ["FAILED", "PARTIAL", "CANCELLED"];
+
+  for (const status of resumable) {
+    it(`offers Resume on a ${status} run`, async () => {
+      routeGets({ run: detail({ status, billedCount: status === "PARTIAL" ? 2 : 0 }) });
+      await renderPage();
+
+      expect(
+        await screen.findByRole("button", { name: /resume/i }),
+      ).toBeInTheDocument();
+    });
+  }
+
+  it("offers no Resume on a run with nothing left to bill", async () => {
+    routeGets({ run: detail({ status: "COMPLETE", billedCount: 120 }) });
+    await renderPage();
+
+    await loaded();
+    expect(screen.queryByRole("button", { name: /resume/i })).toBeNull();
+  });
+
+  it("offers no Resume while the run is still going", async () => {
+    routeGets({ run: detail({ status: "RUNNING", billedCount: 4 }) });
+    await renderPage();
+
+    // Two workers on one run would race over the same items.
+    expect(screen.queryByRole("button", { name: /resume/i })).toBeNull();
+  });
+
+  it("offers no Resume to a user who may only look", async () => {
+    vi.spyOn(permModule, "usePermission").mockReturnValue({
+      canView: true,
+      canCreate: false,
+      canEdit: false,
+      canDelete: false,
+    });
+    routeGets({ run: detail({ status: "FAILED" }) });
+    await renderPage();
+
+    await loaded();
+    expect(screen.queryByRole("button", { name: /resume/i })).toBeNull();
+  });
+
+  it("queues the unbilled accounts and reloads", async () => {
+    routeGets({ run: detail({ status: "FAILED" }) });
+    await renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /resume/i }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/api/v1/billing-runs/run-1/resume", {}),
+    );
+  });
+});

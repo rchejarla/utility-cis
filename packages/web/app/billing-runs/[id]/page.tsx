@@ -59,6 +59,7 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
   const [itemsLoading, setItemsLoading] = useState(false);
   const [confirmPost, setConfirmPost] = useState(false);
   const [posting, setPosting] = useState(false);
+  const [resuming, setResuming] = useState(false);
 
   const loadRun = useCallback(async () => {
     try {
@@ -132,6 +133,28 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
     }
   };
 
+  /**
+   * Put the accounts this run did not bill back in the queue.
+   *
+   * The only way forward from a run that did not finish: one run per
+   * cycle window is a database constraint, so the period cannot be
+   * started again. Accounts already billed are untouched — the worker
+   * bills only PENDING items.
+   */
+  const resume = async () => {
+    setResuming(true);
+    try {
+      await apiClient.post(`/api/v1/billing-runs/${id}/resume`, {});
+      toast("Resumed. The accounts it could not bill are queued again.", "success");
+      await loadRun();
+      await loadItems();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Resume failed", "error");
+    } finally {
+      setResuming(false);
+    }
+  };
+
   if (!canView) return <AccessDenied />;
   if (notFound) {
     return (
@@ -147,6 +170,13 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
 
   const finished = !inFlight;
   const canPost = canEdit && finished && run.billedCount > 0 && !run.postedAt;
+  /*
+   * FAILED, PARTIAL and CANCELLED all mean the same thing — some
+   * accounts are not billed — and all three are dead ends without this,
+   * since the window cannot be run again. COMPLETE has nothing left.
+   */
+  const canResume =
+    canEdit && ["FAILED", "PARTIAL", "CANCELLED"].includes(run.status) && !run.postedAt;
 
   return (
     <div>
@@ -160,6 +190,16 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
             {canEdit && inFlight && !run.cancelRequested && (
               <button onClick={() => void cancel()} style={WARNING_BTN}>
                 Cancel run
+              </button>
+            )}
+            {canResume && (
+              <button
+                onClick={() => void resume()}
+                disabled={resuming}
+                style={{ ...WARNING_BTN, opacity: resuming ? 0.6 : 1 }}
+                title="Queue the accounts this run did not bill. Accounts already billed are untouched."
+              >
+                {resuming ? "Resuming…" : "Resume"}
               </button>
             )}
             {canPost && (

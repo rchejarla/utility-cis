@@ -57,6 +57,8 @@ export const EVENT_TYPES = {
   BILL_SEGMENT_CREATED: "bill_segment.created",
   BILL_CREATED: "bill.created",
   BILLING_RUN_CREATED: "billing_run.created",
+  /** Unbilled accounts put back in the queue after a failed or partial pass. */
+  BILLING_RUN_RESUMED: "billing_run.resumed",
   LEDGER_ENTRY_CREATED: "ledger_entry.created",
   LEDGER_PAYMENT_CREATED: "ledger_payment.created",
   LEDGER_REVERSAL_CREATED: "ledger_reversal.created",

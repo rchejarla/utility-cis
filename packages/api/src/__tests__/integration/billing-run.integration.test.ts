@@ -398,6 +398,150 @@ describe("posting a run", () => {
   }, 300_000);
 });
 
+/**
+ * A failed run is not a dead end.
+ *
+ * `FAILED` is not a different state from `PARTIAL` — the status rule
+ * reads "nothing billed and nothing pending" — so the two want the same
+ * treatment: the run is a worklist, open until every item resolves.
+ * Before 2026-10-22 neither could be resumed and, worse, any run for a
+ * window blocked a new one regardless of status, so a run that billed
+ * nothing closed its period permanently. The guard's own message told
+ * the operator to "resume or cancel", and resume did not exist.
+ */
+describe("resuming a run", () => {
+  /** Force an item into a terminal state without rating it. */
+  async function setItems(runId: string, status: "FAILED" | "SKIPPED" | "BILLED") {
+    const { prisma } = prismaImports;
+    await prisma.billingRunItem.updateMany({
+      where: { billingRunId: runId },
+      data: { status, processedAt: new Date(), errorCode: status === "FAILED" ? "X" : null },
+    });
+  }
+
+  it("puts unbilled items back to PENDING so the worker retries them", async () => {
+    const { prisma } = prismaImports;
+    const run = JSON.parse((await startRun()).body);
+    await setItems(run.id, "FAILED");
+    await prisma.billingRun.update({ where: { id: run.id }, data: { status: "FAILED" } });
+
+    const resumed = await svc.resumeBillingRun(utilityId, ACTOR_ID, "Tester", run.id);
+
+    expect(resumed.status).toBe("PENDING");
+    const items = await prisma.billingRunItem.findMany({ where: { billingRunId: run.id } });
+    expect(items.every((i) => i.status === "PENDING")).toBe(true);
+    // The reason is cleared with the retry; keeping it would describe an
+    // attempt that is no longer the latest one.
+    expect(items.every((i) => i.errorCode === null)).toBe(true);
+  }, 120_000);
+
+  it("leaves an account that already billed alone", async () => {
+    const { prisma } = prismaImports;
+    const run = JSON.parse((await startRun()).body);
+    const all = await prisma.billingRunItem.findMany({ where: { billingRunId: run.id } });
+    const keep = all[0];
+    await setItems(run.id, "FAILED");
+    await prisma.billingRunItem.update({
+      where: { id: keep.id },
+      data: { status: "BILLED", errorCode: null },
+    });
+    await prisma.billingRun.update({ where: { id: run.id }, data: { status: "PARTIAL" } });
+
+    await svc.resumeBillingRun(utilityId, ACTOR_ID, "Tester", run.id);
+
+    // Double-billing is what `processBillingRun`'s PENDING filter exists
+    // to prevent; resume must not undo that by resetting a BILLED item.
+    const after = await prisma.billingRunItem.findUniqueOrThrow({ where: { id: keep.id } });
+    expect(after.status).toBe("BILLED");
+  }, 120_000);
+
+  it("refuses a run with nothing left to do", async () => {
+    const { prisma } = prismaImports;
+    const run = JSON.parse((await startRun()).body);
+    await setItems(run.id, "BILLED");
+    await prisma.billingRun.update({ where: { id: run.id }, data: { status: "COMPLETE" } });
+
+    await expect(
+      svc.resumeBillingRun(utilityId, ACTOR_ID, "Tester", run.id),
+    ).rejects.toMatchObject({ code: "RUN_NOT_RESUMABLE" });
+  }, 120_000);
+
+  it("refuses a run that is still live", async () => {
+    const { prisma } = prismaImports;
+    const run = JSON.parse((await startRun()).body);
+    await prisma.billingRun.update({ where: { id: run.id }, data: { status: "RUNNING" } });
+
+    // Two workers on one run would race over the same items.
+    await expect(
+      svc.resumeBillingRun(utilityId, ACTOR_ID, "Tester", run.id),
+    ).rejects.toMatchObject({ code: "RUN_NOT_RESUMABLE" });
+  }, 120_000);
+
+  it("resumes a cancelled run, which nothing else can rescue", async () => {
+    const { prisma } = prismaImports;
+    const run = JSON.parse((await startRun()).body);
+    await setItems(run.id, "FAILED");
+    await prisma.billingRun.update({
+      where: { id: run.id },
+      data: { status: "CANCELLED", cancelRequested: true },
+    });
+
+    const resumed = await svc.resumeBillingRun(utilityId, ACTOR_ID, "Tester", run.id);
+
+    expect(resumed.status).toBe("PENDING");
+    // The cancel must not carry over, or the worker stops on the first
+    // item and the run cancels itself again.
+    const fresh = await prisma.billingRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(fresh.cancelRequested).toBe(false);
+  }, 120_000);
+});
+
+/**
+ * One run per window is a database constraint
+ * (`@@unique([utilityId, billingCycleId, windowEnd])`), not a policy the
+ * service chose — which is why resume is the only way forward from a run
+ * that did not finish, and why it accepts CANCELLED too.
+ *
+ * This file briefly asserted the opposite: that a FAILED run could be
+ * superseded by a new one, on the reasoning that a run which billed
+ * nothing should not close its period. The insert fails on the unique
+ * index, so relaxing the service's own check only replaced a clear 409
+ * with `UNIQUE_CONSTRAINT` naming three columns.
+ */
+describe("starting a second run for a window", () => {
+  it("is refused whatever the first run's status, with the reason and the way out", async () => {
+    const { prisma } = prismaImports;
+    const run = JSON.parse((await startRun()).body);
+    for (const status of [
+      "PENDING",
+      "RUNNING",
+      "PARTIAL",
+      "COMPLETE",
+      "FAILED",
+      "CANCELLED",
+    ] as const) {
+      await prisma.billingRun.update({ where: { id: run.id }, data: { status } });
+      const res = await startRun();
+      expect(res.statusCode, `status ${status} should block`).toBe(409);
+      const body = JSON.parse(res.body);
+      // The service's own refusal, not the database's: the message has
+      // to name the run and say what to do, which UNIQUE_CONSTRAINT
+      // cannot.
+      expect(body.error.code, `status ${status}`).toBe("RUN_ALREADY_EXISTS_FOR_WINDOW");
+    }
+  }, 120_000);
+
+  it("tells an operator to resume the ones that have work left", async () => {
+    const { prisma } = prismaImports;
+    const run = JSON.parse((await startRun()).body);
+    for (const status of ["FAILED", "PARTIAL", "CANCELLED"] as const) {
+      await prisma.billingRun.update({ where: { id: run.id }, data: { status } });
+      const res = await startRun();
+      expect(JSON.parse(res.body).error.message, `status ${status}`).toMatch(/resume it/i);
+    }
+  }, 120_000);
+});
+
 describe("tenant isolation", () => {
   it("never puts another utility's accounts in a run, and hides its runs", async () => {
     const run = JSON.parse((await startRun()).body);

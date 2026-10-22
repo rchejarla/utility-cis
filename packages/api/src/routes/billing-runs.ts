@@ -13,6 +13,7 @@ import {
   listBillingRunItems,
   postBillingRun,
   cancelBillingRun,
+  resumeBillingRun,
 } from "../services/billing-run.service.js";
 import { QUEUE_NAMES, enqueueSafely } from "../lib/queues.js";
 import { BILLING_RUN_JOB_NAME } from "../workers/billing-run-worker.js";
@@ -123,6 +124,35 @@ export async function billingRunRoutes(app: FastifyInstance) {
       const { id } = idParamSchema.parse(request.params);
       const result = await postBillingRun(utilityId, actorId, actorName, id);
       return reply.status(201).send(result);
+    },
+  );
+
+  /**
+   * Put the run's unbilled accounts back in the queue.
+   *
+   * `EDIT` like starting one, because it is the same act continued: the
+   * run is a worklist and this works it down. The enqueue mirrors
+   * create — after the reset is committed, and swallowed on failure,
+   * since the run sitting PENDING is recoverable by the boot sweep or
+   * another resume, while a 500 on a run that was genuinely reset is
+   * not.
+   */
+  app.post(
+    "/api/v1/billing-runs/:id/resume",
+    { config: { module: "accounts", permission: "EDIT" } },
+    async (request, reply) => {
+      const { utilityId, id: actorId, name: actorName } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      const run = await resumeBillingRun(utilityId, actorId, actorName, id);
+
+      const jobId = await enqueueSafely(QUEUE_NAMES.billingRuns, BILLING_RUN_JOB_NAME, {
+        runId: run.id,
+        utilityId,
+        actorId,
+        actorName,
+      });
+
+      return reply.status(202).send({ ...run, queued: jobId !== null });
     },
   );
 

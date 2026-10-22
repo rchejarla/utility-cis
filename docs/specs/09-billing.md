@@ -198,6 +198,50 @@ are shaped after `import_batch` / `import_row` and **copied rather than
 abstracted**: the two share a shape, not a reason, and an "async batch job"
 base class would make a change to imports a change to billing.
 
+**Resume (shipped 2026-10-22) — `POST /api/v1/billing-runs/:id/resume`, `accounts:EDIT`.**
+
+`FAILED` is not a different state from `PARTIAL`: the status rule is
+"nothing billed and nothing pending", so both mean *some accounts are not
+billed*. A run is therefore a worklist, open until every item resolves,
+and the operating loop is **run → fix the cause an exception names →
+resume**, repeated until `COMPLETE` or until the remainder is deliberately
+deferred. Resume resets every item that is not `BILLED` to `PENDING`,
+clears its error, clears `cancelRequested`, and re-enqueues the job;
+`processBillingRun` selects only `PENDING`, so an account cannot be billed
+twice. `SKIPPED` is reset along with `FAILED`, because a skip is "not
+ready" rather than "nothing to do" — `NO_READ_IN_WINDOW` resolves the
+moment a reader submits.
+
+It accepts `FAILED`, `PARTIAL` **and `CANCELLED`**, and that list is
+forced rather than chosen: **one run per cycle window is a database
+constraint** (`@@unique([utilityId, billingCycleId, windowEnd])`), so a
+window cannot be run a second time. Without resume, a run that billed
+nothing — or one an operator cancelled — closed its period permanently,
+and the service's refusal told them to "resume or cancel" when resume did
+not exist. Worth recording what that constraint rules out: the obvious fix
+of letting a `FAILED` run be superseded by a new one cannot work, and
+relaxing the service's own check only replaces a clear
+`RUN_ALREADY_EXISTS_FOR_WINDOW` with an opaque `UNIQUE_CONSTRAINT` naming
+three columns. The refusal message now names the run's status and points
+at resume for the three states that have work left.
+
+Resume is also deliberately not BullMQ's retry: `billing-run-worker` sets
+`attempts: 1` precisely so an automatic retry cannot restart a run whose
+early accounts are already billed. The run detail page carries a
+**Resume** button on those three states.
+
+**Still missing, and the item that would have prevented the failure in the
+first place:** `resolveRunPlan`'s eligibility checks only that the account
+is on the cycle, its status bills, and it has an agreement overlapping the
+window. It does **not** check that the agreement has a rate-schedule
+assignment or that the schedule is published — so the two commonest
+configuration faults are discovered account by account during the run
+rather than refused at preview. A pre-flight on `GET /billing-runs/preview`
+that answered "240 of 12,000 cannot be billed, for these 3 reasons" would
+turn a failed run into a to-do list before anything is committed. The
+exceptions list is also per-account rather than per-reason, where one fix
+usually clears a whole group.
+
 #### BillingRun
 
 | Field | Type | Notes |
