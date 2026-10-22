@@ -202,6 +202,122 @@ async function resolveRunPlan(
 }
 
 /**
+ * A reason some of the eligible accounts cannot be billed, and what to
+ * fix. Grouped by cause rather than listed per account: one publish or
+ * one assignment usually clears the whole group.
+ */
+export interface RunBlocker {
+  code: "NO_ACTIVE_ASSIGNMENTS" | "SCHEDULE_NOT_PUBLISHED";
+  accountCount: number;
+  /** The thing to go and fix — schedule codes, or the agreements. */
+  detail: string;
+  /** A few account numbers, so the group is recognisable. */
+  sampleAccounts: string[];
+}
+
+/**
+ * Which of the eligible accounts a run would fail or skip on config,
+ * before it is started.
+ *
+ * Eligibility answers "is this account due"; it says nothing about
+ * whether the account *can* be billed, so these two faults used to be
+ * discovered one account at a time during a run and reported only
+ * afterwards. Both are invisible until then and both are usually one
+ * fix for many accounts.
+ *
+ * Two set-based queries rather than a walk: the per-agreement checks
+ * `createBillSegmentForServiceAgreement` performs are the expensive
+ * part and they belong to rating, not to a preview that has to answer
+ * while someone waits.
+ *
+ * Reads are deliberately not checked here. `NO_READ_IN_WINDOW` is a
+ * skip rather than a failure — not-ready rather than misconfigured —
+ * and the operator already knows whether reading is done, whereas a
+ * draft schedule is invisible. Adding it would also mean resolving a
+ * service period per agreement, which is the work of a run.
+ */
+async function findRunBlockers(
+  utilityId: string,
+  accountIds: string[],
+  window: { periodStart: Date; periodEnd: Date },
+): Promise<{ blockers: RunBlocker[]; blockedAccountIds: Set<string> }> {
+  if (accountIds.length === 0) return { blockers: [], blockedAccountIds: new Set() };
+
+  const agreements = await prisma.serviceAgreement.findMany({
+    where: {
+      utilityId,
+      accountId: { in: accountIds },
+      startDate: { lte: window.periodEnd },
+      OR: [{ endDate: null }, { endDate: { gte: window.periodStart } }],
+    },
+    select: {
+      id: true,
+      agreementNumber: true,
+      account: { select: { id: true, accountNumber: true } },
+      rateScheduleAssignments: {
+        where: {
+          effectiveDate: { lte: window.periodEnd },
+          OR: [{ expirationDate: null }, { expirationDate: { gte: window.periodStart } }],
+        },
+        select: {
+          rateSchedule: { select: { code: true, version: true, publishedAt: true } },
+        },
+      },
+    },
+  });
+
+  const unassigned = new Map<string, string>();
+  const unpublished = new Map<string, string>();
+  const unpublishedSchedules = new Set<string>();
+  const unassignedAgreements = new Set<string>();
+
+  for (const sa of agreements) {
+    if (sa.rateScheduleAssignments.length === 0) {
+      unassigned.set(sa.account.id, sa.account.accountNumber);
+      unassignedAgreements.add(sa.agreementNumber);
+      continue;
+    }
+    const drafts = sa.rateScheduleAssignments.filter((a) => !a.rateSchedule.publishedAt);
+    if (drafts.length > 0) {
+      unpublished.set(sa.account.id, sa.account.accountNumber);
+      for (const d of drafts) {
+        unpublishedSchedules.add(`${d.rateSchedule.code} v${d.rateSchedule.version}`);
+      }
+    }
+  }
+
+  const blockers: RunBlocker[] = [];
+  const describe = (items: Set<string>, max = 5) => {
+    const all = [...items].sort();
+    return all.length <= max
+      ? all.join(", ")
+      : `${all.slice(0, max).join(", ")} and ${all.length - max} more`;
+  };
+
+  if (unassigned.size > 0) {
+    blockers.push({
+      code: "NO_ACTIVE_ASSIGNMENTS",
+      accountCount: unassigned.size,
+      detail: describe(unassignedAgreements),
+      sampleAccounts: [...unassigned.values()].sort().slice(0, 5),
+    });
+  }
+  if (unpublished.size > 0) {
+    blockers.push({
+      code: "SCHEDULE_NOT_PUBLISHED",
+      accountCount: unpublished.size,
+      detail: describe(unpublishedSchedules),
+      sampleAccounts: [...unpublished.values()].sort().slice(0, 5),
+    });
+  }
+
+  return {
+    blockers,
+    blockedAccountIds: new Set([...unassigned.keys(), ...unpublished.keys()]),
+  };
+}
+
+/**
  * Describe the run a cycle would produce right now.
  *
  * Exists because the window and both dates are computed from the
@@ -213,9 +329,27 @@ async function resolveRunPlan(
 export async function previewBillingRun(
   utilityId: string,
   args: CreateBillingRunArgs,
-): Promise<Omit<BillingRunPlan, "accountIds"> & { accountCount: number }> {
+): Promise<
+  Omit<BillingRunPlan, "accountIds"> & {
+    accountCount: number;
+    /** Of those, how many are actually billable as configured. */
+    billableCount: number;
+    blockers: RunBlocker[];
+  }
+> {
   const { accountIds, ...rest } = await resolveRunPlan(utilityId, args);
-  return { ...rest, accountCount: accountIds.length };
+  const { blockers, blockedAccountIds } = await findRunBlockers(utilityId, accountIds, {
+    periodStart: rest.windowStart,
+    periodEnd: rest.windowEnd,
+  });
+  return {
+    ...rest,
+    accountCount: accountIds.length,
+    // Both numbers, not one: "240 of 12,000 cannot be billed" is a
+    // different instruction from either figure alone.
+    billableCount: accountIds.filter((id) => !blockedAccountIds.has(id)).length,
+    blockers,
+  };
 }
 
 /**

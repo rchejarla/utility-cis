@@ -69,7 +69,20 @@ function preview(over: Record<string, unknown> = {}) {
     billDate: "2026-10-15",
     dueDate: "2026-11-14",
     accountCount: 120,
+    billableCount: 120,
+    blockers: [],
     existingRun: null,
+    ...over,
+  };
+}
+
+/** A pre-flight finding: a cause, a count, and the thing to fix. */
+function blocker(over: Record<string, unknown> = {}) {
+  return {
+    code: "SCHEDULE_NOT_PUBLISHED",
+    accountCount: 4,
+    detail: "BZN-WATER v1",
+    sampleAccounts: ["0001000-00", "0001002-00"],
     ...over,
   };
 }
@@ -207,6 +220,80 @@ describe("Starting a run", () => {
       expect(screen.getByText(/nothing to bill/i)).toBeInTheDocument(),
     );
     expect(screen.getByRole("button", { name: "Start the run" })).toBeDisabled();
+  });
+
+  /**
+   * The pre-flight, stated before the button is pressed.
+   *
+   * Eligibility answers "is this account due", not "can it be billed",
+   * so a draft schedule or a missing assignment used to be discovered
+   * one account at a time *during* the run and reported afterwards as
+   * failures. One publish usually clears the whole group, which is why
+   * the cause is what gets shown rather than a list of accounts.
+   */
+  it("warns which accounts cannot be billed, and why, before starting", async () => {
+    routeGets({
+      runs: [],
+      preview: preview({ billableCount: 116, blockers: [blocker()] }),
+    });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Start a run" }));
+    await userEvent.selectOptions(screen.getByLabelText("Billing cycle"), "cyc-1");
+
+    const warning = await screen.findByTestId("run-blockers");
+    // Both numbers: "4 of 120" is a different instruction from either
+    // figure alone.
+    expect(warning).toHaveTextContent("4");
+    expect(warning).toHaveTextContent("120");
+    // The thing to go and fix, named.
+    expect(warning).toHaveTextContent("BZN-WATER v1");
+  });
+
+  it("still allows the run, since the rest of the accounts can bill", async () => {
+    routeGets({
+      runs: [],
+      preview: preview({ billableCount: 116, blockers: [blocker()] }),
+    });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Start a run" }));
+    await userEvent.selectOptions(screen.getByLabelText("Billing cycle"), "cyc-1");
+
+    // Billing 116 and fixing 4 is a normal month. Refusing the run would
+    // make one misconfigured account hold up the cycle.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Start the run" })).toBeEnabled(),
+    );
+  });
+
+  it("will not start a run when nothing at all can be billed", async () => {
+    routeGets({
+      runs: [],
+      preview: preview({ billableCount: 0, blockers: [blocker({ accountCount: 120 })] }),
+    });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Start a run" }));
+    await userEvent.selectOptions(screen.getByLabelText("Billing cycle"), "cyc-1");
+
+    // A run that can bill nothing produces a FAILED run that then owns
+    // the window — and one run per window is a database constraint, so
+    // the only way on is resume. Better not to start it.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Start the run" })).toBeDisabled(),
+    );
+  });
+
+  it("says nothing when every eligible account is configured", async () => {
+    routeGets({ runs: [], preview: preview() });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Start a run" }));
+    await userEvent.selectOptions(screen.getByLabelText("Billing cycle"), "cyc-1");
+
+    await waitFor(() => expect(screen.getByText(/Accounts due/i)).toBeInTheDocument());
+    expect(screen.queryByTestId("run-blockers")).toBeNull();
   });
 
   it("offers only active cycles, since an inactive one is refused by the API", async () => {

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
-import { fmtDate, daysInclusive } from "./run-format";
+import { fmtDate, daysInclusive, describeBlocker } from "./run-format";
 import type { BillingRunPreview, BillingRunRow } from "./run-format";
 
 /**
@@ -97,8 +97,20 @@ export function StartRunDialog({
     };
   }, [cycleId, windowEnd, billDate, dueDate]);
 
+  /*
+   * `billableCount === 0` refuses as firmly as "nothing due", and for a
+   * sharper reason: a run that can bill nothing finishes FAILED and then
+   * owns the window, and one run per cycle window is a database
+   * constraint — so the only way on would be resume. Better not to start
+   * it. A partial blocker does not refuse: billing most and fixing a few
+   * is an ordinary month.
+   */
   const blocked =
-    !preview || preview.accountCount === 0 || preview.existingRun !== null || submitting;
+    !preview ||
+    preview.accountCount === 0 ||
+    preview.billableCount === 0 ||
+    preview.existingRun !== null ||
+    submitting;
 
   const start = async () => {
     if (!preview) return;
@@ -246,6 +258,55 @@ export function StartRunDialog({
                 No account on this cycle has a service agreement covering this window, so
                 there is nothing to bill.
               </p>
+            )}
+
+            {/*
+              The pre-flight. Eligibility above answers "is this account
+              due"; this answers "can it be billed", which used to be
+              discovered one account at a time during the run and
+              reported afterwards as failures. Shown by cause, because
+              one publish usually clears the whole group.
+            */}
+            {preview.blockers.length > 0 && (
+              <div
+                data-testid="run-blockers"
+                style={{
+                  margin: "6px 0 0",
+                  padding: "8px 10px",
+                  borderRadius: "var(--radius)",
+                  color: "var(--warning)",
+                  background: "color-mix(in srgb, var(--warning) 9%, transparent)",
+                  border: "1px solid color-mix(in srgb, var(--warning) 25%, transparent)",
+                }}
+              >
+                <strong>
+                  {(preview.accountCount - preview.billableCount).toLocaleString()} of{" "}
+                  {preview.accountCount.toLocaleString()} cannot be billed yet
+                </strong>
+                <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                  {preview.blockers.map((b) => (
+                    <li key={b.code} style={{ marginBottom: 2 }}>
+                      {describeBlocker(b)}
+                      {b.sampleAccounts.length > 0 && (
+                        <span style={{ color: "var(--text-muted)" }}>
+                          {" "}
+                          e.g. {b.sampleAccounts.slice(0, 3).join(", ")}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                {preview.billableCount > 0 && (
+                  /* Not a refusal: billing most and fixing a few is an
+                     ordinary month, and holding up the cycle for one
+                     misconfigured account would be worse. */
+                  <p style={{ margin: "6px 0 0", color: "var(--text-secondary)" }}>
+                    The run will bill the other{" "}
+                    {preview.billableCount.toLocaleString()} and record these as
+                    exceptions — or fix them first and start with a clean run.
+                  </p>
+                )}
+              </div>
             )}
             {preview.existingRun && (
               <p style={{ margin: "4px 0 0", color: "var(--warning)" }}>

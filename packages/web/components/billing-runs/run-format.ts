@@ -55,7 +55,29 @@ export interface BillingRunPreview {
   billDate: string;
   dueDate: string;
   accountCount: number;
+  /** Of those, how many can actually be billed as configured. */
+  billableCount: number;
+  /**
+   * Why the rest cannot, by cause rather than by account — one publish
+   * or one assignment usually clears a whole group.
+   */
+  blockers: RunBlocker[];
   existingRun: { id: string; status: string } | null;
+}
+
+export interface RunBlocker {
+  code: "NO_ACTIVE_ASSIGNMENTS" | "SCHEDULE_NOT_PUBLISHED";
+  accountCount: number;
+  detail: string;
+  sampleAccounts: string[];
+}
+
+/** What to do about a blocker, in the operator's terms. */
+export function describeBlocker(b: RunBlocker): string {
+  const accounts = `${b.accountCount.toLocaleString()} account${b.accountCount === 1 ? "" : "s"}`;
+  return b.code === "SCHEDULE_NOT_PUBLISHED"
+    ? `${accounts}: rate schedule not published — ${b.detail}. Publish it and these will bill.`
+    : `${accounts}: no rate schedule assigned — ${b.detail}. Assign one on the agreement.`;
 }
 
 /**

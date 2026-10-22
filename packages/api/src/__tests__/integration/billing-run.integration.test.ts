@@ -542,6 +542,93 @@ describe("starting a second run for a window", () => {
   }, 120_000);
 });
 
+/**
+ * What preview can tell an operator before anything is committed.
+ *
+ * Eligibility answers "is this account due" — on the cycle, a billing
+ * status, an agreement overlapping the window. It says nothing about
+ * whether the account *can* be billed, so the two commonest
+ * configuration faults were found account by account during a run and
+ * reported as failures afterwards. One fix usually clears a whole group,
+ * which is the argument for reporting them by cause and up front.
+ */
+describe("preview pre-flight", () => {
+  async function preview() {
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/billing-runs/preview?billingCycleId=${cycleId}&windowEnd=${WINDOW_END}`,
+      headers: headers(),
+    });
+    expect(res.statusCode).toBe(200);
+    return JSON.parse(res.body);
+  }
+
+  it("reports nothing to fix when every eligible account is configured", async () => {
+    const body = await preview();
+
+    expect(body.blockers).toEqual([]);
+    // Everything eligible is billable, so the two counts agree.
+    expect(body.billableCount).toBe(body.accountCount);
+  }, 120_000);
+
+  it("names an unpublished schedule, the accounts it stops, and itself", async () => {
+    const { prisma } = prismaImports;
+    const water = await prisma.rateSchedule.findFirstOrThrow({
+      where: { utilityId, code: "BZN-WATER" },
+    });
+    await prisma.rateSchedule.update({
+      where: { id: water.id },
+      data: { publishedAt: null },
+    });
+
+    const body = await preview();
+
+    const blocker = body.blockers.find(
+      (b: { code: string }) => b.code === "SCHEDULE_NOT_PUBLISHED",
+    );
+    expect(blocker).toBeDefined();
+    expect(blocker.accountCount).toBeGreaterThan(0);
+    // The schedule is named because that is the thing to go and fix,
+    // and one publish clears every account in the group.
+    expect(blocker.detail).toContain("BZN-WATER");
+    expect(body.billableCount).toBe(body.accountCount - blocker.accountCount);
+
+    await prisma.rateSchedule.update({
+      where: { id: water.id },
+      data: { publishedAt: new Date() },
+    });
+  }, 120_000);
+
+  it("reports an agreement with no schedule assigned at all", async () => {
+    const { prisma } = prismaImports;
+    const assignment = await prisma.sAScheduleAssignment.findFirstOrThrow({
+      where: { utilityId },
+    });
+    const saved = { ...assignment };
+    await prisma.sAScheduleAssignment.delete({ where: { id: assignment.id } });
+
+    const body = await preview();
+
+    const blocker = body.blockers.find(
+      (b: { code: string }) => b.code === "NO_ACTIVE_ASSIGNMENTS",
+    );
+    expect(blocker).toBeDefined();
+    expect(blocker.accountCount).toBeGreaterThan(0);
+
+    await prisma.sAScheduleAssignment.create({
+      data: {
+        id: saved.id,
+        utilityId: saved.utilityId,
+        serviceAgreementId: saved.serviceAgreementId,
+        rateScheduleId: saved.rateScheduleId,
+        roleCode: saved.roleCode,
+        effectiveDate: saved.effectiveDate,
+        expirationDate: saved.expirationDate,
+      },
+    });
+  }, 120_000);
+});
+
 describe("tenant isolation", () => {
   it("never puts another utility's accounts in a run, and hides its runs", async () => {
     const run = JSON.parse((await startRun()).body);
