@@ -7,6 +7,7 @@ import type { FieldDefinition } from "@utility-cis/shared";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
+import { AssignRateScheduleDialog } from "@/components/service-agreements/assign-rate-schedule-dialog";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { DataTable } from "@/components/ui/data-table";
@@ -71,6 +72,8 @@ interface RateScheduleAssignment {
     name: string;
     code: string;
     version: number;
+    /** Null means a draft: assignable, but no bill will price against it. */
+    publishedAt: string | null;
     components: Array<{
       id: string;
       kindCode: string;
@@ -137,6 +140,10 @@ export default function ServiceAgreementDetailPage({
   const { toast } = useToast();
   const { canView, canEdit, canDelete } = usePermission("agreements");
   const { canEdit: canEditMeter } = usePermission("meters");
+  // Assigning a schedule is rate_schedules:EDIT, not agreements:EDIT —
+  // the row joins the two and the API gates it on the schedule side.
+  const { canEdit: canEditRateSchedules } = usePermission("rate_schedules");
+  const [showAssignSchedule, setShowAssignSchedule] = useState(false);
   const [sa, setSa] = useState<ServiceAgreement | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -151,6 +158,30 @@ export default function ServiceAgreementDetailPage({
   const [saving, setSaving] = useState(false);
   const [showAddMeter, setShowAddMeter] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
+
+  /**
+   * Drop an assignment.
+   *
+   * A delete rather than an expiry, because that is what the API
+   * offers. Ending a schedule's run and starting another is expressed
+   * by setting the first one's end date — which this screen cannot do
+   * yet, so removing is the blunt instrument and it loses the history
+   * of what applied when. Worth replacing with an "ends on" edit once
+   * overlap rules exist (schema: deferred to slice 2/3).
+   */
+  const removeAssignment = async (a: RateScheduleAssignment) => {
+    try {
+      await apiClient.delete(`/api/v1/sa-rate-schedule-assignments/${a.id}`);
+      toast(`${a.rateSchedule.code} unassigned`, "success");
+      await loadSA();
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? err.message.replace(/^API error \d+:\s*/, "")
+          : "Could not remove the assignment";
+      toast(msg, "error");
+    }
+  };
 
   const loadSA = async () => {
     try {
@@ -654,9 +685,10 @@ export default function ServiceAgreementDetailPage({
             </div>
           </div>
 
-          {/* Rate Schedules panel — read-only view of assigned schedules
-              and their components. Edits happen on the rate-schedule
-              detail page, reachable via the schedule-name link. */}
+          {/* Rate Schedules panel. The schedules themselves are edited on
+              the rate-schedule detail page, reachable via the name link;
+              what is editable here is the assignment — which schedule
+              applies to this agreement, in which role, over which dates. */}
           <div
             style={{
               background: "var(--bg-card)",
@@ -668,6 +700,9 @@ export default function ServiceAgreementDetailPage({
           >
             <div
               style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
                 fontSize: "11px",
                 fontWeight: 600,
                 color: "var(--text-muted)",
@@ -676,11 +711,32 @@ export default function ServiceAgreementDetailPage({
                 marginBottom: "12px",
               }}
             >
-              Rate Schedules
+              <span>Rate Schedules</span>
+              {canEditRateSchedules && (
+                <button
+                  onClick={() => setShowAssignSchedule(true)}
+                  style={{
+                    padding: "5px 12px",
+                    borderRadius: "var(--radius)",
+                    border: "1px solid var(--border)",
+                    background: "var(--bg-elevated)",
+                    color: "var(--text-primary)",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                    textTransform: "none",
+                    letterSpacing: "normal",
+                  }}
+                >
+                  Assign schedule
+                </button>
+              )}
             </div>
             {(!sa.rateScheduleAssignments || sa.rateScheduleAssignments.length === 0) && (
               <p style={{ color: "var(--text-muted)", fontSize: "13px", margin: 0 }}>
-                No rate schedules assigned.
+                No rate schedules assigned — this agreement cannot be billed until it has
+                one.
               </p>
             )}
             {sa.rateScheduleAssignments?.map((a) => (
@@ -737,6 +793,45 @@ export default function ServiceAgreementDetailPage({
                       {a.effectiveDate.slice(0, 10)}
                       {a.expirationDate ? ` — ${a.expirationDate.slice(0, 10)}` : " — Open-ended"}
                     </span>
+                    {!a.rateSchedule.publishedAt && (
+                      /* The assignment is fine; the schedule is a draft,
+                         so a billing run answers SCHEDULE_NOT_PUBLISHED.
+                         Said here because this is where someone looks
+                         when a run refuses an account. */
+                      <span
+                        title="This schedule is a draft. A bill will refuse to price against it until it is published."
+                        style={{
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          fontSize: 10,
+                          fontWeight: 700,
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                          color: "var(--warning)",
+                          background: "color-mix(in srgb, var(--warning) 9%, transparent)",
+                          border: "1px solid color-mix(in srgb, var(--warning) 25%, transparent)",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        Draft — not billable
+                      </span>
+                    )}
+                    {canEditRateSchedules && (
+                      <button
+                        onClick={() => void removeAssignment(a)}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: "var(--danger)",
+                          fontSize: 12,
+                          cursor: "pointer",
+                          fontFamily: "inherit",
+                          padding: 0,
+                        }}
+                      >
+                        Remove
+                      </button>
+                    )}
                   </div>
                 </div>
                 {a.rateSchedule.components.length === 0 ? (
@@ -930,6 +1025,20 @@ export default function ServiceAgreementDetailPage({
           destructive
           onConfirm={confirmIssueFinalBill}
           onCancel={() => !transitioning && setCloseBillDialog(false)}
+        />
+      )}
+
+      {showAssignSchedule && sa && (
+        <AssignRateScheduleDialog
+          saId={id}
+          commodityId={sa.commodityId ?? ""}
+          commodityName={sa.commodity?.name}
+          defaultEffectiveDate={sa.startDate?.slice(0, 10) ?? ""}
+          onAssigned={() => {
+            setShowAssignSchedule(false);
+            void loadSA();
+          }}
+          onClose={() => setShowAssignSchedule(false)}
         />
       )}
     </div>

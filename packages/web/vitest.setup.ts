@@ -21,6 +21,15 @@ Object.defineProperty(window, "matchMedia", {
   })),
 });
 
+// jsdom implements no layout, so Element.scrollIntoView does not exist.
+// SearchableSelect calls it to keep the active option in view while
+// arrowing through the listbox, which means any test that opens one
+// throws "scrollIntoView is not a function" on a code path that has
+// nothing to do with what it is testing.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = vi.fn();
+}
+
 // Next.js app-router hooks are imported by components under test but the
 // test environment isn't running a router. Provide a minimal stub.
 vi.mock("next/navigation", () => ({
