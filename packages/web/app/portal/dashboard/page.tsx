@@ -5,11 +5,16 @@ import { useRouter } from "next/navigation";
 import { StatCard } from "@/components/ui/stat-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { apiClient } from "@/lib/api-client";
-import {
-  mockCustomerBills,
-  fmtMoney,
-  type MockInvoice,
-} from "@/lib/mock-billing";
+
+/**
+ * What the customer owes comes from `Account.balance` via
+ * `/portal/api/dashboard`, summed server-side as `amountDue`.
+ *
+ * Until 2026-10-22 this page built both the figure and the list of
+ * "pending payments" from `lib/mock-billing` — invented invoices, and a
+ * total that was the first number a customer saw on signing in.
+ */
+const fmtMoney = (s: string) => `$${parseFloat(s).toFixed(2)}`;
 
 interface Agreement {
   id: string;
@@ -26,6 +31,8 @@ interface AccountWithAgreements {
   accountNumber: string;
   accountType: string;
   status: string;
+  /** What this account owes — the ledger-maintained cache. */
+  balance: string;
   serviceAgreements: Agreement[];
 }
 
@@ -39,6 +46,8 @@ interface PortalDashboardData {
     email?: string;
   };
   accounts: AccountWithAgreements[];
+  /** Summed across the customer's accounts by the API. */
+  amountDue: string;
 }
 
 interface ReadRow {
@@ -86,9 +95,8 @@ export default function PortalDashboardPage() {
       ? customer.organizationName
       : `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim();
   const activeAgreements = accounts.flatMap((a) => a.serviceAgreements).filter((s) => s.status === "ACTIVE");
-  const mockBills = mockCustomerBills(customer.id, "");
-  const pendingInvoices = mockBills.invoices.filter((i) => i.status === "OVERDUE" || i.status === "SENT" || i.status === "PARTIAL");
-  const totalDue = pendingInvoices.reduce((sum, i) => sum + (i.total - i.amountPaid), 0);
+  const amountDue = data.amountDue ?? "0";
+  const owing = accounts.filter((a) => parseFloat(a.balance ?? "0") > 0);
 
   // If only one account, clicking should go straight to it
   const singleAccount = accounts.length === 1 ? accounts[0] : null;
@@ -103,7 +111,7 @@ export default function PortalDashboardPage() {
       </div>
 
       <div style={{ display: "flex", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
-        <StatCard label="Balance due" value={totalDue > 0 ? fmtMoney(totalDue) : "$0.00"} icon="💰" />
+        <StatCard label="Balance due" value={fmtMoney(amountDue)} icon="💰" />
         <StatCard label="Active services" value={activeAgreements.length} icon="📄" />
         <StatCard label="Accounts" value={accounts.length} icon="🏠" />
       </div>
@@ -113,19 +121,54 @@ export default function PortalDashboardPage() {
 
         {/* Pending payments — expandable rows */}
         <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden" }}>
-          <div style={sectionHeadStyle}>Pending Payments</div>
-          {pendingInvoices.length === 0 ? (
+          <div style={sectionHeadStyle}>Amount Due</div>
+          {owing.length === 0 ? (
             <div style={{ padding: "24px 16px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
-              No outstanding payments
+              Nothing outstanding
             </div>
           ) : (
             <div>
-              {pendingInvoices.map((inv) => (
-                <InvoiceRow key={inv.id} invoice={inv} onClick={() => router.push(`/portal/invoices/${inv.id}`)} />
+              {/* Per account, because a customer with two accounts is
+                  told which one is behind — and the figure is each
+                  account's own ledger balance, not a bill total. The
+                  bills behind it are one click away rather than
+                  re-listed here. */}
+              {owing.map((a) => (
+                <div
+                  key={a.id}
+                  onClick={() => router.push(`/portal/accounts/${a.id}`)}
+                  style={{
+                    padding: "12px 16px",
+                    borderBottom: "1px solid var(--border-subtle)",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    cursor: "pointer",
+                  }}
+                >
+                  <span style={{ fontSize: 13, color: "var(--text-primary)" }}>
+                    Account {a.accountNumber}
+                  </span>
+                  <span
+                    style={{
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: "var(--danger)",
+                    }}
+                  >
+                    {fmtMoney(a.balance)}
+                  </span>
+                </div>
               ))}
               <div style={{ padding: "10px 16px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 600 }}>
                 <span style={{ color: "var(--text-secondary)" }}>Total due</span>
-                <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--danger)" }}>{fmtMoney(totalDue)}</span>
+                <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--danger)" }}>{fmtMoney(amountDue)}</span>
+              </div>
+              <div style={{ padding: "10px 16px", borderTop: "1px solid var(--border)", fontSize: 12 }}>
+                <a href="/portal/bills" style={{ color: "var(--accent-primary)", textDecoration: "none" }}>
+                  See your bills →
+                </a>
               </div>
             </div>
           )}
@@ -253,39 +296,6 @@ export default function PortalDashboardPage() {
             </div>
           );
         })}
-      </div>
-    </div>
-  );
-}
-
-function InvoiceRow({ invoice, onClick }: { invoice: MockInvoice; onClick: () => void }) {
-  const due = invoice.total - invoice.amountPaid;
-  const statusColor = invoice.status === "OVERDUE" ? "var(--danger)" : invoice.status === "PARTIAL" ? "var(--warning)" : "var(--info)";
-  const statusLabel = invoice.status === "OVERDUE" ? "Overdue" : invoice.status === "PARTIAL" ? "Partial" : "Due";
-
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        padding: "12px 16px",
-        borderBottom: "1px solid var(--border-subtle)",
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        cursor: "pointer",
-        transition: "background 0.1s",
-      }}
-      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)"; }}
-      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-    >
-      <div>
-        <div style={{ fontSize: 12, fontWeight: 500, color: "var(--text-primary)" }}>{invoice.invoiceNumber}</div>
-        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 1 }}>{invoice.commodities.join(" · ")}</div>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <span style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: statusColor }}>{statusLabel}</span>
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>{fmtMoney(due)}</span>
-        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>→</span>
       </div>
     </div>
   );

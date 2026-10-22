@@ -378,7 +378,18 @@ function PortalUsagePageInner() {
           lineHeight: 1.6,
         }}
       >
-        Cost data will be available here once the billing integration with SaaSLogic is live. Until then, only consumption quantities are shown. For your current charges, check the Bills page.
+        {/* This said cost data was waiting on "the billing integration
+            with SaaSLogic" until 2026-10-22, which was wrong twice over:
+            SaaSLogic stopped doing the pricing on 2026-10-09, and CIS has
+            priced its own charges since rate-model slice 5a. What this
+            page genuinely lacks is per-read costing — a charge belongs to
+            a billed period, not to a single read. */}
+        This page shows the quantities you have used. Charges are worked out per billing
+        period rather than per reading, so you will find them on your{" "}
+        <a href="/portal/bills" style={{ color: "var(--accent-primary)" }}>
+          Bills
+        </a>{" "}
+        page.
       </div>
     </div>
   );

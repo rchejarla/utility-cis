@@ -51,6 +51,18 @@ interface BillPdfButtonProps {
    * component in two screens that each settled on a different idiom.
    */
   variant?: "pill" | "link";
+  /**
+   * Which surface this is on, which decides the route and whether
+   * generating is permitted at all.
+   *
+   * On `"portal"` the customer reads their own bill through
+   * `/portal/api/bills/:id/document`, and a missing document is simply
+   * reported: generating is `accounts:EDIT`, which no portal token
+   * holds, so a fetch-then-generate fallback there would turn "not
+   * ready yet" into a 403 and show the customer an authorization error
+   * for a bill that is legitimately theirs.
+   */
+  surface?: "staff" | "portal";
 }
 
 export function BillPdfButton({
@@ -59,12 +71,16 @@ export function BillPdfButton({
   onChanged,
   disabled = false,
   variant = "pill",
+  surface = "staff",
 }: BillPdfButtonProps) {
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
 
   const fileName = `bill-${billNumber.replace(/[^A-Za-z0-9._-]/g, "_")}.pdf`;
-  const path = `/api/v1/bills/${billId}/document`;
+  const path =
+    surface === "portal"
+      ? `/portal/api/bills/${billId}/document`
+      : `/api/v1/bills/${billId}/document`;
 
   /** The bytes, generating them first if none are stored yet. */
   async function fetchOrGenerate(): Promise<Blob> {
@@ -73,6 +89,11 @@ export function BillPdfButton({
     } catch (err) {
       // 404 is not a failure here, it is "not generated yet".
       if (!(err instanceof DownloadError) || err.status !== 404) throw err;
+      if (surface === "portal") {
+        // Said in the customer's terms. They cannot generate it and
+        // there is nothing for them to do about it.
+        throw new Error("This bill is not available to view yet. Please try again later.");
+      }
       await apiClient.post(path, {});
       const file = await authFetchFile(path);
       onChanged?.();

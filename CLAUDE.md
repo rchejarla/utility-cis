@@ -49,15 +49,19 @@ docs/specs/
 ├── 10-payments-and-collections.md   — Payments, late fees, payment plans
 ├── 11-delinquency.md                — Rules, notices, shut-off
 ├── 12-solid-waste.md                — Container, cart management
-├── 13-notifications.md              — Templates, email/SMS/mail
+├── 13-notifications.md              — Templates, email + SMS (no postal channel)
 ├── 14-service-requests.md           — SR lifecycle, SLAs
 ├── 15-customer-portal.md            — Self-service portal (Phase 4.1 MVP complete)
 ├── 20-custom-fields.md              — Custom fields (Phase 1+2 complete)
-├── 21-saaslogic-billing.md          — SaaSLogic billing integration (Phase 3 design)
+├── 21-saaslogic-billing.md          — SaaSLogic payment collection (design; unblocked, needs vendor answers)
 ├── 23-accounts-receivable.md        — AR ledger, posting, balance (slice 1 complete)
 ├── 16-special-assessments.md        — Districts, parcel assessments
 ├── 17-reporting-and-audit.md        — Audit log, reports
 ├── 18-theme-and-configuration.md    — Tenant theme, settings
+├── 19-rbac.md                       — Roles, permissions, preset roles
+├── 22-import-infrastructure.md      — ImportBatch, ImportRow, the imports queue
+├── 24-platform-worker-control.md    — Worker lifecycle across nodes (step 1 built)
+└── 25-platform-console.md           — Platform actor's console: tenants + cluster (shipped)
 ```
 
 ### Master Design Document
@@ -82,6 +86,24 @@ Single overarching architecture and data model reference for the entire system (
 - **UI:** Tailwind CSS, Font Awesome Pro icons
 - **Auth:** NextAuth.js with JWT
 - **Validation:** Zod (shared between API and UI)
+- **Integrations:** apptor-connect (see below)
+
+## Integrations
+
+**Everything that leaves this process goes through apptor-connect** (`c:\development\apptor-connect`, HTTP surface `apptor-connect-service`, configured by `APPTOR_CONNECT_URL` + `APPTOR_CONNECT_API_KEY`). Email, SMS, postal mail, object storage, GIS, meter-reading systems, work-order systems, payment collection — all of it. Four planes:
+
+| Plane | Use it for |
+|---|---|
+| `proxy` — `POST /proxy/v1/{integration}` | Calling a vendor's API. The service injects auth and applies timeouts, retries and per-tenant rate limits. |
+| `files` — `/files/v1/*` | S3, Azure Blob, GCS, SFTP. Mint a link, stream the bytes, keep a pointer. |
+| `events` — `POST /events/v1/{token}` | Verified, deduplicated inbound webhooks, read by cursor. The return path for vendor callbacks. |
+| `resolve` — `POST /v1/resolve` | Connection details plus a short-lived token, when a caller genuinely must talk to a vendor directly. |
+
+Its ownership hierarchy is `PLATFORM ⊃ TENANT ⊃ CUSTOMER ⊃ SUBJECT`, which maps onto `utility_id`. The `mail`, `sendgrid`, `s3`, `azure-blob`, `gcs`, `sftp`, `rest` and `kafka` connectors exist already.
+
+**The rule this imposes: no vendor credential belongs in this codebase.** apptor-connect holds it and never hands it out — not in `.env`, not in `UtilityConfig.settings`, not in a new encrypted-secrets table. **One standing exception:** `NEXT_PUBLIC_MAPBOX_TOKEN`, the premise map's tile token, which is public by design, restricted by referrer at Mapbox, and has to reach the browser — no server-side proxy can hold a key the browser must present. Anything a *server* sends outward has no such excuse. A tenant-level integration setting names *which integration to use*, the way bill storage does; it never carries a key, a bucket, a region or a base URL. Before writing an HTTP client for anything external, check whether a connector already covers it: `packages/api/src/lib/apptor-connect/files-client.ts` is the shape to copy — one module owns the conversation, errors map to a 502 naming the integration, and a minted link is consumed internally and never persisted, because it is a bearer credential that needs no login.
+
+**Payment collection is SaaSLogic** (`docs/specs/21-saaslogic-billing.md`), reached over this rail like any other vendor. CIS is the system of record for what is owed — rating, taxes, the bill, the ledger, the balance — and SaaSLogic is told an amount and reports whether it was paid. Card data, the hosted payment page and settlement are theirs, which is what keeps PCI scope at effectively zero. Payments also arrive as cash, cheque and lockbox and never touch SaaSLogic, which is why the ledger is ours.
 
 ## Commands
 
@@ -92,7 +114,7 @@ Single overarching architecture and data model reference for the entire system (
 - `seed_db.bat` — Seed test data
 - `node seed.js` — Alternative seed (CommonJS, so no `tsx` to run it — but it shells out to `scripts/provision-tenant.ts` for the tenant, and resolves `tsx` from the pnpm store, so a non-pnpm install fails here)
 - `start_prod.bat` — Build + run in production mode
-- `pnpm --filter @utility-cis/api dev:worker` — the BullMQ worker process. **`start_dev.bat` does not start it**, so by default every queue fills up and nothing in it ever runs: the repeatable schedulers go overdue, and enqueued billing runs and imports sit in `waiting` indefinitely. That is why `/platform/queues` reports worker attachment per queue — zero workers and a healthy-looking set of counts are the same picture otherwise. `WORKER_QUEUES=<comma-list>` serves a subset; **starting it will run whatever has accumulated**, so check what is waiting first — the five cron queues go overdue as soon as nothing is attached, and `notification-send` dispatches outward while `audit-retention` deletes rows. The platform console's Queues page can also start and stop it (`WORKER_CONTROL_ENABLED`, on by default outside production), which spawns the same process detached and records its pid in Redis so a `tsx watch` reload does not lose it.
+- `pnpm --filter @utility-cis/api dev:worker` — the BullMQ worker process. **`start_dev.bat` does not start it**, so by default every queue fills up and nothing in it ever runs: the repeatable schedulers go overdue, and enqueued billing runs and imports sit in `waiting` indefinitely. That is why `/platform/cluster/queues` reports worker attachment per queue — zero workers and a healthy-looking set of counts are the same picture otherwise. `WORKER_QUEUES=<comma-list>` serves a subset; **starting it will run whatever has accumulated**, so check what is waiting first — the five cron queues go overdue as soon as nothing is attached, and `notification-send` dispatches outward while `audit-retention` deletes rows. The platform console's Workers page (`/platform/cluster/workers`) can also start and stop it (`WORKER_CONTROL_ENABLED`, on by default outside production), which spawns the same process detached and records it in the `platform:workers` Redis hash so a `tsx watch` reload does not lose it.
 - `npx tsx scripts/provision-tenant.ts --list` — list tenants with their module, role and user counts
 - `npx tsx scripts/provision-tenant.ts --name "<name>" [--dry-run]` — create a tenant: utility row, all 32 modules, the six preset roles, optionally a first admin (`--admin-email`, `--admin-name`). On Windows `tsx` resolves at `node_modules/.pnpm/node_modules/.bin/tsx.cmd`.
 
@@ -160,6 +182,23 @@ Consequences worth knowing before touching `cis_user`:
 
 Customer portal lives at `/portal/*` as a route segment in the web app. Unified JWT format shared with admin — portal tokens carry a `customer_id` claim. Portal users are `CisUser` rows with a `customerId` FK to `Customer` and a `Portal Customer` role with `portal_*` module permissions. Admin chrome (sidebar/topbar) is skipped for `/portal/*`, `/login`, `/dev` and `/platform/*` routes.
 
-**Portal API routes:** `/portal/api/auth/register`, `/portal/api/auth/login`, `/portal/api/dashboard`, `/portal/api/accounts`, `/portal/api/accounts/:id`, `/portal/api/agreements/:id/usage`, `/portal/api/profile` (GET + PATCH), `/portal/api/bills/:id/document` (GET — the customer's own bill PDF, streamed through the API).
+**Portal API routes:** `/portal/api/auth/register`, `/portal/api/auth/login`, `/portal/api/dashboard` (carries `amountDue`, summed from the customer's `Account.balance` rows), `/portal/api/accounts`, `/portal/api/accounts/:accountId`, `/portal/api/accounts/:accountId/bills`, `/portal/api/agreements/:id/usage`, `/portal/api/profile` (GET + PATCH), `/portal/api/bills/:id/document` (GET — the customer's own bill PDF, streamed through the API).
+
+**Every portal route carries the ownership check in its query** (`requireCustomerId` plus `customerId` in the `where`), and that is why they exist at all rather than reusing the admin routes: the staff equivalents filter on tenant and account only, because a CSR may read any account. Granting a portal token `accounts:VIEW` would therefore let any signed-in customer read a stranger's data by passing their id. A miss is a **404, not a 403** — whether someone else's account exists is not the caller's to learn. The bills route additionally **withholds unposted bills**: a bill is a calculation until it is posted, so the customer does not owe it, and the staff Bills tab is where posting happens.
 
 **Dev test credentials:** `jane.smith@example.com` and `robert.j@example.com` (seeded via `seed_db.bat`). Login at `/login` and click the portal customer quick-login pills.
+
+## Platform console
+
+Lives at `/platform/*` in the web app, behind the **platform actor** (see Multi-tenancy above). Full spec: `docs/specs/25-platform-console.md`.
+
+Two nav sections, because they answer two different questions:
+
+- **Platform** — tenant lifecycle: `/platform/utilities`, `/platform/utilities/new` (provision, with a dry-run Preview), `/platform/utilities/:id` (modules, roles, staff, readiness, from-outside history), `/platform/users` (the operators themselves).
+- **Cluster** — the deployment: `/platform/cluster` (is anything wrong), `/platform/cluster/workers` (nodes and worker processes), `/platform/cluster/queues` (counts for the eight queues), `/platform/cluster/jobs` (the jobs behind a count, with retry/promote/replay).
+
+Chrome is `components/platform-shell.tsx`. These screens mount **no `AuthPermissionProvider`** on purpose: `/auth/me` answers 403 for a platform token and the provider then falls back to granting every permission, so any gating it appeared to do here would be fabricated. The real gate is `{ config: { platform: true } }`, server-side.
+
+**Workers are a separate Node process** (`packages/api/src/worker.ts`) and `start_dev.bat` does not start one, so the ordinary state of a dev stack is eight queues filling up with nothing attached. Start one from `/platform/cluster/workers`, or run `pnpm --filter @utility-cis/api dev:worker`. Worker control is allowed unless `NODE_ENV=production`, where `WORKER_CONTROL_ENABLED` must be set explicitly (`workerControlAllowed()`); a start lands on the node serving the request, and a stop is offered only where the pid is that node's to signal — cluster-wide control is steps 2–4 of `docs/specs/24-platform-worker-control.md`.
+
+**Tests must not enqueue into the dev Redis.** Integration tests that exercise a route which enqueues mock `enqueueSafely`; without that, a test run leaves jobs behind that look like real stuck work on this console — which is exactly how 102 unrunnable dev jobs appeared.

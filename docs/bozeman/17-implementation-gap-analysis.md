@@ -4,6 +4,7 @@
 **Revised:** 2026-10-11 — bill production slice 1 shipped. #130 and #137 move from absent to **built** (API, UI and tests); #133 from absent to **partial**. The staff UI landed the same day as the API; the portal download did not, and the reason is recorded below.
 **Revised:** 2026-10-15 — #138 closed (tier-threshold proration, opt-in per tariff). The batch billing run shipped as API, worker and tests with **no UI**, which closes nothing on its own: see the bill production entry in §2 and item 7 of §5.
 **Revised:** 2026-10-16 — the billing run's screens shipped, so a cycle can now be billed and reviewed by an operator rather than by a terminal. Nothing in the 202 moves on it: the run is infrastructure every billing requirement assumed, not a requirement of its own. What remains is unattended scheduling.
+**Revised:** 2026-10-21 — re-verified every zero-hit claim below against current code; all still zero. Three changes, none of them new work: **#74 was never absent** (minimum bills are a rate-engine component with golden coverage — see §3); **#138's closure on 10-15 was never carried into the counts**, so the headline understated what is built by two; and a mock-data finding that this document had the wrong way round is now item 8 of §5. The five days since 10-16 went to tenancy, the platform console and UI fixes — infrastructure, so nothing else in the 202 moves.
 **Method:** Every one of the 202 Bozeman functional requirements checked against the code in `packages/` — Prisma schema (57 models, all enums), 52 API route modules, 66 services, 87 web pages, and the rate engine. Judged on code, not on specs or on the RFP response.
 **Why this doc exists:** `00-requirements-master.md` maps all 202 requirements to a `docs/specs/` module spec, and the RFP answers all 202 as **Y** (184) or **Y-WC** (18). Column 6 of `bozeman-functional-reqs.xlsx` now names an owning module for every requirement. None of that means the behavior exists. This doc is the difference.
 
@@ -11,9 +12,9 @@
 
 | Verdict | Count | Share |
 |---|---|---|
-| **Built** — the behavior exists and is exercised by tests | 81 | 40% |
+| **Built** — the behavior exists and is exercised by tests | 83 | 41% |
 | **Partial** — some of it works; a named piece is missing | 44 | 22% |
-| **Absent** — no code implements it | 77 | 38% |
+| **Absent** — no code implements it | 75 | 37% |
 
 By area:
 
@@ -21,14 +22,16 @@ By area:
 |---|---|---|---|---|
 | Customer / Property File | 41 | 19 | 10 | 12 |
 | Solid Waste | 18 | 7 | 5 | 6 |
-| Water / Wastewater & Stormwater | 68 | 36 | 15 | 17 |
-| Billing | 37 | 12 | 10 | 15 |
+| Water / Wastewater & Stormwater | 68 | 37 | 15 | 16 |
+| Billing | 37 | 13 | 10 | 14 |
 | Special Assessments | 15 | 0 | 0 | **15** |
 | Service Requests | 23 | 7 | 4 | 12 |
 
-The strongest area is water/wastewater rating and metering — the rate engine has golden tests against Bozeman's own tariffs (`bozeman-water-sfr`, `bozeman-sewer-wqa`, `bozeman-sewer-linked`, `bozeman-stormwater`, `bozeman-solid-waste`). The weakest are Special Assessments (nothing), payment processing (most of it), and every external-system integration (all of them). Bill production was in that list until 2026-10-11; rendering and bill messages now exist as API, leaving delivery, print export, bill holds and the UI.
+The 2026-10-21 pass moved two: **#138** (closed 10-15, counted here for the first time) and **#74** (never absent). Both are Billing-and-rating requirements the rate engine already satisfied, which is the shape of error to expect from a document that reads code rather than running it — a component kind in a declarative grammar does not announce itself to a grep for the requirement's wording.
 
-**Two qualifications on the 77, before anyone prices it as build work.** Three of them (#157, #158, #164) are another product's job by design and mean integration, not implementation — see the payment-processing entry in §2. And every gap that reaches outside this process runs on an integration layer that already exists and is running, apptor-connect, so the mechanism is chosen even though our side of it isn't written — see §2's integration-rail subsection. Neither qualification moves a verdict: nothing above counted as absent is built.
+The strongest area is water/wastewater rating and metering — the rate engine has golden tests against Bozeman's own tariffs (`bozeman-water-sfr`, `bozeman-sewer-wqa`, `bozeman-sewer-linked`, `bozeman-stormwater`, `bozeman-solid-waste`). The weakest are Special Assessments (nothing), payment processing (most of it), and every external-system integration (all of them). Bill production was in that list until 2026-10-11; rendering, bill messages, the staff screens and bulk runs now exist, leaving delivery, print export, bill holds and rebill. The mock bill screens that were in this list came off it on 2026-10-22 (§5 item 8).
+
+**Two qualifications on the 75, before anyone prices it as build work.** Three of them (#157, #158, #164) are another product's job by design and mean integration, not implementation — see the payment-processing entry in §2. And every gap that reaches outside this process runs on an integration layer that already exists and is running, apptor-connect, so the mechanism is chosen even though our side of it isn't written — see §2's integration-rail subsection. Neither qualification moves a verdict: nothing above counted as absent is built.
 
 ## 2. Whole capabilities with no code at all
 
@@ -53,7 +56,9 @@ No `parcel`, `gisParcelId`, `geospatial`, or sync worker anywhere. The only occu
 
 **Still absent:** #131 (no print/mail vendor export; `document_type` is a VARCHAR so adding `PRINT_EXPORT` needs no migration) and #136 (no bill hold). Delivery of any kind is unbuilt — `BillDocument` carries no delivery columns, so #132 is untouched. #131 also asks for *City-defined bill formats* and there is still only one hardcoded template — the payments block above went into it directly, which is the right place for now and the wrong place once the City wants its own layout.
 
-**The portal download is the one piece still unreachable, and slice 1 ships without it by decision** — staff can produce and send bills; customers cannot self-serve yet. Not for want of an endpoint — `GET /portal/api/bills/:id/document` is live and tested, including that another customer's bill answers 404 exactly as a non-existent one does. Every portal bill surface (`/portal/bills`, the portal dashboard, `/portal/invoices/[id]`) still renders `mockCustomerBills`, so there are no real bill ids there to download. It needs the portal bill list wired to real `Bill` rows, plus a `GET /portal/api/bills` that does not exist — Phase 4.2, already recorded as blocked on Phase 3.
+**The portal download was the one piece still unreachable, and slice 1 shipped without it by decision. Closed 2026-10-22.** `GET /portal/api/bills/:id/document` had been live and tested all along — including that another customer's bill answers 404 exactly as a non-existent one does — but every portal bill surface rendered `mockCustomerBills`, so there were no real bill ids there to download. `GET /portal/api/accounts/:accountId/bills` now supplies them and the list offers the PDF through the shared `BillPdfButton` on its `surface="portal"` setting, which fetches only: generating is `accounts:EDIT`, which no portal token holds, so a fetch-then-generate fallback would have shown the customer an authorization error for a bill that is legitimately theirs. The `GET /portal/api/bills` this entry asked for was never the right shape — bills hang off an account, and the portal iterates the accounts it already exposes.
+
+**And it is not only the portal (found 2026-10-21).** Two *staff* screens render the same invented data: `/customers/[id]` → Bills tab and `/service-agreements/[id]` → Billing tab. See item 8 of §5 — this document had the claim backwards in both directions, and the staff half was never recorded at all.
 
 ### Payment processing — #157, 158, 162, 164 — *partly delegated by design*
 No gateway, no tokenization, no card/ACH capture (`stripe|braintree|authorize\.net|tokeniz`: zero hits). `PaymentTender {CARD, ACH, CASH, CHECK, LOCKBOX}` records *how a payment was taken elsewhere*; nothing takes payments. No POS integration, no real-time payment feed, no PCI surface.
@@ -104,10 +109,11 @@ So these gaps are not "we need to choose and build a mechanism" — the mechanis
 | #189, #190 SR routing to RAMS / work systems | Call them through the proxy. The enum values already exist and are read by nothing. |
 | #191 bi-directional status | The events plane is the inbound half; we need a handler and a status mapping. |
 | #76 meter-reading system API, #106 meter inventory sync | The `rest` connector plus a scheduled pull; today only file import exists. |
+| #157, #158, #164 payment processing | **SaaSLogic over the proxy plane, decided 2026-10-21** (`docs/specs/21-saaslogic-billing.md` § Transport). Needs our request/response types, a bill-keyed idempotency column, and an events-plane handler feeding AR posting. No client package, no credential, no call log: the spec's own `SaaslogicCallLog` and `PollCursor` were dropped on that decision. #158 (PCI) closes by never touching card data rather than by work here. |
 
 **What this does not change: none of these are built, and no verdict in §1 moves.** A rail is not a feature — every row above still needs our side written, and several need a third party's file format or API before they can be specified at all. The distinction worth carrying into planning is narrower than it looks: these are *integration* work against a layer that exists, not *infrastructure* work. That makes them cheaper to estimate, not done.
 
-One standing consequence: no vendor credential belongs in this codebase. Anything that reaches an external system goes through apptor-connect, which holds the credential and never hands it out.
+One standing consequence: no vendor credential belongs in this codebase. Anything that reaches an external system goes through apptor-connect, which holds the credential and never hands it out. **That rule now lives in CLAUDE.md § Integrations and in the architecture doc §3.6** — it is a standing constraint on every future integration, not a finding about Bozeman's requirements, and it was stated here first only because this is where the integration gaps were counted.
 
 ## 3. Absent — full list by requirement
 
@@ -137,11 +143,10 @@ One standing consequence: no vendor credential belongs in this codebase. Anythin
 | 51 | Pre-bill exception reports for SW charges | no reporting module |
 | 54 | Dispute workflows for SW charges | no dispute entity; "dispute" appears only in UI example text |
 
-### Water / Wastewater & Stormwater (17)
+### Water / Wastewater & Stormwater (16)
 | # | Requirement | Evidence |
 |---|---|---|
 | 64 | Taxes and franchise fees, configurable | `franchise|salesTax|taxRate`: zero hits |
-| 74 | Minimum bills regardless of usage | no minimum-charge component |
 | 83 | Ingest and retain raw interval meter data | no interval model — yet `tenant-settings.ts:52` defines `intervalReadRetentionDays` (default 1095) that **nothing reads** |
 | 85 | Meter events trigger notifications or billing holds | no notify/hold logic in `meter-event.service.ts` |
 | 94 | Flag abnormal reads (no use, excessive use) | `ZERO_USE|HIGH_USE|EXCESSIVE`: zero hits; only `ROLLOVER`, `METER_DEFECT`, `REVERSE_FLOW` are raised |
@@ -158,14 +163,13 @@ One standing consequence: no vendor credential belongs in this codebase. Anythin
 | 123 | Meter location in multi-unit building | `unitDesignation|meterLocation`: zero hits |
 | 127 | Configurable reporting module with multi-format export | no reporting module |
 
-### Billing (15)
+> **Left this list: #74 — minimum bills — which was never absent.** Corrected 2026-10-21. `minimum_bill` is a rate-component kind: `rate.ts:50` defers it out of the main pass, `topo-sort.ts:113` orders every one of them last, and `pricing.ts:128` throws if one is ever priced directly. Exercised by the `bozeman-water-sfr` golden test, the ordering and property suites, and two integration suites. The original pass searched for a minimum-*charge* construct; the grammar spells it `minimum_bill`.
+
+### Billing (14)
 | # | Requirement | Evidence |
 |---|---|---|
 | 131 | Printed bill generation, third-party print export | no export |
 | 136 | Bill holds | `billHold|holdBilling`: zero hits |
-
-> #130, #133 and #137 left this list on 2026-10-11 — #130 and #137 built, #133 partial. See the bill production entry in §2 for what shipped and what remains.
-| 138 | Prorate tier thresholds for partial periods | **closed 2026-10-15** — a `tiered` pricing may declare `standard_days` and `evaluators/pricing.ts` scales each `to` by the days billed; opt-in, so published schedules price unchanged until revised |
 | 141 | Reconciliation of water usage vs wastewater billing | no reconciliation report |
 | 142 | Rebill when reads are corrected | no rebill (§2) |
 | 147 | Payment plans | no model |
@@ -178,6 +182,8 @@ One standing consequence: no vendor credential belongs in this codebase. Anythin
 | 158 | PCI DSS-compliant processing | no payment capture surface |
 | 162 | POS integration | zero hits |
 | 164 | Real-time payment integration | no gateway |
+
+> **Left this list:** #130 and #137 on 2026-10-11 (built) and #133 (partial) — see the bill production entry in §2. **#138** on 2026-10-15: a `tiered` pricing may declare `standard_days` and `evaluators/pricing.ts` scales each `to` by the days billed; opt-in, so published schedules price unchanged until revised. The #138 closure was recorded in the revision header that day but never subtracted from this section's count or from §1 — corrected 2026-10-21.
 
 ### Special Assessments (15) — #165–179, all of them
 District creation and management, multi-district parcels, activate/deactivate/sunset, parcel-based billing, GIS parcel attribute import, automatic transfer on ownership change, parcel-level overrides, configurable calculation formulas, recurring assessment schedules, separate balance tracking, assessment-specific collections rules, installment/loan assessments with amortization, early payoff with recalculation, assessment audit trail, assessment reporting.
@@ -224,13 +230,37 @@ Worth knowing before anyone reads the schema as a feature list:
 6. **`PaymentTender`** — reads like payment processing; it is a record of how money was taken somewhere else.
 7. **A scheduled billing run** — the run itself is now built end to end, screens included, but nothing *triggers* it: a person starts every run. The cron machinery is right there (five scheduled jobs run today, declared in `SCHEDULER_REGISTRY`), which is what makes this easy to read as done. Posting stays manual by design, so the gap is unattended *starting*, not unattended money.
 
+8. **Three bill screens render invented data, two of them staff screens** (found 2026-10-21). `mockCustomerBills` and `mockAgreementBilling` in `web/lib/mock-billing.ts` are rendered by:
+
+   | Screen | Component |
+   |---|---|
+   | `/customers/[id]` → Bills tab | `CustomerBillsTab` |
+   | `/service-agreements/[id]` → Billing tab | `AgreementBillingTab` |
+   | `/portal/bills` | `CustomerBillsTab` (same component) |
+
+   A CSR opening a customer's Bills tab sees fabricated invoices, invoice numbers and a **Balance due** stat, with nothing on the page saying so. That is worse than a gap: an absent screen is read as absent, and this one is read as the customer's account.
+
+   `customer-bills-tab.tsx:86` says it "will be replaced with a real API call when Phase 3 ships the invoice mirror table described in docs/specs/21-saaslogic-billing.md". **That table was dropped** — architecture §8 lists "the authoritative `Invoice` mirror" among the SaaSLogic items cancelled on 2026-10-09, because CIS now does its own rating. So the component is waiting on something nobody is going to build, while its real source (`Bill`, `BillSegment`, `LedgerEntry`) has existed since 2026-10-09 and is already rendered correctly by `/bills` and the account AR tab.
+
+   **This document had it backwards in both directions**, which is the reason it is written up here rather than quietly fixed: §2 said only the portal was mock, and §6 said the portal pages had been fixed. Neither was true, and no requirement verdict changes — #156 and the portal items were already absent or partial. What changes is that two screens counted as working are showing fiction.
+
+   **Closed 2026-10-22. The cost estimate written here on 10-21 was wrong, and wrongly shaped.** It proposed adding a `customerId` filter to `GET /api/v1/bills` and wiring all three screens to it. A `Bill` belongs to an Account, so there is no customer-level bill list in this data model to filter for — the estimate would have built one and then duplicated the account Bills tab that already worked. What the three screens actually needed were three different things:
+
+   | Screen | What it needed | Done |
+   |---|---|---|
+   | `/customers/[id]` → Bills tab | **Deletion.** Bills are account-level; the customer page already has an Accounts tab, and `/accounts/[id]` → Bills is real. | Tab removed |
+   | `/service-agreements/[id]` → Billing tab | **The right noun.** An agreement has `BillSegment`s, not bills, and `GET /api/v1/service-agreements/:id/bill-segments` already existed. The mock showed a SaaSLogic *subscription* — dropped 2026-10-09 — a hardcoded "Synced" pill, and an estimated charge nothing computes. | Rewritten against the real endpoint, plus `next-service-period`; 5 tests |
+   | `/portal/bills`, `/portal/dashboard`, `/portal/invoices/[id]` | **One new endpoint.** `GET /portal/api/accounts/:accountId/bills`, because the staff route has no ownership check to borrow. The dashboard's figure now comes from `Account.balance` via `amountDue`. `/portal/invoices/[id]` was deleted: the customer-facing bill document is the PDF, and `/portal/api/bills/:id/document` already served it. | Endpoint + 5 integration tests; `BillsList` + 6 tests |
+
+   `web/lib/mock-billing.ts` is deleted, and with it the invented premises, commodities, lifetime-paid figure and on-time rate — three of which had no source in this data model at all. `/portal/usage` also stopped telling customers that cost data was waiting on "the billing integration with SaaSLogic", which was wrong twice over.
+
 ## 6. Stale statuses in this folder's index
 
 `README.md` status columns predate the AR and rating work and now understate what exists:
 
 - **`bz/12` Corrections & Reversals** says "zero financial entities exist… `Account.balance` is never written by any code path". `LedgerEntry`, `LedgerApplication`, and `LedgerReasonDef` now exist with posting, allocation, adjustment, fee, deposit, refund, reversal, and reconciliation services, 12 integration suites, and a receipts and disbursements UI.
 - **`bz/16` Wastewater Billing & WQA** says "no WQA infrastructure; no irrigation-meter flag; no historical-usage aggregation". `WqaValue` exists, WQA and winter-averaging are implemented in the rate engine with golden tests, and irrigation deduction works through a `net`/`subtract` transform with `meter:role` predicates.
-- **`bz/05` Customer Portal** says "bills are mock". Portal bill and invoice pages now read real data; what's actually missing there is payments, preferences, and AR history.
+- **`bz/05` Customer Portal** said "bills are mock". **That status was right and this document's first correction of it was wrong** — and on 2026-10-22 it stopped being true: the portal reads real bills through `GET /portal/api/accounts/:accountId/bills`, the dashboard's amount due comes from `Account.balance`, and `mock-billing.ts` is deleted (§5 item 8). What is still missing in the portal is **payments, communication preferences and AR history**, so the row needs rewriting rather than ticking. The history is worth keeping: a status that was accurate got "corrected" into a wrong one, and the wrong one is the thing that should not have been quoted anywhere.
 
 Correcting these is worth doing before the statuses get quoted into the RFP response.
 

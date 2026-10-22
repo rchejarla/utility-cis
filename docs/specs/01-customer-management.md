@@ -138,10 +138,12 @@ All endpoints are live. Customer CRUD is at top-level routes; Contact and Billin
 | Page | Path | Features |
 |------|------|----------|
 | Customers List | `/customers` | Search bar (name, email, phone) with debounce; stat cards (total, by type, by status); filter by type/status; pagination; Create Customer button |
-| Customer Detail | `/customers/:id` | Command center layout: hero header with name, type badge, status; 4 tabs: Overview (inline editable fields), Accounts (linked accounts + Add Account inline form), Premises (premises where customer is owner), Contacts; Deactivate button with confirmation dialog |
+| Customer Detail | `/customers/:id` | Command center layout: hero header with name, type badge, status; 5 tabs: Overview (inline editable fields), Accounts (linked accounts + Add Account inline form), Premises (premises where customer is owner), Contacts, Attachments; Deactivate button with confirmation dialog |
 | Customer Create | `/customers/new` | Form with customer type selector; conditional fields for INDIVIDUAL vs ORGANIZATION; HelpTooltip on type field referencing BR-CU-001 |
 | Account Contacts | `/accounts/:id` (Contacts tab) | List contacts with role badges; inline Add Contact form; inline edit per contact; Delete contact with confirmation |
 | Account Billing Addresses | `/accounts/:id` (Billing tab) | List billing addresses with primary badge; inline Add Billing Address form; inline edit; remove |
+
+**There is no Bills tab on a customer**, and the absence is deliberate. A `Bill` belongs to an Account, so a customer-level bill list is not a thing this data model has — bills live at `/accounts/:id` → Bills, one click away through the Accounts tab. A sixth tab existed here until 2026-10-22 rendering `lib/mock-billing`: fabricated invoice numbers, premises, commodities and a **Balance due** stat, with nothing on the page saying so. That is worse than a missing screen, because an absent screen reads as absent while that one read as the customer's account. It was removed rather than wired up; the tab count above was `4` throughout its life, so it was never documented here at all.
 
 ## Phase Roadmap
 

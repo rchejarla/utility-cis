@@ -1,24 +1,17 @@
 "use client";
 
-import { useMemo } from "react";
-import { StatCard } from "@/components/ui/stat-card";
-import { CustomerBillsTab } from "@/components/billing/customer-bills-tab";
+import { BillsList } from "@/components/portal/bills-list";
 
 /**
- * Portal bills page. Reuses the same CustomerBillsTab component
- * from the admin side with mock data. When the invoice mirror API
- * lands in Phase 3, this will call /portal/api/accounts/:id/bills
- * instead.
+ * Portal bills page.
+ *
+ * Reads the customer's own accounts and their posted bills. Until
+ * 2026-10-22 it rendered `lib/mock-billing` through the admin side's
+ * CustomerBillsTab, waiting on an "invoice mirror API" that was
+ * cancelled on 2026-10-09 — the real source, `Bill`, had existed since
+ * rate-model slice 5b.
  */
 export default function PortalBillsPage() {
-  const portalUser = useMemo(() => {
-    try {
-      return JSON.parse(localStorage.getItem("portal_user") ?? "{}");
-    } catch {
-      return {};
-    }
-  }, []);
-
   return (
     <div>
       <div style={{ marginBottom: 24 }}>
@@ -33,14 +26,11 @@ export default function PortalBillsPage() {
           Bills
         </h1>
         <p style={{ fontSize: 14, color: "var(--text-secondary)", margin: 0 }}>
-          Your billing history and invoice details
+          Your billing history and what you currently owe
         </p>
       </div>
 
-      <CustomerBillsTab
-        customerId={portalUser.customerId ?? "portal-mock"}
-        primaryPremiseLabel="Your primary address"
-      />
+      <BillsList />
     </div>
   );
 }

@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { Prisma } from "@utility-cis/shared/src/generated/prisma";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
+import { listBillsForAccount } from "../services/bill.service.js";
 
 /**
  * Portal data endpoints under /portal/api/*.
@@ -63,6 +65,11 @@ export async function portalApiRoutes(app: FastifyInstance) {
           accountNumber: true,
           accountType: true,
           status: true,
+          // What the account owes. Maintained by AR posting in the same
+          // transaction that raises the receivable, so it is the
+          // authoritative figure rather than something to recompute
+          // from the bills in a browser.
+          balance: true,
           billingCycle: { select: { id: true, name: true } },
           serviceAgreements: {
             select: {
@@ -91,7 +98,14 @@ export async function portalApiRoutes(app: FastifyInstance) {
         orderBy: { createdAt: "desc" },
       });
 
-      return reply.send({ customer, accounts });
+      // Summed here rather than in the browser: one number the client
+      // cannot derive differently, and Decimal arithmetic stays off the
+      // float side of the wire.
+      const amountDue = accounts
+        .reduce((sum, a) => sum.add(a.balance), new Prisma.Decimal(0))
+        .toFixed(2);
+
+      return reply.send({ customer, accounts, amountDue });
     },
   );
 
@@ -159,6 +173,54 @@ export async function portalApiRoutes(app: FastifyInstance) {
       }
 
       return reply.send({ data: account });
+    },
+  );
+
+  /**
+   * The customer's own bills for one of their accounts.
+   *
+   * Bills hang off the Account, so this is account-scoped like its
+   * admin counterpart `GET /api/v1/accounts/:id/bills` — the portal
+   * iterates the accounts `/portal/api/accounts` already returns rather
+   * than asking for a customer-wide list.
+   *
+   * It exists rather than reusing the admin route because that route
+   * filters on tenant and account only: a CSR may read any account, so
+   * it has no ownership check to borrow. Granting a portal token
+   * `accounts:VIEW` would therefore let any signed-in customer read a
+   * stranger's bills by passing their account id.
+   *
+   * Ownership is checked before the bills are fetched, and a miss is a
+   * 404 rather than a 403: whether some other customer's account exists
+   * is not this caller's to learn.
+   */
+  app.get(
+    "/portal/api/accounts/:accountId/bills",
+    { config: { module: "portal_accounts", permission: "VIEW" } },
+    async (request, reply) => {
+      const customerId = requireCustomerId(request);
+      const utilityId = request.user.utilityId;
+      const { accountId } = request.params as { accountId: string };
+
+      const account = await prisma.account.findFirst({
+        where: { id: accountId, customerId, utilityId },
+        select: { id: true },
+      });
+
+      if (!account) {
+        return reply.status(404).send({
+          error: { code: "ACCOUNT_NOT_FOUND", message: "Account not found or not yours" },
+        });
+      }
+
+      // Unposted bills are withheld. A bill is a calculation until it
+      // is posted: it has raised no receivable and moved no balance, so
+      // the customer does not owe it — the admin AR tab excludes them
+      // for the same reason. The staff Bills tab must still show them
+      // (that is where posting happens), so the filter belongs here
+      // rather than in the shared service.
+      const bills = await listBillsForAccount(utilityId, accountId);
+      return reply.send({ data: bills.filter((b) => b.postedAt !== null) });
     },
   );
 

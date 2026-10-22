@@ -14,7 +14,6 @@ import { DataTable } from "@/components/ui/data-table";
 import { DatePicker } from "@/components/ui/date-picker";
 import { AccountsTab } from "@/components/customers/accounts-tab";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
-import { CustomerBillsTab } from "@/components/billing/customer-bills-tab";
 import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
@@ -423,7 +422,6 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
           { key: "accounts", label: `Accounts (${accounts.length})` },
           { key: "premises", label: `Owned Premises (${ownedPremises.length})` },
           { key: "contacts", label: `Contacts (${contacts.length})` },
-          { key: "bills", label: "Bills" },
           { key: "attachments", label: "Attachments" },
         ]}
         activeTab={activeTab}
@@ -987,16 +985,6 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
           </div>
         )}
 
-        {activeTab === "bills" && (
-          <CustomerBillsTab
-            customerId={id}
-            primaryPremiseLabel={
-              ownedPremises[0]
-                ? `${ownedPremises[0].addressLine1}, ${ownedPremises[0].city}`
-                : "—"
-            }
-          />
-        )}
 
         {activeTab === "attachments" && (
           <AttachmentsTab entityType="Customer" entityId={id} showForm={showUpload} onShowFormChange={setShowUpload} />

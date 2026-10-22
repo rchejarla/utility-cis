@@ -230,11 +230,17 @@ The GET list endpoint supports filtering by `accountId` and `premiseId` to suppo
 | Page | Path | Features |
 |------|------|----------|
 | Agreements List | `/service-agreements` | Table with agreement number, account, premise, commodity, status, start date; filter by status |
-| Agreement Detail | `/service-agreements/:id` | Tabs: Overview (inline editable fields + status transition buttons), Meters (assigned meters with add/remove actions), Audit (change history from AuditLog), Attachments; Upload button in tab bar |
+| Agreement Detail | `/service-agreements/:id` | Tabs: Overview (inline editable fields + status transition buttons), Meters (assigned meters with add/remove actions), **Billing** (this agreement's bill segments and its next service period), Audit (change history from AuditLog), Attachments; Upload button in tab bar |
 | Agreements at Account | `/accounts/:id` (Agreements tab) | List of agreements for an account; status indicators |
 | Agreements at Premise | `/premises/:id` (Agreements tab) | List of agreements at a premise; current vs historical; Add Agreement inline form |
 
 **Overview tab fields displayed:** agreement number, status badge, account (linked), premise (linked), commodity, rate schedule (linked), billing cycle, start date, end date (if set), read sequence. All editable fields support inline editing.
+
+**Billing tab (rewritten 2026-10-22).** It shows what this agreement has been charged and what the next charge would cover, from `GET /api/v1/service-agreements/:id/bill-segments` and `GET /api/v1/service-agreements/:id/next-service-period`. The noun is deliberate: a `Bill` belongs to the **Account** and aggregates the segments of every agreement on it, so an agreement has no bills of its own — the Bills tab lives on `/accounts/:id`. Each row carries the period, the subtotal/taxes/credits/total, and whether the **tariff minimum** was applied rather than the metered amount, which is what lets a CSR answer "why is my bill the same every month".
+
+There is deliberately **no estimated charge and no current-cycle projection**. Nothing in CIS estimates — a period is resolved from the meter reads — so the honest forward-looking answer is the interval the next segment would cover, or the reason there is not one: `next-service-period` returns `NO_READ_IN_WINDOW` or `READ_PREDATES_BILLED_PERIOD` as a 200 body precisely so a page can say "no unbilled read on or before <date>" where it would otherwise show a blank period. That message names the date it looked up to, which a generic "nothing to bill" would lose, and that date is what tells a clerk whether they are waiting on a reader or on a cycle.
+
+This tab previously rendered `lib/mock-billing`: a "SaaSLogic Subscription" card with a subscription id, a plan id and a **hardcoded** green "Synced" pill, an estimated charge, and a fabricated activity log. Subscriptions were dropped from the design on 2026-10-09 when SaaSLogic stopped doing the pricing, so the card described an entity that no longer existed — while both endpoints above had existed since rate-model slice 5a.
 
 **Status transition buttons:** Context-sensitive action buttons on the Overview tab (BR-SA-006 enforced):
 - Agreement in `PENDING`: "Activate" button (transitions to ACTIVE)

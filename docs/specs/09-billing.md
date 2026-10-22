@@ -611,7 +611,7 @@ Not built: CSV export of the item list.
   - Bill holds
   - Final bill on account closure
   - Bill delivery: email to paperless customers, print vendor export
-  - **The portal bill download — descoped from slice 1 by decision, not forgotten.** The API endpoint is live and tested, but no portal screen can call it: `/portal/bills`, the portal dashboard and `/portal/invoices/[id]` all render `mockCustomerBills`, so there are no real bill ids in the portal UI to download. It needs the portal bill list wired to real `Bill` rows first — Phase 4.2 work, which also needs a `GET /portal/api/bills` that does not exist yet.
+  - ~~**The portal bill download — descoped from slice 1 by decision, not forgotten.**~~ **Done 2026-10-22.** The endpoint had been live and tested since slice 1; what no portal screen could supply was a real bill id, because `/portal/bills`, the portal dashboard and `/portal/invoices/[id]` all rendered `mockCustomerBills`. `GET /portal/api/accounts/:accountId/bills` now supplies them. The `GET /portal/api/bills` this entry asked for was the wrong shape and was never built: a `Bill` belongs to an Account, so the portal iterates the accounts it already exposes rather than asking for a customer-wide list the data model does not have.
   - `BIMONTHLY` / `QUARTERLY` cycle frequencies — `computeBillPeriod` throws `UNSUPPORTED_FREQUENCY` today
   - Tenant-configurable due-date offset — hardcoded at bill date + 30 days
 

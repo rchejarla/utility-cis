@@ -1,19 +1,56 @@
 "use client";
 
-import { useMemo } from "react";
-import { mockAgreementBilling, fmtMoney } from "@/lib/mock-billing";
+import { useEffect, useState } from "react";
+import { apiClient } from "@/lib/api-client";
 
 /**
  * Service agreement → Billing tab.
  *
- * Two-column card layout: SaaSLogic subscription info on the left,
- * current cycle snapshot on the right. Recent activity table underneath.
- * Uses the existing CIS field-grid pattern (180px label / 1fr value).
- * Primary action buttons are present but disabled with a tooltip until
- * Phase 3 backend work lands.
+ * An agreement's charges are its `BillSegment`s: one per billed period,
+ * each priced from one schedule version. It has no bills of its own —
+ * a `Bill` belongs to the Account and aggregates the segments of every
+ * agreement on it, which is why the Bills tab lives there.
+ *
+ * Until 2026-10-22 this tab showed a mock "SaaSLogic Subscription"
+ * card, an entity dropped from the design on 2026-10-09 when SaaSLogic
+ * stopped doing the pricing, next to an estimated charge nothing
+ * computes and a fabricated activity log. Both endpoints it needed had
+ * existed since rate-model slice 5a.
+ *
+ * There is deliberately no "estimated charge" here. Nothing in CIS
+ * estimates: a period is resolved from the meter reads, so the honest
+ * forward-looking answer is the interval the next segment would cover
+ * — or the reason there isn't one yet.
  */
 interface AgreementBillingTabProps {
   agreementId: string;
+}
+
+interface BillSegmentSummary {
+  id: string;
+  segmentNumber: number;
+  periodStart: string;
+  periodEnd: string;
+  subtotal: string;
+  taxes: string;
+  credits: string;
+  total: string;
+  minimumFloorApplied: boolean;
+  createdAt: string;
+}
+
+/**
+ * `GET .../next-service-period` answers a missing read with a 200 and a
+ * reason rather than a status, so this shape carries both outcomes and
+ * the component renders whichever arrived.
+ */
+interface NextServicePeriod {
+  periodStart: string | null;
+  periodEnd: string | null;
+  readCount?: number;
+  days?: number;
+  reason?: string;
+  message?: string;
 }
 
 const cardStyle = {
@@ -49,24 +86,44 @@ const monoValueStyle = {
   fontSize: 12,
 };
 
-const disabledBtnStyle = {
-  padding: "8px 16px",
-  fontSize: 13,
-  fontWeight: 500,
-  background: "var(--bg-elevated)",
-  color: "var(--text-muted)",
-  border: "1px solid var(--border)",
-  borderRadius: "var(--radius)",
-  cursor: "not-allowed",
-  fontFamily: "inherit",
-};
+const fmt = (s: string) => `$${parseFloat(s).toFixed(2)}`;
+const ymd = (s: string) => s.slice(0, 10);
 
 export function AgreementBillingTab({ agreementId }: AgreementBillingTabProps) {
-  const data = useMemo(() => mockAgreementBilling(agreementId), [agreementId]);
+  const [segments, setSegments] = useState<BillSegmentSummary[]>([]);
+  const [next, setNext] = useState<NextServicePeriod | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    Promise.all([
+      apiClient
+        .get<BillSegmentSummary[]>(`/api/v1/service-agreements/${agreementId}/bill-segments`)
+        .catch(() => [] as BillSegmentSummary[]),
+      apiClient
+        .get<NextServicePeriod>(
+          `/api/v1/service-agreements/${agreementId}/next-service-period`,
+        )
+        .catch(() => null),
+    ])
+      .then(([segs, np]) => {
+        if (!live) return;
+        setSegments(segs);
+        setNext(np);
+      })
+      .finally(() => {
+        if (live) setLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [agreementId]);
+
+  const billed = segments.reduce((sum, s) => sum + parseFloat(s.total), 0);
 
   return (
     <div>
-      {/* Two-column cards */}
       <div
         style={{
           display: "grid",
@@ -75,73 +132,35 @@ export function AgreementBillingTab({ agreementId }: AgreementBillingTabProps) {
           marginBottom: 16,
         }}
       >
-        {/* SaaSLogic subscription */}
         <div style={cardStyle}>
-          <h3 style={cardHeadingStyle}>SaaSLogic Subscription</h3>
-          <Field label="Subscription ID" value={data.subscription.id} mono />
-          <Field label="Plan" value={data.subscription.planId} mono />
-          <Field label="Provisioned" value={data.subscription.provisionedAt} />
-          <Field
-            label="Link status"
-            valueNode={
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 5,
-                  padding: "2px 8px",
-                  borderRadius: 999,
-                  background: "var(--success-subtle)",
-                  border: "1px solid var(--success)",
-                  fontSize: 11,
-                  fontWeight: 600,
-                  color: "var(--success)",
-                }}
-              >
-                <span
-                  aria-hidden
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: "50%",
-                    background: "var(--success)",
-                  }}
-                />
-                Synced
-              </span>
-            }
-          />
-          <Field
-            label="Last reconciled"
-            value={`${data.subscription.lastReconciledSecondsAgo} seconds ago`}
-          />
-
-          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-            <button
-              style={disabledBtnStyle}
-              disabled
-              title="Payment method management is hosted by SaaSLogic (Phase 3)"
-            >
-              Manage payment methods
-            </button>
-            <button
-              style={disabledBtnStyle}
-              disabled
-              title="Ad-hoc charges are a Phase 3 feature"
-            >
-              Issue charge now
-            </button>
-          </div>
+          <h3 style={cardHeadingStyle}>Next period</h3>
+          {loading ? (
+            <div style={{ ...valueStyle, color: "var(--text-muted)" }}>Loading…</div>
+          ) : next?.periodStart && next.periodEnd ? (
+            <>
+              <Field label="Would cover" value={`${ymd(next.periodStart)} → ${ymd(next.periodEnd)}`} />
+              <Field label="Days" value={next.days != null ? String(next.days) : "—"} />
+              <Field
+                label="Unbilled reads"
+                value={next.readCount != null ? String(next.readCount) : "—"}
+              />
+            </>
+          ) : (
+            /* The reason, verbatim from the API. It names the date it
+               looked up to, which a generic "nothing to bill" would
+               lose — that date is what tells a clerk whether they are
+               waiting on a reader or on a cycle. */
+            <div style={{ ...valueStyle, color: "var(--text-secondary)" }}>
+              {next?.message ?? "No period could be resolved for this agreement."}
+            </div>
+          )}
         </div>
 
-        {/* Current cycle snapshot */}
         <div style={cardStyle}>
-          <h3 style={cardHeadingStyle}>Current Cycle Snapshot</h3>
-          <Field label="Period" value={data.currentCycle.period} />
-          <Field label="Closes in" value={`${data.currentCycle.closesInDays} days`} />
-          <Field label="Accumulated usage" value={data.currentCycle.usage} mono />
+          <h3 style={cardHeadingStyle}>Billed to date</h3>
+          <Field label="Segments" value={String(segments.length)} />
           <Field
-            label="Estimated charge"
+            label="Total charged"
             valueNode={
               <span
                 style={{
@@ -151,45 +170,17 @@ export function AgreementBillingTab({ agreementId }: AgreementBillingTabProps) {
                   color: "var(--text-primary)",
                 }}
               >
-                {fmtMoney(data.currentCycle.estimatedCharge)}
+                {fmt(billed.toFixed(4))}
               </span>
             }
           />
-          <Field label="Last interval read" value={data.currentCycle.lastIntervalReadAt} />
           <Field
-            label="Line item state"
-            valueNode={
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 5,
-                  padding: "2px 8px",
-                  borderRadius: 999,
-                  background: "var(--bg-elevated)",
-                  border: "1px solid var(--border)",
-                  fontSize: 11,
-                  fontWeight: 600,
-                  color: "var(--text-secondary)",
-                }}
-              >
-                <span
-                  aria-hidden
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: "50%",
-                    background: "var(--text-secondary)",
-                  }}
-                />
-                Pending cycle close
-              </span>
-            }
+            label="Most recent"
+            value={segments[0] ? ymd(segments[0].periodEnd) : "—"}
           />
         </div>
       </div>
 
-      {/* Recent activity */}
       <div
         style={{
           background: "var(--bg-card)",
@@ -210,72 +201,111 @@ export function AgreementBillingTab({ agreementId }: AgreementBillingTabProps) {
             color: "var(--text-muted)",
           }}
         >
-          Recent activity
+          Billed periods
         </div>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ background: "var(--bg-elevated)" }}>
-              <Th style={{ width: 160 }}>When</Th>
-              <Th style={{ width: 200 }}>Event</Th>
-              <Th>Detail</Th>
-              <Th style={{ width: 140, textAlign: "right" }}>Amount</Th>
-              <Th style={{ width: 120 }}>Status</Th>
+              <Th style={{ width: 60 }}>#</Th>
+              <Th style={{ width: 200 }}>Period</Th>
+              <Th style={{ width: 120, textAlign: "right" }}>Subtotal</Th>
+              <Th style={{ width: 110, textAlign: "right" }}>Taxes</Th>
+              <Th style={{ width: 110, textAlign: "right" }}>Credits</Th>
+              <Th style={{ width: 120, textAlign: "right" }}>Total</Th>
+              <Th>Basis</Th>
             </tr>
           </thead>
           <tbody>
-            {data.recentActivity.map((row, i) => (
-              <tr key={i}>
+            {segments.map((s) => (
+              <tr key={s.id}>
                 <Td>
-                  <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>{row.when}</span>
+                  <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                    {s.segmentNumber}
+                  </span>
                 </Td>
-                <Td>{row.event}</Td>
-                <Td>
-                  <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{row.detail}</span>
+                <Td>{`${ymd(s.periodStart)} → ${ymd(s.periodEnd)}`}</Td>
+                <Td style={{ textAlign: "right" }}>
+                  <Money value={s.subtotal} />
                 </Td>
                 <Td style={{ textAlign: "right" }}>
-                  {row.amount !== undefined ? (
-                    <span
-                      style={{
-                        fontFamily: "'JetBrains Mono', monospace",
-                        fontSize: 13,
-                        fontWeight: 600,
-                      }}
-                    >
-                      {fmtMoney(row.amount)}
-                    </span>
-                  ) : (
-                    <span
-                      style={{
-                        fontSize: 12,
-                        color: "var(--text-muted)",
-                        fontStyle: "italic",
-                      }}
-                    >
-                      —
-                    </span>
-                  )}
+                  <Money value={s.taxes} />
+                </Td>
+                <Td style={{ textAlign: "right" }}>
+                  <Money value={s.credits} />
+                </Td>
+                <Td style={{ textAlign: "right" }}>
+                  <Money value={s.total} bold />
                 </Td>
                 <Td>
-                  <ActivityBadge status={row.status} />
+                  {s.minimumFloorApplied ? <MinimumPill /> : <Metered />}
                 </Td>
               </tr>
             ))}
+            {!loading && segments.length === 0 && (
+              <tr>
+                <Td colSpan={7}>
+                  <span style={{ fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
+                    No billed periods yet. A segment appears here once this agreement is
+                    billed.
+                  </span>
+                </Td>
+              </tr>
+            )}
           </tbody>
         </table>
-        <div
-          style={{
-            padding: "10px 16px",
-            borderTop: "1px solid var(--border)",
-            fontSize: 12,
-            color: "var(--text-muted)",
-            fontStyle: "italic",
-            textAlign: "right",
-          }}
-        >
-          Mock data — Phase 3 wiring pending
-        </div>
       </div>
     </div>
+  );
+}
+
+function Money({ value, bold = false }: { value: string; bold?: boolean }) {
+  return (
+    <span
+      style={{
+        fontFamily: "'JetBrains Mono', monospace",
+        fontSize: 13,
+        fontWeight: bold ? 600 : 400,
+      }}
+    >
+      {fmt(value)}
+    </span>
+  );
+}
+
+/**
+ * The charge is the tariff's floor, not the metered amount. Without
+ * this marker the screen cannot answer "why is my bill the same every
+ * month", since the figure alone looks like ordinary usage.
+ */
+function MinimumPill() {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        padding: "2px 8px",
+        borderRadius: 999,
+        background: "var(--warning-subtle)",
+        border: "1px solid var(--warning)",
+        fontSize: 11,
+        fontWeight: 600,
+        color: "var(--warning)",
+        whiteSpace: "nowrap",
+      }}
+    >
+      <span
+        aria-hidden
+        style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--warning)" }}
+      />
+      Minimum applied
+    </span>
+  );
+}
+
+function Metered() {
+  return (
+    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Metered</span>
   );
 }
 
@@ -295,70 +325,6 @@ function Field({
       <div style={labelStyle}>{label}</div>
       <div style={mono ? monoValueStyle : valueStyle}>{valueNode ?? value ?? "—"}</div>
     </div>
-  );
-}
-
-function ActivityBadge({
-  status,
-}: {
-  status: "DRAFT" | "SENT" | "PARTIAL" | "OVERDUE" | "PAID" | "SYNCED";
-}) {
-  const tones: Record<string, { bg: string; fg: string; border: string; label: string }> = {
-    DRAFT: {
-      bg: "var(--bg-elevated)",
-      fg: "var(--text-secondary)",
-      border: "var(--border)",
-      label: "Draft",
-    },
-    SENT: { bg: "var(--info-subtle)", fg: "var(--info)", border: "var(--info)", label: "Sent" },
-    PARTIAL: {
-      bg: "var(--warning-subtle)",
-      fg: "var(--warning)",
-      border: "var(--warning)",
-      label: "Partial",
-    },
-    OVERDUE: {
-      bg: "var(--danger-subtle)",
-      fg: "var(--danger)",
-      border: "var(--danger)",
-      label: "Overdue",
-    },
-    PAID: {
-      bg: "var(--success-subtle)",
-      fg: "var(--success)",
-      border: "var(--success)",
-      label: "Paid",
-    },
-    SYNCED: {
-      bg: "var(--bg-elevated)",
-      fg: "var(--text-secondary)",
-      border: "var(--border)",
-      label: "Synced",
-    },
-  };
-  const t = tones[status];
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 5,
-        padding: "2px 8px",
-        borderRadius: 999,
-        background: t.bg,
-        border: `1px solid ${t.border}`,
-        fontSize: 11,
-        fontWeight: 600,
-        color: t.fg,
-        whiteSpace: "nowrap",
-      }}
-    >
-      <span
-        aria-hidden
-        style={{ width: 6, height: 6, borderRadius: "50%", background: t.fg }}
-      />
-      {t.label}
-    </span>
   );
 }
 
@@ -384,9 +350,18 @@ function Th({ children, style }: { children: React.ReactNode; style?: React.CSSP
   );
 }
 
-function Td({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+function Td({
+  children,
+  style,
+  colSpan,
+}: {
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+  colSpan?: number;
+}) {
   return (
     <td
+      colSpan={colSpan}
       style={{
         padding: "12px 16px",
         fontSize: 13,
