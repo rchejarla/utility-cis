@@ -35,6 +35,15 @@ interface RateScheduleOption {
   supersededById: string | null;
 }
 
+/** Just enough of an existing assignment to spot a clash. */
+export interface ExistingAssignment {
+  id: string;
+  rateScheduleId: string;
+  roleCode: string;
+  effectiveDate: string;
+  expirationDate: string | null;
+}
+
 interface AssignRateScheduleDialogProps {
   saId: string;
   /** The agreement's commodity — the picker is narrowed to it. */
@@ -42,6 +51,8 @@ interface AssignRateScheduleDialogProps {
   commodityName?: string;
   /** The agreement's start date: the sensible default for a first assignment. */
   defaultEffectiveDate: string;
+  /** What the agreement already holds, so a clash can be named up front. */
+  existing: ExistingAssignment[];
   onAssigned: () => void;
   onClose: () => void;
 }
@@ -51,6 +62,7 @@ export function AssignRateScheduleDialog({
   commodityId,
   commodityName,
   defaultEffectiveDate,
+  existing,
   onAssigned,
   onClose,
 }: AssignRateScheduleDialogProps) {
@@ -78,17 +90,47 @@ export function AssignRateScheduleDialog({
 
   const options = useMemo(
     () =>
-      schedules.map((s) => ({
-        value: s.id,
-        // The draft marker is in the label because that is the only
-        // place a combobox shows while collapsed.
-        label: `${s.code} · v${s.version} — ${s.name}${s.publishedAt ? "" : "  [DRAFT]"}`,
-      })),
-    [schedules],
+      schedules.map((s) => {
+        const held = existing.some((e) => e.rateScheduleId === s.id);
+        return {
+          value: s.id,
+          // Both markers live in the label because that is the only
+          // text a combobox shows while collapsed. A commodity often has
+          // exactly one schedule, so the single option offered is
+          // frequently the one already assigned.
+          label:
+            `${s.code} · v${s.version} — ${s.name}` +
+            `${s.publishedAt ? "" : "  [DRAFT]"}` +
+            `${held ? " — already assigned" : ""}`,
+        };
+      }),
+    [schedules, existing],
   );
 
   const chosen = schedules.find((s) => s.id === scheduleId);
   const anyDraft = schedules.some((s) => !s.publishedAt);
+
+  /**
+   * An assignment already holding this role over an open or overlapping
+   * window.
+   *
+   * Keyed on the role rather than the schedule, because that is the
+   * collision that breaks rating: two *different* schedules both
+   * `primary` and open-ended would both stand — nothing enforces
+   * exclusion (schema: deferred to slice 2/3) — and the engine would
+   * then see two schedules for one role. An expired window is history
+   * rather than a clash, since superseding a schedule is exactly "end
+   * the old one, start the new".
+   */
+  const roleClash = useMemo(
+    () =>
+      existing.find((e) => {
+        if (e.roleCode !== roleCode) return false;
+        if (!e.expirationDate) return true;
+        return !effectiveDate || e.expirationDate.slice(0, 10) >= effectiveDate;
+      }),
+    [existing, roleCode, effectiveDate],
+  );
 
   const submit = async () => {
     if (!scheduleId || !effectiveDate) return;
@@ -222,6 +264,33 @@ export function AssignRateScheduleDialog({
           {chosen && !chosen.publishedAt && (
             <p style={{ margin: 0, fontSize: 12, color: "var(--warning)" }}>
               {chosen.code} v{chosen.version} is a draft.
+            </p>
+          )}
+
+          {roleClash && (
+            /* Allowed, not blocked: the API permits it and a deliberate
+               overlap may be what someone wants. But nothing downstream
+               will mention it, and two schedules in one role is a rating
+               bug rather than a visible error. */
+            <p
+              data-testid="role-collision"
+              style={{
+                margin: 0,
+                fontSize: 12,
+                color: "var(--warning)",
+                background: "color-mix(in srgb, var(--warning) 9%, transparent)",
+                border: "1px solid color-mix(in srgb, var(--warning) 25%, transparent)",
+                borderRadius: "var(--radius)",
+                padding: "8px 10px",
+              }}
+            >
+              This agreement already has a schedule in the <b>{roleClash.roleCode}</b> role
+              from {roleClash.effectiveDate.slice(0, 10)}
+              {roleClash.expirationDate
+                ? ` to ${roleClash.expirationDate.slice(0, 10)}`
+                : " with no end date"}
+              . Adding another that overlaps leaves two in one role, which nothing
+              downstream prevents — end the first one or pick a different role.
             </p>
           )}
         </div>

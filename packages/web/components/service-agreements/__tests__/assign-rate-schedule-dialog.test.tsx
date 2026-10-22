@@ -36,6 +36,17 @@ function schedule(over: Record<string, unknown> = {}) {
   };
 }
 
+function assignment(over: Record<string, unknown> = {}) {
+  return {
+    id: "asg-1",
+    rateScheduleId: "rs-1",
+    roleCode: "primary",
+    effectiveDate: "2025-01-01T00:00:00.000Z",
+    expirationDate: null,
+    ...over,
+  };
+}
+
 function renderDialog(schedules: unknown[], props: Record<string, unknown> = {}) {
   get.mockImplementation((url: string) => {
     if (url.startsWith("/api/v1/rate-schedules")) {
@@ -50,6 +61,7 @@ function renderDialog(schedules: unknown[], props: Record<string, unknown> = {})
         commodityId="com-water"
         commodityName="Potable Water"
         defaultEffectiveDate="2025-01-01"
+        existing={(props.existing as ReturnType<typeof assignment>[]) ?? []}
         onAssigned={props.onAssigned as () => void ?? vi.fn()}
         onClose={props.onClose as () => void ?? vi.fn()}
       />
@@ -119,6 +131,74 @@ describe("Assign rate schedule", () => {
     await userEvent.click(screen.getByRole("button", { name: /assign/i }));
 
     expect(post).not.toHaveBeenCalled();
+  });
+
+  it("says which schedules this agreement already has", async () => {
+    // A commodity often has exactly one schedule, so the single option
+    // offered is frequently the one already assigned. Offering it
+    // unmarked invites a duplicate.
+    renderDialog([schedule()], { existing: [assignment()] });
+
+    await waitFor(() => expect(get).toHaveBeenCalled());
+    await userEvent.click(screen.getByRole("combobox", { name: /schedule/i }));
+    expect(await screen.findByRole("option", { name: /already assigned/i })).toBeInTheDocument();
+  });
+
+  it("warns before adding a second open window for the same role", async () => {
+    // Nothing downstream stops this: overlap exclusion for a role is
+    // unimplemented, so two open-ended `primary` assignments would both
+    // stand and the rate engine would see two schedules for one role.
+    //
+    // Keyed on the ROLE, not the schedule — two *different* schedules
+    // both holding `primary` open-ended is the case that breaks rating,
+    // and it is the one a schedule-keyed check would miss.
+    renderDialog([schedule()], { existing: [assignment()] });
+
+    await waitFor(() => expect(get).toHaveBeenCalled());
+
+    // Asserted on its own element rather than by text: the option label
+    // also says "already assigned", so a text match could pass without
+    // this warning existing at all.
+    const warning = await screen.findByTestId("role-collision");
+    expect(warning).toHaveTextContent(/primary/i);
+  });
+
+  it("does not warn when the existing assignment holds a different role", async () => {
+    // Role defaults to `primary`; the existing one is a rider, so the
+    // two do not collide.
+    renderDialog([schedule()], { existing: [assignment({ roleCode: "rider" })] });
+
+    await waitFor(() => expect(get).toHaveBeenCalled());
+    expect(screen.queryByTestId("role-collision")).toBeNull();
+  });
+
+  it("does not warn when the existing window closed before the new one opens", async () => {
+    // Superseding a schedule is exactly "end the old one, start the
+    // new", so a window that has already closed is history rather than
+    // a collision. The default effective date here is 2025-01-01 and
+    // this one ends the day before it.
+    renderDialog([schedule()], {
+      existing: [
+        assignment({
+          effectiveDate: "2024-01-01T00:00:00.000Z",
+          expirationDate: "2024-12-31T00:00:00.000Z",
+        }),
+      ],
+    });
+
+    await waitFor(() => expect(get).toHaveBeenCalled());
+    expect(screen.queryByTestId("role-collision")).toBeNull();
+  });
+
+  it("warns when the existing window is still open on the new start date", async () => {
+    // Ends 2025-06-30, new one starts 2025-01-01 — six months of
+    // overlap in one role, which is the case that breaks rating.
+    renderDialog([schedule()], {
+      existing: [assignment({ expirationDate: "2025-06-30T00:00:00.000Z" })],
+    });
+
+    await waitFor(() => expect(get).toHaveBeenCalled());
+    expect(await screen.findByTestId("role-collision")).toHaveTextContent("2025-06-30");
   });
 
   it("says there is nothing to assign when the commodity has no schedules", async () => {

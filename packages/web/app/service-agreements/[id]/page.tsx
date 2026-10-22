@@ -1034,6 +1034,7 @@ export default function ServiceAgreementDetailPage({
           commodityId={sa.commodityId ?? ""}
           commodityName={sa.commodity?.name}
           defaultEffectiveDate={sa.startDate?.slice(0, 10) ?? ""}
+          existing={sa.rateScheduleAssignments ?? []}
           onAssigned={() => {
             setShowAssignSchedule(false);
             void loadSA();
