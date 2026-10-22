@@ -58,6 +58,20 @@ describe("the theme bootstrap", () => {
     expect(layout).not.toMatch(/defer|async/);
   });
 
+  it("suppresses the hydration warning on the element it rewrites", () => {
+    // The script's whole job is to make the DOM disagree with the HTML
+    // the server sent: markup ships data-theme="dark", and anyone on the
+    // light theme has data-theme="light" by the time React hydrates.
+    // React reports that as a hydration mismatch on <html> — the error
+    // this attribute exists for, and the standard answer for an
+    // attribute mutated by a pre-hydration inline script.
+    //
+    // It is on <html> and nowhere else on purpose: the attribute covers
+    // one element, not its subtree, so a real mismatch inside the app
+    // still gets reported.
+    expect(layout).toMatch(/<html[^>]*suppressHydrationWarning/);
+  });
+
   it("honours a saved light theme, which is the case that flashed", () => {
     expect(runBootstrap("light", false)).toBe("light");
   });

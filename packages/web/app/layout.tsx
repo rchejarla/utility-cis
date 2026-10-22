@@ -53,8 +53,24 @@ export default function RootLayout({
 }) {
   return (
     /* `data-theme` is the default for a browser that never runs the
-       script below; the script replaces it before anything is painted. */
-    <html lang="en" data-theme="dark" className={dmSans.variable}>
+       script below; the script replaces it before anything is painted.
+
+       `suppressHydrationWarning` is required, not cosmetic. Making the
+       DOM disagree with the server's markup is precisely what the script
+       is for: the HTML says `dark` and anyone on the light theme has
+       `light` by the time React hydrates, which React reports as a
+       mismatch on this element. The attribute covers this element only
+       and not its subtree, so a genuine mismatch inside the app is still
+       reported. The alternative that removes the disagreement rather
+       than silencing it is storing the theme in a cookie the server can
+       read; `localStorage` is deliberate for now, since the choice is a
+       per-browser preference and the server has no other use for it. */
+    <html
+      lang="en"
+      data-theme="dark"
+      className={dmSans.variable}
+      suppressHydrationWarning
+    >
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
       </head>
