@@ -2,6 +2,7 @@ import { Prisma } from "@utility-cis/shared/src/generated/prisma";
 import { prisma } from "../lib/prisma.js";
 import { auditCreate } from "../lib/audit-wrap.js";
 import { paginatedTenantList } from "../lib/pagination.js";
+import { whyNotDeliverable } from "./bill-delivery.service.js";
 import {
   toBillSegmentLineRow,
   type BillSegmentLineRow,
@@ -86,6 +87,14 @@ export interface BillSummary {
    * successful resend is a bill that arrived.
    */
   delivery: { status: string; sentAt: Date | null; error: string | null } | null;
+  /**
+   * Why this bill cannot be sent, or null when nothing is in the way.
+   *
+   * From the same function `deliverBill` refuses by, so the label on a
+   * row and the refusal on its button cannot disagree. Null is the only
+   * state an operator acts on by pressing Send.
+   */
+  blockedReason: string | null;
 }
 
 export interface BillWithSegments extends BillSummary {
@@ -341,7 +350,14 @@ async function assembleBillWithSegments(
       // The account's standing hold, so one read answers whether
       // anything may happen to this bill. Nothing is stamped onto the
       // bill, so the rule has to be fetched with it.
-      account: { select: { billingHoldReason: true } },
+      account: {
+        select: {
+          accountNumber: true,
+          billingHoldReason: true,
+          customer: { select: { email: true } },
+        },
+      },
+      _count: { select: { documents: true } },
       deliveries: {
         select: { status: true, sentAt: true, error: true },
         orderBy: { createdAt: "desc" },
@@ -368,6 +384,15 @@ async function assembleBillWithSegments(
     holdReason: bill.holdReason ?? bill.account?.billingHoldReason ?? null,
     heldByAccount: bill.holdReason === null && !!bill.account?.billingHoldReason,
     delivery: bill.deliveries[0] ?? null,
+    blockedReason:
+      whyNotDeliverable({
+        billNumber: bill.billNumber,
+        accountNumber: bill.account?.accountNumber ?? "",
+        posted: bill.postedAt !== null,
+        holdReason: bill.holdReason ?? bill.account?.billingHoldReason ?? null,
+        hasDocument: bill._count.documents > 0,
+        hasEmail: !!bill.account?.customer?.email,
+      })?.code ?? null,
     segments: bill.segments.map((s) => ({
       id: s.id,
       segmentNumber: s.segmentNumber,
@@ -679,11 +704,13 @@ export async function listBills(
                 firstName: true;
                 lastName: true;
                 organizationName: true;
+                email: true;
               };
             };
             billingHoldReason: true;
           };
         };
+        _count: { select: { documents: true } };
         billingCycle: { select: { name: true } };
         deliveries: {
           select: { status: true; sentAt: true; error: true };
@@ -710,11 +737,15 @@ export async function listBills(
               firstName: true,
               lastName: true,
               organizationName: true,
+              email: true,
             },
           },
           billingHoldReason: true,
         },
       },
+      // Two facts `whyNotDeliverable` needs, fetched with the page
+      // rather than per row.
+      _count: { select: { documents: true } },
       billingCycle: { select: { name: true } },
       // The newest attempt only: the list answers "did it go", and an
       // earlier bounce followed by a successful resend is a bill that
@@ -736,6 +767,15 @@ export async function listBills(
       holdReason: b.holdReason ?? b.account.billingHoldReason ?? null,
       heldByAccount: b.holdReason === null && !!b.account.billingHoldReason,
       delivery: b.deliveries[0] ?? null,
+      blockedReason:
+        whyNotDeliverable({
+          billNumber: b.billNumber,
+          accountNumber: b.account.accountNumber,
+          posted: b.postedAt !== null,
+          holdReason: b.holdReason ?? b.account.billingHoldReason,
+          hasDocument: b._count.documents > 0,
+          hasEmail: !!b.account.customer?.email,
+        })?.code ?? null,
       id: b.id,
       utilityId: b.utilityId,
       accountId: b.accountId,
@@ -792,7 +832,14 @@ export async function listBillsForAccount(
     orderBy: { periodEnd: "desc" },
     include: {
       ledgerEntries: CHARGE_FOR_SETTLEMENT,
-      account: { select: { billingHoldReason: true } },
+      account: {
+        select: {
+          accountNumber: true,
+          billingHoldReason: true,
+          customer: { select: { email: true } },
+        },
+      },
+      _count: { select: { documents: true } },
       deliveries: {
         select: { status: true, sentAt: true, error: true },
         orderBy: { createdAt: "desc" },
@@ -805,6 +852,15 @@ export async function listBillsForAccount(
     holdReason: b.holdReason ?? b.account.billingHoldReason ?? null,
     heldByAccount: b.holdReason === null && !!b.account.billingHoldReason,
     delivery: b.deliveries[0] ?? null,
+    blockedReason:
+      whyNotDeliverable({
+        billNumber: b.billNumber,
+        accountNumber: b.account.accountNumber,
+        posted: b.postedAt !== null,
+        holdReason: b.holdReason ?? b.account.billingHoldReason,
+        hasDocument: b._count.documents > 0,
+        hasEmail: !!b.account.customer?.email,
+      })?.code ?? null,
     id: b.id,
     utilityId: b.utilityId,
     accountId: b.accountId,

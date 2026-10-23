@@ -39,6 +39,71 @@ export interface BillDeliveryRow {
   createdAt: Date;
 }
 
+/** The facts that decide whether a bill may be sent. */
+export interface DeliverabilityFacts {
+  billNumber: string;
+  accountNumber: string;
+  posted: boolean;
+  /** The bill's own reason, or the account's standing rule. */
+  holdReason: string | null;
+  hasDocument: boolean;
+  hasEmail: boolean;
+}
+
+export interface DeliveryBlocker {
+  code: string;
+  statusCode: number;
+  message: string;
+}
+
+/**
+ * Why this bill cannot be sent, or null if nothing is in the way.
+ *
+ * One definition, used twice: `deliverBill` throws by it, and the bill
+ * list labels rows with it. Two copies of this order would drift, and a
+ * list that says "ready" over a button that refuses is worse than a
+ * list that says nothing — this codebase has paid for that mistake
+ * several times over.
+ *
+ * The order is the order an operator can act in: posting precedes
+ * everything, a hold is a decision somebody made and outranks a missing
+ * file, and an address is only worth mentioning once there is something
+ * to send.
+ */
+export function whyNotDeliverable(f: DeliverabilityFacts): DeliveryBlocker | null {
+  if (!f.posted) {
+    return {
+      code: "BILL_NOT_POSTED",
+      statusCode: 409,
+      message:
+        `Bill ${f.billNumber} has not been posted. A bill that is not posted is a calculation — ` +
+        "nobody owes it yet, so there is nothing to send. Post it first.",
+    };
+  }
+  if (f.holdReason) {
+    return {
+      code: "BILL_ON_HOLD",
+      statusCode: 409,
+      message: `Bill ${f.billNumber} is on hold: ${f.holdReason}. Release it before sending.`,
+    };
+  }
+  if (!f.hasDocument) {
+    return {
+      code: "NO_BILL_DOCUMENT",
+      statusCode: 409,
+      message: `Bill ${f.billNumber} has no rendered document to send. Generate the PDF first.`,
+    };
+  }
+  if (!f.hasEmail) {
+    return {
+      code: "NO_EMAIL_ADDRESS",
+      statusCode: 422,
+      message: `${f.accountNumber}'s customer has no email address. Add one, or send this bill by post.`,
+    };
+  }
+  return null;
+}
+
 function refuse(code: string, statusCode: number, message: string): never {
   throw Object.assign(new Error(message), { statusCode, code });
 }
@@ -77,46 +142,6 @@ export async function deliverBill(utilityId: string, billId: string): Promise<st
     refuse("BILL_NOT_FOUND", 404, `Bill ${billId} not found`);
   }
 
-  /*
-   * An unposted bill is a calculation. Nobody owes it, the run that
-   * produced it has not been accepted, and sending it would ask a
-   * customer for money the utility has not decided to charge. Posting is
-   * already the deliberate second act; this is the third.
-   */
-  if (!bill.postedAt) {
-    refuse(
-      "BILL_NOT_POSTED",
-      409,
-      `Bill ${bill.billNumber} has not been posted. A bill that is not posted is a calculation — ` +
-        "nobody owes it yet, so there is nothing to send. Post it first.",
-    );
-  }
-
-  /*
-   * A held bill does not leave the building (Bozeman #136). Checked
-   * before the document and the address, because "we stopped this one"
-   * is the answer the operator wants first — being told to generate a
-   * PDF for a bill somebody deliberately held would be noise.
-   */
-  const heldFor = bill.holdReason ?? bill.account.billingHoldReason;
-  if (heldFor) {
-    refuse(
-      "BILL_ON_HOLD",
-      409,
-      `Bill ${bill.billNumber} is on hold: ${heldFor}. Release it before sending.`,
-    );
-  }
-
-  // "Deliver the bill" means the document. A link to a portal page is a
-  // different feature and would be a different template.
-  if (bill.documents.length === 0) {
-    refuse(
-      "NO_BILL_DOCUMENT",
-      409,
-      `Bill ${bill.billNumber} has no rendered document to send. Generate the PDF first.`,
-    );
-  }
-
   const customer = bill.account.customer;
   if (!customer) {
     refuse(
@@ -125,13 +150,22 @@ export async function deliverBill(utilityId: string, billId: string): Promise<st
       `Account ${bill.account.accountNumber} has no customer to send to.`,
     );
   }
-  if (!customer.email) {
-    refuse(
-      "NO_EMAIL_ADDRESS",
-      422,
-      `${bill.account.accountNumber}'s customer has no email address. Add one, or send this bill by post.`,
-    );
-  }
+
+  /*
+   * Every reason a bill may not go, in one place — see
+   * `whyNotDeliverable`. The list labels its rows with the same
+   * function, so what an operator reads and what this refuses cannot
+   * disagree.
+   */
+  const blocked = whyNotDeliverable({
+    billNumber: bill.billNumber,
+    accountNumber: bill.account.accountNumber,
+    posted: bill.postedAt !== null,
+    holdReason: bill.holdReason ?? bill.account.billingHoldReason,
+    hasDocument: bill.documents.length > 0,
+    hasEmail: !!customer.email,
+  });
+  if (blocked) refuse(blocked.code, blocked.statusCode, blocked.message);
 
   const inFlight = await prisma.notification.findFirst({
     where: { utilityId, billId: bill.id, status: { in: ["PENDING", "SENDING"] } },

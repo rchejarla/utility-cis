@@ -554,11 +554,74 @@ describe("Bills — delivery", () => {
     expect(await screen.findByText(/failed/i)).toBeInTheDocument();
   });
 
-  it("says nothing was attempted when nothing was", async () => {
-    get.mockResolvedValue(payload([bill({ delivery: null })]));
+  it("says nothing was attempted when a bill is ready and waiting", async () => {
+    get.mockResolvedValue(payload([bill({ delivery: null, blockedReason: null })]));
     renderPage();
 
     await screen.findByText("B-1001");
+    // "not sent" now means ready: the only row an operator acts on.
     expect(screen.getByText(/not sent/i)).toBeInTheDocument();
+  });
+
+  /*
+   * "Not sent" used to cover five different situations — nobody has
+   * pressed Send, the bill is not posted, it is held, nothing is
+   * rendered, there is no address. The first is "I have not got to it";
+   * the rest will never go until somebody fixes something, and a
+   * worklist that cannot tell them apart is not a worklist.
+   */
+  it.each([
+    ["BILL_ON_HOLD", /on hold/i],
+    ["NO_BILL_DOCUMENT", /no pdf/i],
+    ["NO_EMAIL_ADDRESS", /no address/i],
+    ["BILL_NOT_POSTED", /not posted/i],
+  ])("says %s rather than a bare 'not sent'", async (code, shown) => {
+    get.mockResolvedValue(payload([bill({ delivery: null, blockedReason: code })]));
+    renderPage();
+
+    await screen.findByText("B-1001");
+    expect(screen.getByText(shown)).toBeInTheDocument();
+    expect(screen.queryByText(/not sent/i)).toBeNull();
+  });
+});
+
+describe("Bills — sending from the list", () => {
+  it("offers Send on a bill that is ready", async () => {
+    get.mockResolvedValue(
+      payload([bill({ delivery: null, blockedReason: null, postedAt: "2026-03-01" })]),
+    );
+    renderPage();
+
+    expect(
+      await screen.findByRole("button", { name: /send bill B-1001/i }),
+    ).toBeEnabled();
+  });
+
+  it("will not offer it for a bill that cannot go", async () => {
+    get.mockResolvedValue(
+      payload([bill({ delivery: null, blockedReason: "NO_BILL_DOCUMENT" })]),
+    );
+    renderPage();
+
+    await screen.findByText("B-1001");
+    // A button that is always live and fails on click is worse than one
+    // that says why it cannot.
+    expect(screen.queryByRole("button", { name: /send bill B-1001/i })).toBeNull();
+  });
+
+  it("offers a resend after a bounce, which is the job after reading that column", async () => {
+    get.mockResolvedValue(
+      payload([
+        bill({
+          blockedReason: null,
+          delivery: { status: "FAILED", sentAt: null, error: "mailbox unavailable" },
+        }),
+      ]),
+    );
+    renderPage();
+
+    expect(
+      await screen.findByRole("button", { name: /resend bill B-1001/i }),
+    ).toBeInTheDocument();
   });
 });

@@ -1473,3 +1473,94 @@ describe("holding an account's billing", () => {
     expect(rows[0]!.heldByAccount).toBe(true);
   }, 60_000);
 });
+
+/**
+ * Why a bill cannot be sent, said on the list rather than discovered by
+ * pressing Send.
+ *
+ * "Not sent" conflated five different situations: nobody has pressed
+ * Send yet, the bill is not posted, it is held, nothing has been
+ * rendered, or the customer has no address. The first is "I have not
+ * got to it"; the rest are "this will never go until somebody fixes
+ * something", and a worklist that cannot tell them apart is not a
+ * worklist.
+ *
+ * The reasons come from the same function `deliverBill` throws by, so
+ * the label on the row and the refusal on the button cannot drift —
+ * which is the failure that has cost the most time in this codebase.
+ */
+describe("a bill list says why a bill cannot be sent", () => {
+  async function listed(billId: string) {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/bills",
+      headers: staffHeaders(),
+    });
+    expect(res.statusCode).toBe(200);
+    const rows = JSON.parse(res.body).data as Array<Record<string, any>>;
+    return rows.find((r) => r.id === billId)!;
+  }
+
+  it("names the hold", async () => {
+    const billId = await postedBill();
+    await prismaImports.prisma.bill.update({
+      where: { id: billId },
+      data: { holdReason: "Disputed" },
+    });
+
+    expect((await listed(billId)).blockedReason).toBe("BILL_ON_HOLD");
+  }, 60_000);
+
+  it("names a missing document", async () => {
+    const billId = await postedBill();
+
+    // postedBill renders nothing; the PDF is produced on demand.
+    expect((await listed(billId)).blockedReason).toBe("NO_BILL_DOCUMENT");
+  }, 60_000);
+
+  it("names a missing address", async () => {
+    const billId = await postedBill();
+    await prismaImports.prisma.billDocument.create({
+      data: {
+        utilityId: UTILITY,
+        billId,
+        storageIntegration: "dev-files",
+        objectKey: `bills/${billId}.pdf`,
+        byteSize: 1024,
+        documentType: "BILL",
+        templateKey: "default-bill",
+        isPaperless: false,
+      },
+    });
+
+    // The fixture's customer has no email by design.
+    expect((await listed(billId)).blockedReason).toBe("NO_EMAIL_ADDRESS");
+  }, 60_000);
+
+  it("says nothing is in the way when a bill is ready to go", async () => {
+    const billId = await postedBill();
+    await prismaImports.prisma.billDocument.create({
+      data: {
+        utilityId: UTILITY,
+        billId,
+        storageIntegration: "dev-files",
+        objectKey: `bills/${billId}.pdf`,
+        byteSize: 1024,
+        documentType: "BILL",
+        templateKey: "default-bill",
+        isPaperless: false,
+      },
+    });
+    const bill = await prismaImports.prisma.bill.findUniqueOrThrow({
+      where: { id: billId },
+      select: { account: { select: { customerId: true } } },
+    });
+    await prismaImports.prisma.customer.update({
+      where: { id: bill.account.customerId! },
+      data: { email: "jane.smith@example.com" },
+    });
+
+    // Null is the only state an operator acts on by pressing Send.
+    expect((await listed(billId)).blockedReason).toBeNull();
+  }, 60_000);
+});

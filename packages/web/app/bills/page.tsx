@@ -49,6 +49,11 @@ interface BillRow {
    * is a bill that arrived.
    */
   delivery: { status: string; sentAt: string | null; error: string | null } | null;
+  /**
+   * Why this bill cannot be sent, or null when it is ready. From the
+   * same rule the API refuses by, so the row and the button agree.
+   */
+  blockedReason: string | null;
   /** Decided by the API, so the pill and the overdue filter agree. */
   overdue: boolean;
   /**
@@ -330,11 +335,19 @@ function Bills() {
                         distinction a worker running stale code hid for
                         a day — it marked rows sent that never left.
                       */}
-                      <DeliveryCell delivery={b.delivery} />
+                      <DeliveryCell delivery={b.delivery} blockedReason={b.blockedReason} />
                     </Td>
                     {showActions && (
                       <Td>
                         <BillRowActions bill={b} onChanged={() => void load()} />
+                        {/*
+                          Only when it can actually go. A button that is
+                          always live and fails on click is worse than
+                          one whose absence the cell beside it explains.
+                        */}
+                        {b.blockedReason === null && (
+                          <SendBillButton bill={b} onSent={() => void load()} />
+                        )}
                       </Td>
                     )}
                   </tr>
@@ -512,24 +525,86 @@ export default function BillsPage() {
   );
 }
 
-/** Whether this bill has gone out, in one word. */
+/** Whether this bill has gone out — or why it cannot — in one phrase. */
 function DeliveryCell({
   delivery,
+  blockedReason,
 }: {
   delivery: { status: string; sentAt: string | null; error: string | null } | null;
+  blockedReason: string | null;
 }) {
-  if (!delivery) {
-    return <span style={{ fontSize: 11, color: "var(--text-muted)" }}>not sent</span>;
+  if (delivery) {
+    const { label, colour } =
+      delivery.status === "SENT"
+        ? { label: "sent", colour: "var(--success)" }
+        : delivery.status === "FAILED"
+          ? { label: "failed", colour: "var(--danger)" }
+          : { label: "queued", colour: "var(--warning)" };
+    return (
+      <span style={{ fontSize: 11, color: colour }} title={delivery.error ?? undefined}>
+        {label}
+      </span>
+    );
   }
-  const { label, colour } =
-    delivery.status === "SENT"
-      ? { label: "sent", colour: "var(--success)" }
-      : delivery.status === "FAILED"
-        ? { label: "failed", colour: "var(--danger)" }
-        : { label: "queued", colour: "var(--warning)" };
+  /*
+   * Nothing attempted. "Not sent" alone covered five situations — one
+   * of them "I have not got to it", the rest "this will never go until
+   * somebody fixes something" — so the reason is named, and "not sent"
+   * finally means ready and waiting.
+   */
+  const reason = BLOCKED_LABELS[blockedReason ?? ""];
+  if (reason) {
+    return <span style={{ fontSize: 11, color: "var(--warning)" }}>{reason}</span>;
+  }
+  return <span style={{ fontSize: 11, color: "var(--text-muted)" }}>not sent</span>;
+}
+
+const BLOCKED_LABELS: Record<string, string> = {
+  BILL_ON_HOLD: "on hold",
+  NO_BILL_DOCUMENT: "no PDF",
+  NO_EMAIL_ADDRESS: "no address",
+  BILL_NOT_POSTED: "not posted",
+  NO_CUSTOMER: "no customer",
+};
+
+/** Send, or resend after a bounce — the job after reading the column beside it. */
+function SendBillButton({ bill, onSent }: { bill: BillRow; onSent: () => void }) {
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const resend = bill.delivery !== null;
+
+  const send = async () => {
+    setBusy(true);
+    try {
+      await apiClient.post(`/api/v1/bills/${bill.id}/deliver`, {});
+      toast(`${bill.billNumber} queued for delivery.`, "success");
+      onSent();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not send", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <span style={{ fontSize: 11, color: colour }} title={delivery.error ?? undefined}>
-      {label}
-    </span>
+    <button
+      onClick={() => void send()}
+      disabled={busy}
+      aria-label={`${resend ? "Resend" : "Send"} bill ${bill.billNumber}`}
+      style={{
+        marginLeft: 6,
+        padding: "3px 8px",
+        fontSize: 11,
+        background: "transparent",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        color: "var(--text-primary)",
+        cursor: busy ? "default" : "pointer",
+        opacity: busy ? 0.6 : 1,
+        fontFamily: "inherit",
+      }}
+    >
+      {resend ? "Resend" : "Send"}
+    </button>
   );
 }
