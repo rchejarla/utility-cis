@@ -31,6 +31,22 @@ export default defineConfig({
     ],
     // No setupFiles — integration tests handle their own container
     // lifecycle via beforeAll/afterAll.
+    //
+    // Redis database 9, not the dev stack's 0.
+    //
+    // These suites run the real seed, so their tenant is the dev
+    // tenant's own UUID — and anything they cache under it lands on the
+    // key the running dev API reads. A run of billing-run.integration
+    // left `tenant-modules:00000000-…-0001` holding the two modules its
+    // fixture creates, so the dev app saw a tenant with 2 enabled
+    // modules instead of 32: menu sections vanished and every page in
+    // them answered "You don't have permission to view this page."
+    //
+    // This is the same hazard as the queues (which these tests avoid by
+    // mocking `enqueueSafely`), but the cache has no such guard and
+    // needs none once the address is separate. A `worker-*` suite that
+    // points REDIS_URL at its own container still overrides this.
+    env: { REDIS_URL: "redis://127.0.0.1:6379/9" },
     testTimeout: 60_000,
     hookTimeout: 120_000,
     // Run integration suites one at a time, each in its own fork.
