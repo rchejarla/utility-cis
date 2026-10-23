@@ -45,6 +45,12 @@ interface Account {
   accountNumber: string;
   accountType: string;
   status: string;
+  /**
+   * The account's standing billing hold, or null. Its bills can neither
+   * post nor be sent while it is set — and nothing is stamped onto
+   * them, so this field is the only place the rule is visible.
+   */
+  billingHoldReason?: string | null;
   creditRating?: string;
   depositAmount?: number;
   depositWaived?: boolean;
@@ -142,6 +148,37 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
   const [showAddContact, setShowAddContact] = useState(false);
   const [showAddAddress, setShowAddAddress] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
+
+  /*
+   * The standing hold, placed and lifted here because here is the only
+   * place it is visible. Nothing is stamped onto the bills, so an
+   * account-held bill shows the reason but cannot be released from the
+   * bill — releasing it there would clear a reason the bill does not
+   * have.
+   */
+  const holdBilling = async () => {
+    const reason = window.prompt("Why is this account's billing being held?")?.trim();
+    // An empty reason cancels rather than creating a hold nobody can
+    // explain later.
+    if (!reason) return;
+    try {
+      await apiClient.post(`/api/v1/accounts/${id}/billing-hold`, { reason });
+      toast("Billing held. Bills still calculate; none will post or be sent.", "success");
+      await loadAccount();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not hold billing", "error");
+    }
+  };
+
+  const releaseBilling = async () => {
+    try {
+      await apiClient.post(`/api/v1/accounts/${id}/billing-release`, {});
+      toast("Billing released.", "success");
+      await loadAccount();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not release billing", "error");
+    }
+  };
 
   const loadAccount = async () => {
     try {
@@ -286,7 +323,50 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
           ].filter(Boolean);
           return parts.join(" · ");
         })()}
+        actions={
+          canEdit ? (
+            account.billingHoldReason ? (
+              <button onClick={() => void releaseBilling()} style={HOLD_BTN}>
+                Release billing
+              </button>
+            ) : (
+              <button onClick={() => void holdBilling()} style={HOLD_BTN}>
+                Hold billing
+              </button>
+            )
+          ) : undefined
+        }
       />
+
+      {/*
+        Said on the account because it is the only place it can be seen.
+        The rule is not written onto the bills it holds — that is what
+        lets one release free them all — so without this line an
+        operator has an account quietly stopping every bill it produces
+        and nothing anywhere saying so.
+      */}
+      {account.billingHoldReason && (
+        <div
+          style={{
+            background: "var(--warning-subtle)",
+            border: "1px solid var(--warning)",
+            borderRadius: "var(--radius)",
+            padding: "10px 14px",
+            marginBottom: 16,
+            fontSize: 12.5,
+            color: "var(--warning)",
+          }}
+        >
+          <strong>Billing is held</strong>
+          <div style={{ color: "var(--text-secondary)", marginTop: 4 }}>
+            {account.billingHoldReason}
+          </div>
+          <div style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 11 }}>
+            This account is still billed — a period that goes unbilled rolls into the next
+            one — but no bill can post or be sent until the hold is lifted.
+          </div>
+        </div>
+      )}
 
       <Tabs
         tabs={[
@@ -778,3 +858,16 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
     </div>
   );
 }
+
+/** Matches the page's other lifecycle actions in weight, not in alarm. */
+const HOLD_BTN: React.CSSProperties = {
+  padding: "7px 16px",
+  background: "transparent",
+  border: "1px solid var(--warning)",
+  borderRadius: "var(--radius)",
+  color: "var(--warning)",
+  fontSize: 12,
+  fontWeight: 500,
+  cursor: "pointer",
+  fontFamily: "inherit",
+};
