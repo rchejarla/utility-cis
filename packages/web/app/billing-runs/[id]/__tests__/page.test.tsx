@@ -74,11 +74,16 @@ function item(over: Record<string, unknown> = {}) {
 function routeGets(opts: {
   run?: Record<string, unknown>;
   byStatus?: Record<string, unknown[]>;
+  /** The one bill the detail dialog fetches, when a case opens it. */
+  bill?: Record<string, unknown>;
 }) {
   get.mockImplementation((path: string, query?: Record<string, string>) => {
     if (path === "/api/v1/billing-runs/run-1") return Promise.resolve(opts.run ?? detail());
     if (path === "/api/v1/billing-runs/run-1/items") {
       return Promise.resolve(opts.byStatus?.[query?.status ?? ""] ?? []);
+    }
+    if (opts.bill && path === `/api/v1/bills/${opts.bill.id}`) {
+      return Promise.resolve(opts.bill);
     }
     return Promise.resolve([]);
   });
@@ -293,6 +298,58 @@ describe("Billing run detail — exceptions", () => {
     // which is the read-to-read point and why the column exists.
     expect(await screen.findByText(/09\/14\/2026 – 10\/13\/2026 \(30d\)/)).toBeInTheDocument();
     expect(screen.getByText("$64.20")).toBeInTheDocument();
+  });
+
+  /**
+   * Reviewing a run means working down its accounts, so looking at one
+   * bill must not cost the place in the list.
+   *
+   * View used to be a link to the bill list, which left the run
+   * entirely: first to `?search=<bill id>`, which matched nothing and
+   * read as "no such bill", then to `?bill=<id>`, which opened the
+   * right bill but on another screen. The operator is reviewing a run;
+   * the bill belongs on top of it.
+   */
+  it("opens a billed account's bill without leaving the run", async () => {
+    routeGets({
+      run: detail(),
+      byStatus: {
+        BILLED: [
+          item({
+            id: "item-3",
+            status: "BILLED",
+            billId: "bill-7",
+            total: "64.2000",
+            errorCode: null,
+            errorMessage: null,
+          }),
+        ],
+      },
+      bill: {
+        id: "bill-7",
+        billNumber: "BILL-202610-0001000-00",
+        periodStart: "2026-09-14",
+        periodEnd: "2026-10-13",
+        billDate: "2026-10-13",
+        dueDate: "2026-11-12",
+        postedAt: null,
+        subtotal: "64.2000",
+        taxes: "0.0000",
+        credits: "0.0000",
+        total: "64.2000",
+        segments: [],
+      },
+    });
+    await renderPage();
+
+    await loaded();
+    await userEvent.click(tab(/Billed \(118\)/));
+    await userEvent.click(await screen.findByRole("button", { name: "View" }));
+
+    // The dialog fetched the bill, and the run is still underneath it.
+    expect(await screen.findByText("BILL-202610-0001000-00")).toBeInTheDocument();
+    expect(get).toHaveBeenCalledWith("/api/v1/bills/bill-7");
+    expect(screen.getByText(/Billed \(118\)/)).toBeInTheDocument();
   });
 });
 

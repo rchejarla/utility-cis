@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Tabs } from "@/components/ui/tabs";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
+import { BillDetailDialog } from "@/components/bills/bill-detail-dialog";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { fmtDate, fmtMoney, daysInclusive } from "@/components/billing-runs/run-format";
@@ -60,6 +61,16 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
   const [confirmPost, setConfirmPost] = useState(false);
   const [posting, setPosting] = useState(false);
   const [resuming, setResuming] = useState(false);
+  /*
+   * The bill an operator is looking at, over the top of the run.
+   *
+   * Reviewing a run means working down its accounts, so looking at one
+   * bill must not cost the place in the list. This used to be a link
+   * out to the bill list — which matched nothing on a bill id and read
+   * as "no such bill" — and then a link to the bill list with the right
+   * bill open on it. Either way the run was gone from under them.
+   */
+  const [billId, setBillId] = useState<string | null>(null);
 
   const loadRun = useCallback(async () => {
     try {
@@ -342,16 +353,12 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
                         </Td>
                         <Td>
                           {i.billId ? (
-                            /*
-                              `?bill=` opens that bill. `?search=` put the
-                              id in the list's search box, which matches
-                              bill number, account number and customer
-                              name and never an id — so this landed on an
-                              empty list, reading as "no such bill".
-                            */
-                            <Link href={`/bills?bill=${i.billId}`} style={MONO_LINK}>
+                            <button
+                              onClick={() => setBillId(i.billId)}
+                              style={LINK_BTN}
+                            >
                               View
-                            </Link>
+                            </button>
                           ) : (
                             "—"
                           )}
@@ -395,6 +402,8 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
           ← Back to all runs
         </Link>
       </div>
+
+      {billId && <BillDetailDialog billId={billId} onClose={() => setBillId(null)} />}
 
       {confirmPost && (
         <ConfirmDialog
@@ -527,6 +536,18 @@ const EMPTY: React.CSSProperties = {
   background: "var(--bg-card)",
   border: "1px solid var(--border)",
   borderRadius: "var(--radius)",
+};
+
+/** Looks like the account links beside it; it opens a dialog, not a page. */
+const LINK_BTN: React.CSSProperties = {
+  fontFamily: "'JetBrains Mono', monospace",
+  fontSize: 12,
+  fontWeight: 600,
+  color: "var(--primary)",
+  background: "none",
+  border: "none",
+  padding: 0,
+  cursor: "pointer",
 };
 
 const MONO_LINK: React.CSSProperties = {
