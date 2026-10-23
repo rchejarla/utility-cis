@@ -22,13 +22,58 @@ const fullInclude = {
       id: true,
       agreementNumber: true,
       commodity: { select: { name: true } },
-      premise: { select: { addressLine1: true } },
+      /*
+       * An agreement has no premise of its own; it reaches one through a
+       * **service point**, the per-place anchor between the two. One
+       * agreement can hold several, and a closed one is somewhere it
+       * used to be served — so the open point is the address it is
+       * served at now, which is the same filter `account.service.ts`
+       * applies for the same reason.
+       *
+       * Selecting `premise` straight off the agreement is not a wrong
+       * answer but a rejected query, so it took every read of a service
+       * request down together.
+       */
+      servicePoints: {
+        where: { endDate: null },
+        select: { premise: { select: { addressLine1: true } } },
+        orderBy: { startDate: "asc" },
+        take: 1,
+      },
     },
   },
   sla: { select: { id: true, responseHours: true, resolutionHours: true } },
   assignee: { select: { id: true, name: true, email: true } },
   creator: { select: { id: true, name: true } },
 } as const;
+
+/** The agreement as `fullInclude` selects it, before the hop is flattened. */
+interface AgreementRow {
+  id: string;
+  agreementNumber: string;
+  commodity: { name: string };
+  servicePoints: { premise: { addressLine1: string } }[];
+}
+
+/**
+ * Put the agreement's address where callers look for it.
+ *
+ * The service point is an internal anchor, and nothing reading a service
+ * request cares that the hop exists: `formatAgreementLabel` wants
+ * `{agreementNumber, commodity, premise}` and renders "SA-0421 · Potable
+ * Water · 412 N 7th Ave". Flattening here keeps that shape one thing the
+ * API owns, rather than a join two screens and a formatter each repeat.
+ */
+function presentAgreement(sa: AgreementRow | null) {
+  if (!sa) return null;
+  const { servicePoints, ...rest } = sa;
+  return { ...rest, premise: servicePoints[0]?.premise ?? null };
+}
+
+/** Every read and every write returns a request through here. */
+function presentServiceRequest<T extends { serviceAgreement: AgreementRow | null }>(sr: T) {
+  return { ...sr, serviceAgreement: presentAgreement(sr.serviceAgreement) };
+}
 
 const VALID_TRANSITIONS: Record<ServiceRequestStatus, ServiceRequestStatus[]> = {
   NEW:           ["ASSIGNED", "CANCELLED"],
@@ -97,14 +142,16 @@ export async function listServiceRequests(utilityId: string, query: ServiceReque
     orderBy: [{ createdAt: "desc" }],
     take,
   });
-  return { data: rows, total: rows.length };
+  return { data: rows.map(presentServiceRequest), total: rows.length };
 }
 
 export async function getServiceRequest(id: string, utilityId: string) {
-  return prisma.serviceRequest.findFirstOrThrow({
-    where: { id, utilityId },
-    include: fullInclude,
-  });
+  return presentServiceRequest(
+    await prisma.serviceRequest.findFirstOrThrow({
+      where: { id, utilityId },
+      include: fullInclude,
+    }),
+  );
 }
 
 export async function createServiceRequest(
@@ -117,7 +164,8 @@ export async function createServiceRequest(
   const now = new Date();
   const sla = await resolveSlaForRequest(utilityId, data.requestType, data.priority);
   const requestNumber = await nextRequestNumber(utilityId, now.getUTCFullYear());
-  return auditCreate(
+  return presentServiceRequest(
+    await auditCreate(
     { utilityId, actorId, actorName, entityType: "ServiceRequest" },
     "service_request.created",
     async (tx) =>
@@ -140,6 +188,7 @@ export async function createServiceRequest(
         },
         include: fullInclude,
       }),
+    ),
   );
 }
 
@@ -151,7 +200,8 @@ export async function updateServiceRequest(
   data: UpdateServiceRequestInput,
 ) {
   const before = await getServiceRequest(id, utilityId);
-  return auditUpdate(
+  return presentServiceRequest(
+    await auditUpdate(
     { utilityId, actorId, actorName, entityType: "ServiceRequest" },
     "service_request.updated",
     before,
@@ -176,6 +226,7 @@ export async function updateServiceRequest(
         include: fullInclude,
       });
     },
+    ),
   );
 }
 
@@ -193,7 +244,8 @@ export async function assignServiceRequest(
       { statusCode: 409, code: "SERVICE_REQUEST_TERMINAL" },
     );
   }
-  return auditUpdate(
+  return presentServiceRequest(
+    await auditUpdate(
     { utilityId, actorId, actorName, entityType: "ServiceRequest" },
     "service_request.assigned",
     before,
@@ -207,6 +259,7 @@ export async function assignServiceRequest(
         },
         include: fullInclude,
       }),
+    ),
   );
 }
 
@@ -221,7 +274,8 @@ export async function transitionServiceRequest(
   if (!isValidTransition(before.status, data.toStatus)) {
     throw invalidTransition(before.status, data.toStatus);
   }
-  return auditUpdate(
+  return presentServiceRequest(
+    await auditUpdate(
     { utilityId, actorId, actorName, entityType: "ServiceRequest" },
     "service_request.transitioned",
     before,
@@ -238,6 +292,7 @@ export async function transitionServiceRequest(
         },
         include: fullInclude,
       }),
+    ),
   );
 }
 
@@ -254,7 +309,8 @@ export async function completeServiceRequest(
   }
   const now = new Date();
   const breached = before.slaDueAt ? now > before.slaDueAt : false;
-  return auditUpdate(
+  return presentServiceRequest(
+    await auditUpdate(
     { utilityId, actorId, actorName, entityType: "ServiceRequest" },
     "service_request.completed",
     before,
@@ -269,6 +325,7 @@ export async function completeServiceRequest(
         },
         include: fullInclude,
       }),
+    ),
   );
 }
 
@@ -283,7 +340,8 @@ export async function cancelServiceRequest(
   if (!isValidTransition(before.status, "CANCELLED")) {
     throw invalidTransition(before.status, "CANCELLED");
   }
-  return auditUpdate(
+  return presentServiceRequest(
+    await auditUpdate(
     { utilityId, actorId, actorName, entityType: "ServiceRequest" },
     "service_request.cancelled",
     before,
@@ -299,25 +357,28 @@ export async function cancelServiceRequest(
         },
         include: fullInclude,
       }),
+    ),
   );
 }
 
 export async function listByAccount(utilityId: string, accountId: string) {
-  return prisma.serviceRequest.findMany({
+  const rows = await prisma.serviceRequest.findMany({
     where: { utilityId, accountId },
     include: fullInclude,
     orderBy: { createdAt: "desc" },
     take: 100,
   });
+  return rows.map(presentServiceRequest);
 }
 
 export async function listByPremise(utilityId: string, premiseId: string) {
-  return prisma.serviceRequest.findMany({
+  const rows = await prisma.serviceRequest.findMany({
     where: { utilityId, premiseId },
     include: fullInclude,
     orderBy: { createdAt: "desc" },
     take: 100,
   });
+  return rows.map(presentServiceRequest);
 }
 
 interface BreachedSrRow {

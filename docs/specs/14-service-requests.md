@@ -121,6 +121,16 @@ Service level agreement definitions by request type and priority. Used to calcul
 | GET | `/api/v1/premises/:id/service-requests` | Scoped list | ✓ slice B |
 | GET | `/api/v1/service-request-types` | Active type-defs (globals + tenant, shadow-resolved) | ✓ slice B |
 
+**The agreement on a service request carries `premise`, and the API does the hop.** An agreement has no premise of its own — it reaches one through a **service point**, the per-place anchor between the two, and can hold several. The open one (`endDate: null`) is the address it is served at now, the same filter `account.service.ts` applies. Every read and every write flattens `servicePoints[0].premise` to `serviceAgreement.premise` before returning, because `formatAgreementLabel` wants `{agreementNumber, commodity, premise}` and nothing reading a request should have to know the anchor exists.
+
+This was broken for six months and took the whole module down with it. Slice B shipped on 2026-04-23 selecting `serviceAgreement.premise` directly, which was correct then: `ServiceAgreement` still had a `premiseId`. A week later, on 2026-04-30, `04d5f77` moved the premise onto `ServicePoint` and dropped that column — and did not update this service. An `include` naming a field the model does not have is not a wrong answer but a **rejected query**, so all ten call sites returned 400 `PRISMA_VALIDATION`: the queue, the detail page, both scoped tabs, and every write.
+
+Nothing caught it, for two reasons worth keeping in mind:
+- `src/__tests__/integration/service-requests.test.ts` reads like the coverage for this. It is gated behind `RUN_REAL_DB_INTEGRATION_TESTS=true` **and** matches neither vitest config's integration glob, so it runs in the unit suite and is skipped there. It has never executed. It still covers the lifecycle and is still worth converting to the `bootPostgres` pattern the rest of the suite uses.
+- `formatAgreementLabel` has three passing unit tests that hand-build their input. The formatter was never wrong; the query feeding it was, and no test joined the two.
+
+`service-request-reads.integration.test.ts` now exercises all four read paths against real Postgres, including a closed service point beside an open one so the address cannot come back by insertion order.
+
 ### SLA Management
 
 | Method | Path | Description | Status |
