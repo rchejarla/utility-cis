@@ -143,13 +143,6 @@ export async function deliverBill(utilityId: string, billId: string): Promise<st
   }
 
   const customer = bill.account.customer;
-  if (!customer) {
-    refuse(
-      "NO_CUSTOMER",
-      409,
-      `Account ${bill.account.accountNumber} has no customer to send to.`,
-    );
-  }
 
   /*
    * Every reason a bill may not go, in one place — see
@@ -163,9 +156,25 @@ export async function deliverBill(utilityId: string, billId: string): Promise<st
     posted: bill.postedAt !== null,
     holdReason: bill.holdReason ?? bill.account.billingHoldReason,
     hasDocument: bill.documents.length > 0,
-    hasEmail: !!customer.email,
+    hasEmail: !!customer?.email,
   });
   if (blocked) refuse(blocked.code, blocked.statusCode, blocked.message);
+
+  /*
+   * After the ordered reasons, not before them. Checking it first put
+   * "no customer" ahead of a hold, so a bill somebody had deliberately
+   * stopped reported the wrong cause — and on a fixture whose accounts
+   * carry no customer, every bill did. An account with no customer has
+   * no address either, so `whyNotDeliverable` has already refused by
+   * then; this remains for the one case it cannot express.
+   */
+  if (!customer) {
+    refuse(
+      "NO_CUSTOMER",
+      409,
+      `Account ${bill.account.accountNumber} has no customer to send to.`,
+    );
+  }
 
   const inFlight = await prisma.notification.findFirst({
     where: { utilityId, billId: bill.id, status: { in: ["PENDING", "SENDING"] } },

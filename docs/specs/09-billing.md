@@ -288,6 +288,29 @@ Until then the button stays, and automatic *holding* at posting time —
 variance thresholds, exception-flagged reads — belongs with the same
 slice, since both are the rules the brake would run on.
 
+#### Billing one account off cycle
+
+The account's Bills tab used to offer **Generate Bill**, which reads as
+*the* way a bill is made. It is not: a cycle's bills come from a billing
+run, and this path only **assembles unbilled `BillSegment` rows for one
+account** — it rates nothing. On an ordinary account there is nothing to
+assemble, because a run creates segments and assembles the bill in the
+same pass, so the button mostly answered `NO_SEGMENTS_TO_BILL` whose
+precondition nothing on screen explained.
+
+Renamed **Bill off cycle**, with the dialog naming the usual path and
+what this one does, and the error now says why there is nothing to
+assemble and where to go instead.
+
+**It no longer posts.** It previously posted immediately per the
+tenant's `autoPostBills`, so the same act moved money or did not
+depending on which screen it was started from — and the screen with
+less context around it was the one that charged the customer straight
+away. A run creates bills for review; so does this. **`autoPostBills`
+now governs nothing**; it is left in the automation config rather than
+quietly deleted, because removing a setting an operator may have turned
+off is its own decision.
+
 #### Bill delivery (Bozeman #132)
 
 A delivery is a **`notification` row**, not a table of its own.

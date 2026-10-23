@@ -255,7 +255,9 @@ export async function generateBillForAccount(
       if (segments.length === 0) {
         throw Object.assign(
           new Error(
-            `No unbilled BillSegments for account ${accountId} in period [${period.periodStart.toISOString().slice(0, 10)}, ${period.periodEnd.toISOString().slice(0, 10)}]`,
+            `Nothing to bill for this account in ${period.periodStart.toISOString().slice(0, 10)} – ${period.periodEnd.toISOString().slice(0, 10)}. ` +
+            "A bill is assembled from unbilled charges, and this account has none in that period — either its cycle's billing run has already billed it, " +
+            "or no charges have been worked out yet. Rate the agreement from its Bill Segments tab, or let the cycle's run do it.",
           ),
           { statusCode: 400, code: "NO_SEGMENTS_TO_BILL" },
         );

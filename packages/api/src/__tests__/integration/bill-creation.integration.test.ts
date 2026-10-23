@@ -241,6 +241,34 @@ describe("POST /api/v1/accounts/:id/bills — Bozeman SFR golden", () => {
    * showing a bare 6.6279 for a gallons meter on an HCF tariff, which
    * is the number the column exists to explain.
    */
+  /*
+   * Billing one account by hand creates a bill for review, exactly as a
+   * run does.
+   *
+   * It used to post immediately, per the tenant's `autoPostBills`, so
+   * the same act moved money or did not depending on which screen it
+   * was started from — and the screen with less context around it was
+   * the one that charged the customer straight away. The dialog now
+   * says it will not post; this is what makes that true.
+   */
+  it("does not post the bill it makes, the way a run does not", async () => {
+    await seedBozemanSegment();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/bills`,
+      headers: headers(),
+      payload: { asOfDate: "2026-05-15" },
+    });
+
+    expect(res.statusCode).toBe(201);
+    const body = JSON.parse(res.body);
+    expect(body.postedAt).toBeNull();
+    // And nothing has moved: no receivable, no balance.
+    const { prisma } = prismaImports;
+    expect(await prisma.ledgerEntry.count({ where: { billId: body.id } })).toBe(0);
+  }, 600_000);
+
   it("returns the unit each line's quantity is counted in", async () => {
     await seedBozemanSegment();
 

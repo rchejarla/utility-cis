@@ -96,7 +96,7 @@ export function BillsTab({ accountId, canEdit }: { accountId: string; canEdit: b
               fontFamily: "inherit",
             }}
           >
-            Generate Bill
+            Bill off cycle
           </button>
         )}
       </div>
@@ -112,7 +112,8 @@ export function BillsTab({ accountId, canEdit }: { accountId: string; canEdit: b
             fontSize: "13px",
           }}
         >
-          No bills yet. Click <b>Generate Bill</b> above to create one for the current period.
+          No bills yet. A cycle&apos;s bills come from a billing run; billing this account
+          on its own is for the exceptions.
         </div>
       ) : (
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -208,8 +209,27 @@ export function BillsTab({ accountId, canEdit }: { accountId: string; canEdit: b
             }}
           >
             <h3 style={{ margin: "0 0 16px", fontSize: "16px", color: "var(--text-primary)" }}>
-              Generate Bill
+              Bill this account off cycle
             </h3>
+            {/*
+              Said before the date field, because the commonest reason
+              to be here is looking for the normal path and not finding
+              it. This one assembles unbilled segments for a single
+              account; it rates nothing, and on an account whose cycle
+              has already run there is usually nothing to assemble.
+            */}
+            <p
+              style={{
+                fontSize: "12px",
+                color: "var(--text-secondary)",
+                margin: "0 0 16px",
+                lineHeight: 1.5,
+              }}
+            >
+              A cycle&apos;s bills are made by a <b>billing run</b>. Use this for an exception —
+              a final bill, or a correction. It will <b>not be posted</b>: review it, then post
+              it, the same way a run works.
+            </p>
             <div style={{ marginBottom: "16px" }}>
               <label
                 style={{ fontSize: "12px", color: "var(--text-muted)", display: "block", marginBottom: "6px" }}

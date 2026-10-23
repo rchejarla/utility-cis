@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
 import { BillsTab } from "../bills-tab";
@@ -112,5 +113,53 @@ describe("Account Bills tab", () => {
     expect(
       screen.getByRole("button", { name: "More actions for B-1001" }),
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * Billing one account by hand, now that runs do the real work.
+ *
+ * The control was called "Generate Bill", which reads as *the* way a
+ * bill is made — and it is not. A cycle's bills come from a billing
+ * run; this makes one bill for one account, off cycle, and it assembles
+ * unbilled segments rather than rating anything. On an ordinary account
+ * there are none, because a run creates segments and assembles the bill
+ * in the same pass, so the button mostly answered an error whose
+ * precondition nothing on screen explained.
+ */
+describe("Bills tab — billing one account off cycle", () => {
+  it("does not call itself the way bills are made", async () => {
+    get.mockResolvedValue([]);
+    renderTab();
+
+    await screen.findByRole("button", { name: /off cycle/i });
+    // "Generate Bill" invites a click from somebody looking for the
+    // normal path, which is the run.
+    expect(screen.queryByRole("button", { name: /^generate bill$/i })).toBeNull();
+  });
+
+  it("says what it will do, and what the usual path is", async () => {
+    get.mockResolvedValue([]);
+    renderTab();
+
+    await userEvent.click(await screen.findByRole("button", { name: /off cycle/i }));
+
+    // The empty state names it too, so match the dialog's own sentence.
+    expect(
+      await screen.findByText(/A cycle's bills are made by a/i),
+    ).toBeInTheDocument();
+    // It will not post: a run creates bills for review and this must
+    // not quietly differ from it. The <b> carries the claim.
+    expect(screen.getByText("not be posted")).toBeInTheDocument();
+  });
+
+  it("points at the empty state without inviting the wrong click", async () => {
+    get.mockResolvedValue([]);
+    renderTab();
+
+    // The empty state used to say "Click Generate Bill above", teaching
+    // the off-cycle path as the normal one.
+    expect(await screen.findByText(/no bills yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/click .*generate bill/i)).toBeNull();
   });
 });
