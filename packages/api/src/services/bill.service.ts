@@ -69,6 +69,14 @@ export interface BillSummary {
    * the summary rather than being fetched separately.
    */
   postedAt: Date | null;
+  /**
+   * Why this bill is held, or null. Carries the account's standing rule
+   * when that is what holds it, so one field answers "can anything
+   * happen to this bill" — the two gates read the same pair.
+   */
+  holdReason: string | null;
+  /** True when the account's rule holds it, not the bill's own reason. */
+  heldByAccount: boolean;
 }
 
 export interface BillWithSegments extends BillSummary {
@@ -321,6 +329,10 @@ async function assembleBillWithSegments(
         orderBy: [{ periodEnd: "asc" }, { id: "asc" }],
         include: { lines: { orderBy: { sortOrder: "asc" } } },
       },
+      // The account's standing hold, so one read answers whether
+      // anything may happen to this bill. Nothing is stamped onto the
+      // bill, so the rule has to be fetched with it.
+      account: { select: { billingHoldReason: true } },
     },
   });
   return {
@@ -339,6 +351,8 @@ async function assembleBillWithSegments(
     billNumber: bill.billNumber,
     createdAt: bill.createdAt,
     postedAt: bill.postedAt,
+    holdReason: bill.holdReason ?? bill.account?.billingHoldReason ?? null,
+    heldByAccount: bill.holdReason === null && !!bill.account?.billingHoldReason,
     segments: bill.segments.map((s) => ({
       id: s.id,
       segmentNumber: s.segmentNumber,
@@ -652,6 +666,7 @@ export async function listBills(
                 organizationName: true;
               };
             };
+            billingHoldReason: true;
           };
         };
         billingCycle: { select: { name: true } };
@@ -679,6 +694,7 @@ export async function listBills(
               organizationName: true,
             },
           },
+          billingHoldReason: true,
         },
       },
       billingCycle: { select: { name: true } },
@@ -691,6 +707,8 @@ export async function listBills(
   return {
     ...page,
     data: page.data.map((b) => ({
+      holdReason: b.holdReason ?? b.account.billingHoldReason ?? null,
+      heldByAccount: b.holdReason === null && !!b.account.billingHoldReason,
       id: b.id,
       utilityId: b.utilityId,
       accountId: b.accountId,
@@ -745,10 +763,15 @@ export async function listBillsForAccount(
   const bills = await prisma.bill.findMany({
     where: { utilityId, accountId },
     orderBy: { periodEnd: "desc" },
-    include: { ledgerEntries: CHARGE_FOR_SETTLEMENT },
+    include: {
+      ledgerEntries: CHARGE_FOR_SETTLEMENT,
+      account: { select: { billingHoldReason: true } },
+    },
   });
   const cutoff = dueDateCutoff();
   return bills.map((b) => ({
+    holdReason: b.holdReason ?? b.account.billingHoldReason ?? null,
+    heldByAccount: b.holdReason === null && !!b.account.billingHoldReason,
     id: b.id,
     utilityId: b.utilityId,
     accountId: b.accountId,

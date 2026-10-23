@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiClient } from "@/lib/api-client";
+import { useToast } from "@/components/ui/toast";
 import { BillPdfButton } from "./bill-pdf-button";
 
 interface SegmentLine {
@@ -42,6 +43,14 @@ interface BillWithSegments {
    * unposted bill and spent a 404 and a 409 toast finding out.
    */
   postedAt: string | null;
+  /**
+   * Why this bill is held, or null. Carries the account's standing rule
+   * when that is what holds it, so one field answers "can anything
+   * happen to this bill".
+   */
+  holdReason: string | null;
+  /** True when the account's rule holds it rather than the bill itself. */
+  heldByAccount: boolean;
   subtotal: string;
   taxes: string;
   credits: string;
@@ -49,20 +58,82 @@ interface BillWithSegments {
   segments: SegmentRow[];
 }
 
+/** One attempt to deliver this bill. */
+interface Delivery {
+  id: string;
+  channel: string;
+  status: string;
+  recipientEmail: string | null;
+  attempts: number;
+  sentAt: string | null;
+  error: string | null;
+  createdAt: string;
+}
+
 const fmt = (s: string) => `$${parseFloat(s).toFixed(2)}`;
 const ymd = (s: string) => s.slice(0, 10);
 
 export function BillDetailDialog({ billId, onClose }: { billId: string; onClose: () => void }) {
+  const { toast } = useToast();
   const [bill, setBill] = useState<BillWithSegments | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deliveries, setDeliveries] = useState<Delivery[]>([]);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    apiClient
+  const load = useCallback(() => {
+    return apiClient
       .get<BillWithSegments>(`/api/v1/bills/${billId}`)
       .then(setBill)
-      .catch(console.error)
-      .finally(() => setLoading(false));
+      .catch(console.error);
   }, [billId]);
+
+  const loadDeliveries = useCallback(() => {
+    return apiClient
+      .get<Delivery[]>(`/api/v1/bills/${billId}/deliveries`)
+      .then(setDeliveries)
+      // The bill still reads fine without its delivery history; a
+      // failure here is not worth taking the dialog down for.
+      .catch(() => setDeliveries([]));
+  }, [billId]);
+
+  useEffect(() => {
+    void Promise.all([load(), loadDeliveries()]).finally(() => setLoading(false));
+  }, [load, loadDeliveries]);
+
+  /*
+   * Hold, release and send all reload the bill rather than patching it
+   * in place: each changes what the others may do, and a second source
+   * of truth about that is how a stale Send button offers to post a bill
+   * somebody just held.
+   */
+  const act = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await fn();
+      await Promise.all([load(), loadDeliveries()]);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "That did not work", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const hold = () => {
+    const reason = window.prompt("Why is this bill being held?")?.trim();
+    // A hold nobody can explain is one nobody can clear, so an empty
+    // reason is a cancelled action rather than a hold with no reason.
+    if (!reason) return;
+    void act(() => apiClient.post(`/api/v1/bills/${billId}/hold`, { reason }));
+  };
+
+  const release = () =>
+    void act(() => apiClient.post(`/api/v1/bills/${billId}/release`, {}));
+
+  const send = () =>
+    void act(async () => {
+      await apiClient.post(`/api/v1/bills/${billId}/deliver`, {});
+      toast("Queued for delivery.", "success");
+    });
 
   return (
     <div
@@ -122,8 +193,116 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
                     billNumber={bill.billNumber}
                   />
                 )}
+                {/*
+                  Send only once posted: an unposted bill is a
+                  calculation nobody owes, and the API refuses it. Held
+                  bills keep the button and are refused with the reason,
+                  rather than hiding it and leaving the operator to
+                  wonder.
+                */}
+                {bill.postedAt && (
+                  <SmallButton onClick={send} disabled={busy} label="Send" />
+                )}
+                {bill.holdReason ? (
+                  !bill.heldByAccount && (
+                    <SmallButton onClick={release} disabled={busy} label="Release" />
+                  )
+                ) : (
+                  <SmallButton onClick={hold} disabled={busy} label="Hold" />
+                )}
               </div>
             </div>
+
+            {/*
+              The hold, said before the numbers. A held bill looks
+              exactly like any other one — same lines, same total — and
+              the only thing that distinguishes it is that nothing can
+              happen to it. Which of the two holds it matters because
+              they are released in different places: Release here clears
+              the bill's own reason and would do nothing to the
+              account's standing rule.
+            */}
+            {bill.holdReason && (
+              <div
+                style={{
+                  background: "var(--warning-subtle)",
+                  border: "1px solid var(--warning)",
+                  borderRadius: "var(--radius)",
+                  padding: "10px 14px",
+                  marginBottom: 16,
+                  fontSize: 12.5,
+                  color: "var(--warning)",
+                }}
+              >
+                <strong>
+                  {bill.heldByAccount
+                    ? "On hold — the account's billing is held"
+                    : "On hold"}
+                </strong>
+                <div style={{ color: "var(--text-secondary)", marginTop: 4 }}>
+                  {bill.holdReason}
+                </div>
+                <div style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 11 }}>
+                  {bill.heldByAccount
+                    ? "It cannot post or be sent until the account's hold is lifted, which is done on the account."
+                    : "It cannot post or be sent until it is released."}
+                </div>
+              </div>
+            )}
+
+            {deliveries.length > 0 && (
+              <div
+                style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius)",
+                  padding: "10px 14px",
+                  marginBottom: 16,
+                  fontSize: 12,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 600,
+                    color: "var(--text-muted)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.05em",
+                    marginBottom: 6,
+                  }}
+                >
+                  Delivery
+                </div>
+                {deliveries.map((d) => (
+                  <div key={d.id} style={{ marginBottom: 4 }}>
+                    <span
+                      style={{
+                        fontWeight: 600,
+                        color:
+                          d.status === "SENT"
+                            ? "var(--success)"
+                            : d.status === "FAILED"
+                              ? "var(--danger)"
+                              : "var(--text-muted)",
+                      }}
+                    >
+                      {d.status}
+                    </span>{" "}
+                    <span style={{ color: "var(--text-secondary)" }}>
+                      {d.recipientEmail ?? "—"}
+                    </span>
+                    <span style={{ color: "var(--text-muted)" }}>
+                      {" · "}
+                      {ymd(d.sentAt ?? d.createdAt)}
+                    </span>
+                    {/* The reason a bounce is worth a row of its own:
+                        the bill looks sent and is not. */}
+                    {d.error && (
+                      <div style={{ color: "var(--danger)", fontSize: 11 }}>{d.error}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
 
             {bill.segments.map((seg) => (
               <div
@@ -219,3 +398,35 @@ const btn: React.CSSProperties = {
   cursor: "pointer",
   fontFamily: "inherit",
 };
+
+/** The dialog's own action button, matching BillPdfButton's weight. */
+function SmallButton({
+  onClick,
+  disabled,
+  label,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  label: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: "6px 12px",
+        fontSize: 12,
+        fontWeight: 500,
+        background: "transparent",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        color: "var(--text-primary)",
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.6 : 1,
+        fontFamily: "inherit",
+      }}
+    >
+      {label}
+    </button>
+  );
+}

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
 import { BillDetailDialog } from "../bill-detail-dialog";
 
@@ -29,8 +30,10 @@ function line(over: Record<string, unknown> = {}) {
   };
 }
 
-function bill(lines: Array<Record<string, unknown>>) {
+function bill(lines: Array<Record<string, unknown>>, over: Record<string, unknown> = {}) {
   return {
+    holdReason: null,
+    heldByAccount: false,
     id: "b-1",
     billNumber: "BILL-202610-0001000-00",
     periodStart: "2026-08-16",
@@ -42,6 +45,7 @@ function bill(lines: Array<Record<string, unknown>>) {
     taxes: "0.0000",
     credits: "0.0000",
     total: "37.8854",
+    ...over,
     segments: [
       {
         id: "s-1",
@@ -57,6 +61,15 @@ function bill(lines: Array<Record<string, unknown>>) {
   };
 }
 
+/** The dialog raises toasts on hold, release and send, so it needs the provider. */
+function renderDialog() {
+  return render(
+    <ToastProvider>
+      <BillDetailDialog billId="b-1" onClose={() => {}} />
+    </ToastProvider>,
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -64,7 +77,7 @@ beforeEach(() => {
 describe("Bill detail — charge lines", () => {
   it("prints the unit the quantity is counted in", async () => {
     get.mockResolvedValue(bill([line()]));
-    render(<BillDetailDialog billId="b-1" onClose={() => {}} />);
+    renderDialog();
 
     expect(await screen.findByText("4.71 HCF")).toBeInTheDocument();
   });
@@ -82,7 +95,7 @@ describe("Bill detail — charge lines", () => {
         }),
       ]),
     );
-    render(<BillDetailDialog billId="b-1" onClose={() => {}} />);
+    renderDialog();
 
     expect(await screen.findByText("1.00 MONTH")).toBeInTheDocument();
   });
@@ -94,7 +107,7 @@ describe("Bill detail — charge lines", () => {
    */
   it("shows the bare quantity when the tariff names no unit", async () => {
     get.mockResolvedValue(bill([line({ unit: null })]));
-    render(<BillDetailDialog billId="b-1" onClose={() => {}} />);
+    renderDialog();
 
     expect(await screen.findByText("4.71")).toBeInTheDocument();
     expect(screen.queryByText(/null/)).not.toBeInTheDocument();
@@ -102,8 +115,106 @@ describe("Bill detail — charge lines", () => {
 
   it("shows a dash where there is no quantity at all", async () => {
     get.mockResolvedValue(bill([line({ quantity: null, unit: null })]));
-    render(<BillDetailDialog billId="b-1" onClose={() => {}} />);
+    renderDialog();
 
     expect(await screen.findByText("—")).toBeInTheDocument();
+  });
+});
+
+/**
+ * Hold and send, where an operator actually meets them.
+ *
+ * Both were API-only: a bill could be held, released and queued for
+ * delivery, and none of it was reachable from the app. The dialog is
+ * the one screen that already shows a bill, so it is where both belong.
+ *
+ * A hold has two possible sources and they are released differently —
+ * the bill's own reason, or the account's standing rule — so the banner
+ * says which. Releasing the wrong one does nothing, and an operator
+ * should not have to guess.
+ */
+describe("Bill detail — holds", () => {
+  it("says a bill is held, and why", async () => {
+    get.mockImplementation((path: string) =>
+      path.includes("/deliveries")
+        ? Promise.resolve([])
+        : Promise.resolve(bill([line()], { holdReason: "Read looks wrong — re-reading" })),
+    );
+    renderDialog();
+
+    expect(await screen.findByText(/on hold/i)).toBeInTheDocument();
+    expect(screen.getByText(/Read looks wrong/)).toBeInTheDocument();
+  });
+
+  it("names the account's rule when that is what holds it", async () => {
+    get.mockImplementation((path: string) =>
+      path.includes("/deliveries")
+        ? Promise.resolve([])
+        : Promise.resolve(
+            bill([line()], {
+              holdReason: "Move-out pending final read",
+              heldByAccount: true,
+            }),
+          ),
+    );
+    renderDialog();
+
+    // Releasing this bill would do nothing — the rule is on the account,
+    // so the banner has to say which of the two holds it.
+    expect(
+      await screen.findByText(/the account's billing is held/i),
+    ).toBeInTheDocument();
+    // And Release is not offered here, because it would clear a reason
+    // this bill does not have.
+    expect(screen.queryByRole("button", { name: /release/i })).toBeNull();
+  });
+
+  it("offers Hold on a bill that is not held", async () => {
+    get.mockImplementation((path: string) =>
+      path.includes("/deliveries") ? Promise.resolve([]) : Promise.resolve(bill([line()])),
+    );
+    renderDialog();
+
+    expect(await screen.findByRole("button", { name: /hold/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /release/i })).toBeNull();
+  });
+});
+
+describe("Bill detail — sending", () => {
+  it("will not offer Send for a bill nobody owes yet", async () => {
+    get.mockImplementation((path: string) =>
+      path.includes("/deliveries")
+        ? Promise.resolve([])
+        : Promise.resolve(bill([line()], { postedAt: null })),
+    );
+    renderDialog();
+
+    // An unposted bill is a calculation. Posting is the gate before it.
+    await screen.findByText("BILL-202610-0001000-00");
+    expect(screen.queryByRole("button", { name: /^send/i })).toBeNull();
+  });
+
+  it("shows the last attempt and how it went", async () => {
+    get.mockImplementation((path: string) =>
+      path.includes("/deliveries")
+        ? Promise.resolve([
+            {
+              id: "n-1",
+              channel: "EMAIL",
+              status: "FAILED",
+              recipientEmail: "jane.smith@example.com",
+              attempts: 1,
+              sentAt: null,
+              error: "mailbox unavailable",
+              createdAt: "2026-10-23T09:00:00.000Z",
+            },
+          ])
+        : Promise.resolve(bill([line()], { postedAt: "2026-10-01T00:00:00.000Z" })),
+    );
+    renderDialog();
+
+    // A bounce is the thing worth seeing: the bill looks sent and is not.
+    expect(await screen.findByText(/mailbox unavailable/)).toBeInTheDocument();
+    expect(screen.getByText(/jane.smith@example.com/)).toBeInTheDocument();
   });
 });
