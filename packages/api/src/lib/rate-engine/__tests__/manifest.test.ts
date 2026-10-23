@@ -111,6 +111,27 @@ describe("manifest()", () => {
     expect(keys).toEqual(["index:cpi:2026-01"]);
   });
 
+  /*
+   * The manifest decides which index row gets loaded; the evaluator
+   * decides which one it then reads. Two copies of the period
+   * arithmetic have to agree, so this case is the evaluator's UTC case
+   * asked of the manifest: disagree, and the loader fetches a key
+   * nothing looks up while rating throws for a key nothing fetched.
+   */
+  it("resolves the quarter of a UTC-midnight start in UTC", () => {
+    const c = mkComponent({
+      pricing: {
+        type: "indexed",
+        index_name: "supply_residential",
+        period_resolver: "current_quarter",
+      },
+    });
+    const keys = manifest(
+      mkBase([mkAssignment("rs-1", [c])], new Date("2025-01-01T00:00:00Z")),
+    );
+    expect(keys).toEqual(["index:supply_residential:2025-Q1"]);
+  });
+
   it("resolves indexed pricing with fixed period", () => {
     const c = mkComponent({
       pricing: {

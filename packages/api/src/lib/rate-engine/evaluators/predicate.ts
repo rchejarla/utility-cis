@@ -1,5 +1,6 @@
 import type { RatingContext } from "../types.js";
 import { UnsupportedInSlice3Error } from "../types.js";
+import { seasonOf } from "../period.js";
 
 type Predicate = Record<string, unknown>;
 
@@ -108,7 +109,5 @@ function inferMeterId(ctx: RatingContext): string | undefined {
 }
 
 function computeSeason(period: { startDate: Date; endDate: Date }): string {
-  const month = period.startDate.getMonth(); // 0-indexed
-  if (month >= 4 && month <= 9) return "summer"; // May–Oct
-  return "winter"; // Nov–Apr
+  return seasonOf(period.startDate);
 }

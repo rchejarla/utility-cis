@@ -1,4 +1,5 @@
 import type { BaseContext, VariableKey } from "./types.js";
+import { monthOf, quarterOf, yearOf } from "./period.js";
 
 /**
  * Walk the active components on `base.assignments` and collect every variable
@@ -109,11 +110,11 @@ function resolvePeriod(
   const p = base.period.startDate;
   switch (resolver) {
     case "current_quarter":
-      return `${p.getFullYear()}-Q${Math.floor(p.getMonth() / 3) + 1}`;
+      return quarterOf(p);
     case "current_month":
-      return `${p.getFullYear()}-${String(p.getMonth() + 1).padStart(2, "0")}`;
+      return monthOf(p);
     case "current_year":
-      return String(p.getFullYear());
+      return yearOf(p);
     case "fixed":
       return fixedPeriod ?? "";
     default:

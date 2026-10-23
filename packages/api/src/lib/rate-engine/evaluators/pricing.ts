@@ -1,7 +1,7 @@
 import { Decimal, ZERO, HUNDRED, toDecimal } from "../decimal.js";
 import type { LineItem, RatingContext } from "../types.js";
 import { evaluateSelector } from "./selectors.js";
-import { daysIn } from "../period.js";
+import { daysIn, monthOf, quarterOf, yearOf } from "../period.js";
 
 type Pricing = Record<string, unknown> & { type: string };
 
@@ -153,15 +153,12 @@ function resolvePeriod(
 ): string {
   const p = ctx.base.period.startDate;
   switch (resolver) {
-    case "current_quarter": {
-      const month = p.getMonth();
-      const q = Math.floor(month / 3) + 1;
-      return `${p.getFullYear()}-Q${q}`;
-    }
+    case "current_quarter":
+      return quarterOf(p);
     case "current_month":
-      return `${p.getFullYear()}-${String(p.getMonth() + 1).padStart(2, "0")}`;
+      return monthOf(p);
     case "current_year":
-      return String(p.getFullYear());
+      return yearOf(p);
     case "fixed":
       if (!fixedPeriod) throw new Error("fixed period_resolver requires fixed_period");
       return fixedPeriod;

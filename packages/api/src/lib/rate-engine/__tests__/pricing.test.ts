@@ -487,6 +487,61 @@ describe("applyPricing — floor", () => {
   });
 });
 
+/**
+ * The period a date falls in is the UTC one.
+ *
+ * A service period's start comes from a `@db.Date` column — an
+ * agreement's start date, or the day after the last billed read — and
+ * Prisma hands those back as UTC midnight. Read with local getters,
+ * UTC midnight on 1 January is 31 December anywhere west of Greenwich,
+ * so an agreement starting 2025-01-01 asks the index for 2024-Q4: a
+ * quarter in the wrong year, and one no utility would have published.
+ *
+ * The cases below construct the dates the way the database produces
+ * them. The older cases in this file build theirs with `new Date(y, m,
+ * d)`, which is local midnight and therefore cannot show the fault.
+ * These assert the same values in any zone; they only *fail* west of
+ * Greenwich, which is where the bug was found.
+ */
+describe("applyPricing — period resolvers read dates in UTC", () => {
+  const utcMidnight = (iso: string) => ({
+    period: { startDate: new Date(`${iso}T00:00:00Z`), endDate: new Date(`${iso}T00:00:00Z`) },
+  });
+
+  it("resolves the quarter of a UTC-midnight start, not the previous evening's", () => {
+    const vars = new Map<string, unknown>([["index:supply:2025-Q1", 0.1]]);
+    const result = applyPricing(
+      { type: "indexed", index_name: "supply", period_resolver: "current_quarter" },
+      new Decimal(10),
+      [],
+      makeCtx(utcMidnight("2025-01-01"), vars),
+    );
+    expect(result.toString()).toBe("1");
+  });
+
+  it("resolves the month of a UTC-midnight start", () => {
+    const vars = new Map<string, unknown>([["index:supply:2025-01", 0.1]]);
+    const result = applyPricing(
+      { type: "indexed", index_name: "supply", period_resolver: "current_month" },
+      new Decimal(10),
+      [],
+      makeCtx(utcMidnight("2025-01-01"), vars),
+    );
+    expect(result.toString()).toBe("1");
+  });
+
+  it("resolves the year of a UTC-midnight start", () => {
+    const vars = new Map<string, unknown>([["index:supply:2025", 0.1]]);
+    const result = applyPricing(
+      { type: "indexed", index_name: "supply", period_resolver: "current_year" },
+      new Decimal(10),
+      [],
+      makeCtx(utcMidnight("2025-01-01"), vars),
+    );
+    expect(result.toString()).toBe("1");
+  });
+});
+
 describe("applyPricing — unknown type", () => {
   it("throws clear error", () => {
     expect(() =>

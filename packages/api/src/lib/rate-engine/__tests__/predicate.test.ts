@@ -148,6 +148,36 @@ describe("evaluatePredicate", () => {
     expect(evaluatePredicate({ season: "summer" }, ctx)).toBe(false);
   });
 
+  /*
+   * A period start arrives from a `@db.Date` column as UTC midnight.
+   * The two cases above build theirs with `new Date(y, m, d)` — local
+   * midnight — so they cannot see the fault: read with local getters,
+   * UTC midnight on 1 May is 30 April west of Greenwich, and a summer
+   * period gets billed at winter rates. Summer water is the dearer of
+   * the two, so the error is money.
+   */
+  it("season reads a UTC-midnight start in UTC — 1 May is summer", () => {
+    const ctx = makeCtx({
+      period: {
+        startDate: new Date("2026-05-01T00:00:00Z"),
+        endDate: new Date("2026-05-31T00:00:00Z"),
+      },
+    });
+    expect(evaluatePredicate({ season: "summer" }, ctx)).toBe(true);
+    expect(evaluatePredicate({ season: "winter" }, ctx)).toBe(false);
+  });
+
+  it("season reads a UTC-midnight start in UTC — 1 November is winter", () => {
+    const ctx = makeCtx({
+      period: {
+        startDate: new Date("2026-11-01T00:00:00Z"),
+        endDate: new Date("2026-11-30T00:00:00Z"),
+      },
+    });
+    expect(evaluatePredicate({ season: "winter" }, ctx)).toBe(true);
+    expect(evaluatePredicate({ season: "summer" }, ctx)).toBe(false);
+  });
+
   it("drought_stage_active: true matches when var is truthy", () => {
     const vars = new Map<string, unknown>([["tenant:drought_stage", 2]]);
     expect(
