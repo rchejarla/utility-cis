@@ -34,6 +34,10 @@ interface BillSummary {
   overdue: boolean;
   partPaid: boolean;
   charge: { entryId: string; openAmount: string; reversed: boolean } | null;
+  /** Why this bill cannot be sent, or null when it is ready. */
+  blockedReason: string | null;
+  /** The newest delivery attempt, which decides Send versus Resend. */
+  delivery: { status: string; sentAt: string | null; error: string | null } | null;
 }
 
 const fmt = (s: string) => `$${parseFloat(s).toFixed(2)}`;

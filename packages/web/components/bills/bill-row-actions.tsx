@@ -42,6 +42,13 @@ export interface BillActionFields {
   postedAt: string | null;
   accountId: string;
   charge: { entryId: string; openAmount: string; reversed: boolean } | null;
+  /**
+   * Why this bill cannot be sent, or null when it is ready. From the
+   * same rule the API refuses by, so the menu and the refusal agree.
+   */
+  blockedReason: string | null;
+  /** The newest attempt, which decides Send versus Resend. */
+  delivery: { status: string; sentAt: string | null; error: string | null } | null;
 }
 
 /** Carried over unchanged from the bills page, so the row looks the same. */
@@ -127,6 +134,16 @@ export function BillRowActions({
     }
   }
 
+  async function send() {
+    try {
+      await apiClient.post(`/api/v1/bills/${bill.id}/deliver`, {});
+      toast(`${bill.billNumber} queued for delivery.`, "success");
+      onChanged();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not send", "error");
+    }
+  }
+
   const items: ActionMenuItem[] = [];
   const open = bill.charge && !bill.charge.reversed && Number(bill.charge.openAmount) > 0;
 
@@ -146,6 +163,25 @@ export function BillRowActions({
       label: "Take payment on account",
       title: "Allocated oldest-first across what the account owes, not to this bill alone",
       onSelect: () => setPayFor(true),
+    });
+  }
+  /*
+   * Sending is behind More for the reason this menu exists: a row reads
+   * as a list of bills, and an action reached now and then belongs a
+   * deliberate click away rather than loose beside View Bill.
+   *
+   * Absent entirely when the bill cannot go — the Delivery column
+   * beside it already says why, and an item that fails on click would
+   * add nothing. `blockedReason` comes from the same rule the API
+   * refuses by, so the menu and the refusal cannot disagree.
+   */
+  if (canEdit && bill.blockedReason === null) {
+    items.push({
+      label: bill.delivery ? "Resend" : "Send",
+      title: bill.delivery
+        ? "Queue this bill for delivery again; the earlier attempt stays on the record"
+        : "Queue this bill for delivery to its customer",
+      onSelect: () => void send(),
     });
   }
   if (canEdit && bill.postedAt) {

@@ -586,30 +586,41 @@ describe("Bills — delivery", () => {
 });
 
 describe("Bills — sending from the list", () => {
-  it("offers Send on a bill that is ready", async () => {
+  /** The row's overflow menu, where the less-common actions live. */
+  async function openMore() {
+    await userEvent.click(
+      await screen.findByRole("button", { name: /more actions for B-1001/i }),
+    );
+  }
+
+  it("offers Send behind More for a bill that is ready", async () => {
     get.mockResolvedValue(
       payload([bill({ delivery: null, blockedReason: null, postedAt: "2026-03-01" })]),
     );
     renderPage();
+    await screen.findByText("B-1001");
 
-    expect(
-      await screen.findByRole("button", { name: /send bill B-1001/i }),
-    ).toBeEnabled();
+    // Not loose beside View Bill: a row reads as a list of bills, and an
+    // action used now and then belongs a deliberate click away.
+    expect(screen.queryByRole("button", { name: /^send$/i })).toBeNull();
+    await openMore();
+    expect(await screen.findByRole("menuitem", { name: /^send$/i })).toBeInTheDocument();
   });
 
-  it("will not offer it for a bill that cannot go", async () => {
+  it("does not offer it at all for a bill that cannot go", async () => {
     get.mockResolvedValue(
       payload([bill({ delivery: null, blockedReason: "NO_BILL_DOCUMENT" })]),
     );
     renderPage();
-
     await screen.findByText("B-1001");
-    // A button that is always live and fails on click is worse than one
-    // that says why it cannot.
-    expect(screen.queryByRole("button", { name: /send bill B-1001/i })).toBeNull();
+    await openMore();
+
+    // The cell beside it already says "no PDF"; an item that fails on
+    // click would add nothing.
+    expect(screen.queryByRole("menuitem", { name: /send/i })).toBeNull();
   });
 
-  it("offers a resend after a bounce, which is the job after reading that column", async () => {
+  it("says Resend once an attempt has been made", async () => {
     get.mockResolvedValue(
       payload([
         bill({
@@ -619,9 +630,9 @@ describe("Bills — sending from the list", () => {
       ]),
     );
     renderPage();
+    await screen.findByText("B-1001");
+    await openMore();
 
-    expect(
-      await screen.findByRole("button", { name: /resend bill B-1001/i }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("menuitem", { name: /^resend$/i })).toBeInTheDocument();
   });
 });

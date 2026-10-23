@@ -340,14 +340,6 @@ function Bills() {
                     {showActions && (
                       <Td>
                         <BillRowActions bill={b} onChanged={() => void load()} />
-                        {/*
-                          Only when it can actually go. A button that is
-                          always live and fails on click is worse than
-                          one whose absence the cell beside it explains.
-                        */}
-                        {b.blockedReason === null && (
-                          <SendBillButton bill={b} onSent={() => void load()} />
-                        )}
                       </Td>
                     )}
                   </tr>
@@ -566,45 +558,3 @@ const BLOCKED_LABELS: Record<string, string> = {
   BILL_NOT_POSTED: "not posted",
   NO_CUSTOMER: "no customer",
 };
-
-/** Send, or resend after a bounce — the job after reading the column beside it. */
-function SendBillButton({ bill, onSent }: { bill: BillRow; onSent: () => void }) {
-  const { toast } = useToast();
-  const [busy, setBusy] = useState(false);
-  const resend = bill.delivery !== null;
-
-  const send = async () => {
-    setBusy(true);
-    try {
-      await apiClient.post(`/api/v1/bills/${bill.id}/deliver`, {});
-      toast(`${bill.billNumber} queued for delivery.`, "success");
-      onSent();
-    } catch (err) {
-      toast(err instanceof Error ? err.message : "Could not send", "error");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <button
-      onClick={() => void send()}
-      disabled={busy}
-      aria-label={`${resend ? "Resend" : "Send"} bill ${bill.billNumber}`}
-      style={{
-        marginLeft: 6,
-        padding: "3px 8px",
-        fontSize: 11,
-        background: "transparent",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius)",
-        color: "var(--text-primary)",
-        cursor: busy ? "default" : "pointer",
-        opacity: busy ? 0.6 : 1,
-        fontFamily: "inherit",
-      }}
-    >
-      {resend ? "Resend" : "Send"}
-    </button>
-  );
-}
