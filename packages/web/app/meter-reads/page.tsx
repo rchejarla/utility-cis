@@ -16,6 +16,8 @@ interface MeterRead {
   exceptionCode?: string | null;
   isFrozen: boolean;
   meter?: { meterNumber: string; commodityId: string };
+  /** The read's own unit — a register's, where one is named. */
+  uom?: { code: string; name: string } | null;
   serviceAgreement?: { agreementNumber: string };
 }
 
@@ -80,6 +82,18 @@ const columns: Column<MeterRead>[] = [
     render: (row) => (
       <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "12px", fontVariantNumeric: "tabular-nums" }}>
         {fmtNumber(row.reading)}
+      </span>
+    ),
+  },
+  {
+    // One column for both numbers beside it, since a reading and the
+    // consumption derived from it are always in the same unit. Said
+    // once rather than twice.
+    key: "uom",
+    header: "UOM",
+    render: (row) => (
+      <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+        {row.uom?.code ?? "—"}
       </span>
     ),
   },

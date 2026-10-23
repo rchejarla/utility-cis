@@ -45,6 +45,8 @@ interface MeterReadDetail {
   readerId?: string | null;
   createdAt: string;
   updatedAt: string;
+  /** The read's own unit — a register's, where one is named. */
+  uom?: { code: string; name: string } | null;
   meter?: {
     id: string;
     meterNumber: string;
@@ -550,7 +552,17 @@ export default function MeterReadDetailPage({ params }: PageProps) {
           <KeyValue label="READING" value={fmtNumber(read.reading)} emphasis />
           <KeyValue label="PRIOR" value={fmtNumber(read.priorReading)} muted />
           <KeyValue label="× MULTIPLIER" value={multiplier} muted />
-          <KeyValue label="= CONSUMPTION" value={fmtNumber(read.consumption)} emphasis accent="var(--success)" />
+          {/*
+            The unit goes on the consumption, not on all three: reading,
+            prior and consumption are the same unit by construction, and
+            the consumption is the figure that gets billed.
+          */}
+          <KeyValue
+            label="= CONSUMPTION"
+            value={`${fmtNumber(read.consumption)}${read.uom ? ` ${read.uom.code}` : ""}`}
+            emphasis
+            accent="var(--success)"
+          />
         </div>
         <div
           style={{

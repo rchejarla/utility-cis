@@ -46,6 +46,17 @@ const fullInclude = {
       },
     },
   },
+  /*
+   * The read's own unit, not the meter's.
+   *
+   * They differ: a read taken against a register carries that
+   * register's uom_id, which is the whole reason a multi-register
+   * electric meter can log kW demand and kWh usage side by side. A log
+   * of bare numbers cannot be read across commodities at all, and since
+   * rating began converting — gallons on the meter, HCF on the tariff —
+   * the unit is what connects a reading here to the quantity on a bill.
+   */
+  uom: { select: { id: true, code: true, name: true } },
   register: true,
 } as const;
 
