@@ -41,6 +41,13 @@ export interface MailAttachmentRef {
 }
 
 export interface MailMessage {
+  /**
+   * The sender. Omitted when the tenant has not set one, in which case
+   * the connection's own `from` property is used — and if it has none
+   * either, apptor-connect refuses with CONFIG_INVALID rather than
+   * sending from something arbitrary.
+   */
+  from?: string | null;
   to: string[];
   subject?: string | null;
   body: string;
@@ -71,6 +78,10 @@ export async function sendMail(
     to: message.to,
     body: message.body,
   };
+  // Blank and missing are different to them: a blank `from` falls back
+  // to the connection just as an absent one does, so there is no reason
+  // to send an empty string.
+  if (message.from) body.from = message.from;
   if (message.subject) body.subject = message.subject;
   if (message.html) body.html = true;
   if (opts.connection) body.cn = opts.connection;

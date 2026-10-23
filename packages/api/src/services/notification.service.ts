@@ -266,6 +266,11 @@ function getProvider(
   return new ApptorConnectMailProvider(
     integration,
     parsed.data.mailConnection?.trim() || null,
+    // The address the customer sees. Left unset, the connection's own
+    // `from` is used; with neither, apptor-connect refuses rather than
+    // inventing a sender — which is the right failure, and the one this
+    // setting exists to prevent.
+    parsed.data.senderEmail?.trim() || null,
   );
 }
 
@@ -276,6 +281,7 @@ class ApptorConnectMailProvider implements NotificationProvider {
   constructor(
     private readonly integration: string,
     private readonly connection: string | null,
+    private readonly from: string | null,
   ) {}
 
   async send(
@@ -286,7 +292,7 @@ class ApptorConnectMailProvider implements NotificationProvider {
   ): Promise<{ messageId: string | null }> {
     return sendMail(
       this.integration,
-      { to: [to], subject, body, attachments },
+      { from: this.from, to: [to], subject, body, attachments },
       { connection: this.connection },
     );
   }

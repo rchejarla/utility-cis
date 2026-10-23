@@ -100,6 +100,27 @@ describe("sendMail", () => {
     expect(att).not.toHaveProperty("connection");
   });
 
+  /*
+   * Measured against the running service on 2026-10-23: without a
+   * sender, `mail@tenant:acme` answers 500 CONFIG_INVALID — "no sender:
+   * the request has no 'from' and the connection has no 'from'
+   * property". The tenant's `notifications.senderEmail` is what fills
+   * it, and a blank one is omitted rather than sent, because blank and
+   * missing both fall back to the connection on their side.
+   */
+  it("sends the tenant's sender, and omits it rather than sending blank", async () => {
+    await sendMail("mail", {
+      from: "billing@utility.example",
+      to: ["a@example.com"],
+      body: "x",
+    });
+    expect(sentBody().from).toBe("billing@utility.example");
+
+    fetchMock.mockClear();
+    await sendMail("mail", { from: null, to: ["a@example.com"], body: "x" });
+    expect(sentBody()).not.toHaveProperty("from");
+  });
+
   it("passes a connection when one narrows the choice", async () => {
     await sendMail(
       "mail",
