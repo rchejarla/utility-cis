@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { apiClient } from "@/lib/api-client";
 import { PageHeader } from "@/components/ui/page-header";
 import { useCluster } from "@/components/cluster/use-cluster";
@@ -35,11 +35,40 @@ const HIDE_SM = "col-hide-sm";
  * `docs/specs/24-platform-worker-control.md`.
  */
 export default function ClusterWorkersPage() {
-  const { report, error, setReport } = useCluster();
+  const { report, error, setReport, reload } = useCluster();
   const [busy, setBusy] = useState(false);
+  /*
+   * Workers that have been asked to drain and have not gone yet.
+   *
+   * The record stays while a worker winds down — a drain takes up to a
+   * minute, and reporting "stopped" early would have this page
+   * contradict the process table. Without marking the row, the control
+   * looked inert and the honest response was to press it again.
+   */
+  const [draining, setDraining] = useState<string[]>([]);
   const [said, setSaid] = useState<string | null>(null);
 
   const workers = report?.workers ?? [];
+
+  /*
+   * While anything is draining, read again until it has gone.
+   *
+   * The worker exits on its own and the next status read is what
+   * notices; without this the row sat there until a reload, which is
+   * what sent an operator back to the Stop button to press it a second
+   * time. Stops when nothing is draining, so an idle page is idle.
+   */
+  useEffect(() => {
+    if (draining.length === 0) return;
+    const live = new Set(workers.map((w) => w.id));
+    const gone = draining.filter((id) => !live.has(id));
+    if (gone.length > 0) {
+      setDraining((d) => d.filter((id) => live.has(id)));
+      return;
+    }
+    const t = setInterval(() => reload(), 3000);
+    return () => clearInterval(t);
+  }, [draining, workers, reload]);
   /** A worker this node spawned, if any. At most one — the health port. */
   const ourWorker = workers.find((w) => w.node === report?.thisNode);
   const attachedSomewhere = (report?.queues ?? []).some((q) => (q.workers ?? 0) > 0);
@@ -107,7 +136,9 @@ export default function ClusterWorkersPage() {
 
       // Gone only once the process has actually left; a drain can take a
       // minute, and the next read is what notices.
-      if (!result.stopping) {
+      if (result.stopping) {
+        setDraining((d) => (d.includes(id) ? d : [...d, id]));
+      } else {
         setReport((r) => ({ ...r, workers: r.workers.filter((w) => w.id !== id) }));
       }
     } catch (err) {
@@ -214,6 +245,11 @@ export default function ClusterWorkersPage() {
                         <td style={{ ...cellStyle, whiteSpace: "nowrap" }}>
                           {!worker ? (
                             <span style={{ color: "var(--warning)" }}>no worker</span>
+                          ) : draining.includes(worker.id) ? (
+                            /* Asked to drain and not gone yet. A drain
+                               runs to the end of the job in flight, so
+                               this can sit here for up to a minute. */
+                            <span style={{ color: "var(--warning)" }}>stopping…</span>
                           ) : worker.attached ? (
                             <span style={{ color: "var(--success)" }}>attached</span>
                           ) : (
@@ -266,7 +302,10 @@ export default function ClusterWorkersPage() {
                               label="Stop"
                               ariaLabel={`Stop worker on ${host}`}
                               loud
-                              busy={busy}
+                              // A second press is harmless but teaches
+                              // an operator the control cannot be
+                              // trusted: it is already stopping.
+                              busy={busy || draining.includes(worker.id)}
                               onClick={() => stopWorker(worker.id)}
                             />
                           ) : worker ? (

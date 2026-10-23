@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { apiClient } from "@/lib/api-client";
 import ClusterWorkersPage from "../page";
@@ -305,6 +305,74 @@ describe("the cluster workers page", () => {
     expect(post).toHaveBeenCalledWith("/api/v1/platform/workers/4a1f/stop", {});
     expect(await screen.findByText(/draining/i)).toBeInTheDocument();
   });
+
+  /**
+   * A drain takes up to a minute, and the row has to show it.
+   *
+   * The record is deliberately left in place while the worker winds
+   * down — reporting "stopped" would have this page contradict the
+   * process table. But the row looked untouched and its Stop button
+   * stayed live, so the control read as broken and the honest response
+   * was to click it again. A second press is harmless, and "click it
+   * twice and it works" is exactly how a control loses trust.
+   */
+  it("marks the row as draining and will not take a second press", async () => {
+    get.mockResolvedValue(
+      report({
+        thisNode: "dev-box",
+        workers: [workerView({ id: "4a1f", node: "dev-box", stoppable: true })],
+      }),
+    );
+    post.mockResolvedValue({
+      id: "4a1f",
+      node: "dev-box",
+      pid: 4242,
+      stopping: true,
+      method: "drain",
+      drained: true,
+    });
+
+    render(<ClusterWorkersPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /stop worker on dev-box/i }));
+
+    // The row's own cell, matched exactly: the page also carries a
+    // static line — "Stopping asks the worker to finish what it is
+    // holding first." — and a loose /stopping/i matched that whatever
+    // the row did, which made this assertion pass against a row that
+    // said nothing.
+    expect(await screen.findByText("stopping…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /stop worker on dev-box/i })).toBeDisabled();
+  });
+
+  it("clears the row once the worker has actually gone", async () => {
+    get.mockResolvedValue(
+      report({
+        thisNode: "dev-box",
+        workers: [workerView({ id: "4a1f", node: "dev-box", stoppable: true })],
+      }),
+    );
+    post.mockResolvedValue({
+      id: "4a1f",
+      node: "dev-box",
+      pid: 4242,
+      stopping: true,
+      method: "drain",
+      drained: true,
+    });
+
+    render(<ClusterWorkersPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /stop worker on dev-box/i }));
+    await screen.findByText("stopping…");
+
+    // The worker exits; the next read no longer lists it. The page has
+    // to notice by itself — waiting for a reload is what sent an
+    // operator back to the button.
+    get.mockResolvedValue(report({ thisNode: "dev-box", workers: [] }));
+
+    await waitFor(() => expect(screen.queryByText("stopping…")).toBeNull(), {
+      timeout: 8000,
+    });
+  }, 15_000);
 
   it("says plainly when a worker had to be cut off instead of drained", async () => {
     // The fallback: a wedged worker that no longer answers its own HTTP
