@@ -1,0 +1,29 @@
+-- What a bill line's quantity is counted in.
+--
+-- The rate engine converts a metered quantity into the unit its tariff
+-- is written in: Bozeman publishes water rates per HCF and the meters
+-- are gallons, so a 4,958-gallon month is billed as 6.6279. Stored
+-- without the unit, that figure matches nothing the customer can read
+-- off their own meter, and nothing on the bill says which of the two it
+-- is.
+--
+-- Stored rather than derived. bill_segment_line already carries
+-- source_component_id, and the unit could be read from that component's
+-- pricing at render time — but a bill line is a record of what was
+-- charged, and that row is mutable: republish a tariff in different
+-- terms and every historical bill silently relabels its quantities. The
+-- engine already snapshots components for this reason. The unit belongs
+-- beside the quantity it describes.
+--
+-- Nullable, and left NULL on existing rows. A component that names no
+-- unit has none to record, which is the common case for a flat charge
+-- ("1" of a service charge is one service charge), and backfilling the
+-- rows already here would mean guessing which unit a past bill was
+-- rated in — the very ambiguity this column exists to remove. A bill
+-- written before this migration says nothing about its units because it
+-- genuinely recorded nothing.
+--
+-- VarChar(20) to match unit_of_measure.code's own width, since the
+-- values come from the same vocabulary (GAL, HCF, KWH, MONTH, ERU).
+
+ALTER TABLE "bill_segment_line" ADD COLUMN "unit" VARCHAR(20);

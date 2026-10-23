@@ -10,6 +10,8 @@ interface SegmentLine {
   kindCode: string;
   amount: string;
   quantity: string | null;
+  /** What the quantity counts — the tariff's unit, not always the meter's. */
+  unit: string | null;
   sortOrder: number;
 }
 
@@ -161,7 +163,9 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
                           </span>
                         </td>
                         <td style={{ ...td, textAlign: "right", fontFamily: "monospace" }}>
-                          {l.quantity ? parseFloat(l.quantity).toFixed(2) : "—"}
+                          {l.quantity
+                            ? `${parseFloat(l.quantity).toFixed(2)}${l.unit ? ` ${l.unit}` : ""}`
+                            : "—"}
                         </td>
                         <td style={{ ...td, textAlign: "right", fontFamily: "monospace" }}>
                           {fmt(l.amount)}

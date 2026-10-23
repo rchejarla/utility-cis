@@ -65,6 +65,7 @@ period's allowance until the schedule says what a standard period is. See
 Differences worth noting against the superseded design:
 
 - Line items are **rows** (`BillSegmentLine`), not a `charge_breakdown` JSONB blob, so a line can be traced to the exact `RateSchedule` version and `RateComponent` that produced it.
+- A line carries a **`unit`** beside its `quantity` (nullable `VARCHAR(20)`, added 2026-10-23), naming what the quantity counts. It is the unit the *tariff* is written in, which is not always the meter's: Bozeman publishes water rates per HCF while the meters are `GAL`, and the rate engine converts between them (`rate-engine/units.ts`), so a 4,958-gallon month bills as 6.6279 and a bare 6.6279 on a bill reconciles with nothing the customer can read off their meter. Stored rather than read from `source_component_id` at render time, because a bill line is a record of what was charged and a rate component is mutable — republish a tariff in other terms and every historical bill would silently relabel its quantities. Null where the component names no unit, and null on rows written before the column existed, which recorded nothing to backfill from.
 - Amounts are `DECIMAL(14,4)`, not `DECIMAL(10,2)` — rating needs sub-cent precision before rounding.
 - There is no `saaslogic_invoice_id` on the charge record. CIS owns the bill; see module 21.
 - No status enum yet. A `Bill` existing means it was issued. `DRAFT`/`VOID` arrive when generation and delivery need them.

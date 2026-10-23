@@ -1141,7 +1141,7 @@ Rating and billing (shipped — Rate Model v2 slices 1–5b.2, plus bill product
 - **Declarative rate engine** (`packages/api/src/lib/rate-engine`) — a `RateComponent` carries `predicate`, `quantitySource` and `pricing` as JSON validated by a shared Zod grammar, so tariffs are data rather than code. Components are topologically sorted, gated by predicate, priced, and `minimum_bill` floors apply as a separate stage after the main pass.
 - **Variable loaders** (`lib/rate-engine-loaders`) — account, meter, premise, tenant, index, WQA, linked-commodity and items loaders hydrate the rating context. This is how "wastewater as a share of winter-average water, excluding irrigation" becomes configuration.
 - **Versioned schedules** — `RateSchedule` carries an explicit publish state and a `supersedes`/`supersededBy` chain, with a visual component editor in the web app.
-- **Charges** — `BillSegment` + `BillSegmentLine` per agreement per period (slice 5a); account-level `Bill` aggregating segments (slice 5b.2). Each line is traceable to the exact schedule version and component that produced it.
+- **Charges** — `BillSegment` + `BillSegmentLine` per agreement per period (slice 5a); account-level `Bill` aggregating segments (slice 5b.2). Each line is traceable to the exact schedule version and component that produced it, and carries the `unit` its `quantity` is counted in — the tariff's unit, which the rate engine converts a meter's reading into (HCF tiers, gallon meters).
 - **Golden tests** pin the Bozeman water / sewer / stormwater / solid-waste tariffs and NorthWestern Energy residential electric.
 
 SaaSLogic, reduced to a payment rail and reached over apptor-connect (see `docs/specs/21-saaslogic-billing.md` and §3.6):

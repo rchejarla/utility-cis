@@ -24,6 +24,14 @@ export interface BillPresentationIssuer {
 
 export interface BillPresentationLine {
   label: string;
+  /**
+   * The quantity as printed, unit and all — "6.63 HCF", not "6.63".
+   *
+   * The engine bills in the unit the tariff is written in, which is not
+   * always the meter's: a gallons meter on an HCF tariff bills 6.6279,
+   * and a customer holding the paper cannot reconcile that with the
+   * meter in their basement unless the bill says which it is.
+   */
   quantity: string | null;
   amount: string;
 }
@@ -248,7 +256,12 @@ export async function loadBillPresentation(
     const commodity = segment.serviceAgreement?.commodity;
     const lines = segment.lines.map((line) => ({
       label: line.label,
-      quantity: line.quantity === null ? null : money(line.quantity),
+      quantity:
+        line.quantity === null
+          ? null
+          : line.unit
+            ? `${money(line.quantity)} ${line.unit}`
+            : money(line.quantity),
       amount: money(line.amount),
     }));
     const subtotal = lines

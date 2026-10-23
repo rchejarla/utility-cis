@@ -153,6 +153,8 @@ export interface BillSegmentLineRow {
   kindCode: string;
   amount: string;       // serialized decimal
   quantity: string | null;
+  /** What `quantity` is counted in, when the tariff names a unit. */
+  unit: string | null;
   sourceScheduleId: string;
   sourceComponentId: string;
   sortOrder: number;
@@ -329,6 +331,7 @@ export async function createBillSegmentForServiceAgreement(
           line.quantity != null
             ? new Prisma.Decimal(decToFixedRequired(line.quantity))
             : null,
+        unit: line.unit ?? null,
         sourceScheduleId: line.sourceScheduleId,
         sourceComponentId: line.sourceComponentId,
         sortOrder: (idx + 1) * 100,
@@ -386,6 +389,7 @@ async function assembleSegmentWithLines(
       kindCode: l.kindCode,
       amount: l.amount.toFixed(4),
       quantity: l.quantity ? l.quantity.toFixed(4) : null,
+      unit: l.unit,
       sourceScheduleId: l.sourceScheduleId,
       sourceComponentId: l.sourceComponentId,
       sortOrder: l.sortOrder,

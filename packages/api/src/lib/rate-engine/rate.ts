@@ -82,6 +82,7 @@ export function rate(ctx: RatingContext): RatingResult {
       sourceScheduleId: c._scheduleId,
       sourceComponentId: c.id,
       quantity: qty,
+      unit: pricing.unit,
       rate: pricing,
     });
     evalTrace.fired = true;

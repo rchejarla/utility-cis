@@ -19,6 +19,7 @@ export function bozemanWaterComponents(): RateComponentSnapshot[] {
       pricing: {
         type: "lookup",
         by: "meter_size",
+        unit: "MONTH",
         table: {
           '5/8"': 22.31,
           '1"': 29.56,

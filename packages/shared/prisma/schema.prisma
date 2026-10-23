@@ -788,6 +788,10 @@ model BillSegmentLine {
   kindCode            String   @map("kind_code") @db.VarChar(50)
   amount              Decimal  @map("amount") @db.Decimal(14, 4)
   quantity            Decimal? @map("quantity") @db.Decimal(14, 4)
+  /// What `quantity` is counted in. The tariff's unit, which is not
+  /// always the meter's: the engine converts, so a gallons meter on an
+  /// HCF tariff bills 6.6279 and the bill has to say of what.
+  unit                String?  @map("unit") @db.VarChar(20)
   sourceScheduleId    String   @map("source_schedule_id") @db.Uuid
   sourceComponentId   String   @map("source_component_id") @db.Uuid
   sortOrder           Int      @map("sort_order")

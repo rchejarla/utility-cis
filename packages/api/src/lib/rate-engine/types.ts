@@ -74,6 +74,16 @@ export interface LineItem {
   sourceScheduleId: string;
   sourceComponentId: string;
   quantity?: Decimal;
+  /**
+   * What `quantity` is counted in — the unit the tariff is written in,
+   * which is not always the meter's.
+   *
+   * Carried because the engine converts: a 4,958-gallon month on an HCF
+   * tariff prints as 6.6279, and a bare 6.6279 on a bill matches
+   * nothing the customer can read off their meter. Absent when the
+   * component names no unit.
+   */
+  unit?: string;
   rate?: unknown;
 }
 

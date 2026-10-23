@@ -280,7 +280,10 @@ async function main() {
       { utilityId: UID, rateScheduleId: rsW.id, kindCode: "service_charge",
         label: "Water Service Charge", sortOrder: 10, effectiveDate: SLICE1_EFF,
         predicate: {}, quantitySource: { base: "fixed" },
-        pricing: { type: "lookup", by: "meter_size", table: {
+        // MONTH like every other service charge: the amount varies by
+        // meter size but the charge is one month of service, and a bill
+        // line reading a bare "1" says nothing.
+        pricing: { type: "lookup", by: "meter_size", unit: "MONTH", table: {
           '5/8"': 22.31, '1"': 29.56, '1.5"': 46.52, '2"': 67.64,
           '3"': 116.92, '4"': 187.50, '6"': 349.42, '8"': 552.48,
         }},

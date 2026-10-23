@@ -188,6 +188,61 @@ describe("rate orchestrator", () => {
     expect(result.lines[1]!.amount.toNumber()).toBe(4); // 10% of 40
   });
 
+  /**
+   * A quantity on a line means nothing without its unit.
+   *
+   * Since the engine converts a metered quantity into the unit its
+   * tariff is written in, the figure on the line is no longer the one
+   * the meter showed: a 4,958-gallon month prints as 6.6279, which
+   * matches nothing a customer can read off their own meter. The unit
+   * is part of what was charged, so the line carries it — the bill is a
+   * record, and `sourceComponentId` points at a tariff row that can be
+   * republished in other terms.
+   */
+  it("records the unit a line's quantity is in", () => {
+    const consumption = mkComponent({
+      id: "cons-1",
+      kindCode: "consumption",
+      label: "Water Usage",
+      quantitySource: { base: "metered" },
+      pricing: { type: "flat", rate: 3.31, unit: "HCF" },
+    });
+    const vars = new Map<string, unknown>();
+    vars.set("meter:reads:m-1", { quantity: 748.051948051948, unit: "GAL" });
+
+    const result = rate(mkCtx([mkAssignment("rs-1", [consumption])], vars));
+
+    const line = result.lines[0]!;
+    expect(line.quantity!.toFixed(4)).toBe("1.0000");
+    expect(line.unit).toBe("HCF");
+  });
+
+  /*
+   * A fixed charge is one of something the tariff names — a month, a
+   * meter — and the tariff's own word for it is the only one there is.
+   */
+  it("carries a fixed charge's unit through unconverted", () => {
+    const service = mkComponent({
+      id: "svc-1",
+      kindCode: "service_charge",
+      label: "Service Charge",
+      quantitySource: { base: "fixed" },
+      pricing: { type: "flat", rate: 4.2, unit: "MONTH" },
+    });
+
+    const result = rate(mkCtx([mkAssignment("rs-1", [service])], new Map()));
+
+    expect(result.lines[0]!.unit).toBe("MONTH");
+  });
+
+  it("leaves the unit unset when the tariff names none", () => {
+    const anon = mkComponent({ id: "a-1", pricing: { type: "flat", rate: 10 } });
+
+    const result = rate(mkCtx([mkAssignment("rs-1", [anon])], new Map()));
+
+    expect(result.lines[0]!.unit).toBeUndefined();
+  });
+
   it("filters out components outside the bill period", () => {
     const inScope = mkComponent({
       id: "in-1",
