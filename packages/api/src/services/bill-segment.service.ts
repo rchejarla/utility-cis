@@ -20,6 +20,18 @@ export interface CreateBillSegmentInput {
    */
   periodStart?: Date;
   periodEnd?: Date;
+  /**
+   * The latest read this segment may close on. Defaults to now.
+   *
+   * A billing run passes its window end, because a run is a pass over a
+   * period that has already closed: a read taken after the bill day
+   * belongs to the next period, not this one. Without it the run
+   * checked eligibility against the window and then rated against
+   * today, so a meter read between the window closing and the run
+   * executing was swept into the bill anyway. Ignored when explicit
+   * dates are given, which name the interval outright.
+   */
+  asOf?: Date;
 }
 
 /** A service period, and the reads that bound it. */
@@ -215,7 +227,7 @@ export async function createBillSegmentForServiceAgreement(
 
   const resolved = explicit
     ? { periodStart: input.periodStart as Date, periodEnd: input.periodEnd as Date }
-    : await resolveServicePeriod(utilityId, saId);
+    : await resolveServicePeriod(utilityId, saId, { asOf: input.asOf });
 
   if (resolved.periodEnd < resolved.periodStart) {
     throw Object.assign(new Error("periodEnd must be on/after periodStart"), {

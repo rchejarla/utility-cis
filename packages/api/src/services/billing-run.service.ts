@@ -644,7 +644,12 @@ async function billOneAccount(args: {
 
   for (const sa of agreements) {
     try {
-      await createBillSegmentForServiceAgreement(utilityId, actorId, actorName, sa.id, {});
+      // The same bound the eligibility check above used. Resolving the
+      // period twice against two different "nows" is what let a read
+      // taken after the window closed into this run's bill.
+      await createBillSegmentForServiceAgreement(utilityId, actorId, actorName, sa.id, {
+        asOf: windowEnd,
+      });
     } catch (err) {
       if ((err as { code?: string }).code === "NO_READ_IN_WINDOW") continue;
       throw err;

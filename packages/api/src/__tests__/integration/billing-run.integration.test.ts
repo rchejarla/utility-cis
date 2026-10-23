@@ -261,7 +261,26 @@ describe("processing a run", () => {
       expect(billed.billId).toBeTruthy();
       expect(billed.servicePeriodStart).not.toBeNull();
       expect(billed.servicePeriodEnd).not.toBeNull();
-      expect(Number(billed.total)).toBeGreaterThan(0);
+      /*
+       * A bounded figure, not merely a positive one.
+       *
+       * `> 0` was the only thing this suite ever asserted about an
+       * amount, and it let two bills through today that were wrong by
+       * three orders of magnitude: a 21-month catch-up segment at
+       * $530,257.75, and $33,467.69 for one house for one month, from
+       * gallons priced as hundred-cubic-feet. Both are greater than
+       * zero.
+       *
+       * A range rather than an exact total because the seed randomises
+       * monthly usage, so there is no fixed answer to assert — but a
+       * month of residential service is tens of dollars, and anything
+       * outside this band is a unit or a period gone wrong rather than
+       * an unusual customer. The exact arithmetic is pinned in the
+       * golden tariff tests; what this guards is that the figures
+       * reaching a bill are of the right magnitude at all.
+       */
+      expect(Number(billed.total)).toBeGreaterThan(1);
+      expect(Number(billed.total)).toBeLessThan(500);
       expect(billed.segmentCount).toBeGreaterThan(0);
     }
     // An exception says why, in a code a list can filter on.
@@ -270,6 +289,76 @@ describe("processing a run", () => {
       expect(ex.errorMessage).toBeTruthy();
       expect(ex.billId).toBeNull();
     }
+  }, 300_000);
+
+  /**
+   * A read taken after the window closed belongs to the next period.
+   *
+   * The run resolves each agreement's period twice: once to decide
+   * whether the account has anything to bill, and again inside rating
+   * to produce the segment. Only the first was given the window, so
+   * the second defaulted to "now" — the check asked about the bill day
+   * and the rating then billed every unbilled read up to today. On the
+   * seed that is visible: reads land on the 16th, the window closes on
+   * the 10th, so the current month's read is one the run must not
+   * touch.
+   *
+   * Asserted on segments the run itself created, because the seed's
+   * own demo segments end after the window by design.
+   */
+  it("never bills a read taken after the window closed", async () => {
+    const { prisma } = prismaImports;
+
+    // The seed's reads all fall before the window, so the condition has
+    // to be made: one read dated ten days after the window closes, on an
+    // agreement that does bill.
+    const latest = await prisma.meterRead.findFirst({ orderBy: { readDate: "desc" } });
+    if (!latest) throw new Error("fixture has no reads to clone");
+    const lateDate = new Date("2026-10-20T00:00:00Z");
+    await prisma.meterRead.create({
+      data: {
+        utilityId,
+        meterId: latest.meterId,
+        serviceAgreementId: latest.serviceAgreementId,
+        uomId: latest.uomId,
+        readDate: lateDate,
+        readDatetime: lateDate,
+        priorReading: latest.reading,
+        reading: latest.reading.plus(1000),
+        consumption: 1000,
+        readType: latest.readType,
+        readSource: latest.readSource,
+      },
+    });
+
+    const before = new Set(
+      (await prisma.billSegment.findMany({ select: { id: true } })).map((s) => s.id),
+    );
+
+    const run = JSON.parse((await startRun()).body);
+    await svc.processBillingRun({
+      runId: run.id,
+      utilityId,
+      actorId: ACTOR_ID,
+      actorName: "Tester",
+    });
+
+    const made = (
+      await prisma.billSegment.findMany({
+        select: { id: true, segmentNumber: true, periodEnd: true },
+      })
+    ).filter((s) => !before.has(s.id));
+
+    // Guards the assertion below against a run that rated nothing.
+    expect(made.length).toBeGreaterThan(0);
+    const windowEnd = new Date(run.windowEnd);
+    expect(
+      made.filter((s) => s.periodEnd > windowEnd).map((s) => s.segmentNumber),
+    ).toEqual([]);
+
+    // And the read is still there for the next period to claim.
+    const late = await prisma.meterRead.findFirst({ where: { readDate: lateDate } });
+    expect(late?.billedAt).toBeNull();
   }, 300_000);
 
   it("separates an account with nothing to bill from one that failed", async () => {
