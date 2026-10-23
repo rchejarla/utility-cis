@@ -1,5 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
+import { sendMail, type MailAttachmentRef } from "../lib/apptor-connect/mail-client.js";
+import { notificationSettingsSchema } from "@utility-cis/shared";
 import { config } from "../config.js";
 
 /**
@@ -36,11 +38,14 @@ interface ChannelContent {
 }
 
 interface NotificationProvider {
+  /** Recorded on the row, so "how was this sent" is answerable later. */
+  readonly name: string;
   send(
     to: string,
     subject: string | null,
     body: string,
-  ): Promise<{ messageId: string }>;
+    attachments?: MailAttachmentRef[],
+  ): Promise<{ messageId: string | null }>;
 }
 
 // ─── Template variable resolution ────────────────────────────────
@@ -201,6 +206,8 @@ function renderTemplate(template: string, vars: Record<string, string>): string 
 // ─── Providers ───────────────────────────────────────────────────
 
 class ConsoleProvider implements NotificationProvider {
+  readonly name = "console";
+
   async send(
     to: string,
     subject: string | null,
@@ -221,8 +228,68 @@ class ConsoleProvider implements NotificationProvider {
   }
 }
 
-function getProvider(_channel: "EMAIL" | "SMS"): NotificationProvider {
-  return new ConsoleProvider();
+/**
+ * How a tenant's mail leaves, or that it does not.
+ *
+ * A tenant with `notifications.mailIntegration` set sends through
+ * apptor-connect; one without keeps the console provider, so an
+ * unconfigured tenant cannot accidentally mail its customers. The
+ * setting holds a name and nothing else — the credential, the sender
+ * domain and the choice between SendGrid and that tenant's own SMTP
+ * server all live on their side.
+ *
+ * SMS stays on the console until a tenant's SMS integration exists;
+ * there is no `twilio` binding to point at yet.
+ */
+function getProvider(
+  channel: "EMAIL" | "SMS",
+  settings: unknown,
+): NotificationProvider {
+  if (channel !== "EMAIL") return new ConsoleProvider();
+  const raw =
+    settings && typeof settings === "object" && "notifications" in settings
+      ? (settings as { notifications?: unknown }).notifications
+      : undefined;
+  const parsed = notificationSettingsSchema.safeParse(raw ?? {});
+  // Settings that cannot be read are not a reason to mail anyway, nor
+  // to fail the drain: fall back and log, the way an absent setting
+  // does.
+  if (!parsed.success) {
+    logger.warn(
+      { component: "notification", issues: parsed.error.issues.length },
+      "notification settings unreadable; falling back to the console provider",
+    );
+    return new ConsoleProvider();
+  }
+  const integration = parsed.data.mailIntegration?.trim();
+  if (!integration) return new ConsoleProvider();
+  return new ApptorConnectMailProvider(
+    integration,
+    parsed.data.mailConnection?.trim() || null,
+  );
+}
+
+/** Mail through apptor-connect's mail plane. */
+class ApptorConnectMailProvider implements NotificationProvider {
+  readonly name = "apptor-connect";
+
+  constructor(
+    private readonly integration: string,
+    private readonly connection: string | null,
+  ) {}
+
+  async send(
+    to: string,
+    subject: string | null,
+    body: string,
+    attachments?: MailAttachmentRef[],
+  ): Promise<{ messageId: string | null }> {
+    return sendMail(
+      this.integration,
+      { to: [to], subject, body, attachments },
+      { connection: this.connection },
+    );
+  }
 }
 
 // ─── Public API ──────────────────────────────────────────────────
@@ -389,6 +456,14 @@ interface PendingWithTenantCfg {
   attempts: number;
   created_at: Date;
   notification_send_enabled: boolean;
+  /** The tenant's settings JSON, for choosing a provider per row. */
+  settings: unknown;
+  /** The bill this delivers, and where its PDF lives — null for the rest. */
+  bill_id: string | null;
+  bill_number: string | null;
+  storage_integration: string | null;
+  storage_connection: string | null;
+  object_key: string | null;
   timezone: string;
   notification_quiet_start: string;
   notification_quiet_end: string;
@@ -423,11 +498,31 @@ export async function processPendingNotificationsWithQuietHours(
       n.id, n.utility_id, n.channel, n.recipient_email, n.recipient_phone,
       n.resolved_subject, n.resolved_body, n.attempts, n.created_at,
       tc.notification_send_enabled,
+      tc.settings,
+      n.bill_id,
+      b.bill_number,
+      d.storage_integration,
+      d.storage_connection,
+      d.object_key,
       tc.timezone,
       tc.notification_quiet_start,
       tc.notification_quiet_end
     FROM notification n
     INNER JOIN utility_config tc ON tc.utility_id = n.utility_id
+    LEFT JOIN bill b ON b.id = n.bill_id
+    /*
+     * The newest rendered document for the bill, where there is one.
+     * LEFT because almost no notification is about a bill, and a bill
+     * whose PDF has not been produced still sends — the message says it
+     * is ready and the portal has it.
+     */
+    LEFT JOIN LATERAL (
+      SELECT storage_integration, storage_connection, object_key
+      FROM bill_document
+      WHERE bill_id = n.bill_id
+      ORDER BY generated_at DESC
+      LIMIT 1
+    ) d ON n.bill_id IS NOT NULL
     WHERE n.status = 'PENDING'
       AND tc.notification_send_enabled = true
     ORDER BY n.created_at ASC
@@ -501,15 +596,45 @@ async function trySendOne(row: PendingWithTenantCfg): Promise<"sent" | "failed" 
       return "skipped";
     }
 
-    const provider = getProvider(row.channel);
+    const provider = getProvider(row.channel, row.settings);
     const to = row.channel === "EMAIL" ? row.recipient_email! : row.recipient_phone!;
-    const { messageId } = await provider.send(to, row.resolved_subject, row.resolved_body);
+    /*
+     * A bill's PDF goes as a pointer to where it already lives, never
+     * as bytes: it is in a connection apptor-connect owns, so naming it
+     * keeps the file inside their service instead of streaming it out
+     * here and posting it back base64-encoded.
+     *
+     * A notification that is not about a bill, or a bill with nothing
+     * rendered, sends without one — the message still says the bill is
+     * ready and the portal still has it.
+     */
+    const attachments =
+      row.bill_id && row.storage_integration && row.object_key
+        ? [
+            {
+              integration: row.storage_integration,
+              connection: row.storage_connection,
+              path: row.object_key,
+              filename: `Bill-${row.bill_number ?? row.bill_id}.pdf`,
+              contentType: "application/pdf",
+            },
+          ]
+        : undefined;
+    const { messageId } = await provider.send(
+      to,
+      row.resolved_subject,
+      row.resolved_body,
+      attachments,
+    );
 
     await prisma.notification.update({
       where: { id: row.id },
       data: {
         status: "SENT",
-        provider: "console",
+        // The provider that actually sent it, not a constant. "How did
+        // this leave?" is the first question when a customer says a bill
+        // never arrived.
+        provider: provider.name,
         providerMessageId: messageId,
         sentAt: new Date(),
         attempts: row.attempts + 1,

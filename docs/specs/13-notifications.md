@@ -108,6 +108,27 @@ bill is a notification that names the bill it delivered. `ON DELETE SET
 NULL` like `template_id` and `customer_id`, because the row is evidence
 that something was sent and that outlives the bill it was about.
 
+**Mail leaves through apptor-connect (2026-10-23).** `getProvider` is
+tenant-aware: a tenant with `notifications.mailIntegration` set sends
+through `POST /proxy/v1/{integration}` with apptor-connect's own
+`SendMailRequest`; one without keeps the console provider, so an
+unconfigured tenant cannot accidentally mail its customers. The setting
+holds **a name and nothing else** — no key, no host, no sender domain.
+On this deployment that name is `mail` (`mail@tenant:acme`, type
+SENDGRID). The sibling `sendgrid@tenant:acme` is type REST — SendGrid's
+raw HTTP API — and is deliberately *not* what we use: it would mean
+building their JSON by hand, which is the coupling the proxy exists to
+remove. `notification.provider` now records which provider actually
+sent, rather than the constant `"console"` it wrote before.
+
+**A bill's PDF travels as a pointer, never as bytes.** The file already
+lives in a connection apptor-connect owns, so the attachment names
+`{integration, connection, path}` from `bill_document` and the bytes go
+from their store to their mail transport. Sending base64 would mean
+streaming the file out to this process and posting it back — for a
+12,000-account run, 24,000 transfers of bytes that never needed to
+move, and customer bill content back through here for no reason.
+
 The `billing.bill_ready` template is the event `deliverBill` sends on.
 Without an active one, delivery answers 422 rather than the usual quiet
 null — a scheduled notice may skip silently; a person pressing Send may

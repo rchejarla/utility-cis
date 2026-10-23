@@ -48,6 +48,19 @@ export const notificationSettingsSchema = z
       .optional()
       .or(z.literal("")),
     dailyDigestEnabled: z.boolean().optional(),
+    /**
+     * Which apptor-connect integration carries this tenant's mail.
+     *
+     * A name and nothing else — no key, no host, no region. The
+     * credential lives in apptor-connect and is never handed out; the
+     * integration selects SendGrid or that tenant's own SMTP server on
+     * their side, and moving between the two changes a row there rather
+     * than anything here. Left empty, notifications fall back to the
+     * console provider and nothing leaves the process.
+     */
+    mailIntegration: z.string().min(1).max(100).optional().or(z.literal("")),
+    /** Optional connection name, narrowing among that integration's connections. */
+    mailConnection: z.string().min(1).max(100).optional().or(z.literal("")),
   })
   .strict();
 export type NotificationSettings = z.infer<typeof notificationSettingsSchema>;
