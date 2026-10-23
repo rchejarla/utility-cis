@@ -77,6 +77,15 @@ export interface BillSummary {
   holdReason: string | null;
   /** True when the account's rule holds it, not the bill's own reason. */
   heldByAccount: boolean;
+  /**
+   * The latest attempt to deliver this bill, or null if none was made.
+   *
+   * "Which bills have not gone out" is a worklist question, so it
+   * belongs on the list rather than only inside a bill. The newest
+   * attempt is the one that matters: an earlier bounce followed by a
+   * successful resend is a bill that arrived.
+   */
+  delivery: { status: string; sentAt: Date | null; error: string | null } | null;
 }
 
 export interface BillWithSegments extends BillSummary {
@@ -333,6 +342,11 @@ async function assembleBillWithSegments(
       // anything may happen to this bill. Nothing is stamped onto the
       // bill, so the rule has to be fetched with it.
       account: { select: { billingHoldReason: true } },
+      deliveries: {
+        select: { status: true, sentAt: true, error: true },
+        orderBy: { createdAt: "desc" },
+        take: 1,
+      },
     },
   });
   return {
@@ -353,6 +367,7 @@ async function assembleBillWithSegments(
     postedAt: bill.postedAt,
     holdReason: bill.holdReason ?? bill.account?.billingHoldReason ?? null,
     heldByAccount: bill.holdReason === null && !!bill.account?.billingHoldReason,
+    delivery: bill.deliveries[0] ?? null,
     segments: bill.segments.map((s) => ({
       id: s.id,
       segmentNumber: s.segmentNumber,
@@ -670,6 +685,9 @@ export async function listBills(
           };
         };
         billingCycle: { select: { name: true } };
+        deliveries: {
+          select: { status: true; sentAt: true; error: true };
+        };
         ledgerEntries: {
           select: {
             id: true;
@@ -698,6 +716,14 @@ export async function listBills(
         },
       },
       billingCycle: { select: { name: true } },
+      // The newest attempt only: the list answers "did it go", and an
+      // earlier bounce followed by a successful resend is a bill that
+      // arrived.
+      deliveries: {
+        select: { status: true, sentAt: true, error: true },
+        orderBy: { createdAt: "desc" },
+        take: 1,
+      },
       ledgerEntries: CHARGE_FOR_SETTLEMENT,
     },
   });
@@ -709,6 +735,7 @@ export async function listBills(
     data: page.data.map((b) => ({
       holdReason: b.holdReason ?? b.account.billingHoldReason ?? null,
       heldByAccount: b.holdReason === null && !!b.account.billingHoldReason,
+      delivery: b.deliveries[0] ?? null,
       id: b.id,
       utilityId: b.utilityId,
       accountId: b.accountId,
@@ -766,12 +793,18 @@ export async function listBillsForAccount(
     include: {
       ledgerEntries: CHARGE_FOR_SETTLEMENT,
       account: { select: { billingHoldReason: true } },
+      deliveries: {
+        select: { status: true, sentAt: true, error: true },
+        orderBy: { createdAt: "desc" },
+        take: 1,
+      },
     },
   });
   const cutoff = dueDateCutoff();
   return bills.map((b) => ({
     holdReason: b.holdReason ?? b.account.billingHoldReason ?? null,
     heldByAccount: b.holdReason === null && !!b.account.billingHoldReason,
+    delivery: b.deliveries[0] ?? null,
     id: b.id,
     utilityId: b.utilityId,
     accountId: b.accountId,

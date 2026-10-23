@@ -940,6 +940,74 @@ describe("sending a run's bills", () => {
   }, 300_000);
 });
 
+/**
+ * "Did my bills go out?" — answerable later, not only in the ten
+ * seconds after pressing Send.
+ *
+ * The send result panel is transient; a reload loses it. A run is the
+ * thing an operator comes back to days afterwards, so the count of
+ * bills actually delivered belongs on the run itself, derived rather
+ * than remembered.
+ */
+describe("a run reports what was delivered", () => {
+  it("counts the bills that have gone out, not the attempts made", async () => {
+    const run = JSON.parse((await startRun()).body);
+    await svc.processBillingRun({
+      runId: run.id,
+      utilityId,
+      actorId: ACTOR_ID,
+      actorName: "Tester",
+    });
+    await svc.postBillingRun(utilityId, ACTOR_ID, "Tester", run.id);
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/billing-runs/${run.id}/send`,
+      headers: headers(),
+    });
+
+    const { prisma } = prismaImports;
+    const queued = await prisma.notification.findMany({
+      where: { utilityId, billId: { not: null } },
+      select: { id: true, billId: true },
+    });
+    // Queued is not sent: until the worker reports a provider accepted
+    // it, nothing has left the building.
+    expect(JSON.parse((await app.inject({
+      method: "GET",
+      url: `/api/v1/billing-runs/${run.id}`,
+      headers: headers(),
+    })).body).sentCount).toBe(0);
+
+    if (queued.length > 0) {
+      await prisma.notification.update({
+        where: { id: queued[0]!.id },
+        data: { status: "SENT", sentAt: new Date() },
+      });
+      // A second attempt on the same bill — a resend — must not make
+      // the figure say two bills went out.
+      await prisma.notification.create({
+        data: {
+          utilityId,
+          eventType: "billing.bill_ready",
+          channel: "EMAIL",
+          recipientEmail: "x@example.com",
+          billId: queued[0]!.billId,
+          resolvedBody: "again",
+          status: "SENT",
+          sentAt: new Date(),
+        },
+      });
+
+      const after = await app.inject({
+        method: "GET",
+        url: `/api/v1/billing-runs/${run.id}`,
+        headers: headers(),
+      });
+      expect(JSON.parse(after.body).sentCount).toBe(1);
+    }
+  }, 300_000);
+});
+
 describe("tenant isolation", () => {
   it("never puts another utility's accounts in a run, and hides its runs", async () => {
     const run = JSON.parse((await startRun()).body);

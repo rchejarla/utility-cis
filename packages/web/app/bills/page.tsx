@@ -43,6 +43,12 @@ interface BillRow {
   accountId: string;
   account: { id: string; accountNumber: string; customerName: string | null };
   charge: { entryId: string; openAmount: string; reversed: boolean } | null;
+  /**
+   * The newest attempt to deliver this bill, or null if none was made.
+   * The newest only: an earlier bounce followed by a successful resend
+   * is a bill that arrived.
+   */
+  delivery: { status: string; sentAt: string | null; error: string | null } | null;
   /** Decided by the API, so the pill and the overdue filter agree. */
   overdue: boolean;
   /**
@@ -241,6 +247,7 @@ function Bills() {
                   <Th className={HIDE_SM} style={{ textAlign: "right" }}>Total</Th>
                   <Th style={{ textAlign: "right" }}>Still owed</Th>
                   <Th>Status</Th>
+                  <Th className={HIDE_SM}>Delivery</Th>
                   {showActions && <Th>Actions</Th>}
                 </tr>
               </thead>
@@ -315,6 +322,15 @@ function Bills() {
                     </Td>
                     <Td>
                       <BillStatusPill bill={b} />
+                    </Td>
+                    <Td className={HIDE_SM}>
+                      {/*
+                        Queued is not sent. A run reporting "116 queued"
+                        has delivered nothing yet, which is exactly the
+                        distinction a worker running stale code hid for
+                        a day — it marked rows sent that never left.
+                      */}
+                      <DeliveryCell delivery={b.delivery} />
                     </Td>
                     {showActions && (
                       <Td>
@@ -493,5 +509,27 @@ export default function BillsPage() {
     <Suspense fallback={null}>
       <Bills />
     </Suspense>
+  );
+}
+
+/** Whether this bill has gone out, in one word. */
+function DeliveryCell({
+  delivery,
+}: {
+  delivery: { status: string; sentAt: string | null; error: string | null } | null;
+}) {
+  if (!delivery) {
+    return <span style={{ fontSize: 11, color: "var(--text-muted)" }}>not sent</span>;
+  }
+  const { label, colour } =
+    delivery.status === "SENT"
+      ? { label: "sent", colour: "var(--success)" }
+      : delivery.status === "FAILED"
+        ? { label: "failed", colour: "var(--danger)" }
+        : { label: "queued", colour: "var(--warning)" };
+  return (
+    <span style={{ fontSize: 11, color: colour }} title={delivery.error ?? undefined}>
+      {label}
+    </span>
   );
 }

@@ -43,6 +43,9 @@ function detail(over: Record<string, unknown> = {}) {
     failedCount: 1,
     skippedCount: 1,
     billedTotal: "9452.6100",
+    // Always present on the wire, so the fixture carries it too rather
+    // than letting the page defend against a field the API guarantees.
+    sentCount: 0,
     postedAt: null,
     cancelRequested: false,
     lastProgressAt: "2026-10-15T10:00:00.000Z",
@@ -500,6 +503,18 @@ describe("Billing run detail — exceptions by cause", () => {
  * missing address usually stands for a group.
  */
 describe("Billing run detail — sending", () => {
+  it("says how many of its bills have actually gone out", async () => {
+    routeGets({
+      run: detail({ postedAt: "2026-10-16T09:00:00.000Z", billedCount: 118, sentCount: 116 }),
+    });
+    await renderPage();
+
+    await loaded();
+    // Derived on read, so it is still true days later — unlike the send
+    // panel, which a reload loses.
+    expect(await screen.findByText(/116 of 118/)).toBeInTheDocument();
+  });
+
   it("does not offer Send until the run is posted", async () => {
     routeGets({ run: detail({ postedAt: null }) });
     await renderPage();

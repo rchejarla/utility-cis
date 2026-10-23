@@ -1023,6 +1023,16 @@ export async function listBillingRuns(utilityId: string): Promise<BillingRunSumm
  */
 export interface BillingRunDetail extends BillingRunSummary {
   billedTotal: string;
+  /**
+   * How many of this run's bills have actually been delivered.
+   *
+   * Bills, not attempts: a resend is a second row against the same bill
+   * and must not make the figure claim two went out. Derived on read
+   * rather than stored, so it stays true as the outbox drains — the
+   * send panel answers this for ten seconds and a reload loses it,
+   * while a run is the thing an operator comes back to days later.
+   */
+  sentCount: number;
 }
 
 export async function getBillingRun(utilityId: string, runId: string): Promise<BillingRunDetail> {
@@ -1040,11 +1050,31 @@ export async function getBillingRun(utilityId: string, runId: string): Promise<B
     where: { utilityId, billingRunId: runId, status: "BILLED" },
     _sum: { total: true },
   });
+  /*
+   * Distinct bills with a delivery that reached a provider. Grouped
+   * rather than counted, because `count` would total the attempts and
+   * a resent bill would read as two.
+   */
+  const billIds = (
+    await prisma.billingRunItem.findMany({
+      where: { utilityId, billingRunId: runId, status: "BILLED", billId: { not: null } },
+      select: { billId: true },
+    })
+  ).map((i) => i.billId!);
+  const sent =
+    billIds.length === 0
+      ? []
+      : await prisma.notification.groupBy({
+          by: ["billId"],
+          where: { utilityId, status: "SENT", billId: { in: billIds } },
+        });
+
   return {
     ...toSummary(run),
     // Summed at 4dp like the column, and rounded by whatever prints it —
     // the same order as a bill's own subtotals.
     billedTotal: (billed._sum.total ?? new Prisma.Decimal(0)).toFixed(4),
+    sentCount: sent.length,
   };
 }
 

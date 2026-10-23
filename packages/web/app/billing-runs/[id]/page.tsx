@@ -33,6 +33,13 @@ import type { BillingRunItemRow, BillingRunRow } from "@/components/billing-runs
 
 interface RunDetail extends BillingRunRow {
   billedTotal: string;
+  /**
+   * How many of this run's bills have actually been delivered. Bills,
+   * not attempts — a resend must not make it claim two went out — and
+   * derived on read, so it is still true days later. The send panel
+   * answers this for ten seconds and a reload loses it.
+   */
+  sentCount: number;
 }
 
 /** One cause, and how much of the run it accounts for. */
@@ -394,6 +401,15 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
         />
         <Stat label="Skipped" value={run.skippedCount.toLocaleString()} />
         <Stat label="Billed total" value={fmtMoney(run.billedTotal)} />
+        {run.postedAt && (
+          <Stat
+            label="Delivered"
+            value={`${run.sentCount.toLocaleString()} of ${run.billedCount.toLocaleString()}`}
+            accent={
+              run.sentCount < run.billedCount ? "var(--warning)" : "var(--success)"
+            }
+          />
+        )}
       </div>
 
       <Tabs

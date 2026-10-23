@@ -508,3 +508,57 @@ describe("Bills — arriving with a bill named in the URL", () => {
     expect(get).not.toHaveBeenCalledWith("/api/v1/bills/bill-1");
   });
 });
+
+/**
+ * Whether a bill has gone out, on the list.
+ *
+ * It was answerable only by opening a bill, one at a time — the same
+ * per-bill-versus-volume mistake as holds and sending. "Which bills have
+ * not gone out" is a worklist question and belongs where the list is.
+ */
+describe("Bills — delivery", () => {
+  it("says a bill has been sent", async () => {
+    get.mockResolvedValue(
+      payload([
+        bill({
+          delivery: { status: "SENT", sentAt: "2026-10-23T09:00:00.000Z", error: null },
+        }),
+      ]),
+    );
+    renderPage();
+
+    expect(await screen.findByText(/^sent$/i)).toBeInTheDocument();
+  });
+
+  it("says one is queued but not yet gone", async () => {
+    get.mockResolvedValue(
+      payload([bill({ delivery: { status: "PENDING", sentAt: null, error: null } })]),
+    );
+    renderPage();
+
+    // Queued is not sent: a run that reports 116 queued has delivered
+    // nothing yet, which is exactly the distinction a stale worker hid.
+    expect(await screen.findByText(/queued/i)).toBeInTheDocument();
+  });
+
+  it("marks a failure, since that is the row somebody has to work", async () => {
+    get.mockResolvedValue(
+      payload([
+        bill({
+          delivery: { status: "FAILED", sentAt: null, error: "mailbox unavailable" },
+        }),
+      ]),
+    );
+    renderPage();
+
+    expect(await screen.findByText(/failed/i)).toBeInTheDocument();
+  });
+
+  it("says nothing was attempted when nothing was", async () => {
+    get.mockResolvedValue(payload([bill({ delivery: null })]));
+    renderPage();
+
+    await screen.findByText("B-1001");
+    expect(screen.getByText(/not sent/i)).toBeInTheDocument();
+  });
+});
