@@ -462,7 +462,12 @@ describe("dev-login for the platform actor", () => {
     const claims = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf-8"));
     expect(claims).toMatchObject({ sub: PLATFORM_ID, platform: true });
     expect(claims.utility_id).toBeUndefined();
-    expect(redirectTo).toBe("/platform/tenants");
+    // A page in the web app, not this API's route name — the two differ
+    // (`/api/v1/platform/tenants` is the endpoint) and the console's page
+    // is `/platform/utilities`. Sending the operator to a path the web
+    // app does not serve is a 404 straight after a successful login,
+    // which is what this assertion exists to stop.
+    expect(redirectTo).toBe("/platform/utilities");
   });
 
   it("refuses a tenant user asked for as a platform login", async () => {

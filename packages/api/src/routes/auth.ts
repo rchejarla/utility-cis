@@ -92,7 +92,7 @@ export async function authRoutes(app: FastifyInstance) {
               customerId: null,
             },
             isPortal: false,
-            redirectTo: "/platform/tenants",
+            redirectTo: "/platform/utilities",
           });
         }
 
