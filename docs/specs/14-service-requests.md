@@ -126,10 +126,21 @@ Service level agreement definitions by request type and priority. Used to calcul
 This was broken for six months and took the whole module down with it. Slice B shipped on 2026-04-23 selecting `serviceAgreement.premise` directly, which was correct then: `ServiceAgreement` still had a `premiseId`. A week later, on 2026-04-30, `04d5f77` moved the premise onto `ServicePoint` and dropped that column — and did not update this service. An `include` naming a field the model does not have is not a wrong answer but a **rejected query**, so all ten call sites returned 400 `PRISMA_VALIDATION`: the queue, the detail page, both scoped tabs, and every write.
 
 Nothing caught it, for two reasons worth keeping in mind:
-- `src/__tests__/integration/service-requests.test.ts` reads like the coverage for this. It is gated behind `RUN_REAL_DB_INTEGRATION_TESTS=true` **and** matches neither vitest config's integration glob, so it runs in the unit suite and is skipped there. It has never executed. It still covers the lifecycle and is still worth converting to the `bootPostgres` pattern the rest of the suite uses.
+- `src/__tests__/integration/service-requests.test.ts` read like the coverage for this. It was gated behind `RUN_REAL_DB_INTEGRATION_TESTS=true` **and** named so it matched neither vitest config's integration glob — so it landed in the unit suite, where `describe.skipIf` skipped it. Two independent conditions, each enough on its own to keep it dark. It never executed once.
 - `formatAgreementLabel` has three passing unit tests that hand-build their input. The formatter was never wrong; the query feeding it was, and no test joined the two.
 
-`service-request-reads.integration.test.ts` now exercises all four read paths against real Postgres, including a closed service point beside an open one so the address cannot come back by insertion order.
+### Integration coverage
+
+Two suites, both on the testcontainers `bootPostgres` pattern, both running wherever the rest of the integration suite runs and needing no flag:
+
+- **`service-request-reads.integration.test.ts`** — all four read paths at the service layer, with a closed service point beside the open one so the address cannot come back by insertion order.
+- **`service-request-lifecycle.integration.test.ts`** — create → list → assign → progress → complete over HTTP, the 409 on an illegal transition, the 403 on a subject whose role holds nothing on the module, and the agreement's premise through both the detail route and the account tab. This replaces the skipped file, which is deleted.
+
+Two things the conversion surfaced that apply beyond this module:
+
+**Permissions are built by the fixture, not taken from the seeded presets.** A 403 that depends on how "Portal Customer" happens to be configured today is testing the seed.
+
+**Postgres is a fresh container each run; Redis is not.** The integration config points every suite at database 9 of the dev Redis, and `rbac.service` caches roles, enabled modules and tenant status under keys built from the ids a test file hardcodes — so a run inherits the previous run's authorization state. This silently defeated a mutation check here: granting the portal subject `service_requests:VIEW` left the 403 in place, because the role being read predated the grant, and the suite would have passed with the permission gate removed entirely. Other route suites have not been bitten because they authenticate as an all-permissions fixture, where a stale entry says the same thing as a fresh one. **Any suite that cares which permissions a subject holds must `cacheDel` those keys after seeding** — and must assert the refusal *code*, since `authorization.ts` has six 403 branches and four of them fire for reasons unrelated to permissions.
 
 ### SLA Management
 
