@@ -487,3 +487,54 @@ describe("Billing run detail — exceptions by cause", () => {
     expect(screen.queryByTestId("exception-causes")).toBeNull();
   });
 });
+
+/**
+ * Sending a run's bills.
+ *
+ * Delivery existed one bill at a time, which is a feature for a utility
+ * with twelve customers. The run is where it scales: it knows which
+ * bills it made, and posting already precedes sending.
+ *
+ * Offered only once posted, because an unposted run is a calculation
+ * nobody owes — and what comes back is reported by cause, since one
+ * missing address usually stands for a group.
+ */
+describe("Billing run detail — sending", () => {
+  it("does not offer Send until the run is posted", async () => {
+    routeGets({ run: detail({ postedAt: null }) });
+    await renderPage();
+
+    await loaded();
+    expect(screen.queryByRole("button", { name: /^send bills$/i })).toBeNull();
+  });
+
+  it("sends, and says how many went and what did not", async () => {
+    routeGets({ run: detail({ postedAt: "2026-10-16T09:00:00.000Z" }) });
+    post.mockResolvedValue({
+      queued: 116,
+      skipped: [
+        {
+          code: "NO_EMAIL_ADDRESS",
+          accountCount: 4,
+          sampleAccounts: ["0001000-00", "0001002-00"],
+          message: "no email address",
+        },
+      ],
+    });
+    await renderPage();
+
+    await loaded();
+    await userEvent.click(screen.getByRole("button", { name: /^send bills$/i }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/api/v1/billing-runs/run-1/send", {}),
+    );
+    // Both numbers: "116 sent" alone hides four customers who got
+    // nothing, and the cause is what someone has to act on. Matched on
+    // the panel's own wording — the toast says "116 bills queued" and
+    // would otherwise make this ambiguous.
+    expect(await screen.findByText(/116 queued for delivery/)).toBeInTheDocument();
+    expect(screen.getByText(/NO_EMAIL_ADDRESS/)).toBeInTheDocument();
+    expect(screen.getByText(/0001000-00/)).toBeInTheDocument();
+  });
+});

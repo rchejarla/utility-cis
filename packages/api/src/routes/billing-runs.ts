@@ -15,6 +15,7 @@ import {
   cancelBillingRun,
   resumeBillingRun,
   summariseRunExceptions,
+  sendBillingRun,
 } from "../services/billing-run.service.js";
 import { QUEUE_NAMES, enqueueSafely } from "../lib/queues.js";
 import { BILLING_RUN_JOB_NAME } from "../workers/billing-run-worker.js";
@@ -131,6 +132,27 @@ export async function billingRunRoutes(app: FastifyInstance) {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);
       return reply.send(await summariseRunExceptions(utilityId, id));
+    },
+  );
+
+  /*
+   * Send every bill this run produced.
+   *
+   * `EDIT` like posting, and after it: a run that has not been posted
+   * is refused outright rather than per bill, so twelve thousand
+   * identical refusals are not how an operator discovers the order.
+   *
+   * 202, because each bill is queued for the notification worker. The
+   * body reports what could not be queued, by cause — one address to
+   * fix usually clears a group.
+   */
+  app.post(
+    "/api/v1/billing-runs/:id/send",
+    { config: { module: "accounts", permission: "EDIT" } },
+    async (request, reply) => {
+      const { utilityId } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      return reply.status(202).send(await sendBillingRun(utilityId, id));
     },
   );
 

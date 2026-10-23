@@ -814,6 +814,132 @@ describe("exceptions grouped by cause", () => {
   }, 300_000);
 });
 
+/**
+ * Sending a run's bills, which is the only way sending scales.
+ *
+ * Delivery existed one bill at a time, and a run of twelve thousand
+ * accounts cannot be worked that way — the same objection as a per-bill
+ * hold button. The run is the natural trigger: it already knows which
+ * bills it produced, and posting is already the act that precedes
+ * sending.
+ *
+ * What it must not do is stop at the first problem. A customer with no
+ * email address, a bill nobody rendered, a held account — each is one
+ * account's exception, not a reason the other eleven thousand go
+ * unsent. So this reports by cause, the same shape as the pre-flight
+ * and the exception list.
+ */
+describe("sending a run's bills", () => {
+  async function send(runId: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/billing-runs/${runId}/send`,
+      headers: headers(),
+    });
+    return { statusCode: res.statusCode, body: JSON.parse(res.body) };
+  }
+
+  /** A run whose bills are posted and rendered, ready to go out. */
+  async function postedRun(): Promise<string> {
+    const run = JSON.parse((await startRun()).body);
+    await svc.processBillingRun({
+      runId: run.id,
+      utilityId,
+      actorId: ACTOR_ID,
+      actorName: "Tester",
+    });
+    await svc.postBillingRun(utilityId, ACTOR_ID, "Tester", run.id);
+    return run.id;
+  }
+
+  it("refuses a run that has not been posted", async () => {
+    const run = JSON.parse((await startRun()).body);
+    await svc.processBillingRun({
+      runId: run.id,
+      utilityId,
+      actorId: ACTOR_ID,
+      actorName: "Tester",
+    });
+
+    const res = await send(run.id);
+
+    // Nobody owes an unposted run. Sending it would ask twelve thousand
+    // customers for money the utility has not decided to charge.
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error.code).toBe("RUN_NOT_POSTED");
+  }, 300_000);
+
+  it("queues what it can and accounts for the rest by cause", async () => {
+    const runId = await postedRun();
+
+    const res = await send(runId);
+
+    expect(res.statusCode).toBe(202);
+    const { queued, skipped } = res.body as {
+      queued: number;
+      skipped: Array<{ code: string; accountCount: number; sampleAccounts: string[] }>;
+    };
+    const { prisma } = prismaImports;
+
+    // Every bill the run billed is either queued or explained; none is
+    // silently dropped.
+    const billed = await prisma.billingRunItem.count({
+      where: { billingRunId: runId, status: "BILLED" },
+    });
+    expect(queued + skipped.reduce((n, s) => n + s.accountCount, 0)).toBe(billed);
+
+    // One outbox row per queued bill, and no more: a second press must
+    // not double-send, which the next case pins.
+    expect(
+      await prisma.notification.count({ where: { utilityId, billId: { not: null } } }),
+    ).toBe(queued);
+
+    for (const group of skipped) {
+      expect(group.code).toBeTruthy();
+      expect(group.accountCount).toBeGreaterThan(0);
+      expect(group.sampleAccounts.length).toBeGreaterThan(0);
+    }
+  }, 300_000);
+
+  it("does not send a bill twice when pressed again", async () => {
+    const runId = await postedRun();
+    const first = await send(runId);
+
+    const second = await send(runId);
+
+    // The second pass finds every bill already queued and says so
+    // rather than making a second copy. An operator who clicks twice,
+    // or a page that retries, must not mail the customer twice.
+    expect(second.body.queued).toBe(0);
+    const { prisma } = prismaImports;
+    expect(
+      await prisma.notification.count({ where: { utilityId, billId: { not: null } } }),
+    ).toBe(first.body.queued);
+  }, 300_000);
+
+  it("leaves a held bill unsent, and names the hold as the cause", async () => {
+    const runId = await postedRun();
+    const { prisma } = prismaImports;
+    const item = await prisma.billingRunItem.findFirstOrThrow({
+      where: { billingRunId: runId, status: "BILLED" },
+    });
+    await prisma.bill.update({
+      where: { id: item.billId! },
+      data: { holdReason: "Disputed — do not send" },
+    });
+
+    const res = await send(runId);
+
+    const held = (res.body.skipped as Array<{ code: string }>).find(
+      (s) => s.code === "BILL_ON_HOLD",
+    );
+    expect(held).toBeTruthy();
+    expect(
+      await prisma.notification.count({ where: { billId: item.billId } }),
+    ).toBe(0);
+  }, 300_000);
+});
+
 describe("tenant isolation", () => {
   it("never puts another utility's accounts in a run, and hides its runs", async () => {
     const run = JSON.parse((await startRun()).body);

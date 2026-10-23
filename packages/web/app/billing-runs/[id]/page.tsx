@@ -44,6 +44,19 @@ interface ExceptionGroup {
   message: string;
 }
 
+/** One reason bills were not sent, and how much of the run it covers. */
+interface SendSkip {
+  code: string;
+  accountCount: number;
+  sampleAccounts: string[];
+  message: string;
+}
+
+interface SendResult {
+  queued: number;
+  skipped: SendSkip[];
+}
+
 interface PostResult {
   posted: number;
   alreadyPosted: number;
@@ -80,6 +93,14 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
    * bill open on it. Either way the run was gone from under them.
    */
   const [billId, setBillId] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  /*
+   * What the last send did, kept on screen rather than toasted away.
+   * "116 sent" is the easy half; the four customers who got nothing are
+   * the half somebody has to act on, and a toast that vanishes is not
+   * where that belongs.
+   */
+  const [sendResult, setSendResult] = useState<SendResult | null>(null);
   /*
    * The exceptions counted by cause, which is a different question from
    * the list below it. The counts on the cards say how many accounts;
@@ -155,6 +176,30 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
     }, 5000);
     return () => clearInterval(t);
   }, [inFlight, loadRun, loadItems]);
+
+  /**
+   * Queue every bill this run produced.
+   *
+   * Only once posted: an unposted run is a calculation nobody owes, and
+   * the API refuses it outright rather than per bill.
+   */
+  const sendBills = async () => {
+    setSending(true);
+    try {
+      const res = await apiClient.post<SendResult>(`/api/v1/billing-runs/${id}/send`, {});
+      setSendResult(res);
+      toast(
+        res.skipped.length === 0
+          ? `${res.queued.toLocaleString()} bills queued for delivery.`
+          : `${res.queued.toLocaleString()} queued — ${res.skipped.reduce((n, s) => n + s.accountCount, 0).toLocaleString()} could not be sent.`,
+        res.skipped.length === 0 ? "success" : "info",
+      );
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Sending failed", "error");
+    } finally {
+      setSending(false);
+    }
+  };
 
   const post = async () => {
     setPosting(true);
@@ -249,6 +294,16 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
                 {resuming ? "Resuming…" : "Resume"}
               </button>
             )}
+            {canEdit && run.postedAt && (
+              <button
+                onClick={() => void sendBills()}
+                disabled={sending}
+                style={{ ...WARNING_BTN, opacity: sending ? 0.6 : 1 }}
+                title="Queue every bill this run produced for delivery to its customer."
+              >
+                {sending ? "Sending…" : "Send bills"}
+              </button>
+            )}
             {canPost && (
               <button onClick={() => setConfirmPost(true)} style={PRIMARY_BTN}>
                 Post this run
@@ -269,6 +324,42 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
           any of it yet. Review the failures, then post the run.
         </Banner>
       )}
+      {sendResult && (
+        <div
+          style={{
+            background: "var(--bg-card)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+            padding: "12px 16px",
+            marginBottom: 16,
+            fontSize: 12.5,
+          }}
+        >
+          <strong>
+            {sendResult.queued.toLocaleString()} queued for delivery
+          </strong>
+          {sendResult.skipped.length > 0 && (
+            <ul style={{ margin: "6px 0 0", paddingLeft: 18, color: "var(--warning)" }}>
+              {sendResult.skipped.map((s) => (
+                <li key={s.code} style={{ marginBottom: 2 }}>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>
+                    {s.code}
+                  </span>{" "}
+                  {s.accountCount.toLocaleString()}{" "}
+                  {s.accountCount === 1 ? "account" : "accounts"}
+                  {s.sampleAccounts.length > 0 && (
+                    <span style={{ color: "var(--text-muted)" }}>
+                      {" "}
+                      e.g. {s.sampleAccounts.join(", ")}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       {run.postedAt && (
         <Banner tone="success">
           Posted {fmtDate(run.postedAt)} — these bills are now receivables on their accounts.
