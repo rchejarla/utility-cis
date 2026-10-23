@@ -6,6 +6,25 @@ import { apiClient } from "@/lib/api-client";
 import * as permModule from "@/lib/use-permission";
 import BillsPage from "../page";
 
+/*
+ * The global setup pins `useSearchParams` to an empty URLSearchParams,
+ * so a page that reads one cannot be exercised through it. Overridden
+ * per file the way the cluster jobs suite does.
+ */
+let search = new URLSearchParams();
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+  usePathname: () => "/bills",
+  useSearchParams: () => search,
+}));
+
 /**
  * The bill-document actions on the tenant-wide bill list.
  *
@@ -75,6 +94,7 @@ const fetchMock = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  search = new URLSearchParams();
   vi.stubGlobal("fetch", fetchMock);
   // jsdom implements none of these. Viewing a bill opens a tab and
   // points it at a blob URL; left unstubbed, jsdom's window.open returns
@@ -438,5 +458,53 @@ describe("Bills page — bill document actions", () => {
     // labelled "Regenerate PDF", behind a menu that starts closed.
     expect(screen.queryByRole("button", { name: /More actions/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: "Regenerate PDF" })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Arriving at a bill from somewhere else.
+ *
+ * A billing run's Billed tab lists accounts, and its View action has to
+ * land on the bill it names. It used to link to `?search=<bill id>`,
+ * and the list's search matches bill number, account number and
+ * customer name — never an id — so the operator arrived at an empty
+ * list with a UUID in the search box, which reads as "that bill does
+ * not exist".
+ */
+describe("Bills — arriving with a bill named in the URL", () => {
+  it("opens that bill rather than searching for its id", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === `/api/v1/bills/${"bill-1"}`) {
+        return Promise.resolve({
+          ...bill(),
+          subtotal: "107.50",
+          taxes: "0.00",
+          credits: "0.00",
+          segments: [],
+        });
+      }
+      return Promise.resolve(payload([bill()]));
+    });
+    search = new URLSearchParams({ bill: "bill-1" });
+
+    renderPage();
+
+    // The dialog fetches the one bill by id; the list is not filtered by
+    // a value it could never match.
+    await waitFor(() => expect(get).toHaveBeenCalledWith("/api/v1/bills/bill-1"));
+    const listCalls = get.mock.calls.filter((c) => c[0] === "/api/v1/bills");
+    for (const call of listCalls) {
+      expect(call[1]?.search).toBeUndefined();
+    }
+  });
+
+  it("shows the plain list when no bill is named", async () => {
+    get.mockResolvedValue(payload([bill()]));
+    search = new URLSearchParams();
+
+    renderPage();
+
+    await screen.findByText("B-1001");
+    expect(get).not.toHaveBeenCalledWith("/api/v1/bills/bill-1");
   });
 });

@@ -342,7 +342,14 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
                         </Td>
                         <Td>
                           {i.billId ? (
-                            <Link href={`/bills?search=${i.billId}`} style={MONO_LINK}>
+                            /*
+                              `?bill=` opens that bill. `?search=` put the
+                              id in the list's search box, which matches
+                              bill number, account number and customer
+                              name and never an id — so this landed on an
+                              empty list, reading as "no such bill".
+                            */
+                            <Link href={`/bills?bill=${i.billId}`} style={MONO_LINK}>
                               View
                             </Link>
                           ) : (

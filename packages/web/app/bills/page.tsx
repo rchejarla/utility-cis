@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { PageHeader } from "@/components/ui/page-header";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { FilterBar } from "@/components/ui/filter-bar";
@@ -92,14 +93,33 @@ const STATE_OPTIONS = (Object.keys(STATE_LABELS) as BillState[]).map((value) => 
 
 type StateFilter = BillState | "all";
 
-export default function BillsPage() {
+function Bills() {
   const { canView } = usePermission("accounts");
+  const params = useSearchParams();
   const { toast } = useToast();
 
   const [rows, setRows] = useState<BillRow[]>([]);
   const [meta, setMeta] = useState<BillPage["meta"] | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailId, setDetailId] = useState<string | null>(null);
+
+  /*
+   * A bill named in the URL opens straight away.
+   *
+   * How a billing run's Billed tab reaches one bill out of thousands.
+   * It used to link to `?search=<bill id>`, and this list's search
+   * matches bill number, account number and customer name — never an
+   * id — so the operator landed on an empty list with a UUID in the
+   * search box, which reads as "that bill does not exist".
+   *
+   * Read once per id rather than held in sync with the URL: closing the
+   * dialog should not navigate, and reopening the same bill from the
+   * list is the list's business.
+   */
+  const billParam = params.get("bill");
+  useEffect(() => {
+    if (billParam) setDetailId(billParam);
+  }, [billParam]);
 
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -461,5 +481,17 @@ function Td({
     >
       {children}
     </td>
+  );
+}
+
+/**
+ * `useSearchParams` makes this page client-rendered; the boundary is
+ * what keeps Next from complaining about it during the build.
+ */
+export default function BillsPage() {
+  return (
+    <Suspense fallback={null}>
+      <Bills />
+    </Suspense>
   );
 }
