@@ -160,6 +160,39 @@ export interface BillSegmentLineRow {
   sortOrder: number;
 }
 
+/**
+ * One stored line, as an API caller sees it.
+ *
+ * Exported because two endpoints serve the same line — a segment, and
+ * the bill that aggregates it — and they were mapping it separately.
+ * Adding `unit` to one list of fields and not the other is how a
+ * quantity reached the database in HCF and the bill dialog as a bare
+ * number. One mapper cannot drift from itself.
+ */
+export function toBillSegmentLineRow(l: {
+  id: string;
+  label: string;
+  kindCode: string;
+  amount: Prisma.Decimal;
+  quantity: Prisma.Decimal | null;
+  unit: string | null;
+  sourceScheduleId: string;
+  sourceComponentId: string;
+  sortOrder: number;
+}): BillSegmentLineRow {
+  return {
+    id: l.id,
+    label: l.label,
+    kindCode: l.kindCode,
+    amount: l.amount.toFixed(4),
+    quantity: l.quantity ? l.quantity.toFixed(4) : null,
+    unit: l.unit,
+    sourceScheduleId: l.sourceScheduleId,
+    sourceComponentId: l.sourceComponentId,
+    sortOrder: l.sortOrder,
+  };
+}
+
 export interface BillSegmentSummary {
   id: string;
   utilityId: string;
@@ -383,17 +416,7 @@ async function assembleSegmentWithLines(
     minimumFloorApplied: segment.minimumFloorApplied,
     segmentNumber: segment.segmentNumber,
     createdAt: segment.createdAt,
-    lines: segment.lines.map((l) => ({
-      id: l.id,
-      label: l.label,
-      kindCode: l.kindCode,
-      amount: l.amount.toFixed(4),
-      quantity: l.quantity ? l.quantity.toFixed(4) : null,
-      unit: l.unit,
-      sourceScheduleId: l.sourceScheduleId,
-      sourceComponentId: l.sourceComponentId,
-      sortOrder: l.sortOrder,
-    })),
+    lines: segment.lines.map(toBillSegmentLineRow),
   };
 }
 

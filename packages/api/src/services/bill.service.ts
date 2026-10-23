@@ -3,6 +3,10 @@ import { prisma } from "../lib/prisma.js";
 import { auditCreate } from "../lib/audit-wrap.js";
 import { paginatedTenantList } from "../lib/pagination.js";
 import {
+  toBillSegmentLineRow,
+  type BillSegmentLineRow,
+} from "./bill-segment.service.js";
+import {
   EVENT_TYPES,
   billSortFields,
   type BillQuery,
@@ -41,22 +45,6 @@ export interface BillSegmentRow {
   credits: string;
   total: string;
   lines: BillSegmentLineRow[];
-}
-
-export interface BillSegmentLineRow {
-  id: string;
-  label: string;
-  kindCode: string;
-  amount: string;
-  quantity: string | null;
-  /**
-   * What `quantity` is counted in — the tariff's unit, not always the
-   * meter's, since the engine converts between them. Without it a
-   * gallons meter on an HCF tariff reaches the bill dialog as a bare
-   * 6.6279, which reconciles with nothing the customer can read.
-   */
-  unit: string | null;
-  sortOrder: number;
 }
 
 export interface BillSummary {
@@ -361,15 +349,7 @@ async function assembleBillWithSegments(
       taxes: s.taxes.toFixed(4),
       credits: s.credits.toFixed(4),
       total: s.total.toFixed(4),
-      lines: s.lines.map((l) => ({
-        id: l.id,
-        label: l.label,
-        kindCode: l.kindCode,
-        amount: l.amount.toFixed(4),
-        quantity: l.quantity ? l.quantity.toFixed(4) : null,
-        unit: l.unit,
-        sortOrder: l.sortOrder,
-      })),
+      lines: s.lines.map(toBillSegmentLineRow),
     })),
   };
 }

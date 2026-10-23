@@ -100,7 +100,18 @@ beforeAll(async () => {
   const rbac = await import("../../services/rbac.service.js");
   await rbac.invalidateTenantModulesCache(utilityId);
 
-  // Seed meter size + a single 12 HCF read for May 2026.
+  /*
+   * Seed meter size + a single read of 12 HCF, recorded the way the
+   * meter records it.
+   *
+   * It used to write `consumption: 12` against a water meter whose unit
+   * of measure is GAL and expect it to price as 12 HCF — the same
+   * assumption the golden fixtures made, and the one the engine's unit
+   * conversion exists to break. Twelve gallons is 0.016 HCF and bills
+   * five cents of usage. The quantity below is 12 HCF in gallons, so
+   * the $69.65 this file is named for is still what a 12 HCF month
+   * costs.
+   */
   const meterId = assignment.serviceAgreement.servicePoints[0]!.meters[0]!.meterId;
   await prisma.meter.update({
     where: { id: meterId },
@@ -118,14 +129,17 @@ beforeAll(async () => {
       uomId: meter.uomId,
       readDate: new Date(2026, 4, 31),
       readDatetime: new Date(2026, 4, 31, 12, 0, 0),
-      reading: 100,
+      // 100 ft³ is exactly 172800/231 US gallons.
+      reading: TWELVE_HCF_IN_GALLONS + 88,
       priorReading: 88,
-      consumption: 12,
+      consumption: TWELVE_HCF_IN_GALLONS,
       readType: "ACTUAL",
       readSource: "MANUAL",
     },
   });
 }, 600_000);
+
+const TWELVE_HCF_IN_GALLONS = (12 * 172800) / 231;
 
 afterAll(async () => {
   await app?.close().catch(() => {});

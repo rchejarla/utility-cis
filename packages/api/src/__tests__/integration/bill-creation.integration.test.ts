@@ -269,6 +269,49 @@ describe("POST /api/v1/accounts/:id/bills — Bozeman SFR golden", () => {
     expect(lines.some((l) => l.unit === "HCF")).toBe(true);
   }, 600_000);
 
+  /*
+   * One shape for a bill line, not one per endpoint.
+   *
+   * `BillSegmentLineRow` was declared twice — here and in the segment
+   * service — with two hand-written mappers, and the bill endpoint's
+   * copy omitted the provenance fields. That is how `unit` reached the
+   * database and the segment endpoint but not the bill dialog: a field
+   * added to one list of nine and not the other. Spec 09 says a line
+   * can be traced to the exact schedule version and component that
+   * produced it; this is that claim, asserted where it is served.
+   */
+  it("traces each line to the schedule and component that produced it", async () => {
+    await seedBozemanSegment();
+
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/bills`,
+      headers: headers(),
+      payload: { asOfDate: "2026-05-15" },
+    });
+    const billId = JSON.parse(created.body).id;
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/bills/${billId}`,
+      headers: headers(),
+    });
+
+    const lines = JSON.parse(res.body).segments[0].lines as Array<Record<string, unknown>>;
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(line.sourceScheduleId).toEqual(expect.any(String));
+      expect(line.sourceComponentId).toEqual(expect.any(String));
+    }
+
+    // And they name rows that exist, not ids carried for show.
+    const { prisma } = prismaImports;
+    const component = await prisma.rateComponent.findUnique({
+      where: { id: lines[0]!.sourceComponentId as string },
+    });
+    expect(component).not.toBeNull();
+  }, 600_000);
+
   it("multi-SA aggregation: Bill totals = sum of attached segments", async () => {
     // First, the real water segment from the engine.
     const waterSeg = await seedBozemanSegment();

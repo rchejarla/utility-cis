@@ -119,7 +119,17 @@ describe("End-to-end rating: seeded Bozeman SFR water → $69.65 subtotal", () =
     const sa = assignment.serviceAgreement;
     expect(sa.rateServiceClass?.code).toBe("single_family");
 
-    // 3. Locate the SA's meter + seed a 12 HCF read for May 2026
+    /*
+     * 3. Locate the SA's meter + seed a read of 12 HCF, recorded the way
+     * the meter records it.
+     *
+     * The water meter's unit of measure is GAL and the tariff is written
+     * per HCF. Writing `consumption: 12` here meant "12 HCF" only
+     * because nothing converted; now that the engine does, 12 gallons is
+     * 0.016 HCF and bills five cents. 100 ft³ is exactly 172800/231 US
+     * gallons, so this is the same month the file is named for.
+     */
+    const TWELVE_HCF_IN_GALLONS = (12 * 172800) / 231;
     const meterAssignment = sa.servicePoints[0]?.meters[0];
     if (!meterAssignment) {
       throw new Error("Seeded SFR SA has no meter — adjust fixture or seed");
@@ -146,9 +156,9 @@ describe("End-to-end rating: seeded Bozeman SFR water → $69.65 subtotal", () =
         uomId: meter.uomId,
         readDate: new Date(2026, 4, 31),
         readDatetime: new Date(2026, 4, 31, 12, 0, 0),
-        reading: 100,
+        reading: TWELVE_HCF_IN_GALLONS + 88,
         priorReading: 88,
-        consumption: 12,
+        consumption: TWELVE_HCF_IN_GALLONS,
         readType: "ACTUAL",
         readSource: "MANUAL",
       },
