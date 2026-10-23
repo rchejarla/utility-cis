@@ -232,6 +232,43 @@ describe("POST /api/v1/accounts/:id/bills — Bozeman SFR golden", () => {
     expect(dbBill.segments[0].billId).toBe(dbBill.id);
   }, 600_000);
 
+  /*
+   * The unit travels with the quantity all the way out.
+   *
+   * There are three near-identical BillSegmentLine row types — this
+   * endpoint's, the segment service's, and the statement's — each with
+   * its own mapper. Adding `unit` to two of them left the bill dialog
+   * showing a bare 6.6279 for a gallons meter on an HCF tariff, which
+   * is the number the column exists to explain.
+   */
+  it("returns the unit each line's quantity is counted in", async () => {
+    await seedBozemanSegment();
+
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/bills`,
+      headers: headers(),
+      payload: { asOfDate: "2026-05-15" },
+    });
+    const billId = JSON.parse(created.body).id;
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/bills/${billId}`,
+      headers: headers(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const lines = JSON.parse(res.body).segments[0].lines as Array<Record<string, unknown>>;
+    expect(lines.length).toBeGreaterThan(0);
+    // Every line names its unit or says plainly that it has none;
+    // `undefined` would mean the field never left the service.
+    for (const line of lines) {
+      expect(line).toHaveProperty("unit");
+    }
+    expect(lines.some((l) => l.unit === "HCF")).toBe(true);
+  }, 600_000);
+
   it("multi-SA aggregation: Bill totals = sum of attached segments", async () => {
     // First, the real water segment from the engine.
     const waterSeg = await seedBozemanSegment();

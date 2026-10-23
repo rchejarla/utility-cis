@@ -235,7 +235,9 @@ async function main() {
       { kindCode: "service_charge", label: "Water Service Charge",
         sortOrder: 10, effectiveDate: SLICE1_EFF,
         predicate: {}, quantitySource: { base: "fixed" },
-        pricing: { type: "lookup", by: "meter_size", table: {
+        // MONTH like every other service charge: the amount varies by
+        // meter size but the charge is one month of service.
+        pricing: { type: "lookup", by: "meter_size", unit: "MONTH", table: {
           '5/8"': 22.31, '1"': 29.56, '1.5"': 46.52, '2"': 67.64,
           '3"': 116.92, '4"': 187.50, '6"': 349.42, '8"': 552.48,
         }},
@@ -244,7 +246,11 @@ async function main() {
         sortOrder: 20, effectiveDate: SLICE1_EFF,
         predicate: { class: "single_family" },
         quantitySource: { base: "metered" },
-        pricing: { type: "tiered", tiers: [
+        // `unit` because both the rates and the thresholds are per HCF
+        // while the meters are GAL. Its siblings below always said so;
+        // this one did not, so a gallons reading was priced as though it
+        // were already hundred-cubic-feet.
+        pricing: { type: "tiered", unit: "HCF", tiers: [
           { to: 6, rate: 3.31 }, { to: 25, rate: 4.58 },
           { to: 55, rate: 6.39 }, { to: null, rate: 9.58 },
         ]},

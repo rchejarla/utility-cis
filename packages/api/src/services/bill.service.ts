@@ -49,6 +49,13 @@ export interface BillSegmentLineRow {
   kindCode: string;
   amount: string;
   quantity: string | null;
+  /**
+   * What `quantity` is counted in — the tariff's unit, not always the
+   * meter's, since the engine converts between them. Without it a
+   * gallons meter on an HCF tariff reaches the bill dialog as a bare
+   * 6.6279, which reconciles with nothing the customer can read.
+   */
+  unit: string | null;
   sortOrder: number;
 }
 
@@ -360,6 +367,7 @@ async function assembleBillWithSegments(
         kindCode: l.kindCode,
         amount: l.amount.toFixed(4),
         quantity: l.quantity ? l.quantity.toFixed(4) : null,
+        unit: l.unit,
         sortOrder: l.sortOrder,
       })),
     })),
