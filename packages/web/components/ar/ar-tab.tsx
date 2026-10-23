@@ -231,11 +231,29 @@ export function ArTab({ accountId }: { accountId: string }) {
     }
   }
 
+  // All three sit on the same card the loaded tab does, so the tab does
+  // not snap from a bare line on the page background into a panel.
   if (!canView) {
-    return <div style={muted}>You do not have permission to view this account&apos;s ledger.</div>;
+    return (
+      <div style={panel}>
+        <div style={muted}>You do not have permission to view this account&apos;s ledger.</div>
+      </div>
+    );
   }
-  if (loading) return <div style={muted}>Loading…</div>;
-  if (error) return <div style={{ ...muted, color: "var(--danger)" }}>{error}</div>;
+  if (loading) {
+    return (
+      <div style={panel}>
+        <div style={muted}>Loading…</div>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div style={panel}>
+        <div style={{ ...muted, color: "var(--danger)" }}>{error}</div>
+      </div>
+    );
+  }
   if (!page) return null;
 
   const balance = parseFloat(page.balance);
@@ -248,7 +266,15 @@ export function ArTab({ accountId }: { accountId: string }) {
   const creditAvailable = inCredit ? (-balance).toFixed(2) : "0.00";
 
   return (
-    <div>
+    <div style={panel}>
+      {/*
+        One card for the whole tab, not one around the table alone. The
+        three figures and the unposted-bills note are a reading of the
+        ledger below them, and the acts change it — floated above an
+        isolated table they read as page furniture that happens to sit
+        nearby.
+      */}
+      <div style={summary}>
       {(canTakePayment || canRaiseFee) && (
         <div
           style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginBottom: "12px" }}
@@ -322,7 +348,7 @@ export function ArTab({ accountId }: { accountId: string }) {
       )}
 
       {/* What the account owes, in words that are true for every sign. */}
-      <div style={{ display: "flex", gap: "16px", marginBottom: "20px", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
         <div style={card}>
           <div style={cardValue}>{settledUp ? "$0.00" : money(page.balance)}</div>
           <div style={cardLabel}>
@@ -350,6 +376,8 @@ export function ArTab({ accountId }: { accountId: string }) {
             </div>
           </div>
         )}
+      </div>
+
       </div>
 
       {page.data.length === 0 ? (
@@ -516,6 +544,23 @@ const muted: React.CSSProperties = {
   padding: "24px 0",
   fontSize: "13px",
 };
+/**
+ * The chrome a tab sits in, as DataTable and ContactsTab draw it.
+ *
+ * Padded, so the table is inset from the card's edges rather than run
+ * to them — which also means the table's parent is the card itself, and
+ * the tests can ask one element whether it holds the figures, the acts
+ * and the rows alike.
+ */
+const panel: React.CSSProperties = {
+  background: "var(--bg-card)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius)",
+  overflow: "hidden",
+  padding: "16px",
+};
+/** Everything above the ledger, separated from it by one gap. */
+const summary: React.CSSProperties = { marginBottom: "16px" };
 const card: React.CSSProperties = {
   background: "var(--bg-elevated)",
   border: "1px solid var(--border)",

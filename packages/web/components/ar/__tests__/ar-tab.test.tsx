@@ -347,3 +347,53 @@ describe("ArTab — the bill's PDF", () => {
     expect(screen.queryByRole("button", { name: "View bill" })).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The whole tab is one card, not a bare table on the page.
+ *
+ * Every other tab on this account draws a `--bg-card` panel — DataTable
+ * for Agreements and Audit, ContactsTab for Contacts — and AR and Bills
+ * were the only two that did not, so on the light theme they were the
+ * page's indigo-grey all the way down while their siblings were white.
+ *
+ * The card goes around the *whole* tab, not around the table alone. The
+ * three figures and the unposted-bills note are a reading of the ledger
+ * below them, and the acts change it; floated above an isolated table
+ * they read as page furniture that happens to sit nearby. Bills takes
+ * the same shape — see the matching cases in bills-tab.test.tsx.
+ */
+describe("ArTab — the card it sits on", () => {
+  it("puts the ledger on a card", async () => {
+    routeGets(page({ data: [row()], balance: "40.00", openCount: 1 }));
+    renderTab();
+    const panel = (await screen.findByRole("table")).parentElement!;
+    expect(panel).toHaveStyle({ background: "var(--bg-card)" });
+  });
+
+  it("puts the empty state on it too, rather than floating it on the page", async () => {
+    routeGets(page());
+    renderTab();
+    const empty = await screen.findByText(/no ledger activity yet/i);
+    expect(empty.parentElement).toHaveStyle({ background: "var(--bg-card)" });
+  });
+
+  it("holds the figures and the acts inside that same card", async () => {
+    routeGets(page({ data: [row()], balance: "40.00", openCount: 1 }));
+    renderTab();
+    const card = (await screen.findByRole("table")).parentElement!;
+    expect(card).toContainElement(screen.getByText("Amount due"));
+    expect(card).toContainElement(screen.getByText("Open item"));
+    expect(card).toContainElement(screen.getByRole("button", { name: /record payment/i }));
+  });
+
+  it("holds the unposted-bills note inside it too", async () => {
+    // The note explains the figure above it and the rows below it, so it
+    // is the last thing that should be floating loose on the page.
+    routeGets(page({ data: [row()], balance: "40.00", openCount: 1 }), [
+      { id: "b1", billNumber: "B-9", periodStart: "", periodEnd: "", dueDate: "", total: "10.00" },
+    ]);
+    renderTab();
+    const card = (await screen.findByRole("table")).parentElement!;
+    expect(card).toContainElement(await screen.findByText(/not yet owed/i));
+  });
+});

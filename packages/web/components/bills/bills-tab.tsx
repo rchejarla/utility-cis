@@ -79,8 +79,10 @@ export function BillsTab({ accountId, canEdit }: { accountId: string; canEdit: b
   };
 
   return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px" }}>
+    <div style={panel}>
+      {/* One card for the whole tab, matching AR beside it. */}
+      <div style={summary}>
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
         {canEdit && (
           <button
             onClick={() => setShowDialog(true)}
@@ -99,6 +101,8 @@ export function BillsTab({ accountId, canEdit }: { accountId: string; canEdit: b
             Bill off cycle
           </button>
         )}
+      </div>
+
       </div>
 
       {loading ? (
@@ -287,6 +291,20 @@ export function BillsTab({ accountId, canEdit }: { accountId: string; canEdit: b
   );
 }
 
+/**
+ * The chrome a tab sits in, as DataTable and ContactsTab draw it.
+ * Padded, so the table is inset from the card's edges rather than run
+ * to them.
+ */
+const panel: React.CSSProperties = {
+  background: "var(--bg-card)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius)",
+  overflow: "hidden",
+  padding: "16px",
+};
+/** Everything above the list, separated from it by one gap. */
+const summary: React.CSSProperties = { marginBottom: "16px" };
 const th: React.CSSProperties = {
   padding: "10px 12px",
   fontSize: "11px",

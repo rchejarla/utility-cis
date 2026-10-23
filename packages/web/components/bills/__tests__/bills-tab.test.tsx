@@ -163,3 +163,32 @@ describe("Bills tab — billing one account off cycle", () => {
     expect(screen.queryByText(/click .*generate bill/i)).toBeNull();
   });
 });
+
+/**
+ * One card for the whole tab, the shape AR takes beside it — see the
+ * matching cases in ar-tab.test.tsx. These two were the only tabs on
+ * this account rendering a bare table, and so the only two that read as
+ * grey beside white siblings.
+ */
+describe("Account Bills tab — the card it sits on", () => {
+  it("puts the list on a card", async () => {
+    get.mockResolvedValue([bill()]);
+    renderTab();
+    const panel = (await screen.findByRole("table")).parentElement!;
+    expect(panel).toHaveStyle({ background: "var(--bg-card)" });
+  });
+
+  it("puts the empty state on it too, rather than floating it on the page", async () => {
+    get.mockResolvedValue([]);
+    renderTab();
+    const empty = await screen.findByText(/no bills yet/i);
+    expect(empty.parentElement).toHaveStyle({ background: "var(--bg-card)" });
+  });
+
+  it("holds the act inside that same card", async () => {
+    get.mockResolvedValue([bill()]);
+    renderTab();
+    const card = (await screen.findByRole("table")).parentElement!;
+    expect(card).toContainElement(screen.getByRole("button", { name: /off cycle/i }));
+  });
+});
