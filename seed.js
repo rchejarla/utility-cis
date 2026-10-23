@@ -43,11 +43,24 @@ async function main() {
   // bill_segment_line -> rate_component, which is why this sits above the
   // rate v2 cleanup rather than below it. Getting that last one wrong puts
   // a delete here that can never run on a DB holding a rated segment.
+  // A billing run's items point at account and bill, and the run itself
+  // at billing_cycle — so both precede every one of those. Same blind
+  // spot as bill_document: this cleanup was written before runs existed
+  // and no seeded database had a row here until one was started by hand.
+  if (p.billingRunItem) await p.billingRunItem.deleteMany({});
+  if (p.billingRun) await p.billingRun.deleteMany({});
   if (p.ledgerApplication) await p.ledgerApplication.deleteMany({});
   if (p.ledgerEntry) await p.ledgerEntry.deleteMany({});
   if (p.ledgerReasonDef) await p.ledgerReasonDef.deleteMany({});
   if (p.billSegmentLine) await p.billSegmentLine.deleteMany({});
   if (p.billSegment) await p.billSegment.deleteMany({});
+  // bill_document -> bill is a fifth RESTRICT parent. It went unnoticed
+  // until a bill PDF was generated for the first time, because a
+  // database with no rendered bill has no row here and the delete below
+  // succeeds. The object in storage is left where it is: apptor-connect
+  // owns that bucket, the pointer is what lives in this database, and a
+  // reseed is not a licence to reach into someone else's store.
+  if (p.billDocument) await p.billDocument.deleteMany({});
   if (p.bill) await p.bill.deleteMany({});
 
   // Rate v2 cleanup (slice 1 task 10) — sa_rate_schedule_assignment
@@ -212,8 +225,36 @@ async function main() {
   // ============ RATE INDICES (v2 — slice 1 task 10) ============
   await p.rateIndex.create({ data: { utilityId: UID, name: "fac",                period: "2026-Q2",      value: 0.00125, effectiveDate: new Date("2026-04-01") } });
   await p.rateIndex.create({ data: { utilityId: UID, name: "epcc",               period: "2026-current", value: 0.00050, effectiveDate: new Date("2026-01-01") } });
-  await p.rateIndex.create({ data: { utilityId: UID, name: "supply_residential", period: "2026-Q2",      value: 0.07000, effectiveDate: new Date("2026-04-01") } });
-  console.log("  3 rate indices");
+  /*
+   * `supply_residential` is published every quarter, because NWE's
+   * default-supply component is `indexed` with a `current_quarter`
+   * resolver: it reads `index:supply_residential:<quarter of the
+   * service period's start>` and throws if that exact quarter is
+   * missing. One quarter's row only bills the one quarter.
+   *
+   * The span starts at 2025-Q1 because that is when the seeded service
+   * agreements start, and a first bill runs from the agreement's own
+   * start date; it runs to 2026-Q4 to cover the seeded reads. Values
+   * drift a little so a bill's supply charge changes between
+   * quarters the way a real indexed rate does.
+   */
+  const SUPPLY_BY_QUARTER = {
+    "2025-Q1": 0.06100, "2025-Q2": 0.06250, "2025-Q3": 0.06800, "2025-Q4": 0.06400,
+    "2026-Q1": 0.06650, "2026-Q2": 0.07000, "2026-Q3": 0.07350, "2026-Q4": 0.07100,
+  };
+  for (const [period, value] of Object.entries(SUPPLY_BY_QUARTER)) {
+    const [y, q] = period.split("-Q");
+    await p.rateIndex.create({
+      data: {
+        utilityId: UID,
+        name: "supply_residential",
+        period,
+        value,
+        effectiveDate: new Date(Date.UTC(Number(y), (Number(q) - 1) * 3, 1)),
+      },
+    });
+  }
+  console.log("  " + (2 + Object.keys(SUPPLY_BY_QUARTER).length) + " rate indices");
 
   // ============ RATE SCHEDULES + COMPONENTS (v2 — slice 1 task 10) ============
   // Schedules are metadata-only; pricing lives in rate_component rows.
@@ -244,12 +285,15 @@ async function main() {
           '3"': 116.92, '4"': 187.50, '6"': 349.42, '8"': 552.48,
         }},
       },
-      // SFR — inclining-block tiers.
+      // SFR — inclining-block tiers. `unit` because both the rates and
+      // the thresholds are per HCF while the meters are GAL: without it
+      // 3,515 gallons priced as 3,515 HCF and billed $33,445.38 of
+      // usage on one house for one month.
       { utilityId: UID, rateScheduleId: rsW.id, kindCode: "consumption",
         label: "Water Usage — Single Family", sortOrder: 20, effectiveDate: SLICE1_EFF,
         predicate: { class: "single_family" },
         quantitySource: { base: "metered" },
-        pricing: { type: "tiered", tiers: [
+        pricing: { type: "tiered", unit: "HCF", tiers: [
           { to: 6, rate: 3.31 }, { to: 25, rate: 4.58 },
           { to: 55, rate: 6.39 }, { to: null, rate: 9.58 },
         ]},
@@ -617,6 +661,18 @@ async function main() {
           // for the two portal customers.
           id: `00000000-0000-4000-8000-00000000ac0${i.toString(16)}`,
           utilityId: UID,
+          /*
+           * Backdated to the agreements' own start, or nothing can be
+           * billed. `computeBillPeriod` clamps a window's start to
+           * `account.createdAt` — an account created today gets a
+           * window whose start is after its end, finds no segments and
+           * skips with NO_SEGMENTS_TO_BILL. That clamp is right (an
+           * account cannot be billed for a window predating it); what
+           * was wrong was seeding every account as created today and
+           * then billing it for last month. The billing-run integration
+           * fixture had to undo this in raw SQL to test anything.
+           */
+          createdAt: new Date("2025-01-01T00:00:00Z"),
           ...ac,
         },
       }),
@@ -624,21 +680,34 @@ async function main() {
   }
   console.log("  " + aArr.length + " accounts");
 
+  /*
+   * Water and sewer meters carry a size, because Bozeman's water
+   * service charge is priced by one: `lookup` pricing reads
+   * `meter:size:<id>` from `customFields.size` and the tariff's table
+   * is keyed `5/8"`, `1"`, `1.5"` … A meter without it does not bill —
+   * the component throws rather than guessing a size, and a run
+   * reports the account as failed. Electric and gas meters have no
+   * size in inches and no tariff asks for one.
+   *
+   * The sizes below follow the premise: residential 5/8", commercial
+   * and industrial larger, so more than one row of the table is ever
+   * exercised.
+   */
   const meterData = [
-    { premiseId: pArr[0].id, meterNumber: "WM-001", commodityId: water.id, uomId: gal.id, meterType: "MANUAL", status: "ACTIVE", installDate: new Date("2024-01-15") },
-    { premiseId: pArr[0].id, meterNumber: "SM-001", commodityId: sewer.id, uomId: sgal.id, meterType: "MANUAL", status: "ACTIVE", installDate: new Date("2024-01-15") },
-    { premiseId: pArr[1].id, meterNumber: "WM-002", commodityId: water.id, uomId: gal.id, meterType: "AMR", status: "ACTIVE", installDate: new Date("2024-02-01") },
+    { premiseId: pArr[0].id, meterNumber: "WM-001", commodityId: water.id, uomId: gal.id, meterType: "MANUAL", status: "ACTIVE", installDate: new Date("2024-01-15"), customFields: { size: '5/8"' } },
+    { premiseId: pArr[0].id, meterNumber: "SM-001", commodityId: sewer.id, uomId: sgal.id, meterType: "MANUAL", status: "ACTIVE", installDate: new Date("2024-01-15"), customFields: { size: '5/8"' } },
+    { premiseId: pArr[1].id, meterNumber: "WM-002", commodityId: water.id, uomId: gal.id, meterType: "AMR", status: "ACTIVE", installDate: new Date("2024-02-01"), customFields: { size: '2"' } },
     { premiseId: pArr[1].id, meterNumber: "EM-001", commodityId: electric.id, uomId: kwh.id, meterType: "AMI", status: "ACTIVE", installDate: new Date("2024-02-01") },
     { premiseId: pArr[1].id, meterNumber: "GM-001", commodityId: gas.id, uomId: mcf.id, meterType: "AMR", status: "ACTIVE", installDate: new Date("2024-02-01") },
     { premiseId: pArr[2].id, meterNumber: "EM-002", commodityId: electric.id, uomId: kwh.id, meterType: "SMART", status: "ACTIVE", installDate: new Date("2024-03-01") },
     { premiseId: pArr[2].id, meterNumber: "GM-002", commodityId: gas.id, uomId: mcf.id, meterType: "MANUAL", status: "ACTIVE", installDate: new Date("2024-03-01") },
-    { premiseId: pArr[3].id, meterNumber: "WM-003", commodityId: water.id, uomId: gal.id, meterType: "AMI", status: "ACTIVE", installDate: new Date("2024-01-20") },
+    { premiseId: pArr[3].id, meterNumber: "WM-003", commodityId: water.id, uomId: gal.id, meterType: "AMI", status: "ACTIVE", installDate: new Date("2024-01-20"), customFields: { size: '4"' } },
     { premiseId: pArr[3].id, meterNumber: "EM-003", commodityId: electric.id, uomId: kwh.id, meterType: "AMI", status: "ACTIVE", installDate: new Date("2024-01-20") },
-    { premiseId: pArr[4].id, meterNumber: "WM-004", commodityId: water.id, uomId: gal.id, meterType: "AMR", status: "ACTIVE", installDate: new Date("2024-04-01") },
+    { premiseId: pArr[4].id, meterNumber: "WM-004", commodityId: water.id, uomId: gal.id, meterType: "AMR", status: "ACTIVE", installDate: new Date("2024-04-01"), customFields: { size: '1.5"' } },
     { premiseId: pArr[4].id, meterNumber: "EM-004", commodityId: electric.id, uomId: kwh.id, meterType: "AMR", status: "ACTIVE", installDate: new Date("2024-04-01") },
-    { premiseId: pArr[5].id, meterNumber: "WM-005", commodityId: water.id, uomId: gal.id, meterType: "MANUAL", status: "ACTIVE", installDate: new Date("2024-05-01") },
+    { premiseId: pArr[5].id, meterNumber: "WM-005", commodityId: water.id, uomId: gal.id, meterType: "MANUAL", status: "ACTIVE", installDate: new Date("2024-05-01"), customFields: { size: '5/8"' } },
     { premiseId: pArr[5].id, meterNumber: "EM-005", commodityId: electric.id, uomId: kwh.id, meterType: "SMART", status: "ACTIVE", installDate: new Date("2024-05-01") },
-    { premiseId: pArr[6].id, meterNumber: "WM-006", commodityId: water.id, uomId: gal.id, meterType: "AMI", status: "ACTIVE", installDate: new Date("2024-06-01") },
+    { premiseId: pArr[6].id, meterNumber: "WM-006", commodityId: water.id, uomId: gal.id, meterType: "AMI", status: "ACTIVE", installDate: new Date("2024-06-01"), customFields: { size: '1"' } },
     { premiseId: pArr[6].id, meterNumber: "EM-006", commodityId: electric.id, uomId: kwh.id, meterType: "AMI", status: "ACTIVE", installDate: new Date("2024-06-01") },
   ];
 
@@ -767,6 +836,20 @@ async function main() {
 
   // Seed 12 months of meter reads for SA-0001 (water, WM-001) and SA-0006 (electric, EM-002).
   // These give the portal usage page real data to chart. Each month has one ACTUAL read.
+  //
+  /*
+   * Read dates are built in UTC, on the 15th.
+   *
+   * `read_date` is a `@db.Date`, so a local-midnight Date lands on the
+   * 16th once stored anywhere west of Greenwich, and every date derived
+   * from it downstream — which period a run may close on, which bill
+   * covers it — was then a day out from what this file says.
+   */
+  const READ_DAY_UTC = new Date(Date.UTC(
+    new Date().getUTCFullYear(),
+    new Date().getUTCMonth(),
+    15,
+  ));
   const saList = await p.serviceAgreement.findMany({
     where: { utilityId: UID },
     include: { servicePoints: { include: { meters: { include: { meter: { select: { uomId: true } } } } } } },
@@ -785,9 +868,11 @@ async function main() {
     const uomId = firstSpm.meter.uomId;
     let running = baseReading;
     for (let m = 11; m >= 0; m--) {
-      const d = new Date();
-      d.setDate(15);
-      d.setMonth(d.getMonth() - m);
+      const d = new Date(Date.UTC(
+        READ_DAY_UTC.getUTCFullYear(),
+        READ_DAY_UTC.getUTCMonth() - m,
+        15,
+      ));
       const usage = monthlyUsage();
       const prior = running;
       running += usage;
@@ -1321,13 +1406,25 @@ async function main() {
   //   - an UNPOSTED bill on 0001002-00, so GET unposted-bills is not
   //     always empty and the operator has something to post.
   const billSaFor = (accountId) => saCreated.find((sa) => sa.accountId === accountId);
-  const billPeriodEnd = new Date();
-  billPeriodEnd.setDate(15);
-  const billPeriodStart = new Date(billPeriodEnd);
-  billPeriodStart.setMonth(billPeriodStart.getMonth() - 1);
-  billPeriodStart.setDate(16);
+  /*
+   * The demo bill covers a period that has already been billed and
+   * closed — two read-months back, not the most recent one.
+   *
+   * It used to cover [last month's 16th, this month's 15th], which is
+   * the period a run started today would bill: the run's own bill then
+   * overlapped it and was refused, and before that the two disagreed
+   * about who owned the reads. Leaving the last two reads alone gives a
+   * run real work on a period nothing else claims.
+   *
+   * Two rather than one because a cycle's bill day can precede its read
+   * day — R01 bills on the 10th and the meters are read on the 15th, so
+   * a run on the 10th closes on the *previous* month's read. Leave only
+   * one and that cycle has nothing it is allowed to bill.
+   */
+  const billPeriodEnd = new Date(Date.UTC(READ_DAY_UTC.getUTCFullYear(), READ_DAY_UTC.getUTCMonth() - 2, 15));
+  const billPeriodStart = new Date(Date.UTC(billPeriodEnd.getUTCFullYear(), billPeriodEnd.getUTCMonth() - 1, 16));
   const billDue = new Date(billPeriodEnd);
-  billDue.setDate(billDue.getDate() + 30);
+  billDue.setUTCDate(billDue.getUTCDate() + 30);
 
   // One segment per service agreement, each with real line items, because
   // that is what a bill actually is: generateBillForAccount aggregates the
@@ -1516,6 +1613,33 @@ async function main() {
   }
   console.log(
     "  " + postedBills + " posted bills with receivables, " + unpostedBills + " unposted"
+  );
+
+  /*
+   * The reads the demo bills cover are spent, and say so.
+   *
+   * Billing is one-way: a segment stamps `billed_at` on the reads in its
+   * period, and `resolveServicePeriod` starts the next period the day
+   * after the last read already billed. The bills above are written
+   * straight to the tables rather than rated, so they stamped nothing —
+   * and the first genuine run then found twelve months of unbilled reads
+   * behind bills that claimed to have covered them. It opened at the
+   * agreement's start date and swept the lot into one 21-month segment:
+   * on a fresh seed, a $530,257.75 water bill for a single house, over a
+   * period two of the demo bills already said was billed.
+   *
+   * Stamping them here is what makes the seeded history true. The reads
+   * after this date are left alone deliberately — they are the work a
+   * first run is supposed to find.
+   */
+  const spent = await p.meterRead.updateMany({
+    where: { utilityId: UID, billedAt: null, readDate: { lte: billPeriodEnd } },
+    data: { billedAt: billPeriodEnd },
+  });
+  console.log(
+    "  " + spent.count + " reads marked billed through " +
+      billPeriodEnd.toISOString().slice(0, 10) +
+      " (the rest are a run's to find)"
   );
 
   // Payments, so the Payments screen opens on something real rather than
