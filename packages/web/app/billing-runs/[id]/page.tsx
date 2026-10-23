@@ -260,7 +260,7 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
       <div>
         <PageHeader title="Billing run" subtitle="Not found" />
         <p style={{ color: "var(--text-muted)" }}>
-          No run with this id. <Link href="/billing-runs" style={{ color: "var(--primary)" }}>Back to all runs</Link>
+          No run with this id. <Link href="/billing-runs" style={{ color: "var(--accent-primary)" }}>Back to all runs</Link>
         </p>
       </div>
     );
@@ -551,7 +551,7 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
       </Tabs>
 
       <div style={{ marginTop: 16 }}>
-        <Link href="/billing-runs" style={{ color: "var(--primary)", fontSize: 13 }}>
+        <Link href="/billing-runs" style={{ color: "var(--accent-primary)", fontSize: 13 }}>
           ← Back to all runs
         </Link>
       </div>
@@ -760,7 +760,7 @@ const LINK_BTN: React.CSSProperties = {
   fontFamily: "'JetBrains Mono', monospace",
   fontSize: 12,
   fontWeight: 600,
-  color: "var(--primary)",
+  color: "var(--accent-primary)",
   background: "none",
   border: "none",
   padding: 0,
@@ -771,7 +771,7 @@ const MONO_LINK: React.CSSProperties = {
   fontFamily: "'JetBrains Mono', monospace",
   fontSize: 12,
   fontWeight: 600,
-  color: "var(--primary)",
+  color: "var(--accent-primary)",
   textDecoration: "none",
 };
 

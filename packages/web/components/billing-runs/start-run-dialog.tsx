@@ -313,7 +313,7 @@ export function StartRunDialog({
                 This window has already been run ({preview.existingRun.status}).{" "}
                 <Link
                   href={`/billing-runs/${preview.existingRun.id}`}
-                  style={{ color: "var(--primary)" }}
+                  style={{ color: "var(--accent-primary)" }}
                   onClick={onClose}
                 >
                   Open that run

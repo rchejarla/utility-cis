@@ -452,7 +452,7 @@ const MONO_LINK: React.CSSProperties = {
   fontFamily: "'JetBrains Mono', monospace",
   fontSize: 12,
   fontWeight: 600,
-  color: "var(--primary)",
+  color: "var(--accent-primary)",
   textDecoration: "none",
 };
 const DEPOSIT_TAG: React.CSSProperties = {
@@ -462,7 +462,7 @@ const DEPOSIT_TAG: React.CSSProperties = {
   fontWeight: 700,
   textTransform: "uppercase",
   letterSpacing: "0.05em",
-  color: "var(--primary)",
+  color: "var(--accent-primary)",
   border: "1px solid var(--border)",
   borderRadius: 999,
 };

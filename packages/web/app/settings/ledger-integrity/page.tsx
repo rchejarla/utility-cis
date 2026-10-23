@@ -280,7 +280,7 @@ const LINK: React.CSSProperties = {
   fontFamily: "'JetBrains Mono', monospace",
   fontSize: 12,
   fontWeight: 600,
-  color: "var(--primary)",
+  color: "var(--accent-primary)",
   textDecoration: "none",
 };
 
@@ -288,7 +288,7 @@ const BTN = (disabled: boolean): React.CSSProperties => ({
   padding: "7px 14px",
   fontSize: 12,
   fontWeight: 600,
-  background: "var(--primary)",
+  background: "var(--accent-primary)",
   color: "#fff",
   border: "none",
   borderRadius: "var(--radius)",

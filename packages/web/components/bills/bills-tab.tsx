@@ -307,7 +307,7 @@ const MONO_BUTTON: React.CSSProperties = {
   fontFamily: "'JetBrains Mono', monospace",
   fontSize: 12,
   fontWeight: 600,
-  color: "var(--primary)",
+  color: "var(--accent-primary)",
   background: "none",
   border: "none",
   padding: 0,

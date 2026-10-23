@@ -405,7 +405,18 @@ export function UsersTab({ showAddForm, onAddFormClose }: UsersTabProps) {
                 return (
                   <tr
                     key={user.id}
-                    style={{ background: isEditing ? "rgba(var(--accent-rgb),0.04)" : "transparent" }}
+                    style={{
+                      // color-mix, not an rgba() wrapped around an
+                      // `--accent-rgb` channel triplet: no such token has
+                      // ever been defined, so that declaration was dropped
+                      // and the row being edited was never tinted at all.
+                      // The theme ships whole colors, and this is the form
+                      // that composes with them — the one bill-pdf-button
+                      // settled on.
+                      background: isEditing
+                        ? "color-mix(in srgb, var(--accent-primary) 6%, transparent)"
+                        : "transparent",
+                    }}
                   >
                     <td style={cellStyle}>
                       {isEditing ? (

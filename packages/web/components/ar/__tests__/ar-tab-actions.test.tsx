@@ -112,19 +112,38 @@ describe("ArTab actions — permissions", () => {
     expect(screen.queryByRole("button", { name: /record payment/i })).not.toBeInTheDocument();
   });
 
-  it("hides Reverse without payments:EDIT", async () => {
+  /*
+   * Asserted through the menu, not on the row.
+   *
+   * Reverse lives behind More now, so a bare `queryByRole("button",
+   * {name: /reverse/})` is absent whether the act is offered or not —
+   * the menu renders its items only while open. The negative case has to
+   * prove the menu itself is not offered, and the positive case has to
+   * open it.
+   */
+  it("offers no row menu without payments:EDIT or ar_adjustments:EDIT", async () => {
     grant({ accounts: ["VIEW"], payments: ["VIEW", "CREATE"] });
-    routeGets();
+    // The row carries a bill, so the actions cell exists for its own
+    // reason — View bill is a read and stays. Without that the cell is
+    // not rendered at all and this would pass while proving nothing
+    // about the permission gate.
+    routeGets({
+      data: [row({ billId: "b1" })],
+      balance: "40.00",
+      openCount: 1,
+      depositHeld: "0.00",
+    });
     renderTab();
-    expect(await screen.findByRole("table")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^reverse$/i })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /view bill/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /more actions/i })).not.toBeInTheDocument();
   });
 
-  it("shows Reverse with payments:EDIT", async () => {
+  it("offers Reverse in the row menu with payments:EDIT", async () => {
     grant({ accounts: ["VIEW"], payments: ["VIEW", "EDIT"] });
     routeGets();
     renderTab();
-    expect(await screen.findByRole("button", { name: /^reverse$/i })).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: /more actions/i }));
+    expect(screen.getByRole("menuitem", { name: /^reverse$/i })).toBeInTheDocument();
   });
 
   it("shows the unposted note to a read-only user", async () => {
@@ -161,6 +180,64 @@ describe("ArTab actions — permissions", () => {
 
 });
 
+/**
+ * What a ledger row looks like, as distinct from what it can do.
+ *
+ * It carried every act loose in the cell: an underlined "View bill" from
+ * BillPdfButton's link variant, then Waive with no left margin at all —
+ * so the two ran together as one word — then Write off and Reverse. Four
+ * text buttons, one underlined and three not, and the most consequential
+ * of them the easiest to hit by accident.
+ *
+ * Now the same shape as a bill row, which offers these same acts: the
+ * one act that only reads stays inline, and everything that moves money
+ * is a deliberate click away.
+ */
+describe("ArTab — the row's shape", () => {
+  const CHARGE_WITH_BILL: LedgerPage = {
+    data: [row({ billId: "b1" })],
+    balance: "40.00",
+    openCount: 1,
+    depositHeld: "0.00",
+  };
+
+  it("keeps one inline act and puts the rest behind More", async () => {
+    grant({
+      accounts: ["VIEW"],
+      payments: ["VIEW", "EDIT"],
+      ar_adjustments: ["VIEW", "EDIT"],
+    });
+    routeGets(CHARGE_WITH_BILL);
+    renderTab();
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getByRole("button", { name: /view bill/i })).toBeInTheDocument();
+    for (const act of [/^waive$/i, /^write off$/i, /^reverse$/i]) {
+      expect(within(table).queryByRole("button", { name: act })).not.toBeInTheDocument();
+    }
+
+    await userEvent.click(within(table).getByRole("button", { name: /more actions/i }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: /^waive$/i })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: /^write off$/i })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: /^reverse$/i })).toBeInTheDocument();
+  });
+
+  /*
+   * The trigger has to name its row. Every row's menu is otherwise "More"
+   * to a screen reader, on a table where the rows differ only by what
+   * they did and when.
+   */
+  it("names the entry the menu belongs to", async () => {
+    grant({ accounts: ["VIEW"], payments: ["VIEW", "EDIT"] });
+    routeGets(CHARGE_WITH_BILL);
+    renderTab();
+    expect(
+      await screen.findByRole("button", { name: /more actions for bill charge on 2026-05-15/i }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("ArTab actions — behaviour", () => {
   it("warns when a reversal leaves dependent fees standing", async () => {
     grant({ accounts: ["VIEW"], payments: ["VIEW", "EDIT"] });
@@ -168,7 +245,8 @@ describe("ArTab actions — behaviour", () => {
     mockedPost.mockResolvedValue({ balance: "40.00", dependentFees: [{ id: "f1" }] } as never);
     renderTab();
 
-    await userEvent.click(await screen.findByRole("button", { name: /^reverse$/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /more actions/i }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /^reverse$/i }));
     // The confirm names what happens, including that nothing is deleted.
     expect(screen.getByText(/nothing is deleted/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /reverse entry/i }));
@@ -188,8 +266,11 @@ describe("ArTab actions — behaviour", () => {
     });
     renderTab();
     expect(await screen.findByRole("table")).toBeInTheDocument();
-    // Neither the reversed original nor the reversal itself can be reversed.
-    expect(screen.queryByRole("button", { name: /^reverse$/i })).not.toBeInTheDocument();
+    // Neither the reversed original nor the reversal itself can be
+    // reversed, and neither has any other act — so neither row offers a
+    // menu. Asserting on the trigger is what makes this test real: the
+    // menu items do not exist in the DOM until one is opened.
+    expect(screen.queryByRole("button", { name: /more actions/i })).not.toBeInTheDocument();
   });
 
 });

@@ -35,7 +35,7 @@ const inputStyle: React.CSSProperties = {
   padding: "8px 10px",
   borderRadius: "var(--radius)",
   border: "1px solid var(--border)",
-  background: "var(--bg-input, var(--bg-card))",
+  background: "var(--bg-card)",
   color: "var(--text-primary)",
   fontSize: 13,
   fontFamily: "inherit",

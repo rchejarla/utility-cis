@@ -7,6 +7,7 @@ import { usePermission } from "@/lib/use-permission";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { BillPdfButton } from "@/components/bills/bill-pdf-button";
+import { ActionMenu, type ActionMenuItem } from "@/components/ui/action-menu";
 import { RecordPaymentDialog } from "./record-payment-dialog";
 import { RefundDialog } from "./refund-dialog";
 import { AdjustDialog, type AdjustMode } from "./adjust-dialog";
@@ -32,6 +33,13 @@ import { AdjustDialog, type AdjustMode } from "./adjust-dialog";
  * `payments:CREATE`, reversing one is `payments:EDIT`. A button the user
  * cannot use is not rendered — and the API refuses it regardless, so the
  * hiding is courtesy rather than security.
+ *
+ * A row offers one act inline and the rest behind More, the same shape a
+ * bill row has — these are the same acts, on the same money. They were
+ * all loose in the cell: an underlined "View bill" with Waive butted
+ * straight against it ("View billWaive", no margin on the first text
+ * button), then Write off and Reverse. Reversal is the most consequential
+ * thing on this screen and was the easiest to hit by accident.
  */
 
 export interface LedgerRow {
@@ -156,6 +164,47 @@ export function ArTab({ accountId }: { accountId: string }) {
   const showRowActions =
     canReverse || canForgive || (page?.data.some((r) => r.billId) ?? false);
 
+  /**
+   * What this entry can have done to it, in the order a bill row offers
+   * the same acts: forgiveness first, reversal last — furthest from
+   * where the pointer lands when the menu opens.
+   *
+   * Everything here is derived from the row, so an act is offered only
+   * where it can succeed and the menu cannot disagree with the API.
+   */
+  function rowActions(row: LedgerRow): ActionMenuItem[] {
+    const items: ActionMenuItem[] = [];
+    const reversed = row.reversedByEntryId !== null;
+    const isCredit = parseFloat(row.amount) < 0;
+
+    // Forgiving only makes sense on a charge that is still owed: a
+    // credit cannot be waived, and a settled charge has nothing left to
+    // forgive.
+    if (canForgive && !reversed && !isCredit && !row.settled) {
+      items.push({
+        label: "Waive",
+        title: "Forgive a charge that was correct",
+        onSelect: () => setAdjust({ mode: "waive", target: row }),
+      });
+      items.push({
+        label: "Write off",
+        title: "Give up on collecting this charge",
+        onSelect: () => setAdjust({ mode: "writeOff", target: row }),
+      });
+    }
+    // A reversal is itself irreversible, and an entry already reversed
+    // cannot be reversed again.
+    if (canReverse && !reversed && row.type !== "REVERSAL") {
+      items.push({
+        label: "Reverse",
+        tone: "danger",
+        title: "Negate this entry; both sides stay on the ledger",
+        onSelect: () => setReverseRow(row),
+      });
+    }
+    return items;
+  }
+
   async function confirmReverse() {
     if (!reverseRow) return;
     setReversing(true);
@@ -186,7 +235,7 @@ export function ArTab({ accountId }: { accountId: string }) {
     return <div style={muted}>You do not have permission to view this account&apos;s ledger.</div>;
   }
   if (loading) return <div style={muted}>Loading…</div>;
-  if (error) return <div style={{ ...muted, color: "var(--accent-danger, #b00)" }}>{error}</div>;
+  if (error) return <div style={{ ...muted, color: "var(--danger)" }}>{error}</div>;
   if (!page) return null;
 
   const balance = parseFloat(page.balance);
@@ -379,48 +428,27 @@ export function ArTab({ accountId }: { accountId: string }) {
                       .join(" · ") || "—"}
                   </td>
                   {showRowActions && (
-                    <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
-                      {/* The bill itself, where staff already are when a
-                          customer phones about one. A ledger entry only
-                          exists once its bill is posted, so there is no
-                          unposted case to guard here. */}
-                      {row.billId && (
-                        <BillPdfButton
-                          billId={row.billId}
-                          billNumber={row.billNumber ?? "bill"}
-                          variant="link"
-                          onChanged={load}
+                    <td style={{ ...td, whiteSpace: "nowrap" }}>
+                      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                        {/* The bill itself, where staff already are when a
+                            customer phones about one. A ledger entry only
+                            exists once its bill is posted, so there is no
+                            unposted case to guard here. */}
+                        {row.billId && (
+                          <BillPdfButton
+                            billId={row.billId}
+                            billNumber={row.billNumber ?? "bill"}
+                            onChanged={load}
+                          />
+                        )}
+                        {/* Named for its row: every menu on this table is
+                            otherwise "More" to a screen reader, on rows
+                            that differ only by what they did and when. */}
+                        <ActionMenu
+                          aria-label={`More actions for ${describe(row)} on ${row.effectiveDate}`}
+                          items={rowActions(row)}
                         />
-                      )}
-                      {/* Forgiving only makes sense on a charge that is
-                          still owed: a credit cannot be waived, and a
-                          settled charge has nothing left to forgive. */}
-                      {canForgive && !reversed && !isCredit && !row.settled && (
-                        <>
-                          <button
-                            onClick={() => setAdjust({ mode: "waive", target: row })}
-                            style={linkButton}
-                          >
-                            Waive
-                          </button>
-                          <button
-                            onClick={() => setAdjust({ mode: "writeOff", target: row })}
-                            style={{ ...linkButton, marginLeft: "10px" }}
-                          >
-                            Write off
-                          </button>
-                        </>
-                      )}
-                      {/* A reversal is itself irreversible, and an entry
-                          already reversed cannot be reversed again. */}
-                      {canReverse && !reversed && row.type !== "REVERSAL" && (
-                        <button
-                          onClick={() => setReverseRow(row)}
-                          style={{ ...linkButton, marginLeft: "10px" }}
-                        >
-                          Reverse
-                        </button>
-                      )}
+                      </div>
                     </td>
                   )}
                 </tr>
@@ -540,17 +568,8 @@ const secondaryButton: React.CSSProperties = {
   cursor: "pointer",
   fontFamily: "inherit",
 };
-const linkButton: React.CSSProperties = {
-  background: "none",
-  border: "none",
-  color: "var(--accent-primary)",
-  fontSize: "12px",
-  cursor: "pointer",
-  fontFamily: "inherit",
-  padding: 0,
-};
 const stripLink: React.CSSProperties = {
-  color: "var(--primary)",
+  color: "var(--accent-primary)",
   fontWeight: 600,
   textDecoration: "none",
   whiteSpace: "nowrap",

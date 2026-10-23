@@ -212,7 +212,7 @@ const EMPTY: React.CSSProperties = {
 const LINK: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 600,
-  color: "var(--primary)",
+  color: "var(--accent-primary)",
   textDecoration: "none",
 };
 

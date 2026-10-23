@@ -56,7 +56,7 @@ const POST_BTN = (busy: boolean): React.CSSProperties => ({
   padding: "3px 10px",
   fontSize: 10,
   fontWeight: 600,
-  background: "var(--primary)",
+  background: "var(--accent-primary)",
   color: "#fff",
   border: "none",
   borderRadius: "var(--radius)",

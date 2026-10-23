@@ -448,7 +448,7 @@ export default function BillingCycleDetailPage({ params }: { params: Promise<{ i
                               fontFamily: "'JetBrains Mono', monospace",
                               fontSize: 12,
                               fontWeight: 600,
-                              color: "var(--primary)",
+                              color: "var(--accent-primary)",
                               textDecoration: "none",
                             }}
                           >

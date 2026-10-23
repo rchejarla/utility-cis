@@ -469,7 +469,12 @@ export function AgreementsTab({
                             fontSize: "10px",
                             fontWeight: 600,
                             color: "var(--accent-primary)",
-                            background: "rgba(var(--accent-primary-rgb, 99,102,241), 0.12)",
+                            // The fallback hardcoded the DARK theme's
+                            // indigo-500, and `--accent-primary-rgb` has
+                            // never existed — so the light theme got a
+                            // tint of the wrong accent. This token is
+                            // exactly this tint, per theme.
+                            background: "var(--accent-primary-subtle)",
                             padding: "1px 6px",
                             borderRadius: "4px",
                           }}

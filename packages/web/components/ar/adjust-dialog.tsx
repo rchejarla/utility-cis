@@ -346,7 +346,7 @@ const input: React.CSSProperties = {
   fontSize: "13px",
   fontFamily: "inherit",
   color: "var(--text-primary)",
-  background: "var(--bg-base)",
+  background: "var(--bg-elevated)",
   border: "1px solid var(--border)",
   borderRadius: "var(--radius)",
 };
@@ -368,7 +368,7 @@ const hintError: React.CSSProperties = {
   fontSize: "12px",
   textTransform: "none",
   letterSpacing: 0,
-  color: "var(--accent-danger, #b00)",
+  color: "var(--danger)",
 };
 const targetBox: React.CSSProperties = {
   fontSize: "12px",

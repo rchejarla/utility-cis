@@ -418,7 +418,7 @@ const MONO_LINK: React.CSSProperties = {
   fontFamily: "'JetBrains Mono', monospace",
   fontSize: 12,
   fontWeight: 600,
-  color: "var(--primary)",
+  color: "var(--accent-primary)",
   textDecoration: "none",
 };
 

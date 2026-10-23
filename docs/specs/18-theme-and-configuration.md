@@ -34,44 +34,40 @@ Per-tenant UI theme configuration. One record per tenant. If no record exists, t
 
 #### colors JSONB Structure
 
+The keys are the custom properties `globals.css` declares, and `theme.service.ts` holds the defaults. This section used to show a `--color-bg-primary` / `--color-accent` set that has never existed in either — documentation of a theme nobody shipped:
+
 ```json
 {
   "dark": {
-    "--color-bg-primary": "#0f1117",
-    "--color-bg-secondary": "#1a1d27",
-    "--color-bg-tertiary": "#242736",
-    "--color-text-primary": "#e8eaf0",
-    "--color-text-secondary": "#9197a8",
-    "--color-text-muted": "#5c6375",
-    "--color-border": "#2e3244",
-    "--color-accent": "#4f8ef7",
-    "--color-accent-hover": "#3d7af0",
-    "--color-accent-muted": "#1a2d4f",
-    "--color-success": "#34c97b",
-    "--color-warning": "#f5a623",
-    "--color-danger": "#e85050",
-    "--color-info": "#4f8ef7"
+    "--accent-primary": "#6366f1",
+    "--accent-secondary": "#22d3ee",
+    "--success": "#4ade80",
+    "--danger": "#f87171",
+    "--warning": "#fbbf24",
+    "--bg-deep": "#06080d",
+    "--bg-surface": "#0c1018",
+    "--sidebar-bg": "#0c1018",
+    "--header-bg": "#0c1018",
+    "--bg-card": "#111722",
+    "--bg-elevated": "#171f2e",
+    "--bg-hover": "#1c2640",
+    "--border": "#1e293b",
+    "--border-subtle": "#162033",
+    "--text-primary": "#e8edf5",
+    "--text-secondary": "#8494ad",
+    "--text-muted": "#4a5a73"
   },
-  "light": {
-    "--color-bg-primary": "#ffffff",
-    "--color-bg-secondary": "#f4f5f9",
-    "--color-bg-tertiary": "#e9ebf0",
-    "--color-text-primary": "#1a1d27",
-    "--color-text-secondary": "#4a5068",
-    "--color-text-muted": "#8892a4",
-    "--color-border": "#d1d5e0",
-    "--color-accent": "#2563eb",
-    "--color-accent-hover": "#1d4ed8",
-    "--color-accent-muted": "#dbeafe",
-    "--color-success": "#16a34a",
-    "--color-warning": "#d97706",
-    "--color-danger": "#dc2626",
-    "--color-info": "#2563eb"
-  }
+  "light": { "…the same keys": "indigo-led light values" }
 }
 ```
 
 All values are valid CSS custom property values. The admin UI applies these to the `<html>` element at runtime.
+
+A tenant can only override a token `globals.css` already declares — `applyCSSVariables` sets whatever keys it is given, but a key nothing reads changes nothing. The reverse is the failure that actually happened, and it is silent: a component asking for a token that was never declared. CSS drops the whole declaration, and what it falls back to depends on the property. An inherited one like `color` takes the parent's value, so an accent link renders as body text; everything else takes its initial value, so `background: var(--nope)` is **transparent** — a filled button becomes its own label on whatever is behind it.
+
+Six phantoms had accumulated across 23 sites: `--primary` (15 sites, 11 files, never defined anywhere), `--bg-base` (the AR dialogs' input wells, so every field in Record Payment, Refund and Adjust was transparent on a white card), `--accent-danger` (whose four sites carried `, #b00`, so a hardcoded maroon always won over the theme's own `--danger`), `--bg-input`, `--accent-rgb` and `--accent-primary-rgb`. The last two were `rgba()` wrapped around a channel triplet the theme has never shipped — it ships whole colors, so `color-mix(in srgb, var(--accent-primary) N%, transparent)` is the form that composes with it.
+
+`packages/web/__tests__/css-tokens.test.ts` now fails on any `var(--token)` in the package that `globals.css` does not declare. It scans comments too, so a comment explaining a token's removal has to name it without the `var()` wrapper.
 
 #### typography JSONB Structure
 

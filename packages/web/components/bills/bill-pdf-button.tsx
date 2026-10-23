@@ -45,13 +45,6 @@ interface BillPdfButtonProps {
   /** A posted bill only; an unposted one has no document to offer. */
   disabled?: boolean;
   /**
-   * Match the host's own action style — pills on the bills list, text
-   * links on an account's AR tab. The same host-style override the
-   * shared custom-fields section takes, and for the same reason: one
-   * component in two screens that each settled on a different idiom.
-   */
-  variant?: "pill" | "link";
-  /**
    * Which surface this is on, which decides the route and whether
    * generating is permitted at all.
    *
@@ -70,7 +63,6 @@ export function BillPdfButton({
   billNumber,
   onChanged,
   disabled = false,
-  variant = "pill",
   surface = "staff",
 }: BillPdfButtonProps) {
   const { toast } = useToast();
@@ -132,6 +124,16 @@ export function BillPdfButton({
 
   if (disabled) return null;
 
+  /*
+   * One look, everywhere a bill is listed.
+   *
+   * There was a second, `variant="link"`, for the account's AR tab,
+   * whose rows then carried an underlined "View bill" beside three
+   * un-underlined text buttons — and with no left margin on the first of
+   * them, so it rendered as "View billWaive". That tab now offers these
+   * acts the way the bills list does, which left this variant with no
+   * caller.
+   */
   const pill: React.CSSProperties = {
     padding: "3px 8px",
     fontSize: 10,
@@ -146,24 +148,13 @@ export function BillPdfButton({
     border: "1px solid color-mix(in srgb, var(--info) 25%, transparent)",
     borderRadius: "var(--radius)",
   };
-  const link: React.CSSProperties = {
-    padding: 0,
-    marginLeft: 10,
-    fontSize: 12,
-    fontWeight: 500,
-    background: "none",
-    color: "var(--accent-primary)",
-    border: "none",
-    textDecoration: "underline",
-  };
-
   return (
     <button
       onClick={() => void view()}
       disabled={busy}
       title="Open the bill as a PDF, generating it if it has not been generated yet"
       style={{
-        ...(variant === "pill" ? pill : link),
+        ...pill,
         cursor: busy ? "default" : "pointer",
         opacity: busy ? 0.6 : 1,
         fontFamily: "inherit",
