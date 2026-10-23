@@ -14,6 +14,7 @@ import {
   postBillingRun,
   cancelBillingRun,
   resumeBillingRun,
+  summariseRunExceptions,
 } from "../services/billing-run.service.js";
 import { QUEUE_NAMES, enqueueSafely } from "../lib/queues.js";
 import { BILLING_RUN_JOB_NAME } from "../workers/billing-run-worker.js";
@@ -113,6 +114,23 @@ export async function billingRunRoutes(app: FastifyInstance) {
       const { id } = idParamSchema.parse(request.params);
       const query = billingRunItemQuerySchema.parse(request.query ?? {});
       return reply.send(await listBillingRunItems(utilityId, id, query));
+    },
+  );
+
+  /*
+   * The same exceptions, counted by cause.
+   *
+   * Beside `/items` rather than inside it: one answers "what happened to
+   * this account" and the other "how many things are there to fix", and
+   * a page shows both at once.
+   */
+  app.get(
+    "/api/v1/billing-runs/:id/exception-summary",
+    { config: { module: "accounts", permission: "VIEW" } },
+    async (request, reply) => {
+      const { utilityId } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      return reply.send(await summariseRunExceptions(utilityId, id));
     },
   );
 

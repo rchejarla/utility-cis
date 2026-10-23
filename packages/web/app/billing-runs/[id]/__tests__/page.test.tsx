@@ -76,8 +76,13 @@ function routeGets(opts: {
   byStatus?: Record<string, unknown[]>;
   /** The one bill the detail dialog fetches, when a case opens it. */
   bill?: Record<string, unknown>;
+  /** The exceptions, counted by cause. */
+  groups?: unknown[];
 }) {
   get.mockImplementation((path: string, query?: Record<string, string>) => {
+    if (path === "/api/v1/billing-runs/run-1/exception-summary") {
+      return Promise.resolve(opts.groups ?? []);
+    }
     if (path === "/api/v1/billing-runs/run-1") return Promise.resolve(opts.run ?? detail());
     if (path === "/api/v1/billing-runs/run-1/items") {
       return Promise.resolve(opts.byStatus?.[query?.status ?? ""] ?? []);
@@ -415,5 +420,70 @@ describe("resuming a run", () => {
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith("/api/v1/billing-runs/run-1/resume", {}),
     );
+  });
+});
+
+/**
+ * What there is to fix, as against what happened to each account.
+ *
+ * A run of twelve thousand accounts that fails forty on one unpublished
+ * schedule presents as forty rows, and an operator reads forty rows to
+ * find one job. The counts above the list say how many accounts; this
+ * says how many *things*, which is what the work is sized by. It is the
+ * same grouping the pre-flight shows before the run, so a cause reads
+ * the same either side of it.
+ */
+describe("Billing run detail — exceptions by cause", () => {
+  function group(over: Record<string, unknown> = {}) {
+    return {
+      status: "FAILED",
+      code: "SCHEDULE_NOT_PUBLISHED",
+      accountCount: 40,
+      sampleAccounts: ["0001000-00", "0001002-00", "0001003-00"],
+      message: "Cannot bill against unpublished rate schedule(s): BZN-WATER v1. Publish them first.",
+      ...over,
+    };
+  }
+
+  it("states the cause, how many accounts it holds, and examples", async () => {
+    routeGets({ run: detail({ failedCount: 40 }), groups: [group()] });
+    await renderPage();
+
+    await loaded();
+    const panel = await screen.findByTestId("exception-causes");
+    expect(panel).toHaveTextContent("40");
+    expect(panel).toHaveTextContent("SCHEDULE_NOT_PUBLISHED");
+    expect(panel).toHaveTextContent("0001000-00");
+  });
+
+  it("shows the causes for the tab being read, not all of them at once", async () => {
+    // Failures and skips are separate tabs because only one is work;
+    // merging their causes into one panel would undo that.
+    routeGets({
+      run: detail({ failedCount: 40, skippedCount: 7 }),
+      groups: [
+        group(),
+        group({ status: "SKIPPED", code: "NO_READ_IN_WINDOW", accountCount: 7 }),
+      ],
+    });
+    await renderPage();
+
+    await loaded();
+    const failures = await screen.findByTestId("exception-causes");
+    expect(failures).toHaveTextContent("SCHEDULE_NOT_PUBLISHED");
+    expect(failures).not.toHaveTextContent("NO_READ_IN_WINDOW");
+
+    await userEvent.click(tab(/Skipped \(7\)/));
+    const skips = await screen.findByTestId("exception-causes");
+    expect(skips).toHaveTextContent("NO_READ_IN_WINDOW");
+    expect(skips).not.toHaveTextContent("SCHEDULE_NOT_PUBLISHED");
+  });
+
+  it("says nothing when a run has nothing wrong", async () => {
+    routeGets({ run: detail({ failedCount: 0 }), groups: [] });
+    await renderPage();
+
+    await loaded();
+    expect(screen.queryByTestId("exception-causes")).toBeNull();
   });
 });

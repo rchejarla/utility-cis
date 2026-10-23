@@ -936,6 +936,77 @@ export async function getBillingRun(utilityId: string, runId: string): Promise<B
   };
 }
 
+/** One cause, and how much of the run it accounts for. */
+export interface RunExceptionGroup {
+  /** FAILED or SKIPPED — never merged, since only one of them is work. */
+  status: string;
+  code: string;
+  accountCount: number;
+  /** A few account numbers, to recognise the group by. */
+  sampleAccounts: string[];
+  /** One account's sentence, as the reason in full. */
+  message: string;
+}
+
+/**
+ * A run's exceptions by cause.
+ *
+ * The item list answers "what happened to this account". An operator
+ * working a run needs the other question first — "how many things do I
+ * have to fix" — and the two differ by orders of magnitude: twelve
+ * thousand accounts failing on one unpublished schedule is one job
+ * reported forty times. `billing-runs/[id]/page.tsx` already says as
+ * much next to the reason column, and `previewBillingRun` groups the
+ * same way before a run, so this is that view after the fact.
+ *
+ * Grouped on `errorCode`, not the message: the messages name the account
+ * they belong to, so grouping by sentence would reproduce the list it
+ * replaces. Counted in the database rather than over the fetched page,
+ * because the list is capped and the whole point is the size of the
+ * group.
+ */
+export async function summariseRunExceptions(
+  utilityId: string,
+  runId: string,
+): Promise<RunExceptionGroup[]> {
+  const groups = await prisma.billingRunItem.groupBy({
+    by: ["status", "errorCode"],
+    where: {
+      utilityId,
+      billingRunId: runId,
+      status: { in: ["FAILED", "SKIPPED"] },
+    },
+    _count: { _all: true },
+    orderBy: { _count: { id: "desc" } },
+  });
+
+  // One query per group for its examples. Bounded by the number of
+  // distinct codes, which is small by construction — a run with forty
+  // different causes has a problem no grouping will help with.
+  return Promise.all(
+    groups.map(async (group) => {
+      const samples = await prisma.billingRunItem.findMany({
+        where: {
+          utilityId,
+          billingRunId: runId,
+          status: group.status,
+          errorCode: group.errorCode,
+        },
+        select: { errorMessage: true, account: { select: { accountNumber: true } } },
+        orderBy: { id: "asc" },
+        take: 3,
+      });
+      return {
+        status: group.status,
+        code: group.errorCode ?? "UNKNOWN",
+        accountCount: group._count._all,
+        sampleAccounts: samples.map((s) => s.account.accountNumber),
+        message: samples[0]?.errorMessage ?? "",
+      };
+    }),
+  );
+}
+
 export async function listBillingRunItems(
   utilityId: string,
   runId: string,

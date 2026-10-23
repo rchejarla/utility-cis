@@ -237,11 +237,18 @@ is on the cycle, its status bills, and it has an agreement overlapping the
 window. It does **not** check that the agreement has a rate-schedule
 assignment or that the schedule is published — so the two commonest
 configuration faults are discovered account by account during the run
-rather than refused at preview. A pre-flight on `GET /billing-runs/preview`
-that answered "240 of 12,000 cannot be billed, for these 3 reasons" would
-turn a failed run into a to-do list before anything is committed. The
-exceptions list is also per-account rather than per-reason, where one fix
-usually clears a whole group.
+rather than refused at preview. **Both halves of this shipped on 2026-10-23.**
+`GET /billing-runs/preview` now carries `billableCount` and `blockers`,
+grouped by cause with sample accounts, so the start dialog says "4 of 120
+cannot be billed yet" and names what to fix; it refuses only when nothing
+at all can be billed, since billing most and fixing a few is an ordinary
+month. And `GET /billing-runs/:id/exception-summary` answers the same
+question after the fact: the run detail page shows the causes above the
+item list, counted in the database rather than over the capped page,
+because the size of a group is the point. Grouped on `error_code` rather
+than the message — the messages name the account they belong to, so
+grouping by sentence would reproduce the per-account list it replaces —
+and failures stay separate from skips, since only one of them is work.
 
 #### BillingRun
 

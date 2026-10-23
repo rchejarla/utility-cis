@@ -718,6 +718,102 @@ describe("preview pre-flight", () => {
   }, 120_000);
 });
 
+/**
+ * The exception list, by cause rather than by account.
+ *
+ * A run of twelve thousand accounts that fails forty of them on one
+ * unpublished schedule presents as forty rows, and an operator reads
+ * forty rows to discover one job. The counts above the list answer "how
+ * many"; this answers "how many *things to fix*", which is the question
+ * the work is actually sized by — and it is the same grouping the
+ * pre-flight already shows before a run, so the two read alike.
+ *
+ * Grouped on the code, not the sentence: the messages carry account ids
+ * ("no unbilled read … on account 0000…ac03"), so grouping by message
+ * would put every account in a group of its own, which is the list it
+ * replaces.
+ */
+describe("exceptions grouped by cause", () => {
+  async function summary(runId: string) {
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/billing-runs/${runId}/exception-summary`,
+      headers: headers(),
+    });
+    expect(res.statusCode).toBe(200);
+    return JSON.parse(res.body) as Array<{
+      status: string;
+      code: string;
+      accountCount: number;
+      sampleAccounts: string[];
+      message: string;
+    }>;
+  }
+
+  it("counts each cause once, with examples and the sentence behind it", async () => {
+    const run = JSON.parse((await startRun()).body);
+    await svc.processBillingRun({
+      runId: run.id,
+      utilityId,
+      actorId: ACTOR_ID,
+      actorName: "Tester",
+    });
+
+    const groups = await summary(run.id);
+    expect(groups.length).toBeGreaterThan(0);
+
+    const { prisma } = prismaImports;
+    for (const group of groups) {
+      const real = await prisma.billingRunItem.count({
+        where: {
+          billingRunId: run.id,
+          status: group.status as "FAILED" | "SKIPPED",
+          errorCode: group.code,
+        },
+      });
+      expect(group.accountCount).toBe(real);
+      // Examples, not the whole group: enough to recognise, never a
+      // second copy of the table.
+      expect(group.sampleAccounts.length).toBeGreaterThan(0);
+      expect(group.sampleAccounts.length).toBeLessThanOrEqual(3);
+      expect(group.message.length).toBeGreaterThan(0);
+    }
+
+    // Every exception is in exactly one group, so the groups account for
+    // the whole list rather than a sample of it.
+    const exceptions = await prisma.billingRunItem.count({
+      where: { billingRunId: run.id, status: { in: ["FAILED", "SKIPPED"] } },
+    });
+    expect(groups.reduce((n, g) => n + g.accountCount, 0)).toBe(exceptions);
+  }, 300_000);
+
+  it("keeps failures and skips apart, because only one of them is work", async () => {
+    const run = JSON.parse((await startRun()).body);
+    await svc.processBillingRun({
+      runId: run.id,
+      utilityId,
+      actorId: ACTOR_ID,
+      actorName: "Tester",
+    });
+
+    const groups = await summary(run.id);
+    // A skip and a failure sharing a code would still be two groups: the
+    // list they feed is split in two tabs for the same reason.
+    for (const group of groups) {
+      expect(["FAILED", "SKIPPED"]).toContain(group.status);
+    }
+    expect(groups.some((g) => g.status === "SKIPPED")).toBe(true);
+  }, 300_000);
+
+  it("says nothing for a run with nothing wrong", async () => {
+    const run = JSON.parse((await startRun()).body);
+    // Not processed: every item is still PENDING, so there is no
+    // exception to group and the answer is an empty list rather than a
+    // row saying zero.
+    expect(await summary(run.id)).toEqual([]);
+  }, 300_000);
+});
+
 describe("tenant isolation", () => {
   it("never puts another utility's accounts in a run, and hides its runs", async () => {
     const run = JSON.parse((await startRun()).body);

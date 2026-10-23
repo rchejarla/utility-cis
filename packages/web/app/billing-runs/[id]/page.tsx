@@ -35,6 +35,15 @@ interface RunDetail extends BillingRunRow {
   billedTotal: string;
 }
 
+/** One cause, and how much of the run it accounts for. */
+interface ExceptionGroup {
+  status: string;
+  code: string;
+  accountCount: number;
+  sampleAccounts: string[];
+  message: string;
+}
+
 interface PostResult {
   posted: number;
   alreadyPosted: number;
@@ -71,6 +80,15 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
    * bill open on it. Either way the run was gone from under them.
    */
   const [billId, setBillId] = useState<string | null>(null);
+  /*
+   * The exceptions counted by cause, which is a different question from
+   * the list below it. The counts on the cards say how many accounts;
+   * these say how many *things to fix*, and the two differ by orders of
+   * magnitude — forty accounts stopped by one unpublished schedule is
+   * one job reported forty times. Counted in the database, because the
+   * item list is capped at 500 and the size of a group is the point.
+   */
+  const [groups, setGroups] = useState<ExceptionGroup[]>([]);
 
   const loadRun = useCallback(async () => {
     try {
@@ -80,6 +98,20 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
       toast(err instanceof Error ? err.message : "Failed to load the run", "error");
     }
   }, [id, toast]);
+
+  const loadGroups = useCallback(async () => {
+    try {
+      setGroups(
+        await apiClient.get<ExceptionGroup[]>(
+          `/api/v1/billing-runs/${id}/exception-summary`,
+        ),
+      );
+    } catch {
+      // The list below still answers the question, just one account at a
+      // time, so a failure here is not worth a toast over the run.
+      setGroups([]);
+    }
+  }, [id]);
 
   const loadItems = useCallback(async () => {
     const status = TAB_STATUS[tab];
@@ -104,6 +136,10 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
   useEffect(() => {
     if (canView) void loadItems();
   }, [canView, loadItems]);
+
+  useEffect(() => {
+    if (canView) void loadGroups();
+  }, [canView, loadGroups]);
 
   /*
    * While the run is still going, both halves of the screen are stale
@@ -303,12 +339,20 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
               different dates.
             </p>
           </div>
-        ) : itemsLoading ? (
-          <p style={{ color: "var(--text-muted)" }}>Loading…</p>
-        ) : items.length === 0 ? (
-          <div style={EMPTY}>{emptyFor(tab, run)}</div>
         ) : (
-          <div style={CARD}>
+          <>
+            {/*
+              Above the list, and outside its loading and empty states:
+              the causes describe the run, not the page of rows that
+              happened to come back.
+            */}
+            <CauseSummary groups={groups.filter((g) => g.status === TAB_STATUS[tab])} />
+            {itemsLoading ? (
+              <p style={{ color: "var(--text-muted)" }}>Loading…</p>
+            ) : items.length === 0 ? (
+              <div style={EMPTY}>{emptyFor(tab, run)}</div>
+            ) : (
+            <div style={CARD}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "var(--bg-elevated)" }}>
@@ -392,8 +436,10 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
                   </tr>
                 ))}
               </tbody>
-            </table>
-          </div>
+              </table>
+            </div>
+            )}
+          </>
         )}
       </Tabs>
 
@@ -452,6 +498,70 @@ function emptyFor(tab: string, run: BillingRunRow): string {
   return run.billedCount === 0
     ? "Nothing has billed yet."
     : "No bills to show.";
+}
+
+/**
+ * What there is to fix, above the list of who it happened to.
+ *
+ * Ordered by size, because the biggest group is almost always the one
+ * job worth doing first: one publish, one assignment, one import. The
+ * code is shown because that is what an operator filters and talks
+ * about, and the sentence beneath it because the code alone does not
+ * say which schedule.
+ */
+function CauseSummary({ groups }: { groups: ExceptionGroup[] }) {
+  if (groups.length === 0) return null;
+  return (
+    <div
+      data-testid="exception-causes"
+      style={{
+        background: "var(--bg-card)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        padding: "12px 16px",
+        marginBottom: 12,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 600,
+          color: "var(--text-muted)",
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+        }}
+      >
+        {groups.length === 1 ? "1 cause" : `${groups.length} causes`}
+      </div>
+      {groups.map((g) => (
+        <div key={`${g.status}:${g.code}`} style={{ fontSize: 12.5 }}>
+          <span
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 11,
+              fontWeight: 600,
+              color: g.status === "FAILED" ? "var(--danger)" : "var(--text-muted)",
+            }}
+          >
+            {g.code}
+          </span>{" "}
+          <strong>
+            {g.accountCount.toLocaleString()}{" "}
+            {g.accountCount === 1 ? "account" : "accounts"}
+          </strong>
+          <div style={{ color: "var(--text-secondary)", marginTop: 2 }}>{g.message}</div>
+          {g.sampleAccounts.length > 0 && (
+            <div style={{ color: "var(--text-muted)", fontSize: 11, marginTop: 2 }}>
+              e.g. {g.sampleAccounts.join(", ")}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function Banner({ tone, children }: { tone: "warning" | "success"; children: React.ReactNode }) {
