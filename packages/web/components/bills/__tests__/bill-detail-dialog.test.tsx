@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
 import { BillDetailDialog } from "../bill-detail-dialog";
@@ -167,6 +168,51 @@ describe("Bill detail — holds", () => {
     // And Release is not offered here, because it would clear a reason
     // this bill does not have.
     expect(screen.queryByRole("button", { name: /release/i })).toBeNull();
+  });
+
+  /*
+   * Asking for the reason in the app, not in a browser prompt.
+   *
+   * `window.prompt` blocks the page, cannot be styled, is suppressed in
+   * some browsers and reads as though the site is broken. The reason is
+   * also the one piece of a hold that has to be good — it is what the
+   * next person has to act on — and a one-line native box does not
+   * invite that.
+   */
+  it("asks for the reason in a dialog, and will not hold without one", async () => {
+    get.mockImplementation((path: string) =>
+      path.includes("/deliveries") ? Promise.resolve([]) : Promise.resolve(bill([line()])),
+    );
+    const prompt = vi.fn();
+    vi.stubGlobal("prompt", prompt);
+    renderDialog();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^hold$/i }));
+
+    // An in-app dialog, and the native one never opens.
+    const reason = await screen.findByLabelText(/reason/i);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /hold the bill/i })).toBeDisabled();
+
+    await userEvent.type(reason, "Read looks wrong");
+    expect(screen.getByRole("button", { name: /hold the bill/i })).toBeEnabled();
+  });
+
+  it("holds the bill with the reason given", async () => {
+    get.mockImplementation((path: string) =>
+      path.includes("/deliveries") ? Promise.resolve([]) : Promise.resolve(bill([line()])),
+    );
+    const post = apiClient.post as unknown as ReturnType<typeof vi.fn>;
+    post.mockResolvedValue({});
+    renderDialog();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^hold$/i }));
+    await userEvent.type(await screen.findByLabelText(/reason/i), "Meter re-read booked");
+    await userEvent.click(screen.getByRole("button", { name: /hold the bill/i }));
+
+    expect(post).toHaveBeenCalledWith("/api/v1/bills/b-1/hold", {
+      reason: "Meter re-read booked",
+    });
   });
 
   it("offers Hold on a bill that is not held", async () => {

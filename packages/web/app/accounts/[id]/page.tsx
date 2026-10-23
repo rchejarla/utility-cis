@@ -17,6 +17,7 @@ import { AttachmentsTab } from "@/components/ui/attachments-tab";
 import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { ServiceRequestList } from "@/components/service-requests/request-list";
 import { usePermission } from "@/lib/use-permission";
+import { HoldReasonDialog } from "@/components/bills/hold-reason-dialog";
 import { useAccountTypes } from "@/lib/use-type-defs";
 import { AccessDenied } from "@/components/ui/access-denied";
 
@@ -133,6 +134,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
   const { canCreate: canCreateContact } = usePermission("customers");
   const { types: accountTypes } = useAccountTypes();
   const [account, setAccount] = useState<Account | null>(null);
+  const [askingHold, setAskingHold] = useState(false);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
@@ -156,11 +158,8 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
    * bill — releasing it there would clear a reason the bill does not
    * have.
    */
-  const holdBilling = async () => {
-    const reason = window.prompt("Why is this account's billing being held?")?.trim();
-    // An empty reason cancels rather than creating a hold nobody can
-    // explain later.
-    if (!reason) return;
+  const holdBilling = async (reason: string) => {
+    setAskingHold(false);
     try {
       await apiClient.post(`/api/v1/accounts/${id}/billing-hold`, { reason });
       toast("Billing held. Bills still calculate; none will post or be sent.", "success");
@@ -330,13 +329,24 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
                 Release billing
               </button>
             ) : (
-              <button onClick={() => void holdBilling()} style={HOLD_BTN}>
+              <button onClick={() => setAskingHold(true)} style={HOLD_BTN}>
                 Hold billing
               </button>
             )
           ) : undefined
         }
       />
+
+      {askingHold && (
+        <HoldReasonDialog
+          title="Hold this account's billing?"
+          message="Bills still calculate — a period that goes unbilled rolls into the next one — but none of them can post or be sent until the hold is lifted."
+          confirmLabel="Hold this account"
+          placeholder="e.g. Move-out pending a final read"
+          onConfirm={(reason) => void holdBilling(reason)}
+          onCancel={() => setAskingHold(false)}
+        />
+      )}
 
       {/*
         Said on the account because it is the only place it can be seen.

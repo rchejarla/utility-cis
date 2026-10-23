@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { BillPdfButton } from "./bill-pdf-button";
+import { HoldReasonDialog } from "./hold-reason-dialog";
 
 interface SegmentLine {
   id: string;
@@ -79,6 +80,7 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
   const [loading, setLoading] = useState(true);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [busy, setBusy] = useState(false);
+  const [asking, setAsking] = useState(false);
 
   const load = useCallback(() => {
     return apiClient
@@ -118,11 +120,8 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
     }
   };
 
-  const hold = () => {
-    const reason = window.prompt("Why is this bill being held?")?.trim();
-    // A hold nobody can explain is one nobody can clear, so an empty
-    // reason is a cancelled action rather than a hold with no reason.
-    if (!reason) return;
+  const hold = (reason: string) => {
+    setAsking(false);
     void act(() => apiClient.post(`/api/v1/bills/${billId}/hold`, { reason }));
   };
 
@@ -208,7 +207,7 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
                     <SmallButton onClick={release} disabled={busy} label="Release" />
                   )
                 ) : (
-                  <SmallButton onClick={hold} disabled={busy} label="Hold" />
+                  <SmallButton onClick={() => setAsking(true)} disabled={busy} label="Hold" />
                 )}
               </div>
             </div>
@@ -302,6 +301,17 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
                   </div>
                 ))}
               </div>
+            )}
+
+            {asking && (
+              <HoldReasonDialog
+                title="Hold this bill?"
+                message="A held bill cannot post and cannot be sent. It is not cancelled — the lines and the total stay as they are, and nothing happens to it until somebody releases it."
+                confirmLabel="Hold the bill"
+                placeholder="e.g. Read looks wrong — re-reading the meter on Thursday"
+                onConfirm={hold}
+                onCancel={() => setAsking(false)}
+              />
             )}
 
             {bill.segments.map((seg) => (

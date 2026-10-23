@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
 import * as permModule from "@/lib/use-permission";
@@ -113,5 +114,32 @@ describe("Account — billing hold", () => {
     // next one — so the banner has to distinguish "still calculated"
     // from "cannot post or be sent".
     expect(await screen.findByText(/still billed/i)).toBeInTheDocument();
+  });
+
+  /*
+   * In the app, not in `window.prompt`: the native box blocks the page,
+   * cannot be styled, is suppressed by some browsers, and reads as
+   * though the site is broken. The reason is the part of a hold that has
+   * to be good — it is what the next person acts on.
+   */
+  it("asks for the reason in a dialog rather than a browser prompt", async () => {
+    const prompt = vi.fn();
+    vi.stubGlobal("prompt", prompt);
+    const post = apiClient.post as unknown as ReturnType<typeof vi.fn>;
+    post.mockResolvedValue({});
+    await renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /hold billing/i }));
+
+    const reason = await screen.findByLabelText(/reason/i);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /hold this account/i })).toBeDisabled();
+
+    await userEvent.type(reason, "Bankruptcy — legal hold");
+    await userEvent.click(screen.getByRole("button", { name: /hold this account/i }));
+
+    expect(post).toHaveBeenCalledWith("/api/v1/accounts/acc-1/billing-hold", {
+      reason: "Bankruptcy — legal hold",
+    });
   });
 });
