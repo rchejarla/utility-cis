@@ -113,7 +113,7 @@ beforeEach(async () => {
   // second test in the file collides on a unique code rather than
   // testing anything.
   await prisma.$executeRawUnsafe(
-    `TRUNCATE TABLE audit_log, bill_document, bill_segment_line, bill_segment, bill, service_agreement, account, customer, billing_address, billing_cycle, rate_component, rate_component_kind, rate_schedule, commodity, utility_config, utility_module, user_role, cis_user, role RESTART IDENTITY CASCADE`,
+    `TRUNCATE TABLE audit_log, bill_document, bill_segment_line, bill_segment, bill, service_agreement, account, customer, billing_address, billing_cycle, rate_component, rate_component_kind, rate_schedule, commodity, utility_config, utility_module, user_role, cis_user, role, notification, notification_template RESTART IDENTITY CASCADE`,
   );
   await ensurePrincipal(prisma, UTILITY);
 });
@@ -1005,5 +1005,206 @@ describe("bill document endpoints", () => {
     });
 
     expect(res.statusCode).toBe(403);
+  }, 60_000);
+});
+
+/**
+ * Delivering a bill — Bozeman #132.
+ *
+ * Here rather than in a file of its own because the precondition *is* a
+ * posted bill with a rendered document, which `postedBill` already
+ * builds; a parallel fixture is the thing that diverges.
+ *
+ * A delivery is a `notification` row, not a table of its own. That row
+ * already records the channel, the address, the status, the provider's
+ * message id, the attempts and the error, with a queue draining it — so
+ * these cases assert against the outbox, and what they are really
+ * pinning is which bills are allowed into it.
+ */
+describe("delivering a posted bill", () => {
+  const DELIVER_EVENT = "billing.bill_ready";
+
+  /** The tenant's template for the event, without which nothing sends. */
+  async function template(): Promise<void> {
+    await prismaImports.prisma.notificationTemplate.create({
+      data: {
+        utilityId: UTILITY,
+        name: "Bill Ready",
+        eventType: DELIVER_EVENT,
+        channels: { email: { subject: "Your bill", body: "Bill {{billNumber}} is ready." } },
+        variables: [],
+        isActive: true,
+      },
+    });
+  }
+
+  /** A rendered document, which is the thing being delivered. */
+  async function document(billId: string): Promise<void> {
+    await prismaImports.prisma.billDocument.create({
+      data: {
+        utilityId: UTILITY,
+        billId,
+        storageIntegration: "dev-files",
+        objectKey: `bills/${billId}.pdf`,
+        byteSize: 1024,
+        documentType: "BILL",
+        templateKey: "default-bill",
+        isPaperless: false,
+      },
+    });
+  }
+
+  /** An address to send to. The fixture's customer has none by design. */
+  async function reachable(billId: string): Promise<void> {
+    const bill = await prismaImports.prisma.bill.findUniqueOrThrow({
+      where: { id: billId },
+      select: { account: { select: { customerId: true } } },
+    });
+    await prismaImports.prisma.customer.update({
+      where: { id: bill.account.customerId! },
+      data: { email: "jane.smith@example.com" },
+    });
+  }
+
+  function deliver(billId: string) {
+    return app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/deliver`,
+      headers: staffHeaders(),
+    });
+  }
+
+  it("queues one email against the bill, and says which outbox row it is", async () => {
+    const billId = await postedBill();
+    await Promise.all([template(), document(billId), reachable(billId)]);
+
+    const res = await deliver(billId);
+
+    expect(res.statusCode).toBe(202);
+    const { notificationId } = JSON.parse(res.body);
+
+    const queued = await prismaImports.prisma.notification.findUniqueOrThrow({
+      where: { id: notificationId },
+    });
+    // The row is the delivery record: what, to whom, by which channel,
+    // and not yet sent — the worker owns that part.
+    expect(queued.billId).toBe(billId);
+    expect(queued.eventType).toBe(DELIVER_EVENT);
+    expect(queued.channel).toBe("EMAIL");
+    expect(queued.recipientEmail).toBe("jane.smith@example.com");
+    expect(queued.status).toBe("PENDING");
+    expect(queued.sentAt).toBeNull();
+  }, 60_000);
+
+  it("refuses a bill that has not been posted", async () => {
+    const billId = await postedBill();
+    await Promise.all([template(), document(billId), reachable(billId)]);
+    await prismaImports.prisma.bill.update({
+      where: { id: billId },
+      data: { postedAt: null },
+    });
+
+    const res = await deliver(billId);
+
+    // Nobody owes an unposted bill. Sending it would ask a customer for
+    // money the utility has not decided to charge.
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res.body).error.code).toBe("BILL_NOT_POSTED");
+    expect(await prismaImports.prisma.notification.count()).toBe(0);
+  }, 60_000);
+
+  it("refuses a bill with nothing rendered to send", async () => {
+    const billId = await postedBill();
+    await Promise.all([template(), reachable(billId)]);
+
+    const res = await deliver(billId);
+
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res.body).error.code).toBe("NO_BILL_DOCUMENT");
+  }, 60_000);
+
+  it("refuses when there is no address, and says what to do instead", async () => {
+    const billId = await postedBill();
+    await Promise.all([template(), document(billId)]);
+
+    const res = await deliver(billId);
+
+    expect(res.statusCode).toBe(422);
+    const body = JSON.parse(res.body);
+    expect(body.error.code).toBe("NO_EMAIL_ADDRESS");
+    expect(body.error.message).toMatch(/by post/i);
+  }, 60_000);
+
+  /*
+   * The quiet failure that would be worst: `sendNotification` answers
+   * null when a tenant has no active template and logs it, which is
+   * right for a scheduled notice and wrong for a person pressing Send —
+   * they would be told it worked and nothing would arrive.
+   */
+  it("refuses when the tenant has no template for the event", async () => {
+    const billId = await postedBill();
+    await Promise.all([document(billId), reachable(billId)]);
+
+    const res = await deliver(billId);
+
+    expect(res.statusCode).toBe(422);
+    expect(JSON.parse(res.body).error.code).toBe("NO_ACTIVE_TEMPLATE");
+    expect(await prismaImports.prisma.notification.count()).toBe(0);
+  }, 60_000);
+
+  it("refuses a second send while the first is still queued", async () => {
+    const billId = await postedBill();
+    await Promise.all([template(), document(billId), reachable(billId)]);
+
+    expect((await deliver(billId)).statusCode).toBe(202);
+    const second = await deliver(billId);
+
+    // One click, one email. A resend is legitimate; two copies from one
+    // operator's double-click is not.
+    expect(second.statusCode).toBe(409);
+    expect(JSON.parse(second.body).error.code).toBe("DELIVERY_IN_FLIGHT");
+    expect(await prismaImports.prisma.notification.count({ where: { billId } })).toBe(1);
+  }, 60_000);
+
+  it("allows a resend once the first attempt has finished", async () => {
+    const billId = await postedBill();
+    await Promise.all([template(), document(billId), reachable(billId)]);
+    const first = JSON.parse((await deliver(billId)).body).notificationId;
+    await prismaImports.prisma.notification.update({
+      where: { id: first },
+      data: { status: "SENT", sentAt: new Date() },
+    });
+
+    // Utilities resend bills constantly — a deleted email, a wrong
+    // address, a customer asking on the phone — and each attempt is its
+    // own fact rather than an overwrite of the last.
+    expect((await deliver(billId)).statusCode).toBe(202);
+    expect(await prismaImports.prisma.notification.count({ where: { billId } })).toBe(2);
+  }, 60_000);
+
+  it("lists every attempt against the bill, newest first", async () => {
+    const billId = await postedBill();
+    await Promise.all([template(), document(billId), reachable(billId)]);
+    const first = JSON.parse((await deliver(billId)).body).notificationId;
+    await prismaImports.prisma.notification.update({
+      where: { id: first },
+      data: { status: "FAILED", error: "mailbox unavailable", attempts: 1 },
+    });
+    await deliver(billId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/bills/${billId}/deliveries`,
+      headers: staffHeaders(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const rows = JSON.parse(res.body) as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.status).toBe("PENDING");
+    // The failure is still on the record, with its reason — the point of
+    // a row per attempt rather than a column on the bill.
+    expect(rows[1]!.status).toBe("FAILED");
+    expect(rows[1]!.error).toBe("mailbox unavailable");
   }, 60_000);
 });

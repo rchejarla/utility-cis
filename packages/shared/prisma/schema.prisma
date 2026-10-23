@@ -836,6 +836,8 @@ model Bill {
   segments             BillSegment[]
   ledgerEntries        LedgerEntry[]
   documents            BillDocument[]
+  /// Every attempt to deliver this bill, newest first by index.
+  deliveries           Notification[]
 
   @@unique([utilityId, billNumber])
   @@index([utilityId, accountId, periodEnd])
@@ -1626,6 +1628,12 @@ model Notification {
   recipientPhone    String?             @map("recipient_phone") @db.VarChar(20)
   customerId        String?             @map("customer_id") @db.Uuid
   accountId         String?             @map("account_id") @db.Uuid
+  /// The bill this notification delivered, where it delivered one.
+  /// Null on every notification that is not about a bill, which is
+  /// most of them. A partial index on (bill_id, created_at DESC) lives
+  /// in SQL only — Prisma cannot express the WHERE, so `migrate dev`
+  /// would propose dropping it.
+  billId            String?             @map("bill_id") @db.Uuid
   context           Json                @default("{}") @map("context")
   resolvedVariables Json                @default("{}") @map("resolved_variables")
   resolvedSubject   String?             @map("resolved_subject") @db.Text
@@ -1640,6 +1648,7 @@ model Notification {
 
   template NotificationTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   customer Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  bill     Bill?                 @relation(fields: [billId], references: [id], onDelete: SetNull)
 
   @@index([utilityId, status, createdAt])
   @@index([customerId, createdAt])

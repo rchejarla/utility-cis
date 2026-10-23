@@ -20,6 +20,14 @@ export interface SendNotificationInput {
   recipientId: string;
   context: Record<string, string>;
   recipientOverride?: { email?: string; phone?: string };
+  /**
+   * The bill this notification delivers, where it delivers one.
+   *
+   * Set so the outbox row *is* the delivery record: "was this bill sent,
+   * when, to what address, and what did the provider say" is answered by
+   * the row itself rather than by a second table restating its columns.
+   */
+  billId?: string;
 }
 
 interface ChannelContent {
@@ -310,6 +318,7 @@ export async function sendNotification(
       recipientPhone,
       customerId: input.recipientId || null,
       accountId: input.context.accountId || null,
+      billId: input.billId ?? null,
       context: input.context as object,
       resolvedVariables: vars as object,
       resolvedSubject,

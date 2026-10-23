@@ -1,7 +1,7 @@
 # Billing
 
 **Module:** 09 — Billing
-**Status:** Partially shipped — `BillSegment`, `BillSegmentLine` and `Bill` are live (Rate Model v2 slices 5a–5b.2), AR posting is live (module 23 slice 1), bill generation to a stored PDF is live (bill production slice 1), and the batch billing run is live end to end — API, worker and UI (slice 5c). Bill delivery is outstanding.
+**Status:** Partially shipped — `BillSegment`, `BillSegmentLine` and `Bill` are live (Rate Model v2 slices 5a–5b.2), AR posting is live (module 23 slice 1), bill generation to a stored PDF is live (bill production slice 1), and the batch billing run is live end to end — API, worker and UI (slice 5c). Bill delivery (Bozeman #132) has its API: `POST /bills/:id/deliver` queues a posted, rendered bill to its customer and `GET /bills/:id/deliveries` lists every attempt. **Still outstanding:** the staff UI for it, and the mail provider — notifications dispatch through a provider abstraction that is a console stub until apptor-connect's `sendgrid` connector is wired, so a queued bill is queued for whatever that becomes. Bill holds (#136) and print export (#131) are untouched.
 **Entities:** BillSegment (shipped), BillSegmentLine (shipped), Bill (shipped), BillDocument (shipped), BillMessage (shipped), BillingRun (shipped), BillingRunItem (shipped)
 
 ## Overview
@@ -249,6 +249,48 @@ because the size of a group is the point. Grouped on `error_code` rather
 than the message — the messages name the account they belong to, so
 grouping by sentence would reproduce the per-account list it replaces —
 and failures stay separate from skips, since only one of them is work.
+
+#### Bill delivery (Bozeman #132)
+
+A delivery is a **`notification` row**, not a table of its own.
+
+The simpler alternative was a `bill_delivery` entity, rejected on
+inspection: `notification` already records what a delivery record has to
+— `channel`, `recipient_email`, `status`, `provider`,
+`provider_message_id`, `attempts`, `sent_at`, `error` — and already has
+a queue draining it, retries, quiet hours and per-tenant templates on
+top. A second table would have restated eight columns and a worker to
+gain nothing.
+
+What was missing was the link, so `notification.bill_id` is a nullable
+FK to `bill` with a partial index on `(bill_id, created_at DESC)`. A
+column rather than a `context` JSON key, because "has this bill been
+sent, and what happened" is asked once per row by the bills list, and a
+JSON predicate is not an index. `ON DELETE SET NULL`, matching
+`template_id` and `customer_id`: a notification is evidence that
+something was sent, and that fact outlives the bill it was about.
+
+`bill-delivery.service.ts` owns one question — may this bill be sent,
+and to whom — and hands the sending to the machinery above. It refuses:
+
+| Code | Status | Why |
+|---|---|---|
+| `BILL_NOT_POSTED` | 409 | An unposted bill is a calculation; nobody owes it, so sending it asks for money the utility has not decided to charge. Posting is the deliberate second act; delivery is the third. |
+| `NO_BILL_DOCUMENT` | 409 | "Deliver the bill" means the rendered document. A link to a portal page would be a different template. |
+| `NO_CUSTOMER` | 409 | No one to send to. |
+| `NO_EMAIL_ADDRESS` | 422 | Names the alternative — add an address, or send by post. |
+| `DELIVERY_IN_FLIGHT` | 409 | One click, one email. A resend is legitimate; two copies from a double-click are not. |
+| `NO_ACTIVE_TEMPLATE` | 422 | `sendNotification` answers null and logs when a tenant has no template, which is right for a scheduled notice and wrong for a person pressing Send — they would be told it worked and nothing would arrive. |
+
+Resending is allowed once an attempt finishes and makes a second row:
+utilities resend bills routinely, and each attempt is its own fact
+rather than an overwrite of the last. That is the point of a row per
+attempt over a `delivered_at` column on the bill — a bounce stays on the
+record, with its reason.
+
+`POST /bills/:id/deliver` is `accounts:EDIT`, like posting: a clerk who
+may read a bill may not put it in someone's inbox. It answers **202**,
+because the notification worker owns the send.
 
 #### BillingRun
 

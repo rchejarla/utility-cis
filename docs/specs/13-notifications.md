@@ -96,7 +96,22 @@ The send log / outbox. One row per message sent or attempted. Frozen at render t
 | sent_at | TIMESTAMPTZ | When delivery was confirmed |
 | created_at | TIMESTAMPTZ | |
 
-**Indexes:** `(utility_id, status, created_at)`, `(customer_id, created_at DESC)`, `(account_id, created_at DESC)`, `(template_id)`, `(event_type, created_at DESC)`.
+**Indexes:** `(utility_id, status, created_at)`, `(customer_id, created_at DESC)`, `(account_id, created_at DESC)`, `(template_id)`, `(event_type, created_at DESC)`, and a partial `(bill_id, created_at DESC) WHERE bill_id IS NOT NULL`.
+
+**`bill_id` (nullable FK → `bill`, added 2026-10-23).** Null on almost
+every notification — a delinquency notice, a portal welcome, a
+high-usage alert — and set on the ones that deliver a bill. This table
+*is* the bill-delivery record (spec 09, Bozeman #132): rather than a
+`bill_delivery` entity restating `channel`, `status`, `provider`,
+`provider_message_id`, `attempts`, `sent_at` and `error`, a delivered
+bill is a notification that names the bill it delivered. `ON DELETE SET
+NULL` like `template_id` and `customer_id`, because the row is evidence
+that something was sent and that outlives the bill it was about.
+
+The `billing.bill_ready` template is the event `deliverBill` sends on.
+Without an active one, delivery answers 422 rather than the usual quiet
+null — a scheduled notice may skip silently; a person pressing Send may
+not be told it worked when nothing will arrive.
 **RLS:** standard `utility_id` policy.
 
 ## Template Variable System

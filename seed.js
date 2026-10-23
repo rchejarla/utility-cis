@@ -26,6 +26,15 @@ async function main() {
   await p.utilityModule.deleteMany({ where: { utilityId: UID } });
 
   // Phase 2 operational entities — delete first.
+  //
+  // `delinquency_action` points at account and is written by a worker
+  // rather than by anything here, so a database only has rows once the
+  // delinquency cron has run against it — which is why this delete was
+  // missing for as long as nobody left a worker attached overnight. Same
+  // family as bill_document and billing_run below: a RESTRICT parent
+  // that the seed itself never creates and therefore never thought to
+  // clear.
+  if (p.delinquencyAction) await p.delinquencyAction.deleteMany({});
   if (p.serviceSuspension) await p.serviceSuspension.deleteMany({});
   if (p.serviceEvent) await p.serviceEvent.deleteMany({});
   if (p.meterEvent) await p.meterEvent.deleteMany({});
@@ -1231,6 +1240,25 @@ async function main() {
       variables: [
         { key: "customer.firstName", label: "Customer first name", sample: "Jane" },
         { key: "premise.addressLine1", label: "Address", sample: "123 Main St" },
+        { key: "utility.name", label: "Utility name", sample: "Bozeman Utilities" },
+      ],
+    },
+    {
+      name: "Bill Ready",
+      // The event `deliverBill` sends on. Without an active template for
+      // it, pressing Send answers 422 rather than reporting success and
+      // delivering nothing — see bill-delivery.service.ts.
+      eventType: "billing.bill_ready",
+      description: "Sent when a posted bill is delivered to the customer.",
+      channels: {
+        email: {
+          subject: "Your {{utility.name}} bill is ready",
+          body: "Dear {{customer.firstName}},\n\nYour bill {{billNumber}} is ready. You can view and download it by signing in to the customer portal.\n\nThank you,\n{{utility.name}}",
+        },
+      },
+      variables: [
+        { key: "customer.firstName", label: "Customer first name", sample: "Jane" },
+        { key: "billNumber", label: "Bill number", sample: "BILL-202610-0001000-00" },
         { key: "utility.name", label: "Utility name", sample: "Bozeman Utilities" },
       ],
     },
