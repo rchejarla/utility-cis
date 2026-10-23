@@ -732,7 +732,7 @@ export async function postBillingRun(
   actorId: string,
   actorName: string,
   runId: string,
-): Promise<{ posted: number; alreadyPosted: number; failed: number }> {
+): Promise<{ posted: number; alreadyPosted: number; failed: number; held: number }> {
   const run = await prisma.billingRun.findFirst({ where: { id: runId, utilityId } });
   if (!run) {
     throw Object.assign(new Error(`Billing run ${runId} not found`), {
@@ -755,15 +755,31 @@ export async function postBillingRun(
   let posted = 0;
   let alreadyPosted = 0;
   let failed = 0;
+  let held = 0;
   for (const item of items) {
     const billId = item.billId as string;
     const bill = await prisma.bill.findFirst({
       where: { id: billId, utilityId },
-      select: { postedAt: true },
+      select: {
+        postedAt: true,
+        holdReason: true,
+        account: { select: { billingHoldReason: true } },
+      },
     });
     if (!bill) continue;
     if (bill.postedAt) {
       alreadyPosted += 1;
+      continue;
+    }
+    /*
+     * Counted apart from `failed`, for the reason this run's whole
+     * design rests on: a held bill is a decision somebody made, not work
+     * to investigate. Reporting "3 could not post" against three bills
+     * an operator deliberately stopped would send them looking for a
+     * fault that is not there.
+     */
+    if (bill.holdReason ?? bill.account.billingHoldReason) {
+      held += 1;
       continue;
     }
     try {
@@ -780,7 +796,7 @@ export async function postBillingRun(
     data: { postedAt: new Date(), postedBy: actorId },
   });
 
-  return { posted, alreadyPosted, failed };
+  return { posted, alreadyPosted, failed, held };
 }
 
 /** Ask a run to stop; it finishes the account it is on. */

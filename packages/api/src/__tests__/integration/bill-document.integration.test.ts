@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
 import type { Prisma } from "@utility-cis/shared/src/generated/prisma";
-import {bootPostgres, ensurePrincipal } from "./_effective-dating-fixtures.js";
+import { bootPostgres, ensurePrincipal } from "./_effective-dating-fixtures.js";
 
 /**
  * BillDocument end to end against a real database.
@@ -1206,5 +1206,270 @@ describe("delivering a posted bill", () => {
     // a row per attempt rather than a column on the bill.
     expect(rows[1]!.status).toBe("FAILED");
     expect(rows[1]!.error).toBe("mailbox unavailable");
+  }, 60_000);
+});
+
+/**
+ * Bill holds — Bozeman #136.
+ *
+ * A held bill can neither post nor be delivered. It is not cancelled and
+ * not reversed; nothing further happens to it until somebody releases
+ * it.
+ *
+ * Both gates, which is the decision these cases exist to pin. Posting is
+ * the irreversible step — a wrong charge is undone by a reversal on the
+ * ledger, in full view, never by an edit — so a hold that stopped only
+ * delivery would let the bill somebody is unsure about become money
+ * owed, move the balance, and reach the portal and delinquency while
+ * they were still looking at it.
+ */
+describe("holding a bill", () => {
+  function hold(billId: string, reason = "Read looks wrong — re-reading the meter") {
+    return app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/hold`,
+      headers: staffHeaders(),
+      payload: { reason },
+    });
+  }
+
+  function release(billId: string) {
+    return app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/release`,
+      headers: staffHeaders(),
+    });
+  }
+
+  /** An unposted bill, which is what a hold usually meets. */
+  async function unposted(): Promise<string> {
+    const billId = await postedBill();
+    await prismaImports.prisma.bill.update({
+      where: { id: billId },
+      data: { postedAt: null },
+    });
+    return billId;
+  }
+
+  it("stops the bill becoming money owed", async () => {
+    const billId = await unposted();
+    expect((await hold(billId)).statusCode).toBe(204);
+
+    const { postBill } = await import("../../services/ar/posting.service.js");
+    await expect(
+      postBill(UTILITY, ACTOR, "Tester", billId),
+    ).rejects.toMatchObject({ code: "BILL_ON_HOLD" });
+
+    // Not posted, and nothing on the ledger — the hold stops the whole
+    // act rather than leaving a half-written one.
+    const after = await prismaImports.prisma.bill.findUniqueOrThrow({ where: { id: billId } });
+    expect(after.postedAt).toBeNull();
+    expect(await prismaImports.prisma.ledgerEntry.count({ where: { billId } })).toBe(0);
+  }, 60_000);
+
+  it("stops the bill leaving the building", async () => {
+    const billId = await postedBill();
+    await hold(billId, "Customer disputing last month");
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/deliver`,
+      headers: staffHeaders(),
+    });
+
+    expect(res.statusCode).toBe(409);
+    const body = JSON.parse(res.body);
+    expect(body.error.code).toBe("BILL_ON_HOLD");
+    // The reason travels with the refusal: the operator should not have
+    // to go and look up why it stopped.
+    expect(body.error.message).toMatch(/disputing last month/);
+  }, 60_000);
+
+  it("refuses a hold with no reason", async () => {
+    const billId = await unposted();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/hold`,
+      headers: staffHeaders(),
+      payload: { reason: "   " },
+    });
+
+    // A hold nobody can explain is one nobody can clear.
+    expect(res.statusCode).toBe(400);
+  }, 60_000);
+
+  it("lets the bill through once released", async () => {
+    const billId = await unposted();
+    await hold(billId);
+    expect((await release(billId)).statusCode).toBe(204);
+
+    const { postBill } = await import("../../services/ar/posting.service.js");
+    await expect(
+      postBill(UTILITY, ACTOR, "Tester", billId),
+    ).resolves.toMatchObject({ billId });
+  }, 60_000);
+
+  it("refuses to release a bill that is not held", async () => {
+    const billId = await unposted();
+    expect((await release(billId)).statusCode).toBe(409);
+  }, 60_000);
+
+  it("lists what is held, for the worklist", async () => {
+    const billId = await unposted();
+    await hold(billId, "Meter re-read booked");
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/bills/held",
+      headers: staffHeaders(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const rows = JSON.parse(res.body) as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(billId);
+    expect(rows[0]!.holdReason).toBe("Meter re-read booked");
+    // Who it belongs to, because a worklist of bill ids is unusable.
+    expect(rows[0]!.accountNumber).toBeTruthy();
+  }, 60_000);
+});
+
+/**
+ * A standing hold on the account — the rule, as against a bill's state.
+ *
+ * It exists because it has to reach bills that do not exist yet: a
+ * move-out pending a final read, a bankruptcy, a legal hold. A per-bill
+ * hold cannot say that.
+ *
+ * Nothing is stamped onto the bills. The gates read the account's reason
+ * alongside the bill's, so lifting the rule frees everything at once and
+ * there is nothing to reconcile. An earlier version copied the reason
+ * onto each unposted bill and released by matching that string back,
+ * which breaks as soon as somebody edits the reason.
+ *
+ * Billing itself still happens. Not billing a held account would push
+ * the period into the next one, and a run that bills two periods at once
+ * is the failure this system has already produced — a twenty-one-month
+ * catch-up segment.
+ */
+describe("holding an account's billing", () => {
+  async function accountOf(billId: string): Promise<string> {
+    const bill = await prismaImports.prisma.bill.findUniqueOrThrow({
+      where: { id: billId },
+      select: { accountId: true },
+    });
+    return bill.accountId;
+  }
+
+  function holdAccount(accountId: string, reason = "Move-out pending final read") {
+    return app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/billing-hold`,
+      headers: staffHeaders(),
+      payload: { reason },
+    });
+  }
+
+  function releaseAccount(accountId: string) {
+    return app.inject({
+      method: "POST",
+      url: `/api/v1/accounts/${accountId}/billing-release`,
+      headers: staffHeaders(),
+    });
+  }
+
+  /** An unposted bill on a held account. */
+  async function heldByAccount(): Promise<{ billId: string; accountId: string }> {
+    const billId = await postedBill();
+    await prismaImports.prisma.bill.update({
+      where: { id: billId },
+      data: { postedAt: null },
+    });
+    const accountId = await accountOf(billId);
+    expect((await holdAccount(accountId)).statusCode).toBe(200);
+    return { billId, accountId };
+  }
+
+  it("stops its bills posting, without touching the bills themselves", async () => {
+    const { billId } = await heldByAccount();
+
+    const { postBill } = await import("../../services/ar/posting.service.js");
+    await expect(
+      postBill(UTILITY, ACTOR, "Tester", billId),
+    ).rejects.toMatchObject({ code: "BILL_ON_HOLD" });
+
+    // The rule did the stopping. The bill carries no reason of its own,
+    // which is what makes releasing the account sufficient.
+    const after = await prismaImports.prisma.bill.findUniqueOrThrow({ where: { id: billId } });
+    expect(after.holdReason).toBeNull();
+    expect(after.postedAt).toBeNull();
+  }, 60_000);
+
+  it("stops its bills being delivered", async () => {
+    const billId = await postedBill();
+    const accountId = await accountOf(billId);
+    await holdAccount(accountId, "Bankruptcy — legal hold");
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/deliver`,
+      headers: staffHeaders(),
+    });
+
+    expect(res.statusCode).toBe(409);
+    const body = JSON.parse(res.body);
+    expect(body.error.code).toBe("BILL_ON_HOLD");
+    expect(body.error.message).toMatch(/Bankruptcy/);
+  }, 60_000);
+
+  it("frees everything the moment it is lifted", async () => {
+    const { billId, accountId } = await heldByAccount();
+
+    expect((await releaseAccount(accountId)).statusCode).toBe(200);
+
+    const { postBill } = await import("../../services/ar/posting.service.js");
+    await expect(
+      postBill(UTILITY, ACTOR, "Tester", billId),
+    ).resolves.toMatchObject({ billId });
+  }, 60_000);
+
+  it("leaves a bill held on its own terms held", async () => {
+    const { billId, accountId } = await heldByAccount();
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/bills/${billId}/hold`,
+      headers: staffHeaders(),
+      payload: { reason: "Disputed line" },
+    });
+
+    await releaseAccount(accountId);
+
+    // True by construction now rather than by matching reason strings:
+    // releasing an account was never a decision about this bill.
+    const after = await prismaImports.prisma.bill.findUniqueOrThrow({ where: { id: billId } });
+    expect(after.holdReason).toBe("Disputed line");
+    const { postBill } = await import("../../services/ar/posting.service.js");
+    await expect(
+      postBill(UTILITY, ACTOR, "Tester", billId),
+    ).rejects.toMatchObject({ code: "BILL_ON_HOLD" });
+  }, 60_000);
+
+  it("shows an account-held bill on the worklist, and says why it is there", async () => {
+    const { billId } = await heldByAccount();
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/bills/held",
+      headers: staffHeaders(),
+    });
+
+    const rows = JSON.parse(res.body) as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(billId);
+    expect(rows[0]!.holdReason).toMatch(/Move-out pending/);
+    // Which of the two holds it, because releasing the wrong one does
+    // nothing and the operator should not have to guess.
+    expect(rows[0]!.heldByAccount).toBe(true);
   }, 60_000);
 });

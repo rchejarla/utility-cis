@@ -61,9 +61,11 @@ export async function deliverBill(utilityId: string, billId: string): Promise<st
       billNumber: true,
       accountId: true,
       postedAt: true,
+      holdReason: true,
       account: {
         select: {
           accountNumber: true,
+          billingHoldReason: true,
           customerId: true,
           customer: { select: { id: true, email: true } },
         },
@@ -87,6 +89,21 @@ export async function deliverBill(utilityId: string, billId: string): Promise<st
       409,
       `Bill ${bill.billNumber} has not been posted. A bill that is not posted is a calculation — ` +
         "nobody owes it yet, so there is nothing to send. Post it first.",
+    );
+  }
+
+  /*
+   * A held bill does not leave the building (Bozeman #136). Checked
+   * before the document and the address, because "we stopped this one"
+   * is the answer the operator wants first — being told to generate a
+   * PDF for a bill somebody deliberately held would be noise.
+   */
+  const heldFor = bill.holdReason ?? bill.account.billingHoldReason;
+  if (heldFor) {
+    refuse(
+      "BILL_ON_HOLD",
+      409,
+      `Bill ${bill.billNumber} is on hold: ${heldFor}. Release it before sending.`,
     );
   }
 

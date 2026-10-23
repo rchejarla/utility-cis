@@ -178,9 +178,39 @@ export async function postBill(
     // the double-post guard — the claim below is.
     const bill = await tx.bill.findUnique({
       where: { id: billId, utilityId },
-      select: { id: true, accountId: true, total: true, dueDate: true, billDate: true },
+      select: {
+        id: true,
+        accountId: true,
+        total: true,
+        dueDate: true,
+        billDate: true,
+        billNumber: true,
+        holdReason: true,
+        account: { select: { billingHoldReason: true } },
+      },
     });
     if (!bill) throw err("BILL_NOT_FOUND", `Bill ${billId} not found`, 404);
+
+    /*
+     * A held bill does not become money owed (Bozeman #136).
+     *
+     * Checked here rather than at each caller because this is the one
+     * chokepoint every posting path goes through — a run posting in
+     * bulk, the per-account auto-post, and a manual post all arrive
+     * here. Posting is the irreversible step: a wrong charge is undone
+     * by a reversal on the ledger, in full view, never by an edit. If a
+     * hold did not stop it, the bill somebody is unsure about would move
+     * the balance and reach the portal and delinquency while they were
+     * still looking at it.
+     */
+    const heldFor = bill.holdReason ?? bill.account.billingHoldReason;
+    if (heldFor) {
+      throw err(
+        "BILL_ON_HOLD",
+        `Bill ${bill.billNumber} is on hold: ${heldFor}. Release it before posting.`,
+        409,
+      );
+    }
 
     // Claim the bill atomically rather than check-then-write: the credit
     // path has no unique-index backstop, so this is its only double-post guard.

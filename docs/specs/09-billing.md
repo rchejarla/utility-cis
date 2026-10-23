@@ -250,6 +250,44 @@ than the message — the messages name the account they belong to, so
 grouping by sentence would reproduce the per-account list it replaces —
 and failures stay separate from skips, since only one of them is work.
 
+#### Why posting and sending are manual — and why that is temporary
+
+Decided 2026-10-23. A run calculates; a person presses *Post this run*;
+a person sends. That stays for now, and the reasoning for changing it
+later is recorded here so it is not re-argued from scratch.
+
+The review the manual gate exists for **does not happen at volume**.
+Nobody opens twelve thousand bills before pressing Post, so the gate
+supplies the appearance of review rather than the substance — which is
+worse than no gate, because it manufactures assurance nobody gave. The
+reasons usually offered for it mostly resolve to something other than a
+button:
+
+| Reason | What it actually needs |
+|---|---|
+| Accounting period control | a schedule |
+| Data completeness — don't post a half-read route | a rule |
+| Accountability for charging 12,000 customers | configuration, plus the audit log |
+| Consumer protection / notice periods | a schedule |
+| Don't send at 2am on a holiday weekend | a schedule, and quiet hours already exist |
+| Verifying a new tariff's first run | real, but **transitional** — the first N runs, not every run |
+
+The intended shape is: **post automatically on the cycle's schedule,
+with rules deciding what is held, and a circuit-breaker** — auto-post
+unless the exception rate crosses a threshold, because 400 failures in
+12,000 means something systemic and posting the other 11,600 is probably
+wrong. That is the moment a human is genuinely useful, and it is rare
+enough that they will actually look. Sending follows posting
+automatically, skipping held bills.
+
+One asymmetry survives automation: a wrong charge is undone by a visible
+ledger reversal, but **an email cannot be unsent**. So the stricter rules
+belong on sending, not equally on both.
+
+Until then the button stays, and automatic *holding* at posting time —
+variance thresholds, exception-flagged reads — belongs with the same
+slice, since both are the rules the brake would run on.
+
 #### Bill delivery (Bozeman #132)
 
 A delivery is a **`notification` row**, not a table of its own.

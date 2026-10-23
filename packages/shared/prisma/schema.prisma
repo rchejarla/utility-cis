@@ -459,6 +459,10 @@ model Account {
   /// cache of the receivable. Written only inside the transaction that
   /// writes the entry, and proved by GET /api/v1/ar/reconciliation.
   depositAmount       Decimal       @default(0) @map("deposit_amount") @db.Decimal(10, 2)
+  /// A standing hold: bills for this account are born held, carrying
+  /// this reason. Billing still happens — an unbilled period rolls up
+  /// into the next one — but nothing leaves and nothing posts.
+  billingHoldReason   String?       @map("billing_hold_reason") @db.VarChar(500)
   depositWaived       Boolean       @default(false) @map("deposit_waived")
   depositWaivedReason String?       @map("deposit_waived_reason") @db.VarChar(255)
   languagePref        String        @default("en-US") @map("language_pref") @db.Char(5)
@@ -823,6 +827,14 @@ model Bill {
   periodEnd            DateTime @map("period_end") @db.Date
   billDate             DateTime @map("bill_date") @db.Date
   dueDate              DateTime @map("due_date") @db.Date
+  /// Why this bill is held, or null if it is not. A held bill cannot be
+  /// posted and cannot be delivered; it is neither cancelled nor
+  /// reversed, and nothing further happens to it until released. The
+  /// column *is* the hold, so placing one requires a reason. Who held it
+  /// and when comes from the audit log, which is why there is no
+  /// `bill_hold` entity. A partial index on (utility_id) WHERE
+  /// hold_reason IS NOT NULL lives in SQL only.
+  holdReason           String?  @map("hold_reason") @db.VarChar(500)
   subtotal             Decimal  @map("subtotal") @db.Decimal(14, 4)
   taxes                Decimal  @map("taxes") @db.Decimal(14, 4)
   credits              Decimal  @map("credits") @db.Decimal(14, 4)

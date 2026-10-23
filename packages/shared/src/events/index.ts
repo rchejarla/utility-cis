@@ -56,6 +56,12 @@ export const EVENT_TYPES = {
   BILLING_CYCLE_UPDATED: "billing_cycle.updated",
   BILL_SEGMENT_CREATED: "bill_segment.created",
   BILL_CREATED: "bill.created",
+  /** Stopped: a held bill can neither post nor be delivered (Bozeman #136). */
+  BILL_HELD: "bill.held",
+  BILL_RELEASED: "bill.released",
+  /** A standing hold, so the account's bills are born held. */
+  ACCOUNT_BILLING_HELD: "account.billing_held",
+  ACCOUNT_BILLING_RELEASED: "account.billing_released",
   BILLING_RUN_CREATED: "billing_run.created",
   /** Unbilled accounts put back in the queue after a failed or partial pass. */
   BILLING_RUN_RESUMED: "billing_run.resumed",
