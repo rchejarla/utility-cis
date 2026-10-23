@@ -54,12 +54,17 @@ export function rate(ctx: RatingContext): RatingResult {
       continue;
     }
 
-    // Quantity
-    const qty = resolveQuantity(c.quantitySource as never, ctx);
-    evalTrace.evaluatedQuantity = qty;
+    // Pricing first, because it names the unit the quantity has to be
+    // in: a tariff's rate and its tier thresholds are both denominated,
+    // and a meter is denominated separately.
+    const pricing = c.pricing as Record<string, unknown> & {
+      type: string;
+      unit?: string;
+    };
 
-    // Pricing
-    const pricing = c.pricing as Record<string, unknown> & { type: string };
+    // Quantity
+    const qty = resolveQuantity(c.quantitySource as never, ctx, pricing.unit);
+    evalTrace.evaluatedQuantity = qty;
     const amount = applyPricing(pricing as never, qty, lines, ctx);
 
     if (amount.eq(ZERO)) {

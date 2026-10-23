@@ -44,6 +44,11 @@ export function bozemanWaterComponents(): RateComponentSnapshot[] {
       quantitySource: { base: "metered" },
       pricing: {
         type: "tiered",
+        // Both the rates and the thresholds are per HCF. Its siblings
+        // below always said so; this one did not, and a tariff that does
+        // not name its unit cannot be billed from a meter denominated in
+        // another.
+        unit: "HCF",
         tiers: [
           { to: 6, rate: 3.31 },
           { to: 25, rate: 4.58 },
