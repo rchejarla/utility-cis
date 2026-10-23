@@ -13,6 +13,7 @@ import {
   Th,
   Verb,
 } from "@/components/cluster/ui";
+import { isStale } from "@/components/cluster/types";
 import type { StopResult, WorkerView } from "@/components/cluster/types";
 
 /** See the note on `.col-hide-sm` in globals.css. */
@@ -227,7 +228,37 @@ export default function ClusterWorkersPage() {
                           className={HIDE_SM}
                           style={{ ...cellStyle, whiteSpace: "nowrap" }}
                         >
-                          {worker ? new Date(worker.startedAt).toLocaleString() : DASH}
+                          {worker ? (
+                            <>
+                              {new Date(worker.startedAt).toLocaleString()}
+                              {/*
+                                The worker is the only process here that
+                                does not reload: the API runs `tsx watch`,
+                                a worker runs as one `--import tsx`
+                                process so a stop cannot orphan it. So a
+                                code change does not reach the next job,
+                                and the job reports the old behaviour as
+                                current. Nothing on this page used to
+                                contradict that.
+                              */}
+                              {isStale(worker.startedAt, report.sourceChangedAt) && (
+                                <div
+                                  style={{
+                                    fontSize: 11,
+                                    color: "var(--warning)",
+                                    whiteSpace: "normal",
+                                    maxWidth: 260,
+                                    marginTop: 4,
+                                  }}
+                                >
+                                  Running code from before the last change on disk — restart it
+                                  to pick that up.
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            DASH
+                          )}
                         </td>
                         <td style={{ ...cellStyle, textAlign: "right", whiteSpace: "nowrap" }}>
                           {worker && worker.stoppable ? (

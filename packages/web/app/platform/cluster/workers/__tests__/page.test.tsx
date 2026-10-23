@@ -91,6 +91,62 @@ function report(over: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * A worker holding code older than the source on disk.
+ *
+ * This is the one thing this page could not say, and it cost four
+ * billing runs in an evening: the worker is the only process in the
+ * stack that does not reload — the API runs `tsx watch`, and a worker
+ * deliberately runs as a single `--import tsx` process so the recorded
+ * pid is the worker's own and a stop cannot orphan it. So a code change
+ * does not reach the next run, the run reports the old behaviour as
+ * current, and nothing on screen contradicts it.
+ *
+ * Reported rather than fixed by reloading: the restart is one click,
+ * and `tsx watch` here would put a supervisor between the registry and
+ * the process it names.
+ */
+describe("a worker running older code than the source", () => {
+  it("says so, and says what to do about it", async () => {
+    get.mockResolvedValue(
+      report({
+        sourceChangedAt: "2026-10-20T10:30:00.000Z",
+        workers: [workerView({ startedAt: "2026-10-20T10:00:00.000Z" })],
+      }),
+    );
+    render(<ClusterWorkersPage />);
+
+    expect(await screen.findByText(/running code from before/i)).toBeInTheDocument();
+    expect(screen.getByText(/restart/i)).toBeInTheDocument();
+  });
+
+  it("stays quiet when the worker started after the last change", async () => {
+    get.mockResolvedValue(
+      report({
+        sourceChangedAt: "2026-10-20T10:00:00.000Z",
+        workers: [workerView({ startedAt: "2026-10-20T10:30:00.000Z" })],
+      }),
+    );
+    render(<ClusterWorkersPage />);
+
+    await screen.findByRole("columnheader", { name: /^worker$/i });
+    expect(screen.queryByText(/running code from before/i)).not.toBeInTheDocument();
+  });
+
+  it("stays quiet where there is no source to compare against", async () => {
+    // Production: the API reports null rather than stat-ing a tree that
+    // is not there, and a built worker has no sources to be stale
+    // against anyway.
+    get.mockResolvedValue(
+      report({ sourceChangedAt: null, workers: [workerView()] }),
+    );
+    render(<ClusterWorkersPage />);
+
+    await screen.findByRole("columnheader", { name: /^worker$/i });
+    expect(screen.queryByText(/running code from before/i)).not.toBeInTheDocument();
+  });
+});
+
 beforeEach(() => {
   /*
    * `mockReset`, not `clearAllMocks`: the latter leaves queued

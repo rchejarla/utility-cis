@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
+import { closeSync, openSync, readdirSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import path from "node:path";
@@ -92,6 +92,25 @@ export interface WorkerView extends WorkerRecord {
 }
 
 export interface WorkerControlStatus {
+  /**
+   * When this node's TypeScript sources were last written, or null where
+   * there are none to look at.
+   *
+   * A worker is the only process in the stack that does not reload. The
+   * API runs `tsx watch`; a worker runs as a single `--import tsx`
+   * process on purpose, so the recorded pid is the worker's own and a
+   * stop cannot orphan it — see the three facts in
+   * `worker-process.service.test.ts`. The consequence is that a change
+   * to rating or run logic does not reach the next run, and the run
+   * reports the old behaviour as current. Four billing runs in one
+   * evening were read as fresh bugs before the worker turned out to be
+   * holding code from twenty minutes earlier.
+   *
+   * Reported rather than fixed by reloading, because the restart is one
+   * click and the information was the part that was missing. A caller
+   * compares it with each worker's `startedAt`.
+   */
+  sourceChangedAt: string | null;
   /** Whether this node may start or stop a worker at all. */
   controllable: boolean;
   /** Which node answered, so an arbitrary placement is visible. */
@@ -189,6 +208,41 @@ function workerCommand(): { args: string[]; cwd: string } {
     : { args: ["--import", "tsx", "--env-file=.env", "src/worker.ts"], cwd };
 }
 
+/**
+ * The newest mtime under the API's `src`, or null outside development.
+ *
+ * Production has `dist` and no sources to be stale against, and stat-ing
+ * a tree that is not there would be a lie rather than an omission. Walks
+ * rather than caches: a few hundred stats on a console request nobody
+ * polls is cheaper than a cache that can be wrong about the one thing
+ * this exists to report.
+ */
+function newestSourceChange(): Date | null {
+  if (config.NODE_ENV === "production") return null;
+  const root = path.join(apiRoot(), "src");
+  let newest = 0;
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
+        const { mtimeMs } = statSync(full);
+        if (mtimeMs > newest) newest = mtimeMs;
+      }
+    }
+  };
+  try {
+    walk(root);
+  } catch {
+    // A missing or unreadable tree is "nothing to compare", not an error
+    // worth failing a status read over.
+    return null;
+  }
+  return newest > 0 ? new Date(newest) : null;
+}
+
 async function readRegistry(): Promise<WorkerRecord[]> {
   const raw = (await redis.hgetall(REGISTRY_KEY)) ?? {};
   const records: WorkerRecord[] = [];
@@ -265,6 +319,7 @@ export async function getWorkerControlStatus(): Promise<WorkerControlStatus> {
   }
 
   return {
+    sourceChangedAt: newestSourceChange()?.toISOString() ?? null,
     controllable: workerControlAllowed(),
     thisNode: thisNodeName(),
     workers,

@@ -111,6 +111,13 @@ export interface ClusterReport {
   checkedAt: string;
   queues: QueueHealth[];
   totals: { waiting: number; active: number; failed: number; dlq: number };
+  /**
+   * When the serving node's sources were last written, or null where
+   * there are none — a built deployment has no sources to be stale
+   * against. Compared with a worker's `startedAt`, it is the only way
+   * this page can say that a worker is holding code older than the disk.
+   */
+  sourceChangedAt: string | null;
   /** Whether the node serving this page may start or stop a worker. */
   controllable: boolean;
   /** Which node answered, since a start lands there and nowhere else. */
@@ -118,4 +125,15 @@ export interface ClusterReport {
   workers: WorkerView[];
   /** Every connected API node; null when Redis would not list clients. */
   nodes: ConnectedNode[] | null;
+}
+
+/**
+ * Whether a worker started before the last change to the sources.
+ *
+ * Null `sourceChangedAt` means there is nothing to compare — production,
+ * or an unreadable tree — and silence is the right answer, not a guess.
+ */
+export function isStale(startedAt: string, sourceChangedAt: string | null): boolean {
+  if (!sourceChangedAt) return false;
+  return new Date(startedAt).getTime() < new Date(sourceChangedAt).getTime();
 }
