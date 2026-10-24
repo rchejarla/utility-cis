@@ -7,7 +7,10 @@ import { loggerOptions } from "./lib/logger.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { tenantMiddleware } from "./middleware/tenant.js";
 import { authorizationMiddleware } from "./middleware/authorization.js";
-import { actingContextMiddleware } from "./middleware/acting-context.js";
+import {
+  tenantScopeMiddleware,
+  platformScopeMiddleware,
+} from "./middleware/acting-context.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { redis } from "./lib/cache-redis.js";
 import { commodityRoutes } from "./routes/commodities.js";
@@ -94,11 +97,15 @@ export async function buildApp() {
   app.setErrorHandler(errorHandler);
 
   app.addHook("onRequest", authMiddleware);
+  // Before anything reads the database — `authorizationMiddleware` itself
+  // queries user_role, utility_module and utility, so a tenant's scope
+  // has to be in place by the time it runs. See the file.
+  app.addHook("onRequest", tenantScopeMiddleware);
   app.addHook("onRequest", tenantMiddleware);
   app.addHook("onRequest", authorizationMiddleware);
-  // After authorization, which is what decides whether this is a tenant's
-  // request or the platform's. See the file for why it is a callback hook.
-  app.addHook("onRequest", actingContextMiddleware);
+  // And the platform's, which is only knowable once authorization has
+  // proven the actor rather than taken a claim for it.
+  app.addHook("onRequest", platformScopeMiddleware);
 
   /**
    * Liveness, plus the one dependency whose state is invisible from

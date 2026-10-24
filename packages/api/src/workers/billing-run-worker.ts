@@ -9,6 +9,7 @@ import {
 import { scopedJob } from "../lib/queue-scope.js";
 import { processBillingRun, postBillingRun } from "../services/billing-run.service.js";
 import { prisma } from "../lib/prisma.js";
+import { runAsPlatform } from "../lib/tenant-context.js";
 
 /**
  * BullMQ worker for the `billing-runs` queue.
@@ -110,7 +111,25 @@ export function buildBillingRunWorker(): Worker<BillingRunJobData> {
  * of a resumed run still names the person who started it rather than
  * the machine that finished it.
  */
+  /*
+   * Platform authority, declared here rather than by the caller.
+   *
+   * This is cross-tenant discovery with neither a request nor a job
+   * behind it: it looks for work *any* tenant was left holding, and it
+   * runs at boot, before any scope exists. Under a role the policies
+   * bind to that means it reads nothing — and a sweep that finds
+   * nothing reports success, so a replica that died holding a run would
+   * leave it looking busy forever.
+   *
+   * Self-scoping because the function is cross-tenant by nature. A
+   * caller that had to remember is a caller that will eventually
+   * forget, and the symptom would be silence.
+   */
 export async function reclaimZombieBillingRuns(): Promise<number> {
+  return runAsPlatform(() => reclaimZombieBillingRunsUnscoped());
+}
+
+async function reclaimZombieBillingRunsUnscoped(): Promise<number> {
   const stuck = await prisma.billingRun.findMany({
     where: { status: "RUNNING" },
     select: { id: true, utilityId: true, createdBy: true },

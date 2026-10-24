@@ -1,7 +1,16 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import pg from "pg";
 import { bootPostgres, TENANT_A, TENANT_B } from "./_effective-dating-fixtures.js";
+
+/*
+ * The boot sweeps re-enqueue what they find. Stopped here so a run does
+ * not leave jobs in the dev Redis that look like real stuck work.
+ */
+vi.mock("../../lib/queues.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/queues.js")>()),
+  enqueueSafely: vi.fn(async () => "test-job-id"),
+}));
 
 /**
  * What authority a queue's work runs under.
@@ -155,5 +164,57 @@ describe("a queue's authority", () => {
       }),
     );
     expect(breached.map((r) => r.utilityId).sort()).toEqual([utilityId, otherUtility].sort());
+  });
+
+  /*
+   * Boot sweeps are the one database path with neither a request nor a
+   * job behind it. `reclaimZombieBillingRuns` looks for runs any tenant
+   * left RUNNING, and `reclaimAndEnqueueZombies` does the same for
+   * import batches — both are cross-tenant discovery by nature, and both
+   * run before any scope exists.
+   *
+   * Under `cis_app` with no scope the policy refuses them, and a sweep
+   * that finds nothing reports success: a replica dies holding a run,
+   * nothing reclaims it, and it looks busy forever. So this asserts the
+   * sweep finds BOTH tenants' stuck runs when called the way the worker
+   * calls it — with nothing wrapped around it.
+   */
+  it("reclaims stuck work for every tenant, called with no ambient scope", async () => {
+    const { prisma } = prismaImports;
+    const { runAsPlatform } = await import("../../lib/tenant-context.js");
+
+    const cycles: Record<string, string> = {};
+    await runAsPlatform(async () => {
+      for (const uid of [utilityId, otherUtility]) {
+        const cycle = await prisma.billingCycle.create({
+          data: {
+            utilityId: uid,
+            name: "Zombie",
+            cycleCode: "Z01",
+            readDayOfMonth: 1,
+            billDayOfMonth: 15,
+            frequency: "MONTHLY",
+          },
+        });
+        cycles[uid] = cycle.id;
+        await prisma.billingRun.create({
+          data: {
+            utilityId: uid,
+            billingCycleId: cycle.id,
+            windowStart: new Date("2026-01-01"),
+            windowEnd: new Date("2026-01-31"),
+            billDate: new Date("2026-01-31"),
+            dueDate: new Date("2026-03-02"),
+            status: "RUNNING",
+            createdBy: "00000000-0000-4000-8000-aaaa00000001",
+          },
+        });
+      }
+    });
+
+    const worker = await import("../../workers/billing-run-worker.js");
+    // Called bare, exactly as worker.ts calls it at boot.
+    const requeued = await worker.reclaimZombieBillingRuns();
+    expect(requeued).toBe(2);
   });
 });

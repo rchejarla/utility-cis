@@ -10,11 +10,30 @@ import { enterScope } from "../lib/tenant-context.js";
  * its queries will carry — without it every handler runs with no scope
  * at all, and a tenant table refuses them.
  *
- * Registered **after** `authorizationMiddleware`, because that is what
- * establishes which of the two a request is: `request.platformActor` for
- * the 24 routes declaring `{ platform: true }`, `request.user` for
- * everything else. The middleware refuses each kind on the other's
- * routes, so exactly one of them is set.
+ * **Two hooks, at two different points, and the split is forced.**
+ *
+ * `authorizationMiddleware` reads the database itself — `getUserRole`,
+ * `getTenantModules` and `getUtilityStatus` all query tenant tables — so
+ * a tenant's scope has to exist *before* it runs, or the request dies in
+ * that middleware and never reaches a handler at all. That is exactly
+ * what happened: every tenant route answered 400 while platform routes
+ * answered 200, because `cis_user` is nullif-guarded and readable
+ * without a tenant while `user_role` and `utility_module` are not.
+ *
+ * But which requests are the platform's is only known *after* that same
+ * middleware runs, since `request.platformActor` is what it establishes.
+ *
+ * So: the tenant scope goes in immediately after `authMiddleware`, which
+ * is what sets `request.user`; the platform scope goes in after
+ * authorization, once the actor is a proven row rather than a claim. The
+ * two nest harmlessly — a platform request has no `utility_id` to scope
+ * by, so the first hook is a no-op for it.
+ *
+ * Deriving the platform scope from the token's `platform: true` claim
+ * instead would collapse them into one hook, and was rejected: it would
+ * hand a connection holding BYPASSRLS to anything that merely *claims*
+ * to be the platform, for the duration of the lookup that decides
+ * whether it is.
  *
  * Callback form, deliberately. An async hook would unwind its own
  * AsyncLocalStorage scope on return, before the handler ever ran;
@@ -29,7 +48,7 @@ import { enterScope } from "../lib/tenant-context.js";
  * is the safe default: its queries are refused rather than served from
  * whichever tenant happened to be last.
  */
-export function actingContextMiddleware(
+export function platformScopeMiddleware(
   request: FastifyRequest,
   _reply: FastifyReply,
   done: HookHandlerDoneFunction,
@@ -38,6 +57,15 @@ export function actingContextMiddleware(
     enterScope({ kind: "platform" }, done);
     return;
   }
+  done();
+}
+
+/** The tenant's scope, established before anything reads the database. */
+export function tenantScopeMiddleware(
+  request: FastifyRequest,
+  _reply: FastifyReply,
+  done: HookHandlerDoneFunction,
+): void {
   const utilityId = request.user?.utilityId;
   if (utilityId) {
     try {

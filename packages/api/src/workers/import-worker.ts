@@ -14,6 +14,7 @@ import {
 import { emitImportTerminalNotifications } from "../services/imports/notify.service.js";
 import { reclaimZombieBatches } from "../services/imports/zombie-sweep.service.js";
 import { prisma } from "../lib/prisma.js";
+import { runAsPlatform } from "../lib/tenant-context.js";
 
 /**
  * BullMQ worker for the `imports` queue.
@@ -89,7 +90,25 @@ export function buildImportWorker(): Worker<ImportJobData> {
  * mid-processing when it died. Safe to call repeatedly — finding zero
  * zombies is the steady state.
  */
+  /*
+   * Platform authority, declared here rather than by the caller.
+   *
+   * This is cross-tenant discovery with neither a request nor a job
+   * behind it: it looks for work *any* tenant was left holding, and it
+   * runs at boot, before any scope exists. Under a role the policies
+   * bind to that means it reads nothing — and a sweep that finds
+   * nothing reports success, so a replica that died holding a run would
+   * leave it looking busy forever.
+   *
+   * Self-scoping because the function is cross-tenant by nature. A
+   * caller that had to remember is a caller that will eventually
+   * forget, and the symptom would be silence.
+   */
 export async function reclaimAndEnqueueZombies(): Promise<void> {
+  return runAsPlatform(() => reclaimAndEnqueueZombiesUnscoped());
+}
+
+async function reclaimAndEnqueueZombiesUnscoped(): Promise<void> {
   const ids = await reclaimZombieBatches(new Date());
   for (const batchId of ids) {
     const batch = await prisma.importBatch.findUnique({
