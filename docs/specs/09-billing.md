@@ -421,7 +421,7 @@ act repeated rather than a new kind of power.
 | GET | `/api/v1/billing-runs/preview` | `accounts:VIEW` | What starting a run would do — resolved window, dates, and how many accounts are due — without writing anything. Same fields as the create body, as a query |
 | GET | `/api/v1/billing-runs/:id` | `accounts:VIEW` | One run's counts and status, plus `billedTotal` — what posting would raise — and `postedCount` / `awaitingPostCount`, which is what the Post button is gated on rather than `postedAt` |
 | GET | `/api/v1/billing-runs/:id/items` | `accounts:VIEW` | The item list. `?status=FAILED` is the work queue; `limit` (≤500) / `offset` |
-| POST | `/api/v1/billing-runs/:id/post` | `accounts:EDIT` | Post every bill the run produced. **201** with `{ posted, alreadyPosted, failed }` |
+| POST | `/api/v1/billing-runs/:id/post` | `accounts:EDIT` | Queue a posting pass over every bill the run produced. **202** with `{ queued, jobId }` — the counts land on the run, not in this response. Refusals (`RUN_NOT_FOUND`, `RUN_NOT_FINISHED`) are answered synchronously, before the enqueue |
 | POST | `/api/v1/billing-runs/:id/cancel` | `accounts:EDIT` | Ask a run to stop; it finishes the account it is on |
 
 The body is `{ billingCycleId }` and, optionally, `windowEnd`, `billDate`,
@@ -697,6 +697,44 @@ the run is still going (the API refuses with `RUN_NOT_FINISHED`).
 **Cancel run** is offered in its place while a run is in
 flight, and says what cancelling does: stops after the current account,
 leaves what has billed billed.
+
+**Posting runs on the worker, like generating.** `POST /billing-runs/:id/post`
+enqueues `post-billing-run` on the existing `billing-runs` queue and answers
+202; the worker calls `postBillingRun`. The same queue, because the two
+passes must not run concurrently over one run and its concurrency of 1
+already guarantees that — a second queue would reintroduce the overlap it
+was set to prevent.
+
+It used to loop in the request: a `findFirst` and a transaction per bill
+with the HTTP connection held open for all of them. At twelve thousand
+accounts that is the bottleneck long before anything else is, and a request
+that died halfway left a run half-posted with nothing to pick it up —
+*generating* a run has had a worker and a boot sweep since it shipped, and
+posting had neither. Moving it finishes a pattern the codebase started
+rather than introducing one.
+
+**`BillingRun.postingStartedAt` is the marker a dead replica leaves.**
+`postedAt` is stamped after the loop, so it cannot describe the middle of a
+pass; this is posting's equivalent of generation's `status = RUNNING`. A
+zombie is `postingStartedAt IS NOT NULL AND posted_at IS NULL` — a pass that
+began and never reached the end — and `reclaimZombieBillingRuns` re-enqueues
+on exactly that pair, alongside the runs it already reclaims. A partial
+index covers it, since the steady state is none at all. Resuming is safe for
+the same reason resuming generation is: the loop re-reads each bill and
+`postBill` claims atomically with `UPDATE … WHERE posted_at IS NULL`, so a
+bill the dead pass posted comes back as `alreadyPosted` rather than charged
+twice. **A pass that finished with failures is not a zombie** — `postedAt`
+is set — and that run is not stuck: it has work left, and the Post button
+is what finishes it.
+
+There is deliberately no guard against a pass already being in flight. It
+would refuse the reclaim, which arrives in precisely that state, and it
+would be guarding nothing the atomic claim does not already cover. The
+*screen* hides Post while a pass runs, because a second one tells the
+operator nothing and reads as though the first did not take.
+
+Single-bill posting (`routes/ar.ts`) stays synchronous. A CSR posting one
+bill wants the answer in the response, and one bill is one transaction.
 
 **It is gated on what is left to post, not on `postedAt`.** The run detail
 carries two derived figures for this: `postedCount`, how many of the run's

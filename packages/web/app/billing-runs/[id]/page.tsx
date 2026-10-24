@@ -54,6 +54,14 @@ interface RunDetail extends BillingRunRow {
    * their accounts — of all of them.
    */
   awaitingPostCount: number;
+  /**
+   * When the current posting pass began, or null if none is running.
+   *
+   * With `postedAt` still null this is a pass under way — the same
+   * marker the worker's boot sweep reclaims on, because `postedAt` is
+   * stamped after the loop and so cannot describe the middle of one.
+   */
+  postingStartedAt: string | null;
 }
 
 /** One cause, and how much of the run it accounts for. */
@@ -76,12 +84,6 @@ interface SendSkip {
 interface SendResult {
   queued: number;
   skipped: SendSkip[];
-}
-
-interface PostResult {
-  posted: number;
-  alreadyPosted: number;
-  failed: number;
 }
 
 const TAB_STATUS: Record<string, string | undefined> = {
@@ -189,14 +191,21 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
    * A finished run never changes, so the timer stops with it.
    */
   const inFlight = run?.status === "PENDING" || run?.status === "RUNNING";
+  /*
+   * Posting is queued too now, so its counts climb while the screen
+   * sits there exactly as generation's do — and the same timer has to
+   * cover it, or a run posts in the background and the page says it
+   * never started.
+   */
+  const postingInFlight = run?.postingStartedAt != null && run?.postedAt == null;
   useEffect(() => {
-    if (!inFlight) return;
+    if (!inFlight && !postingInFlight) return;
     const t = setInterval(() => {
       void loadRun();
       void loadItems();
     }, 5000);
     return () => clearInterval(t);
-  }, [inFlight, loadRun, loadItems]);
+  }, [inFlight, postingInFlight, loadRun, loadItems]);
 
   /**
    * Queue every bill this run produced.
@@ -222,12 +231,18 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
     }
   };
 
+  /*
+   * Queues the pass; it does not perform it. The response is a job id,
+   * so there are no counts to report — claiming any would be inventing
+   * them. What the pass did shows up on the run itself as the timer
+   * above brings it back.
+   */
   const post = async () => {
     setPosting(true);
     try {
-      const res = await apiClient.post<PostResult>(`/api/v1/billing-runs/${id}/post`, {});
+      await apiClient.post(`/api/v1/billing-runs/${id}/post`, {});
       setConfirmPost(false);
-      toast(describePosting(res), res.failed > 0 ? "error" : "success");
+      toast("Posting queued — the counts update here as it works.", "success");
       await loadRun();
     } catch (err) {
       toast(err instanceof Error ? err.message : "Posting failed", "error");
@@ -282,7 +297,11 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
   if (!run) return <p style={{ color: "var(--text-muted)", padding: "20px 0" }}>Loading…</p>;
 
   const finished = !inFlight;
-  const canPost = canEdit && finished && run.awaitingPostCount > 0;
+  // Not while a pass is already running: a second Post would queue a
+  // second pass over the same run. It cannot double-charge — postBill
+  // claims atomically — but it tells the operator nothing and reads as
+  // though the first one did not take.
+  const canPost = canEdit && finished && !postingInFlight && run.awaitingPostCount > 0;
   /*
    * Posted, and not everything landed. Held bills are not in this
    * figure, so it is the ones that threw — work, and the Post above
@@ -387,6 +406,13 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
         </div>
       )}
 
+      {postingInFlight && (
+        <Banner tone="info">
+          Posting is under way — {run.postedCount.toLocaleString()} of{" "}
+          {run.billedCount.toLocaleString()} so far. This page updates as it works; it keeps
+          going if you leave.
+        </Banner>
+      )}
       {run.postedAt && !postedIncomplete && (
         <Banner tone="success">
           Posted {fmtDate(run.postedAt)} — these bills are now receivables on their accounts.
@@ -607,21 +633,6 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
   );
 }
 
-/**
- * What posting did, in one sentence.
- *
- * `alreadyPosted` is not an error: somebody posting a bill by hand
- * between the run and this click agrees with us about the outcome, and
- * the service deliberately tolerates it. It is still worth saying, so
- * the number of bills posted here matches what the operator sees.
- */
-function describePosting(res: PostResult): string {
-  const parts = [`${res.posted.toLocaleString()} posted`];
-  if (res.alreadyPosted > 0) parts.push(`${res.alreadyPosted.toLocaleString()} already posted`);
-  if (res.failed > 0) parts.push(`${res.failed.toLocaleString()} could not post`);
-  return parts.join(", ") + ".";
-}
-
 function emptyFor(tab: string, run: BillingRunRow): string {
   if (tab === "failures") {
     return run.status === "PENDING"
@@ -698,12 +709,30 @@ function CauseSummary({ groups }: { groups: ExceptionGroup[] }) {
   );
 }
 
-function Banner({ tone, children }: { tone: "warning" | "success"; children: React.ReactNode }) {
-  const color = tone === "warning" ? "var(--warning)" : "var(--success)";
+/**
+ * `info` is for work in progress — neither a warning nor a result.
+ * Posting under way is the case it was added for: it is not something
+ * wrong, and calling it a success before it finishes would be a lie.
+ */
+function Banner({
+  tone,
+  children,
+}: {
+  tone: "warning" | "success" | "info";
+  children: React.ReactNode;
+}) {
+  const color =
+    tone === "warning" ? "var(--warning)" : tone === "info" ? "var(--info)" : "var(--success)";
+  const fill =
+    tone === "warning"
+      ? "var(--warning-subtle)"
+      : tone === "info"
+        ? "var(--info-subtle)"
+        : "var(--success-subtle)";
   return (
     <div
       style={{
-        background: tone === "warning" ? "var(--warning-subtle)" : "var(--success-subtle)",
+        background: fill,
         border: `1px solid ${color}`,
         borderRadius: "var(--radius)",
         padding: "10px 14px",

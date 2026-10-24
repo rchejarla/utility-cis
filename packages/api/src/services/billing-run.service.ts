@@ -728,12 +728,17 @@ async function finalise(
  * rather than failing the operation, because the operator's intent and
  * ours agree about the outcome.
  */
-export async function postBillingRun(
-  utilityId: string,
-  actorId: string,
-  actorName: string,
-  runId: string,
-): Promise<{ posted: number; alreadyPosted: number; failed: number; held: number }> {
+/**
+ * Whether this run may be posted at all, as distinct from what posting
+ * would do.
+ *
+ * Separate from `postBillingRun` because posting is queued: these
+ * refusals are about the run's state and belong to the caller, and
+ * raising them inside the job would answer nobody. The route checks
+ * first and replies; the job calls this too, since by the time it runs
+ * the run may have changed.
+ */
+export async function assertRunPostable(utilityId: string, runId: string): Promise<void> {
   const run = await prisma.billingRun.findFirst({ where: { id: runId, utilityId } });
   if (!run) {
     throw Object.assign(new Error(`Billing run ${runId} not found`), {
@@ -747,6 +752,35 @@ export async function postBillingRun(
       { statusCode: 409, code: "RUN_NOT_FINISHED" },
     );
   }
+}
+
+export async function postBillingRun(
+  utilityId: string,
+  actorId: string,
+  actorName: string,
+  runId: string,
+): Promise<{ posted: number; alreadyPosted: number; failed: number; held: number }> {
+  await assertRunPostable(utilityId, runId);
+
+  /*
+   * Mark the pass before doing any of it, so a replica that dies
+   * holding this run leaves evidence. `postedAt` is stamped after the
+   * loop and so cannot say "a pass is under way"; this is posting's
+   * equivalent of generation's `status = RUNNING`, and
+   * `reclaimZombieBillingRuns` re-enqueues on exactly this pair.
+   *
+   * There is deliberately no guard against a pass already being in
+   * flight. It would refuse the reclaim, which arrives in precisely
+   * that state — and it would be guarding nothing: `postBill` claims
+   * atomically with UPDATE ... WHERE posted_at IS NULL, so a duplicated
+   * or concurrent pass cannot double-charge. It reports the bills as
+   * `alreadyPosted`, which is the same tolerance this loop already
+   * extends to a bill somebody posted by hand.
+   */
+  await prisma.billingRun.update({
+    where: { id: runId },
+    data: { postingStartedAt: new Date() },
+  });
 
   const items = await prisma.billingRunItem.findMany({
     where: { billingRunId: runId, status: "BILLED", billId: { not: null } },

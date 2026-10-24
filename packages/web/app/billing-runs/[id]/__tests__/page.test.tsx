@@ -51,6 +51,8 @@ function detail(over: Record<string, unknown> = {}) {
     postedCount: 0,
     awaitingPostCount: 118,
     postedAt: null,
+    /** Set only while a posting pass is running; see the cases below. */
+    postingStartedAt: null,
     cancelRequested: false,
     lastProgressAt: "2026-10-15T10:00:00.000Z",
     createdAt: "2026-10-15T09:00:00.000Z",
@@ -171,9 +173,14 @@ describe("Billing run detail — the posting gate", () => {
     expect(screen.getByText(/1 accounts failed and are not included/)).toBeInTheDocument();
   });
 
-  it("posts only on confirmation, and reports what happened", async () => {
+  /*
+   * Posting is queued now, so the request has no counts to report —
+   * it answers 202 with a job id. Claiming "117 posted" off that
+   * response would be inventing the number.
+   */
+  it("posts only on confirmation, and says the work was queued", async () => {
     routeGets({ byStatus: { FAILED: [] } });
-    post.mockResolvedValue({ posted: 117, alreadyPosted: 1, failed: 0 });
+    post.mockResolvedValue({ queued: true, jobId: "job-1" });
     await renderPage();
     await loaded();
 
@@ -185,9 +192,30 @@ describe("Billing run detail — the posting gate", () => {
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith("/api/v1/billing-runs/run-1/post", {}),
     );
-    // "Already posted" is not an error — somebody posting a bill by hand
-    // in between agrees with us about the outcome.
-    expect(await screen.findByText(/117 posted, 1 already posted\./)).toBeInTheDocument();
+    expect(await screen.findByText(/queued/i)).toBeInTheDocument();
+    // No count claimed from a response that carries none.
+    expect(screen.queryByText(/\d+ posted/)).not.toBeInTheDocument();
+  });
+
+  /*
+   * A pass under way is `postingStartedAt` set with `postedAt` still
+   * null — the marker the worker and the boot sweep use. Offering Post
+   * on top of it would queue a second pass over the same run.
+   */
+  it("says a posting pass is under way, and offers no second one", async () => {
+    routeGets({
+      run: detail({
+        status: "COMPLETE",
+        postingStartedAt: "2026-10-15T10:00:00.000Z",
+        postedAt: null,
+      }),
+      byStatus: { FAILED: [] },
+    });
+    await renderPage();
+
+    await loaded();
+    expect(screen.getByText(/posting .*under way|being posted/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Post this run" })).not.toBeInTheDocument();
   });
 
   it("offers no Post button to a user who may only look", async () => {

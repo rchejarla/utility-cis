@@ -11,14 +11,17 @@ import {
   listBillingRuns,
   getBillingRun,
   listBillingRunItems,
-  postBillingRun,
+  assertRunPostable,
   cancelBillingRun,
   resumeBillingRun,
   summariseRunExceptions,
   sendBillingRun,
 } from "../services/billing-run.service.js";
 import { QUEUE_NAMES, enqueueSafely } from "../lib/queues.js";
-import { BILLING_RUN_JOB_NAME } from "../workers/billing-run-worker.js";
+import {
+  BILLING_RUN_JOB_NAME,
+  BILLING_RUN_POST_JOB_NAME,
+} from "../workers/billing-run-worker.js";
 
 /**
  * Billing runs.
@@ -156,14 +159,34 @@ export async function billingRunRoutes(app: FastifyInstance) {
     },
   );
 
+  /**
+   * Post a whole run — queued, like generating one.
+   *
+   * It used to loop here, in the request: a `findFirst` and a
+   * transaction per bill, with the HTTP connection held open for all of
+   * them. At twelve thousand accounts that is the bottleneck long before
+   * anything else is, and a request that dies halfway leaves a run
+   * half-posted with nothing to pick it up — generating a run has had a
+   * worker and a boot sweep since it shipped, and posting had neither.
+   *
+   * The refusals stay synchronous, because they are about the run's
+   * state rather than the work: `postBillingRun` is called by the worker
+   * and would raise RUN_NOT_FINISHED there, where nobody is listening.
+   * So the same check runs here first and answers the caller.
+   */
   app.post(
     "/api/v1/billing-runs/:id/post",
     { config: { module: "accounts", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
-      const result = await postBillingRun(utilityId, actorId, actorName, id);
-      return reply.status(201).send(result);
+      await assertRunPostable(utilityId, id);
+      const jobId = await enqueueSafely(
+        QUEUE_NAMES.billingRuns,
+        BILLING_RUN_POST_JOB_NAME,
+        { runId: id, utilityId, actorId, actorName },
+      );
+      return reply.status(202).send({ queued: jobId !== null, jobId });
     },
   );
 

@@ -465,14 +465,10 @@ describe("posting a run", () => {
     const { postBill } = await import("../../services/ar/posting.service.js");
     await postBill(utilityId, ACTOR_ID, "Tester", billed[0].billId as string);
 
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/billing-runs/${run.id}/post`,
-      headers: headers(),
-    });
-
-    expect(res.statusCode).toBe(201);
-    const result = JSON.parse(res.body);
+    // The service, not the route: posting is queued now, so the route
+    // only enqueues — which the case below covers. This one is about
+    // what the pass does, which is what the worker calls.
+    const result = await svc.postBillingRun(utilityId, ACTOR_ID, "Tester", run.id);
     expect(result.alreadyPosted).toBe(1);
     expect(result.posted).toBe(billed.length - 1);
     expect(result.failed).toBe(0);
@@ -500,6 +496,93 @@ describe("posting a run", () => {
    * separate: a gate counting it would offer a Post that can only ever
    * report it held again.
    */
+  /*
+   * Posting is queued, like generating. It used to loop in the request —
+   * a findFirst and a transaction per bill with the connection held open
+   * for all of them — which at twelve thousand accounts is the
+   * bottleneck before anything else is, and left a half-posted run with
+   * nothing to pick it up if the request died.
+   */
+  it("queues the posting instead of doing it in the request", async () => {
+    const run = JSON.parse((await startRun()).body);
+    await svc.processBillingRun({
+      runId: run.id,
+      utilityId,
+      actorId: ACTOR_ID,
+      actorName: "Tester",
+    });
+
+    const queues = await import("../../lib/queues.js");
+    vi.mocked(queues.enqueueSafely).mockClear();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/billing-runs/${run.id}/post`,
+      headers: headers(),
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(JSON.parse(res.body).queued).toBe(true);
+    expect(queues.enqueueSafely).toHaveBeenCalledWith(
+      "billing-runs",
+      "post-billing-run",
+      expect.objectContaining({ runId: run.id, utilityId }),
+    );
+
+    // And nothing was posted by the request itself.
+    const { prisma } = prismaImports;
+    const detail = await svc.getBillingRun(utilityId, run.id);
+    expect(detail.postedCount).toBe(0);
+    expect(await prisma.ledgerEntry.count({ where: { utilityId, type: "BILL_CHARGE" } })).toBe(0);
+  }, 300_000);
+
+  /*
+   * The marker a dead replica leaves behind. `postedAt` is stamped after
+   * the loop, so it cannot say a pass is under way — without this there
+   * was nothing for a boot sweep to find, which is why generating a run
+   * recovered from a crash and posting one did not.
+   */
+  it("marks a posting pass so a dead replica's run can be reclaimed", async () => {
+    const run = JSON.parse((await startRun()).body);
+    await svc.processBillingRun({
+      runId: run.id,
+      utilityId,
+      actorId: ACTOR_ID,
+      actorName: "Tester",
+    });
+    const { prisma } = prismaImports;
+
+    expect((await prisma.billingRun.findUniqueOrThrow({ where: { id: run.id } })).postingStartedAt)
+      .toBeNull();
+
+    await svc.postBillingRun(utilityId, ACTOR_ID, "Tester", run.id);
+    const after = await prisma.billingRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(after.postingStartedAt).not.toBeNull();
+
+    // A finished pass is not a zombie, even though it is marked.
+    const worker = await import("../../workers/billing-run-worker.js");
+    const queues = await import("../../lib/queues.js");
+    vi.mocked(queues.enqueueSafely).mockClear();
+    await worker.reclaimZombieBillingRuns();
+    expect(queues.enqueueSafely).not.toHaveBeenCalledWith(
+      "billing-runs",
+      "post-billing-run",
+      expect.anything(),
+    );
+
+    // One that died mid-pass is: marked, and never stamped posted.
+    await prisma.billingRun.update({
+      where: { id: run.id },
+      data: { postedAt: null, postedBy: null },
+    });
+    await worker.reclaimZombieBillingRuns();
+    expect(queues.enqueueSafely).toHaveBeenCalledWith(
+      "billing-runs",
+      "post-billing-run",
+      expect.objectContaining({ runId: run.id }),
+    );
+  }, 300_000);
+
   it("says how many bills are posted and how many a Post would still act on", async () => {
     const run = JSON.parse((await startRun()).body);
     await svc.processBillingRun({

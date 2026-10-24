@@ -2231,6 +2231,13 @@ model BillingRun {
   /// those is a far worse afternoon than discarding unposted bills.
   postedAt       DateTime?        @map("posted_at") @db.Timestamptz
   postedBy       String?          @map("posted_by") @db.Uuid
+  /// When the current posting pass began, and the only way to tell that
+  /// one is under way: `postedAt` is stamped after the loop, so it
+  /// cannot mark the middle. A pass that died leaves this set with
+  /// `postedAt` still null, which is what the boot sweep reclaims —
+  /// the posting equivalent of generation's `status = RUNNING`.
+  /// The sweep's partial index over this pair exists in SQL only.
+  postingStartedAt DateTime?      @map("posting_started_at") @db.Timestamptz
   cancelRequested Boolean         @default(false) @map("cancel_requested")
   lastProgressAt DateTime?        @map("last_progress_at") @db.Timestamptz
   createdBy      String           @map("created_by") @db.Uuid

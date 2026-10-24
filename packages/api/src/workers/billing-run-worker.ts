@@ -6,7 +6,7 @@ import {
   enqueueSafely,
   workerOptions,
 } from "../lib/queues.js";
-import { processBillingRun } from "../services/billing-run.service.js";
+import { processBillingRun, postBillingRun } from "../services/billing-run.service.js";
 import { prisma } from "../lib/prisma.js";
 
 /**
@@ -29,6 +29,20 @@ import { prisma } from "../lib/prisma.js";
  */
 
 export const BILLING_RUN_JOB_NAME = "process-billing-run";
+/**
+ * Posting a whole run, on the same queue as generating it.
+ *
+ * The same queue because the two must not run concurrently over one
+ * run, and concurrency 1 already guarantees that — a second queue would
+ * reintroduce the overlap. The same reason the queue holds concurrency 1
+ * at all applies here: posting is a loop over thousands of accounts,
+ * one transaction each.
+ *
+ * Posting a *single* bill stays synchronous on `routes/ar.ts`. A CSR
+ * posting one bill wants the answer in the response, and one bill is one
+ * transaction — there is nothing to background.
+ */
+export const BILLING_RUN_POST_JOB_NAME = "post-billing-run";
 
 export interface BillingRunJobData {
   runId: string;
@@ -42,6 +56,18 @@ export function buildBillingRunWorker(): Worker<BillingRunJobData> {
     QUEUE_NAMES.billingRuns,
     async (job) => {
       const { runId, utilityId, actorId, actorName } = job.data;
+
+      if (job.name === BILLING_RUN_POST_JOB_NAME) {
+        const result = await withTelemetry(QUEUE_NAMES.billingRuns, () =>
+          postBillingRun(utilityId, actorId, actorName, runId),
+        );
+        logger.info(
+          { component: "billing-run-worker", runId, ...result },
+          "Billing run posting finished",
+        );
+        return result;
+      }
+
       const result = await withTelemetry(QUEUE_NAMES.billingRuns, () =>
         processBillingRun({ runId, utilityId, actorId, actorName }),
       );
@@ -88,6 +114,25 @@ export async function reclaimZombieBillingRuns(): Promise<number> {
     where: { status: "RUNNING" },
     select: { id: true, utilityId: true, createdBy: true },
   });
+  /*
+   * And the posting equivalent. A pass that began and never reached the
+   * end leaves `postingStartedAt` set with `postedAt` still null —
+   * `postedAt` is stamped after the loop, so it cannot mark the middle.
+   *
+   * Resuming is safe for the same reason resuming generation is: the
+   * loop re-reads each bill and `postBill` claims atomically, so a bill
+   * posted by the dead pass comes back as `alreadyPosted` rather than
+   * being charged twice.
+   *
+   * A pass that *finished* with failures is not a zombie — `postedAt`
+   * is set, so it is excluded. That run is not stuck, it has work left,
+   * and the Post button on the run page is what finishes it.
+   */
+  const stuckPosting = await prisma.billingRun.findMany({
+    where: { postingStartedAt: { not: null }, postedAt: null },
+    select: { id: true, utilityId: true, createdBy: true },
+  });
+
   let requeued = 0;
   for (const run of stuck) {
     const jobId = await enqueueSafely(QUEUE_NAMES.billingRuns, BILLING_RUN_JOB_NAME, {
@@ -101,6 +146,21 @@ export async function reclaimZombieBillingRuns(): Promise<number> {
       logger.warn(
         { component: "billing-run-worker", runId: run.id, jobId },
         "Re-enqueued a billing run left RUNNING by a previous process",
+      );
+    }
+  }
+  for (const run of stuckPosting) {
+    const jobId = await enqueueSafely(QUEUE_NAMES.billingRuns, BILLING_RUN_POST_JOB_NAME, {
+      runId: run.id,
+      utilityId: run.utilityId,
+      actorId: run.createdBy,
+      actorName: "billing run posting (resumed)",
+    });
+    if (jobId) {
+      requeued += 1;
+      logger.warn(
+        { component: "billing-run-worker", runId: run.id, jobId },
+        "Re-enqueued a billing run whose posting was left in flight by a previous process",
       );
     }
   }
