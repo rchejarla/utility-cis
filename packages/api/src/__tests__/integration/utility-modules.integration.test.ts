@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { MODULES } from "@utility-cis/shared";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Turning a utility's modules on and off.
@@ -27,6 +27,14 @@ const TENANT = "00000000-0000-4000-8000-0000000000e1";
 
 beforeAll(async () => {
   const booted = await bootPostgres();
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/provisioning.service.js");
@@ -43,7 +51,8 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   // Before the utility: `audit_log.utility_id` is ON DELETE RESTRICT and
   // provisioning now writes a row, so leftover history blocks the
@@ -56,7 +65,8 @@ beforeEach(async () => {
   await prisma.utility.deleteMany({ where: { id: TENANT } });
   await svc.provisionTenant({ utilityId: TENANT, name: "City of Modules" });
   await rbac.invalidateTenantModulesCache(TENANT);
-});
+}),
+);
 
 describe("setUtilityModule", () => {
   it("disables a module", async () => {

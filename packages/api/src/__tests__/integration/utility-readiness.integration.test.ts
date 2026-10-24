@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Whether a utility can actually operate.
@@ -38,6 +38,15 @@ const COMPLETE_ISSUER = {
 
 beforeAll(async () => {
   const booted = await bootPostgres();
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // Its routes run correctly as `cis_app` — no route or service was
+  // found querying a tenant table without a scope — but its own test
+  // bodies arrange and assert on rows through `prisma` directly, which
+  // needs a `seedAsPlatform` or `runAsTenant` per site. See
+  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
+  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
+  // only lets the number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/provisioning.service.js");
@@ -54,7 +63,8 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   await prisma.auditLog.deleteMany({ where: { utilityId: UTILITY } });
   await prisma.rateSchedule.deleteMany({ where: { utilityId: UTILITY } });
@@ -71,7 +81,8 @@ beforeEach(async () => {
   await prisma.utilityModule.deleteMany({ where: { utilityId: UTILITY } });
   await prisma.utility.deleteMany({ where: { id: UTILITY } });
   await svc.provisionTenant({ utilityId: UTILITY, name: "City of Readiness" });
-});
+}),
+);
 
 const check = (checks: { key: string; ok: boolean }[], key: string) =>
   checks.find((c) => c.key === key)!;
@@ -401,13 +412,15 @@ describe("through the detail route", () => {
     await app.ready();
   }, 60_000);
 
-  beforeEach(async () => {
+  beforeEach(() =>
+  seedAsPlatform(async () => {
     const { prisma } = prismaImports;
     await prisma.cisUser.deleteMany({ where: { utilityId: null } });
     await prisma.cisUser.create({
       data: { id: PLATFORM_ACTOR, utilityId: null, email: "o@x.gov", name: "Ops", isActive: true },
     });
-  });
+  }),
+);
 
   it("serves readiness alongside the counts that used to imply it", async () => {
     const res = await app.inject({

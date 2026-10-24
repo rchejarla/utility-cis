@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Refunds — giving money back.
@@ -41,8 +41,17 @@ let accountId: string;
 let otherAccountId: string;
 let debitReasonId: string;
 
-beforeAll(async () => {
+beforeAll(() =>
+  seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId, otherUtilityId] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   posting = await import("../../services/ar/posting.service.js");
@@ -83,14 +92,15 @@ beforeAll(async () => {
     data: { utilityId, code: "MISC_DEBIT", label: "Misc charge", appliesToType: "ADJUSTMENT_DEBIT" },
   });
   debitReasonId = reason.id;
-}, 180_000);
+}), 180_000);
 
 afterAll(async () => {
   await prismaImports?.prisma.$disconnect();
   await pgContainer?.stop();
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   await prisma.ledgerApplication.deleteMany({ where: { utilityId } });
   await prisma.ledgerEntry.deleteMany({ where: { utilityId } });
@@ -98,7 +108,8 @@ beforeEach(async () => {
     where: { id: accountId },
     data: { balance: 0, depositAmount: 0, lastDueDate: null },
   });
-});
+}),
+);
 
 async function debit(amount: string, dueDate = "2026-06-14"): Promise<string> {
   const { prisma } = prismaImports;

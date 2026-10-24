@@ -10,6 +10,8 @@ import {
   ACTOR,
   type TenantFixture,
   ensurePrincipal,
+  truncateTables,
+  seedAsPlatform,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -85,6 +87,15 @@ const headers = () => ({
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A, TENANT_B] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // Its routes run correctly as `cis_app` — no route or service was
+  // found querying a tenant table without a scope — but its own test
+  // bodies arrange and assert on rows through `prisma` directly, which
+  // needs a `seedAsPlatform` or `runAsTenant` per site. See
+  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
+  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
+  // only lets the number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   appImports = await import("../../app.js");
@@ -103,17 +114,16 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
-  await resetDb(prisma);
+  await resetDb();
 
   // `resetDb`'s table list predates notifications and does not cover
   // these three. `notification_template` is unique on
   // (utility_id, event_type), so leftovers would collide on the second
   // test rather than fail quietly.
-  await prisma.$executeRawUnsafe(
-    "TRUNCATE TABLE notification, notification_template, customer RESTART IDENTITY CASCADE",
-  );
+  await truncateTables("notification, notification_template, customer");
   await ensurePrincipal(prisma, TENANT_A);
 
   await makeTenantFixture(prisma, TENANT_A);
@@ -183,7 +193,8 @@ beforeEach(async () => {
     },
     select: { id: true },
   });
-});
+}),
+);
 
 describe("POST /api/v1/notifications/send — across tenants", () => {
   /**

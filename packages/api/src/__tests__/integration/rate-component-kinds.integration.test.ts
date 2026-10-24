@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
-import { bootPostgres, TENANT_A, ensurePrincipal} from "./_effective-dating-fixtures.js";
+import { bootPostgres, TENANT_A, ensurePrincipal, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 1 task 1 — RateComponentKind ref table CRUD.
@@ -56,7 +56,8 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   // Clear tenant overrides between tests so each one starts from a
   // clean global-only slate. Globals (utility_id IS NULL) are
@@ -76,7 +77,8 @@ beforeEach(async () => {
   }
   const rbac = await import("../../services/rbac.service.js");
   await rbac.invalidateTenantModulesCache(TENANT_A);
-});
+}),
+);
 
 describe("/api/v1/rate-component-kinds", () => {
   it("GET returns 11 globals for a fresh tenant", async () => {

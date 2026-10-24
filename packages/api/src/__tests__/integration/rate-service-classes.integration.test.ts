@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
-import { bootPostgres, TENANT_A, ensurePrincipal} from "./_effective-dating-fixtures.js";
+import { bootPostgres, TENANT_A, ensurePrincipal, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 1 task 2 — RateServiceClass per-tenant ref table CRUD.
@@ -38,7 +38,8 @@ function makeToken(utilityId: string, actorId = ACTOR_ID) {
 
 const headers = () => ({ authorization: `Bearer ${makeToken(TENANT_A)}` });
 
-beforeAll(async () => {
+beforeAll(() =>
+  seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
@@ -58,7 +59,7 @@ beforeAll(async () => {
   });
   waterCommodityId = water.id;
   gasCommodityId = gas.id;
-}, 180_000);
+}), 180_000);
 
 afterAll(async () => {
   await app?.close().catch(() => {});
@@ -71,7 +72,8 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   // Clean slate for each test — this table has no globals, so a
   // straight DELETE leaves it empty.
@@ -88,7 +90,8 @@ beforeEach(async () => {
   }
   const rbac = await import("../../services/rbac.service.js");
   await rbac.invalidateTenantModulesCache(TENANT_A);
-});
+}),
+);
 
 describe("/api/v1/rate-service-classes", () => {
   it("POST creates a service class (status 201, fields round-trip)", async () => {
@@ -115,30 +118,35 @@ describe("/api/v1/rate-service-classes", () => {
 
   it("GET filtered by commodityId returns only matching rows", async () => {
     const { prisma } = prismaImports;
-    await prisma.rateServiceClass.createMany({
-      data: [
-        {
-          utilityId: TENANT_A,
-          commodityId: waterCommodityId,
-          code: "single_family",
-          label: "Single Family",
-          sortOrder: 10,
-        },
-        {
-          utilityId: TENANT_A,
-          commodityId: waterCommodityId,
-          code: "multi_family",
-          label: "Multi-Family",
-          sortOrder: 20,
-        },
-        {
-          utilityId: TENANT_A,
-          commodityId: gasCommodityId,
-          code: "residential",
-          label: "Residential",
-          sortOrder: 10,
-        },
-      ],
+        // Arranging state, not exercising the route: the same authority the
+    // hooks seed under. The request below still runs as `cis_app` under
+    // the tenant its own middleware enters.
+    await seedAsPlatform(async () => {
+  await prisma.rateServiceClass.createMany({
+        data: [
+          {
+            utilityId: TENANT_A,
+            commodityId: waterCommodityId,
+            code: "single_family",
+            label: "Single Family",
+            sortOrder: 10,
+          },
+          {
+            utilityId: TENANT_A,
+            commodityId: waterCommodityId,
+            code: "multi_family",
+            label: "Multi-Family",
+            sortOrder: 20,
+          },
+          {
+            utilityId: TENANT_A,
+            commodityId: gasCommodityId,
+            code: "residential",
+            label: "Residential",
+            sortOrder: 10,
+          },
+        ],
+      });
     });
 
     const res = await app.inject({

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, makeTenantFixture, type TenantFixture } from "./_effective-dating-fixtures.js";
+import { bootPostgres, makeTenantFixture, type TenantFixture, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Move-out, and the deposit it used to strand.
@@ -32,6 +32,14 @@ let debitReasonId: string;
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [utilityId] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   workflows = await import("../../services/workflows.service.js");
@@ -44,10 +52,11 @@ afterAll(async () => {
   await pgContainer?.stop();
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   const { resetDb } = await import("./_effective-dating-fixtures.js");
-  await resetDb(prisma);
+  await resetDb();
   fx = await makeTenantFixture(prisma, utilityId);
 
   // Upserted, not created: `resetDb` truncates `account` with CASCADE,
@@ -81,7 +90,8 @@ beforeEach(async () => {
       startDate: new Date("2026-01-01"),
     },
   });
-});
+}),
+);
 
 async function owe(amount: string): Promise<void> {
   const { prisma } = prismaImports;

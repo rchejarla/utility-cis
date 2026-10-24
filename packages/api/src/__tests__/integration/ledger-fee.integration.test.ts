@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 3 — raising a fee (§6.4).
@@ -32,8 +32,17 @@ let feeReasonId: string;
 let writeOffReasonId: string;
 let debitReasonId: string;
 
-beforeAll(async () => {
+beforeAll(() =>
+  seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId, otherUtilityId] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   posting = await import("../../services/ar/posting.service.js");
@@ -77,14 +86,15 @@ beforeAll(async () => {
     else if (appliesToType === "WRITE_OFF") writeOffReasonId = r.id;
     else debitReasonId = r.id;
   }
-}, 180_000);
+}), 180_000);
 
 afterAll(async () => {
   await prismaImports?.prisma.$disconnect();
   await pgContainer?.stop();
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   await prisma.ledgerApplication.deleteMany({});
   await prisma.ledgerEntry.deleteMany({});
@@ -93,7 +103,8 @@ beforeEach(async () => {
     where: { utilityId },
     data: { balance: 0, lastDueDate: null },
   });
-});
+}),
+);
 
 async function debit(amount: string, dueDate: string, forAccount = accountId): Promise<string> {
   const { prisma } = prismaImports;

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { DEFAULT_REASON_CODES } from "@utility-cis/shared";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 3 — the tenant's reason codes (§4.4).
@@ -23,6 +23,14 @@ let reason: typeof import("../../services/ar/reason.service.js");
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [utilityId, otherUtilityId, freshUtilityId] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   reason = await import("../../services/ar/reason.service.js");
@@ -33,10 +41,12 @@ afterAll(async () => {
   await pgContainer?.stop();
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   await prisma.ledgerReasonDef.deleteMany({});
-});
+}),
+);
 
 async function makeReason(
   code: string,

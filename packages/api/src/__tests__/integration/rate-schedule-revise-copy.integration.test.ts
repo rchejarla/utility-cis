@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
-import { bootPostgres, TENANT_A, ensurePrincipal} from "./_effective-dating-fixtures.js";
+import { bootPostgres, TENANT_A, ensurePrincipal, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import { runAsTenant } from "../../lib/tenant-context.js";
 
 /**
  * `reviseRateSchedule` must carry forward every still-active component
@@ -43,7 +44,8 @@ function makeToken(utilityId: string, actorId = ACTOR_ID) {
 
 const headers = () => ({ authorization: `Bearer ${makeToken(TENANT_A)}` });
 
-beforeAll(async () => {
+beforeAll(() =>
+  seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
@@ -59,7 +61,7 @@ beforeAll(async () => {
     update: {},
   });
   waterCommodityId = water.id;
-}, 180_000);
+}), 180_000);
 
 afterAll(async () => {
   await app?.close().catch(() => {});
@@ -72,7 +74,8 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   await prisma.$executeRawUnsafe("DELETE FROM rate_component");
   await prisma.$executeRawUnsafe("UPDATE rate_schedule SET superseded_by_id = NULL, supersedes_id = NULL");
@@ -88,7 +91,8 @@ beforeEach(async () => {
   }
   const rbac = await import("../../services/rbac.service.js");
   await rbac.invalidateTenantModulesCache(TENANT_A);
-});
+}),
+);
 
 async function createDraftSchedule(code = "RES-WATER", name = "Residential Water") {
   const res = await app.inject({
@@ -146,9 +150,17 @@ describe("POST /api/v1/rate-schedules/:id/revise component copy", () => {
     const newSchedule = JSON.parse(reviseRes.body);
 
     const { prisma } = prismaImports;
-    const copied = await prisma.rateComponent.findMany({
-      where: { rateScheduleId: newSchedule.id, utilityId: TENANT_A },
-    });
+    // `runAsTenant` rather than the platform authority the fixtures use:
+    // this asserts what the tenant's own rows are, so it should read
+    // them the way the application does. The `utilityId` in the `where`
+    // stays — the policy and the predicate agree here, and the
+    // predicate is the half that still holds if someone connects as a
+    // role the policy does not bind to.
+    const copied = await runAsTenant(TENANT_A, async () =>
+      prisma.rateComponent.findMany({
+        where: { rateScheduleId: newSchedule.id, utilityId: TENANT_A },
+      }),
+    );
     expect(copied).toHaveLength(1);
     const c = copied[0];
     expect(c.id).not.toBe(original.id);
@@ -193,10 +205,12 @@ describe("POST /api/v1/rate-schedules/:id/revise component copy", () => {
     const newSchedule = JSON.parse(reviseRes.body);
 
     const { prisma } = prismaImports;
-    const copied = await prisma.rateComponent.findMany({
-      where: { rateScheduleId: newSchedule.id, utilityId: TENANT_A },
-      orderBy: { sortOrder: "asc" },
-    });
+    const copied = await runAsTenant(TENANT_A, async () =>
+      prisma.rateComponent.findMany({
+        where: { rateScheduleId: newSchedule.id, utilityId: TENANT_A },
+        orderBy: { sortOrder: "asc" },
+      }),
+    );
     expect(copied).toHaveLength(2);
 
     const newBase = copied.find((c) => c.label === "Volumetric Charge")!;
@@ -257,10 +271,12 @@ describe("POST /api/v1/rate-schedules/:id/revise component copy", () => {
     const newSchedule = JSON.parse(reviseRes.body);
 
     const { prisma } = prismaImports;
-    const copied = await prisma.rateComponent.findMany({
-      where: { rateScheduleId: newSchedule.id, utilityId: TENANT_A },
-      orderBy: { sortOrder: "asc" },
-    });
+    const copied = await runAsTenant(TENANT_A, async () =>
+      prisma.rateComponent.findMany({
+        where: { rateScheduleId: newSchedule.id, utilityId: TENANT_A },
+        orderBy: { sortOrder: "asc" },
+      }),
+    );
     const newA = copied.find((c) => c.label === "Tier A")!;
     const newB = copied.find((c) => c.label === "Tier B")!;
     const newSurcharge = copied.find((c) => c.label === "Combined Surcharge")!;
@@ -304,18 +320,26 @@ describe("POST /api/v1/rate-schedules/:id/revise component copy", () => {
     const newSchedule = JSON.parse(reviseRes.body);
 
     const { prisma } = prismaImports;
-    const copied = await prisma.rateComponent.findMany({
-      where: { rateScheduleId: newSchedule.id, utilityId: TENANT_A },
-    });
+    // `runAsTenant` rather than the platform authority the fixtures use:
+    // this asserts what the tenant's own rows are, so it should read
+    // them the way the application does. The `utilityId` in the `where`
+    // stays — the policy and the predicate agree here, and the
+    // predicate is the half that still holds if someone connects as a
+    // role the policy does not bind to.
+    const copied = await runAsTenant(TENANT_A, async () =>
+      prisma.rateComponent.findMany({
+        where: { rateScheduleId: newSchedule.id, utilityId: TENANT_A },
+      }),
+    );
     expect(copied).toHaveLength(1);
     expect(copied[0].label).toBe("Active Charge");
     expect(copied[0].id).not.toBe(active.id);
     // The retired one should NOT appear on the new schedule.
     expect(copied.some((c) => c.label === "Retired Surcharge")).toBe(false);
     // sanity: the retired component still exists on the predecessor.
-    const onPredecessor = await prisma.rateComponent.findUnique({
-      where: { id: retired.id },
-    });
+    const onPredecessor = await runAsTenant(TENANT_A, async () =>
+      prisma.rateComponent.findUnique({ where: { id: retired.id } }),
+    );
     expect(onPredecessor).not.toBeNull();
   });
 });

@@ -8,6 +8,7 @@ import {
   TENANT_A,
   type TenantFixture,
   ensurePrincipal,
+  seedAsPlatform,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -57,6 +58,15 @@ function makeToken(utilityId: string, actorId = "00000000-0000-4000-8000-aaaa000
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // Its routes run correctly as `cis_app` — no route or service was
+  // found querying a tenant table without a scope — but its own test
+  // bodies arrange and assert on rows through `prisma` directly, which
+  // needs a `seedAsPlatform` or `runAsTenant` per site. See
+  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
+  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
+  // only lets the number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   appImports = await import("../../app.js");
@@ -75,9 +85,10 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
-  await resetDb(prisma);
+  await resetDb();
   await ensurePrincipal(prisma, TENANT_A);
   fixA = await makeTenantFixture(prisma, TENANT_A);
 
@@ -87,7 +98,8 @@ beforeEach(async () => {
       data: { utilityId: fixA.utilityId, moduleKey },
     });
   }
-});
+}),
+);
 
 const headers = () => ({ authorization: `Bearer ${makeToken(TENANT_A)}` });
 

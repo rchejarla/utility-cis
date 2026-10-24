@@ -8,6 +8,8 @@ import {
   TENANT_A,
   type TenantFixture,
   ensurePrincipal,
+  truncateTables,
+  seedAsPlatform,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -121,6 +123,15 @@ function buildMultipart(
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // Its routes run correctly as `cis_app` — no route or service was
+  // found querying a tenant table without a scope — but its own test
+  // bodies arrange and assert on rows through `prisma` directly, which
+  // needs a `seedAsPlatform` or `runAsTenant` per site. See
+  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
+  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
+  // only lets the number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   appImports = await import("../../app.js");
@@ -139,15 +150,14 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
-  await resetDb(prisma);
+  await resetDb();
   await ensurePrincipal(prisma, TENANT_A);
   // The shared resetDb doesn't truncate import tables — add them so
   // tests don't accumulate batches across cases.
-  await prisma.$executeRawUnsafe(
-    "TRUNCATE TABLE import_row, import_batch, attachment, in_app_notification RESTART IDENTITY CASCADE",
-  );
+  await truncateTables("import_row, import_batch, attachment, in_app_notification");
 
   fixA = await makeTenantFixture(prisma, TENANT_A);
 
@@ -211,7 +221,8 @@ beforeEach(async () => {
   });
   meterNumber = meters.find((m) => m.id === fixA.meterId)!.meterNumber;
   meter2Number = meters.find((m) => m.id === fixA.meterId2)!.meterNumber;
-});
+}),
+);
 
 // ─── Tests ──────────────────────────────────────────────────────────
 

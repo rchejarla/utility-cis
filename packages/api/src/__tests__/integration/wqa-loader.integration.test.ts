@@ -26,6 +26,14 @@ let prismaImports: typeof import("../../lib/prisma.js");
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);
@@ -90,7 +98,7 @@ beforeEach(async () => {
   // wqa_value isn't in resetDb's truncate list (post-dates it); wipe
   // it explicitly before resetDb cascades the rest.
   await prisma.$executeRawUnsafe("DELETE FROM wqa_value");
-  await resetDb(prisma);
+  await resetDb();
 });
 
 describe("WqaLoader", () => {

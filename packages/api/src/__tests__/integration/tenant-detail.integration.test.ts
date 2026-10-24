@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { MODULES } from "@utility-cis/shared";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * What a tenant actually holds.
@@ -28,6 +28,14 @@ const ABSENT = "00000000-0000-4000-8000-0000000000cf";
 
 beforeAll(async () => {
   const booted = await bootPostgres();
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/provisioning.service.js");
@@ -43,7 +51,8 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   for (const id of [TENANT, OTHER]) {
     // `audit_log.utility_id` is ON DELETE RESTRICT too, and provisioning
@@ -64,7 +73,8 @@ beforeEach(async () => {
     name: "City of Detail",
     firstAdmin: { email: "ops@detail.gov", name: "Pat Admin" },
   });
-});
+}),
+);
 
 describe("getUtilityDetail", () => {
   it("reports the tenant's identity and what it holds", async () => {

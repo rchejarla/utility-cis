@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
-import { bootPostgres, TENANT_A, ensurePrincipal} from "./_effective-dating-fixtures.js";
+import { bootPostgres, TENANT_A, ensurePrincipal, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 1 task 6 — SAScheduleAssignment CRUD endpoints.
@@ -45,7 +45,8 @@ function makeToken(utilityId: string, actorId = ACTOR_ID) {
 
 const headers = () => ({ authorization: `Bearer ${makeToken(TENANT_A)}` });
 
-beforeAll(async () => {
+beforeAll(() =>
+  seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
@@ -86,7 +87,7 @@ beforeAll(async () => {
     },
   });
   accountId = account.id;
-}, 180_000);
+}), 180_000);
 
 afterAll(async () => {
   await app?.close().catch(() => {});
@@ -99,7 +100,8 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   // Wipe assignments first (FK to schedule + SA), then dependents.
   await prisma.$executeRawUnsafe("DELETE FROM sa_rate_schedule_assignment");
@@ -165,7 +167,8 @@ beforeEach(async () => {
     },
   });
   serviceAgreementId2 = sa2.id;
-});
+}),
+);
 
 describe("/api/v1/sa-rate-schedule-assignments", () => {
   it("POST creates an assignment (status 201)", async () => {

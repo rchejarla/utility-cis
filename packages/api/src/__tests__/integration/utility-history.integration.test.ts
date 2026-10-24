@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * What the operator may read of a utility's audit log: its own actions.
@@ -37,6 +37,15 @@ const operator = { id: OPERATOR, name: "Pat Operator", source: `platform:${OPERA
 
 beforeAll(async () => {
   const booted = await bootPostgres();
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // Its routes run correctly as `cis_app` — no route or service was
+  // found querying a tenant table without a scope — but its own test
+  // bodies arrange and assert on rows through `prisma` directly, which
+  // needs a `seedAsPlatform` or `runAsTenant` per site. See
+  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
+  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
+  // only lets the number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/provisioning.service.js");
@@ -52,7 +61,8 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   for (const id of [UTILITY, OTHER]) {
     await prisma.auditLog.deleteMany({ where: { utilityId: id } });
@@ -64,7 +74,8 @@ beforeEach(async () => {
   }
   await svc.provisionTenant({ utilityId: UTILITY, name: "City of History" }, operator);
   await svc.provisionTenant({ utilityId: OTHER, name: "Other Utility" }, operator);
-});
+}),
+);
 
 /** A row of the kind the tenant's own staff produce. */
 async function seedTenantRow(utilityId: string, source: string | null) {
@@ -181,12 +192,14 @@ describe("through the route", () => {
     await app.ready();
   }, 60_000);
 
-  beforeEach(async () => {
+  beforeEach(() =>
+  seedAsPlatform(async () => {
     await prismaImports.prisma.cisUser.deleteMany({ where: { utilityId: null } });
     await prismaImports.prisma.cisUser.create({
       data: { id: PLATFORM_ACTOR, utilityId: null, email: "o@x.gov", name: "Ops", isActive: true },
     });
-  });
+  }),
+);
 
   it("serves the history to the operator", async () => {
     await svc.suspendUtility(UTILITY, operator);

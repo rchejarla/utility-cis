@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
-import { bootPostgres, TENANT_A, ensurePrincipal} from "./_effective-dating-fixtures.js";
+import { bootPostgres, TENANT_A, ensurePrincipal, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 2 task 2 — POST /api/v1/rate-schedules/:scheduleId/cycle-check.
@@ -39,7 +39,8 @@ function makeToken(utilityId: string, actorId = ACTOR_ID) {
 
 const headers = () => ({ authorization: `Bearer ${makeToken(TENANT_A)}` });
 
-beforeAll(async () => {
+beforeAll(() =>
+  seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
@@ -55,7 +56,7 @@ beforeAll(async () => {
     update: {},
   });
   waterCommodityId = water.id;
-}, 180_000);
+}), 180_000);
 
 afterAll(async () => {
   await app?.close().catch(() => {});
@@ -68,7 +69,8 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   await prisma.$executeRawUnsafe("DELETE FROM rate_component");
   await prisma.$executeRawUnsafe("DELETE FROM rate_schedule");
@@ -101,7 +103,8 @@ beforeEach(async () => {
     );
   }
   scheduleId = JSON.parse(created.body).id;
-});
+}),
+);
 
 const flatConsumption = {
   kindCode: "consumption",

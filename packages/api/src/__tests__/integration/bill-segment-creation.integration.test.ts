@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, ensurePrincipal } from "./_effective-dating-fixtures.js";
+import { bootPostgres, ensurePrincipal, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 5a task 7 — POST /api/v1/service-agreements/:id/bill-segments produces
@@ -41,8 +41,18 @@ function makeToken(uid: string) {
 }
 const headers = () => ({ authorization: `Bearer ${makeToken(utilityId)}` });
 
-beforeAll(async () => {
+beforeAll(() =>
+  seedAsPlatform(async () => {
   const booted = await bootPostgres();
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // Its routes run correctly as `cis_app` — no route or service was
+  // found querying a tenant table without a scope — but its own test
+  // bodies arrange and assert on rows through `prisma` directly, which
+  // needs a `seedAsPlatform` or `runAsTenant` per site. See
+  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
+  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
+  // only lets the number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
 
   const TSX_BIN =
@@ -137,7 +147,7 @@ beforeAll(async () => {
       readSource: "MANUAL",
     },
   });
-}, 600_000);
+}), 600_000);
 
 const TWELVE_HCF_IN_GALLONS = (12 * 172800) / 231;
 

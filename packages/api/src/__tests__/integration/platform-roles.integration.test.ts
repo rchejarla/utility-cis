@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
-import { bootPostgres, ensurePrincipal, ACTOR } from "./_effective-dating-fixtures.js";
+import { bootPostgres, ensurePrincipal, ACTOR, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * A utility's roles, from above it.
@@ -55,6 +55,15 @@ const tenantHeaders = {
 
 beforeAll(async () => {
   const booted = await bootPostgres();
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // Its routes run correctly as `cis_app` — no route or service was
+  // found querying a tenant table without a scope — but its own test
+  // bodies arrange and assert on rows through `prisma` directly, which
+  // needs a `seedAsPlatform` or `runAsTenant` per site. See
+  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
+  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
+  // only lets the number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/provisioning.service.js");
@@ -73,7 +82,8 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   for (const id of [UTILITY, OTHER]) {
     // Role mutations write audit rows, and audit_log.utility_id is
@@ -92,7 +102,8 @@ beforeEach(async () => {
     data: { id: PLATFORM_ACTOR, utilityId: null, email: "ops@example.gov", name: "Ops", isActive: true },
   });
   await ensurePrincipal(prisma, UTILITY);
-});
+}),
+);
 
 const rolesUrl = (id: string) => `/api/v1/platform/utilities/${id}/roles`;
 

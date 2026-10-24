@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
-import { bootPostgres, TENANT_A, ensurePrincipal} from "./_effective-dating-fixtures.js";
+import { bootPostgres, TENANT_A, ensurePrincipal, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 1 task 1 — RateAssignmentRole ref table CRUD.
@@ -55,7 +55,8 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   await prisma.$executeRawUnsafe(
     "DELETE FROM rate_assignment_role WHERE utility_id IS NOT NULL",
@@ -70,7 +71,8 @@ beforeEach(async () => {
   }
   const rbac = await import("../../services/rbac.service.js");
   await rbac.invalidateTenantModulesCache(TENANT_A);
-});
+}),
+);
 
 describe("/api/v1/rate-assignment-roles", () => {
   it("GET returns 5 globals for a fresh tenant", async () => {

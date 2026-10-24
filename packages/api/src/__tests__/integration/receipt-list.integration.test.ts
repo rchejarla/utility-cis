@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * The tenant-wide receipts list — `GET /api/v1/receipts` / `listReceipts`.
@@ -40,8 +40,17 @@ let otherAccountId: string;
 
 const Q = { page: 1, limit: 25, sort: "effectiveDate" as const, order: "desc" as const };
 
-beforeAll(async () => {
+beforeAll(() =>
+  seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId, otherUtility] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   receipts = await import("../../services/ar/payment.service.js");
@@ -83,7 +92,7 @@ beforeAll(async () => {
   await pay({ amount: "25.50", on: "2026-06-01", tender: "CHECK", ref: "CHQ-8841" });
   await pay({ amount: "10.00", on: "2026-06-02", tender: "CARD", ref: "TXN-999" });
   await pay({ amount: "500.00", on: "2026-06-01", tender: "CASH", utility: otherUtility });
-}, 180_000);
+}), 180_000);
 
 afterAll(async () => {
   await prismaImports?.prisma.$disconnect();

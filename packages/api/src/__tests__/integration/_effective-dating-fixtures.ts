@@ -10,6 +10,8 @@
  * them. Tests import the named helpers explicitly.
  */
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { runAsPlatform } from "../../lib/tenant-context.js";
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +22,33 @@ export const SHARED_DIR = path.resolve(__dirname, "../../../../shared");
 export const TENANT_A = "00000000-0000-4000-8000-0000000000aa";
 export const TENANT_B = "00000000-0000-4000-8000-0000000000bb";
 export const ACTOR = "00000000-0000-4000-8000-aaaa00000001";
+
+/**
+ * Run setup with authority to cross tenants.
+ *
+ * Wrap a `beforeAll` or `beforeEach` that writes fixture rows in this.
+ *
+ * Fixtures are not the thing under test, and most of them write rows for
+ * two tenants in one pass — which is precisely what `cis_app` may not
+ * do. So setup gets `cis_platform`, the way migrations and seeds get the
+ * owner in production, while the code under test gets `cis_app` with the
+ * tenant its own request or job established. That split is what makes
+ * this suite evidence: a route that reads another tenant's rows now
+ * fails, and one that reads its own still passes.
+ *
+ * Safe to wrap a whole hook, including one that calls `bootPostgres` or
+ * injects a request. `tenant-context.ts` imports nothing but
+ * `node:async_hooks`, so entering a scope cannot pull `config.ts` in
+ * early and read `DATABASE_URL` before the container has set it; and
+ * `enterScope` is a `store.run`, so a request handled inside this scope
+ * still runs under the tenant its own middleware establishes.
+ */
+export function seedAsPlatform<T>(fn: () => Promise<T>): Promise<T> {
+  return runAsPlatform(fn);
+}
+
+/** The same thing, for this module's own fixture writers. */
+const asPlatform = seedAsPlatform;
 
 /**
  * Give `ACTOR` a `cis_user` row and a role, in the tenant a test
@@ -58,48 +87,50 @@ export async function ensurePrincipal(
     (MODULES as readonly string[]).map((m) => [m, ["VIEW", "CREATE", "EDIT", "DELETE", "APPROVE"]]),
   );
 
-  const role = await prisma.role.upsert({
-    where: { utilityId_name: { utilityId, name: "Integration Test Admin" } },
-    update: { permissions },
-    create: {
-      utilityId,
-      name: "Integration Test Admin",
-      description: "Every module, every verb — a fixture, not a preset.",
-      isSystem: false,
-      permissions,
-    },
-    select: { id: true },
-  });
-
-  await prisma.cisUser.upsert({
-    where: { id: actorId },
-    update: { utilityId, isActive: true },
-    create: {
-      id: actorId,
-      utilityId,
-      email: `actor-${actorId.slice(-12)}@integration.test`,
-      name: "Integration Tester",
-      isActive: true,
-    },
-  });
-
-  // `@@unique([userId, accountId])` does not constrain a tenant-wide row,
-  // because Postgres treats NULL account ids as distinct — so this is a
-  // find-then-create rather than an upsert.
-  const existing = await prisma.userRole.findFirst({
-    where: { userId: actorId, accountId: null },
-    select: { id: true },
-  });
-  if (existing) {
-    await prisma.userRole.update({
-      where: { id: existing.id },
-      data: { utilityId, roleId: role.id },
+  await asPlatform(async () => {
+    const role = await prisma.role.upsert({
+      where: { utilityId_name: { utilityId, name: "Integration Test Admin" } },
+      update: { permissions },
+      create: {
+        utilityId,
+        name: "Integration Test Admin",
+        description: "Every module, every verb — a fixture, not a preset.",
+        isSystem: false,
+        permissions,
+      },
+      select: { id: true },
     });
-  } else {
-    await prisma.userRole.create({
-      data: { utilityId, userId: actorId, accountId: null, roleId: role.id },
+
+    await prisma.cisUser.upsert({
+      where: { id: actorId },
+      update: { utilityId, isActive: true },
+      create: {
+        id: actorId,
+        utilityId,
+        email: `actor-${actorId.slice(-12)}@integration.test`,
+        name: "Integration Tester",
+        isActive: true,
+      },
     });
-  }
+
+    // `@@unique([userId, accountId])` does not constrain a tenant-wide row,
+    // because Postgres treats NULL account ids as distinct — so this is a
+    // find-then-create rather than an upsert.
+    const existing = await prisma.userRole.findFirst({
+      where: { userId: actorId, accountId: null },
+      select: { id: true },
+    });
+    if (existing) {
+      await prisma.userRole.update({
+        where: { id: existing.id },
+        data: { utilityId, roleId: role.id },
+      });
+    } else {
+      await prisma.userRole.create({
+        data: { utilityId, userId: actorId, accountId: null, roleId: role.id },
+      });
+    }
+  });
 
   /*
    * `getUserRole` caches its answer in Redis for 300 seconds, keyed by
@@ -125,7 +156,49 @@ export async function ensurePrincipal(
 
 export interface BootedContainer {
   container: StartedPostgreSqlContainer;
+  /**
+   * The container's superuser URI — the owner that ran the migrations.
+   *
+   * Unchanged in meaning: it is still what a file passes to its own
+   * `pg.Pool` to seed rows or alter roles. It is **not** what the
+   * application reads; `bootPostgres` points `DATABASE_URL` at `cis_app`.
+   */
   dbUrl: string;
+  /** `cis_app` — what `DATABASE_URL` is set to. */
+  appUrl: string;
+  /** `cis_platform` — what `DATABASE_URL_PLATFORM` is set to. */
+  platformUrl: string;
+}
+
+/** The password granted to the de-privileged roles for the container's life. */
+const TEST_ROLE_PASSWORD = "probe";
+
+/** Swap whatever credentials a connection URI carries for a role's. */
+function asRoleUrl(dbUrl: string, role: string): string {
+  return dbUrl.replace(/\/\/[^@]+@/, `//${role}:${TEST_ROLE_PASSWORD}@`);
+}
+
+/**
+ * The superuser URI of the container this file booted.
+ *
+ * Held here so `resetDb` can TRUNCATE. `cis_app` is granted DML and
+ * nothing else — deliberately, since a role that may not create or drop
+ * anything cannot grant itself a way around a policy — so it has no
+ * TRUNCATE privilege, and a reset run as the application role would fail
+ * on every file that has one.
+ */
+let adminUrl: string | undefined;
+let adminPool: pg.Pool | undefined;
+
+function admin(): pg.Pool {
+  if (!adminUrl) {
+    throw new Error(
+      "resetDb needs the owner connection, which bootPostgres records. " +
+        "A file that boots its own container must truncate through its own client.",
+    );
+  }
+  adminPool ??= new pg.Pool({ connectionString: adminUrl });
+  return adminPool;
 }
 
 /**
@@ -161,13 +234,15 @@ function utilityInsertSql(ids: readonly string[]): string {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function ensureUtilities(prisma: any, ids: readonly string[]): Promise<void> {
-  for (const id of ids) {
-    await prisma.utility.upsert({
-      where: { id },
-      update: {},
-      create: { id, name: `Test Utility ${id.slice(-4)}` },
-    });
-  }
+  await asPlatform(async () => {
+    for (const id of ids) {
+      await prisma.utility.upsert({
+        where: { id },
+        update: {},
+        create: { id, name: `Test Utility ${id.slice(-4)}` },
+      });
+    }
+  });
 }
 
 /**
@@ -206,15 +281,45 @@ export async function bootPostgres(
     .start();
 
   const dbUrl = container.getConnectionUri();
-  process.env.DATABASE_URL = dbUrl;
+  adminUrl = dbUrl;
   process.env.NODE_ENV = "test";
   process.env.LOG_LEVEL = "error";
 
+  // The migration needs the owner; nothing after it does.
   execSync("pnpm prisma migrate deploy", {
     cwd: SHARED_DIR,
     env: { ...process.env, DATABASE_URL: dbUrl },
     stdio: "pipe",
   });
+
+  /*
+   * Point the application at `cis_app`, not at the superuser that just
+   * ran the migrations.
+   *
+   * This is what makes the suite evidence about isolation. Until
+   * 2026-10-24 every file here connected as the container's `postgres`
+   * — a superuser *and* the owner of every table, exempt from row-level
+   * security on both counts — so a route that read another tenant's
+   * rows passed, and so did a route that read them correctly. A suite
+   * that cannot tell those apart is no evidence at all.
+   *
+   * The migration creates both roles NOLOGIN with no password, since
+   * credentials are not a migration's business. Granted here for the
+   * container's lifetime, which is a few seconds.
+   */
+  execSync("pnpm prisma db execute --stdin", {
+    cwd: SHARED_DIR,
+    env: { ...process.env, DATABASE_URL: dbUrl },
+    input:
+      `ALTER ROLE cis_app LOGIN PASSWORD '${TEST_ROLE_PASSWORD}';\n` +
+      `ALTER ROLE cis_platform LOGIN PASSWORD '${TEST_ROLE_PASSWORD}';\n`,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  const appUrl = asRoleUrl(dbUrl, "cis_app");
+  const platformUrl = asRoleUrl(dbUrl, "cis_platform");
+  process.env.DATABASE_URL = appUrl;
+  process.env.DATABASE_URL_PLATFORM = platformUrl;
 
   // Through `prisma db execute` rather than a client: this function has
   // only just set DATABASE_URL, and the caller imports `lib/prisma.js`
@@ -230,7 +335,7 @@ export async function bootPostgres(
     });
   }
 
-  return { container, dbUrl };
+  return { container, dbUrl, appUrl, platformUrl };
 }
 
 export interface TenantFixture {
@@ -283,20 +388,42 @@ function isLockTimeout(err: unknown): boolean {
  * Who is holding the locks we failed to take. Best-effort: if this
  * introspection itself fails, the caller still gets the original error.
  */
-async function describeBlockers(prisma: ResetClient): Promise<string> {
+async function describeBlockers(pool: ResetPool): Promise<string> {
   try {
-    const rows = await prisma.$queryRawUnsafe(`
-      SELECT pid, state, wait_event_type, left(query, 120) AS query
-      FROM pg_stat_activity
-      WHERE datname = current_database()
-        AND pid <> pg_backend_pid()
-      ORDER BY state
-    `);
-    return JSON.stringify(rows);
+    const client = await pool.connect();
+    try {
+      const res = await client.query(`
+        SELECT pid, state, wait_event_type, left(query, 120) AS query
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND pid <> pg_backend_pid()
+        ORDER BY state
+      `);
+      return JSON.stringify(res.rows);
+    } finally {
+      client.release();
+    }
   } catch {
     return "(pg_stat_activity unavailable)";
   }
 }
+
+/**
+ * The slice of `pg.Pool` that `resetDb` needs.
+ *
+ * Named so the retry and the one-session guarantee stay unit-testable
+ * without a container: `_effective-dating-fixtures.test.ts` passes a
+ * fake that fails the TRUNCATE a chosen number of times. The statements
+ * used to run through a Prisma client, which is what that test stubbed;
+ * they now run on a pooled connection, because a reset needs the owner
+ * role and the application's client no longer connects as it.
+ */
+export type ResetPool = {
+  connect(): Promise<{
+    query(sql: string): Promise<{ rows: unknown[] }>;
+    release(): void;
+  }>;
+};
 
 /**
  * The RBAC caches describe rows a reset destroys, and they do not live
@@ -392,18 +519,57 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T | void> {
  * transaction — a bare `$executeRawUnsafe` pair can land on two different
  * pooled connections, leaving the TRUNCATE with no timeout at all.
  */
-export async function resetDb(prisma: ResetClient) {
+/**
+ * Truncate tables `resetDb`'s list does not cover, over the owner
+ * connection.
+ *
+ * Six files truncate a list of their own — auth tables, import tables,
+ * notification tables — because `RESET_TABLES` deliberately leaves them
+ * alone. They used to do it with `prisma.$executeRawUnsafe`, which
+ * worked only while the application connected as a superuser; `cis_app`
+ * is granted DML and no TRUNCATE, so the same statement is now a 42501.
+ *
+ * The privilege is not the thing to widen — a reset is fixture work, and
+ * fixture work gets the role that owns the schema. This is `resetDb`'s
+ * mechanism with the caller's own list.
+ */
+export async function truncateTables(tables: string): Promise<void> {
+  const client = await admin().connect();
+  try {
+    await client.query(`TRUNCATE TABLE ${tables} RESTART IDENTITY CASCADE`);
+  } finally {
+    client.release();
+  }
+}
+
+export async function resetDb(pool: ResetPool = admin()) {
   for (let attempt = 1; attempt <= RESET_ATTEMPTS; attempt++) {
     try {
-      await prisma.$transaction(
-        async (tx: { $executeRawUnsafe: (sql: string) => Promise<unknown> }) => {
-          await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = ${LOCK_TIMEOUT_MS}`);
-          await tx.$executeRawUnsafe(
-            `TRUNCATE TABLE ${RESET_TABLES} RESTART IDENTITY CASCADE`,
-          );
-        },
-        { timeout: LOCK_TIMEOUT_MS + 5_000, maxWait: 10_000 },
-      );
+      /*
+       * Over the owner connection, not the client the caller passed.
+       *
+       * `cis_app` is granted SELECT, INSERT, UPDATE and DELETE and
+       * nothing else, so it has no TRUNCATE privilege — which is the
+       * grant working rather than something to widen. A reset is fixture
+       * work, and fixture work gets the role that owns the schema, the
+       * same way migrations and seeds do in production.
+       *
+       * One connection for the `SET LOCAL` and the TRUNCATE, for the
+       * reason the transaction was here before: a bare pair can land on
+       * two pooled connections, leaving the TRUNCATE with no timeout.
+       */
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(`SET LOCAL lock_timeout = ${LOCK_TIMEOUT_MS}`);
+        await client.query(`TRUNCATE TABLE ${RESET_TABLES} RESTART IDENTITY CASCADE`);
+        await client.query("COMMIT");
+      } catch (truncateErr) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw truncateErr;
+      } finally {
+        client.release();
+      }
       await clearRbacCaches();
       return;
     } catch (err) {
@@ -412,7 +578,7 @@ export async function resetDb(prisma: ResetClient) {
           throw new Error(
             `resetDb: TRUNCATE still blocked after ${RESET_ATTEMPTS} attempts ` +
               `at ${LOCK_TIMEOUT_MS}ms each. Sessions on this database: ` +
-              `${await describeBlockers(prisma)}`,
+              `${await describeBlockers(pool)}`,
             { cause: err },
           );
         }
@@ -446,135 +612,137 @@ export async function makeTenantFixture(
   // calling this per test would collide on the second call.
   await ensureUtilities(prisma, [utilityId]);
 
-  await prisma.utilityConfig.create({ data: { utilityId } });
+  return asPlatform(async () => {
+    await prisma.utilityConfig.create({ data: { utilityId } });
 
-  const commodity = await prisma.commodity.create({
-    data: { utilityId, code: `WATER-${suffix}`, name: "Water" },
-  });
-
-  // MeasureTypeDef is referenced by UnitOfMeasure with a NOT NULL FK.
-  // Reuse a shared one across test runs if it already exists (e.g.,
-  // the test sets up two tenants in one beforeEach).
-  let measureType = await prisma.measureTypeDef.findFirst({
-    where: { code: "VOLUME" },
-  });
-  if (!measureType) {
-    measureType = await prisma.measureTypeDef.create({
-      data: { code: "VOLUME", label: "Volume" },
+    const commodity = await prisma.commodity.create({
+      data: { utilityId, code: `WATER-${suffix}`, name: "Water" },
     });
-  }
 
-  const uom = await prisma.unitOfMeasure.create({
-    data: {
+    // MeasureTypeDef is referenced by UnitOfMeasure with a NOT NULL FK.
+    // Reuse a shared one across test runs if it already exists (e.g.,
+    // the test sets up two tenants in one beforeEach).
+    let measureType = await prisma.measureTypeDef.findFirst({
+      where: { code: "VOLUME" },
+    });
+    if (!measureType) {
+      measureType = await prisma.measureTypeDef.create({
+        data: { code: "VOLUME", label: "Volume" },
+      });
+    }
+
+    const uom = await prisma.unitOfMeasure.create({
+      data: {
+        utilityId,
+        commodityId: commodity.id,
+        measureTypeId: measureType.id,
+        code: "GAL",
+        name: "Gallons",
+        conversionFactor: 1,
+        isBaseUnit: true,
+        isActive: true,
+      },
+    });
+
+    const billingCycle = await prisma.billingCycle.create({
+      data: {
+        utilityId,
+        name: `Cycle-${suffix}`,
+        cycleCode: `C-${suffix}`,
+        readDayOfMonth: 1, billDayOfMonth: 10,
+        frequency: "MONTHLY",
+      },
+    });
+
+    // v2 RateSchedule has no rateType/rateConfig — pricing is in
+    // RateComponent rows (slice 1 task 5) and SAs link to schedules
+    // via SAScheduleAssignment (task 6). The schedule still exists
+    // for completeness in case future fixtures reference it.
+    await prisma.rateSchedule.create({
+      data: {
+        utilityId,
+        name: `Rate-${suffix}`,
+        code: `RATE-${suffix}`,
+        commodityId: commodity.id,
+        effectiveDate: new Date("2024-01-01"),
+        version: 1,
+      },
+    });
+
+    const account = await prisma.account.create({
+      data: {
+        utilityId,
+        accountNumber: `ACCT-${suffix}`,
+        accountType: "RESIDENTIAL",
+        status: "ACTIVE",
+        billingCycleId: billingCycle.id,
+        depositAmount: 0,
+      },
+    });
+
+    const premise = await prisma.premise.create({
+      data: {
+        utilityId,
+        addressLine1: `1 Test Lane ${suffix}`,
+        city: "Testville",
+        state: "TS",
+        zip: "00000",
+        premiseType: "RESIDENTIAL",
+        commodityIds: [commodity.id],
+        status: "ACTIVE",
+      },
+    });
+
+    const meter = await prisma.meter.create({
+      data: {
+        utilityId,
+        premiseId: premise.id,
+        commodityId: commodity.id,
+        uomId: uom.id,
+        meterNumber: `MTR-${suffix}-1`,
+        meterType: "MANUAL",
+        status: "ACTIVE",
+        installDate: new Date("2024-01-01"),
+      },
+    });
+
+    const meter2 = await prisma.meter.create({
+      data: {
+        utilityId,
+        premiseId: premise.id,
+        commodityId: commodity.id,
+        uomId: uom.id,
+        meterNumber: `MTR-${suffix}-2`,
+        meterType: "MANUAL",
+        status: "ACTIVE",
+        installDate: new Date("2024-01-01"),
+      },
+    });
+
+    const meter3 = await prisma.meter.create({
+      data: {
+        utilityId,
+        premiseId: premise.id,
+        commodityId: commodity.id,
+        uomId: uom.id,
+        meterNumber: `MTR-${suffix}-3`,
+        meterType: "MANUAL",
+        status: "ACTIVE",
+        installDate: new Date("2024-01-01"),
+      },
+    });
+
+    return {
       utilityId,
       commodityId: commodity.id,
-      measureTypeId: measureType.id,
-      code: "GAL",
-      name: "Gallons",
-      conversionFactor: 1,
-      isBaseUnit: true,
-      isActive: true,
-    },
-  });
-
-  const billingCycle = await prisma.billingCycle.create({
-    data: {
-      utilityId,
-      name: `Cycle-${suffix}`,
-      cycleCode: `C-${suffix}`,
-      readDayOfMonth: 1, billDayOfMonth: 10,
-      frequency: "MONTHLY",
-    },
-  });
-
-  // v2 RateSchedule has no rateType/rateConfig — pricing is in
-  // RateComponent rows (slice 1 task 5) and SAs link to schedules
-  // via SAScheduleAssignment (task 6). The schedule still exists
-  // for completeness in case future fixtures reference it.
-  await prisma.rateSchedule.create({
-    data: {
-      utilityId,
-      name: `Rate-${suffix}`,
-      code: `RATE-${suffix}`,
-      commodityId: commodity.id,
-      effectiveDate: new Date("2024-01-01"),
-      version: 1,
-    },
-  });
-
-  const account = await prisma.account.create({
-    data: {
-      utilityId,
-      accountNumber: `ACCT-${suffix}`,
-      accountType: "RESIDENTIAL",
-      status: "ACTIVE",
+      uomId: uom.id,
       billingCycleId: billingCycle.id,
-      depositAmount: 0,
-    },
-  });
-
-  const premise = await prisma.premise.create({
-    data: {
-      utilityId,
-      addressLine1: `1 Test Lane ${suffix}`,
-      city: "Testville",
-      state: "TS",
-      zip: "00000",
-      premiseType: "RESIDENTIAL",
-      commodityIds: [commodity.id],
-      status: "ACTIVE",
-    },
-  });
-
-  const meter = await prisma.meter.create({
-    data: {
-      utilityId,
+      billingCycleCode: billingCycle.cycleCode,
+      accountId: account.id,
       premiseId: premise.id,
-      commodityId: commodity.id,
-      uomId: uom.id,
-      meterNumber: `MTR-${suffix}-1`,
-      meterType: "MANUAL",
-      status: "ACTIVE",
-      installDate: new Date("2024-01-01"),
-    },
+      meterId: meter.id,
+      meterId2: meter2.id,
+      meterId3: meter3.id,
+    };
   });
-
-  const meter2 = await prisma.meter.create({
-    data: {
-      utilityId,
-      premiseId: premise.id,
-      commodityId: commodity.id,
-      uomId: uom.id,
-      meterNumber: `MTR-${suffix}-2`,
-      meterType: "MANUAL",
-      status: "ACTIVE",
-      installDate: new Date("2024-01-01"),
-    },
-  });
-
-  const meter3 = await prisma.meter.create({
-    data: {
-      utilityId,
-      premiseId: premise.id,
-      commodityId: commodity.id,
-      uomId: uom.id,
-      meterNumber: `MTR-${suffix}-3`,
-      meterType: "MANUAL",
-      status: "ACTIVE",
-      installDate: new Date("2024-01-01"),
-    },
-  });
-
-  return {
-    utilityId,
-    commodityId: commodity.id,
-    uomId: uom.id,
-    billingCycleId: billingCycle.id,
-    billingCycleCode: billingCycle.cycleCode,
-    accountId: account.id,
-    premiseId: premise.id,
-    meterId: meter.id,
-    meterId2: meter2.id,
-    meterId3: meter3.id,
-  };
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 1 — asserts the ledger schema exists with the constraints the
@@ -15,8 +15,17 @@ let prismaImports: typeof import("../../lib/prisma.js");
 const utilityId = "00000000-0000-4000-8000-0000000000aa";
 let accountId: string;
 
-beforeAll(async () => {
+beforeAll(() =>
+  seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 
@@ -34,7 +43,7 @@ beforeAll(async () => {
     },
   });
   accountId = account.id;
-}, 180_000);
+}), 180_000);
 
 afterAll(async () => {
   await prismaImports?.prisma.$disconnect();

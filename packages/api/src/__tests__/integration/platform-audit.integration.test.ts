@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * What was done to a utility, and by whom.
@@ -37,6 +37,14 @@ const operator = { id: OPERATOR, name: "Pat Operator", source: `platform:${OPERA
 
 beforeAll(async () => {
   const booted = await bootPostgres();
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/provisioning.service.js");
@@ -52,7 +60,8 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   await prisma.auditLog.deleteMany({ where: { utilityId: UTILITY } });
   await prisma.userRole.deleteMany({ where: { utilityId: UTILITY } });
@@ -60,7 +69,8 @@ beforeEach(async () => {
   await prisma.role.deleteMany({ where: { utilityId: UTILITY } });
   await prisma.utilityModule.deleteMany({ where: { utilityId: UTILITY } });
   await prisma.utility.deleteMany({ where: { id: UTILITY } });
-});
+}),
+);
 
 async function auditRows(entityType?: string) {
   const { prisma } = prismaImports;
@@ -109,10 +119,12 @@ describe("provisioning", () => {
 });
 
 describe("suspending and reactivating", () => {
-  beforeEach(async () => {
+  beforeEach(() =>
+  seedAsPlatform(async () => {
     await svc.provisionTenant({ utilityId: UTILITY, name: "City of Audit" }, operator);
     await prismaImports.prisma.auditLog.deleteMany({ where: { utilityId: UTILITY } });
-  });
+  }),
+);
 
   it("records the suspension, with what changed", async () => {
     await svc.suspendUtility(UTILITY, operator);
@@ -142,10 +154,12 @@ describe("suspending and reactivating", () => {
 });
 
 describe("module changes", () => {
-  beforeEach(async () => {
+  beforeEach(() =>
+  seedAsPlatform(async () => {
     await svc.provisionTenant({ utilityId: UTILITY, name: "City of Audit" }, operator);
     await prismaImports.prisma.auditLog.deleteMany({ where: { utilityId: UTILITY } });
-  });
+  }),
+);
 
   it("records which module was turned off", async () => {
     await svc.setUtilityModule(UTILITY, "containers", false, operator);
@@ -176,11 +190,13 @@ describe("module changes", () => {
 describe("role changes", () => {
   let roleSvc: typeof import("../../services/role.service.js");
 
-  beforeEach(async () => {
+  beforeEach(() =>
+  seedAsPlatform(async () => {
     await svc.provisionTenant({ utilityId: UTILITY, name: "City of Audit" }, operator);
     roleSvc = await import("../../services/role.service.js");
     await prismaImports.prisma.auditLog.deleteMany({ where: { utilityId: UTILITY } });
-  });
+  }),
+);
 
   it("records a role being created", async () => {
     await roleSvc.createRole(

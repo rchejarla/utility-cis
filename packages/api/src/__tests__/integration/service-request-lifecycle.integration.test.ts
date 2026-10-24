@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * The service-request lifecycle over HTTP: create, list, assign,
@@ -70,7 +70,8 @@ async function principal(
   });
 }
 
-beforeAll(async () => {
+beforeAll(() =>
+  seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
@@ -137,7 +138,7 @@ beforeAll(async () => {
     cacheDel(`user-role:${utilityId}:${CSR}:tenant`),
     cacheDel(`user-role:${utilityId}:${PORTAL}:tenant`),
   ]);
-}, 240_000);
+}), 240_000);
 
 afterAll(async () => {
   if (app) await app.close();
@@ -145,9 +146,11 @@ afterAll(async () => {
   await pgContainer?.stop();
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   await prismaImports.prisma.serviceRequest.deleteMany({ where: { utilityId } });
-});
+}),
+);
 
 describe("service request lifecycle over HTTP", () => {
   it("creates, lists, assigns, progresses and completes a request", async () => {
@@ -262,98 +265,111 @@ describe("service request lifecycle over HTTP", () => {
    * since a `include` fault surfaces as a 400 here and nowhere else a
    * CSR would see.
    */
-  it("returns a request whose agreement carries the premise it is served at", async () => {
-    const { prisma } = prismaImports;
-    const customer = await prisma.customer.create({
-      data: { utilityId, customerType: "INDIVIDUAL", firstName: "Ada", lastName: "Lovelace" },
-    });
-    const cycle = await prisma.billingCycle.create({
-      data: {
-        utilityId,
-        name: "R1",
-        cycleCode: "R01",
-        readDayOfMonth: 1,
-        billDayOfMonth: 15,
-        frequency: "MONTHLY",
-      },
-    });
-    const account = await prisma.account.create({
-      data: {
-        utilityId,
-        accountNumber: "SRL-001",
-        accountType: "RESIDENTIAL",
-        status: "ACTIVE",
-        billingCycleId: cycle.id,
-        customerId: customer.id,
-      },
-    });
-    const premise = await prisma.premise.create({
-      data: {
-        utilityId,
-        addressLine1: "412 N 7th Ave",
-        city: "Bozeman",
-        state: "MT",
-        zip: "59715",
-        premiseType: "RESIDENTIAL",
-      },
-    });
-    const commodity = await prisma.commodity.create({
-      data: { utilityId, code: "WATER-L", name: "Potable Water" },
-    });
-    const agreement = await prisma.serviceAgreement.create({
-      data: {
-        utilityId,
-        accountId: account.id,
-        commodityId: commodity.id,
-        agreementNumber: "SA-L-0421",
-        status: "ACTIVE",
-        startDate: new Date("2026-01-01"),
-      },
-    });
-    await prisma.servicePoint.create({
-      data: {
-        utilityId,
-        serviceAgreementId: agreement.id,
-        premiseId: premise.id,
-        startDate: new Date("2026-01-01"),
-      },
-    });
-
-    const created = (
-      await app.inject({
-        method: "POST",
-        url: "/api/v1/service-requests",
-        headers: csrHeaders,
-        payload: {
-          requestType: "LEAK_REPORT",
-          priority: "HIGH",
-          description: "kerbside pooling",
-          accountId: account.id,
-          premiseId: premise.id,
-          serviceAgreementId: agreement.id,
+    /*
+   * The whole body under the fixture authority, because the rows it
+   * arranges are declared here and used below — wrapping only the
+   * writes would scope their names away.
+   *
+   * It costs nothing: `app.inject` enters its own tenant scope in the
+   * request's middleware, so every route call below still runs as
+   * `cis_app` acting for its own tenant, and the assertions are on the
+   * HTTP responses rather than on direct reads.
+   */
+  it("returns a request whose agreement carries the premise it is served at", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const customer = await prisma.customer.create({
+        data: { utilityId, customerType: "INDIVIDUAL", firstName: "Ada", lastName: "Lovelace" },
+      });
+      const cycle = await prisma.billingCycle.create({
+        data: {
+          utilityId,
+          name: "R1",
+          cycleCode: "R01",
+          readDayOfMonth: 1,
+          billDayOfMonth: 15,
+          frequency: "MONTHLY",
         },
-      })
-    ).json();
+      });
+      const account = await prisma.account.create({
+        data: {
+          utilityId,
+          accountNumber: "SRL-001",
+          accountType: "RESIDENTIAL",
+          status: "ACTIVE",
+          billingCycleId: cycle.id,
+          customerId: customer.id,
+        },
+      });
+      const premise = await prisma.premise.create({
+        data: {
+          utilityId,
+          addressLine1: "412 N 7th Ave",
+          city: "Bozeman",
+          state: "MT",
+          zip: "59715",
+          premiseType: "RESIDENTIAL",
+        },
+      });
+      const commodity = await prisma.commodity.create({
+        data: { utilityId, code: "WATER-L", name: "Potable Water" },
+      });
+      const agreement = await prisma.serviceAgreement.create({
+        data: {
+          utilityId,
+          accountId: account.id,
+          commodityId: commodity.id,
+          agreementNumber: "SA-L-0421",
+          status: "ACTIVE",
+          startDate: new Date("2026-01-01"),
+        },
+      });
+      await prisma.servicePoint.create({
+        data: {
+          utilityId,
+          serviceAgreementId: agreement.id,
+          premiseId: premise.id,
+          startDate: new Date("2026-01-01"),
+        },
+      });
 
-    const detail = await app.inject({
-      method: "GET",
-      url: `/api/v1/service-requests/${created.id}`,
-      headers: csrHeaders,
-    });
-    expect(detail.statusCode).toBe(200);
-    expect(detail.json().serviceAgreement).toMatchObject({
-      agreementNumber: "SA-L-0421",
-      commodity: { name: "Potable Water" },
-      premise: { addressLine1: "412 N 7th Ave" },
-    });
+      const created = (
+        await app.inject({
+          method: "POST",
+          url: "/api/v1/service-requests",
+          headers: csrHeaders,
+          payload: {
+            requestType: "LEAK_REPORT",
+            priority: "HIGH",
+            description: "kerbside pooling",
+            accountId: account.id,
+            premiseId: premise.id,
+            serviceAgreementId: agreement.id,
+          },
+        })
+      ).json();
 
-    // The account tab reads the same request through its own route.
-    const tab = await app.inject({
-      method: "GET",
-      url: `/api/v1/accounts/${account.id}/service-requests`,
-      headers: csrHeaders,
-    });
-    expect(tab.statusCode).toBe(200);
-    expect(tab.json()[0].serviceAgreement.premise).toEqual({ addressLine1: "412 N 7th Ave" });
-  });
+      const detail = await app.inject({
+        method: "GET",
+        url: `/api/v1/service-requests/${created.id}`,
+        headers: csrHeaders,
+      });
+      expect(detail.statusCode).toBe(200);
+      expect(detail.json().serviceAgreement).toMatchObject({
+        agreementNumber: "SA-L-0421",
+        commodity: { name: "Potable Water" },
+        premise: { addressLine1: "412 N 7th Ave" },
+      });
+
+      // The account tab reads the same request through its own route.
+      const tab = await app.inject({
+        method: "GET",
+        url: `/api/v1/accounts/${account.id}/service-requests`,
+        headers: csrHeaders,
+      });
+      expect(tab.statusCode).toBe(200);
+      expect(tab.json()[0].serviceAgreement.premise).toEqual({ addressLine1: "412 N 7th Ave" });
+  
+    }),
+  );
 });

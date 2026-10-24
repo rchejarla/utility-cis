@@ -50,6 +50,14 @@ let prisma: PrismaClient;
 
 beforeAll(async () => {
   booted = await bootPostgres();
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
 
   // Run the v2 prisma seed — same TSX_BIN resolution as the Slice 1
   // seed-sanity suite. The shared package doesn't list `tsx` as a

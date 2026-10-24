@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import { runAsTenant } from "../../lib/tenant-context.js";
 
 /**
  * The tenant-wide bill list — `GET /api/v1/bills` / `listBills`.
@@ -32,6 +33,21 @@ let accountId: string;
 let otherAccountId: string;
 let billingCycleId: string;
 
+/**
+ * Call the service the way a request does: acting as the tenant, not
+ * merely naming it.
+ *
+ * `listBills` already takes the tenant as its first argument, and in
+ * production that value came from a request whose middleware had already
+ * entered the scope — so the argument and the scope are always the same
+ * id. A direct service test has the argument and not the scope, and on a
+ * connection `cis_app` holds, a tenant table read with no scope raises
+ * rather than returning the wrong rows. This supplies the half the
+ * request would have.
+ */
+const listBills = (tenant: string, q: Parameters<typeof bills.listBills>[1]) =>
+  runAsTenant(tenant, async () => bills.listBills(tenant, q));
+
 const Q = {
   page: 1,
   limit: 20,
@@ -39,8 +55,17 @@ const Q = {
   order: "desc" as const,
 };
 
-beforeAll(async () => {
+beforeAll(() =>
+  seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId, otherUtility] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   bills = await import("../../services/bill.service.js");
@@ -91,7 +116,7 @@ beforeAll(async () => {
     posted: true,
     utility: otherUtility,
   });
-}, 180_000);
+}), 180_000);
 
 afterAll(async () => {
   await prismaImports?.prisma.$disconnect();
@@ -133,19 +158,19 @@ const numbers = (r: { data: { billNumber: string }[] }) => r.data.map((b) => b.b
 
 describe("listBills", () => {
   it("returns every bill for the tenant when posted is omitted", async () => {
-    const res = await bills.listBills(utilityId, Q);
+    const res = await listBills(utilityId, Q);
     // Tri-state: all three, posted and unposted alike.
     expect(numbers(res).sort()).toEqual(["B-JAN", "B-JUL", "B-JUN-30"]);
     expect(res.meta.total).toBe(3);
   });
 
   it("filters to unposted bills — the posting queue", async () => {
-    const res = await bills.listBills(utilityId, { ...Q, posted: false });
+    const res = await listBills(utilityId, { ...Q, posted: false });
     expect(numbers(res).sort()).toEqual(["B-JUL", "B-JUN-30"]);
   });
 
   it("filters to posted bills", async () => {
-    const res = await bills.listBills(utilityId, { ...Q, posted: true });
+    const res = await listBills(utilityId, { ...Q, posted: true });
     expect(numbers(res)).toEqual(["B-JAN"]);
   });
 
@@ -153,36 +178,36 @@ describe("listBills", () => {
     // The bill dated exactly 2026-06-30 must be included — an exclusive
     // bound would drop it. This holds with a plain `lte` only because
     // billDate is a DATE column; see the note in listBills.
-    const res = await bills.listBills(utilityId, { ...Q, from: "2026-01-01", to: "2026-06-30" });
+    const res = await listBills(utilityId, { ...Q, from: "2026-01-01", to: "2026-06-30" });
     expect(numbers(res).sort()).toEqual(["B-JAN", "B-JUN-30"]);
   });
 
   it("excludes bills after `to`", async () => {
-    const res = await bills.listBills(utilityId, { ...Q, to: "2026-06-29" });
+    const res = await listBills(utilityId, { ...Q, to: "2026-06-29" });
     expect(numbers(res)).toEqual(["B-JAN"]);
   });
 
   it("honours `from` as an inclusive lower bound", async () => {
-    const res = await bills.listBills(utilityId, { ...Q, from: "2026-06-30" });
+    const res = await listBills(utilityId, { ...Q, from: "2026-06-30" });
     expect(numbers(res).sort()).toEqual(["B-JUL", "B-JUN-30"]);
   });
 
   it("finds a bill by number, case-insensitively and partially", async () => {
-    const res = await bills.listBills(utilityId, { ...Q, search: "jun" });
+    const res = await listBills(utilityId, { ...Q, search: "jun" });
     expect(numbers(res)).toEqual(["B-JUN-30"]);
   });
 
   it("returns the account number and customer name, not just ids", async () => {
-    const res = await bills.listBills(utilityId, { ...Q, search: "B-JAN" });
+    const res = await listBills(utilityId, { ...Q, search: "B-JAN" });
     expect(res.data[0]!.account.accountNumber).toBe("BL-001");
     expect(res.data[0]!.account.customerName).toBe("Ada Lovelace");
     expect(res.data[0]!.billingCycleName).toBe("Residential 1");
   });
 
   it("carries postedAt so a caller can tell a calculation from a receivable", async () => {
-    const posted = await bills.listBills(utilityId, { ...Q, search: "B-JAN" });
+    const posted = await listBills(utilityId, { ...Q, search: "B-JAN" });
     expect(posted.data[0]!.postedAt).toBeInstanceOf(Date);
-    const unposted = await bills.listBills(utilityId, { ...Q, search: "B-JUL" });
+    const unposted = await listBills(utilityId, { ...Q, search: "B-JUL" });
     expect(unposted.data[0]!.postedAt).toBeNull();
   });
 
@@ -205,7 +230,7 @@ describe("listBills", () => {
       },
     });
     try {
-      const res = await bills.listBills(utilityId, { ...Q, search: "B-JAN" });
+      const res = await listBills(utilityId, { ...Q, search: "B-JAN" });
       expect(res.data[0]!.charge).toEqual({
         entryId: entry.id,
         openAmount: "6.00",
@@ -234,7 +259,7 @@ describe("listBills", () => {
       },
     });
     try {
-      const res = await bills.listBills(utilityId, { ...Q, search: "B-JAN" });
+      const res = await listBills(utilityId, { ...Q, search: "B-JAN" });
       expect(res.data[0]!.charge!.reversed).toBe(true);
     } finally {
       await prisma.ledgerEntry.delete({ where: { id: rev.id } });
@@ -243,7 +268,7 @@ describe("listBills", () => {
   });
 
   it("reports charge: null while a bill is unposted", async () => {
-    const res = await bills.listBills(utilityId, { ...Q, search: "B-JUL" });
+    const res = await listBills(utilityId, { ...Q, search: "B-JUL" });
     expect(res.data[0]!.postedAt).toBeNull();
     expect(res.data[0]!.charge).toBeNull();
   });
@@ -260,7 +285,7 @@ describe("listBills", () => {
       },
     });
     try {
-      const res = await bills.listBills(utilityId, { ...Q, search: "B-JUN-30" });
+      const res = await listBills(utilityId, { ...Q, search: "B-JUN-30" });
       expect(res.data[0]!.charge).toBeNull();
     } finally {
       await prisma.ledgerEntry.delete({ where: { id: credit.id } });
@@ -330,7 +355,7 @@ describe("listBills", () => {
     }
 
     const found = async (state: Parameters<typeof bills.listBills>[1]["state"]) =>
-      numbers(await bills.listBills(utilityId, { ...Q, state }));
+      numbers(await listBills(utilityId, { ...Q, state }));
 
     it("finds an unpaid charge as outstanding and overdue, not as paid", async () => {
       const cleanup = await withCharge();
@@ -370,7 +395,7 @@ describe("listBills", () => {
       const dueYesterday = new Date(dueToday.getTime() - 86_400_000);
 
       const rowOf = async (billNumber: string) => {
-        const page = await bills.listBills(utilityId, Q);
+        const page = await listBills(utilityId, Q);
         return page.data.find((b) => b.billNumber === billNumber);
       };
 
@@ -410,7 +435,7 @@ describe("listBills", () => {
     it("agrees with the partPaid filter, including on an unpaid fractional total", async () => {
       const { prisma } = prismaImports;
       const rowOf = async (billNumber: string) => {
-        const page = await bills.listBills(utilityId, Q);
+        const page = await listBills(utilityId, Q);
         return page.data.find((b) => b.billNumber === billNumber);
       };
 
@@ -459,7 +484,7 @@ describe("listBills", () => {
     it("tells the account's own list exactly what the tenant-wide list says", async () => {
       const partly = await withCharge({ openAmount: "6.00", applied: true });
       try {
-        const page = await bills.listBills(utilityId, Q);
+        const page = await listBills(utilityId, Q);
         const wide = page.data.find((b) => b.billNumber === "B-JAN");
         const scoped = (await bills.listBillsForAccount(utilityId, accountId)).find(
           (b) => b.billNumber === "B-JAN",
@@ -537,7 +562,7 @@ describe("listBills", () => {
     });
 
     it("still returns every bill when no state is given", async () => {
-      const all = await bills.listBills(utilityId, Q);
+      const all = await listBills(utilityId, Q);
       expect(all.meta.total).toBeGreaterThan(1);
     });
   });
@@ -551,7 +576,7 @@ describe("listBills", () => {
    */
   describe("search", () => {
     const found = async (search: string) =>
-      numbers(await bills.listBills(utilityId, { ...Q, search }));
+      numbers(await listBills(utilityId, { ...Q, search }));
 
     it("still matches the bill number", async () => {
       expect(await found("B-JAN")).toContain("B-JAN");
@@ -592,35 +617,35 @@ describe("listBills", () => {
       // The other tenant's bill must not surface for this tenant's
       // search, and the reverse: searching our customer from theirs.
       expect(await found("B-OTHER")).toEqual([]);
-      expect(numbers(await bills.listBills(otherUtility, { ...Q, search: "Lovelace" }))).toEqual([]);
+      expect(numbers(await listBills(otherUtility, { ...Q, search: "Lovelace" }))).toEqual([]);
     });
   });
 
   it("never returns another utility's bills", async () => {
-    const res = await bills.listBills(utilityId, Q);
+    const res = await listBills(utilityId, Q);
     expect(numbers(res)).not.toContain("B-OTHER");
 
     // And the other tenant sees only its own, so the filter is scoping
     // rather than just hiding one fixture.
-    const theirs = await bills.listBills(otherUtility, Q);
+    const theirs = await listBills(otherUtility, Q);
     expect(numbers(theirs)).toEqual(["B-OTHER"]);
   });
 
   it("does not let a search cross tenants", async () => {
-    const res = await bills.listBills(utilityId, { ...Q, search: "B-OTHER" });
+    const res = await listBills(utilityId, { ...Q, search: "B-OTHER" });
     expect(res.data).toEqual([]);
     expect(res.meta.total).toBe(0);
   });
 
   it("paginates with a correct total", async () => {
-    const res = await bills.listBills(utilityId, { ...Q, limit: 2 });
+    const res = await listBills(utilityId, { ...Q, limit: 2 });
     expect(res.data).toHaveLength(2);
     expect(res.meta.total).toBe(3);
     expect(res.meta.pages).toBe(2);
   });
 
   it("sorts by billDate descending by default", async () => {
-    const res = await bills.listBills(utilityId, Q);
+    const res = await listBills(utilityId, Q);
     expect(numbers(res)).toEqual(["B-JUL", "B-JUN-30", "B-JAN"]);
   });
 });

@@ -8,6 +8,8 @@ import {
   TENANT_A,
   type TenantFixture,
   ensurePrincipal,
+  truncateTables,
+  seedAsPlatform,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -104,6 +106,15 @@ function buildMultipart(
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // Its routes run correctly as `cis_app` — no route or service was
+  // found querying a tenant table without a scope — but its own test
+  // bodies arrange and assert on rows through `prisma` directly, which
+  // needs a `seedAsPlatform` or `runAsTenant` per site. See
+  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
+  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
+  // only lets the number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   appImports = await import("../../app.js");
@@ -122,12 +133,11 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
-  await resetDb(prisma);
-  await prisma.$executeRawUnsafe(
-    "TRUNCATE TABLE import_row, import_batch, attachment, customer RESTART IDENTITY CASCADE",
-  );
+  await resetDb();
+  await truncateTables("import_row, import_batch, attachment, customer");
   await ensurePrincipal(prisma, TENANT_A);
 
   fixA = await makeTenantFixture(prisma, TENANT_A);
@@ -144,7 +154,8 @@ beforeEach(async () => {
   // same process.
   const rbac = await import("../../services/rbac.service.js");
   await rbac.invalidateTenantModulesCache(fixA.utilityId);
-});
+}),
+);
 
 describe("customer kind — registered alongside meter_read", () => {
   it("appears in GET /imports/kinds", async () => {

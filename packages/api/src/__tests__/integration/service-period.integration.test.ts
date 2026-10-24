@@ -6,6 +6,7 @@ import {
   makeTenantFixture,
   TENANT_A,
   type TenantFixture,
+  seedAsPlatform,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -32,6 +33,14 @@ let saId: string;
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   process.env.DATABASE_URL = booted.dbUrl;
   prismaImports = await import("../../lib/prisma.js");
@@ -48,9 +57,10 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
-  await resetDb(prisma);
+  await resetDb();
   fix = await makeTenantFixture(prisma, TENANT_A);
   const sa = await prisma.serviceAgreement.create({
     data: {
@@ -63,7 +73,8 @@ beforeEach(async () => {
     },
   });
   saId = sa.id;
-});
+}),
+);
 
 /** A read on `date`, unbilled unless `billed` says otherwise. */
 async function read(date: string, opts: { billed?: boolean; consumption?: number } = {}) {

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Suspending a tenant, and reactivating it.
@@ -27,6 +27,14 @@ const ABSENT = "00000000-0000-4000-8000-0000000000bf";
 
 beforeAll(async () => {
   const booted = await bootPostgres();
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/provisioning.service.js");
@@ -42,7 +50,8 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   await prisma.userRole.deleteMany({ where: { utilityId: TENANT } });
   await prisma.cisUser.deleteMany({ where: { utilityId: TENANT } });
@@ -50,7 +59,8 @@ beforeEach(async () => {
   await prisma.utilityModule.deleteMany({ where: { utilityId: TENANT } });
   await prisma.utility.deleteMany({ where: { id: TENANT } });
   await svc.provisionTenant({ utilityId: TENANT, name: "City of Suspendable" });
-});
+}),
+);
 
 describe("suspendUtility and reactivateUtility", () => {
   it("suspends, and reports the status back", async () => {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
 import type { Prisma } from "@utility-cis/shared/src/generated/prisma";
-import { bootPostgres, ensurePrincipal } from "./_effective-dating-fixtures.js";
+import { bootPostgres, ensurePrincipal, truncateTables} from "./_effective-dating-fixtures.js";
 
 /**
  * BillDocument end to end against a real database.
@@ -90,6 +90,15 @@ const portalHeaders = (customerId: string) => ({
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [OTHER_UTILITY, UTILITY] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // Its routes run correctly as `cis_app` — no route or service was
+  // found querying a tenant table without a scope — but its own test
+  // bodies arrange and assert on rows through `prisma` directly, which
+  // needs a `seedAsPlatform` or `runAsTenant` per site. See
+  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
+  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
+  // only lets the number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/bill-document.service.js");
@@ -117,9 +126,7 @@ beforeEach(async () => {
   // bill_segment_line's required source FKs need — leave one out and the
   // second test in the file collides on a unique code rather than
   // testing anything.
-  await prisma.$executeRawUnsafe(
-    `TRUNCATE TABLE audit_log, bill_document, bill_segment_line, bill_segment, bill, service_agreement, account, customer, billing_address, billing_cycle, rate_component, rate_component_kind, rate_schedule, commodity, utility_config, utility_module, user_role, cis_user, role, notification, notification_template RESTART IDENTITY CASCADE`,
-  );
+  await truncateTables("audit_log, bill_document, bill_segment_line, bill_segment, bill, service_agreement, account, customer, billing_address, billing_cycle, rate_component, rate_component_kind, rate_schedule, commodity, utility_config, utility_module, user_role, cis_user, role, notification, notification_template");
   await ensurePrincipal(prisma, UTILITY);
 });
 

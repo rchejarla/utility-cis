@@ -18,11 +18,15 @@ const LOCK_ERR = new Error(
 );
 
 /**
- * Stub client whose TRUNCATE fails for the first `failures` attempts.
- * Records the SQL each attempt issued so the test can assert that the
- * lock_timeout is set on the same session as the TRUNCATE.
+ * Pool whose TRUNCATE fails for the first `failures` attempts.
+ *
+ * Records the SQL each attempt issued, so a test can assert the
+ * lock_timeout lands on the same session as the TRUNCATE. It is a pool
+ * rather than a Prisma client because `resetDb` now runs these
+ * statements on the owner connection — `cis_app`, which the application
+ * connects as, is granted DML and has no TRUNCATE privilege.
  */
-function stubClient(failures: number) {
+function stubPool(failures: number) {
   const statements: string[][] = [];
   let attempt = 0;
   return {
@@ -30,33 +34,38 @@ function stubClient(failures: number) {
     get attempts() {
       return attempt;
     },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async $transaction(fn: (tx: any) => Promise<unknown>) {
+    async connect() {
       attempt += 1;
       const issued: string[] = [];
       statements.push(issued);
       const mine = attempt;
-      return fn({
-        async $executeRawUnsafe(sql: string) {
-          issued.push(sql);
+      return {
+        async query(sql: string) {
+          // BEGIN/COMMIT/ROLLBACK are the transaction, not the work.
+          if (!/^(BEGIN|COMMIT|ROLLBACK)$/.test(sql.trim())) issued.push(sql);
           if (sql.includes("TRUNCATE") && mine <= failures) throw LOCK_ERR;
-          return 0;
+          if (sql.includes("pg_stat_activity")) {
+            return {
+              rows: [
+                { pid: 123, state: "idle in transaction", query: "LOCK TABLE premise" },
+              ],
+            };
+          }
+          return { rows: [] };
         },
-      });
-    },
-    async $queryRawUnsafe() {
-      return [{ pid: 123, state: "idle in transaction", query: "LOCK TABLE premise" }];
+        release() {},
+      };
     },
   };
 }
 
 describe("resetDb lock handling", () => {
   it("sets lock_timeout on the same session as the TRUNCATE", async () => {
-    const client = stubClient(0);
-    await resetDb(client);
+    const pool = stubPool(0);
+    await resetDb(pool);
 
-    expect(client.statements).toHaveLength(1);
-    const [first, second] = client.statements[0];
+    expect(pool.statements).toHaveLength(1);
+    const [first, second] = pool.statements[0];
     expect(first).toMatch(/SET LOCAL lock_timeout = \d+/);
     expect(second).toMatch(/^TRUNCATE TABLE /);
   });
@@ -64,11 +73,11 @@ describe("resetDb lock handling", () => {
   it("retries a lock timeout and succeeds when the holder lets go", async () => {
     vi.useFakeTimers();
     try {
-      const client = stubClient(2);
-      const done = resetDb(client);
+      const pool = stubPool(2);
+      const done = resetDb(pool);
       await vi.runAllTimersAsync();
       await done;
-      expect(client.attempts).toBe(3);
+      expect(pool.attempts).toBe(3);
     } finally {
       vi.useRealTimers();
     }
@@ -77,12 +86,14 @@ describe("resetDb lock handling", () => {
   it("gives up after three attempts and names the blocking sessions", async () => {
     vi.useFakeTimers();
     try {
-      const client = stubClient(Number.POSITIVE_INFINITY);
-      const failed = resetDb(client).catch((err: unknown) => err);
+      const pool = stubPool(Number.POSITIVE_INFINITY);
+      const failed = resetDb(pool).catch((err: unknown) => err);
       await vi.runAllTimersAsync();
       const err = await failed;
 
-      expect(client.attempts).toBe(3);
+      // Three TRUNCATE attempts plus the connection that reads
+      // pg_stat_activity to name the holder.
+      expect(pool.attempts).toBe(4);
       expect(String(err)).toMatch(/still blocked after 3 attempts/);
       expect(String(err)).toMatch(/idle in transaction/);
     } finally {
@@ -92,21 +103,21 @@ describe("resetDb lock handling", () => {
 
   it("does not retry an error that is not a lock timeout", async () => {
     const boom = new Error("relation does not exist");
-    const client = {
+    const pool = {
       attempts: 0,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      async $transaction(fn: (tx: any) => Promise<unknown>) {
+      async connect() {
         this.attempts += 1;
-        return fn({
-          async $executeRawUnsafe(sql: string) {
+        return {
+          async query(sql: string) {
             if (sql.includes("TRUNCATE")) throw boom;
-            return 0;
+            return { rows: [] };
           },
-        });
+          release() {},
+        };
       },
     };
 
-    await expect(resetDb(client)).rejects.toThrow("relation does not exist");
-    expect(client.attempts).toBe(1);
+    await expect(resetDb(pool)).rejects.toThrow("relation does not exist");
+    expect(pool.attempts).toBe(1);
   });
 });

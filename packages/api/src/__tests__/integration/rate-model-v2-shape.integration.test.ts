@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
-import { bootPostgres, TENANT_A, ensurePrincipal} from "./_effective-dating-fixtures.js";
+import { bootPostgres, TENANT_A, ensurePrincipal, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 1 task 11 — end-to-end shape tests.
@@ -45,7 +45,8 @@ function makeToken(utilityId: string, actorId = ACTOR_ID) {
 
 const headers = () => ({ authorization: `Bearer ${makeToken(TENANT_A)}` });
 
-beforeAll(async () => {
+beforeAll(() =>
+  seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
@@ -81,7 +82,7 @@ beforeAll(async () => {
     update: {},
   });
   billingCycleId = bc.id;
-}, 300_000);
+}), 300_000);
 
 afterAll(async () => {
   await app?.close().catch(() => {});
@@ -94,7 +95,8 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   // Wipe in FK-safe order: assignments + components first (FK to schedule/SA),
   // then SAs and schedules. Account/premise persist for the run.
@@ -116,7 +118,8 @@ beforeEach(async () => {
   }
   const rbac = await import("../../services/rbac.service.js");
   await rbac.invalidateTenantModulesCache(TENANT_A);
-});
+}),
+);
 
 describe("rate-model v2 end-to-end shape", () => {
   it("creates a Bozeman-style water schedule with components via the API", async () => {
@@ -183,110 +186,45 @@ describe("rate-model v2 end-to-end shape", () => {
     ]);
   });
 
-  it("attaches a schedule to an SA and reads it back via SA detail", async () => {
-    const { prisma } = prismaImports;
+    /*
+   * Whole body under the fixture authority, for the reason the case
+   * above gives: the rows are declared here and used below, and every
+   * `app.inject` still enters its own tenant scope.
+   */
+  it("attaches a schedule to an SA and reads it back via SA detail", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
 
-    const account = await prisma.account.create({
-      data: {
-        utilityId: TENANT_A,
-        accountNumber: `ACCT-SHAPE-1-${Date.now()}`,
-        accountType: "RESIDENTIAL",
-        status: "ACTIVE",
-        billingCycleId,
-        depositAmount: 0,
-      },
-    });
+      const account = await prisma.account.create({
+        data: {
+          utilityId: TENANT_A,
+          accountNumber: `ACCT-SHAPE-1-${Date.now()}`,
+          accountType: "RESIDENTIAL",
+          status: "ACTIVE",
+          billingCycleId,
+          depositAmount: 0,
+        },
+      });
 
-    const sa = await prisma.serviceAgreement.create({
-      data: {
-        utilityId: TENANT_A,
-        agreementNumber: `SA-SHAPE-1-${Date.now()}`,
-        accountId: account.id,
-        commodityId: waterCommodityId,
-        startDate: new Date("2026-01-01"),
-        status: "ACTIVE",
-      },
-    });
+      const sa = await prisma.serviceAgreement.create({
+        data: {
+          utilityId: TENANT_A,
+          agreementNumber: `SA-SHAPE-1-${Date.now()}`,
+          accountId: account.id,
+          commodityId: waterCommodityId,
+          startDate: new Date("2026-01-01"),
+          status: "ACTIVE",
+        },
+      });
 
-    const schedRes = await app.inject({
-      method: "POST",
-      url: "/api/v1/rate-schedules",
-      headers: headers(),
-      payload: {
-        name: "Attach Test",
-        code: "TEST-ATTACH-1",
-        commodityId: waterCommodityId,
-        effectiveDate: "2025-09-15",
-      },
-    });
-    expect(schedRes.statusCode).toBe(201);
-    const sched = JSON.parse(schedRes.body);
-
-    const assignRes = await app.inject({
-      method: "POST",
-      url: "/api/v1/sa-rate-schedule-assignments",
-      headers: headers(),
-      payload: {
-        serviceAgreementId: sa.id,
-        rateScheduleId: sched.id,
-        roleCode: "primary",
-        effectiveDate: "2025-09-15",
-      },
-    });
-    expect(assignRes.statusCode).toBe(201);
-
-    const saRes = await app.inject({
-      method: "GET",
-      url: `/api/v1/service-agreements/${sa.id}`,
-      headers: headers(),
-    });
-    expect(saRes.statusCode).toBe(200);
-    const saBody = JSON.parse(saRes.body);
-    expect(saBody.rateScheduleAssignments).toBeDefined();
-    expect(saBody.rateScheduleAssignments).toHaveLength(1);
-    expect(saBody.rateScheduleAssignments[0].rateSchedule.id).toBe(sched.id);
-    expect(saBody.rateScheduleAssignments[0].roleCode).toBe("primary");
-  });
-
-  it("attaches three NWE-style schedules (delivery/supply/rider) to one electric SA", async () => {
-    const { prisma } = prismaImports;
-
-    const account = await prisma.account.create({
-      data: {
-        utilityId: TENANT_A,
-        accountNumber: `ACCT-SHAPE-ELEC-${Date.now()}`,
-        accountType: "RESIDENTIAL",
-        status: "ACTIVE",
-        billingCycleId,
-        depositAmount: 0,
-      },
-    });
-
-    const sa = await prisma.serviceAgreement.create({
-      data: {
-        utilityId: TENANT_A,
-        agreementNumber: `SA-SHAPE-ELEC-${Date.now()}`,
-        accountId: account.id,
-        commodityId: electricCommodityId,
-        startDate: new Date("2026-01-01"),
-        status: "ACTIVE",
-      },
-    });
-
-    const stamp = Date.now();
-    for (const [name, role] of [
-      ["Delivery", "delivery"],
-      ["Supply", "supply"],
-      ["USBC", "rider"],
-    ] as const) {
       const schedRes = await app.inject({
         method: "POST",
         url: "/api/v1/rate-schedules",
         headers: headers(),
         payload: {
-          name: `NWE ${name}`,
-          code: `NWE-${name.toUpperCase()}-${stamp}`,
-          commodityId: electricCommodityId,
+          name: "Attach Test",
+          code: "TEST-ATTACH-1",
+          commodityId: waterCommodityId,
           effectiveDate: "2025-09-15",
         },
       });
@@ -300,25 +238,111 @@ describe("rate-model v2 end-to-end shape", () => {
         payload: {
           serviceAgreementId: sa.id,
           rateScheduleId: sched.id,
-          roleCode: role,
+          roleCode: "primary",
           effectiveDate: "2025-09-15",
         },
       });
       expect(assignRes.statusCode).toBe(201);
-    }
 
-    const saRes = await app.inject({
-      method: "GET",
-      url: `/api/v1/service-agreements/${sa.id}`,
-      headers: headers(),
-    });
-    expect(saRes.statusCode).toBe(200);
-    const saBody = JSON.parse(saRes.body);
-    expect(saBody.rateScheduleAssignments).toHaveLength(3);
-    expect(
-      saBody.rateScheduleAssignments
-        .map((a: { roleCode: string }) => a.roleCode)
-        .sort(),
-    ).toEqual(["delivery", "rider", "supply"]);
-  });
+      const saRes = await app.inject({
+        method: "GET",
+        url: `/api/v1/service-agreements/${sa.id}`,
+        headers: headers(),
+      });
+      expect(saRes.statusCode).toBe(200);
+      const saBody = JSON.parse(saRes.body);
+      expect(saBody.rateScheduleAssignments).toBeDefined();
+      expect(saBody.rateScheduleAssignments).toHaveLength(1);
+      expect(saBody.rateScheduleAssignments[0].rateSchedule.id).toBe(sched.id);
+      expect(saBody.rateScheduleAssignments[0].roleCode).toBe("primary");
+  
+    }),
+  );
+
+    /*
+   * The whole body under the fixture authority, because the rows it
+   * arranges are declared here and used below — wrapping only the
+   * writes would scope their names away.
+   *
+   * It costs nothing: `app.inject` enters its own tenant scope in the
+   * request's middleware, so every route call below still runs as
+   * `cis_app` acting for its own tenant, and the assertions are on the
+   * HTTP responses rather than on direct reads.
+   */
+  it("attaches three NWE-style schedules (delivery/supply/rider) to one electric SA", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+
+      const account = await prisma.account.create({
+        data: {
+          utilityId: TENANT_A,
+          accountNumber: `ACCT-SHAPE-ELEC-${Date.now()}`,
+          accountType: "RESIDENTIAL",
+          status: "ACTIVE",
+          billingCycleId,
+          depositAmount: 0,
+        },
+      });
+
+      const sa = await prisma.serviceAgreement.create({
+        data: {
+          utilityId: TENANT_A,
+          agreementNumber: `SA-SHAPE-ELEC-${Date.now()}`,
+          accountId: account.id,
+          commodityId: electricCommodityId,
+          startDate: new Date("2026-01-01"),
+          status: "ACTIVE",
+        },
+      });
+
+      const stamp = Date.now();
+      for (const [name, role] of [
+        ["Delivery", "delivery"],
+        ["Supply", "supply"],
+        ["USBC", "rider"],
+      ] as const) {
+        const schedRes = await app.inject({
+          method: "POST",
+          url: "/api/v1/rate-schedules",
+          headers: headers(),
+          payload: {
+            name: `NWE ${name}`,
+            code: `NWE-${name.toUpperCase()}-${stamp}`,
+            commodityId: electricCommodityId,
+            effectiveDate: "2025-09-15",
+          },
+        });
+        expect(schedRes.statusCode).toBe(201);
+        const sched = JSON.parse(schedRes.body);
+
+        const assignRes = await app.inject({
+          method: "POST",
+          url: "/api/v1/sa-rate-schedule-assignments",
+          headers: headers(),
+          payload: {
+            serviceAgreementId: sa.id,
+            rateScheduleId: sched.id,
+            roleCode: role,
+            effectiveDate: "2025-09-15",
+          },
+        });
+        expect(assignRes.statusCode).toBe(201);
+      }
+
+      const saRes = await app.inject({
+        method: "GET",
+        url: `/api/v1/service-agreements/${sa.id}`,
+        headers: headers(),
+      });
+      expect(saRes.statusCode).toBe(200);
+      const saBody = JSON.parse(saRes.body);
+      expect(saBody.rateScheduleAssignments).toHaveLength(3);
+      expect(
+        saBody.rateScheduleAssignments
+          .map((a: { roleCode: string }) => a.roleCode)
+          .sort(),
+      ).toEqual(["delivery", "rider", "supply"]);
+  
+    }),
+  );
 });

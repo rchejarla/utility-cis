@@ -17,6 +17,14 @@ let prismaImports: typeof import("../../lib/prisma.js");
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);
@@ -102,7 +110,7 @@ async function makeSaFixture(opts: {
 
 beforeEach(async () => {
   const { prisma } = prismaImports;
-  await resetDb(prisma);
+  await resetDb();
   // resetDb truncates the core tables; rate_service_class isn't in
   // its list (it post-dates the helper). Wipe it explicitly so each
   // test starts from a known empty state.

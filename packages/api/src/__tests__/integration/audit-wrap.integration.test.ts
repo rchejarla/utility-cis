@@ -3,7 +3,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testconta
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensureUtilities } from "./_effective-dating-fixtures.js";
+import { ensureUtilities, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Integration test for audit-wrap atomicity.
@@ -52,7 +52,19 @@ beforeAll(async () => {
     .start();
 
   const dbUrl = pgContainer.getConnectionUri();
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It boots its own container rather than calling `bootPostgres`, and
+  // it calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope — see
+  // `bill-list.integration.test.ts` for the shape that conversion
+  // takes. Counted by `src/__tests__/app/rls-suite-coverage.test.ts`,
+  // which only lets the number go down.
   process.env.DATABASE_URL = dbUrl;
+  // Pinned, not left to whatever ran before: vitest reuses a worker
+  // across files, so a `DATABASE_URL_PLATFORM` another file set would
+  // still name that file's stopped container and every `runAsPlatform`
+  // here would reach for it.
+  process.env.DATABASE_URL_PLATFORM = dbUrl;
   process.env.NODE_ENV = "test";
   process.env.LOG_LEVEL = "error";
 
@@ -80,14 +92,16 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   // Reset between scenarios — only what these tests touch.
   const { prisma } = prismaImports;
   await prisma.$executeRawUnsafe(
     "TRUNCATE TABLE audit_log, commodity, utility_config RESTART IDENTITY CASCADE",
   );
   await prisma.utilityConfig.create({ data: { utilityId: TENANT } });
-});
+}),
+);
 
 describe("audit-wrap atomicity (in-transaction)", () => {
   it("happy path: auditCreate writes both the entity and the audit row", async () => {

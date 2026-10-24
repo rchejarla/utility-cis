@@ -31,6 +31,14 @@ const PERIOD = {
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // It calls services directly rather than through a route, so there is
+  // no middleware to enter a tenant scope and each test would need its
+  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
+  // shape that conversion takes. Counted by
+  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
+  // number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);
@@ -51,7 +59,7 @@ beforeEach(async () => {
   // service_agreement; clear those explicitly so each test starts
   // from a known empty state.
   await prisma.$executeRawUnsafe("DELETE FROM meter_read");
-  await resetDb(prisma);
+  await resetDb();
 });
 
 interface MeterReadFixture {

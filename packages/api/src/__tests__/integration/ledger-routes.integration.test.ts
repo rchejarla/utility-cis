@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, ensurePrincipal } from "./_effective-dating-fixtures.js";
+import { bootPostgres, ensurePrincipal, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 1 — HTTP surface for manual posting: persistence, duplicate-post
@@ -45,8 +45,18 @@ function makeToken(sub: string = ACTOR) {
 }
 const headers = (sub?: string) => ({ authorization: `Bearer ${makeToken(sub)}` });
 
-beforeAll(async () => {
+beforeAll(() =>
+  seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId, otherUtilityId] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // Its routes run correctly as `cis_app` — no route or service was
+  // found querying a tenant table without a scope — but its own test
+  // bodies arrange and assert on rows through `prisma` directly, which
+  // needs a `seedAsPlatform` or `runAsTenant` per site. See
+  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
+  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
+  // only lets the number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   const appImports = await import("../../app.js");
@@ -134,7 +144,7 @@ beforeAll(async () => {
   }
   const rbac = await import("../../services/rbac.service.js");
   await rbac.invalidateTenantModulesCache(utilityId);
-}, 180_000);
+}), 180_000);
 
 afterAll(async () => {
   await app?.close();
@@ -142,7 +152,8 @@ afterAll(async () => {
   await pgContainer?.stop();
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   // Applications first: they carry RESTRICT FKs onto ledger_entry, and
   // since slice 2 the payment and reverse routes actually write them.
@@ -150,7 +161,8 @@ beforeEach(async () => {
   await prisma.ledgerEntry.deleteMany({});
   await prisma.bill.deleteMany({});
   await prisma.account.update({ where: { id: accountId }, data: { balance: 0, lastDueDate: null } });
-});
+}),
+);
 
 async function makeBill(
   total = "25.0000",
@@ -1097,7 +1109,8 @@ describe("GET /api/v1/receipts", () => {
 describe("POST /api/v1/accounts/:id/refunds", () => {
   let refundAccountId: string;
 
-  beforeEach(async () => {
+  beforeEach(() =>
+  seedAsPlatform(async () => {
     const { prisma } = prismaImports;
     const account = await prisma.account.create({
       data: {
@@ -1125,7 +1138,8 @@ describe("POST /api/v1/accounts/:id/refunds", () => {
       where: { id: refundAccountId },
       data: { balance: "-80.00" },
     });
-  });
+  }),
+);
 
   it("issues a refund and returns the new balance", async () => {
     const res = await app.inject({

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, TENANT_A, TENANT_B } from "./_effective-dating-fixtures.js";
+import { bootPostgres, TENANT_A, TENANT_B, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Whether row-level security actually refuses a cross-tenant read.
@@ -84,9 +84,24 @@ async function asRole<T>(
   });
 }
 
-beforeAll(async () => {
+beforeAll(() =>
+  seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId, otherUtility] });
   pgContainer = booted.container;
+
+  /*
+   * The one file that wants the owner connection, deliberately.
+   *
+   * `bootPostgres` points `DATABASE_URL` at `cis_app` for every other
+   * suite, which is the point. This file reaches each role through `SET
+   * LOCAL ROLE` from a single connection, and only a superuser may
+   * assume a role it is not a member of — `cis_app` cannot become
+   * `cis_platform`, which is exactly the confinement being tested. So
+   * the client here connects as the owner and the roles are entered
+   * explicitly, per statement, which is also what lets one case assert
+   * a refusal without the next case inheriting an aborted transaction.
+   */
+  process.env.DATABASE_URL = booted.dbUrl;
   prismaImports = await import("../../lib/prisma.js");
 
   const { prisma } = prismaImports;
@@ -139,7 +154,7 @@ beforeAll(async () => {
       isActive: true,
     },
   });
-}, 240_000);
+}), 240_000);
 
 afterAll(async () => {
   // `$disconnect` does not dispose a pool the application owns — that

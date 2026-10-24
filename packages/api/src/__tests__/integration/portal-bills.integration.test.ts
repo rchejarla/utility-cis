@@ -8,6 +8,8 @@ import {
   TENANT_A,
   type TenantFixture,
   ensurePrincipal,
+  truncateTables,
+  seedAsPlatform,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -56,6 +58,15 @@ function makeToken(opts: { utilityId: string; actorId: string; customerId?: stri
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
+  // RLS-OPT-OUT: this suite still connects as the migration owner.
+  // Its routes run correctly as `cis_app` — no route or service was
+  // found querying a tenant table without a scope — but its own test
+  // bodies arrange and assert on rows through `prisma` directly, which
+  // needs a `seedAsPlatform` or `runAsTenant` per site. See
+  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
+  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
+  // only lets the number go down.
+  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   appImports = await import("../../app.js");
@@ -74,12 +85,11 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
+beforeEach(() =>
+  seedAsPlatform(async () => {
   const { prisma } = prismaImports;
-  await resetDb(prisma);
-  await prisma.$executeRawUnsafe(
-    "TRUNCATE TABLE user_role, contact, cis_user, role RESTART IDENTITY CASCADE",
-  );
+  await resetDb();
+  await truncateTables("user_role, contact, cis_user, role");
   fixA = await makeTenantFixture(prisma, TENANT_A);
   await ensurePrincipal(prisma, TENANT_A);
 
@@ -170,7 +180,8 @@ beforeEach(async () => {
   await prisma.userRole.create({
     data: { utilityId: fixA.utilityId, userId: user.id, roleId: role.id },
   });
-});
+}),
+);
 
 const asCustomer = () => ({
   authorization: `Bearer ${makeToken({
