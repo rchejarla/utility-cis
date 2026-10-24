@@ -39,7 +39,13 @@ let prismaImports: typeof import("../../lib/prisma.js");
  */
 async function asRoleExpectingRefusal(role: string, sql: string): Promise<Error> {
   const { PrismaClient } = await import("@utility-cis/shared/src/generated/prisma");
-  const client = new PrismaClient();
+  const { PrismaPg } = await import("@prisma/adapter-pg");
+  const pg = (await import("pg")).default;
+  // Prisma 7 has no engine of its own, so even a throwaway client is
+  // built over an adapter — `new PrismaClient()` with no options now
+  // refuses to connect at all.
+  const throwawayPool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+  const client = new PrismaClient({ adapter: new PrismaPg(throwawayPool) });
   try {
     await client.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(`SET LOCAL ROLE ${role}`);
@@ -50,6 +56,7 @@ async function asRoleExpectingRefusal(role: string, sql: string): Promise<Error>
     return err as Error;
   } finally {
     await client.$disconnect().catch(() => {});
+    await throwawayPool.end().catch(() => {});
   }
 }
 
