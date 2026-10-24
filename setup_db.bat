@@ -34,6 +34,14 @@ cd packages\shared
 call npx prisma migrate deploy
 cd ..\..
 
+REM The migrations create cis_app and cis_platform as NOLOGIN with no
+REM password on purpose; credentials are not a migration's business.
+REM Dev needs them connectable, and this cannot go in
+REM docker/init-cis-user.sh because that runs before any migration has
+REM been applied, when the roles do not yet exist.
+echo Granting dev logins to the application roles...
+docker compose exec -T db psql -U cis -d utility_cis -v ON_ERROR_STOP=1 < scripts\grant-dev-db-logins.sql
+
 echo.
 echo Database setup complete!
 echo Run seed_db.bat next to populate dev data.
