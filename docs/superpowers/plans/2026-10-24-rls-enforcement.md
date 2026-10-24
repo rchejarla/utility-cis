@@ -6,7 +6,17 @@
 
 **Architecture:** Three database roles in place of one. `cis` keeps the schema and runs migrations; a new non-owning `cis_app` runs the application and is subject to RLS; a new `cis_platform` holds `BYPASSRLS` and serves only the paths that cross tenants by design. `FORCE ROW LEVEL SECURITY` on every policied table so ownership can never silently reopen the hole. Tenant context reaches the database through a Prisma driver adapter that sets `app.current_utility_id` when a connection is checked out and resets it on release, with the tenant carried in `AsyncLocalStorage` — because middleware cannot pin a pooled connection to a request, and 432 call sites cannot each be rewritten to thread a transaction.
 
-**Tech Stack:** PostgreSQL 16 + TimescaleDB, Prisma 6.2.1 (`driverAdapters` preview + `@prisma/adapter-pg`), Fastify, BullMQ, Vitest (testcontainers for integration).
+**Tech Stack:** PostgreSQL 16 + TimescaleDB, **Prisma 7** + `@prisma/adapter-pg`, Fastify, BullMQ, Vitest (testcontainers for integration).
+
+> **Prisma 7 is a precondition, discovered during execution.** Prisma 6's
+> query engine is a boundary that drops AsyncLocalStorage: the checkout hook
+> in Task 5 read `null` no matter who the caller was acting for, measured
+> both through `$queryRaw` and `$transaction`. Tasks 3–5 were attempted on
+> 6.19, reverted, and the upgrade was done on its own branch and merged
+> (`7b63972`, tagged `pre-prisma-7`). Prisma 7 runs the query compiler in
+> process and the context survives — verified on every path this codebase
+> uses before the upgrade was begun. Do not attempt connection-level tenant
+> context on Prisma 6.
 
 **Spec:** `docs/design/utility-cis-architecture.md` §7.1 "Current gaps". It is the authority for this plan: it already names both bypasses, the role-split-or-FORCE choice, the per-transaction context requirement, and the policy fail-mode inconsistency. Where this plan and §7.1 disagree, §7.1 wins and the plan is wrong.
 
@@ -266,7 +276,7 @@ Denormalising the column is the right fix rather than a policy that joins throug
 
 ---
 
-### Task 3: Enable driver adapters
+### Task 3: Enable driver adapters — **SATISFIED BY THE PRISMA 7 MERGE**
 
 **Files:**
 - Modify: `packages/shared/prisma/schema.prisma` (generator `previewFeatures`)
@@ -275,6 +285,12 @@ Denormalising the column is the right fix rather than a policy that joins throug
 
 **Interfaces:**
 - Produces: `prisma` still exported from `lib/prisma.ts` with an unchanged type, now constructed over a `pg` Pool this codebase owns. Every one of the 432 call sites keeps working untouched.
+
+**Nothing to do.** Prisma 7 removed the built-in engine, so a driver adapter
+is mandatory rather than opt-in, and `lib/prisma.ts` on `main` already
+constructs over an owned `pg` pool and exports it. The `previewFeatures =
+["driverAdapters"]` step below is obsolete: the feature is GA and declaring
+it only earns a deprecation warning.
 
 - [ ] **Step 1: Write the failing test** — `packages/api/src/__tests__/lib/prisma-adapter.test.ts`
 
@@ -294,7 +310,7 @@ it("runs on a pool this process owns, so connection lifecycle is ours to hook", 
 
 ---
 
-### Task 4: Carry the tenant in AsyncLocalStorage
+### Task 4: Carry the tenant in AsyncLocalStorage — **DONE**
 
 **Files:**
 - Create: `packages/api/src/lib/tenant-context.ts`
@@ -314,7 +330,7 @@ it("runs on a pool this process owns, so connection lifecycle is ours to hook", 
 
 ---
 
-### Task 5: Set the GUC on checkout, reset it on release
+### Task 5: Set the GUC on checkout, reset it on release — **DONE**
 
 **Files:**
 - Modify: `packages/api/src/lib/prisma.ts`
