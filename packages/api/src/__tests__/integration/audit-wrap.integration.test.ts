@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import { runAsTenant } from "../../lib/tenant-context.js";
+import {
+  bootPostgres,
+  seedAsPlatform,
+  truncateTables,
+  endAdminPool,
+} from "./_effective-dating-fixtures.js";
 
 /**
  * Integration test for audit-wrap atomicity.
@@ -61,186 +67,207 @@ afterAll(async () => {
   // Postgres reports 57P01 as an unhandled error after a green run.
   await prismaImports?.prisma.$disconnect().catch(() => {});
   await prismaImports?.pool.end().catch(() => {});
+  await endAdminPool();
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(() =>
-  seedAsPlatform(async () => {
-  // Reset between scenarios — only what these tests touch.
-  const { prisma } = prismaImports;
-  await prisma.$executeRawUnsafe(
-    "TRUNCATE TABLE audit_log, commodity, utility_config RESTART IDENTITY CASCADE",
-  );
-  await prisma.utilityConfig.create({ data: { utilityId: TENANT } });
-}),
-);
+beforeEach(async () => {
+  // Reset between scenarios — only what these tests touch. Through
+  // `truncateTables`, which runs on the owner connection: neither
+  // `cis_app` nor `cis_platform` is granted TRUNCATE, and that is the
+  // grant working rather than something to widen.
+  await truncateTables("audit_log, commodity, utility_config");
+  await seedAsPlatform(async () => {
+    await prismaImports.prisma.utilityConfig.create({ data: { utilityId: TENANT } });
+  });
+});
 
 describe("audit-wrap atomicity (in-transaction)", () => {
-  it("happy path: auditCreate writes both the entity and the audit row", async () => {
-    const { prisma } = prismaImports;
-    const { auditCreate } = auditWrapImports;
+  it("happy path: auditCreate writes both the entity and the audit row", () =>
+    runAsTenant(TENANT, async () => {      /* As the tenant: these cases open their own transaction and write
+       * through it, which is what `auditCreate` does inside a request —
+       * and a request has entered the scope before the transaction. */
+      const { prisma } = prismaImports;
+      const { auditCreate } = auditWrapImports;
 
-    const created = await auditCreate(
-      { utilityId: TENANT, actorId: ACTOR, actorName: "Test", entityType: "Commodity" },
-      "commodity.created",
-      (tx) =>
-        tx.commodity.create({
-          data: { utilityId: TENANT, code: COMMODITY_CODE, name: "Test commodity" },
-        }),
-    );
-
-    expect(created.id).toBeDefined();
-
-    const commodityRow = await prisma.commodity.findUnique({ where: { id: created.id } });
-    expect(commodityRow).not.toBeNull();
-    expect(commodityRow?.code).toBe(COMMODITY_CODE);
-
-    const auditRows = await prisma.auditLog.findMany({
-      where: { utilityId: TENANT, entityType: "Commodity", entityId: created.id },
-    });
-    expect(auditRows).toHaveLength(1);
-    expect(auditRows[0]!.action).toBe("CREATE");
-    expect(auditRows[0]!.actorId).toBe(ACTOR);
-    expect(auditRows[0]!.metadata).toMatchObject({ eventType: "commodity.created" });
-  });
-
-  it("atomicity: when the audit insert fails, the entity is rolled back too", async () => {
-    const { prisma } = prismaImports;
-    const { auditCreate } = auditWrapImports;
-
-    // Force the audit insert to fail by violating a NOT NULL constraint.
-    // The wrapper-internal writeAuditRow always sets utilityId; we can't
-    // intercept that. Instead, force a violation by passing an invalid
-    // FK in the entity create AFTER a successful create — meaning the
-    // entity create itself fails. That's the easier-to-engineer path
-    // and proves the same atomicity guarantee from the other side
-    // (entity throws → audit doesn't land either; trivially true since
-    // op runs first).
-    //
-    // For the harder direction (entity created, audit fails), we use a
-    // raw $transaction wrapping a passthrough op + a deliberately-
-    // invalid auditLog.create call. This exercises the SAME transaction
-    // boundary the wrapper uses, just letting us choose where to throw.
-    await expect(
-      prisma.$transaction(async (tx) => {
-        // Create an entity successfully inside the transaction.
-        const c = await tx.commodity.create({
-          data: { utilityId: TENANT, code: COMMODITY_CODE, name: "Will be rolled back" },
-        });
-        expect(c.id).toBeDefined();
-        // Now force an audit-side failure (NULL utilityId violates the
-        // schema's NOT NULL constraint). If the wrapper's claim holds
-        // — the rollback covers both the commodity AND the audit row —
-        // then after this throws, NEITHER row is in the DB.
-        await tx.auditLog.create({
-          data: {
-            // @ts-expect-error — deliberately invalid for the test
-            utilityId: null,
-            entityType: "Commodity",
-            entityId: c.id,
-            action: "CREATE",
-          },
-        });
-      }),
-    ).rejects.toThrow();
-
-    // Verify the rollback: the commodity row should NOT exist.
-    const commodityCount = await prisma.commodity.count({
-      where: { utilityId: TENANT, code: COMMODITY_CODE },
-    });
-    expect(commodityCount).toBe(0);
-
-    // And no orphan audit row either.
-    const auditCount = await prisma.auditLog.count({
-      where: { utilityId: TENANT, entityType: "Commodity" },
-    });
-    expect(auditCount).toBe(0);
-  });
-
-  it("propagates errors from op without writing any rows (entity-side failure)", async () => {
-    const { prisma } = prismaImports;
-    const { auditCreate } = auditWrapImports;
-
-    const boom = new Error("synthetic op failure");
-    await expect(
-      auditCreate(
-        { utilityId: TENANT, actorId: ACTOR, actorName: "Test", entityType: "Commodity" },
-        "commodity.created",
-        async () => {
-          throw boom;
-        },
-      ),
-    ).rejects.toBe(boom);
-
-    // Neither the (never-created) entity nor an audit row exists.
-    const auditCount = await prisma.auditLog.count({
-      where: { utilityId: TENANT, entityType: "Commodity" },
-    });
-    expect(auditCount).toBe(0);
-  });
-
-  it("existingTx: auditCreate joins the caller's transaction; outer rollback removes both", async () => {
-    const { prisma } = prismaImports;
-    const { auditCreate } = auditWrapImports;
-
-    let createdId: string | null = null;
-
-    await expect(
-      prisma.$transaction(async (outerTx) => {
-        const c = await auditCreate(
-          { utilityId: TENANT, actorId: ACTOR, actorName: "Test", entityType: "Commodity" },
-          "commodity.created",
-          (tx) =>
-            tx.commodity.create({
-              data: { utilityId: TENANT, code: COMMODITY_CODE, name: "Inside outer tx" },
-            }),
-          outerTx,
-        );
-        createdId = c.id;
-        // Force outer rollback by throwing AFTER the audit call has
-        // written both rows in the same transaction. This exercises
-        // the existingTx path: the audit row uses the caller's tx, so
-        // when the outer tx rolls back, both rows go.
-        throw new Error("forced outer rollback");
-      }),
-    ).rejects.toThrow("forced outer rollback");
-
-    expect(createdId).not.toBeNull();
-    // The inner auditCreate seemed to succeed (createdId got set),
-    // but the outer rollback wiped both the commodity AND its audit row.
-    const commodityCount = await prisma.commodity.count({
-      where: { utilityId: TENANT, id: createdId! },
-    });
-    expect(commodityCount).toBe(0);
-    const auditCount = await prisma.auditLog.count({
-      where: { utilityId: TENANT, entityType: "Commodity", entityId: createdId! },
-    });
-    expect(auditCount).toBe(0);
-  });
-
-  it("existingTx: outer commit persists both the entity and the audit row", async () => {
-    const { prisma } = prismaImports;
-    const { auditCreate } = auditWrapImports;
-
-    const created = await prisma.$transaction(async (outerTx) => {
-      return auditCreate(
+      const created = await auditCreate(
         { utilityId: TENANT, actorId: ACTOR, actorName: "Test", entityType: "Commodity" },
         "commodity.created",
         (tx) =>
           tx.commodity.create({
-            data: { utilityId: TENANT, code: COMMODITY_CODE, name: "Persisted" },
+            data: { utilityId: TENANT, code: COMMODITY_CODE, name: "Test commodity" },
           }),
-        outerTx,
       );
-    });
 
-    expect(created.id).toBeDefined();
-    const c = await prisma.commodity.findUnique({ where: { id: created.id } });
-    expect(c).not.toBeNull();
-    const auditRows = await prisma.auditLog.findMany({
-      where: { utilityId: TENANT, entityType: "Commodity", entityId: created.id },
-    });
-    expect(auditRows).toHaveLength(1);
-    expect(auditRows[0]!.metadata).toMatchObject({ eventType: "commodity.created" });
-  });
+      expect(created.id).toBeDefined();
+
+      const commodityRow = await prisma.commodity.findUnique({ where: { id: created.id } });
+      expect(commodityRow).not.toBeNull();
+      expect(commodityRow?.code).toBe(COMMODITY_CODE);
+
+      const auditRows = await prisma.auditLog.findMany({
+        where: { utilityId: TENANT, entityType: "Commodity", entityId: created.id },
+      });
+      expect(auditRows).toHaveLength(1);
+      expect(auditRows[0]!.action).toBe("CREATE");
+      expect(auditRows[0]!.actorId).toBe(ACTOR);
+      expect(auditRows[0]!.metadata).toMatchObject({ eventType: "commodity.created" });
+  
+    }));
+
+  it("atomicity: when the audit insert fails, the entity is rolled back too", () =>
+    runAsTenant(TENANT, async () => {      /* As the tenant: these cases open their own transaction and write
+       * through it, which is what `auditCreate` does inside a request —
+       * and a request has entered the scope before the transaction. */
+      const { prisma } = prismaImports;
+      const { auditCreate } = auditWrapImports;
+
+      // Force the audit insert to fail by violating a NOT NULL constraint.
+      // The wrapper-internal writeAuditRow always sets utilityId; we can't
+      // intercept that. Instead, force a violation by passing an invalid
+      // FK in the entity create AFTER a successful create — meaning the
+      // entity create itself fails. That's the easier-to-engineer path
+      // and proves the same atomicity guarantee from the other side
+      // (entity throws → audit doesn't land either; trivially true since
+      // op runs first).
+      //
+      // For the harder direction (entity created, audit fails), we use a
+      // raw $transaction wrapping a passthrough op + a deliberately-
+      // invalid auditLog.create call. This exercises the SAME transaction
+      // boundary the wrapper uses, just letting us choose where to throw.
+      await expect(
+        prisma.$transaction(async (tx) => {
+          // Create an entity successfully inside the transaction.
+          const c = await tx.commodity.create({
+            data: { utilityId: TENANT, code: COMMODITY_CODE, name: "Will be rolled back" },
+          });
+          expect(c.id).toBeDefined();
+          // Now force an audit-side failure (NULL utilityId violates the
+          // schema's NOT NULL constraint). If the wrapper's claim holds
+          // — the rollback covers both the commodity AND the audit row —
+          // then after this throws, NEITHER row is in the DB.
+          await tx.auditLog.create({
+            data: {
+              // @ts-expect-error — deliberately invalid for the test
+              utilityId: null,
+              entityType: "Commodity",
+              entityId: c.id,
+              action: "CREATE",
+            },
+          });
+        }),
+      ).rejects.toThrow();
+
+      // Verify the rollback: the commodity row should NOT exist.
+      const commodityCount = await prisma.commodity.count({
+        where: { utilityId: TENANT, code: COMMODITY_CODE },
+      });
+      expect(commodityCount).toBe(0);
+
+      // And no orphan audit row either.
+      const auditCount = await prisma.auditLog.count({
+        where: { utilityId: TENANT, entityType: "Commodity" },
+      });
+      expect(auditCount).toBe(0);
+  
+    }));
+
+  it("propagates errors from op without writing any rows (entity-side failure)", () =>
+    runAsTenant(TENANT, async () => {      /* As the tenant: these cases open their own transaction and write
+       * through it, which is what `auditCreate` does inside a request —
+       * and a request has entered the scope before the transaction. */
+      const { prisma } = prismaImports;
+      const { auditCreate } = auditWrapImports;
+
+      const boom = new Error("synthetic op failure");
+      await expect(
+        auditCreate(
+          { utilityId: TENANT, actorId: ACTOR, actorName: "Test", entityType: "Commodity" },
+          "commodity.created",
+          async () => {
+            throw boom;
+          },
+        ),
+      ).rejects.toBe(boom);
+
+      // Neither the (never-created) entity nor an audit row exists.
+      const auditCount = await prisma.auditLog.count({
+        where: { utilityId: TENANT, entityType: "Commodity" },
+      });
+      expect(auditCount).toBe(0);
+  
+    }));
+
+  it("existingTx: auditCreate joins the caller's transaction; outer rollback removes both", () =>
+    runAsTenant(TENANT, async () => {      /* As the tenant: these cases open their own transaction and write
+       * through it, which is what `auditCreate` does inside a request —
+       * and a request has entered the scope before the transaction. */
+      const { prisma } = prismaImports;
+      const { auditCreate } = auditWrapImports;
+
+      let createdId: string | null = null;
+
+      await expect(
+        prisma.$transaction(async (outerTx) => {
+          const c = await auditCreate(
+            { utilityId: TENANT, actorId: ACTOR, actorName: "Test", entityType: "Commodity" },
+            "commodity.created",
+            (tx) =>
+              tx.commodity.create({
+                data: { utilityId: TENANT, code: COMMODITY_CODE, name: "Inside outer tx" },
+              }),
+            outerTx,
+          );
+          createdId = c.id;
+          // Force outer rollback by throwing AFTER the audit call has
+          // written both rows in the same transaction. This exercises
+          // the existingTx path: the audit row uses the caller's tx, so
+          // when the outer tx rolls back, both rows go.
+          throw new Error("forced outer rollback");
+        }),
+      ).rejects.toThrow("forced outer rollback");
+
+      expect(createdId).not.toBeNull();
+      // The inner auditCreate seemed to succeed (createdId got set),
+      // but the outer rollback wiped both the commodity AND its audit row.
+      const commodityCount = await prisma.commodity.count({
+        where: { utilityId: TENANT, id: createdId! },
+      });
+      expect(commodityCount).toBe(0);
+      const auditCount = await prisma.auditLog.count({
+        where: { utilityId: TENANT, entityType: "Commodity", entityId: createdId! },
+      });
+      expect(auditCount).toBe(0);
+  
+    }));
+
+  it("existingTx: outer commit persists both the entity and the audit row", () =>
+    runAsTenant(TENANT, async () => {      /* As the tenant: these cases open their own transaction and write
+       * through it, which is what `auditCreate` does inside a request —
+       * and a request has entered the scope before the transaction. */
+      const { prisma } = prismaImports;
+      const { auditCreate } = auditWrapImports;
+
+      const created = await prisma.$transaction(async (outerTx) => {
+        return auditCreate(
+          { utilityId: TENANT, actorId: ACTOR, actorName: "Test", entityType: "Commodity" },
+          "commodity.created",
+          (tx) =>
+            tx.commodity.create({
+              data: { utilityId: TENANT, code: COMMODITY_CODE, name: "Persisted" },
+            }),
+          outerTx,
+        );
+      });
+
+      expect(created.id).toBeDefined();
+      const c = await prisma.commodity.findUnique({ where: { id: created.id } });
+      expect(c).not.toBeNull();
+      const auditRows = await prisma.auditLog.findMany({
+        where: { utilityId: TENANT, entityType: "Commodity", entityId: created.id },
+      });
+      expect(auditRows).toHaveLength(1);
+      expect(auditRows[0]!.metadata).toMatchObject({ eventType: "commodity.created" });
+  
+    }));
 });

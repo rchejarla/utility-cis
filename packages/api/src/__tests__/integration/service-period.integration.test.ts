@@ -218,9 +218,9 @@ describe("resolveServicePeriod", () => {
   });
 
   it("refuses when there is no read to bill, naming what to do", async () => {
-    const err = await svc
-      .resolveServicePeriod(fix.utilityId, saId, { asOf: new Date("2026-02-01T00:00:00.000Z") })
-      .catch((e: unknown) => e);
+    const err = await resolveServicePeriod(fix.utilityId, saId, {
+      asOf: new Date("2026-02-01T00:00:00.000Z"),
+    }).catch((e: unknown) => e);
 
     expect((err as { code: string }).code).toBe("NO_READ_IN_WINDOW");
     expect((err as { statusCode: number }).statusCode).toBe(400);

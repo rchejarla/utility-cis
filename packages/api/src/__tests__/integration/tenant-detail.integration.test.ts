@@ -3,7 +3,7 @@ import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { MODULES } from "@utility-cis/shared";
 import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
-import { runAsTenant } from "../../lib/tenant-context.js";
+import { runAsPlatform, runAsTenant } from "../../lib/tenant-context.js";
 /**
  * What a tenant actually holds.
  *
@@ -41,6 +41,14 @@ const ABSENT = "00000000-0000-4000-8000-0000000000cf";
  * what lets fixture rows be arranged across tenants while the call under
  * test stays confined to one.
  */
+/**
+ * `provisionTenant` under platform authority: it runs before the tenant
+ * exists, so there is no tenant to act for — a platform route is what
+ * calls it.
+ */
+const provisionTenant = (...args: Parameters<typeof svc.provisionTenant>) =>
+  runAsPlatform(async () => svc.provisionTenant(...args));
+
 const getUtilityDetail = (...args: Parameters<typeof svc.getUtilityDetail>) =>
   runAsTenant(args[0], async () => svc.getUtilityDetail(...args));
 
@@ -81,7 +89,7 @@ beforeEach(() =>
     await prisma.utilityModule.deleteMany({ where: { utilityId: id } });
     await prisma.utility.deleteMany({ where: { id } });
   }
-  await svc.provisionTenant({
+  await provisionTenant({
     utilityId: TENANT,
     name: "City of Detail",
     firstAdmin: { email: "ops@detail.gov", name: "Pat Admin" },
@@ -183,7 +191,7 @@ describe("getUtilityDetail", () => {
 
   it("returns nothing belonging to another tenant", async () => {
     const { prisma } = prismaImports;
-    await svc.provisionTenant({
+    await provisionTenant({
       utilityId: OTHER,
       name: "Other Utility",
       firstAdmin: { email: "ops@other.gov", name: "Other Admin" },

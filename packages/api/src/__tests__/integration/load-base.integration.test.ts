@@ -9,7 +9,8 @@ import {
   endAdminPool,
   seedAsPlatform,
 } from "./_effective-dating-fixtures.js";
-import { loadBase } from "../../lib/rate-engine-loaders/load-base.js";
+import { loadBase as loadBaseUnscoped } from "../../lib/rate-engine-loaders/load-base.js";
+import { runAsTenant } from "../../lib/tenant-context.js";
 
 /**
  * Slice 4 task 7 — `loadBase(saId, period)` integration tests.
@@ -61,6 +62,17 @@ interface SaFixture {
   saId: string;
   scheduleId: string;
 }
+
+/**
+ * `loadBase` as the rating engine reaches it: inside the tenant's scope.
+ *
+ * Its tenant is the *fourth* argument, after the client, the agreement
+ * and the period, so the scope cannot be inferred from the first one or
+ * two — and it has to be entered around the call, because the function
+ * takes a client rather than opening its own.
+ */
+const loadBase = (...args: Parameters<typeof loadBaseUnscoped>) =>
+  runAsTenant(args[3], async () => loadBaseUnscoped(...args));
 
 async function makeSaWithSchedule(opts: {
   endServicePoint?: boolean;

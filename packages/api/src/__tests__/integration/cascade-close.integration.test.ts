@@ -71,6 +71,20 @@ beforeEach(async () => {
   fixA = await makeTenantFixture(prisma, TENANT_A);
 });
 
+/**
+ * `closeServiceAgreement` as a route reaches it: acting for the tenant,
+ * which is its first argument.
+ *
+ * One wrapper rather than a `const { closeServiceAgreement } =
+ * serviceImports` in each case — the destructured form is invisible to
+ * any sweep looking for the module name, which is how the one case that
+ * asserts a rejection kept reporting the policy's error instead of the
+ * service's.
+ */
+const closeServiceAgreement = (
+  ...args: Parameters<typeof serviceImports.closeServiceAgreement>
+) => runAsTenant(args[0], async () => serviceImports.closeServiceAgreement(...args));
+
 async function makeSaWithThreeMeters() {
 
   /*
@@ -140,7 +154,6 @@ describe("closeServiceAgreement (real DB)", () => {
     seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
        * scoped wrappers re-enter their own tenant scope. */
       const { prisma } = prismaImports;
-      const { closeServiceAgreement } = serviceImports;
 
       const sa = await makeSaWithThreeMeters();
       const endDate = new Date("2024-12-31");
@@ -180,7 +193,6 @@ describe("closeServiceAgreement (real DB)", () => {
     seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
        * scoped wrappers re-enter their own tenant scope. */
       const { prisma } = prismaImports;
-      const { closeServiceAgreement } = serviceImports;
 
       const sa = await makeSaWithThreeMeters();
       const endDate = new Date("2024-12-31");
@@ -204,7 +216,6 @@ describe("closeServiceAgreement (real DB)", () => {
     seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
        * scoped wrappers re-enter their own tenant scope. */
       const { prisma } = prismaImports;
-      const { closeServiceAgreement } = serviceImports;
 
       const sa = await makeSaWithThreeMeters();
       const endDate = new Date("2024-12-31");
@@ -230,7 +241,6 @@ describe("closeServiceAgreement (real DB)", () => {
     }));
 
   it("rejects re-closing an already-CLOSED SA", async () => {
-    const { closeServiceAgreement } = serviceImports;
 
     const sa = await makeSaWithThreeMeters();
     const endDate = new Date("2024-12-31");
@@ -253,7 +263,6 @@ describe("closeServiceAgreement (real DB)", () => {
     seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
        * scoped wrappers re-enter their own tenant scope. */
       const { prisma } = prismaImports;
-      const { closeServiceAgreement } = serviceImports;
 
       const sa = await makeSaWithThreeMeters();
       // Pre-close meter1 with an earlier removedDate.
@@ -286,7 +295,6 @@ describe("closeServiceAgreement (real DB)", () => {
     seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
        * scoped wrappers re-enter their own tenant scope. */
       const { prisma } = prismaImports;
-      const { closeServiceAgreement } = serviceImports;
 
       const sa = await makeSaWithThreeMeters();
 

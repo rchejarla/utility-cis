@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
-import { runAsTenant } from "../../lib/tenant-context.js";
+import { runAsPlatform, runAsTenant } from "../../lib/tenant-context.js";
 /**
  * Suspending a tenant, and reactivating it.
  *
@@ -40,6 +40,18 @@ const ABSENT = "00000000-0000-4000-8000-0000000000bf";
  * what lets fixture rows be arranged across tenants while the call under
  * test stays confined to one.
  */
+/**
+ * `provisionTenant` under platform authority: it runs before the tenant
+ * exists, so there is no tenant to act for — a platform route is what
+ * calls it.
+ */
+const provisionTenant = (...args: Parameters<typeof svc.provisionTenant>) =>
+  runAsPlatform(async () => svc.provisionTenant(...args));
+
+/** Listing tenants crosses them by definition, so platform too. */
+const listUtilities = (...args: Parameters<typeof svc.listUtilities>) =>
+  runAsPlatform(async () => svc.listUtilities(...args));
+
 const reactivateUtility = (...args: Parameters<typeof svc.reactivateUtility>) =>
   runAsTenant(args[0], async () => svc.reactivateUtility(...args));
 
@@ -70,8 +82,12 @@ beforeEach(() =>
   await prisma.cisUser.deleteMany({ where: { utilityId: TENANT } });
   await prisma.role.deleteMany({ where: { utilityId: TENANT } });
   await prisma.utilityModule.deleteMany({ where: { utilityId: TENANT } });
+  // Audit rows too: `provisionTenant` writes them and `utility_id` is a
+  // foreign key with ON DELETE RESTRICT, so the delete below fails on
+  // `audit_log_utility_id_fkey` without this.
+  await prisma.auditLog.deleteMany({ where: { utilityId: TENANT } });
   await prisma.utility.deleteMany({ where: { id: TENANT } });
-  await svc.provisionTenant({ utilityId: TENANT, name: "City of Suspendable" });
+  await provisionTenant({ utilityId: TENANT, name: "City of Suspendable" });
 }),
 );
 
@@ -121,7 +137,7 @@ describe("suspendUtility and reactivateUtility", () => {
   it("shows the status in the tenant list", async () => {
     await suspendUtility(TENANT);
 
-    const listed = (await svc.listUtilities()).find((u) => u.id === TENANT);
+    const listed = (await listUtilities()).find((u) => u.id === TENANT);
     expect(listed).toMatchObject({ status: "SUSPENDED" });
   });
 
@@ -132,7 +148,7 @@ describe("suspendUtility and reactivateUtility", () => {
     await suspendUtility(TENANT);
 
     await expect(
-      svc.provisionTenant({ utilityId: TENANT, name: "Something Else" }),
+      provisionTenant({ utilityId: TENANT, name: "Something Else" }),
     ).rejects.toMatchObject({ code: "UTILITY_NAME_MISMATCH" });
   });
 });

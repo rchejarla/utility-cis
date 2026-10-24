@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
-import { runAsTenant } from "../../lib/tenant-context.js";
+import { runAsPlatform, runAsTenant } from "../../lib/tenant-context.js";
 /**
  * What was done to a utility, and by whom.
  *
@@ -59,6 +59,17 @@ const deleteRole = (...args: Parameters<typeof roleSvc.deleteRole>) =>
 
 const updateRole = (...args: Parameters<typeof roleSvc.updateRole>) =>
   runAsTenant(args[0], async () => roleSvc.updateRole(...args));
+
+/**
+ * `provisionTenant` under platform authority, unlike the three below it.
+ *
+ * Creating a tenant happens before that tenant exists, so there is no
+ * tenant to act for — a platform route is what calls it. Suspending or
+ * reactivating one, by contrast, names an existing utility, and the
+ * `utility` policy admits it under that tenant's own scope.
+ */
+const provisionTenant = (...args: Parameters<typeof svc.provisionTenant>) =>
+  runAsPlatform(async () => svc.provisionTenant(...args));
 
 const reactivateUtility = (...args: Parameters<typeof svc.reactivateUtility>) =>
   runAsTenant(args[0], async () => svc.reactivateUtility(...args));
@@ -122,7 +133,7 @@ async function auditRows(entityType?: string) {
 
 describe("provisioning", () => {
   it("records who brought the utility into existence", async () => {
-    await svc.provisionTenant({ utilityId: UTILITY, name: "City of Audit" }, operator);
+    await provisionTenant({ utilityId: UTILITY, name: "City of Audit" }, operator);
 
     const [row] = await auditRows("Utility");
     expect(row).toMatchObject({
@@ -138,7 +149,7 @@ describe("provisioning", () => {
   it("writes nothing for a dry run", async () => {
     // The audit row is inside the same transaction the dry run rolls
     // back, so a preview cannot leave a trace claiming it happened.
-    await svc.provisionTenant(
+    await provisionTenant(
       { utilityId: UTILITY, name: "City of Audit", dryRun: true },
       operator,
     );
@@ -150,7 +161,7 @@ describe("provisioning", () => {
     // The CLI has no signed-in actor. `actorId` is nullable for exactly
     // this case — the scheduler paths do the same — and the name says
     // what ran rather than leaving the row unattributed.
-    await svc.provisionTenant({ utilityId: UTILITY, name: "City of Audit" });
+    await provisionTenant({ utilityId: UTILITY, name: "City of Audit" });
 
     const [row] = await auditRows("Utility");
     expect(row).toMatchObject({ actorId: null, source: "script:provision-tenant" });
@@ -161,7 +172,7 @@ describe("provisioning", () => {
 describe("suspending and reactivating", () => {
   beforeEach(() =>
   seedAsPlatform(async () => {
-    await svc.provisionTenant({ utilityId: UTILITY, name: "City of Audit" }, operator);
+    await provisionTenant({ utilityId: UTILITY, name: "City of Audit" }, operator);
     await prismaImports.prisma.auditLog.deleteMany({ where: { utilityId: UTILITY } });
   }),
 );
@@ -196,7 +207,7 @@ describe("suspending and reactivating", () => {
 describe("module changes", () => {
   beforeEach(() =>
   seedAsPlatform(async () => {
-    await svc.provisionTenant({ utilityId: UTILITY, name: "City of Audit" }, operator);
+    await provisionTenant({ utilityId: UTILITY, name: "City of Audit" }, operator);
     await prismaImports.prisma.auditLog.deleteMany({ where: { utilityId: UTILITY } });
   }),
 );
@@ -231,7 +242,7 @@ describe("role changes", () => {
 
   beforeEach(() =>
   seedAsPlatform(async () => {
-    await svc.provisionTenant({ utilityId: UTILITY, name: "City of Audit" }, operator);
+    await provisionTenant({ utilityId: UTILITY, name: "City of Audit" }, operator);
     roleSvc = await import("../../services/role.service.js");
     await prismaImports.prisma.auditLog.deleteMany({ where: { utilityId: UTILITY } });
   }),
@@ -288,20 +299,44 @@ describe("role changes", () => {
   
     }));
 
+  /*
+   * Asserted against the refusal the product actually has.
+   *
+   * This case used to expect `SYSTEM_ROLE`, the code for BR-RB-002 ("a
+   * system role cannot be deleted"). That rule was removed in 150cd1e
+   * and deliberately not replaced — see the reasoning in
+   * `role.service.ts` — but this expectation went in with the same
+   * commit, so it has asserted a code the product never emits since
+   * 2026-10-19. Nothing caught it because the integration suite does not
+   * run in CI, and this file connected as the owner until today.
+   *
+   * The surviving refusal is BR-RB-003: a role somebody holds cannot be
+   * deleted. That is what this case is for — the audit row must not be
+   * written when the refusal stops the delete.
+   */
   it("writes nothing when a refusal stops the delete", () =>
-    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
-       * scoped wrappers re-enter their own tenant scope. */
+    seedAsPlatform(async () => {
       const { prisma } = prismaImports;
-      const preset = await prisma.role.findFirstOrThrow({
-        where: { utilityId: UTILITY, name: "System Admin" },
+      const held = await prisma.role.create({
+        data: { utilityId: UTILITY, name: "Held", permissions: { audit_log: ["VIEW"] } },
+      });
+      const holder = await prisma.cisUser.create({
+        data: {
+          utilityId: UTILITY,
+          email: "holder@platform-audit.test",
+          name: "Holder",
+          isActive: true,
+        },
+      });
+      await prisma.userRole.create({
+        data: { utilityId: UTILITY, userId: holder.id, accountId: null, roleId: held.id },
       });
 
       await expect(
-        deleteRole(UTILITY, preset.id, { actorId: OPERATOR, actorName: "Pat" }),
-      ).rejects.toMatchObject({ code: "SYSTEM_ROLE" });
+        deleteRole(UTILITY, held.id, { actorId: OPERATOR, actorName: "Pat" }),
+      ).rejects.toMatchObject({ code: "ROLE_IN_USE" });
 
       expect(await auditRows("Role")).toHaveLength(0);
-  
     }));
 
   it("attributes a tenant's own admin without a platform source", async () => {
@@ -322,7 +357,7 @@ describe("the tenant's own view of it", () => {
   it("puts platform actions in the tenant's log, where its admins can read them", async () => {
     // The point of the whole exercise: a tenant can see what was done to
     // it from outside, in the same place it sees its own staff's changes.
-    await svc.provisionTenant({ utilityId: UTILITY, name: "City of Audit" }, operator);
+    await provisionTenant({ utilityId: UTILITY, name: "City of Audit" }, operator);
     await suspendUtility(UTILITY, operator);
 
     const rows = await auditRows();
