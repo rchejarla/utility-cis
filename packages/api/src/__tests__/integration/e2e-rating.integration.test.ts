@@ -8,6 +8,7 @@ import pg from "pg";
 import {
   bootPostgres,
   type BootedContainer,
+  seedAsPlatform,
 } from "./_effective-dating-fixtures.js";
 import * as engine from "../../lib/rate-engine/index.js";
 import {
@@ -50,14 +51,6 @@ let prisma: PrismaClient;
 
 beforeAll(async () => {
   booted = await bootPostgres();
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
 
   // Run the v2 prisma seed — same TSX_BIN resolution as the Slice 1
   // seed-sanity suite. The shared package doesn't list `tsx` as a
@@ -99,147 +92,150 @@ afterAll(async () => {
 });
 
 describe("End-to-end rating: seeded Bozeman SFR water → $69.65 subtotal", () => {
-  it("loadBase → manifest → loadVariables → rate produces correct dollar output", async () => {
-    // 1. Find the seeded Bozeman water schedule
-    const waterSchedule = await prisma.rateSchedule.findFirstOrThrow({
-      where: { code: "BZN-WATER" },
-    });
+  it("loadBase → manifest → loadVariables → rate produces correct dollar output", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      // 1. Find the seeded Bozeman water schedule
+      const waterSchedule = await prisma.rateSchedule.findFirstOrThrow({
+        where: { code: "BZN-WATER" },
+      });
 
-    // 2. Find a SFR water SA assigned to this schedule
-    const assignment = await prisma.sAScheduleAssignment.findFirstOrThrow({
-      where: {
-        rateScheduleId: waterSchedule.id,
-        roleCode: "primary",
-        serviceAgreement: {
-          rateServiceClass: { code: "single_family" },
+      // 2. Find a SFR water SA assigned to this schedule
+      const assignment = await prisma.sAScheduleAssignment.findFirstOrThrow({
+        where: {
+          rateScheduleId: waterSchedule.id,
+          roleCode: "primary",
+          serviceAgreement: {
+            rateServiceClass: { code: "single_family" },
+          },
         },
-      },
-      include: {
-        serviceAgreement: {
-          include: {
-            rateServiceClass: { select: { code: true } },
-            servicePoints: {
-              where: { endDate: null },
-              include: { meters: { include: { meter: true } }, premise: true },
-              take: 1,
+        include: {
+          serviceAgreement: {
+            include: {
+              rateServiceClass: { select: { code: true } },
+              servicePoints: {
+                where: { endDate: null },
+                include: { meters: { include: { meter: true } }, premise: true },
+                take: 1,
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    const sa = assignment.serviceAgreement;
-    expect(sa.rateServiceClass?.code).toBe("single_family");
+      const sa = assignment.serviceAgreement;
+      expect(sa.rateServiceClass?.code).toBe("single_family");
 
-    /*
-     * 3. Locate the SA's meter + seed a read of 12 HCF, recorded the way
-     * the meter records it.
-     *
-     * The water meter's unit of measure is GAL and the tariff is written
-     * per HCF. Writing `consumption: 12` here meant "12 HCF" only
-     * because nothing converted; now that the engine does, 12 gallons is
-     * 0.016 HCF and bills five cents. 100 ft³ is exactly 172800/231 US
-     * gallons, so this is the same month the file is named for.
-     */
-    const TWELVE_HCF_IN_GALLONS = (12 * 172800) / 231;
-    const meterAssignment = sa.servicePoints[0]?.meters[0];
-    if (!meterAssignment) {
-      throw new Error("Seeded SFR SA has no meter — adjust fixture or seed");
-    }
-    const meterId = meterAssignment.meterId;
+      /*
+       * 3. Locate the SA's meter + seed a read of 12 HCF, recorded the way
+       * the meter records it.
+       *
+       * The water meter's unit of measure is GAL and the tariff is written
+       * per HCF. Writing `consumption: 12` here meant "12 HCF" only
+       * because nothing converted; now that the engine does, 12 gallons is
+       * 0.016 HCF and bills five cents. 100 ft³ is exactly 172800/231 US
+       * gallons, so this is the same month the file is named for.
+       */
+      const TWELVE_HCF_IN_GALLONS = (12 * 172800) / 231;
+      const meterAssignment = sa.servicePoints[0]?.meters[0];
+      if (!meterAssignment) {
+        throw new Error("Seeded SFR SA has no meter — adjust fixture or seed");
+      }
+      const meterId = meterAssignment.meterId;
 
-    // The service_charge component does a `lookup by meter_size`; the
-    // MeterLoader reads `meter.customFields.size`. Set it inline.
-    await prisma.meter.update({
-      where: { id: meterId },
-      data: { customFields: { size: '5/8"' } as object },
-    });
+      // The service_charge component does a `lookup by meter_size`; the
+      // MeterLoader reads `meter.customFields.size`. Set it inline.
+      await prisma.meter.update({
+        where: { id: meterId },
+        data: { customFields: { size: '5/8"' } as object },
+      });
 
-    const meter = await prisma.meter.findUniqueOrThrow({
-      where: { id: meterId },
-      select: { uomId: true, utilityId: true },
-    });
+      const meter = await prisma.meter.findUniqueOrThrow({
+        where: { id: meterId },
+        select: { uomId: true, utilityId: true },
+      });
 
-    await prisma.meterRead.create({
-      data: {
-        utilityId: meter.utilityId,
-        meterId,
-        serviceAgreementId: sa.id,
-        uomId: meter.uomId,
-        readDate: new Date(2026, 4, 31),
-        readDatetime: new Date(2026, 4, 31, 12, 0, 0),
-        reading: TWELVE_HCF_IN_GALLONS + 88,
-        priorReading: 88,
-        consumption: TWELVE_HCF_IN_GALLONS,
-        readType: "ACTUAL",
-        readSource: "MANUAL",
-      },
-    });
+      await prisma.meterRead.create({
+        data: {
+          utilityId: meter.utilityId,
+          meterId,
+          serviceAgreementId: sa.id,
+          uomId: meter.uomId,
+          readDate: new Date(2026, 4, 31),
+          readDatetime: new Date(2026, 4, 31, 12, 0, 0),
+          reading: TWELVE_HCF_IN_GALLONS + 88,
+          priorReading: 88,
+          consumption: TWELVE_HCF_IN_GALLONS,
+          readType: "ACTUAL",
+          readSource: "MANUAL",
+        },
+      });
 
-    // 4. Period = May 2026
-    const period = {
-      startDate: new Date(2026, 4, 1),
-      endDate: new Date(2026, 4, 31),
-    };
-    const utilityId = sa.utilityId;
+      // 4. Period = May 2026
+      const period = {
+        startDate: new Date(2026, 4, 1),
+        endDate: new Date(2026, 4, 31),
+      };
+      const utilityId = sa.utilityId;
 
-    // 5. loadBase
-    const base = await loadBase(prisma, sa.id, period, utilityId);
+      // 5. loadBase
+      const base = await loadBase(prisma, sa.id, period, utilityId);
 
-    expect(base.assignments.length).toBeGreaterThan(0);
-    expect(base.assignments.some((a) => a.schedule.code === "BZN-WATER")).toBe(
-      true,
-    );
-    expect(base.sa.rateServiceClassCode).toBe("single_family");
+      expect(base.assignments.length).toBeGreaterThan(0);
+      expect(base.assignments.some((a) => a.schedule.code === "BZN-WATER")).toBe(
+        true,
+      );
+      expect(base.sa.rateServiceClassCode).toBe("single_family");
 
-    // 6. Build registry with all 8 loaders
-    const registry = new VariableRegistry();
-    registry.register(new AccountLoader(prisma, utilityId, sa.id));
-    registry.register(new MeterLoader(prisma, utilityId, period));
-    registry.register(new WqaLoader(prisma, utilityId, sa.id));
-    registry.register(new TenantLoader(prisma, utilityId));
-    registry.register(new PremiseLoader(prisma, utilityId, base.sa.premiseId));
-    registry.register(new IndexLoader(prisma, utilityId));
-    registry.register(
-      new LinkedCommodityLoader(prisma, utilityId, period, {
-        id: sa.id,
-        accountId: sa.accountId,
-        premiseId: base.sa.premiseId,
-      }),
-    );
-    registry.register(new ItemsLoader(prisma, utilityId, sa.id));
+      // 6. Build registry with all 8 loaders
+      const registry = new VariableRegistry();
+      registry.register(new AccountLoader(prisma, utilityId, sa.id));
+      registry.register(new MeterLoader(prisma, utilityId, period));
+      registry.register(new WqaLoader(prisma, utilityId, sa.id));
+      registry.register(new TenantLoader(prisma, utilityId));
+      registry.register(new PremiseLoader(prisma, utilityId, base.sa.premiseId));
+      registry.register(new IndexLoader(prisma, utilityId));
+      registry.register(
+        new LinkedCommodityLoader(prisma, utilityId, period, {
+          id: sa.id,
+          accountId: sa.accountId,
+          premiseId: base.sa.premiseId,
+        }),
+      );
+      registry.register(new ItemsLoader(prisma, utilityId, sa.id));
 
-    // 7. manifest — collect schedule-driven keys
-    const manifestKeys = engine.manifest(base);
+      // 7. manifest — collect schedule-driven keys
+      const manifestKeys = engine.manifest(base);
 
-    // The engine's predicate evaluator infers the meter id from
-    // `meter:reads:*` keys at rate time. Pre-load the meter-keyed
-    // vars manually so the engine can run end-to-end.
-    const allKeys = [
-      ...manifestKeys,
-      `meter:size:${meterId}`,
-      `meter:reads:${meterId}`,
-    ];
+      // The engine's predicate evaluator infers the meter id from
+      // `meter:reads:*` keys at rate time. Pre-load the meter-keyed
+      // vars manually so the engine can run end-to-end.
+      const allKeys = [
+        ...manifestKeys,
+        `meter:size:${meterId}`,
+        `meter:reads:${meterId}`,
+      ];
 
-    // 8. loadVariables
-    const vars = await registry.loadVariables(allKeys);
+      // 8. loadVariables
+      const vars = await registry.loadVariables(allKeys);
 
-    // 9. rate
-    const result = engine.rate({ base, vars });
+      // 9. rate
+      const result = engine.rate({ base, vars });
 
-    // 10. Assert dollar output matches Slice 3 SFR golden test exactly.
-    //   service_charge $22.31 + tier-walked usage $47.34 = $69.65
-    expect(result.totals.subtotal.toFixed(2)).toBe("69.65");
+      // 10. Assert dollar output matches Slice 3 SFR golden test exactly.
+      //   service_charge $22.31 + tier-walked usage $47.34 = $69.65
+      expect(result.totals.subtotal.toFixed(2)).toBe("69.65");
 
-    const serviceLine = result.lines.find(
-      (l) => l.kindCode === "service_charge",
-    );
-    expect(serviceLine?.amount.toFixed(2)).toBe("22.31");
+      const serviceLine = result.lines.find(
+        (l) => l.kindCode === "service_charge",
+      );
+      expect(serviceLine?.amount.toFixed(2)).toBe("22.31");
 
-    const consumptionLine = result.lines.find(
-      (l) =>
-        l.kindCode === "consumption" && l.label.includes("Single Family"),
-    );
-    expect(consumptionLine?.amount.toFixed(2)).toBe("47.34");
-  }, 600_000);
+      const consumptionLine = result.lines.find(
+        (l) =>
+          l.kindCode === "consumption" && l.label.includes("Single Family"),
+      );
+      expect(consumptionLine?.amount.toFixed(2)).toBe("47.34");
+  
+    }), 600_000);
 });

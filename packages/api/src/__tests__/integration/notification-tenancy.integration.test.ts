@@ -88,15 +88,6 @@ const headers = () => ({
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A, TENANT_B] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // Its routes run correctly as `cis_app` — no route or service was
-  // found querying a tenant table without a scope — but its own test
-  // bodies arrange and assert on rows through `prisma` directly, which
-  // needs a `seedAsPlatform` or `runAsTenant` per site. See
-  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
-  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
-  // only lets the number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   appImports = await import("../../app.js");
@@ -204,52 +195,58 @@ describe("POST /api/v1/notifications/send — across tenants", () => {
    * deliverable address, so unscoped the lookup succeeds, the send is
    * accepted, and the message is addressed to B's customer.
    */
-  it("refuses to send to a customer belonging to another tenant", async () => {
-    const { prisma } = prismaImports;
+  it("refuses to send to a customer belonging to another tenant", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/notifications/send",
-      headers: headers(),
-      payload: {
-        eventType: EVENT_TYPE,
-        channel: "EMAIL",
-        recipientId: customerB.id,
-        context: {},
-      },
-    });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/notifications/send",
+        headers: headers(),
+        payload: {
+          eventType: EVENT_TYPE,
+          channel: "EMAIL",
+          recipientId: customerB.id,
+          context: {},
+        },
+      });
 
-    expect(res.statusCode).toBe(400);
-    expect(JSON.parse(res.body).error.code).toBe("SEND_FAILED");
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).error.code).toBe("SEND_FAILED");
 
-    // Nothing queued, and in particular nothing addressed to B.
-    expect(await prisma.notification.count()).toBe(0);
-  });
+      // Nothing queued, and in particular nothing addressed to B.
+      expect(await prisma.notification.count()).toBe(0);
+  
+    }));
 
-  it("sends to a customer this tenant owns", async () => {
-    const { prisma } = prismaImports;
+  it("sends to a customer this tenant owns", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/notifications/send",
-      headers: headers(),
-      payload: {
-        eventType: EVENT_TYPE,
-        channel: "EMAIL",
-        recipientId: customerA.id,
-        context: {},
-      },
-    });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/notifications/send",
+        headers: headers(),
+        payload: {
+          eventType: EVENT_TYPE,
+          channel: "EMAIL",
+          recipientId: customerA.id,
+          context: {},
+        },
+      });
 
-    expect(res.statusCode).toBe(201);
+      expect(res.statusCode).toBe(201);
 
-    const row = await prisma.notification.findUniqueOrThrow({
-      where: { id: JSON.parse(res.body).notificationId },
-    });
-    expect(row.utilityId).toBe(TENANT_A);
-    expect(row.recipientEmail).toBe(customerA.email);
-    expect(row.resolvedBody).toContain("Hi Ada");
-  });
+      const row = await prisma.notification.findUniqueOrThrow({
+        where: { id: JSON.parse(res.body).notificationId },
+      });
+      expect(row.utilityId).toBe(TENANT_A);
+      expect(row.recipientEmail).toBe(customerA.email);
+      expect(row.resolvedBody).toContain("Hi Ada");
+  
+    }));
 
   /**
    * `context` is caller-supplied, so it is a second route to another
@@ -257,45 +254,48 @@ describe("POST /api/v1/notifications/send — across tenants", () => {
    * and `resolved_variables` are stored under the caller's own
    * `utility_id` and readable through the caller's tenant-scoped GET.
    */
-  it("resolves none of another tenant's entities named in context", async () => {
-    const { prisma } = prismaImports;
+  it("resolves none of another tenant's entities named in context", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/notifications/send",
-      headers: headers(),
-      payload: {
-        eventType: EVENT_TYPE,
-        channel: "EMAIL",
-        recipientId: customerA.id,
-        context: {
-          accountId: fixB.accountId,
-          premiseId: fixB.premiseId,
-          agreementId: agreementB.id,
-          meterId: fixB.meterId,
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/notifications/send",
+        headers: headers(),
+        payload: {
+          eventType: EVENT_TYPE,
+          channel: "EMAIL",
+          recipientId: customerA.id,
+          context: {
+            accountId: fixB.accountId,
+            premiseId: fixB.premiseId,
+            agreementId: agreementB.id,
+            meterId: fixB.meterId,
+          },
         },
-      },
-    });
+      });
 
-    expect(res.statusCode).toBe(201);
+      expect(res.statusCode).toBe(201);
 
-    const row = await prisma.notification.findUniqueOrThrow({
-      where: { id: JSON.parse(res.body).notificationId },
-    });
+      const row = await prisma.notification.findUniqueOrThrow({
+        where: { id: JSON.parse(res.body).notificationId },
+      });
 
-    // Every fixture value of tenant B carries its `00bb` suffix —
-    // ACCT-00bb, 1 Test Lane 00bb, SA-00bb, MTR-00bb-1 — so one
-    // assertion covers all four lookups.
-    expect(row.resolvedBody).not.toContain("00bb");
-    expect(row.resolvedBody).toContain("Hi Ada");
+      // Every fixture value of tenant B carries its `00bb` suffix —
+      // ACCT-00bb, 1 Test Lane 00bb, SA-00bb, MTR-00bb-1 — so one
+      // assertion covers all four lookups.
+      expect(row.resolvedBody).not.toContain("00bb");
+      expect(row.resolvedBody).toContain("Hi Ada");
 
-    // Unresolved variables are absent rather than empty-valued.
-    const vars = row.resolvedVariables as Record<string, string>;
-    expect(Object.keys(vars)).not.toContain("account.accountNumber");
-    expect(Object.keys(vars)).not.toContain("premise.addressLine1");
-    expect(Object.keys(vars)).not.toContain("agreement.agreementNumber");
-    expect(Object.keys(vars)).not.toContain("meter.meterNumber");
-  });
+      // Unresolved variables are absent rather than empty-valued.
+      const vars = row.resolvedVariables as Record<string, string>;
+      expect(Object.keys(vars)).not.toContain("account.accountNumber");
+      expect(Object.keys(vars)).not.toContain("premise.addressLine1");
+      expect(Object.keys(vars)).not.toContain("agreement.agreementNumber");
+      expect(Object.keys(vars)).not.toContain("meter.meterNumber");
+  
+    }));
 });
 
 describe("POST /api/v1/notification-templates/:id/preview — across tenants", () => {

@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { runAsTenant } from "../../lib/tenant-context.js";
+import type { Prisma } from "@utility-cis/shared/src/generated/prisma";
 import {
   bootPostgres,
   resetDb,
@@ -53,16 +55,19 @@ let saAccount1Id: string;
 let saAccount2Id: string;
 let account2Id: string;
 
+/**
+ * A transaction entered the way a route enters one: inside the tenant's
+ * scope.
+ *
+ * A service taking `(tx, utilityId, …)` cannot receive the scope as an
+ * argument, so it has to be around the call — which is the order a
+ * request does it in.
+ */
+const asTenantTx = <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> =>
+  runAsTenant(TENANT_A, async () => prismaImports.prisma.$transaction(fn));
+
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A, TENANT_B] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);
@@ -182,7 +187,7 @@ beforeEach(() =>
 
 async function callResponsibleAccount(asOf: string, utilityId = TENANT_A): Promise<string | null> {
   const { prisma } = prismaImports;
-  return prisma.$transaction(async (tx) => {
+  return asTenantTx(async (tx) => {
     await tx.$executeRaw`SELECT set_config('app.current_utility_id', ${utilityId}, true)`;
     const rows = await tx.$queryRaw<{ account_id: string | null }[]>`
       SELECT responsible_account_at(
@@ -197,7 +202,7 @@ async function callResponsibleAccount(asOf: string, utilityId = TENANT_A): Promi
 
 async function callMeterAssignment(meterId: string, asOf: string, utilityId = TENANT_A) {
   const { prisma } = prismaImports;
-  return prisma.$transaction(async (tx) => {
+  return asTenantTx(async (tx) => {
     await tx.$executeRaw`SELECT set_config('app.current_utility_id', ${utilityId}, true)`;
     const rows = await tx.$queryRaw<
       { service_agreement_id: string; account_id: string; premise_id: string }[]

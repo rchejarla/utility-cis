@@ -7,9 +7,11 @@ import {
   makeTenantFixture,
   TENANT_A,
   endAdminPool,
+  seedAsPlatform,
 } from "./_effective-dating-fixtures.js";
 import { PremiseLoader } from "../../lib/rate-engine-loaders/loaders/premise-loader.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * Slice 4 task 4 — PremiseLoader integration tests.
  *
@@ -24,14 +26,6 @@ let prismaImports: typeof import("../../lib/prisma.js");
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);
@@ -47,48 +41,66 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
+/**
+ * The loader run the way a route runs it: inside the tenant's scope.
+ *
+ * A loader takes the client and the tenant in its constructor, so the
+ * scope cannot ride in on an argument to `load()` — it has to be around
+ * the call. `runAsTenant` here overrides the surrounding
+ * `seedAsPlatform`, so the fixtures stay free to arrange rows while the
+ * read under test is confined to one tenant.
+ */
+const scoped = <T>(tenant: string, fn: () => Promise<T>): Promise<T> =>
+  runAsTenant(tenant, fn);
+
 beforeEach(async () => {
   const { prisma } = prismaImports;
   await resetDb();
 });
 
 describe("PremiseLoader", () => {
-  it("premise:attr:eru_count returns a Decimal", async () => {
-    const fix = await makeTenantFixture(prismaImports.prisma, TENANT_A);
-    await prismaImports.prisma.premise.update({
-      where: { id: fix.premiseId },
-      data: { eruCount: "1.50" },
-    });
+  it("premise:attr:eru_count returns a Decimal", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const fix = await makeTenantFixture(prismaImports.prisma, TENANT_A);
+      await prismaImports.prisma.premise.update({
+        where: { id: fix.premiseId },
+        data: { eruCount: "1.50" },
+      });
 
-    const loader = new PremiseLoader(prismaImports.prisma, TENANT_A, fix.premiseId);
-    const out = await loader.load(["premise:attr:eru_count"]);
-    const v = out.get("premise:attr:eru_count") as Decimal;
-    expect(v).toBeInstanceOf(Decimal);
-    expect(v.toString()).toBe(new Decimal("1.5").toString());
-  });
+      const loader = new PremiseLoader(prismaImports.prisma, TENANT_A, fix.premiseId);
+      const out = await scoped(TENANT_A, () => loader.load(["premise:attr:eru_count"]));
+      const v = out.get("premise:attr:eru_count") as Decimal;
+      expect(v).toBeInstanceOf(Decimal);
+      expect(v.toString()).toBe(new Decimal("1.5").toString());
+  
+    }));
 
-  it("premise:attr:has_stormwater_infra returns a boolean", async () => {
-    const fix = await makeTenantFixture(prismaImports.prisma, TENANT_A);
-    await prismaImports.prisma.premise.update({
-      where: { id: fix.premiseId },
-      data: { hasStormwaterInfra: true },
-    });
+  it("premise:attr:has_stormwater_infra returns a boolean", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const fix = await makeTenantFixture(prismaImports.prisma, TENANT_A);
+      await prismaImports.prisma.premise.update({
+        where: { id: fix.premiseId },
+        data: { hasStormwaterInfra: true },
+      });
 
-    const loader = new PremiseLoader(prismaImports.prisma, TENANT_A, fix.premiseId);
-    const out = await loader.load(["premise:attr:has_stormwater_infra"]);
-    expect(out.get("premise:attr:has_stormwater_infra")).toBe(true);
-  });
+      const loader = new PremiseLoader(prismaImports.prisma, TENANT_A, fix.premiseId);
+      const out = await scoped(TENANT_A, () => loader.load(["premise:attr:has_stormwater_infra"]));
+      expect(out.get("premise:attr:has_stormwater_infra")).toBe(true);
+  
+    }));
 
   it("premise:attr:premise_type returns the string value", async () => {
     const fix = await makeTenantFixture(prismaImports.prisma, TENANT_A);
 
     const loader = new PremiseLoader(prismaImports.prisma, TENANT_A, fix.premiseId);
-    const out = await loader.load([
+    const out = await scoped(TENANT_A, () => loader.load([
       "premise:attr:premise_type",
       "premise:attr:city",
       "premise:attr:state",
       "premise:attr:zip",
-    ]);
+    ]));
     expect(out.get("premise:attr:premise_type")).toBe("RESIDENTIAL");
     // Fixture seeds city="Testville", state="TS", zip="00000".
     expect(out.get("premise:attr:city")).toBe("Testville");
@@ -100,10 +112,10 @@ describe("PremiseLoader", () => {
     const fix = await makeTenantFixture(prismaImports.prisma, TENANT_A);
 
     const loader = new PremiseLoader(prismaImports.prisma, TENANT_A, fix.premiseId);
-    const out = await loader.load([
+    const out = await scoped(TENANT_A, () => loader.load([
       "premise:attr:zip", // valid — forces a query
       "premise:attr:not_a_real_attr",
-    ]);
+    ]));
     expect(out.get("premise:attr:zip")).toBe("00000");
     expect(out.get("premise:attr:not_a_real_attr")).toBeNull();
   });
@@ -113,6 +125,6 @@ describe("PremiseLoader", () => {
     const missingId = "00000000-0000-4000-8000-deadbeef0001";
 
     const loader = new PremiseLoader(prismaImports.prisma, TENANT_A, missingId);
-    await expect(loader.load(["premise:attr:eru_count"])).rejects.toThrow();
+    await expect(scoped(TENANT_A, () => loader.load(["premise:attr:eru_count"]))).rejects.toThrow();
   });
 });

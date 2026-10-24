@@ -3,6 +3,7 @@ import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { MODULES } from "@utility-cis/shared";
 import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * Turning a utility's modules on and off.
  *
@@ -25,16 +26,31 @@ let rbac: typeof import("../../services/rbac.service.js");
 
 const TENANT = "00000000-0000-4000-8000-0000000000e1";
 
+/**
+ * The services this file calls directly, as a route reaches them: acting
+ * for the tenant, not merely naming it.
+ *
+ * Each already receives the tenant — production passed it from a request
+ * or a job whose scope had been entered, so the argument and the scope
+ * are always the same id. A direct service test has the argument and not
+ * the scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` also overrides a surrounding `seedAsPlatform`, which is
+ * what lets fixture rows be arranged across tenants while the call under
+ * test stays confined to one.
+ */
+const getTenantModules = (...args: Parameters<typeof rbac.getTenantModules>) =>
+  runAsTenant(args[0], async () => rbac.getTenantModules(...args));
+
+const getUtilityDetail = (...args: Parameters<typeof svc.getUtilityDetail>) =>
+  runAsTenant(args[0], async () => svc.getUtilityDetail(...args));
+
+const setUtilityModule = (...args: Parameters<typeof svc.setUtilityModule>) =>
+  runAsTenant(args[0], async () => svc.setUtilityModule(...args));
+
 beforeAll(async () => {
   const booted = await bootPostgres();
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/provisioning.service.js");
@@ -70,7 +86,7 @@ beforeEach(() =>
 
 describe("setUtilityModule", () => {
   it("disables a module", async () => {
-    const result = await svc.setUtilityModule(TENANT, "containers", false);
+    const result = await setUtilityModule(TENANT, "containers", false);
 
     expect(result).toMatchObject({ moduleKey: "containers", isEnabled: false });
   });
@@ -78,55 +94,58 @@ describe("setUtilityModule", () => {
   it("takes effect at once rather than when the cache expires", async () => {
     // The read the authorization middleware actually does. A 600s TTL
     // means a disable without invalidation is inert for ten minutes.
-    expect(await rbac.getTenantModules(TENANT)).toContain("containers");
+    expect(await getTenantModules(TENANT)).toContain("containers");
 
-    await svc.setUtilityModule(TENANT, "containers", false);
+    await setUtilityModule(TENANT, "containers", false);
 
-    expect(await rbac.getTenantModules(TENANT)).not.toContain("containers");
+    expect(await getTenantModules(TENANT)).not.toContain("containers");
   });
 
   it("re-enables, and that takes effect at once too", async () => {
-    await svc.setUtilityModule(TENANT, "containers", false);
-    await svc.setUtilityModule(TENANT, "containers", true);
+    await setUtilityModule(TENANT, "containers", false);
+    await setUtilityModule(TENANT, "containers", true);
 
-    expect(await rbac.getTenantModules(TENANT)).toContain("containers");
+    expect(await getTenantModules(TENANT)).toContain("containers");
   });
 
   it("leaves every other module alone", async () => {
-    await svc.setUtilityModule(TENANT, "containers", false);
+    await setUtilityModule(TENANT, "containers", false);
 
-    const enabled = await rbac.getTenantModules(TENANT);
+    const enabled = await getTenantModules(TENANT);
     expect(enabled).toHaveLength(MODULES.length - 1);
   });
 
   it("is idempotent", async () => {
-    await svc.setUtilityModule(TENANT, "containers", false);
+    await setUtilityModule(TENANT, "containers", false);
 
-    expect((await svc.setUtilityModule(TENANT, "containers", false)).isEnabled).toBe(false);
+    expect((await setUtilityModule(TENANT, "containers", false)).isEnabled).toBe(false);
   });
 
-  it("creates the row when a module postdates the utility", async () => {
-    const { prisma } = prismaImports;
-    // A module added to MODULES after this utility was provisioned has
-    // no row at all, so enabling it has to insert rather than update.
-    await prisma.utilityModule.deleteMany({ where: { utilityId: TENANT, moduleKey: "containers" } });
+  it("creates the row when a module postdates the utility", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      // A module added to MODULES after this utility was provisioned has
+      // no row at all, so enabling it has to insert rather than update.
+      await prisma.utilityModule.deleteMany({ where: { utilityId: TENANT, moduleKey: "containers" } });
 
-    await svc.setUtilityModule(TENANT, "containers", true);
+      await setUtilityModule(TENANT, "containers", true);
 
-    expect(await rbac.getTenantModules(TENANT)).toContain("containers");
-  });
+      expect(await getTenantModules(TENANT)).toContain("containers");
+  
+    }));
 
   it("refuses a module the code does not have", async () => {
     // Otherwise the console can write a row for a module no route reads,
     // which looks enabled and does nothing.
-    await expect(svc.setUtilityModule(TENANT, "not_a_module", true)).rejects.toMatchObject({
+    await expect(setUtilityModule(TENANT, "not_a_module", true)).rejects.toMatchObject({
       code: "UNKNOWN_MODULE",
     });
   });
 
   it("refuses a utility that does not exist", async () => {
     await expect(
-      svc.setUtilityModule("00000000-0000-4000-8000-0000000000ef", "containers", false),
+      setUtilityModule("00000000-0000-4000-8000-0000000000ef", "containers", false),
     ).rejects.toMatchObject({ code: "UTILITY_NOT_FOUND" });
   });
 
@@ -135,15 +154,15 @@ describe("setUtilityModule", () => {
     // utility with no modules is unusable but every module is one click
     // from coming back, and the operator doing the clicking is not
     // locked out of anything.
-    for (const key of MODULES) await svc.setUtilityModule(TENANT, key, false);
+    for (const key of MODULES) await setUtilityModule(TENANT, key, false);
 
-    expect(await rbac.getTenantModules(TENANT)).toEqual([]);
+    expect(await getTenantModules(TENANT)).toEqual([]);
   });
 
   it("reports the change in the utility's detail", async () => {
-    await svc.setUtilityModule(TENANT, "containers", false);
+    await setUtilityModule(TENANT, "containers", false);
 
-    const detail = await svc.getUtilityDetail(TENANT);
+    const detail = await getUtilityDetail(TENANT);
     const containers = detail.modules.find((m) => m.moduleKey === "containers");
     expect(containers).toMatchObject({ isEnabled: false });
     // The count is of modules the utility has rows for, enabled or not;

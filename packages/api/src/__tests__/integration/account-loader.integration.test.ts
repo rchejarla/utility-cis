@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, resetDb, makeTenantFixture, TENANT_A, endAdminPool } from "./_effective-dating-fixtures.js";
+import { bootPostgres, resetDb, makeTenantFixture, TENANT_A, endAdminPool, seedAsPlatform } from "./_effective-dating-fixtures.js";
 import { AccountLoader } from "../../lib/rate-engine-loaders/loaders/account-loader.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * Slice 4 task 2 — AccountLoader integration tests.
  *
@@ -17,14 +18,6 @@ let prismaImports: typeof import("../../lib/prisma.js");
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);
@@ -51,6 +44,18 @@ interface SaFixture {
  * optional account-level overrides on top of the shared tenant
  * fixture. Returns the IDs the test will load against.
  */
+/**
+ * The loader run the way a route runs it: inside the tenant's scope.
+ *
+ * A loader takes the client and the tenant in its constructor, so the
+ * scope cannot ride in on an argument to `load()` — it has to be around
+ * the call. `runAsTenant` here overrides the surrounding
+ * `seedAsPlatform`, so the fixtures stay free to arrange rows while the
+ * read under test is confined to one tenant.
+ */
+const scoped = <T>(tenant: string, fn: () => Promise<T>): Promise<T> =>
+  runAsTenant(tenant, fn);
+
 async function makeSaFixture(opts: {
   attachServiceClass: boolean;
   serviceClassCode?: string;
@@ -63,60 +68,77 @@ async function makeSaFixture(opts: {
   };
   agreementNumber?: string;
 }): Promise<SaFixture> {
-  const { prisma } = prismaImports;
-  const fix = await makeTenantFixture(prisma, TENANT_A);
 
-  // Apply any account overrides — the fixture creates the row with
-  // defaults; tests want to flip specific columns. Prisma's JSON
-  // field input typing is invariant w.r.t. `Record<string, unknown>`,
-  // so we narrow at the assignment site.
-  if (opts.accountOverrides) {
-    const { customFields, ...rest } = opts.accountOverrides;
-    await prisma.account.update({
-      where: { id: fix.accountId },
-      data: {
-        ...rest,
-        ...(customFields !== undefined ? { customFields: customFields as object } : {}),
-      },
-    });
-  }
+  /*
 
-  let serviceClassId = "";
-  if (opts.attachServiceClass) {
-    const cls = await prisma.rateServiceClass.create({
+   * Arranging rows, so the authority the fixtures use. Calls under
+
+   * test re-enter their own tenant scope.
+
+   */
+
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const fix = await makeTenantFixture(prisma, TENANT_A);
+
+    // Apply any account overrides — the fixture creates the row with
+    // defaults; tests want to flip specific columns. Prisma's JSON
+    // field input typing is invariant w.r.t. `Record<string, unknown>`,
+    // so we narrow at the assignment site.
+    if (opts.accountOverrides) {
+      const { customFields, ...rest } = opts.accountOverrides;
+      await prisma.account.update({
+        where: { id: fix.accountId },
+        data: {
+          ...rest,
+          ...(customFields !== undefined ? { customFields: customFields as object } : {}),
+        },
+      });
+    }
+
+    let serviceClassId = "";
+    if (opts.attachServiceClass) {
+      const cls = await prisma.rateServiceClass.create({
+        data: {
+          utilityId: fix.utilityId,
+          commodityId: fix.commodityId,
+          code: opts.serviceClassCode ?? "single_family",
+          label: "Single Family",
+        },
+      });
+      serviceClassId = cls.id;
+    }
+
+    const sa = await prisma.serviceAgreement.create({
       data: {
         utilityId: fix.utilityId,
+        agreementNumber: opts.agreementNumber ?? "SA-LOADER-1",
+        accountId: fix.accountId,
         commodityId: fix.commodityId,
-        code: opts.serviceClassCode ?? "single_family",
-        label: "Single Family",
+        startDate: new Date("2026-01-01"),
+        status: "ACTIVE",
+        rateServiceClassId: opts.attachServiceClass ? serviceClassId : null,
       },
     });
-    serviceClassId = cls.id;
-  }
 
-  const sa = await prisma.serviceAgreement.create({
-    data: {
-      utilityId: fix.utilityId,
-      agreementNumber: opts.agreementNumber ?? "SA-LOADER-1",
-      accountId: fix.accountId,
-      commodityId: fix.commodityId,
-      startDate: new Date("2026-01-01"),
-      status: "ACTIVE",
-      rateServiceClassId: opts.attachServiceClass ? serviceClassId : null,
-    },
+    return { saId: sa.id, accountId: fix.accountId, serviceClassId };
+
+
   });
 
-  return { saId: sa.id, accountId: fix.accountId, serviceClassId };
 }
 
-beforeEach(async () => {
-  const { prisma } = prismaImports;
-  await resetDb();
-  // resetDb truncates the core tables; rate_service_class isn't in
-  // its list (it post-dates the helper). Wipe it explicitly so each
-  // test starts from a known empty state.
-  await prisma.$executeRawUnsafe("DELETE FROM rate_service_class");
-});
+beforeEach(() =>
+  seedAsPlatform(async () => {    /* Fixture rows and read-backs under the fixture authority; the
+     * scoped wrappers re-enter their own tenant scope. */
+    const { prisma } = prismaImports;
+    await resetDb();
+    // resetDb truncates the core tables; rate_service_class isn't in
+    // its list (it post-dates the helper). Wipe it explicitly so each
+    // test starts from a known empty state.
+    await prisma.$executeRawUnsafe("DELETE FROM rate_service_class");
+
+  }));
 
 describe("AccountLoader", () => {
   it("account:class returns the rateServiceClass code when the SA has one", async () => {
@@ -126,7 +148,7 @@ describe("AccountLoader", () => {
     });
 
     const loader = new AccountLoader(prismaImports.prisma, TENANT_A, saId);
-    const out = await loader.load(["account:class"]);
+    const out = await scoped(TENANT_A, () => loader.load(["account:class"]));
     expect(out.get("account:class")).toBe("multi_family");
   });
 
@@ -134,7 +156,7 @@ describe("AccountLoader", () => {
     const { saId } = await makeSaFixture({ attachServiceClass: false });
 
     const loader = new AccountLoader(prismaImports.prisma, TENANT_A, saId);
-    const out = await loader.load(["account:class"]);
+    const out = await scoped(TENANT_A, () => loader.load(["account:class"]));
     expect(out.get("account:class")).toBeNull();
   });
 
@@ -145,7 +167,7 @@ describe("AccountLoader", () => {
     });
 
     const loader = new AccountLoader(prismaImports.prisma, TENANT_A, saId);
-    const out = await loader.load(["account:flag:paperless_billing"]);
+    const out = await scoped(TENANT_A, () => loader.load(["account:flag:paperless_billing"]));
     expect(out.get("account:flag:paperless_billing")).toBe(true);
   });
 
@@ -156,7 +178,7 @@ describe("AccountLoader", () => {
     });
 
     const loader = new AccountLoader(prismaImports.prisma, TENANT_A, saId);
-    const out = await loader.load(["account:flag:paperless_billing"]);
+    const out = await scoped(TENANT_A, () => loader.load(["account:flag:paperless_billing"]));
     expect(out.get("account:flag:paperless_billing")).toBe(false);
   });
 
@@ -167,11 +189,11 @@ describe("AccountLoader", () => {
     });
 
     const loader = new AccountLoader(prismaImports.prisma, TENANT_A, saId);
-    const out = await loader.load([
+    const out = await scoped(TENANT_A, () => loader.load([
       "account:flag:autopay",
       "account:flag:snowflake",
       "account:flag:missing",
-    ]);
+    ]));
     // truthy
     expect(out.get("account:flag:autopay")).toBe(true);
     // falsy primitive in JSON still maps to false
@@ -202,12 +224,12 @@ describe("AccountLoader", () => {
       .mockImplementation((args) => original(args) as ReturnType<typeof original>);
     try {
       const loader = new AccountLoader(prismaImports.prisma, TENANT_A, saId);
-      const out = await loader.load([
+      const out = await scoped(TENANT_A, () => loader.load([
         "account:class",
         "account:flag:paperless_billing",
         "account:flag:budget_billing",
         "account:flag:autopay",
-      ]);
+      ]));
 
       expect(spy).toHaveBeenCalledTimes(1);
       expect(out.get("account:class")).toBe("commercial");
@@ -222,6 +244,6 @@ describe("AccountLoader", () => {
   it("throws when the SA does not exist", async () => {
     const missingId = "00000000-0000-4000-8000-deadbeef0001";
     const loader = new AccountLoader(prismaImports.prisma, TENANT_A, missingId);
-    await expect(loader.load(["account:class"])).rejects.toThrow();
+    await expect(scoped(TENANT_A, () => loader.load(["account:class"]))).rejects.toThrow();
   });
 });

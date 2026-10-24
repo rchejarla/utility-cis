@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { execSync } from "node:child_process";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { ensureUtilities, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Integration test for audit-wrap atomicity.
@@ -33,8 +30,6 @@ import { ensureUtilities, seedAsPlatform } from "./_effective-dating-fixtures.js
  *      Rolling back the outer transaction rolls back the audit row too.
  */
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SHARED_DIR = path.resolve(__dirname, "../../../../shared");
 
 const TENANT = "00000000-0000-4000-8000-000000000001";
 const ACTOR = "00000000-0000-4000-8000-aaaa00000001";
@@ -45,40 +40,17 @@ let prismaImports: typeof import("../../lib/prisma.js");
 let auditWrapImports: typeof import("../../lib/audit-wrap.js");
 
 beforeAll(async () => {
-  pgContainer = await new PostgreSqlContainer("timescale/timescaledb:latest-pg16")
-    .withDatabase("utility_cis_test")
-    .withUsername("postgres")
-    .withPassword("postgres")
-    .start();
-
-  const dbUrl = pgContainer.getConnectionUri();
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It boots its own container rather than calling `bootPostgres`, and
-  // it calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope — see
-  // `bill-list.integration.test.ts` for the shape that conversion
-  // takes. Counted by `src/__tests__/app/rls-suite-coverage.test.ts`,
-  // which only lets the number go down.
-  process.env.DATABASE_URL = dbUrl;
-  // Pinned, not left to whatever ran before: vitest reuses a worker
-  // across files, so a `DATABASE_URL_PLATFORM` another file set would
-  // still name that file's stopped container and every `runAsPlatform`
-  // here would reach for it.
-  process.env.DATABASE_URL_PLATFORM = dbUrl;
-  process.env.NODE_ENV = "test";
-  process.env.LOG_LEVEL = "error";
-
-  execSync("pnpm prisma migrate deploy", {
-    cwd: SHARED_DIR,
-    env: { ...process.env, DATABASE_URL: dbUrl },
-    stdio: "pipe",
-  });
+  /*
+   * Through `bootPostgres` rather than a container of its own, which is
+   * what it was doing by hand: the same `migrate deploy` and the same
+   * tenant row, minus the duplication — and it arrives as `cis_app`,
+   * with `DATABASE_URL_PLATFORM` set, which this file needs because the
+   * fixture helpers it calls enter the platform scope.
+   */
+  const booted = await bootPostgres({ utilities: [TENANT] });
+  pgContainer = booted.container;
 
   prismaImports = await import("../../lib/prisma.js");
-
-  // `utility_id` is a foreign key, so the tenants this file writes
-  // rows for have to exist before the first write.
-  await ensureUtilities(prismaImports.prisma, [TENANT]);
   auditWrapImports = await import("../../lib/audit-wrap.js");
 }, 180_000);
 

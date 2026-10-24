@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
+import { runAsTenant } from "../../lib/tenant-context.js";
 import {
   bootPostgres,
   resetDb,
@@ -55,6 +56,20 @@ let fixA: TenantFixture;
 
 const ENABLED_MODULES = ["imports", "customers"];
 
+/**
+ * The services this file calls directly, as a route reaches them: acting
+ * for the tenant, not merely naming it.
+ *
+ * Each already receives the tenant — production passed it from a request
+ * or a job whose scope had been entered, so the argument and the scope
+ * are always the same id. A direct service test has the argument and not
+ * the scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` also overrides a surrounding `seedAsPlatform`, which is
+ * what lets fixture rows be arranged across tenants while the call under
+ * test stays confined to one.
+ */
 function makeToken(utilityId: string, actorId = "00000000-0000-4000-8000-aaaa00000001") {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
   const payload = Buffer.from(
@@ -107,15 +122,6 @@ function buildMultipart(
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // Its routes run correctly as `cis_app` — no route or service was
-  // found querying a tenant table without a scope — but its own test
-  // bodies arrange and assert on rows through `prisma` directly, which
-  // needs a `seedAsPlatform` or `runAsTenant` per site. See
-  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
-  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
-  // only lets the number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   appImports = await import("../../app.js");
@@ -186,71 +192,74 @@ describe("customer kind — registered alongside meter_read", () => {
 });
 
 describe("POST /api/v1/imports — customer happy path", () => {
-  it("imports a mix of INDIVIDUAL and ORGANIZATION customers, status COMPLETE, audit emitted", async () => {
-    const { prisma } = prismaImports;
+  it("imports a mix of INDIVIDUAL and ORGANIZATION customers, status COMPLETE, audit emitted", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    const csv =
-      "customer_type,first_name,last_name,organization_name,email\n" +
-      "INDIVIDUAL,Jane,Doe,,jane@example.com\n" +
-      "INDIVIDUAL,John,Smith,,john@example.com\n" +
-      "ORGANIZATION,,,Acme Corp,billing@acme.test\n";
+      const csv =
+        "customer_type,first_name,last_name,organization_name,email\n" +
+        "INDIVIDUAL,Jane,Doe,,jane@example.com\n" +
+        "INDIVIDUAL,John,Smith,,john@example.com\n" +
+        "ORGANIZATION,,,Acme Corp,billing@acme.test\n";
 
-    const mapping = {
-      customer_type: "customerType",
-      first_name: "firstName",
-      last_name: "lastName",
-      organization_name: "organizationName",
-      email: "email",
-    };
+      const mapping = {
+        customer_type: "customerType",
+        first_name: "firstName",
+        last_name: "lastName",
+        organization_name: "organizationName",
+        email: "email",
+      };
 
-    const { body, contentType } = buildMultipart([
-      { name: "kind", value: "customer" },
-      { name: "source", value: "MANUAL_UPLOAD" },
-      { name: "fileName", value: "customers.csv" },
-      { name: "mapping", value: JSON.stringify(mapping) },
-      { name: "file", filename: "customers.csv", contentType: "text/csv", body: csv },
-    ]);
+      const { body, contentType } = buildMultipart([
+        { name: "kind", value: "customer" },
+        { name: "source", value: "MANUAL_UPLOAD" },
+        { name: "fileName", value: "customers.csv" },
+        { name: "mapping", value: JSON.stringify(mapping) },
+        { name: "file", filename: "customers.csv", contentType: "text/csv", body: csv },
+      ]);
 
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/imports",
-      headers: { ...headers(), "content-type": contentType },
-      payload: body,
-    });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/imports",
+        headers: { ...headers(), "content-type": contentType },
+        payload: body,
+      });
 
-    expect(res.statusCode).toBe(200);
-    const result = JSON.parse(res.body);
-    expect(result.status).toBe("COMPLETE");
-    expect(result.recordCount).toBe(3);
-    expect(result.importedCount).toBe(3);
-    expect(result.errorCount).toBe(0);
+      expect(res.statusCode).toBe(200);
+      const result = JSON.parse(res.body);
+      expect(result.status).toBe("COMPLETE");
+      expect(result.recordCount).toBe(3);
+      expect(result.importedCount).toBe(3);
+      expect(result.errorCount).toBe(0);
 
-    const customers = await prisma.customer.findMany({
-      where: { utilityId: fixA.utilityId },
-      orderBy: { createdAt: "asc" },
-    });
-    expect(customers).toHaveLength(3);
+      const customers = await prisma.customer.findMany({
+        where: { utilityId: fixA.utilityId },
+        orderBy: { createdAt: "asc" },
+      });
+      expect(customers).toHaveLength(3);
 
-    const jane = customers.find((c) => c.firstName === "Jane");
-    expect(jane).toMatchObject({
-      customerType: "INDIVIDUAL",
-      firstName: "Jane",
-      lastName: "Doe",
-      email: "jane@example.com",
-    });
+      const jane = customers.find((c) => c.firstName === "Jane");
+      expect(jane).toMatchObject({
+        customerType: "INDIVIDUAL",
+        firstName: "Jane",
+        lastName: "Doe",
+        email: "jane@example.com",
+      });
 
-    const acme = customers.find((c) => c.customerType === "ORGANIZATION");
-    expect(acme).toMatchObject({
-      customerType: "ORGANIZATION",
-      organizationName: "Acme Corp",
-      email: "billing@acme.test",
-    });
+      const acme = customers.find((c) => c.customerType === "ORGANIZATION");
+      expect(acme).toMatchObject({
+        customerType: "ORGANIZATION",
+        organizationName: "Acme Corp",
+        email: "billing@acme.test",
+      });
 
-    const audits = await prisma.auditLog.count({
-      where: { utilityId: fixA.utilityId, entityType: "Customer" },
-    });
-    expect(audits).toBe(3);
-  });
+      const audits = await prisma.auditLog.count({
+        where: { utilityId: fixA.utilityId, entityType: "Customer" },
+      });
+      expect(audits).toBe(3);
+  
+    }));
 });
 
 describe("POST /api/v1/imports — customer parse-row validation", () => {
@@ -377,56 +386,59 @@ describe("POST /api/v1/imports — customer parse-row validation", () => {
 });
 
 describe("POST /api/v1/imports — customer permission gate", () => {
-  it("requires customers.CREATE specifically (not meter_reads.CREATE)", async () => {
-    const { prisma } = prismaImports;
+  it("requires customers.CREATE specifically (not meter_reads.CREATE)", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    // Set up a role that has meter_reads.CREATE but NOT customers.CREATE.
-    const roleRow = await prisma.role.create({
-      data: {
-        utilityId: fixA.utilityId,
-        name: "Meter-Reads-Only",
-        description: "Test",
-        permissions: { meter_reads: ["VIEW", "CREATE"], imports: ["VIEW"] },
-      },
-    });
+      // Set up a role that has meter_reads.CREATE but NOT customers.CREATE.
+      const roleRow = await prisma.role.create({
+        data: {
+          utilityId: fixA.utilityId,
+          name: "Meter-Reads-Only",
+          description: "Test",
+          permissions: { meter_reads: ["VIEW", "CREATE"], imports: ["VIEW"] },
+        },
+      });
 
-    const userId = "00000000-0000-4000-8000-bbbb00000002";
-    await prisma.cisUser.create({
-      data: {
-        utilityId: fixA.utilityId,
-        id: userId,
-        email: "scoped@example.com",
-        name: "Scoped User",
-        isActive: true,
-      },
-    });
-    await prisma.userRole.create({
-      data: { utilityId: fixA.utilityId, userId, accountId: null, roleId: roleRow.id },
-    });
+      const userId = "00000000-0000-4000-8000-bbbb00000002";
+      await prisma.cisUser.create({
+        data: {
+          utilityId: fixA.utilityId,
+          id: userId,
+          email: "scoped@example.com",
+          name: "Scoped User",
+          isActive: true,
+        },
+      });
+      await prisma.userRole.create({
+        data: { utilityId: fixA.utilityId, userId, accountId: null, roleId: roleRow.id },
+      });
 
-    const csv = "customer_type,first_name,last_name\nINDIVIDUAL,Jane,Doe\n";
-    const mapping = {
-      customer_type: "customerType",
-      first_name: "firstName",
-      last_name: "lastName",
-    };
+      const csv = "customer_type,first_name,last_name\nINDIVIDUAL,Jane,Doe\n";
+      const mapping = {
+        customer_type: "customerType",
+        first_name: "firstName",
+        last_name: "lastName",
+      };
 
-    const scopedToken = makeToken(TENANT_A, userId);
-    const { body, contentType } = buildMultipart([
-      { name: "kind", value: "customer" },
-      { name: "source", value: "MANUAL_UPLOAD" },
-      { name: "mapping", value: JSON.stringify(mapping) },
-      { name: "file", filename: "x.csv", contentType: "text/csv", body: csv },
-    ]);
+      const scopedToken = makeToken(TENANT_A, userId);
+      const { body, contentType } = buildMultipart([
+        { name: "kind", value: "customer" },
+        { name: "source", value: "MANUAL_UPLOAD" },
+        { name: "mapping", value: JSON.stringify(mapping) },
+        { name: "file", filename: "x.csv", contentType: "text/csv", body: csv },
+      ]);
 
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/imports",
-      headers: { authorization: `Bearer ${scopedToken}`, "content-type": contentType },
-      payload: body,
-    });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/imports",
+        headers: { authorization: `Bearer ${scopedToken}`, "content-type": contentType },
+        payload: body,
+      });
 
-    expect(res.statusCode).toBe(403);
-    expect(JSON.parse(res.body).error.code).toBe("FORBIDDEN");
-  });
+      expect(res.statusCode).toBe(403);
+      expect(JSON.parse(res.body).error.code).toBe("FORBIDDEN");
+  
+    }));
 });

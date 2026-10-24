@@ -26,14 +26,6 @@ const TENANT = "00000000-0000-4000-8000-0000000000a1";
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);
@@ -57,89 +49,110 @@ beforeEach(() =>
 );
 
 describe("a CisUser with no utility", () => {
-  it("admits a user that belongs to no tenant", async () => {
-    const { prisma } = prismaImports;
+  it("admits a user that belongs to no tenant", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    const actor = await prisma.cisUser.create({
-      data: { utilityId: null, email: "platform@example.gov", name: "Platform Operator" },
-    });
+      const actor = await prisma.cisUser.create({
+        data: { utilityId: null, email: "platform@example.gov", name: "Platform Operator" },
+      });
 
-    expect(actor.utilityId).toBeNull();
-  });
+      expect(actor.utilityId).toBeNull();
+  
+    }));
 
-  it("refuses a second platform user with the same email", async () => {
-    const { prisma } = prismaImports;
-    await prisma.cisUser.create({
-      data: { utilityId: null, email: "dupe@example.gov", name: "First" },
-    });
+  it("refuses a second platform user with the same email", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      await prisma.cisUser.create({
+        data: { utilityId: null, email: "dupe@example.gov", name: "First" },
+      });
 
-    await expect(
-      prisma.cisUser.create({
-        data: { utilityId: null, email: "dupe@example.gov", name: "Second" },
-      }),
-    ).rejects.toMatchObject({ code: "P2002" });
-  });
+      await expect(
+        prisma.cisUser.create({
+          data: { utilityId: null, email: "dupe@example.gov", name: "Second" },
+        }),
+      ).rejects.toMatchObject({ code: "P2002" });
+  
+    }));
 
-  it("refuses a second platform user with the same external_id", async () => {
-    const { prisma } = prismaImports;
-    // apptorID is where every identity is headed, so external_id is the
-    // claim that will carry it. Duplicates there are the same bug.
-    await prisma.cisUser.create({
-      data: { utilityId: null, email: "a@example.gov", name: "A", externalId: "idp-1" },
-    });
+  it("refuses a second platform user with the same external_id", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      // apptorID is where every identity is headed, so external_id is the
+      // claim that will carry it. Duplicates there are the same bug.
+      await prisma.cisUser.create({
+        data: { utilityId: null, email: "a@example.gov", name: "A", externalId: "idp-1" },
+      });
 
-    await expect(
-      prisma.cisUser.create({
-        data: { utilityId: null, email: "b@example.gov", name: "B", externalId: "idp-1" },
-      }),
-    ).rejects.toMatchObject({ code: "P2002" });
-  });
+      await expect(
+        prisma.cisUser.create({
+          data: { utilityId: null, email: "b@example.gov", name: "B", externalId: "idp-1" },
+        }),
+      ).rejects.toMatchObject({ code: "P2002" });
+  
+    }));
 
-  it("still admits one platform user per distinct email", async () => {
-    const { prisma } = prismaImports;
-    await prisma.cisUser.create({ data: { utilityId: null, email: "one@example.gov", name: "One" } });
-    await prisma.cisUser.create({ data: { utilityId: null, email: "two@example.gov", name: "Two" } });
+  it("still admits one platform user per distinct email", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      await prisma.cisUser.create({ data: { utilityId: null, email: "one@example.gov", name: "One" } });
+      await prisma.cisUser.create({ data: { utilityId: null, email: "two@example.gov", name: "Two" } });
 
-    expect(await prisma.cisUser.count({ where: { utilityId: null } })).toBe(2);
-  });
+      expect(await prisma.cisUser.count({ where: { utilityId: null } })).toBe(2);
+  
+    }));
 
-  it("leaves several platform users with no external_id alone", async () => {
-    const { prisma } = prismaImports;
-    // The external_id index is partial on NOT NULL as well as on the
-    // tenant, because nothing has an apptorID subject yet and a unique
-    // index over NULLs would admit exactly one platform user in total.
-    await prisma.cisUser.create({ data: { utilityId: null, email: "x@example.gov", name: "X" } });
-    await prisma.cisUser.create({ data: { utilityId: null, email: "y@example.gov", name: "Y" } });
+  it("leaves several platform users with no external_id alone", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      // The external_id index is partial on NOT NULL as well as on the
+      // tenant, because nothing has an apptorID subject yet and a unique
+      // index over NULLs would admit exactly one platform user in total.
+      await prisma.cisUser.create({ data: { utilityId: null, email: "x@example.gov", name: "X" } });
+      await prisma.cisUser.create({ data: { utilityId: null, email: "y@example.gov", name: "Y" } });
 
-    expect(await prisma.cisUser.count({ where: { utilityId: null, externalId: null } })).toBe(2);
-  });
+      expect(await prisma.cisUser.count({ where: { utilityId: null, externalId: null } })).toBe(2);
+  
+    }));
 
-  it("still refuses two users sharing one email inside a tenant", async () => {
-    const { prisma } = prismaImports;
-    // The composite unique has to survive the column going nullable.
-    await prisma.cisUser.create({
-      data: { utilityId: TENANT, email: "staff@example.gov", name: "A" },
-    });
+  it("still refuses two users sharing one email inside a tenant", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      // The composite unique has to survive the column going nullable.
+      await prisma.cisUser.create({
+        data: { utilityId: TENANT, email: "staff@example.gov", name: "A" },
+      });
 
-    await expect(
-      prisma.cisUser.create({
-        data: { utilityId: TENANT, email: "staff@example.gov", name: "B" },
-      }),
-    ).rejects.toMatchObject({ code: "P2002" });
-  });
+      await expect(
+        prisma.cisUser.create({
+          data: { utilityId: TENANT, email: "staff@example.gov", name: "B" },
+        }),
+      ).rejects.toMatchObject({ code: "P2002" });
+  
+    }));
 
-  it("lets a tenant user and a platform user share an email", async () => {
-    const { prisma } = prismaImports;
-    // Deliberate: the same person may operate the platform and hold an
-    // account with a tenant, and the two identities are separate rows
-    // with separate authority. Nothing collapses them.
-    await prisma.cisUser.create({
-      data: { utilityId: TENANT, email: "both@example.gov", name: "Tenant Side" },
-    });
-    const platform = await prisma.cisUser.create({
-      data: { utilityId: null, email: "both@example.gov", name: "Platform Side" },
-    });
+  it("lets a tenant user and a platform user share an email", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      // Deliberate: the same person may operate the platform and hold an
+      // account with a tenant, and the two identities are separate rows
+      // with separate authority. Nothing collapses them.
+      await prisma.cisUser.create({
+        data: { utilityId: TENANT, email: "both@example.gov", name: "Tenant Side" },
+      });
+      const platform = await prisma.cisUser.create({
+        data: { utilityId: null, email: "both@example.gov", name: "Platform Side" },
+      });
 
-    expect(platform.utilityId).toBeNull();
-  });
+      expect(platform.utilityId).toBeNull();
+  
+    }));
 });

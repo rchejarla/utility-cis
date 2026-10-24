@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { bootPostgres, ensurePrincipal, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * Slice 5a task 7 — POST /api/v1/service-agreements/:id/bill-segments produces
  * a persisted BillSegment with line items matching the Slice 4 golden test:
@@ -26,6 +27,20 @@ let saId: string;
 
 const ACTOR_ID = "00000000-0000-4000-8000-aaaa00000001";
 
+/**
+ * The services this file calls directly, as a route reaches them: acting
+ * for the tenant, not merely naming it.
+ *
+ * Each already receives the tenant — production passed it from a request
+ * or a job whose scope had been entered, so the argument and the scope
+ * are always the same id. A direct service test has the argument and not
+ * the scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` also overrides a surrounding `seedAsPlatform`, which is
+ * what lets fixture rows be arranged across tenants while the call under
+ * test stays confined to one.
+ */
 function makeToken(uid: string) {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
   const payload = Buffer.from(
@@ -44,15 +59,6 @@ const headers = () => ({ authorization: `Bearer ${makeToken(utilityId)}` });
 beforeAll(() =>
   seedAsPlatform(async () => {
   const booted = await bootPostgres();
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // Its routes run correctly as `cis_app` — no route or service was
-  // found querying a tenant table without a scope — but its own test
-  // bodies arrange and assert on rows through `prisma` directly, which
-  // needs a `seedAsPlatform` or `runAsTenant` per site. See
-  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
-  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
-  // only lets the number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
 
   const TSX_BIN =
@@ -162,54 +168,60 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
-  const { prisma } = prismaImports;
-  // Wipe any segments from a prior test in the same suite — keep meters / SAs.
-  await prisma.$executeRawUnsafe("DELETE FROM bill_segment_line");
-  await prisma.$executeRawUnsafe("DELETE FROM bill_segment");
-  await prisma.$executeRawUnsafe(
-    "UPDATE meter_read SET billed_at = NULL WHERE service_agreement_id = $1::uuid",
-    saId,
-  );
-});
+beforeEach(() =>
+  seedAsPlatform(async () => {    /* Fixture rows and read-backs under the fixture authority; the
+     * scoped wrappers re-enter their own tenant scope. */
+    const { prisma } = prismaImports;
+    // Wipe any segments from a prior test in the same suite — keep meters / SAs.
+    await prisma.$executeRawUnsafe("DELETE FROM bill_segment_line");
+    await prisma.$executeRawUnsafe("DELETE FROM bill_segment");
+    await prisma.$executeRawUnsafe(
+      "UPDATE meter_read SET billed_at = NULL WHERE service_agreement_id = $1::uuid",
+      saId,
+    );
+
+  }));
 
 describe("POST /api/v1/service-agreements/:id/bill-segments — Bozeman SFR golden", () => {
-  it("creates a BillSegment with $69.65 subtotal and persists lines", async () => {
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/service-agreements/${saId}/bill-segments`,
-      headers: headers(),
-      payload: { periodStart: "2026-05-01", periodEnd: "2026-05-31" },
-    });
+  it("creates a BillSegment with $69.65 subtotal and persists lines", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/service-agreements/${saId}/bill-segments`,
+        headers: headers(),
+        payload: { periodStart: "2026-05-01", periodEnd: "2026-05-31" },
+      });
 
-    expect(res.statusCode).toBe(201);
-    const body = JSON.parse(res.body);
-    expect(parseFloat(body.subtotal).toFixed(2)).toBe("69.65");
-    expect(body.lines.length).toBeGreaterThanOrEqual(2);
+      expect(res.statusCode).toBe(201);
+      const body = JSON.parse(res.body);
+      expect(parseFloat(body.subtotal).toFixed(2)).toBe("69.65");
+      expect(body.lines.length).toBeGreaterThanOrEqual(2);
 
-    const serviceLine = body.lines.find((l: any) => l.kindCode === "service_charge");
-    expect(parseFloat(serviceLine.amount).toFixed(2)).toBe("22.31");
+      const serviceLine = body.lines.find((l: any) => l.kindCode === "service_charge");
+      expect(parseFloat(serviceLine.amount).toFixed(2)).toBe("22.31");
 
-    const consumption = body.lines.find(
-      (l: any) => l.kindCode === "consumption" && l.label.includes("Single Family"),
-    );
-    expect(parseFloat(consumption.amount).toFixed(2)).toBe("47.34");
+      const consumption = body.lines.find(
+        (l: any) => l.kindCode === "consumption" && l.label.includes("Single Family"),
+      );
+      expect(parseFloat(consumption.amount).toFixed(2)).toBe("47.34");
 
-    // DB row exists
-    const { prisma } = prismaImports;
-    const dbSegment = await prisma.billSegment.findUniqueOrThrow({
-      where: { id: body.id, utilityId },
-      include: { lines: true },
-    });
-    expect(dbSegment.lines.length).toBe(body.lines.length);
-    expect(dbSegment.subtotal.toFixed(2)).toBe("69.65");
+      // DB row exists
+      const { prisma } = prismaImports;
+      const dbSegment = await prisma.billSegment.findUniqueOrThrow({
+        where: { id: body.id, utilityId },
+        include: { lines: true },
+      });
+      expect(dbSegment.lines.length).toBe(body.lines.length);
+      expect(dbSegment.subtotal.toFixed(2)).toBe("69.65");
 
-    // MeterRead consumed
-    const consumed = await prisma.meterRead.findFirst({
-      where: { serviceAgreementId: saId, billedAt: { not: null } },
-    });
-    expect(consumed).not.toBeNull();
-  }, 600_000);
+      // MeterRead consumed
+      const consumed = await prisma.meterRead.findFirst({
+        where: { serviceAgreementId: saId, billedAt: { not: null } },
+      });
+      expect(consumed).not.toBeNull();
+  
+    }), 600_000);
 
   it("GET /service-agreements/:id/bill-segments returns the new segment", async () => {
     const create = await app.inject({
@@ -259,45 +271,48 @@ describe("POST /api/v1/service-agreements/:id/bill-segments — Bozeman SFR gold
    * pickers. The seeded read is dated 2026-05-31, and nothing has been
    * billed, so the period ends there and starts at the agreement.
    */
-  it("bills the period from the reads when the body carries no dates", async () => {
-    const { prisma } = prismaImports;
-    // Whatever the newest unbilled read happens to be — the seed makes
-    // one and this suite's fixture adds another, which is the point: the
-    // interval ends at the latest read taken, not at a date anyone chose.
-    const newest = await prisma.meterRead.findFirstOrThrow({
-      where: { serviceAgreementId: saId, billedAt: null },
-      orderBy: [{ readDate: "desc" }, { id: "desc" }],
-      select: { readDate: true },
-    });
+  it("bills the period from the reads when the body carries no dates", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      // Whatever the newest unbilled read happens to be — the seed makes
+      // one and this suite's fixture adds another, which is the point: the
+      // interval ends at the latest read taken, not at a date anyone chose.
+      const newest = await prisma.meterRead.findFirstOrThrow({
+        where: { serviceAgreementId: saId, billedAt: null },
+        orderBy: [{ readDate: "desc" }, { id: "desc" }],
+        select: { readDate: true },
+      });
 
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/service-agreements/${saId}/bill-segments`,
-      headers: headers(),
-      payload: {},
-    });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/service-agreements/${saId}/bill-segments`,
+        headers: headers(),
+        payload: {},
+      });
 
-    expect(res.statusCode).toBe(201);
-    const body = JSON.parse(res.body);
-    expect(body.periodEnd.slice(0, 10)).toBe(newest.readDate.toISOString().slice(0, 10));
+      expect(res.statusCode).toBe(201);
+      const body = JSON.parse(res.body);
+      expect(body.periodEnd.slice(0, 10)).toBe(newest.readDate.toISOString().slice(0, 10));
 
-    const sa = await prisma.serviceAgreement.findUniqueOrThrow({
-      where: { id: saId },
-      select: { startDate: true },
-    });
-    expect(body.periodStart.slice(0, 10)).toBe(sa.startDate.toISOString().slice(0, 10));
+      const sa = await prisma.serviceAgreement.findUniqueOrThrow({
+        where: { id: saId },
+        select: { startDate: true },
+      });
+      expect(body.periodStart.slice(0, 10)).toBe(sa.startDate.toISOString().slice(0, 10));
 
-    // The read that closed the period is now spent, so the next call has
-    // nothing to bill rather than billing the same interval again.
-    const again = await app.inject({
-      method: "POST",
-      url: `/api/v1/service-agreements/${saId}/bill-segments`,
-      headers: headers(),
-      payload: {},
-    });
-    expect(again.statusCode).toBe(400);
-    expect(JSON.parse(again.body).error?.code).toBe("NO_READ_IN_WINDOW");
-  }, 60_000);
+      // The read that closed the period is now spent, so the next call has
+      // nothing to bill rather than billing the same interval again.
+      const again = await app.inject({
+        method: "POST",
+        url: `/api/v1/service-agreements/${saId}/bill-segments`,
+        headers: headers(),
+        payload: {},
+      });
+      expect(again.statusCode).toBe(400);
+      expect(JSON.parse(again.body).error?.code).toBe("NO_READ_IN_WINDOW");
+  
+    }), 60_000);
 
   it("refuses half a period, rather than inventing the other half", async () => {
     const res = await app.inject({
@@ -335,32 +350,35 @@ describe("POST /api/v1/service-agreements/:id/bill-segments — Bozeman SFR gold
     expect(body.error?.code).toBe("NO_ACTIVE_ASSIGNMENTS");
   });
 
-  it("returns 409 SCHEDULE_NOT_PUBLISHED when an assigned schedule has publishedAt = NULL", async () => {
-    const { prisma } = prismaImports;
-    // Find the schedule the SA is assigned to and force it back to draft.
-    const a = await prisma.sAScheduleAssignment.findFirstOrThrow({
-      where: { serviceAgreementId: saId },
-    });
-    await prisma.rateSchedule.update({
-      where: { id: a.rateScheduleId },
-      data: { publishedAt: null },
-    });
-    try {
-      const res = await app.inject({
-        method: "POST",
-        url: `/api/v1/service-agreements/${saId}/bill-segments`,
-        headers: headers(),
-        payload: { periodStart: "2026-05-01", periodEnd: "2026-05-31" },
+  it("returns 409 SCHEDULE_NOT_PUBLISHED when an assigned schedule has publishedAt = NULL", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      // Find the schedule the SA is assigned to and force it back to draft.
+      const a = await prisma.sAScheduleAssignment.findFirstOrThrow({
+        where: { serviceAgreementId: saId },
       });
-      expect(res.statusCode).toBe(409);
-      const body = JSON.parse(res.body);
-      expect(body.error?.code).toBe("SCHEDULE_NOT_PUBLISHED");
-    } finally {
-      // Restore for any later tests.
       await prisma.rateSchedule.update({
         where: { id: a.rateScheduleId },
-        data: { publishedAt: new Date(2026, 0, 1) },
+        data: { publishedAt: null },
       });
-    }
-  }, 600_000);
+      try {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/v1/service-agreements/${saId}/bill-segments`,
+          headers: headers(),
+          payload: { periodStart: "2026-05-01", periodEnd: "2026-05-31" },
+        });
+        expect(res.statusCode).toBe(409);
+        const body = JSON.parse(res.body);
+        expect(body.error?.code).toBe("SCHEDULE_NOT_PUBLISHED");
+      } finally {
+        // Restore for any later tests.
+        await prisma.rateSchedule.update({
+          where: { id: a.rateScheduleId },
+          data: { publishedAt: new Date(2026, 0, 1) },
+        });
+      }
+  
+    }), 600_000);
 });

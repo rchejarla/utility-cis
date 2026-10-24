@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { runAsTenant } from "../../lib/tenant-context.js";
 import {
   bootPostgres,
   resetDb,
@@ -32,18 +33,26 @@ let svc: typeof import("../../services/bill-segment.service.js");
 let fix: TenantFixture;
 let saId: string;
 
+/**
+ * The services this file calls directly, as a route reaches them: acting
+ * for the tenant, not merely naming it.
+ *
+ * Each already receives the tenant — production passed it from a request
+ * or a job whose scope had been entered, so the argument and the scope
+ * are always the same id. A direct service test has the argument and not
+ * the scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` also overrides a surrounding `seedAsPlatform`, which is
+ * what lets fixture rows be arranged across tenants while the call under
+ * test stays confined to one.
+ */
+const resolveServicePeriod = (...args: Parameters<typeof svc.resolveServicePeriod>) =>
+  runAsTenant(args[0], async () => svc.resolveServicePeriod(...args));
+
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
-  process.env.DATABASE_URL = booted.dbUrl;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/bill-segment.service.js");
 }, 180_000);
@@ -80,26 +89,33 @@ beforeEach(() =>
 
 /** A read on `date`, unbilled unless `billed` says otherwise. */
 async function read(date: string, opts: { billed?: boolean; consumption?: number } = {}) {
-  const { prisma } = prismaImports;
-  const meter = await prisma.meter.findUniqueOrThrow({
-    where: { id: fix.meterId },
-    select: { uomId: true },
-  });
-  return prisma.meterRead.create({
-    data: {
-      utilityId: fix.utilityId,
-      meterId: fix.meterId,
-      serviceAgreementId: saId,
-      uomId: meter.uomId,
-      readDate: new Date(`${date}T00:00:00.000Z`),
-      readDatetime: new Date(`${date}T12:00:00.000Z`),
-      reading: 100,
-      priorReading: 88,
-      consumption: opts.consumption ?? 12,
-      readType: "ACTUAL",
-      readSource: "MANUAL",
-      billedAt: opts.billed ? new Date(`${date}T23:00:00.000Z`) : null,
-    },
+  /*
+   * Arranging rows, so the authority the fixtures use. Calls under
+   * test re-enter their own tenant scope.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const meter = await prisma.meter.findUniqueOrThrow({
+      where: { id: fix.meterId },
+      select: { uomId: true },
+    });
+    return prisma.meterRead.create({
+      data: {
+        utilityId: fix.utilityId,
+        meterId: fix.meterId,
+        serviceAgreementId: saId,
+        uomId: meter.uomId,
+        readDate: new Date(`${date}T00:00:00.000Z`),
+        readDatetime: new Date(`${date}T12:00:00.000Z`),
+        reading: 100,
+        priorReading: 88,
+        consumption: opts.consumption ?? 12,
+        readType: "ACTUAL",
+        readSource: "MANUAL",
+        billedAt: opts.billed ? new Date(`${date}T23:00:00.000Z`) : null,
+      },
+    });
+
   });
 }
 
@@ -110,7 +126,7 @@ describe("resolveServicePeriod", () => {
     // The reader came on the 30th, not the month end.
     await read("2026-01-30");
 
-    const p = await svc.resolveServicePeriod(fix.utilityId, saId, {
+    const p = await resolveServicePeriod(fix.utilityId, saId, {
       asOf: new Date("2026-02-01T00:00:00.000Z"),
     });
 
@@ -121,7 +137,7 @@ describe("resolveServicePeriod", () => {
     await read("2025-12-30", { billed: true });
     await read("2026-01-30");
 
-    const p = await svc.resolveServicePeriod(fix.utilityId, saId, {
+    const p = await resolveServicePeriod(fix.utilityId, saId, {
       asOf: new Date("2026-02-01T00:00:00.000Z"),
     });
 
@@ -132,19 +148,22 @@ describe("resolveServicePeriod", () => {
     expect(p.readCount).toBe(1);
   });
 
-  it("starts at the agreement, not at epoch, on a first bill", async () => {
-    await read("2026-01-30");
+  it("starts at the agreement, not at epoch, on a first bill", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      await read("2026-01-30");
 
-    const p = await svc.resolveServicePeriod(fix.utilityId, saId, {
-      asOf: new Date("2026-02-01T00:00:00.000Z"),
-    });
+      const p = await resolveServicePeriod(fix.utilityId, saId, {
+        asOf: new Date("2026-02-01T00:00:00.000Z"),
+      });
 
-    const sa = await prismaImports.prisma.serviceAgreement.findUniqueOrThrow({
-      where: { id: saId },
-      select: { startDate: true },
-    });
-    expect(ymd(p.periodStart)).toBe(ymd(sa.startDate));
-  });
+      const sa = await prismaImports.prisma.serviceAgreement.findUniqueOrThrow({
+        where: { id: saId },
+        select: { startDate: true },
+      });
+      expect(ymd(p.periodStart)).toBe(ymd(sa.startDate));
+  
+    }));
 
   /**
    * The reader slipped a day. Under the calendar rule, January's window
@@ -158,13 +177,13 @@ describe("resolveServicePeriod", () => {
 
     // Billing January finds nothing to bill, and says so.
     await expect(
-      svc.resolveServicePeriod(fix.utilityId, saId, {
+      resolveServicePeriod(fix.utilityId, saId, {
         asOf: new Date("2026-01-31T00:00:00.000Z"),
       }),
     ).rejects.toMatchObject({ code: "NO_READ_IN_WINDOW" });
 
     // Billing after it lands covers the whole 33 days, once.
-    const p = await svc.resolveServicePeriod(fix.utilityId, saId, {
+    const p = await resolveServicePeriod(fix.utilityId, saId, {
       asOf: new Date("2026-02-28T00:00:00.000Z"),
     });
     expect(ymd(p.periodStart)).toBe("2025-12-31");
@@ -176,7 +195,7 @@ describe("resolveServicePeriod", () => {
     await read("2026-01-30");
     await read("2026-02-15");
 
-    const p = await svc.resolveServicePeriod(fix.utilityId, saId, {
+    const p = await resolveServicePeriod(fix.utilityId, saId, {
       asOf: new Date("2026-02-01T00:00:00.000Z"),
     });
 
@@ -189,7 +208,7 @@ describe("resolveServicePeriod", () => {
     await read("2026-01-15");
     await read("2026-01-30");
 
-    const p = await svc.resolveServicePeriod(fix.utilityId, saId, {
+    const p = await resolveServicePeriod(fix.utilityId, saId, {
       asOf: new Date("2026-02-01T00:00:00.000Z"),
     });
 
@@ -218,7 +237,7 @@ describe("resolveServicePeriod", () => {
     await read("2026-01-10");
 
     await expect(
-      svc.resolveServicePeriod(fix.utilityId, saId, {
+      resolveServicePeriod(fix.utilityId, saId, {
         asOf: new Date("2026-02-01T00:00:00.000Z"),
       }),
     ).rejects.toMatchObject({ code: "READ_PREDATES_BILLED_PERIOD", statusCode: 409 });
@@ -228,7 +247,7 @@ describe("resolveServicePeriod", () => {
     await read("2026-01-30");
 
     await expect(
-      svc.resolveServicePeriod("00000000-0000-4000-8000-0000000000bb", saId, {
+      resolveServicePeriod("00000000-0000-4000-8000-0000000000bb", saId, {
         asOf: new Date("2026-02-01T00:00:00.000Z"),
       }),
     ).rejects.toMatchObject({ code: "SA_NOT_FOUND" });

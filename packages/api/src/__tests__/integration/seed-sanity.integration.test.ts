@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import {
   bootPostgres,
   type BootedContainer,
+  seedAsPlatform,
 } from "./_effective-dating-fixtures.js";
 import { createRateComponentSchema } from "@utility-cis/shared";
 
@@ -37,14 +38,6 @@ let prisma: PrismaClient;
 
 beforeAll(async () => {
   booted = await bootPostgres();
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
 
   // Run the v2 prisma seed (seed.ts) against the freshly migrated DB.
   // bootPostgres already applied migrations; we just invoke the seeder
@@ -74,87 +67,105 @@ afterAll(async () => {
 });
 
 describe("seed sanity", () => {
-  it("every rate schedule has at least one component", async () => {
-    const schedules = await prisma.rateSchedule.findMany({
-      include: { _count: { select: { components: true } } },
-    });
-    expect(schedules.length).toBeGreaterThan(0);
-    for (const s of schedules) {
-      expect(s._count.components, `schedule ${s.code} has no components`).toBeGreaterThan(0);
-    }
-  });
-
-  it("every active SA has at least one rate-schedule assignment", async () => {
-    const sas = await prisma.serviceAgreement.findMany({
-      where: { status: { in: ["ACTIVE", "PENDING"] } },
-      include: { _count: { select: { rateScheduleAssignments: true } } },
-    });
-    expect(sas.length).toBeGreaterThan(0);
-    for (const sa of sas) {
-      expect(
-        sa._count.rateScheduleAssignments,
-        `SA ${sa.agreementNumber} has no rate-schedule assignments`,
-      ).toBeGreaterThan(0);
-    }
-  });
-
-  it("every component validates against the current Zod schema", async () => {
-    const components = await prisma.rateComponent.findMany();
-    expect(components.length).toBeGreaterThan(0);
-    for (const c of components) {
-      const result = createRateComponentSchema.safeParse({
-        kindCode: c.kindCode,
-        label: c.label,
-        predicate: c.predicate,
-        quantitySource: c.quantitySource,
-        pricing: c.pricing,
-        sortOrder: c.sortOrder,
-        effectiveDate: c.effectiveDate.toISOString().slice(0, 10),
+  it("every rate schedule has at least one component", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const schedules = await prisma.rateSchedule.findMany({
+        include: { _count: { select: { components: true } } },
       });
-      if (!result.success) {
-        throw new Error(
-          `Component ${c.id} (${c.label}) failed validation: ${JSON.stringify(result.error.format())}`,
-        );
+      expect(schedules.length).toBeGreaterThan(0);
+      for (const s of schedules) {
+        expect(s._count.components, `schedule ${s.code} has no components`).toBeGreaterThan(0);
       }
-    }
-  });
+  
+    }));
 
-  it("rate service classes have unique (utility, commodity, code)", async () => {
-    const classes = await prisma.rateServiceClass.findMany();
-    expect(classes.length).toBeGreaterThan(0);
-    const seen = new Set<string>();
-    for (const c of classes) {
-      const key = `${c.utilityId}|${c.commodityId}|${c.code}`;
-      expect(seen.has(key), `duplicate class key: ${key}`).toBe(false);
-      seen.add(key);
-    }
-  });
+  it("every active SA has at least one rate-schedule assignment", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const sas = await prisma.serviceAgreement.findMany({
+        where: { status: { in: ["ACTIVE", "PENDING"] } },
+        include: { _count: { select: { rateScheduleAssignments: true } } },
+      });
+      expect(sas.length).toBeGreaterThan(0);
+      for (const sa of sas) {
+        expect(
+          sa._count.rateScheduleAssignments,
+          `SA ${sa.agreementNumber} has no rate-schedule assignments`,
+        ).toBeGreaterThan(0);
+      }
+  
+    }));
 
-  it("rate_component_kind has the 11 expected globals", async () => {
-    const globals = await prisma.rateComponentKind.findMany({
-      where: { utilityId: null },
-    });
-    const expected = [
-      "service_charge",
-      "consumption",
-      "derived_consumption",
-      "non_meter",
-      "item_price",
-      "one_time_fee",
-      "surcharge",
-      "tax",
-      "credit",
-      "reservation_charge",
-      "minimum_bill",
-    ];
-    expect(globals.map((g) => g.code).sort()).toEqual(expected.sort());
-  });
+  it("every component validates against the current Zod schema", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const components = await prisma.rateComponent.findMany();
+      expect(components.length).toBeGreaterThan(0);
+      for (const c of components) {
+        const result = createRateComponentSchema.safeParse({
+          kindCode: c.kindCode,
+          label: c.label,
+          predicate: c.predicate,
+          quantitySource: c.quantitySource,
+          pricing: c.pricing,
+          sortOrder: c.sortOrder,
+          effectiveDate: c.effectiveDate.toISOString().slice(0, 10),
+        });
+        if (!result.success) {
+          throw new Error(
+            `Component ${c.id} (${c.label}) failed validation: ${JSON.stringify(result.error.format())}`,
+          );
+        }
+      }
+  
+    }));
 
-  it("rate_assignment_role has the 5 expected globals", async () => {
-    const globals = await prisma.rateAssignmentRole.findMany({
-      where: { utilityId: null },
-    });
-    const expected = ["primary", "delivery", "supply", "rider", "opt_in"];
-    expect(globals.map((g) => g.code).sort()).toEqual(expected.sort());
-  });
+  it("rate service classes have unique (utility, commodity, code)", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const classes = await prisma.rateServiceClass.findMany();
+      expect(classes.length).toBeGreaterThan(0);
+      const seen = new Set<string>();
+      for (const c of classes) {
+        const key = `${c.utilityId}|${c.commodityId}|${c.code}`;
+        expect(seen.has(key), `duplicate class key: ${key}`).toBe(false);
+        seen.add(key);
+      }
+  
+    }));
+
+  it("rate_component_kind has the 11 expected globals", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const globals = await prisma.rateComponentKind.findMany({
+        where: { utilityId: null },
+      });
+      const expected = [
+        "service_charge",
+        "consumption",
+        "derived_consumption",
+        "non_meter",
+        "item_price",
+        "one_time_fee",
+        "surcharge",
+        "tax",
+        "credit",
+        "reservation_charge",
+        "minimum_bill",
+      ];
+      expect(globals.map((g) => g.code).sort()).toEqual(expected.sort());
+  
+    }));
+
+  it("rate_assignment_role has the 5 expected globals", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const globals = await prisma.rateAssignmentRole.findMany({
+        where: { utilityId: null },
+      });
+      const expected = ["primary", "delivery", "supply", "rider", "opt_in"];
+      expect(globals.map((g) => g.code).sort()).toEqual(expected.sort());
+  
+    }));
 });

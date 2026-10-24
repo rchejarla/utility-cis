@@ -59,15 +59,6 @@ function makeToken(utilityId: string, actorId = "00000000-0000-4000-8000-aaaa000
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // Its routes run correctly as `cis_app` — no route or service was
-  // found querying a tenant table without a scope — but its own test
-  // bodies arrange and assert on rows through `prisma` directly, which
-  // needs a `seedAsPlatform` or `runAsTenant` per site. See
-  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
-  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
-  // only lets the number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   appImports = await import("../../app.js");
@@ -106,75 +97,92 @@ beforeEach(() =>
 const headers = () => ({ authorization: `Bearer ${makeToken(TENANT_A)}` });
 
 async function makeActiveSaWithTwoMeters() {
-  const { prisma } = prismaImports;
-  const sa = await prisma.serviceAgreement.create({
-    data: {
-      utilityId: fixA.utilityId,
-      agreementNumber: "SA-HTTP",
-      accountId: fixA.accountId,
-      commodityId: fixA.commodityId,
-      startDate: new Date("2024-01-01"),
-      status: "ACTIVE",
-    },
-  });
 
-  const sp = await prisma.servicePoint.create({
-    data: {
-      utilityId: fixA.utilityId,
-      serviceAgreementId: sa.id,
-      premiseId: fixA.premiseId,
-      type: "METERED",
-      status: "ACTIVE",
-      startDate: new Date("2024-01-01"),
-    },
-  });
+  /*
 
-  await prisma.servicePointMeter.createMany({
-    data: [
-      {
+   * Arranging rows, so the authority the fixtures use. Calls under
+
+   * test re-enter their own tenant scope.
+
+   */
+
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const sa = await prisma.serviceAgreement.create({
+      data: {
         utilityId: fixA.utilityId,
-        servicePointId: sp.id,
-        meterId: fixA.meterId,
-        addedDate: new Date("2024-01-01"),
+        agreementNumber: "SA-HTTP",
+        accountId: fixA.accountId,
+        commodityId: fixA.commodityId,
+        startDate: new Date("2024-01-01"),
+        status: "ACTIVE",
       },
-      {
+    });
+
+    const sp = await prisma.servicePoint.create({
+      data: {
         utilityId: fixA.utilityId,
-        servicePointId: sp.id,
-        meterId: fixA.meterId2,
-        addedDate: new Date("2024-01-01"),
+        serviceAgreementId: sa.id,
+        premiseId: fixA.premiseId,
+        type: "METERED",
+        status: "ACTIVE",
+        startDate: new Date("2024-01-01"),
       },
-    ],
+    });
+
+    await prisma.servicePointMeter.createMany({
+      data: [
+        {
+          utilityId: fixA.utilityId,
+          servicePointId: sp.id,
+          meterId: fixA.meterId,
+          addedDate: new Date("2024-01-01"),
+        },
+        {
+          utilityId: fixA.utilityId,
+          servicePointId: sp.id,
+          meterId: fixA.meterId2,
+          addedDate: new Date("2024-01-01"),
+        },
+      ],
+    });
+
+    return sa;
+
+
   });
 
-  return sa;
 }
 
 describe("POST /api/v1/service-agreements/:id/close", () => {
-  it("closes the SA and cascades onto every open meter assignment", async () => {
-    const { prisma } = prismaImports;
-    const sa = await makeActiveSaWithTwoMeters();
+  it("closes the SA and cascades onto every open meter assignment", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const sa = await makeActiveSaWithTwoMeters();
 
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/service-agreements/${sa.id}/close`,
-      headers: headers(),
-      payload: { endDate: "2024-12-31", status: "FINAL", reason: "test" },
-    });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/service-agreements/${sa.id}/close`,
+        headers: headers(),
+        payload: { endDate: "2024-12-31", status: "FINAL", reason: "test" },
+      });
 
-    expect(res.statusCode).toBe(200);
-    const body = JSON.parse(res.body);
-    expect(body.metersClosed).toBe(2);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.metersClosed).toBe(2);
 
-    const reloaded = await prisma.serviceAgreement.findUniqueOrThrow({ where: { id: sa.id } });
-    expect(reloaded.status).toBe("FINAL");
-    expect(reloaded.endDate?.toISOString().slice(0, 10)).toBe("2024-12-31");
+      const reloaded = await prisma.serviceAgreement.findUniqueOrThrow({ where: { id: sa.id } });
+      expect(reloaded.status).toBe("FINAL");
+      expect(reloaded.endDate?.toISOString().slice(0, 10)).toBe("2024-12-31");
 
-    const spms = await prisma.servicePointMeter.findMany({
-      where: { servicePoint: { serviceAgreementId: sa.id } },
-    });
-    expect(spms.every((s) => s.removedDate?.toISOString().slice(0, 10) === "2024-12-31"))
-      .toBe(true);
-  });
+      const spms = await prisma.servicePointMeter.findMany({
+        where: { servicePoint: { serviceAgreementId: sa.id } },
+      });
+      expect(spms.every((s) => s.removedDate?.toISOString().slice(0, 10) === "2024-12-31"))
+        .toBe(true);
+  
+    }));
 
   it("returns 400 (Zod) when endDate is missing", async () => {
     const sa = await makeActiveSaWithTwoMeters();
@@ -224,72 +232,78 @@ describe("PATCH /api/v1/service-agreements/:id (lifecycle field rejection)", () 
 });
 
 describe("POST /api/v1/service-agreements/:id/meters/:meterId/remove", () => {
-  it("closes a single SPM by (saId, meterId), emits an audit row, leaves the SA open", async () => {
-    const { prisma } = prismaImports;
-    const sa = await makeActiveSaWithTwoMeters();
+  it("closes a single SPM by (saId, meterId), emits an audit row, leaves the SA open", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const sa = await makeActiveSaWithTwoMeters();
 
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/service-agreements/${sa.id}/meters/${fixA.meterId}/remove`,
-      headers: headers(),
-      payload: { removedDate: "2024-08-15", reason: "Failed" },
-    });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/service-agreements/${sa.id}/meters/${fixA.meterId}/remove`,
+        headers: headers(),
+        payload: { removedDate: "2024-08-15", reason: "Failed" },
+      });
 
-    expect(res.statusCode).toBe(200);
-    const spms = await prisma.servicePointMeter.findMany({
-      where: { servicePoint: { serviceAgreementId: sa.id } },
-      orderBy: { addedDate: "asc" },
-    });
-    const removed = spms.find((s) => s.meterId === fixA.meterId);
-    const stillOpen = spms.find((s) => s.meterId === fixA.meterId2);
-    expect(removed?.removedDate?.toISOString().slice(0, 10)).toBe("2024-08-15");
-    expect(stillOpen?.removedDate).toBeNull();
+      expect(res.statusCode).toBe(200);
+      const spms = await prisma.servicePointMeter.findMany({
+        where: { servicePoint: { serviceAgreementId: sa.id } },
+        orderBy: { addedDate: "asc" },
+      });
+      const removed = spms.find((s) => s.meterId === fixA.meterId);
+      const stillOpen = spms.find((s) => s.meterId === fixA.meterId2);
+      expect(removed?.removedDate?.toISOString().slice(0, 10)).toBe("2024-08-15");
+      expect(stillOpen?.removedDate).toBeNull();
 
-    // SA itself is unchanged.
-    const reloaded = await prisma.serviceAgreement.findUniqueOrThrow({ where: { id: sa.id } });
-    expect(reloaded.status).toBe("ACTIVE");
-    expect(reloaded.endDate).toBeNull();
+      // SA itself is unchanged.
+      const reloaded = await prisma.serviceAgreement.findUniqueOrThrow({ where: { id: sa.id } });
+      expect(reloaded.status).toBe("ACTIVE");
+      expect(reloaded.endDate).toBeNull();
 
-    // Audit row for the SPM mutation.
-    const audits = await prisma.auditLog.count({
-      where: { utilityId: fixA.utilityId, entityType: "ServicePointMeter" },
-    });
-    expect(audits).toBe(1);
-  });
+      // Audit row for the SPM mutation.
+      const audits = await prisma.auditLog.count({
+        where: { utilityId: fixA.utilityId, entityType: "ServicePointMeter" },
+      });
+      expect(audits).toBe(1);
+  
+    }));
 });
 
 describe("POST /api/v1/service-agreements/:id/meters/swap", () => {
-  it("swaps old meter for new in one transaction (old.removedDate set, new SPM created)", async () => {
-    const { prisma } = prismaImports;
-    const sa = await makeActiveSaWithTwoMeters();
+  it("swaps old meter for new in one transaction (old.removedDate set, new SPM created)", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const sa = await makeActiveSaWithTwoMeters();
 
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/service-agreements/${sa.id}/meters/swap`,
-      headers: headers(),
-      payload: {
-        oldMeterId: fixA.meterId,
-        newMeterId: fixA.meterId3,
-        swapDate: "2024-09-01",
-        reason: "Routine replacement",
-      },
-    });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/service-agreements/${sa.id}/meters/swap`,
+        headers: headers(),
+        payload: {
+          oldMeterId: fixA.meterId,
+          newMeterId: fixA.meterId3,
+          swapDate: "2024-09-01",
+          reason: "Routine replacement",
+        },
+      });
 
-    expect(res.statusCode).toBe(200);
-    const body = JSON.parse(res.body);
-    expect(body.closedOld.removedDate).toBeTruthy();
-    expect(body.newSpm.meterId).toBe(fixA.meterId3);
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.closedOld.removedDate).toBeTruthy();
+      expect(body.newSpm.meterId).toBe(fixA.meterId3);
 
-    const spms = await prisma.servicePointMeter.findMany({
-      where: { servicePoint: { serviceAgreementId: sa.id } },
-    });
-    // 3 SPMs total: old (closed), other (still open), new (open).
-    expect(spms).toHaveLength(3);
-    expect(spms.find((s) => s.meterId === fixA.meterId)?.removedDate?.toISOString().slice(0, 10))
-      .toBe("2024-09-01");
-    expect(spms.find((s) => s.meterId === fixA.meterId3)?.addedDate.toISOString().slice(0, 10))
-      .toBe("2024-09-01");
-  });
+      const spms = await prisma.servicePointMeter.findMany({
+        where: { servicePoint: { serviceAgreementId: sa.id } },
+      });
+      // 3 SPMs total: old (closed), other (still open), new (open).
+      expect(spms).toHaveLength(3);
+      expect(spms.find((s) => s.meterId === fixA.meterId)?.removedDate?.toISOString().slice(0, 10))
+        .toBe("2024-09-01");
+      expect(spms.find((s) => s.meterId === fixA.meterId3)?.addedDate.toISOString().slice(0, 10))
+        .toBe("2024-09-01");
+  
+    }));
 
   it("returns 409 when the new meter is already on another open SPM", async () => {
     const sa = await makeActiveSaWithTwoMeters();
@@ -311,133 +325,142 @@ describe("POST /api/v1/service-agreements/:id/meters/swap", () => {
 });
 
 describe("GET /api/v1/premises/:id/responsible-account", () => {
-  it("returns the account responsible at a given as_of date", async () => {
-    const { prisma } = prismaImports;
-    const sa = await prisma.serviceAgreement.create({
-      data: {
-        utilityId: fixA.utilityId,
-        agreementNumber: "SA-PIT",
-        accountId: fixA.accountId,
-        commodityId: fixA.commodityId,
-        startDate: new Date("2024-01-01"),
-        status: "ACTIVE",
-      },
-    });
-    await prisma.servicePoint.create({
-      data: {
-        utilityId: fixA.utilityId,
-        serviceAgreementId: sa.id,
-        premiseId: fixA.premiseId,
-        type: "METERED",
-        status: "ACTIVE",
-        startDate: new Date("2024-01-01"),
-      },
-    });
+  it("returns the account responsible at a given as_of date", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const sa = await prisma.serviceAgreement.create({
+        data: {
+          utilityId: fixA.utilityId,
+          agreementNumber: "SA-PIT",
+          accountId: fixA.accountId,
+          commodityId: fixA.commodityId,
+          startDate: new Date("2024-01-01"),
+          status: "ACTIVE",
+        },
+      });
+      await prisma.servicePoint.create({
+        data: {
+          utilityId: fixA.utilityId,
+          serviceAgreementId: sa.id,
+          premiseId: fixA.premiseId,
+          type: "METERED",
+          status: "ACTIVE",
+          startDate: new Date("2024-01-01"),
+        },
+      });
 
-    const res = await app.inject({
-      method: "GET",
-      url: `/api/v1/premises/${fixA.premiseId}/responsible-account?commodity=${fixA.commodityId}&as_of=2024-06-15`,
-      headers: headers(),
-    });
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/premises/${fixA.premiseId}/responsible-account?commodity=${fixA.commodityId}&as_of=2024-06-15`,
+        headers: headers(),
+      });
 
-    expect(res.statusCode).toBe(200);
-    const body = JSON.parse(res.body);
-    expect(body.accountId).toBe(fixA.accountId);
-    expect(body.asOfDate).toBe("2024-06-15");
-  });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.accountId).toBe(fixA.accountId);
+      expect(body.asOfDate).toBe("2024-06-15");
+  
+    }));
 
-  it("returns 404 when no SA covered the date", async () => {
-    const { prisma } = prismaImports;
-    const sa = await prisma.serviceAgreement.create({
-      data: {
-        utilityId: fixA.utilityId,
-        agreementNumber: "SA-PIT-2",
-        accountId: fixA.accountId,
-        commodityId: fixA.commodityId,
-        startDate: new Date("2024-01-01"),
-        status: "ACTIVE",
-      },
-    });
-    await prisma.servicePoint.create({
-      data: {
-        utilityId: fixA.utilityId,
-        serviceAgreementId: sa.id,
-        premiseId: fixA.premiseId,
-        type: "METERED",
-        status: "ACTIVE",
-        startDate: new Date("2024-01-01"),
-      },
-    });
+  it("returns 404 when no SA covered the date", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const sa = await prisma.serviceAgreement.create({
+        data: {
+          utilityId: fixA.utilityId,
+          agreementNumber: "SA-PIT-2",
+          accountId: fixA.accountId,
+          commodityId: fixA.commodityId,
+          startDate: new Date("2024-01-01"),
+          status: "ACTIVE",
+        },
+      });
+      await prisma.servicePoint.create({
+        data: {
+          utilityId: fixA.utilityId,
+          serviceAgreementId: sa.id,
+          premiseId: fixA.premiseId,
+          type: "METERED",
+          status: "ACTIVE",
+          startDate: new Date("2024-01-01"),
+        },
+      });
 
-    const res = await app.inject({
-      method: "GET",
-      url: `/api/v1/premises/${fixA.premiseId}/responsible-account?commodity=${fixA.commodityId}&as_of=2023-06-15`,
-      headers: headers(),
-    });
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/premises/${fixA.premiseId}/responsible-account?commodity=${fixA.commodityId}&as_of=2023-06-15`,
+        headers: headers(),
+      });
 
-    expect(res.statusCode).toBe(404);
-  });
+      expect(res.statusCode).toBe(404);
+  
+    }));
 });
 
 describe("GET /api/v1/premises/:id/agreement-history", () => {
-  it("returns every SA covering the premise (incl. FINAL/CLOSED)", async () => {
-    const { prisma } = prismaImports;
+  it("returns every SA covering the premise (incl. FINAL/CLOSED)", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    const saOld = await prisma.serviceAgreement.create({
-      data: {
-        utilityId: fixA.utilityId,
-        agreementNumber: "SA-OLD",
-        accountId: fixA.accountId,
-        commodityId: fixA.commodityId,
-        startDate: new Date("2023-01-01"),
-        endDate: new Date("2023-12-31"),
-        status: "FINAL",
-      },
-    });
-    await prisma.servicePoint.create({
-      data: {
-        utilityId: fixA.utilityId,
-        serviceAgreementId: saOld.id,
-        premiseId: fixA.premiseId,
-        type: "METERED",
-        status: "CLOSED",
-        startDate: new Date("2023-01-01"),
-        endDate: new Date("2023-12-31"),
-      },
-    });
-    const saNew = await prisma.serviceAgreement.create({
-      data: {
-        utilityId: fixA.utilityId,
-        agreementNumber: "SA-NEW",
-        accountId: fixA.accountId,
-        commodityId: fixA.commodityId,
-        startDate: new Date("2024-01-01"),
-        status: "ACTIVE",
-      },
-    });
-    await prisma.servicePoint.create({
-      data: {
-        utilityId: fixA.utilityId,
-        serviceAgreementId: saNew.id,
-        premiseId: fixA.premiseId,
-        type: "METERED",
-        status: "ACTIVE",
-        startDate: new Date("2024-01-01"),
-      },
-    });
+      const saOld = await prisma.serviceAgreement.create({
+        data: {
+          utilityId: fixA.utilityId,
+          agreementNumber: "SA-OLD",
+          accountId: fixA.accountId,
+          commodityId: fixA.commodityId,
+          startDate: new Date("2023-01-01"),
+          endDate: new Date("2023-12-31"),
+          status: "FINAL",
+        },
+      });
+      await prisma.servicePoint.create({
+        data: {
+          utilityId: fixA.utilityId,
+          serviceAgreementId: saOld.id,
+          premiseId: fixA.premiseId,
+          type: "METERED",
+          status: "CLOSED",
+          startDate: new Date("2023-01-01"),
+          endDate: new Date("2023-12-31"),
+        },
+      });
+      const saNew = await prisma.serviceAgreement.create({
+        data: {
+          utilityId: fixA.utilityId,
+          agreementNumber: "SA-NEW",
+          accountId: fixA.accountId,
+          commodityId: fixA.commodityId,
+          startDate: new Date("2024-01-01"),
+          status: "ACTIVE",
+        },
+      });
+      await prisma.servicePoint.create({
+        data: {
+          utilityId: fixA.utilityId,
+          serviceAgreementId: saNew.id,
+          premiseId: fixA.premiseId,
+          type: "METERED",
+          status: "ACTIVE",
+          startDate: new Date("2024-01-01"),
+        },
+      });
 
-    const res = await app.inject({
-      method: "GET",
-      url: `/api/v1/premises/${fixA.premiseId}/agreement-history`,
-      headers: headers(),
-    });
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/premises/${fixA.premiseId}/agreement-history`,
+        headers: headers(),
+      });
 
-    expect(res.statusCode).toBe(200);
-    const body = JSON.parse(res.body) as Array<{ agreementNumber: string; status: string }>;
-    expect(body).toHaveLength(2);
-    // Newest first per the ORDER BY in the route.
-    expect(body[0].agreementNumber).toBe("SA-NEW");
-    expect(body[1].agreementNumber).toBe("SA-OLD");
-    expect(body[1].status).toBe("FINAL"); // historical row included
-  });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body) as Array<{ agreementNumber: string; status: string }>;
+      expect(body).toHaveLength(2);
+      // Newest first per the ORDER BY in the route.
+      expect(body[0].agreementNumber).toBe("SA-NEW");
+      expect(body[1].agreementNumber).toBe("SA-OLD");
+      expect(body[1].status).toBe("FINAL"); // historical row included
+  
+    }));
 });

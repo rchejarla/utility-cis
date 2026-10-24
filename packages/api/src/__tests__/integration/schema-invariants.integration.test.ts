@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, TENANT_A } from "./_effective-dating-fixtures.js";
+import { bootPostgres, TENANT_A, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Invariants that must hold for every tenant-scoped table, asserted
@@ -25,14 +25,6 @@ const UTILITY_TABLE = "utility";
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);

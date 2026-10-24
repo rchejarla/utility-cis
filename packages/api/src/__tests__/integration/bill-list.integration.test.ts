@@ -55,17 +55,26 @@ const Q = {
   order: "desc" as const,
 };
 
+/**
+ * The services this file calls directly, as a route reaches them: acting
+ * for the tenant, not merely naming it.
+ *
+ * Each already receives the tenant — production passed it from a request
+ * or a job whose scope had been entered, so the argument and the scope
+ * are always the same id. A direct service test has the argument and not
+ * the scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` also overrides a surrounding `seedAsPlatform`, which is
+ * what lets fixture rows be arranged across tenants while the call under
+ * test stays confined to one.
+ */
+const listBillsForAccount = (...args: Parameters<typeof bills.listBillsForAccount>) =>
+  runAsTenant(args[0], async () => bills.listBillsForAccount(...args));
+
 beforeAll(() =>
   seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId, otherUtility] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   bills = await import("../../services/bill.service.js");
@@ -120,6 +129,11 @@ beforeAll(() =>
 
 afterAll(async () => {
   await prismaImports?.prisma.$disconnect();
+  // `$disconnect` does not dispose a pool the application owns —
+  // that is the driver-adapter contract — so the tenant and
+  // platform pools are ended here. Without it the container stops
+  // while connections are live and Postgres reports 57P01.
+  await prismaImports?.pool.end().catch(() => {});
   await pgContainer?.stop();
 });
 
@@ -130,28 +144,42 @@ async function makeBill(o: {
   posted: boolean;
   utility?: string;
 }) {
-  const { prisma } = prismaImports;
-  const u = o.utility ?? utilityId;
-  const isOther = u !== utilityId;
-  await prisma.bill.create({
-    data: {
-      utilityId: u,
-      accountId: isOther ? otherAccountId : accountId,
-      billingCycleId: isOther
-        ? (await prisma.billingCycle.findFirstOrThrow({ where: { utilityId: u } })).id
-        : billingCycleId,
-      periodStart: new Date("2026-01-01"),
-      periodEnd: new Date(o.billDate),
-      billDate: new Date(o.billDate),
-      dueDate: new Date(o.billDate),
-      subtotal: o.total,
-      taxes: "0",
-      credits: "0",
-      total: o.total,
-      billNumber: o.number,
-      postedAt: o.posted ? new Date(o.billDate) : null,
-    },
+
+  /*
+
+   * Arranging rows, so the authority the fixtures use. Calls under
+
+   * test re-enter their own tenant scope.
+
+   */
+
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const u = o.utility ?? utilityId;
+    const isOther = u !== utilityId;
+    await prisma.bill.create({
+      data: {
+        utilityId: u,
+        accountId: isOther ? otherAccountId : accountId,
+        billingCycleId: isOther
+          ? (await prisma.billingCycle.findFirstOrThrow({ where: { utilityId: u } })).id
+          : billingCycleId,
+        periodStart: new Date("2026-01-01"),
+        periodEnd: new Date(o.billDate),
+        billDate: new Date(o.billDate),
+        dueDate: new Date(o.billDate),
+        subtotal: o.total,
+        taxes: "0",
+        credits: "0",
+        total: o.total,
+        billNumber: o.number,
+        postedAt: o.posted ? new Date(o.billDate) : null,
+      },
+    });
+
+
   });
+
 }
 
 const numbers = (r: { data: { billNumber: string }[] }) => r.data.map((b) => b.billNumber);
@@ -211,61 +239,67 @@ describe("listBills", () => {
     expect(unposted.data[0]!.postedAt).toBeNull();
   });
 
-  it("carries the bill's own charge entry: what is still owed, and its id", async () => {
-    const { prisma } = prismaImports;
-    const bill = await prisma.bill.findFirstOrThrow({ where: { utilityId, billNumber: "B-JAN" } });
-    // A $10 charge with $4 paid off leaves $6 owed on THIS bill, which is
-    // not the bill total -- the two are authoritative for different
-    // things (ss4.6), and a CSR on a call needs the second number.
-    const entry = await prisma.ledgerEntry.create({
-      data: {
-        utilityId,
-        accountId,
-        type: "BILL_CHARGE",
-        amount: "10.00",
-        openAmount: "6.00",
-        dueDate: new Date("2026-02-10"),
-        effectiveDate: new Date("2026-01-10"),
-        billId: bill.id,
-      },
-    });
-    try {
-      const res = await listBills(utilityId, { ...Q, search: "B-JAN" });
-      expect(res.data[0]!.charge).toEqual({
-        entryId: entry.id,
-        openAmount: "6.00",
-        reversed: false,
+  it("carries the bill's own charge entry: what is still owed, and its id", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const bill = await prisma.bill.findFirstOrThrow({ where: { utilityId, billNumber: "B-JAN" } });
+      // A $10 charge with $4 paid off leaves $6 owed on THIS bill, which is
+      // not the bill total -- the two are authoritative for different
+      // things (ss4.6), and a CSR on a call needs the second number.
+      const entry = await prisma.ledgerEntry.create({
+        data: {
+          utilityId,
+          accountId,
+          type: "BILL_CHARGE",
+          amount: "10.00",
+          openAmount: "6.00",
+          dueDate: new Date("2026-02-10"),
+          effectiveDate: new Date("2026-01-10"),
+          billId: bill.id,
+        },
       });
-      // The bill total is untouched by what has been paid against it.
-      expect(res.data[0]!.total).toBe("10.0000");
-    } finally {
-      await prisma.ledgerEntry.delete({ where: { id: entry.id } });
-    }
-  });
+      try {
+        const res = await listBills(utilityId, { ...Q, search: "B-JAN" });
+        expect(res.data[0]!.charge).toEqual({
+          entryId: entry.id,
+          openAmount: "6.00",
+          reversed: false,
+        });
+        // The bill total is untouched by what has been paid against it.
+        expect(res.data[0]!.total).toBe("10.0000");
+      } finally {
+        await prisma.ledgerEntry.delete({ where: { id: entry.id } });
+      }
+  
+    }));
 
-  it("reports a reversed charge, so a bill cannot be voided twice", async () => {
-    const { prisma } = prismaImports;
-    const bill = await prisma.bill.findFirstOrThrow({ where: { utilityId, billNumber: "B-JAN" } });
-    const charge = await prisma.ledgerEntry.create({
-      data: {
-        utilityId, accountId, type: "BILL_CHARGE", amount: "10.00", openAmount: "0.00",
-        dueDate: new Date("2026-02-10"), effectiveDate: new Date("2026-01-10"), billId: bill.id,
-      },
-    });
-    const rev = await prisma.ledgerEntry.create({
-      data: {
-        utilityId, accountId, type: "REVERSAL", amount: "-10.00", openAmount: "0.00",
-        effectiveDate: new Date("2026-01-11"), reversesId: charge.id,
-      },
-    });
-    try {
-      const res = await listBills(utilityId, { ...Q, search: "B-JAN" });
-      expect(res.data[0]!.charge!.reversed).toBe(true);
-    } finally {
-      await prisma.ledgerEntry.delete({ where: { id: rev.id } });
-      await prisma.ledgerEntry.delete({ where: { id: charge.id } });
-    }
-  });
+  it("reports a reversed charge, so a bill cannot be voided twice", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const bill = await prisma.bill.findFirstOrThrow({ where: { utilityId, billNumber: "B-JAN" } });
+      const charge = await prisma.ledgerEntry.create({
+        data: {
+          utilityId, accountId, type: "BILL_CHARGE", amount: "10.00", openAmount: "0.00",
+          dueDate: new Date("2026-02-10"), effectiveDate: new Date("2026-01-10"), billId: bill.id,
+        },
+      });
+      const rev = await prisma.ledgerEntry.create({
+        data: {
+          utilityId, accountId, type: "REVERSAL", amount: "-10.00", openAmount: "0.00",
+          effectiveDate: new Date("2026-01-11"), reversesId: charge.id,
+        },
+      });
+      try {
+        const res = await listBills(utilityId, { ...Q, search: "B-JAN" });
+        expect(res.data[0]!.charge!.reversed).toBe(true);
+      } finally {
+        await prisma.ledgerEntry.delete({ where: { id: rev.id } });
+        await prisma.ledgerEntry.delete({ where: { id: charge.id } });
+      }
+  
+    }));
 
   it("reports charge: null while a bill is unposted", async () => {
     const res = await listBills(utilityId, { ...Q, search: "B-JUL" });
@@ -273,24 +307,27 @@ describe("listBills", () => {
     expect(res.data[0]!.charge).toBeNull();
   });
 
-  it("does not mistake a waiver credit for the bill's charge", async () => {
-    // Waiver credits can carry a billId. Only BILL_CHARGE is the bill's
-    // own receivable, so a credit against the bill must not surface here.
-    const { prisma } = prismaImports;
-    const bill = await prisma.bill.findFirstOrThrow({ where: { utilityId, billNumber: "B-JUN-30" } });
-    const credit = await prisma.ledgerEntry.create({
-      data: {
-        utilityId, accountId, type: "ADJUSTMENT_CREDIT", amount: "-5.00", openAmount: "0.00",
-        effectiveDate: new Date("2026-07-01"), billId: bill.id,
-      },
-    });
-    try {
-      const res = await listBills(utilityId, { ...Q, search: "B-JUN-30" });
-      expect(res.data[0]!.charge).toBeNull();
-    } finally {
-      await prisma.ledgerEntry.delete({ where: { id: credit.id } });
-    }
-  });
+  it("does not mistake a waiver credit for the bill's charge", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      // Waiver credits can carry a billId. Only BILL_CHARGE is the bill's
+      // own receivable, so a credit against the bill must not surface here.
+      const { prisma } = prismaImports;
+      const bill = await prisma.bill.findFirstOrThrow({ where: { utilityId, billNumber: "B-JUN-30" } });
+      const credit = await prisma.ledgerEntry.create({
+        data: {
+          utilityId, accountId, type: "ADJUSTMENT_CREDIT", amount: "-5.00", openAmount: "0.00",
+          effectiveDate: new Date("2026-07-01"), billId: bill.id,
+        },
+      });
+      try {
+        const res = await listBills(utilityId, { ...Q, search: "B-JUN-30" });
+        expect(res.data[0]!.charge).toBeNull();
+      } finally {
+        await prisma.ledgerEntry.delete({ where: { id: credit.id } });
+      }
+  
+    }));
 
   /**
    * The `state` filter, which answers settlement rather than issuance.
@@ -307,51 +344,65 @@ describe("listBills", () => {
     async function withCharge(
       over: { openAmount?: string; applied?: boolean; reversed?: boolean } = {},
     ) {
-      const { prisma } = prismaImports;
-      const bill = await prisma.bill.findFirstOrThrow({
-        where: { utilityId, billNumber: "B-JAN" },
-      });
-      const charge = await prisma.ledgerEntry.create({
-        data: {
-          utilityId,
-          accountId,
-          type: "BILL_CHARGE",
-          amount: "10.00",
-          openAmount: over.openAmount ?? "10.00",
-          dueDate: new Date("2026-02-10"),
-          effectiveDate: new Date("2026-01-10"),
-          billId: bill.id,
-        },
-      });
-      const extra: string[] = [];
-      if (over.applied) {
-        const credit = await prisma.ledgerEntry.create({
+      /*
+       * Arranging rows, so the authority the fixtures use. Calls under
+       * test re-enter their own tenant scope.
+       */
+      return seedAsPlatform(async () => {
+        const { prisma } = prismaImports;
+        const bill = await prisma.bill.findFirstOrThrow({
+          where: { utilityId, billNumber: "B-JAN" },
+        });
+        const charge = await prisma.ledgerEntry.create({
           data: {
-            utilityId, accountId, type: "PAYMENT", amount: "-4.00", openAmount: "0.00",
-            effectiveDate: new Date("2026-01-20"),
+            utilityId,
+            accountId,
+            type: "BILL_CHARGE",
+            amount: "10.00",
+            openAmount: over.openAmount ?? "10.00",
+            dueDate: new Date("2026-02-10"),
+            effectiveDate: new Date("2026-01-10"),
+            billId: bill.id,
           },
         });
-        extra.push(credit.id);
-        await prisma.ledgerApplication.create({
-          data: { utilityId, creditId: credit.id, debitId: charge.id, amount: "4.00" },
-        });
-      }
-      if (over.reversed) {
-        const rev = await prisma.ledgerEntry.create({
-          data: {
-            utilityId, accountId, type: "REVERSAL", amount: "-10.00", openAmount: "0.00",
-            effectiveDate: new Date("2026-01-11"), reversesId: charge.id,
-          },
-        });
-        extra.push(rev.id);
-      }
-      return async () => {
-        await prisma.ledgerApplication.deleteMany({ where: { debitId: charge.id } });
-        for (const id of extra.reverse()) {
-          await prisma.ledgerEntry.delete({ where: { id } });
+        const extra: string[] = [];
+        if (over.applied) {
+          const credit = await prisma.ledgerEntry.create({
+            data: {
+              utilityId, accountId, type: "PAYMENT", amount: "-4.00", openAmount: "0.00",
+              effectiveDate: new Date("2026-01-20"),
+            },
+          });
+          extra.push(credit.id);
+          await prisma.ledgerApplication.create({
+            data: { utilityId, creditId: credit.id, debitId: charge.id, amount: "4.00" },
+          });
         }
-        await prisma.ledgerEntry.delete({ where: { id: charge.id } });
-      };
+        if (over.reversed) {
+          const rev = await prisma.ledgerEntry.create({
+            data: {
+              utilityId, accountId, type: "REVERSAL", amount: "-10.00", openAmount: "0.00",
+              effectiveDate: new Date("2026-01-11"), reversesId: charge.id,
+            },
+          });
+          extra.push(rev.id);
+        }
+        /*
+         * The cleanup carries its own scope. It is built here but called
+         * by the test after the route call, so the `seedAsPlatform`
+         * around this helper has long exited by then — a closure that
+         * escapes a scope has to re-enter one.
+         */
+        return async () =>
+          seedAsPlatform(async () => {
+            await prisma.ledgerApplication.deleteMany({ where: { debitId: charge.id } });
+            for (const id of extra.reverse()) {
+              await prisma.ledgerEntry.delete({ where: { id } });
+            }
+            await prisma.ledgerEntry.delete({ where: { id: charge.id } });
+          });
+    
+      });
     }
 
     const found = async (state: Parameters<typeof bills.listBills>[1]["state"]) =>
@@ -382,46 +433,49 @@ describe("listBills", () => {
      * disagreed, because the pill was computed in the browser's zone
      * instead. One of those answers had to go; this pins what is left.
      */
-    it("does not call a bill due today overdue, in the filter or the row", async () => {
-      const { prisma } = prismaImports;
-      const target = await prisma.bill.findFirstOrThrow({
-        where: { utilityId, billNumber: "B-JAN" },
-      });
-      const originalDueDate = target.dueDate;
-      const now = new Date();
-      const dueToday = new Date(
-        Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()),
-      );
-      const dueYesterday = new Date(dueToday.getTime() - 86_400_000);
-
-      const rowOf = async (billNumber: string) => {
-        const page = await listBills(utilityId, Q);
-        return page.data.find((b) => b.billNumber === billNumber);
-      };
-
-      const cleanup = await withCharge();
-      try {
-        await prisma.bill.update({
-          where: { id: target.id },
-          data: { dueDate: dueToday },
+    it("does not call a bill due today overdue, in the filter or the row", () =>
+      seedAsPlatform(async () => {        /* Fixture rows and read-backs under the fixture authority; the
+         * scoped wrappers re-enter their own tenant scope. */
+        const { prisma } = prismaImports;
+        const target = await prisma.bill.findFirstOrThrow({
+          where: { utilityId, billNumber: "B-JAN" },
         });
-        expect(await found("overdue")).not.toContain("B-JAN");
-        expect((await rowOf("B-JAN"))?.overdue).toBe(false);
+        const originalDueDate = target.dueDate;
+        const now = new Date();
+        const dueToday = new Date(
+          Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()),
+        );
+        const dueYesterday = new Date(dueToday.getTime() - 86_400_000);
 
-        await prisma.bill.update({
-          where: { id: target.id },
-          data: { dueDate: dueYesterday },
-        });
-        expect(await found("overdue")).toContain("B-JAN");
-        expect((await rowOf("B-JAN"))?.overdue).toBe(true);
-      } finally {
-        await prisma.bill.update({
-          where: { id: target.id },
-          data: { dueDate: originalDueDate },
-        });
-        await cleanup();
-      }
-    }, 60_000);
+        const rowOf = async (billNumber: string) => {
+          const page = await listBills(utilityId, Q);
+          return page.data.find((b) => b.billNumber === billNumber);
+        };
+
+        const cleanup = await withCharge();
+        try {
+          await prisma.bill.update({
+            where: { id: target.id },
+            data: { dueDate: dueToday },
+          });
+          expect(await found("overdue")).not.toContain("B-JAN");
+          expect((await rowOf("B-JAN"))?.overdue).toBe(false);
+
+          await prisma.bill.update({
+            where: { id: target.id },
+            data: { dueDate: dueYesterday },
+          });
+          expect(await found("overdue")).toContain("B-JAN");
+          expect((await rowOf("B-JAN"))?.overdue).toBe(true);
+        } finally {
+          await prisma.bill.update({
+            where: { id: target.id },
+            data: { dueDate: originalDueDate },
+          });
+          await cleanup();
+        }
+    
+      }), 60_000);
 
     /**
      * `partPaid` in the row has to mean what `state=partPaid` means.
@@ -432,43 +486,46 @@ describe("listBills", () => {
      * paid" and was absent from the Part-paid filter. The filter asks
      * through the applications; so does the field now.
      */
-    it("agrees with the partPaid filter, including on an unpaid fractional total", async () => {
-      const { prisma } = prismaImports;
-      const rowOf = async (billNumber: string) => {
-        const page = await listBills(utilityId, Q);
-        return page.data.find((b) => b.billNumber === billNumber);
-      };
+    it("agrees with the partPaid filter, including on an unpaid fractional total", () =>
+      seedAsPlatform(async () => {        /* Fixture rows and read-backs under the fixture authority; the
+         * scoped wrappers re-enter their own tenant scope. */
+        const { prisma } = prismaImports;
+        const rowOf = async (billNumber: string) => {
+          const page = await listBills(utilityId, Q);
+          return page.data.find((b) => b.billNumber === billNumber);
+        };
 
-      // Nothing applied, and a total that does not land on a cent.
-      const target = await prisma.bill.findFirstOrThrow({
-        where: { utilityId, billNumber: "B-JAN" },
-      });
-      const originalTotal = target.total;
-      await prisma.bill.update({
-        where: { id: target.id },
-        data: { total: "10.0049" },
-      });
-      const unpaid = await withCharge();
-      try {
-        expect(await found("partPaid")).not.toContain("B-JAN");
-        expect((await rowOf("B-JAN"))?.partPaid).toBe(false);
-      } finally {
-        await unpaid();
-      }
-
-      // Something applied, with some still owed.
-      const partly = await withCharge({ openAmount: "6.00", applied: true });
-      try {
-        expect(await found("partPaid")).toContain("B-JAN");
-        expect((await rowOf("B-JAN"))?.partPaid).toBe(true);
-      } finally {
-        await partly();
+        // Nothing applied, and a total that does not land on a cent.
+        const target = await prisma.bill.findFirstOrThrow({
+          where: { utilityId, billNumber: "B-JAN" },
+        });
+        const originalTotal = target.total;
         await prisma.bill.update({
           where: { id: target.id },
-          data: { total: originalTotal },
+          data: { total: "10.0049" },
         });
-      }
-    }, 60_000);
+        const unpaid = await withCharge();
+        try {
+          expect(await found("partPaid")).not.toContain("B-JAN");
+          expect((await rowOf("B-JAN"))?.partPaid).toBe(false);
+        } finally {
+          await unpaid();
+        }
+
+        // Something applied, with some still owed.
+        const partly = await withCharge({ openAmount: "6.00", applied: true });
+        try {
+          expect(await found("partPaid")).toContain("B-JAN");
+          expect((await rowOf("B-JAN"))?.partPaid).toBe(true);
+        } finally {
+          await partly();
+          await prisma.bill.update({
+            where: { id: target.id },
+            data: { total: originalTotal },
+          });
+        }
+    
+      }), 60_000);
 
     /**
      * The account's own Bills tab and the tenant-wide list describe the
@@ -486,7 +543,7 @@ describe("listBills", () => {
       try {
         const page = await listBills(utilityId, Q);
         const wide = page.data.find((b) => b.billNumber === "B-JAN");
-        const scoped = (await bills.listBillsForAccount(utilityId, accountId)).find(
+        const scoped = (await listBillsForAccount(utilityId, accountId)).find(
           (b) => b.billNumber === "B-JAN",
         );
 

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * What the operator may read of a utility's audit log: its own actions.
  *
@@ -35,17 +36,34 @@ const OTHER = "00000000-0000-4000-8000-0000000000ea";
 const OPERATOR = "00000000-0000-4000-8000-aaaa0000e001";
 const operator = { id: OPERATOR, name: "Pat Operator", source: `platform:${OPERATOR}` };
 
+/**
+ * The services this file calls directly, as a route reaches them: acting
+ * for the tenant, not merely naming it.
+ *
+ * Each already receives the tenant — production passed it from a request
+ * or a job whose scope had been entered, so the argument and the scope
+ * are always the same id. A direct service test has the argument and not
+ * the scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` also overrides a surrounding `seedAsPlatform`, which is
+ * what lets fixture rows be arranged across tenants while the call under
+ * test stays confined to one.
+ */
+const listUtilityHistory = (...args: Parameters<typeof svc.listUtilityHistory>) =>
+  runAsTenant(args[0], async () => svc.listUtilityHistory(...args));
+
+const reactivateUtility = (...args: Parameters<typeof svc.reactivateUtility>) =>
+  runAsTenant(args[0], async () => svc.reactivateUtility(...args));
+
+const setUtilityModule = (...args: Parameters<typeof svc.setUtilityModule>) =>
+  runAsTenant(args[0], async () => svc.setUtilityModule(...args));
+
+const suspendUtility = (...args: Parameters<typeof svc.suspendUtility>) =>
+  runAsTenant(args[0], async () => svc.suspendUtility(...args));
+
 beforeAll(async () => {
   const booted = await bootPostgres();
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // Its routes run correctly as `cis_app` — no route or service was
-  // found querying a tenant table without a scope — but its own test
-  // bodies arrange and assert on rows through `prisma` directly, which
-  // needs a `seedAsPlatform` or `runAsTenant` per site. See
-  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
-  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
-  // only lets the number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/provisioning.service.js");
@@ -79,27 +97,34 @@ beforeEach(() =>
 
 /** A row of the kind the tenant's own staff produce. */
 async function seedTenantRow(utilityId: string, source: string | null) {
-  const { prisma } = prismaImports;
-  await prisma.auditLog.create({
-    data: {
-      utilityId,
-      entityType: "Customer",
-      entityId: "00000000-0000-4000-8000-ccccc0000001",
-      action: "UPDATE",
-      actorId: null,
-      actorName: "Tenant Staff",
-      source,
-      beforeState: { lastName: "Public" },
-      afterState: { lastName: "Private" },
-    },
+  /*
+   * Arranging rows, so the authority the fixtures use. Calls under
+   * test re-enter their own tenant scope.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    await prisma.auditLog.create({
+      data: {
+        utilityId,
+        entityType: "Customer",
+        entityId: "00000000-0000-4000-8000-ccccc0000001",
+        action: "UPDATE",
+        actorId: null,
+        actorName: "Tenant Staff",
+        source,
+        beforeState: { lastName: "Public" },
+        afterState: { lastName: "Private" },
+      },
+    });
+
   });
 }
 
 describe("listUtilityHistory", () => {
   it("returns what the operator did to this utility", async () => {
-    await svc.suspendUtility(UTILITY, operator);
+    await suspendUtility(UTILITY, operator);
 
-    const rows = await svc.listUtilityHistory(UTILITY);
+    const rows = await listUtilityHistory(UTILITY);
 
     expect(rows.length).toBeGreaterThanOrEqual(2); // provisioned + suspended
     expect(rows.every((r) => r.source?.startsWith("platform:"))).toBe(true);
@@ -110,7 +135,7 @@ describe("listUtilityHistory", () => {
     // customer data; it must not appear here however the list is read.
     await seedTenantRow(UTILITY, null);
 
-    const rows = await svc.listUtilityHistory(UTILITY);
+    const rows = await listUtilityHistory(UTILITY);
 
     expect(rows.some((r) => r.entityType === "Customer")).toBe(false);
     expect(rows.every((r) => r.source !== null)).toBe(true);
@@ -121,34 +146,37 @@ describe("listUtilityHistory", () => {
     // service request — so they are the tenant's, not the operator's.
     await seedTenantRow(UTILITY, "scheduler:sla-breach-sweep");
 
-    const rows = await svc.listUtilityHistory(UTILITY);
+    const rows = await listUtilityHistory(UTILITY);
 
     expect(rows.every((r) => !r.source?.startsWith("scheduler:"))).toBe(true);
   });
 
-  it("includes a run from the CLI, which is the operator's other hand", async () => {
-    const { prisma } = prismaImports;
-    await prisma.auditLog.deleteMany({ where: { utilityId: UTILITY } });
-    await svc.suspendUtility(UTILITY); // no operator: attributed to the script
+  it("includes a run from the CLI, which is the operator's other hand", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      await prisma.auditLog.deleteMany({ where: { utilityId: UTILITY } });
+      await suspendUtility(UTILITY); // no operator: attributed to the script
 
-    const rows = await svc.listUtilityHistory(UTILITY);
+      const rows = await listUtilityHistory(UTILITY);
 
-    expect(rows.some((r) => r.source?.startsWith("script:"))).toBe(true);
-  });
+      expect(rows.some((r) => r.source?.startsWith("script:"))).toBe(true);
+  
+    }));
 
   it("returns nothing belonging to another utility", async () => {
-    await svc.suspendUtility(OTHER, operator);
+    await suspendUtility(OTHER, operator);
 
-    const rows = await svc.listUtilityHistory(UTILITY);
+    const rows = await listUtilityHistory(UTILITY);
 
     expect(rows.every((r) => r.utilityId === UTILITY)).toBe(true);
   });
 
   it("puts the newest first, since that is what an operator opens it for", async () => {
-    await svc.suspendUtility(UTILITY, operator);
-    await svc.reactivateUtility(UTILITY, operator);
+    await suspendUtility(UTILITY, operator);
+    await reactivateUtility(UTILITY, operator);
 
-    const rows = await svc.listUtilityHistory(UTILITY);
+    const rows = await listUtilityHistory(UTILITY);
 
     expect(rows[0].afterState).toMatchObject({ status: "ACTIVE" });
     for (let i = 1; i < rows.length; i++) {
@@ -158,15 +186,15 @@ describe("listUtilityHistory", () => {
 
   it("caps how much it returns", async () => {
     for (let i = 0; i < 6; i++) {
-      await svc.setUtilityModule(UTILITY, "containers", i % 2 === 0, operator);
+      await setUtilityModule(UTILITY, "containers", i % 2 === 0, operator);
     }
 
-    expect((await svc.listUtilityHistory(UTILITY, 3))).toHaveLength(3);
+    expect((await listUtilityHistory(UTILITY, 3))).toHaveLength(3);
   });
 
   it("refuses a utility that does not exist", async () => {
     await expect(
-      svc.listUtilityHistory("00000000-0000-4000-8000-0000000000ef"),
+      listUtilityHistory("00000000-0000-4000-8000-0000000000ef"),
     ).rejects.toMatchObject({ code: "UTILITY_NOT_FOUND" });
   });
 });
@@ -202,7 +230,7 @@ describe("through the route", () => {
 );
 
   it("serves the history to the operator", async () => {
-    await svc.suspendUtility(UTILITY, operator);
+    await suspendUtility(UTILITY, operator);
     const res = await app.inject({
       method: "GET",
       url: `/api/v1/platform/utilities/${UTILITY}/history`,

@@ -543,18 +543,25 @@ describe("reconcileBalances", () => {
  */
 describe("deposits", () => {
   async function makeDeposit(amount: string) {
-    const { prisma } = prismaImports;
-    return prisma.ledgerEntry.create({
-      data: {
-        utilityId,
-        accountId,
-        type: "DEPOSIT",
-        amount: `-${amount}`,
-        openAmount: `-${amount}`,
-        dueDate: null,
-        effectiveDate: new Date("2026-01-01"),
-        tender: "CASH",
-      },
+    /*
+     * Arranging rows, so the authority the fixtures use. Calls under
+     * test re-enter their own tenant scope.
+     */
+    return seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      return prisma.ledgerEntry.create({
+        data: {
+          utilityId,
+          accountId,
+          type: "DEPOSIT",
+          amount: `-${amount}`,
+          openAmount: `-${amount}`,
+          dueDate: null,
+          effectiveDate: new Date("2026-01-01"),
+          tender: "CASH",
+        },
+      });
+  
     });
   }
 

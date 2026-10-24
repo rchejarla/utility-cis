@@ -2,6 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
+import type { Prisma } from "@utility-cis/shared/src/generated/prisma";
 /**
  * The tenant-wide disbursements list — `GET /api/v1/disbursements`.
  *
@@ -40,17 +42,46 @@ let debitReasonId: string;
 
 const Q = { page: 1, limit: 25, sort: "effectiveDate" as const, order: "desc" as const };
 
+/**
+ * The services this file calls directly, as a route reaches them: acting
+ * for the tenant, not merely naming it.
+ *
+ * Each already receives the tenant — production passed it from a request
+ * or a job whose scope had been entered, so the argument and the scope
+ * are always the same id. A direct service test has the argument and not
+ * the scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` also overrides a surrounding `seedAsPlatform`, which is
+ * what lets fixture rows be arranged across tenants while the call under
+ * test stays confined to one.
+ */
+const recordDeposit = (...args: Parameters<typeof deposit.recordDeposit>) =>
+  runAsTenant(args[0], async () => deposit.recordDeposit(...args));
+
+const recordPayment = (...args: Parameters<typeof payment.recordPayment>) =>
+  runAsTenant(args[0], async () => payment.recordPayment(...args));
+
+const listDisbursements = (...args: Parameters<typeof refund.listDisbursements>) =>
+  runAsTenant(args[0], async () => refund.listDisbursements(...args));
+
+const recordRefund = (...args: Parameters<typeof refund.recordRefund>) =>
+  runAsTenant(args[0], async () => refund.recordRefund(...args));
+
+/**
+ * A transaction entered the way a route enters one: inside the tenant's
+ * scope.
+ *
+ * A service taking `(tx, utilityId, …)` cannot receive the scope as an
+ * argument, so it has to be around the call — which is the order a
+ * request does it in.
+ */
+const asTenantTx = <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> =>
+  runAsTenant(utilityId, async () => prismaImports.prisma.$transaction(fn));
+
 beforeAll(() =>
   seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId, otherUtilityId] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   posting = await import("../../services/ar/posting.service.js");
@@ -99,6 +130,11 @@ beforeAll(() =>
 
 afterAll(async () => {
   await prismaImports?.prisma.$disconnect();
+  // `$disconnect` does not dispose a pool the application owns —
+  // that is the driver-adapter contract — so the tenant and
+  // platform pools are ended here. Without it the container stops
+  // while connections are live and Postgres reports 57P01.
+  await prismaImports?.pool.end().catch(() => {});
   await pgContainer?.stop();
 });
 
@@ -112,33 +148,47 @@ beforeEach(() =>
 );
 
 async function debit(amount: string): Promise<void> {
-  const { prisma } = prismaImports;
-  await prisma.ledgerEntry.create({
-    data: {
-      utilityId,
-      accountId,
-      type: "ADJUSTMENT_DEBIT",
-      amount,
-      openAmount: amount,
-      dueDate: new Date("2026-06-14"),
-      effectiveDate: new Date("2026-06-14"),
-      reasonId: debitReasonId,
-      createdBy: ACTOR,
-    },
+
+  /*
+
+   * Arranging rows, so the authority the fixtures use. Calls under
+
+   * test re-enter their own tenant scope.
+
+   */
+
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    await prisma.ledgerEntry.create({
+      data: {
+        utilityId,
+        accountId,
+        type: "ADJUSTMENT_DEBIT",
+        amount,
+        openAmount: amount,
+        dueDate: new Date("2026-06-14"),
+        effectiveDate: new Date("2026-06-14"),
+        reasonId: debitReasonId,
+        createdBy: ACTOR,
+      },
+    });
+    await asTenantTx((tx) => posting.recomputeAccountCache(tx, utilityId, accountId));
+
+
   });
-  await prisma.$transaction((tx) => posting.recomputeAccountCache(tx, utilityId, accountId));
+
 }
 
 /** Leaves an open credit balance of `paid - billed`. */
 async function overpay(billed: string, paid: string): Promise<void> {
   await debit(billed);
-  await payment.recordPayment(utilityId, ACTOR, "T", accountId, { amount: paid, tender: "CHECK" });
+  await recordPayment(utilityId, ACTOR, "T", accountId, { amount: paid, tender: "CHECK" });
 }
 
 describe("listDisbursements", () => {
   it("lists a credit refund with its disbursement record", async () => {
     await overpay("500.00", "700.00");
-    await refund.recordRefund(utilityId, ACTOR, "T", accountId, {
+    await recordRefund(utilityId, ACTOR, "T", accountId, {
       amount: "200.00",
       source: "CREDIT",
       tender: "CHECK",
@@ -146,7 +196,7 @@ describe("listDisbursements", () => {
       issuedOn: "2026-07-02",
     });
 
-    const res = await refund.listDisbursements(utilityId, Q);
+    const res = await listDisbursements(utilityId, Q);
     expect(res.meta.total).toBe(1);
     const row = res.data[0]!;
     expect(row.amount).toBe("200.00");
@@ -167,17 +217,17 @@ describe("listDisbursements", () => {
    */
   it("derives the pool from the credits discharged, not from what else the account holds", async () => {
     await overpay("500.00", "700.00");
-    await deposit.recordDeposit(utilityId, ACTOR, "T", accountId, {
+    await recordDeposit(utilityId, ACTOR, "T", accountId, {
       amount: "500.00",
       tender: "CHECK",
     });
-    await refund.recordRefund(utilityId, ACTOR, "T", accountId, {
+    await recordRefund(utilityId, ACTOR, "T", accountId, {
       amount: "500.00",
       source: "DEPOSIT",
       tender: "CHECK",
     });
 
-    const res = await refund.listDisbursements(utilityId, Q);
+    const res = await listDisbursements(utilityId, Q);
     expect(res.meta.total).toBe(1);
     expect(res.data[0]!.source).toBe("DEPOSIT");
     expect(res.subtotals).toEqual({ CREDIT: "0.00", DEPOSIT: "500.00" });
@@ -185,27 +235,27 @@ describe("listDisbursements", () => {
 
   it("splits the two kinds, and states a zero rather than omitting it", async () => {
     await overpay("500.00", "700.00");
-    await deposit.recordDeposit(utilityId, ACTOR, "T", accountId, {
+    await recordDeposit(utilityId, ACTOR, "T", accountId, {
       amount: "300.00",
       tender: "CASH",
     });
-    await refund.recordRefund(utilityId, ACTOR, "T", accountId, {
+    await recordRefund(utilityId, ACTOR, "T", accountId, {
       amount: "200.00",
       source: "CREDIT",
       tender: "CHECK",
     });
-    await refund.recordRefund(utilityId, ACTOR, "T", accountId, {
+    await recordRefund(utilityId, ACTOR, "T", accountId, {
       amount: "300.00",
       source: "DEPOSIT",
       tender: "CHECK",
     });
 
-    const both = await refund.listDisbursements(utilityId, Q);
+    const both = await listDisbursements(utilityId, Q);
     expect(both.totalPaidOut).toBe("500.00");
     expect(both.subtotals).toEqual({ CREDIT: "200.00", DEPOSIT: "300.00" });
 
     // Narrowed to the cash day, where no deposit was returned.
-    const none = await refund.listDisbursements(utilityId, { ...Q, tender: "CASH" });
+    const none = await listDisbursements(utilityId, { ...Q, tender: "CASH" });
     expect(none.totalPaidOut).toBe("0.00");
     expect(none.subtotals).toEqual({ CREDIT: "0.00", DEPOSIT: "0.00" });
   });
@@ -217,22 +267,22 @@ describe("listDisbursements", () => {
    */
   it("keeps the split on the filter when the page is smaller than the result", async () => {
     await overpay("500.00", "700.00");
-    await deposit.recordDeposit(utilityId, ACTOR, "T", accountId, {
+    await recordDeposit(utilityId, ACTOR, "T", accountId, {
       amount: "300.00",
       tender: "CHECK",
     });
-    await refund.recordRefund(utilityId, ACTOR, "T", accountId, {
+    await recordRefund(utilityId, ACTOR, "T", accountId, {
       amount: "200.00",
       source: "CREDIT",
       tender: "CHECK",
     });
-    await refund.recordRefund(utilityId, ACTOR, "T", accountId, {
+    await recordRefund(utilityId, ACTOR, "T", accountId, {
       amount: "300.00",
       source: "DEPOSIT",
       tender: "CHECK",
     });
 
-    const res = await refund.listDisbursements(utilityId, { ...Q, limit: 1 });
+    const res = await listDisbursements(utilityId, { ...Q, limit: 1 });
     expect(res.data).toHaveLength(1);
     expect(res.meta.total).toBe(2);
     expect(res.totalPaidOut).toBe("500.00");
@@ -240,44 +290,47 @@ describe("listDisbursements", () => {
     expect(res.subtotals).toEqual({ CREDIT: "200.00", DEPOSIT: "300.00" });
   });
 
-  it("keeps a reversed refund in the total, and marks the row", async () => {
-    const { prisma } = prismaImports;
-    await overpay("500.00", "700.00");
-    const issued = await refund.recordRefund(utilityId, ACTOR, "T", accountId, {
-      amount: "200.00",
-      source: "CREDIT",
-      tender: "CHECK",
-      issuedOn: "2026-07-02",
-    });
-    // Voided two days later. The cheque still left on the 2nd.
-    await prisma.ledgerEntry.create({
-      data: {
-        utilityId,
-        accountId,
-        type: "REVERSAL",
-        amount: "-200.00",
-        openAmount: "0.00",
-        effectiveDate: new Date("2026-07-04"),
-        reversesId: issued.entryId,
-      },
-    });
+  it("keeps a reversed refund in the total, and marks the row", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      await overpay("500.00", "700.00");
+      const issued = await recordRefund(utilityId, ACTOR, "T", accountId, {
+        amount: "200.00",
+        source: "CREDIT",
+        tender: "CHECK",
+        issuedOn: "2026-07-02",
+      });
+      // Voided two days later. The cheque still left on the 2nd.
+      await prisma.ledgerEntry.create({
+        data: {
+          utilityId,
+          accountId,
+          type: "REVERSAL",
+          amount: "-200.00",
+          openAmount: "0.00",
+          effectiveDate: new Date("2026-07-04"),
+          reversesId: issued.entryId,
+        },
+      });
 
-    const res = await refund.listDisbursements(utilityId, {
-      ...Q,
-      from: "2026-07-02",
-      to: "2026-07-02",
-    });
-    expect(res.totalPaidOut).toBe("200.00");
-    expect(res.data[0]!.reversed).toBe(true);
-  });
+      const res = await listDisbursements(utilityId, {
+        ...Q,
+        from: "2026-07-02",
+        to: "2026-07-02",
+      });
+      expect(res.totalPaidOut).toBe("200.00");
+      expect(res.data[0]!.reversed).toBe(true);
+  
+    }));
 
   it("lists nothing but refunds — not payments, deposits or charges", async () => {
     await overpay("500.00", "700.00");
-    await deposit.recordDeposit(utilityId, ACTOR, "T", accountId, {
+    await recordDeposit(utilityId, ACTOR, "T", accountId, {
       amount: "300.00",
       tender: "CHECK",
     });
-    const res = await refund.listDisbursements(utilityId, Q);
+    const res = await listDisbursements(utilityId, Q);
     // Money arrived on this account three times and left none.
     expect(res.meta.total).toBe(0);
     expect(res.totalPaidOut).toBe("0.00");
@@ -285,27 +338,27 @@ describe("listDisbursements", () => {
 
   it("bounds the range by the day the money left", async () => {
     await overpay("500.00", "700.00");
-    await refund.recordRefund(utilityId, ACTOR, "T", accountId, {
+    await recordRefund(utilityId, ACTOR, "T", accountId, {
       amount: "100.00",
       source: "CREDIT",
       tender: "CHECK",
       issuedOn: "2026-07-02",
     });
-    await refund.recordRefund(utilityId, ACTOR, "T", accountId, {
+    await recordRefund(utilityId, ACTOR, "T", accountId, {
       amount: "50.00",
       source: "CREDIT",
       tender: "CHECK",
       issuedOn: "2026-07-05",
     });
 
-    const day = await refund.listDisbursements(utilityId, {
+    const day = await listDisbursements(utilityId, {
       ...Q,
       from: "2026-07-02",
       to: "2026-07-02",
     });
     expect(day.totalPaidOut).toBe("100.00");
     // `to` inclusive of its own day.
-    const span = await refund.listDisbursements(utilityId, {
+    const span = await listDisbursements(utilityId, {
       ...Q,
       from: "2026-07-02",
       to: "2026-07-05",
@@ -313,39 +366,42 @@ describe("listDisbursements", () => {
     expect(span.totalPaidOut).toBe("150.00");
   });
 
-  it("never returns another tenant's disbursements, nor counts them", async () => {
-    const { prisma } = prismaImports;
-    await overpay("500.00", "700.00");
-    await refund.recordRefund(utilityId, ACTOR, "T", accountId, {
-      amount: "200.00",
-      source: "CREDIT",
-      tender: "CHECK",
-    });
-    // Theirs, written directly: a bare REFUND with no applications, which
-    // also exercises the unknown-pool path.
-    await prisma.ledgerEntry.create({
-      data: {
-        utilityId: otherUtilityId,
-        accountId: otherAccountId,
-        type: "REFUND",
-        amount: "999.00",
-        openAmount: "0.00",
-        effectiveDate: new Date("2026-07-02"),
+  it("never returns another tenant's disbursements, nor counts them", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      await overpay("500.00", "700.00");
+      await recordRefund(utilityId, ACTOR, "T", accountId, {
+        amount: "200.00",
+        source: "CREDIT",
         tender: "CHECK",
-        externalRef: "THEIRS",
-      },
-    });
+      });
+      // Theirs, written directly: a bare REFUND with no applications, which
+      // also exercises the unknown-pool path.
+      await prisma.ledgerEntry.create({
+        data: {
+          utilityId: otherUtilityId,
+          accountId: otherAccountId,
+          type: "REFUND",
+          amount: "999.00",
+          openAmount: "0.00",
+          effectiveDate: new Date("2026-07-02"),
+          tender: "CHECK",
+          externalRef: "THEIRS",
+        },
+      });
 
-    const mine = await refund.listDisbursements(utilityId, Q);
-    expect(mine.meta.total).toBe(1);
-    expect(mine.totalPaidOut).toBe("200.00");
-    expect(JSON.stringify(mine)).not.toContain("THEIRS");
+      const mine = await listDisbursements(utilityId, Q);
+      expect(mine.meta.total).toBe(1);
+      expect(mine.totalPaidOut).toBe("200.00");
+      expect(JSON.stringify(mine)).not.toContain("THEIRS");
 
-    const theirs = await refund.listDisbursements(otherUtilityId, Q);
-    expect(theirs.meta.total).toBe(1);
-    // No applications behind it, so the pool is unknown rather than
-    // defaulted to a credit refund.
-    expect(theirs.data[0]!.source).toBeNull();
-    expect(theirs.subtotals).toEqual({ CREDIT: "0.00", DEPOSIT: "0.00" });
-  });
+      const theirs = await listDisbursements(otherUtilityId, Q);
+      expect(theirs.meta.total).toBe(1);
+      // No applications behind it, so the pool is unknown rather than
+      // defaulted to a credit refund.
+      expect(theirs.data[0]!.source).toBeNull();
+      expect(theirs.subtotals).toEqual({ CREDIT: "0.00", DEPOSIT: "0.00" });
+  
+    }));
 });

@@ -923,10 +923,17 @@ describe("posting a run", () => {
 describe("resuming a run", () => {
   /** Force an item into a terminal state without rating it. */
   async function setItems(runId: string, status: "FAILED" | "SKIPPED" | "BILLED") {
-    const { prisma } = prismaImports;
-    await prisma.billingRunItem.updateMany({
-      where: { billingRunId: runId },
-      data: { status, processedAt: new Date(), errorCode: status === "FAILED" ? "X" : null },
+    /*
+     * Arranging rows, so the authority the fixtures use. Calls under
+     * test re-enter their own tenant scope.
+     */
+    return seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      await prisma.billingRunItem.updateMany({
+        where: { billingRunId: runId },
+        data: { status, processedAt: new Date(), errorCode: status === "FAILED" ? "X" : null },
+      });
+  
     });
   }
 

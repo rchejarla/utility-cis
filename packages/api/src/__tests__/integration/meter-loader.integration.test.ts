@@ -8,10 +8,12 @@ import {
   TENANT_A,
   type TenantFixture,
   endAdminPool,
+  seedAsPlatform,
 } from "./_effective-dating-fixtures.js";
 import { MeterLoader } from "../../lib/rate-engine-loaders/loaders/meter-loader.js";
 import { UnsupportedInSlice4Error } from "../../lib/rate-engine-loaders/types.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * Slice 4 task 3 — MeterLoader integration tests.
  *
@@ -32,14 +34,6 @@ const PERIOD = {
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);
@@ -55,14 +49,29 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
-  const { prisma } = prismaImports;
-  // resetDb truncates the core tables but doesn't list meter_read or
-  // service_agreement; clear those explicitly so each test starts
-  // from a known empty state.
-  await prisma.$executeRawUnsafe("DELETE FROM meter_read");
-  await resetDb();
-});
+/**
+ * The loader run the way a route runs it: inside the tenant's scope.
+ *
+ * A loader takes the client and the tenant in its constructor, so the
+ * scope cannot ride in on an argument to `load()` — it has to be around
+ * the call. `runAsTenant` here overrides the surrounding
+ * `seedAsPlatform`, so the fixtures stay free to arrange rows while the
+ * read under test is confined to one tenant.
+ */
+const scoped = <T>(tenant: string, fn: () => Promise<T>): Promise<T> =>
+  runAsTenant(tenant, fn);
+
+beforeEach(() =>
+  seedAsPlatform(async () => {    /* Fixture rows and read-backs under the fixture authority; the
+     * scoped wrappers re-enter their own tenant scope. */
+    const { prisma } = prismaImports;
+    // resetDb truncates the core tables but doesn't list meter_read or
+    // service_agreement; clear those explicitly so each test starts
+    // from a known empty state.
+    await prisma.$executeRawUnsafe("DELETE FROM meter_read");
+    await resetDb();
+
+  }));
 
 interface MeterReadFixture {
   fix: TenantFixture;
@@ -78,34 +87,41 @@ async function makeMeterFixture(opts: {
   meter1CustomFields?: Record<string, unknown>;
   meter2CustomFields?: Record<string, unknown>;
 }): Promise<MeterReadFixture> {
-  const { prisma } = prismaImports;
-  const fix = await makeTenantFixture(prisma, TENANT_A);
+  /*
+   * Arranging rows, so the authority the fixtures use. Calls under
+   * test re-enter their own tenant scope.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const fix = await makeTenantFixture(prisma, TENANT_A);
 
-  if (opts.meter1CustomFields) {
-    await prisma.meter.update({
-      where: { id: fix.meterId },
-      data: { customFields: opts.meter1CustomFields as object },
-    });
-  }
-  if (opts.meter2CustomFields) {
-    await prisma.meter.update({
-      where: { id: fix.meterId2 },
-      data: { customFields: opts.meter2CustomFields as object },
-    });
-  }
+    if (opts.meter1CustomFields) {
+      await prisma.meter.update({
+        where: { id: fix.meterId },
+        data: { customFields: opts.meter1CustomFields as object },
+      });
+    }
+    if (opts.meter2CustomFields) {
+      await prisma.meter.update({
+        where: { id: fix.meterId2 },
+        data: { customFields: opts.meter2CustomFields as object },
+      });
+    }
 
-  const sa = await prisma.serviceAgreement.create({
-    data: {
-      utilityId: fix.utilityId,
-      agreementNumber: "SA-METER-LOADER-1",
-      accountId: fix.accountId,
-      commodityId: fix.commodityId,
-      startDate: new Date("2026-01-01"),
-      status: "ACTIVE",
-    },
+    const sa = await prisma.serviceAgreement.create({
+      data: {
+        utilityId: fix.utilityId,
+        agreementNumber: "SA-METER-LOADER-1",
+        accountId: fix.accountId,
+        commodityId: fix.commodityId,
+        startDate: new Date("2026-01-01"),
+        status: "ACTIVE",
+      },
+    });
+
+    return { fix, saId: sa.id };
+
   });
-
-  return { fix, saId: sa.id };
 }
 
 interface SeedReadOpts {
@@ -120,22 +136,36 @@ interface SeedReadOpts {
 }
 
 async function seedRead(opts: SeedReadOpts): Promise<void> {
-  const { prisma } = prismaImports;
-  await prisma.meterRead.create({
-    data: {
-      utilityId: opts.utilityId,
-      meterId: opts.meterId,
-      serviceAgreementId: opts.saId,
-      uomId: opts.uomId,
-      readDate: opts.readDate,
-      readDatetime: opts.readDate,
-      reading: opts.reading,
-      priorReading: opts.priorReading,
-      consumption: opts.consumption,
-      readType: "ACTUAL",
-      readSource: "MANUAL",
-    },
+
+  /*
+
+   * Arranging rows, so the authority the fixtures use. Calls under
+
+   * test re-enter their own tenant scope.
+
+   */
+
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    await prisma.meterRead.create({
+      data: {
+        utilityId: opts.utilityId,
+        meterId: opts.meterId,
+        serviceAgreementId: opts.saId,
+        uomId: opts.uomId,
+        readDate: opts.readDate,
+        readDatetime: opts.readDate,
+        reading: opts.reading,
+        priorReading: opts.priorReading,
+        consumption: opts.consumption,
+        readType: "ACTUAL",
+        readSource: "MANUAL",
+      },
+    });
+
+
   });
+
 }
 
 describe("MeterLoader", () => {
@@ -145,7 +175,7 @@ describe("MeterLoader", () => {
     });
 
     const loader = new MeterLoader(prismaImports.prisma, TENANT_A, PERIOD);
-    const out = await loader.load([`meter:size:${fix.meterId}`]);
+    const out = await scoped(TENANT_A, () => loader.load([`meter:size:${fix.meterId}`]));
     expect(out.get(`meter:size:${fix.meterId}`)).toBe('5/8"');
   });
 
@@ -156,10 +186,10 @@ describe("MeterLoader", () => {
     });
 
     const loader = new MeterLoader(prismaImports.prisma, TENANT_A, PERIOD);
-    const out = await loader.load([
+    const out = await scoped(TENANT_A, () => loader.load([
       `meter:role:${fix.meterId}`,
       `meter:role:${fix.meterId2}`,
-    ]);
+    ]));
     expect(out.get(`meter:role:${fix.meterId}`)).toBe("irrigation");
     expect(out.get(`meter:role:${fix.meterId2}`)).toBeNull();
   });
@@ -183,7 +213,7 @@ describe("MeterLoader", () => {
     await seedFor(new Date("2026-01-25"), "5.1234", "35.8734");
 
     const loader = new MeterLoader(prismaImports.prisma, TENANT_A, PERIOD);
-    const out = await loader.load([`meter:reads:${fix.meterId}`]);
+    const out = await scoped(TENANT_A, () => loader.load([`meter:reads:${fix.meterId}`]));
     const summary = out.get(`meter:reads:${fix.meterId}`) as {
       quantity: Decimal;
       unit: string;
@@ -229,7 +259,7 @@ describe("MeterLoader", () => {
     });
 
     const loader = new MeterLoader(prismaImports.prisma, TENANT_A, PERIOD);
-    const out = await loader.load([`meter:reads:${fix.meterId}`]);
+    const out = await scoped(TENANT_A, () => loader.load([`meter:reads:${fix.meterId}`]));
     const summary = out.get(`meter:reads:${fix.meterId}`) as {
       quantity: Decimal;
       unit: string;
@@ -241,7 +271,7 @@ describe("MeterLoader", () => {
     const { fix } = await makeMeterFixture({});
 
     const loader = new MeterLoader(prismaImports.prisma, TENANT_A, PERIOD);
-    const out = await loader.load([`meter:reads:${fix.meterId}`]);
+    const out = await scoped(TENANT_A, () => loader.load([`meter:reads:${fix.meterId}`]));
     const summary = out.get(`meter:reads:${fix.meterId}`) as {
       quantity: Decimal;
       unit: string;
@@ -262,12 +292,12 @@ describe("MeterLoader", () => {
       .mockImplementation((args) => original(args) as ReturnType<typeof original>);
     try {
       const loader = new MeterLoader(prismaImports.prisma, TENANT_A, PERIOD);
-      const out = await loader.load([
+      const out = await scoped(TENANT_A, () => loader.load([
         `meter:size:${fix.meterId}`,
         `meter:size:${fix.meterId2}`,
         `meter:role:${fix.meterId}`,
         `meter:role:${fix.meterId2}`,
-      ]);
+      ]));
 
       expect(spy).toHaveBeenCalledTimes(1);
       expect(out.get(`meter:size:${fix.meterId}`)).toBe('5/8"');
@@ -284,7 +314,7 @@ describe("MeterLoader", () => {
     const loader = new MeterLoader(prismaImports.prisma, TENANT_A, PERIOD);
 
     await expect(
-      loader.load([`meter:peak_demand:${fix.meterId}:15min`]),
+      scoped(TENANT_A, () => loader.load([`meter:peak_demand:${fix.meterId}:15min`])),
     ).rejects.toBeInstanceOf(UnsupportedInSlice4Error);
   });
 });

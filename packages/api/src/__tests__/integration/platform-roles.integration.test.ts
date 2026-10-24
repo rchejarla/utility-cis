@@ -55,15 +55,6 @@ const tenantHeaders = {
 
 beforeAll(async () => {
   const booted = await bootPostgres();
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // Its routes run correctly as `cis_app` — no route or service was
-  // found querying a tenant table without a scope — but its own test
-  // bodies arrange and assert on rows through `prisma` directly, which
-  // needs a `seedAsPlatform` or `runAsTenant` per site. See
-  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
-  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
-  // only lets the number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/provisioning.service.js");
@@ -135,30 +126,36 @@ describe("a utility's roles, read from above", () => {
 });
 
 describe("adding and editing", () => {
-  it("creates a role on the utility named in the path", async () => {
-    const res = await app.inject({
-      method: "POST",
-      url: rolesUrl(UTILITY),
-      headers: platformHeaders,
-      payload: { name: "Auditor", description: "Reads the log", permissions: { audit_log: ["VIEW"] } },
-    });
+  it("creates a role on the utility named in the path", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const res = await app.inject({
+        method: "POST",
+        url: rolesUrl(UTILITY),
+        headers: platformHeaders,
+        payload: { name: "Auditor", description: "Reads the log", permissions: { audit_log: ["VIEW"] } },
+      });
 
-    expect(res.statusCode).toBe(201);
-    const { prisma } = prismaImports;
-    expect(await prisma.role.count({ where: { utilityId: UTILITY, name: "Auditor" } })).toBe(1);
-  });
+      expect(res.statusCode).toBe(201);
+      const { prisma } = prismaImports;
+      expect(await prisma.role.count({ where: { utilityId: UTILITY, name: "Auditor" } })).toBe(1);
+  
+    }));
 
-  it("puts it on that utility and no other", async () => {
-    await app.inject({
-      method: "POST",
-      url: rolesUrl(UTILITY),
-      headers: platformHeaders,
-      payload: { name: "Auditor", permissions: { audit_log: ["VIEW"] } },
-    });
+  it("puts it on that utility and no other", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      await app.inject({
+        method: "POST",
+        url: rolesUrl(UTILITY),
+        headers: platformHeaders,
+        payload: { name: "Auditor", permissions: { audit_log: ["VIEW"] } },
+      });
 
-    const { prisma } = prismaImports;
-    expect(await prisma.role.count({ where: { utilityId: OTHER, name: "Auditor" } })).toBe(0);
-  });
+      const { prisma } = prismaImports;
+      expect(await prisma.role.count({ where: { utilityId: OTHER, name: "Auditor" } })).toBe(0);
+  
+    }));
 
   it("refuses a name the utility already uses", async () => {
     // @@unique([utilityId, name]) — surfaced rather than thrown raw.
@@ -172,125 +169,143 @@ describe("adding and editing", () => {
     expect(res.statusCode).toBe(409);
   });
 
-  it("edits a role's permissions", async () => {
-    const { prisma } = prismaImports;
-    const role = await prisma.role.findFirstOrThrow({ where: { utilityId: UTILITY, name: "CSR" } });
+  it("edits a role's permissions", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const role = await prisma.role.findFirstOrThrow({ where: { utilityId: UTILITY, name: "CSR" } });
 
-    const res = await app.inject({
-      method: "PATCH",
-      url: `${rolesUrl(UTILITY)}/${role.id}`,
-      headers: platformHeaders,
-      payload: { permissions: { customers: ["VIEW"] } },
-    });
+      const res = await app.inject({
+        method: "PATCH",
+        url: `${rolesUrl(UTILITY)}/${role.id}`,
+        headers: platformHeaders,
+        payload: { permissions: { customers: ["VIEW"] } },
+      });
 
-    expect(res.statusCode).toBe(200);
-    const after = await prisma.role.findUniqueOrThrow({ where: { id: role.id } });
-    expect(after.permissions).toEqual({ customers: ["VIEW"] });
-  });
+      expect(res.statusCode).toBe(200);
+      const after = await prisma.role.findUniqueOrThrow({ where: { id: role.id } });
+      expect(after.permissions).toEqual({ customers: ["VIEW"] });
+  
+    }));
 
-  it("refuses to edit a role belonging to another utility", async () => {
-    // The role id is all a caller supplies, so the scoping has to come
-    // from the path — otherwise this edits any role in any utility.
-    const { prisma } = prismaImports;
-    const foreign = await prisma.role.findFirstOrThrow({ where: { utilityId: OTHER, name: "CSR" } });
+  it("refuses to edit a role belonging to another utility", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      // The role id is all a caller supplies, so the scoping has to come
+      // from the path — otherwise this edits any role in any utility.
+      const { prisma } = prismaImports;
+      const foreign = await prisma.role.findFirstOrThrow({ where: { utilityId: OTHER, name: "CSR" } });
 
-    const res = await app.inject({
-      method: "PATCH",
-      url: `${rolesUrl(UTILITY)}/${foreign.id}`,
-      headers: platformHeaders,
-      payload: { permissions: { customers: ["VIEW"] } },
-    });
+      const res = await app.inject({
+        method: "PATCH",
+        url: `${rolesUrl(UTILITY)}/${foreign.id}`,
+        headers: platformHeaders,
+        payload: { permissions: { customers: ["VIEW"] } },
+      });
 
-    expect(res.statusCode).toBeGreaterThanOrEqual(400);
-    const after = await prisma.role.findUniqueOrThrow({ where: { id: foreign.id } });
-    expect(after.permissions).not.toEqual({ customers: ["VIEW"] });
-  });
+      expect(res.statusCode).toBeGreaterThanOrEqual(400);
+      const after = await prisma.role.findUniqueOrThrow({ where: { id: foreign.id } });
+      expect(after.permissions).not.toEqual({ customers: ["VIEW"] });
+  
+    }));
 });
 
 describe("deleting", () => {
-  it("deletes a role nobody holds", async () => {
-    const { prisma } = prismaImports;
-    const role = await prisma.role.create({
-      data: { utilityId: UTILITY, name: "Spare", permissions: { audit_log: ["VIEW"] } },
-    });
+  it("deletes a role nobody holds", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const role = await prisma.role.create({
+        data: { utilityId: UTILITY, name: "Spare", permissions: { audit_log: ["VIEW"] } },
+      });
 
-    const res = await app.inject({
-      method: "DELETE",
-      url: `${rolesUrl(UTILITY)}/${role.id}`,
-      headers: platformAuthOnly,
-    });
+      const res = await app.inject({
+        method: "DELETE",
+        url: `${rolesUrl(UTILITY)}/${role.id}`,
+        headers: platformAuthOnly,
+      });
 
-    expect(res.statusCode).toBeLessThan(300);
-    expect(await prisma.role.count({ where: { id: role.id } })).toBe(0);
-  });
+      expect(res.statusCode).toBeLessThan(300);
+      expect(await prisma.role.count({ where: { id: role.id } })).toBe(0);
+  
+    }));
 
-  it("deletes an unassigned preset, which nothing is protected by", async () => {
-    // BR-RB-002 used to refuse this because the role is marked
-    // isSystem. That protected nothing: BR-RB-003 below already refuses
-    // any role somebody holds, so a deletable role is by definition one
-    // whose removal takes no permission away from anyone. All it did was
-    // leave every utility permanently carrying six roles — Portal
-    // Customer on a utility with no portal, Field Technician on one with
-    // no field staff — with no way to shed them.
-    const { prisma } = prismaImports;
-    const preset = await prisma.role.findFirstOrThrow({
-      where: { utilityId: UTILITY, name: "Field Technician" },
-    });
+  it("deletes an unassigned preset, which nothing is protected by", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      // BR-RB-002 used to refuse this because the role is marked
+      // isSystem. That protected nothing: BR-RB-003 below already refuses
+      // any role somebody holds, so a deletable role is by definition one
+      // whose removal takes no permission away from anyone. All it did was
+      // leave every utility permanently carrying six roles — Portal
+      // Customer on a utility with no portal, Field Technician on one with
+      // no field staff — with no way to shed them.
+      const { prisma } = prismaImports;
+      const preset = await prisma.role.findFirstOrThrow({
+        where: { utilityId: UTILITY, name: "Field Technician" },
+      });
 
-    const res = await app.inject({
-      method: "DELETE",
-      url: `${rolesUrl(UTILITY)}/${preset.id}`,
-      headers: platformAuthOnly,
-    });
+      const res = await app.inject({
+        method: "DELETE",
+        url: `${rolesUrl(UTILITY)}/${preset.id}`,
+        headers: platformAuthOnly,
+      });
 
-    expect(res.statusCode).toBeLessThan(300);
-    expect(await prisma.role.count({ where: { id: preset.id } })).toBe(0);
-  });
+      expect(res.statusCode).toBeLessThan(300);
+      expect(await prisma.role.count({ where: { id: preset.id } })).toBe(0);
+  
+    }));
 
-  it("still refuses a preset somebody holds", async () => {
-    // The protection that does the work, on a role that is both a preset
-    // and assigned — the case BR-RB-002 was presumably written for.
-    const { prisma } = prismaImports;
-    const preset = await prisma.role.findFirstOrThrow({
-      where: { utilityId: UTILITY, name: "System Admin" },
-    });
-    const user = await prisma.cisUser.create({
-      data: { utilityId: UTILITY, email: "admin@held.gov", name: "Admin" },
-    });
-    await prisma.userRole.create({
-      data: { utilityId: UTILITY, userId: user.id, accountId: null, roleId: preset.id },
-    });
+  it("still refuses a preset somebody holds", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      // The protection that does the work, on a role that is both a preset
+      // and assigned — the case BR-RB-002 was presumably written for.
+      const { prisma } = prismaImports;
+      const preset = await prisma.role.findFirstOrThrow({
+        where: { utilityId: UTILITY, name: "System Admin" },
+      });
+      const user = await prisma.cisUser.create({
+        data: { utilityId: UTILITY, email: "admin@held.gov", name: "Admin" },
+      });
+      await prisma.userRole.create({
+        data: { utilityId: UTILITY, userId: user.id, accountId: null, roleId: preset.id },
+      });
 
-    const res = await app.inject({
-      method: "DELETE",
-      url: `${rolesUrl(UTILITY)}/${preset.id}`,
-      headers: platformAuthOnly,
-    });
+      const res = await app.inject({
+        method: "DELETE",
+        url: `${rolesUrl(UTILITY)}/${preset.id}`,
+        headers: platformAuthOnly,
+      });
 
-    expect(res.statusCode).toBe(400);
-    expect(JSON.parse(res.body).error.code).toBe("ROLE_IN_USE");
-    expect(await prisma.role.count({ where: { id: preset.id } })).toBe(1);
-  });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).error.code).toBe("ROLE_IN_USE");
+      expect(await prisma.role.count({ where: { id: preset.id } })).toBe(1);
+  
+    }));
 
-  it("refuses a role somebody holds — BR-RB-003 too", async () => {
-    const { prisma } = prismaImports;
-    const role = await prisma.role.create({
-      data: { utilityId: UTILITY, name: "Held", permissions: { audit_log: ["VIEW"] } },
-    });
-    const user = await prisma.cisUser.create({
-      data: { utilityId: UTILITY, email: "holder@example.gov", name: "Holder" },
-    });
-    await prisma.userRole.create({
-      data: { utilityId: UTILITY, userId: user.id, accountId: null, roleId: role.id },
-    });
+  it("refuses a role somebody holds — BR-RB-003 too", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const role = await prisma.role.create({
+        data: { utilityId: UTILITY, name: "Held", permissions: { audit_log: ["VIEW"] } },
+      });
+      const user = await prisma.cisUser.create({
+        data: { utilityId: UTILITY, email: "holder@example.gov", name: "Holder" },
+      });
+      await prisma.userRole.create({
+        data: { utilityId: UTILITY, userId: user.id, accountId: null, roleId: role.id },
+      });
 
-    const res = await app.inject({
-      method: "DELETE",
-      url: `${rolesUrl(UTILITY)}/${role.id}`,
-      headers: platformAuthOnly,
-    });
+      const res = await app.inject({
+        method: "DELETE",
+        url: `${rolesUrl(UTILITY)}/${role.id}`,
+        headers: platformAuthOnly,
+      });
 
-    expect(res.statusCode).toBe(400);
-    expect(await prisma.role.count({ where: { id: role.id } })).toBe(1);
-  });
+      expect(res.statusCode).toBe(400);
+      expect(await prisma.role.count({ where: { id: role.id } })).toBe(1);
+  
+    }));
 });

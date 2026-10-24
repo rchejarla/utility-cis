@@ -8,9 +8,11 @@ import {
   TENANT_A,
   type TenantFixture,
   endAdminPool,
+  seedAsPlatform,
 } from "./_effective-dating-fixtures.js";
 import { LinkedCommodityLoader } from "../../lib/rate-engine-loaders/loaders/linked-commodity-loader.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * Slice 4 task 6 — LinkedCommodityLoader integration tests.
  *
@@ -33,14 +35,6 @@ const PERIOD = {
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);
@@ -56,13 +50,28 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
-  const { prisma } = prismaImports;
-  await prisma.$executeRawUnsafe("DELETE FROM meter_read");
-  await prisma.$executeRawUnsafe("DELETE FROM service_point_meter");
-  await prisma.$executeRawUnsafe("DELETE FROM service_point");
-  await resetDb();
-});
+/**
+ * The loader run the way a route runs it: inside the tenant's scope.
+ *
+ * A loader takes the client and the tenant in its constructor, so the
+ * scope cannot ride in on an argument to `load()` — it has to be around
+ * the call. `runAsTenant` here overrides the surrounding
+ * `seedAsPlatform`, so the fixtures stay free to arrange rows while the
+ * read under test is confined to one tenant.
+ */
+const scoped = <T>(tenant: string, fn: () => Promise<T>): Promise<T> =>
+  runAsTenant(tenant, fn);
+
+beforeEach(() =>
+  seedAsPlatform(async () => {    /* Fixture rows and read-backs under the fixture authority; the
+     * scoped wrappers re-enter their own tenant scope. */
+    const { prisma } = prismaImports;
+    await prisma.$executeRawUnsafe("DELETE FROM meter_read");
+    await prisma.$executeRawUnsafe("DELETE FROM service_point_meter");
+    await prisma.$executeRawUnsafe("DELETE FROM service_point");
+    await resetDb();
+
+  }));
 
 interface LinkedFixture {
   fix: TenantFixture;
@@ -84,68 +93,26 @@ async function makeLinkedFixture(opts: {
   /** Optional second sibling on a different commodity (for the multiple-sibling test) */
   extraSibling?: { code: string };
 } = {}): Promise<LinkedFixture> {
-  const { prisma } = prismaImports;
-  const fix = await makeTenantFixture(prisma, TENANT_A);
+  /*
+   * Arranging rows, so the authority the fixtures use. Calls under
+   * test re-enter their own tenant scope.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const fix = await makeTenantFixture(prisma, TENANT_A);
 
-  // Second commodity (sewer)
-  const sewer = await prisma.commodity.create({
-    data: { utilityId: fix.utilityId, code: "SEWER-AA", name: "Sewer" },
-  });
-
-  // Current SA — uses fixture's water commodity
-  const currentSa = await prisma.serviceAgreement.create({
-    data: {
-      utilityId: fix.utilityId,
-      agreementNumber: "SA-CURRENT-1",
-      accountId: fix.accountId,
-      commodityId: sewer.id, // current is sewer; sibling will be water
-      startDate: new Date("2026-01-01"),
-      status: "ACTIVE",
-    },
-  });
-  await prisma.servicePoint.create({
-    data: {
-      utilityId: fix.utilityId,
-      serviceAgreementId: currentSa.id,
-      premiseId: fix.premiseId,
-      type: "METERED",
-      status: "ACTIVE",
-      startDate: new Date("2026-01-01"),
-    },
-  });
-
-  // Sibling SA — water commodity
-  const siblingSa = await prisma.serviceAgreement.create({
-    data: {
-      utilityId: fix.utilityId,
-      agreementNumber: "SA-SIBLING-1",
-      accountId: fix.accountId,
-      commodityId: fix.commodityId,
-      startDate: new Date("2026-01-01"),
-      status: opts.siblingStatus ?? "ACTIVE",
-    },
-  });
-  await prisma.servicePoint.create({
-    data: {
-      utilityId: fix.utilityId,
-      serviceAgreementId: siblingSa.id,
-      premiseId: fix.premiseId,
-      type: "METERED",
-      status: "ACTIVE",
-      startDate: new Date("2026-01-01"),
-    },
-  });
-
-  if (opts.extraSibling) {
-    const extraComm = await prisma.commodity.create({
-      data: { utilityId: fix.utilityId, code: opts.extraSibling.code, name: "Extra" },
+    // Second commodity (sewer)
+    const sewer = await prisma.commodity.create({
+      data: { utilityId: fix.utilityId, code: "SEWER-AA", name: "Sewer" },
     });
-    const extraSa = await prisma.serviceAgreement.create({
+
+    // Current SA — uses fixture's water commodity
+    const currentSa = await prisma.serviceAgreement.create({
       data: {
         utilityId: fix.utilityId,
-        agreementNumber: "SA-SIBLING-EXTRA",
+        agreementNumber: "SA-CURRENT-1",
         accountId: fix.accountId,
-        commodityId: extraComm.id,
+        commodityId: sewer.id, // current is sewer; sibling will be water
         startDate: new Date("2026-01-01"),
         status: "ACTIVE",
       },
@@ -153,28 +120,77 @@ async function makeLinkedFixture(opts: {
     await prisma.servicePoint.create({
       data: {
         utilityId: fix.utilityId,
-        serviceAgreementId: extraSa.id,
+        serviceAgreementId: currentSa.id,
         premiseId: fix.premiseId,
         type: "METERED",
         status: "ACTIVE",
         startDate: new Date("2026-01-01"),
       },
     });
-  }
 
-  // Get the actual water commodity code from the fixture
-  const waterComm = await prisma.commodity.findUniqueOrThrow({
-    where: { id: fix.commodityId },
-    select: { code: true, id: true },
+    // Sibling SA — water commodity
+    const siblingSa = await prisma.serviceAgreement.create({
+      data: {
+        utilityId: fix.utilityId,
+        agreementNumber: "SA-SIBLING-1",
+        accountId: fix.accountId,
+        commodityId: fix.commodityId,
+        startDate: new Date("2026-01-01"),
+        status: opts.siblingStatus ?? "ACTIVE",
+      },
+    });
+    await prisma.servicePoint.create({
+      data: {
+        utilityId: fix.utilityId,
+        serviceAgreementId: siblingSa.id,
+        premiseId: fix.premiseId,
+        type: "METERED",
+        status: "ACTIVE",
+        startDate: new Date("2026-01-01"),
+      },
+    });
+
+    if (opts.extraSibling) {
+      const extraComm = await prisma.commodity.create({
+        data: { utilityId: fix.utilityId, code: opts.extraSibling.code, name: "Extra" },
+      });
+      const extraSa = await prisma.serviceAgreement.create({
+        data: {
+          utilityId: fix.utilityId,
+          agreementNumber: "SA-SIBLING-EXTRA",
+          accountId: fix.accountId,
+          commodityId: extraComm.id,
+          startDate: new Date("2026-01-01"),
+          status: "ACTIVE",
+        },
+      });
+      await prisma.servicePoint.create({
+        data: {
+          utilityId: fix.utilityId,
+          serviceAgreementId: extraSa.id,
+          premiseId: fix.premiseId,
+          type: "METERED",
+          status: "ACTIVE",
+          startDate: new Date("2026-01-01"),
+        },
+      });
+    }
+
+    // Get the actual water commodity code from the fixture
+    const waterComm = await prisma.commodity.findUniqueOrThrow({
+      where: { id: fix.commodityId },
+      select: { code: true, id: true },
+    });
+
+    return {
+      fix,
+      currentSaId: currentSa.id,
+      siblingSaId: siblingSa.id,
+      siblingCommodityId: waterComm.id,
+      siblingCommodityCode: waterComm.code,
+    };
+
   });
-
-  return {
-    fix,
-    currentSaId: currentSa.id,
-    siblingSaId: siblingSa.id,
-    siblingCommodityId: waterComm.id,
-    siblingCommodityCode: waterComm.code,
-  };
 }
 
 async function seedRead(opts: {
@@ -185,22 +201,36 @@ async function seedRead(opts: {
   readDate: Date;
   consumption: string;
 }): Promise<void> {
-  const { prisma } = prismaImports;
-  await prisma.meterRead.create({
-    data: {
-      utilityId: opts.utilityId,
-      meterId: opts.meterId,
-      serviceAgreementId: opts.saId,
-      uomId: opts.uomId,
-      readDate: opts.readDate,
-      readDatetime: opts.readDate,
-      reading: "0",
-      priorReading: "0",
-      consumption: opts.consumption,
-      readType: "ACTUAL",
-      readSource: "MANUAL",
-    },
+
+  /*
+
+   * Arranging rows, so the authority the fixtures use. Calls under
+
+   * test re-enter their own tenant scope.
+
+   */
+
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    await prisma.meterRead.create({
+      data: {
+        utilityId: opts.utilityId,
+        meterId: opts.meterId,
+        serviceAgreementId: opts.saId,
+        uomId: opts.uomId,
+        readDate: opts.readDate,
+        readDatetime: opts.readDate,
+        reading: "0",
+        priorReading: "0",
+        consumption: opts.consumption,
+        readType: "ACTUAL",
+        readSource: "MANUAL",
+      },
+    });
+
+
   });
+
 }
 
 describe("LinkedCommodityLoader", () => {
@@ -232,7 +262,7 @@ describe("LinkedCommodityLoader", () => {
       { id: currentSaId, accountId: fix.accountId, premiseId: fix.premiseId },
     );
     const key = `linked:${siblingCommodityCode}:current_period`;
-    const out = await loader.load([key]);
+    const out = await scoped(TENANT_A, () => loader.load([key]));
     const v = out.get(key) as Decimal;
     expect(v.toString()).toBe(new Decimal("22.5").toString());
   });
@@ -256,7 +286,7 @@ describe("LinkedCommodityLoader", () => {
       { id: currentSaId, accountId: fix.accountId, premiseId: fix.premiseId },
     );
     const key = `linked:${siblingCommodityId}:current_period`;
-    const out = await loader.load([key]);
+    const out = await scoped(TENANT_A, () => loader.load([key]));
     expect((out.get(key) as Decimal).toString()).toBe(
       new Decimal("7.0").toString(),
     );
@@ -300,7 +330,7 @@ describe("LinkedCommodityLoader", () => {
       { id: currentSaId, accountId: fix.accountId, premiseId: fix.premiseId },
     );
     const key = `linked:${siblingCommodityCode}:current_period`;
-    const out = await loader.load([key]);
+    const out = await scoped(TENANT_A, () => loader.load([key]));
     expect((out.get(key) as Decimal).toString()).toBe(
       new Decimal("8.0").toString(),
     );
@@ -316,46 +346,49 @@ describe("LinkedCommodityLoader", () => {
       { id: currentSaId, accountId: fix.accountId, premiseId: fix.premiseId },
     );
     await expect(
-      loader.load(["linked:NONEXISTENT-COMMODITY:current_period"]),
+      scoped(TENANT_A, () => loader.load(["linked:NONEXISTENT-COMMODITY:current_period"])),
     ).rejects.toThrow(/No sibling SA/);
   });
 
-  it("throws when multiple sibling SAs match the same commodity", async () => {
-    // Build the standard fixture, then add a SECOND water SA on the
-    // same account+premise. The loader should refuse rather than
-    // silently picking one.
-    const { fix, currentSaId, siblingCommodityCode } = await makeLinkedFixture();
-    const secondSibling = await prismaImports.prisma.serviceAgreement.create({
-      data: {
-        utilityId: fix.utilityId,
-        agreementNumber: "SA-SIBLING-DUP",
-        accountId: fix.accountId,
-        commodityId: fix.commodityId, // same water commodity
-        startDate: new Date("2026-01-01"),
-        status: "ACTIVE",
-      },
-    });
-    await prismaImports.prisma.servicePoint.create({
-      data: {
-        utilityId: fix.utilityId,
-        serviceAgreementId: secondSibling.id,
-        premiseId: fix.premiseId,
-        type: "METERED",
-        status: "ACTIVE",
-        startDate: new Date("2026-01-01"),
-      },
-    });
+  it("throws when multiple sibling SAs match the same commodity", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      // Build the standard fixture, then add a SECOND water SA on the
+      // same account+premise. The loader should refuse rather than
+      // silently picking one.
+      const { fix, currentSaId, siblingCommodityCode } = await makeLinkedFixture();
+      const secondSibling = await prismaImports.prisma.serviceAgreement.create({
+        data: {
+          utilityId: fix.utilityId,
+          agreementNumber: "SA-SIBLING-DUP",
+          accountId: fix.accountId,
+          commodityId: fix.commodityId, // same water commodity
+          startDate: new Date("2026-01-01"),
+          status: "ACTIVE",
+        },
+      });
+      await prismaImports.prisma.servicePoint.create({
+        data: {
+          utilityId: fix.utilityId,
+          serviceAgreementId: secondSibling.id,
+          premiseId: fix.premiseId,
+          type: "METERED",
+          status: "ACTIVE",
+          startDate: new Date("2026-01-01"),
+        },
+      });
 
-    const loader = new LinkedCommodityLoader(
-      prismaImports.prisma,
-      TENANT_A,
-      PERIOD,
-      { id: currentSaId, accountId: fix.accountId, premiseId: fix.premiseId },
-    );
-    await expect(
-      loader.load([`linked:${siblingCommodityCode}:current_period`]),
-    ).rejects.toThrow(/Multiple sibling SAs/);
-  });
+      const loader = new LinkedCommodityLoader(
+        prismaImports.prisma,
+        TENANT_A,
+        PERIOD,
+        { id: currentSaId, accountId: fix.accountId, premiseId: fix.premiseId },
+      );
+      await expect(
+        scoped(TENANT_A, () => loader.load([`linked:${siblingCommodityCode}:current_period`])),
+      ).rejects.toThrow(/Multiple sibling SAs/);
+  
+    }));
 
   it("returns 0 when sibling exists but has no reads in the period", async () => {
     const { fix, currentSaId, siblingCommodityCode } = await makeLinkedFixture();
@@ -367,7 +400,7 @@ describe("LinkedCommodityLoader", () => {
       { id: currentSaId, accountId: fix.accountId, premiseId: fix.premiseId },
     );
     const key = `linked:${siblingCommodityCode}:current_period`;
-    const out = await loader.load([key]);
+    const out = await scoped(TENANT_A, () => loader.load([key]));
     expect((out.get(key) as Decimal).toString()).toBe("0");
   });
 });

@@ -7,6 +7,7 @@ import {
   TENANT_A,
   TENANT_B,
   endAdminPool,
+  seedAsPlatform,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -29,14 +30,6 @@ let prismaImports: typeof import("../../lib/prisma.js");
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A, TENANT_B] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);
@@ -57,63 +50,75 @@ beforeEach(async () => {
 });
 
 describe("the Utility entity", () => {
-  it("gives a fixture tenant a utility row", async () => {
-    const { prisma } = prismaImports;
-    const fix = await makeTenantFixture(prisma, TENANT_A);
+  it("gives a fixture tenant a utility row", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const fix = await makeTenantFixture(prisma, TENANT_A);
 
-    const utility = await prisma.utility.findUniqueOrThrow({ where: { id: TENANT_A } });
-    expect(utility.status).toBe("ACTIVE");
-    expect(utility.name).toContain("00aa");
-    expect(fix.utilityId).toBe(TENANT_A);
-  });
+      const utility = await prisma.utility.findUniqueOrThrow({ where: { id: TENANT_A } });
+      expect(utility.status).toBe("ACTIVE");
+      expect(utility.name).toContain("00aa");
+      expect(fix.utilityId).toBe(TENANT_A);
+  
+    }));
 
-  it("creates a second utility without colliding with the first", async () => {
-    const { prisma } = prismaImports;
-    await makeTenantFixture(prisma, TENANT_A);
-    await makeTenantFixture(prisma, TENANT_B);
+  it("creates a second utility without colliding with the first", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      await makeTenantFixture(prisma, TENANT_A);
+      await makeTenantFixture(prisma, TENANT_B);
 
-    // Counted by id rather than globally: `utility` survives resetDb, so
-    // a global count would depend on what ran before this test.
-    const count = await prisma.utility.count({
-      where: { id: { in: [TENANT_A, TENANT_B] } },
-    });
-    expect(count).toBe(2);
-  });
+      // Counted by id rather than globally: `utility` survives resetDb, so
+      // a global count would depend on what ran before this test.
+      const count = await prisma.utility.count({
+        where: { id: { in: [TENANT_A, TENANT_B] } },
+      });
+      expect(count).toBe(2);
+  
+    }));
 
   /**
    * The point of the key. Without it, `utility_id` was an uncontrolled
    * value: a typo produced a phantom tenant whose rows nothing owned and
    * no one could find.
    */
-  it("refuses a row naming a utility that does not exist", async () => {
-    const { prisma } = prismaImports;
-    const fix = await makeTenantFixture(prisma, TENANT_A);
+  it("refuses a row naming a utility that does not exist", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const fix = await makeTenantFixture(prisma, TENANT_A);
 
-    await expect(
-      prisma.account.create({
-        data: {
-          utilityId: "99999999-9999-4999-8999-999999999999",
-          accountNumber: "ACCT-ORPHAN",
-          accountType: "RESIDENTIAL",
-          status: "ACTIVE",
-          billingCycleId: fix.billingCycleId,
-          depositAmount: 0,
-        },
-      }),
-    ).rejects.toMatchObject({ code: "P2003" });
-  });
+      await expect(
+        prisma.account.create({
+          data: {
+            utilityId: "99999999-9999-4999-8999-999999999999",
+            accountNumber: "ACCT-ORPHAN",
+            accountType: "RESIDENTIAL",
+            status: "ACTIVE",
+            billingCycleId: fix.billingCycleId,
+            depositAmount: 0,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2003" });
+  
+    }));
 
   /**
    * `onDelete: Restrict`, not Cascade. A cascade would make one mistaken
    * delete erase a utility's entire history — every customer, bill and
    * ledger entry — from a single call.
    */
-  it("refuses to delete a utility that still has rows", async () => {
-    const { prisma } = prismaImports;
-    await makeTenantFixture(prisma, TENANT_A);
+  it("refuses to delete a utility that still has rows", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      await makeTenantFixture(prisma, TENANT_A);
 
-    await expect(prisma.utility.delete({ where: { id: TENANT_A } })).rejects.toMatchObject({
-      code: "P2003",
-    });
-  });
+      await expect(prisma.utility.delete({ where: { id: TENANT_A } })).rejects.toMatchObject({
+        code: "P2003",
+      });
+  
+    }));
 });

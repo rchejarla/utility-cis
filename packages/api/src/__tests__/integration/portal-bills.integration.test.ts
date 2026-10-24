@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
+import { runAsTenant } from "../../lib/tenant-context.js";
 import {
   bootPostgres,
   resetDb,
@@ -42,6 +43,20 @@ let portalUserId: string;
 
 const PORTAL_MODULES = ["portal_accounts", "accounts"];
 
+/**
+ * The services this file calls directly, as a route reaches them: acting
+ * for the tenant, not merely naming it.
+ *
+ * Each already receives the tenant — production passed it from a request
+ * or a job whose scope had been entered, so the argument and the scope
+ * are always the same id. A direct service test has the argument and not
+ * the scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` also overrides a surrounding `seedAsPlatform`, which is
+ * what lets fixture rows be arranged across tenants while the call under
+ * test stays confined to one.
+ */
 function makeToken(opts: { utilityId: string; actorId: string; customerId?: string }) {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
   const payload = Buffer.from(
@@ -59,15 +74,6 @@ function makeToken(opts: { utilityId: string; actorId: string; customerId?: stri
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // Its routes run correctly as `cis_app` — no route or service was
-  // found querying a tenant table without a scope — but its own test
-  // bodies arrange and assert on rows through `prisma` directly, which
-  // needs a `seedAsPlatform` or `runAsTenant` per site. See
-  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
-  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
-  // only lets the number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   appImports = await import("../../app.js");
@@ -223,82 +229,88 @@ describe("GET /portal/api/accounts/:accountId/bills", () => {
     expect(res.body).not.toContain("7777");
   });
 
-  it("omits a bill that has not been posted", async () => {
-    const { prisma } = prismaImports;
-    // A bill is a calculation until it is posted: it has raised no
-    // receivable and moved no balance, so the customer does not owe it.
-    // The admin AR tab excludes these for the same reason — showing one
-    // here invites a call about a charge that does not exist.
-    await prisma.bill.create({
-      data: {
-        utilityId: fixA.utilityId,
-        accountId: mineAccountId,
-        billingCycleId: fixA.billingCycleId,
-        periodStart: new Date("2026-03-01"),
-        periodEnd: new Date("2026-03-31"),
-        billDate: new Date("2026-04-01"),
-        dueDate: new Date("2026-04-30"),
-        subtotal: "55.0000",
-        taxes: "0.0000",
-        credits: "0.0000",
-        total: "55.0000",
-        billNumber: "PB-DRAFT",
-        postedAt: null,
-      },
-    });
-    const res = await app.inject({
-      method: "GET",
-      url: `/portal/api/accounts/${mineAccountId}/bills`,
-      headers: asCustomer(),
-    });
+  it("omits a bill that has not been posted", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      // A bill is a calculation until it is posted: it has raised no
+      // receivable and moved no balance, so the customer does not owe it.
+      // The admin AR tab excludes these for the same reason — showing one
+      // here invites a call about a charge that does not exist.
+      await prisma.bill.create({
+        data: {
+          utilityId: fixA.utilityId,
+          accountId: mineAccountId,
+          billingCycleId: fixA.billingCycleId,
+          periodStart: new Date("2026-03-01"),
+          periodEnd: new Date("2026-03-31"),
+          billDate: new Date("2026-04-01"),
+          dueDate: new Date("2026-04-30"),
+          subtotal: "55.0000",
+          taxes: "0.0000",
+          credits: "0.0000",
+          total: "55.0000",
+          billNumber: "PB-DRAFT",
+          postedAt: null,
+        },
+      });
+      const res = await app.inject({
+        method: "GET",
+        url: `/portal/api/accounts/${mineAccountId}/bills`,
+        headers: asCustomer(),
+      });
 
-    expect(res.statusCode).toBe(200);
-    const rows = res.json().data;
-    expect(rows.map((r: { billNumber: string }) => r.billNumber)).toEqual(["PB-1001"]);
-  });
+      expect(res.statusCode).toBe(200);
+      const rows = res.json().data;
+      expect(rows.map((r: { billNumber: string }) => r.billNumber)).toEqual(["PB-1001"]);
+  
+    }));
 
-  it("carries each account's balance and the total owed on the dashboard", async () => {
-    const { prisma } = prismaImports;
-    // `Account.balance` is the maintained cache of what the account
-    // owes, recomputed from the ledger in the same transaction that
-    // posts a receivable. The portal dashboard showed a figure derived
-    // from mock invoices until 2026-10-22; this is the real one, and it
-    // is summed server-side so the client cannot disagree with it.
-    await prisma.account.update({
-      where: { id: mineAccountId },
-      data: { balance: "90.00" },
-    });
-    const second = await prisma.account.create({
-      data: {
-        utilityId: fixA.utilityId,
-        accountNumber: "PB-MINE-2",
-        accountType: "RESIDENTIAL",
-        status: "ACTIVE",
-        billingCycleId: fixA.billingCycleId,
-        customerId: mineCustomerId,
-        balance: "10.50",
-      },
-    });
+  it("carries each account's balance and the total owed on the dashboard", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      // `Account.balance` is the maintained cache of what the account
+      // owes, recomputed from the ledger in the same transaction that
+      // posts a receivable. The portal dashboard showed a figure derived
+      // from mock invoices until 2026-10-22; this is the real one, and it
+      // is summed server-side so the client cannot disagree with it.
+      await prisma.account.update({
+        where: { id: mineAccountId },
+        data: { balance: "90.00" },
+      });
+      const second = await prisma.account.create({
+        data: {
+          utilityId: fixA.utilityId,
+          accountNumber: "PB-MINE-2",
+          accountType: "RESIDENTIAL",
+          status: "ACTIVE",
+          billingCycleId: fixA.billingCycleId,
+          customerId: mineCustomerId,
+          balance: "10.50",
+        },
+      });
 
-    const res = await app.inject({
-      method: "GET",
-      url: "/portal/api/dashboard",
-      headers: asCustomer(),
-    });
+      const res = await app.inject({
+        method: "GET",
+        url: "/portal/api/dashboard",
+        headers: asCustomer(),
+      });
 
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(Number(body.amountDue)).toBe(100.5);
-    const byNumber = Object.fromEntries(
-      body.accounts.map((a: { accountNumber: string; balance: string }) => [
-        a.accountNumber,
-        Number(a.balance),
-      ]),
-    );
-    expect(byNumber["PB-MINE"]).toBe(90);
-    expect(byNumber["PB-MINE-2"]).toBe(10.5);
-    expect(second.id).toBeTruthy();
-  });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(Number(body.amountDue)).toBe(100.5);
+      const byNumber = Object.fromEntries(
+        body.accounts.map((a: { accountNumber: string; balance: string }) => [
+          a.accountNumber,
+          Number(a.balance),
+        ]),
+      );
+      expect(byNumber["PB-MINE"]).toBe(90);
+      expect(byNumber["PB-MINE-2"]).toBe(10.5);
+      expect(second.id).toBeTruthy();
+  
+    }));
 
   it("refuses a token that carries no customer", async () => {
     const res = await app.inject({

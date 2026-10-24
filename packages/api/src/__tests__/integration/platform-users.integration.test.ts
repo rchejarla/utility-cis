@@ -26,14 +26,6 @@ let svc: typeof import("../../services/platform-user.service.js");
 
 beforeAll(async () => {
   const booted = await bootPostgres();
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/platform-user.service.js");
@@ -56,19 +48,25 @@ beforeEach(() =>
 );
 
 describe("platform operators", () => {
-  it("creates one, belonging to no tenant", async () => {
-    const actor = await svc.createPlatformUser({ email: "ops@example.gov", name: "Pat Operator" });
+  it("creates one, belonging to no tenant", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const actor = await svc.createPlatformUser({ email: "ops@example.gov", name: "Pat Operator" });
 
-    expect(actor).toMatchObject({ email: "ops@example.gov", name: "Pat Operator", isActive: true });
-    const row = await prismaImports.prisma.cisUser.findFirstOrThrow({ where: { id: actor.id } });
-    expect(row.utilityId).toBeNull();
-  });
+      expect(actor).toMatchObject({ email: "ops@example.gov", name: "Pat Operator", isActive: true });
+      const row = await prismaImports.prisma.cisUser.findFirstOrThrow({ where: { id: actor.id } });
+      expect(row.utilityId).toBeNull();
+  
+    }));
 
-  it("gives it no role, because being the platform actor is the authority", async () => {
-    const actor = await svc.createPlatformUser({ email: "ops@example.gov", name: "Pat" });
+  it("gives it no role, because being the platform actor is the authority", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const actor = await svc.createPlatformUser({ email: "ops@example.gov", name: "Pat" });
 
-    expect(await prismaImports.prisma.userRole.count({ where: { userId: actor.id } })).toBe(0);
-  });
+      expect(await prismaImports.prisma.userRole.count({ where: { userId: actor.id } })).toBe(0);
+  
+    }));
 
   it("lowercases the email, so the account can be signed in to", async () => {
     // dev-login and every other lookup normalise; an address stored with
@@ -105,20 +103,23 @@ describe("platform operators", () => {
     expect(all.map((u) => u.isActive)).toEqual([true, false]);
   });
 
-  it("lists no tenant user, however many exist", async () => {
-    const { prisma } = prismaImports;
-    await prisma.utility.create({ data: { id: "00000000-0000-4000-8000-0000000000d1", name: "T" } });
-    await prisma.cisUser.create({
-      data: {
-        utilityId: "00000000-0000-4000-8000-0000000000d1",
-        email: "staff@tenant.gov",
-        name: "Tenant Staff",
-      },
-    });
-    await svc.createPlatformUser({ email: "ops@example.gov", name: "Pat" });
+  it("lists no tenant user, however many exist", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      await prisma.utility.create({ data: { id: "00000000-0000-4000-8000-0000000000d1", name: "T" } });
+      await prisma.cisUser.create({
+        data: {
+          utilityId: "00000000-0000-4000-8000-0000000000d1",
+          email: "staff@tenant.gov",
+          name: "Tenant Staff",
+        },
+      });
+      await svc.createPlatformUser({ email: "ops@example.gov", name: "Pat" });
 
-    expect((await svc.listPlatformUsers()).map((u) => u.email)).toEqual(["ops@example.gov"]);
-  });
+      expect((await svc.listPlatformUsers()).map((u) => u.email)).toEqual(["ops@example.gov"]);
+  
+    }));
 
   it("deactivates and reactivates", async () => {
     const a = await svc.createPlatformUser({ email: "a@example.gov", name: "A" });
@@ -157,26 +158,29 @@ describe("platform operators", () => {
     ).rejects.toMatchObject({ code: "PLATFORM_USER_NOT_FOUND" });
   });
 
-  it("will not deactivate a tenant user through this door", async () => {
-    const { prisma } = prismaImports;
-    // The id is all a caller supplies, so the lookup has to insist the
-    // row has no tenant — otherwise this is a route to deactivating any
-    // user in any tenant.
-    await prisma.utility.create({ data: { id: "00000000-0000-4000-8000-0000000000d2", name: "T2" } });
-    const staff = await prisma.cisUser.create({
-      data: {
-        utilityId: "00000000-0000-4000-8000-0000000000d2",
-        email: "staff2@tenant.gov",
-        name: "Tenant Staff",
-      },
-    });
-    await svc.createPlatformUser({ email: "ops@example.gov", name: "Pat" });
+  it("will not deactivate a tenant user through this door", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      // The id is all a caller supplies, so the lookup has to insist the
+      // row has no tenant — otherwise this is a route to deactivating any
+      // user in any tenant.
+      await prisma.utility.create({ data: { id: "00000000-0000-4000-8000-0000000000d2", name: "T2" } });
+      const staff = await prisma.cisUser.create({
+        data: {
+          utilityId: "00000000-0000-4000-8000-0000000000d2",
+          email: "staff2@tenant.gov",
+          name: "Tenant Staff",
+        },
+      });
+      await svc.createPlatformUser({ email: "ops@example.gov", name: "Pat" });
 
-    await expect(svc.setPlatformUserActive(staff.id, false)).rejects.toMatchObject({
-      code: "PLATFORM_USER_NOT_FOUND",
-    });
-    expect(
-      (await prisma.cisUser.findFirstOrThrow({ where: { id: staff.id } })).isActive,
-    ).toBe(true);
-  });
+      await expect(svc.setPlatformUserActive(staff.id, false)).rejects.toMatchObject({
+        code: "PLATFORM_USER_NOT_FOUND",
+      });
+      expect(
+        (await prisma.cisUser.findFirstOrThrow({ where: { id: staff.id } })).isActive,
+      ).toBe(true);
+  
+    }));
 });

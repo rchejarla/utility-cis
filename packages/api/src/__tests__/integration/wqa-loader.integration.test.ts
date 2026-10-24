@@ -7,9 +7,11 @@ import {
   makeTenantFixture,
   TENANT_A,
   endAdminPool,
+  seedAsPlatform,
 } from "./_effective-dating-fixtures.js";
 import { WqaLoader } from "../../lib/rate-engine-loaders/loaders/wqa-loader.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * Slice 4 task 5 — WqaLoader integration tests.
  *
@@ -27,14 +29,6 @@ let prismaImports: typeof import("../../lib/prisma.js");
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);
@@ -54,22 +48,48 @@ interface SaFixture {
   saId: string;
 }
 
-async function makeSa(agreementNumber = "SA-WQA-1"): Promise<SaFixture> {
-  const { prisma } = prismaImports;
-  const fix = await makeTenantFixture(prisma, TENANT_A);
+/**
+ * The loader run the way a route runs it: inside the tenant's scope.
+ *
+ * A loader takes the client and the tenant in its constructor, so the
+ * scope cannot ride in on an argument to `load()` — it has to be around
+ * the call. `runAsTenant` here overrides the surrounding
+ * `seedAsPlatform`, so the fixtures stay free to arrange rows while the
+ * read under test is confined to one tenant.
+ */
+const scoped = <T>(tenant: string, fn: () => Promise<T>): Promise<T> =>
+  runAsTenant(tenant, fn);
 
-  const sa = await prisma.serviceAgreement.create({
-    data: {
-      utilityId: fix.utilityId,
-      agreementNumber,
-      accountId: fix.accountId,
-      commodityId: fix.commodityId,
-      startDate: new Date("2026-01-01"),
-      status: "ACTIVE",
-    },
+async function makeSa(agreementNumber = "SA-WQA-1"): Promise<SaFixture> {
+
+  /*
+
+   * Arranging rows, so the authority the fixtures use. Calls under
+
+   * test re-enter their own tenant scope.
+
+   */
+
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const fix = await makeTenantFixture(prisma, TENANT_A);
+
+    const sa = await prisma.serviceAgreement.create({
+      data: {
+        utilityId: fix.utilityId,
+        agreementNumber,
+        accountId: fix.accountId,
+        commodityId: fix.commodityId,
+        startDate: new Date("2026-01-01"),
+        status: "ACTIVE",
+      },
+    });
+
+    return { saId: sa.id };
+
+
   });
 
-  return { saId: sa.id };
 }
 
 interface SeedRowOpts {
@@ -80,28 +100,45 @@ interface SeedRowOpts {
 }
 
 async function seedWqaRow(opts: SeedRowOpts): Promise<void> {
-  const { prisma } = prismaImports;
-  await prisma.wqaValue.create({
-    data: {
-      utilityId: TENANT_A,
-      serviceAgreementId: opts.saId,
-      waterYear: opts.waterYear,
-      computedAt: new Date("2026-04-01T00:00:00Z"),
-      sourceWindowStart: new Date(`${opts.waterYear}-12-01`),
-      sourceWindowEnd: new Date(`${opts.waterYear + 1}-03-01`),
-      computedAvg: opts.computedAvg,
-      overrideValue: opts.overrideValue ?? null,
-    },
+
+  /*
+
+   * Arranging rows, so the authority the fixtures use. Calls under
+
+   * test re-enter their own tenant scope.
+
+   */
+
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    await prisma.wqaValue.create({
+      data: {
+        utilityId: TENANT_A,
+        serviceAgreementId: opts.saId,
+        waterYear: opts.waterYear,
+        computedAt: new Date("2026-04-01T00:00:00Z"),
+        sourceWindowStart: new Date(`${opts.waterYear}-12-01`),
+        sourceWindowEnd: new Date(`${opts.waterYear + 1}-03-01`),
+        computedAvg: opts.computedAvg,
+        overrideValue: opts.overrideValue ?? null,
+      },
+    });
+
+
   });
+
 }
 
-beforeEach(async () => {
-  const { prisma } = prismaImports;
-  // wqa_value isn't in resetDb's truncate list (post-dates it); wipe
-  // it explicitly before resetDb cascades the rest.
-  await prisma.$executeRawUnsafe("DELETE FROM wqa_value");
-  await resetDb();
-});
+beforeEach(() =>
+  seedAsPlatform(async () => {    /* Fixture rows and read-backs under the fixture authority; the
+     * scoped wrappers re-enter their own tenant scope. */
+    const { prisma } = prismaImports;
+    // wqa_value isn't in resetDb's truncate list (post-dates it); wipe
+    // it explicitly before resetDb cascades the rest.
+    await prisma.$executeRawUnsafe("DELETE FROM wqa_value");
+    await resetDb();
+
+  }));
 
 describe("WqaLoader", () => {
   it("wqa:current returns computedAvg when no override is set", async () => {
@@ -109,7 +146,7 @@ describe("WqaLoader", () => {
     await seedWqaRow({ saId, waterYear: 2025, computedAvg: "12.3400" });
 
     const loader = new WqaLoader(prismaImports.prisma, TENANT_A, saId);
-    const out = await loader.load([`wqa:current:${saId}`]);
+    const out = await scoped(TENANT_A, () => loader.load([`wqa:current:${saId}`]));
 
     const v = out.get(`wqa:current:${saId}`);
     expect(v).toBeInstanceOf(Decimal);
@@ -126,7 +163,7 @@ describe("WqaLoader", () => {
     });
 
     const loader = new WqaLoader(prismaImports.prisma, TENANT_A, saId);
-    const out = await loader.load([`wqa:current:${saId}`]);
+    const out = await scoped(TENANT_A, () => loader.load([`wqa:current:${saId}`]));
 
     const v = out.get(`wqa:current:${saId}`);
     expect(v).toBeInstanceOf(Decimal);
@@ -138,7 +175,7 @@ describe("WqaLoader", () => {
     await seedWqaRow({ saId, waterYear: 2025, computedAvg: "12.3400" });
 
     const loader = new WqaLoader(prismaImports.prisma, TENANT_A, saId);
-    const out = await loader.load([`wqa:override:${saId}`]);
+    const out = await scoped(TENANT_A, () => loader.load([`wqa:override:${saId}`]));
 
     expect(out.get(`wqa:override:${saId}`)).toBeNull();
   });
@@ -153,7 +190,7 @@ describe("WqaLoader", () => {
     });
 
     const loader = new WqaLoader(prismaImports.prisma, TENANT_A, saId);
-    const out = await loader.load([`wqa:override:${saId}`]);
+    const out = await scoped(TENANT_A, () => loader.load([`wqa:override:${saId}`]));
 
     const v = out.get(`wqa:override:${saId}`);
     expect(v).toBeInstanceOf(Decimal);
@@ -165,7 +202,7 @@ describe("WqaLoader", () => {
     // No seedWqaRow — the row is intentionally missing.
 
     const loader = new WqaLoader(prismaImports.prisma, TENANT_A, saId);
-    await expect(loader.load([`wqa:current:${saId}`])).rejects.toThrow(
+    await expect(scoped(TENANT_A, () => loader.load([`wqa:current:${saId}`]))).rejects.toThrow(
       /No WqaValue stored/,
     );
   });
@@ -175,7 +212,7 @@ describe("WqaLoader", () => {
     // No seedWqaRow.
 
     const loader = new WqaLoader(prismaImports.prisma, TENANT_A, saId);
-    const out = await loader.load([`wqa:override:${saId}`]);
+    const out = await scoped(TENANT_A, () => loader.load([`wqa:override:${saId}`]));
     expect(out.get(`wqa:override:${saId}`)).toBeNull();
   });
 
@@ -186,10 +223,10 @@ describe("WqaLoader", () => {
     await seedWqaRow({ saId, waterYear: 2025, computedAvg: "12.3400" });
 
     const loader = new WqaLoader(prismaImports.prisma, TENANT_A, saId);
-    const out = await loader.load([
+    const out = await scoped(TENANT_A, () => loader.load([
       `wqa:current:${saId}`,
       `wqa:override:${saId}`,
-    ]);
+    ]));
 
     const cur = out.get(`wqa:current:${saId}`);
     expect(cur).toBeInstanceOf(Decimal);

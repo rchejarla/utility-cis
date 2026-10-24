@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@utility-cis/shared/src/generated/prisma";
 import { PrismaPg } from "@prisma/adapter-pg";
 import pg from "pg";
-import { bootPostgres, type BootedContainer } from "./_effective-dating-fixtures.js";
+import { bootPostgres, type BootedContainer, seedAsPlatform } from "./_effective-dating-fixtures.js";
 import { buildRegistry } from "../../lib/rate-engine-registry.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -17,14 +17,6 @@ let prisma: PrismaClient;
 
 beforeAll(async () => {
   booted = await bootPostgres();
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   const TSX_BIN =
     process.platform === "win32"
       ? path.join(REPO_ROOT, "node_modules", ".pnpm", "node_modules", ".bin", "tsx.cmd")
@@ -47,36 +39,39 @@ afterAll(async () => {
 });
 
 describe("buildRegistry", () => {
-  it("registers all 8 loaders and validates every key the engine produces for a Bozeman SFR SA", async () => {
-    const sched = await prisma.rateSchedule.findFirstOrThrow({
-      where: { code: "BZN-WATER" },
-    });
-    const assignment = await prisma.sAScheduleAssignment.findFirstOrThrow({
-      where: { rateScheduleId: sched.id },
-      include: {
-        serviceAgreement: {
-          include: {
-            servicePoints: { where: { endDate: null }, include: { premise: true }, take: 1 },
+  it("registers all 8 loaders and validates every key the engine produces for a Bozeman SFR SA", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const sched = await prisma.rateSchedule.findFirstOrThrow({
+        where: { code: "BZN-WATER" },
+      });
+      const assignment = await prisma.sAScheduleAssignment.findFirstOrThrow({
+        where: { rateScheduleId: sched.id },
+        include: {
+          serviceAgreement: {
+            include: {
+              servicePoints: { where: { endDate: null }, include: { premise: true }, take: 1 },
+            },
           },
         },
-      },
-    });
-    const sa = assignment.serviceAgreement;
-    const premiseId = sa.servicePoints[0]!.premise.id;
+      });
+      const sa = assignment.serviceAgreement;
+      const premiseId = sa.servicePoints[0]!.premise.id;
 
-    const registry = buildRegistry(prisma, {
-      utilityId: sa.utilityId,
-      saId: sa.id,
-      accountId: sa.accountId,
-      premiseId,
-      period: { startDate: new Date(2026, 4, 1), endDate: new Date(2026, 4, 31) },
-    });
+      const registry = buildRegistry(prisma, {
+        utilityId: sa.utilityId,
+        saId: sa.id,
+        accountId: sa.accountId,
+        premiseId,
+        period: { startDate: new Date(2026, 4, 1), endDate: new Date(2026, 4, 31) },
+      });
 
-    // Spot-check known capability patterns
-    expect(registry.validateKey("account:class").valid).toBe(true);
-    expect(registry.validateKey("tenant:drought_stage").valid).toBe(true);
-    expect(registry.validateKey("premise:attr:eru_count").valid).toBe(true);
-    expect(registry.validateKey(`meter:reads:${"00000000-0000-0000-0000-000000000001"}`).valid).toBe(true);
-    expect(registry.validateKey("totally_unknown:thing").valid).toBe(false);
-  }, 600_000);
+      // Spot-check known capability patterns
+      expect(registry.validateKey("account:class").valid).toBe(true);
+      expect(registry.validateKey("tenant:drought_stage").valid).toBe(true);
+      expect(registry.validateKey("premise:attr:eru_count").valid).toBe(true);
+      expect(registry.validateKey(`meter:reads:${"00000000-0000-0000-0000-000000000001"}`).valid).toBe(true);
+      expect(registry.validateKey("totally_unknown:thing").valid).toBe(false);
+  
+    }), 600_000);
 });

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * What was done to a utility, and by whom.
  *
@@ -30,21 +31,46 @@ import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 let pgContainer: StartedPostgreSqlContainer;
 let prismaImports: typeof import("../../lib/prisma.js");
 let svc: typeof import("../../services/provisioning.service.js");
+let roleSvc: typeof import("../../services/role.service.js");
 
 const UTILITY = "00000000-0000-4000-8000-0000000000d1";
 const OPERATOR = "00000000-0000-4000-8000-aaaa0000d001";
 const operator = { id: OPERATOR, name: "Pat Operator", source: `platform:${OPERATOR}` };
 
+/**
+ * The services this file calls directly, as a route reaches them: acting
+ * for the tenant, not merely naming it.
+ *
+ * Each already receives the tenant — production passed it from a request
+ * or a job whose scope had been entered, so the argument and the scope
+ * are always the same id. A direct service test has the argument and not
+ * the scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` also overrides a surrounding `seedAsPlatform`, which is
+ * what lets fixture rows be arranged across tenants while the call under
+ * test stays confined to one.
+ */
+const createRole = (...args: Parameters<typeof roleSvc.createRole>) =>
+  runAsTenant(args[0], async () => roleSvc.createRole(...args));
+
+const deleteRole = (...args: Parameters<typeof roleSvc.deleteRole>) =>
+  runAsTenant(args[0], async () => roleSvc.deleteRole(...args));
+
+const updateRole = (...args: Parameters<typeof roleSvc.updateRole>) =>
+  runAsTenant(args[0], async () => roleSvc.updateRole(...args));
+
+const reactivateUtility = (...args: Parameters<typeof svc.reactivateUtility>) =>
+  runAsTenant(args[0], async () => svc.reactivateUtility(...args));
+
+const setUtilityModule = (...args: Parameters<typeof svc.setUtilityModule>) =>
+  runAsTenant(args[0], async () => svc.setUtilityModule(...args));
+
+const suspendUtility = (...args: Parameters<typeof svc.suspendUtility>) =>
+  runAsTenant(args[0], async () => svc.suspendUtility(...args));
+
 beforeAll(async () => {
   const booted = await bootPostgres();
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/provisioning.service.js");
@@ -73,11 +99,25 @@ beforeEach(() =>
 );
 
 async function auditRows(entityType?: string) {
-  const { prisma } = prismaImports;
-  return prisma.auditLog.findMany({
-    where: { utilityId: UTILITY, ...(entityType ? { entityType } : {}) },
-    orderBy: { createdAt: "asc" },
+
+  /*
+
+   * Arranging rows, so the authority the fixtures use. Calls under
+
+   * test re-enter their own tenant scope.
+
+   */
+
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    return prisma.auditLog.findMany({
+      where: { utilityId: UTILITY, ...(entityType ? { entityType } : {}) },
+      orderBy: { createdAt: "asc" },
+    });
+
+
   });
+
 }
 
 describe("provisioning", () => {
@@ -127,7 +167,7 @@ describe("suspending and reactivating", () => {
 );
 
   it("records the suspension, with what changed", async () => {
-    await svc.suspendUtility(UTILITY, operator);
+    await suspendUtility(UTILITY, operator);
 
     const [row] = await auditRows("Utility");
     expect(row).toMatchObject({ action: "UPDATE", actorName: "Pat Operator" });
@@ -136,8 +176,8 @@ describe("suspending and reactivating", () => {
   });
 
   it("records the reactivation separately", async () => {
-    await svc.suspendUtility(UTILITY, operator);
-    await svc.reactivateUtility(UTILITY, operator);
+    await suspendUtility(UTILITY, operator);
+    await reactivateUtility(UTILITY, operator);
 
     const rows = await auditRows("Utility");
     expect(rows).toHaveLength(2);
@@ -146,7 +186,7 @@ describe("suspending and reactivating", () => {
 
   it("writes nothing when the utility does not exist", async () => {
     await expect(
-      svc.suspendUtility("00000000-0000-4000-8000-0000000000df", operator),
+      suspendUtility("00000000-0000-4000-8000-0000000000df", operator),
     ).rejects.toMatchObject({ code: "UTILITY_NOT_FOUND" });
 
     expect(await auditRows()).toHaveLength(0);
@@ -162,7 +202,7 @@ describe("module changes", () => {
 );
 
   it("records which module was turned off", async () => {
-    await svc.setUtilityModule(UTILITY, "containers", false, operator);
+    await setUtilityModule(UTILITY, "containers", false, operator);
 
     const [row] = await auditRows("UtilityModule");
     expect(row).toMatchObject({ action: "UPDATE", source: `platform:${OPERATOR}` });
@@ -170,8 +210,8 @@ describe("module changes", () => {
   });
 
   it("records turning it back on", async () => {
-    await svc.setUtilityModule(UTILITY, "containers", false, operator);
-    await svc.setUtilityModule(UTILITY, "containers", true, operator);
+    await setUtilityModule(UTILITY, "containers", false, operator);
+    await setUtilityModule(UTILITY, "containers", true, operator);
 
     const rows = await auditRows("UtilityModule");
     expect(rows).toHaveLength(2);
@@ -180,7 +220,7 @@ describe("module changes", () => {
 
   it("writes nothing for a module the code does not have", async () => {
     await expect(
-      svc.setUtilityModule(UTILITY, "not_a_module", false, operator),
+      setUtilityModule(UTILITY, "not_a_module", false, operator),
     ).rejects.toMatchObject({ code: "UNKNOWN_MODULE" });
 
     expect(await auditRows()).toHaveLength(0);
@@ -188,7 +228,6 @@ describe("module changes", () => {
 });
 
 describe("role changes", () => {
-  let roleSvc: typeof import("../../services/role.service.js");
 
   beforeEach(() =>
   seedAsPlatform(async () => {
@@ -199,7 +238,7 @@ describe("role changes", () => {
 );
 
   it("records a role being created", async () => {
-    await roleSvc.createRole(
+    await createRole(
       UTILITY,
       { name: "Auditor", permissions: { audit_log: ["VIEW"] } },
       { actorId: OPERATOR, actorName: "Pat Operator", source: `platform:${OPERATOR}` },
@@ -210,56 +249,65 @@ describe("role changes", () => {
     expect(row.afterState).toMatchObject({ name: "Auditor" });
   });
 
-  it("records what a role's permissions changed from", async () => {
-    const { prisma } = prismaImports;
-    const role = await prisma.role.findFirstOrThrow({ where: { utilityId: UTILITY, name: "CSR" } });
+  it("records what a role's permissions changed from", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const role = await prisma.role.findFirstOrThrow({ where: { utilityId: UTILITY, name: "CSR" } });
 
-    await roleSvc.updateRole(
-      UTILITY,
-      role.id,
-      { permissions: { customers: ["VIEW"] } },
-      { actorId: OPERATOR, actorName: "Pat Operator", source: `platform:${OPERATOR}` },
-    );
+      await updateRole(
+        UTILITY,
+        role.id,
+        { permissions: { customers: ["VIEW"] } },
+        { actorId: OPERATOR, actorName: "Pat Operator", source: `platform:${OPERATOR}` },
+      );
 
-    const [row] = await auditRows("Role");
-    expect(row.beforeState).toMatchObject({ name: "CSR" });
-    expect(row.afterState).toMatchObject({ permissions: { customers: ["VIEW"] } });
-  });
+      const [row] = await auditRows("Role");
+      expect(row.beforeState).toMatchObject({ name: "CSR" });
+      expect(row.afterState).toMatchObject({ permissions: { customers: ["VIEW"] } });
+  
+    }));
 
-  it("records what a deleted role granted, since nothing can be looked up after", async () => {
-    const { prisma } = prismaImports;
-    const role = await prisma.role.create({
-      data: { utilityId: UTILITY, name: "Spare", permissions: { audit_log: ["VIEW"] } },
-    });
+  it("records what a deleted role granted, since nothing can be looked up after", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const role = await prisma.role.create({
+        data: { utilityId: UTILITY, name: "Spare", permissions: { audit_log: ["VIEW"] } },
+      });
 
-    await roleSvc.deleteRole(UTILITY, role.id, {
-      actorId: OPERATOR,
-      actorName: "Pat Operator",
-      source: `platform:${OPERATOR}`,
-    });
+      await deleteRole(UTILITY, role.id, {
+        actorId: OPERATOR,
+        actorName: "Pat Operator",
+        source: `platform:${OPERATOR}`,
+      });
 
-    const [row] = await auditRows("Role");
-    expect(row).toMatchObject({ action: "DELETE" });
-    expect(row.beforeState).toMatchObject({ name: "Spare" });
-  });
+      const [row] = await auditRows("Role");
+      expect(row).toMatchObject({ action: "DELETE" });
+      expect(row.beforeState).toMatchObject({ name: "Spare" });
+  
+    }));
 
-  it("writes nothing when a refusal stops the delete", async () => {
-    const { prisma } = prismaImports;
-    const preset = await prisma.role.findFirstOrThrow({
-      where: { utilityId: UTILITY, name: "System Admin" },
-    });
+  it("writes nothing when a refusal stops the delete", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const preset = await prisma.role.findFirstOrThrow({
+        where: { utilityId: UTILITY, name: "System Admin" },
+      });
 
-    await expect(
-      roleSvc.deleteRole(UTILITY, preset.id, { actorId: OPERATOR, actorName: "Pat" }),
-    ).rejects.toMatchObject({ code: "SYSTEM_ROLE" });
+      await expect(
+        deleteRole(UTILITY, preset.id, { actorId: OPERATOR, actorName: "Pat" }),
+      ).rejects.toMatchObject({ code: "SYSTEM_ROLE" });
 
-    expect(await auditRows("Role")).toHaveLength(0);
-  });
+      expect(await auditRows("Role")).toHaveLength(0);
+  
+    }));
 
   it("attributes a tenant's own admin without a platform source", async () => {
     // Both paths write a row; `source` is what tells them apart, and the
     // tenant's own action leaves it NULL by the column's convention.
-    await roleSvc.createRole(
+    await createRole(
       UTILITY,
       { name: "Local", permissions: { audit_log: ["VIEW"] } },
       { actorId: "00000000-0000-4000-8000-aaaa0000d002", actorName: "Tenant Admin" },
@@ -275,7 +323,7 @@ describe("the tenant's own view of it", () => {
     // The point of the whole exercise: a tenant can see what was done to
     // it from outside, in the same place it sees its own staff's changes.
     await svc.provisionTenant({ utilityId: UTILITY, name: "City of Audit" }, operator);
-    await svc.suspendUtility(UTILITY, operator);
+    await suspendUtility(UTILITY, operator);
 
     const rows = await auditRows();
     expect(rows.length).toBeGreaterThanOrEqual(2);

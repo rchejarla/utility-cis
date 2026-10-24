@@ -4,35 +4,24 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * How many integration suites still connect as the migration owner.
+ * Whether any integration suite still connects as the migration owner.
  *
  * `bootPostgres` points `DATABASE_URL` at `cis_app`, so a suite inherits
  * a connection the policies apply to and proves something about
  * isolation by passing. A suite that overrides it back to the owner
  * proves nothing: a superuser is exempt from row-level security, so a
- * route that reads another tenant's rows passes exactly as a correct one
+ * route reading another tenant's rows passes exactly as a correct one
  * does.
  *
- * 44 of the 76 suites do override it, and for a reason rather than an
- * oversight. Two reasons, measured on 2026-10-24 rather than assumed:
+ * **As of 2026-10-24 none of the 76 do.** This started as a ratchet over
+ * 58 exempt suites and ended at zero, so what it guards now is the
+ * absence: a new suite cannot quietly opt out, and a converted one
+ * cannot be un-converted, without a line here moving.
  *
- *   - 44 call services directly instead of through a route, so no
- *     middleware enters a tenant scope.
- *   - 14 go through routes that work perfectly as `cis_app` — the run
- *     that established this found no route or service querying a tenant
- *     table without a scope — but arrange and assert on rows through
- *     `prisma` in their own test bodies.
- *
- * Both need the same per-test work: a `seedAsPlatform` around a fixture
- * write, a `runAsTenant` around an assertion read.
- * `rate-schedule-revise-copy.integration.test.ts` shows both shapes and
- * `bill-list.integration.test.ts` shows the service-call form.
- *
- * This is the ratchet. It does not demand the work be finished; it
- * refuses to let the number grow, so a new suite cannot quietly join the
- * exempt set and an old one that is converted cannot be un-converted
- * without the count moving. A file-reading test rather than a
- * container-backed one, because the question is about the suite itself.
+ * What this does NOT claim is that every suite passes — it reads the
+ * files, not a test run. It says each one is pointed at a role the
+ * policies bind to, which is the precondition for its result to mean
+ * anything.
  */
 
 const INTEGRATION_DIR = path.resolve(
@@ -41,10 +30,14 @@ const INTEGRATION_DIR = path.resolve(
 );
 
 /**
- * The count as of 2026-10-24. **Only ever lower this.** Raising it is
- * how the exempt set grows back, which is the thing being prevented.
+ * **Zero, and only ever zero.** Raising it is how the exempt set grows
+ * back, which is the thing being prevented. A suite that genuinely needs
+ * the owner connection — `rls-enforcement`, which reaches each role by
+ * `SET LOCAL ROLE` and so must be able to assume one — belongs in
+ * `DRIVES_ROLES_DELIBERATELY` below, where it is named and explained,
+ * not here as a number.
  */
-const OPTED_OUT_CEILING = 44;
+const OPTED_OUT_CEILING = 0;
 
 const MARKER = "RLS-OPT-OUT";
 
@@ -110,44 +103,23 @@ describe("which integration suites run as a role RLS applies to", () => {
   });
 
   /*
-   * The set that is finished, pinned by name rather than by category.
-   *
-   * These suites drive routes and pass as `cis_app`, so each one is a
-   * request going through its own middleware into a connection the
-   * policies apply to — isolation exercised the way production
-   * exercises it. Named individually because "every route suite" was
-   * the wrong generalisation: most route suites write fixtures in their
-   * test bodies and are in the opted-out set for that, not for anything
-   * about their routes.
-   *
-   * A name leaving this list is a regression, and the `toEqual` says so.
+   * The six that set `DATABASE_URL` on purpose are allowed, and each
+   * says so where it does it. `rls-enforcement` connects as the owner
+   * because only a superuser may assume a role it is not a member of —
+   * `cis_app` cannot become `cis_platform`, which is the confinement
+   * being tested. The other five point the connection at a specific role
+   * to exercise it, which is the opposite of opting out.
    */
-  const PROVEN_ON_CIS_APP = [
-    "bill-document.integration.test.ts",
-    "billing-run.integration.test.ts",
-    "ledger-routes.integration.test.ts",
-    "platform-authority.integration.test.ts",
-    "rate-assignment-roles.integration.test.ts",
-    "rate-component-cycle-check.integration.test.ts",
-    "rate-component-kinds.integration.test.ts",
-    "rate-components.integration.test.ts",
-    "rate-grammar.integration.test.ts",
-    "rate-indices.integration.test.ts",
-    "rate-model-v2-shape.integration.test.ts",
-    "rate-schedule-publish.integration.test.ts",
-    "rate-schedule-revise-copy.integration.test.ts",
-    "rate-service-classes.integration.test.ts",
-    "sa-rate-schedule-assignments.integration.test.ts",
-    "service-request-lifecycle.integration.test.ts",
-    "sign-in-rls.integration.test.ts",
-  ];
-
-  it("keeps the suites proven on the application role there", () => {
-    const stillProven = suites()
-      .filter((s) => PROVEN_ON_CIS_APP.includes(s.name))
-      .filter((s) => !s.source.includes(MARKER))
-      .map((s) => s.name)
-      .sort();
-    expect(stillProven).toEqual([...PROVEN_ON_CIS_APP].sort());
+  it("lets only the declared role-drivers name a role", () => {
+    // A subset rather than an equality: `rls-boot-guard` is in the
+    // declared set but assigns the environment through `Object.assign`
+    // in its own helper, so it does not match the direct-assignment
+    // check. The invariant that matters is that nothing outside the
+    // declared set touches the connection at all.
+    const outsiders = suites()
+      .filter((s) => overridesConnection(s.source))
+      .filter((s) => !DRIVES_ROLES_DELIBERATELY.has(s.name))
+      .map((s) => s.name);
+    expect(outsiders).toEqual([]);
   });
 });

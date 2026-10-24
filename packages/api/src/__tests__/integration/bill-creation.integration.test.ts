@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { bootPostgres, ensurePrincipal, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * Slice 5b.2 — POST /api/v1/accounts/:id/bills aggregates the Account's
  * unbilled BillSegments into a single per-Account Bill.
@@ -33,6 +34,20 @@ let saMeterId: string;
 
 const ACTOR_ID = "00000000-0000-4000-8000-aaaa00000001";
 
+/**
+ * The services this file calls directly, as a route reaches them: acting
+ * for the tenant, not merely naming it.
+ *
+ * Each already receives the tenant — production passed it from a request
+ * or a job whose scope had been entered, so the argument and the scope
+ * are always the same id. A direct service test has the argument and not
+ * the scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` also overrides a surrounding `seedAsPlatform`, which is
+ * what lets fixture rows be arranged across tenants while the call under
+ * test stays confined to one.
+ */
 function makeToken(uid: string) {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
   const payload = Buffer.from(
@@ -73,15 +88,6 @@ async function seedBozemanSegment(): Promise<{ subtotal: string; total: string }
 beforeAll(() =>
   seedAsPlatform(async () => {
   const booted = await bootPostgres();
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // Its routes run correctly as `cis_app` — no route or service was
-  // found querying a tenant table without a scope — but its own test
-  // bodies arrange and assert on rows through `prisma` directly, which
-  // needs a `seedAsPlatform` or `runAsTenant` per site. See
-  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
-  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
-  // only lets the number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
 
   const TSX_BIN =
@@ -190,62 +196,68 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
-  const { prisma } = prismaImports;
-  // Wipe Bills + reattach segments (set bill_id back to null) so each
-  // case starts from "segments exist, no Bill yet".
-  await prisma.$executeRawUnsafe("UPDATE bill_segment SET bill_id = NULL");
-  // Generation now auto-posts, so each Bill has a ledger_entry FK-ing to it.
-  await prisma.$executeRawUnsafe("DELETE FROM ledger_entry");
-  await prisma.$executeRawUnsafe("DELETE FROM bill");
-  // Wipe segments + their lines so each test re-seeds the golden segment fresh.
-  await prisma.$executeRawUnsafe("DELETE FROM bill_segment_line");
-  await prisma.$executeRawUnsafe("DELETE FROM bill_segment");
-  // Reset MeterRead.billed_at so re-running segment generation works.
-  await prisma.$executeRawUnsafe(
-    "UPDATE meter_read SET billed_at = NULL WHERE service_agreement_id = $1::uuid",
-    saId,
-  );
-  // Reset account.createdAt to the pre-test default so the partial-period
-  // test's mutation doesn't bleed into other cases.
-  await prisma.$executeRawUnsafe(
-    "UPDATE account SET created_at = '2025-01-01T00:00:00Z'::timestamptz WHERE id = $1::uuid",
-    accountId,
-  );
-  // Drop any synthetic SAs the multi-SA test created so they don't
-  // contribute extra unbilled segments to subsequent tests.
-  await prisma.$executeRawUnsafe(
-    "DELETE FROM service_agreement WHERE account_id = $1::uuid AND agreement_number LIKE 'TEST-%'",
-    accountId,
-  );
-});
+beforeEach(() =>
+  seedAsPlatform(async () => {    /* Fixture rows and read-backs under the fixture authority; the
+     * scoped wrappers re-enter their own tenant scope. */
+    const { prisma } = prismaImports;
+    // Wipe Bills + reattach segments (set bill_id back to null) so each
+    // case starts from "segments exist, no Bill yet".
+    await prisma.$executeRawUnsafe("UPDATE bill_segment SET bill_id = NULL");
+    // Generation now auto-posts, so each Bill has a ledger_entry FK-ing to it.
+    await prisma.$executeRawUnsafe("DELETE FROM ledger_entry");
+    await prisma.$executeRawUnsafe("DELETE FROM bill");
+    // Wipe segments + their lines so each test re-seeds the golden segment fresh.
+    await prisma.$executeRawUnsafe("DELETE FROM bill_segment_line");
+    await prisma.$executeRawUnsafe("DELETE FROM bill_segment");
+    // Reset MeterRead.billed_at so re-running segment generation works.
+    await prisma.$executeRawUnsafe(
+      "UPDATE meter_read SET billed_at = NULL WHERE service_agreement_id = $1::uuid",
+      saId,
+    );
+    // Reset account.createdAt to the pre-test default so the partial-period
+    // test's mutation doesn't bleed into other cases.
+    await prisma.$executeRawUnsafe(
+      "UPDATE account SET created_at = '2025-01-01T00:00:00Z'::timestamptz WHERE id = $1::uuid",
+      accountId,
+    );
+    // Drop any synthetic SAs the multi-SA test created so they don't
+    // contribute extra unbilled segments to subsequent tests.
+    await prisma.$executeRawUnsafe(
+      "DELETE FROM service_agreement WHERE account_id = $1::uuid AND agreement_number LIKE 'TEST-%'",
+      accountId,
+    );
+
+  }));
 
 describe("POST /api/v1/accounts/:id/bills — Bozeman SFR golden", () => {
-  it("creates a Bill that aggregates the SA's segment", async () => {
-    const seg = await seedBozemanSegment();
+  it("creates a Bill that aggregates the SA's segment", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const seg = await seedBozemanSegment();
 
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/accounts/${accountId}/bills`,
-      headers: headers(),
-      payload: { asOfDate: "2026-05-15" },
-    });
-    expect(res.statusCode).toBe(201);
-    const body = JSON.parse(res.body);
-    expect(body.subtotal).toBe(seg.subtotal);
-    expect(body.total).toBe(seg.total);
-    expect(body.segments.length).toBe(1);
-    expect(body.segments[0].total).toBe(seg.total);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/accounts/${accountId}/bills`,
+        headers: headers(),
+        payload: { asOfDate: "2026-05-15" },
+      });
+      expect(res.statusCode).toBe(201);
+      const body = JSON.parse(res.body);
+      expect(body.subtotal).toBe(seg.subtotal);
+      expect(body.total).toBe(seg.total);
+      expect(body.segments.length).toBe(1);
+      expect(body.segments[0].total).toBe(seg.total);
 
-    // DB row exists and segment is linked.
-    const { prisma } = prismaImports;
-    const dbBill = await prisma.bill.findUniqueOrThrow({
-      where: { id: body.id, utilityId },
-      include: { segments: true },
-    });
-    expect(dbBill.segments.length).toBe(1);
-    expect(dbBill.segments[0].billId).toBe(dbBill.id);
-  }, 600_000);
+      // DB row exists and segment is linked.
+      const { prisma } = prismaImports;
+      const dbBill = await prisma.bill.findUniqueOrThrow({
+        where: { id: body.id, utilityId },
+        include: { segments: true },
+      });
+      expect(dbBill.segments.length).toBe(1);
+      expect(dbBill.segments[0].billId).toBe(dbBill.id);
+  
+    }), 600_000);
 
   /*
    * The unit travels with the quantity all the way out.
@@ -266,23 +278,26 @@ describe("POST /api/v1/accounts/:id/bills — Bozeman SFR golden", () => {
    * the one that charged the customer straight away. The dialog now
    * says it will not post; this is what makes that true.
    */
-  it("does not post the bill it makes, the way a run does not", async () => {
-    await seedBozemanSegment();
+  it("does not post the bill it makes, the way a run does not", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      await seedBozemanSegment();
 
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/accounts/${accountId}/bills`,
-      headers: headers(),
-      payload: { asOfDate: "2026-05-15" },
-    });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/accounts/${accountId}/bills`,
+        headers: headers(),
+        payload: { asOfDate: "2026-05-15" },
+      });
 
-    expect(res.statusCode).toBe(201);
-    const body = JSON.parse(res.body);
-    expect(body.postedAt).toBeNull();
-    // And nothing has moved: no receivable, no balance.
-    const { prisma } = prismaImports;
-    expect(await prisma.ledgerEntry.count({ where: { billId: body.id } })).toBe(0);
-  }, 600_000);
+      expect(res.statusCode).toBe(201);
+      const body = JSON.parse(res.body);
+      expect(body.postedAt).toBeNull();
+      // And nothing has moved: no receivable, no balance.
+      const { prisma } = prismaImports;
+      expect(await prisma.ledgerEntry.count({ where: { billId: body.id } })).toBe(0);
+  
+    }), 600_000);
 
   it("returns the unit each line's quantity is counted in", async () => {
     await seedBozemanSegment();
@@ -323,104 +338,110 @@ describe("POST /api/v1/accounts/:id/bills — Bozeman SFR golden", () => {
    * can be traced to the exact schedule version and component that
    * produced it; this is that claim, asserted where it is served.
    */
-  it("traces each line to the schedule and component that produced it", async () => {
-    await seedBozemanSegment();
+  it("traces each line to the schedule and component that produced it", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      await seedBozemanSegment();
 
-    const created = await app.inject({
-      method: "POST",
-      url: `/api/v1/accounts/${accountId}/bills`,
-      headers: headers(),
-      payload: { asOfDate: "2026-05-15" },
-    });
-    const billId = JSON.parse(created.body).id;
+      const created = await app.inject({
+        method: "POST",
+        url: `/api/v1/accounts/${accountId}/bills`,
+        headers: headers(),
+        payload: { asOfDate: "2026-05-15" },
+      });
+      const billId = JSON.parse(created.body).id;
 
-    const res = await app.inject({
-      method: "GET",
-      url: `/api/v1/bills/${billId}`,
-      headers: headers(),
-    });
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/bills/${billId}`,
+        headers: headers(),
+      });
 
-    const lines = JSON.parse(res.body).segments[0].lines as Array<Record<string, unknown>>;
-    expect(lines.length).toBeGreaterThan(0);
-    for (const line of lines) {
-      expect(line.sourceScheduleId).toEqual(expect.any(String));
-      expect(line.sourceComponentId).toEqual(expect.any(String));
-    }
+      const lines = JSON.parse(res.body).segments[0].lines as Array<Record<string, unknown>>;
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line.sourceScheduleId).toEqual(expect.any(String));
+        expect(line.sourceComponentId).toEqual(expect.any(String));
+      }
 
-    // And they name rows that exist, not ids carried for show.
-    const { prisma } = prismaImports;
-    const component = await prisma.rateComponent.findUnique({
-      where: { id: lines[0]!.sourceComponentId as string },
-    });
-    expect(component).not.toBeNull();
-  }, 600_000);
+      // And they name rows that exist, not ids carried for show.
+      const { prisma } = prismaImports;
+      const component = await prisma.rateComponent.findUnique({
+        where: { id: lines[0]!.sourceComponentId as string },
+      });
+      expect(component).not.toBeNull();
+  
+    }), 600_000);
 
-  it("multi-SA aggregation: Bill totals = sum of attached segments", async () => {
-    // First, the real water segment from the engine.
-    const waterSeg = await seedBozemanSegment();
-    const waterTotal = parseFloat(waterSeg.total);
+  it("multi-SA aggregation: Bill totals = sum of attached segments", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      // First, the real water segment from the engine.
+      const waterSeg = await seedBozemanSegment();
+      const waterTotal = parseFloat(waterSeg.total);
 
-    // Add a synthetic second SA on the same account + a hand-rolled
-    // segment of $30 so we can assert the Bill totals to 99.65.
-    const { prisma } = prismaImports;
-    const sewer = await prisma.commodity.findFirstOrThrow({
-      where: { utilityId, code: "SEWER" },
-    });
-    const sewerClass = await prisma.rateServiceClass.findFirstOrThrow({
-      where: { utilityId, commodityId: sewer.id, code: "residential" },
-    });
-    const sewerSched = await prisma.rateSchedule.findFirstOrThrow({
-      where: { utilityId, commodityId: sewer.id, publishedAt: { not: null } },
-      include: { components: { take: 1 } },
-    });
-    const synthSa = await prisma.serviceAgreement.create({
-      data: {
-        utilityId,
-        agreementNumber: `TEST-MULTI-${Date.now()}`,
-        accountId,
-        commodityId: sewer.id,
-        rateServiceClassId: sewerClass.id,
-        startDate: new Date(2026, 0, 1),
-        status: "ACTIVE",
-      },
-    });
-    await prisma.billSegment.create({
-      data: {
-        utilityId,
-        serviceAgreementId: synthSa.id,
-        periodStart: new Date(2026, 3, 16),
-        periodEnd: new Date(2026, 4, 15),
-        subtotal: "30.0000",
-        taxes: "0.0000",
-        credits: "0.0000",
-        total: "30.0000",
-        minimumFloorApplied: false,
-        segmentNumber: `SEG-TEST-MULTI-${Date.now()}`,
-        lines: {
-          create: [{
-            utilityId,
-            label: "Sewer base",
-            kindCode: "service_charge",
-            amount: "30.0000",
-            sourceScheduleId: sewerSched.id,
-            sourceComponentId: sewerSched.components[0]!.id,
-            sortOrder: 100,
-          }],
+      // Add a synthetic second SA on the same account + a hand-rolled
+      // segment of $30 so we can assert the Bill totals to 99.65.
+      const { prisma } = prismaImports;
+      const sewer = await prisma.commodity.findFirstOrThrow({
+        where: { utilityId, code: "SEWER" },
+      });
+      const sewerClass = await prisma.rateServiceClass.findFirstOrThrow({
+        where: { utilityId, commodityId: sewer.id, code: "residential" },
+      });
+      const sewerSched = await prisma.rateSchedule.findFirstOrThrow({
+        where: { utilityId, commodityId: sewer.id, publishedAt: { not: null } },
+        include: { components: { take: 1 } },
+      });
+      const synthSa = await prisma.serviceAgreement.create({
+        data: {
+          utilityId,
+          agreementNumber: `TEST-MULTI-${Date.now()}`,
+          accountId,
+          commodityId: sewer.id,
+          rateServiceClassId: sewerClass.id,
+          startDate: new Date(2026, 0, 1),
+          status: "ACTIVE",
         },
-      },
-    });
+      });
+      await prisma.billSegment.create({
+        data: {
+          utilityId,
+          serviceAgreementId: synthSa.id,
+          periodStart: new Date(2026, 3, 16),
+          periodEnd: new Date(2026, 4, 15),
+          subtotal: "30.0000",
+          taxes: "0.0000",
+          credits: "0.0000",
+          total: "30.0000",
+          minimumFloorApplied: false,
+          segmentNumber: `SEG-TEST-MULTI-${Date.now()}`,
+          lines: {
+            create: [{
+              utilityId,
+              label: "Sewer base",
+              kindCode: "service_charge",
+              amount: "30.0000",
+              sourceScheduleId: sewerSched.id,
+              sourceComponentId: sewerSched.components[0]!.id,
+              sortOrder: 100,
+            }],
+          },
+        },
+      });
 
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/accounts/${accountId}/bills`,
-      headers: headers(),
-      payload: { asOfDate: "2026-05-15" },
-    });
-    expect(res.statusCode).toBe(201);
-    const body = JSON.parse(res.body);
-    expect(parseFloat(body.total).toFixed(2)).toBe((waterTotal + 30).toFixed(2));
-    expect(body.segments.length).toBe(2);
-  }, 600_000);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/accounts/${accountId}/bills`,
+        headers: headers(),
+        payload: { asOfDate: "2026-05-15" },
+      });
+      expect(res.statusCode).toBe(201);
+      const body = JSON.parse(res.body);
+      expect(parseFloat(body.total).toFixed(2)).toBe((waterTotal + 30).toFixed(2));
+      expect(body.segments.length).toBe(2);
+  
+    }), 600_000);
 
   it("auto-derives period from BillCycle.billDayOfMonth + frequency", async () => {
     await seedBozemanSegment();
@@ -493,43 +514,46 @@ describe("POST /api/v1/accounts/:id/bills — Bozeman SFR golden", () => {
    * agreement's start date — which is a better question than the account
    * row's creation timestamp anyway.
    */
-  it("a mid-period account is billed for what its segments cover, not a clamped window", async () => {
-    await seedBozemanSegment();
+  it("a mid-period account is billed for what its segments cover, not a clamped window", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      await seedBozemanSegment();
 
-    // Mid-period for a billDay=15 cycle, which used to move the dates.
-    const { prisma } = prismaImports;
-    await prisma.$executeRawUnsafe(
-      "UPDATE account SET created_at = $1::timestamptz WHERE id = $2::uuid",
-      new Date("2026-05-08T00:00:00Z").toISOString(),
-      accountId,
-    );
+      // Mid-period for a billDay=15 cycle, which used to move the dates.
+      const { prisma } = prismaImports;
+      await prisma.$executeRawUnsafe(
+        "UPDATE account SET created_at = $1::timestamptz WHERE id = $2::uuid",
+        new Date("2026-05-08T00:00:00Z").toISOString(),
+        accountId,
+      );
 
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/accounts/${accountId}/bills`,
-      headers: headers(),
-      payload: { asOfDate: "2026-05-15" },
-    });
-    expect(res.statusCode).toBe(201);
-    const body = JSON.parse(res.body);
-    expect(body.periodStart.slice(0, 10)).toBe("2026-04-16");
-    expect(body.periodEnd.slice(0, 10)).toBe("2026-05-15");
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/accounts/${accountId}/bills`,
+        headers: headers(),
+        payload: { asOfDate: "2026-05-15" },
+      });
+      expect(res.statusCode).toBe(201);
+      const body = JSON.parse(res.body);
+      expect(body.periodStart.slice(0, 10)).toBe("2026-04-16");
+      expect(body.periodEnd.slice(0, 10)).toBe("2026-05-15");
 
-    // The invariant that replaces the clamp: the bill's period is the
-    // span of its own segments, so the two cannot state different things.
-    const segments = await prisma.billSegment.findMany({
-      where: { billId: body.id },
-      select: { periodStart: true, periodEnd: true },
-    });
-    expect(segments.length).toBeGreaterThan(0);
-    const earliest = segments
-      .map((s) => s.periodStart.toISOString().slice(0, 10))
-      .sort()[0];
-    const latest = segments
-      .map((s) => s.periodEnd.toISOString().slice(0, 10))
-      .sort()
-      .at(-1);
-    expect(body.periodStart.slice(0, 10)).toBe(earliest);
-    expect(body.periodEnd.slice(0, 10)).toBe(latest);
-  }, 600_000);
+      // The invariant that replaces the clamp: the bill's period is the
+      // span of its own segments, so the two cannot state different things.
+      const segments = await prisma.billSegment.findMany({
+        where: { billId: body.id },
+        select: { periodStart: true, periodEnd: true },
+      });
+      expect(segments.length).toBeGreaterThan(0);
+      const earliest = segments
+        .map((s) => s.periodStart.toISOString().slice(0, 10))
+        .sort()[0];
+      const latest = segments
+        .map((s) => s.periodEnd.toISOString().slice(0, 10))
+        .sort()
+        .at(-1);
+      expect(body.periodStart.slice(0, 10)).toBe(earliest);
+      expect(body.periodEnd.slice(0, 10)).toBe(latest);
+  
+    }), 600_000);
 });

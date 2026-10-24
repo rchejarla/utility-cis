@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * The four ways a service request is read, against a real database.
  *
@@ -43,17 +44,49 @@ let requestId: string;
 
 const SERVED_AT = "412 N 7th Ave";
 
+/**
+ * The services this file calls directly, as a route reaches them: acting
+ * for the tenant, not merely naming it.
+ *
+ * Each already receives the tenant — production passed it from a request
+ * or a job whose scope had been entered, so the argument and the scope
+ * are always the same id. A direct service test has the argument and not
+ * the scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` also overrides a surrounding `seedAsPlatform`, which is
+ * what lets fixture rows be arranged across tenants while the call under
+ * test stays confined to one.
+ */
+const listByAccount = (...args: Parameters<typeof srs.listByAccount>) =>
+  runAsTenant(args[0], async () => srs.listByAccount(...args));
+
+const listByPremise = (...args: Parameters<typeof srs.listByPremise>) =>
+  runAsTenant(args[0], async () => srs.listByPremise(...args));
+
+const listServiceRequests = (...args: Parameters<typeof srs.listServiceRequests>) =>
+  runAsTenant(args[0], async () => srs.listServiceRequests(...args));
+
+/**
+ * The services this file calls directly, as a route reaches them: acting
+ * for the tenant, not merely naming it.
+ *
+ * Each already receives the tenant — production passed it from a request
+ * or a job whose scope had been entered, so the argument and the scope
+ * are always the same id. A direct service test has the argument and not
+ * the scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` also overrides a surrounding `seedAsPlatform`, which is
+ * what lets fixture rows be arranged across tenants while the call under
+ * test stays confined to one.
+ */
+const getServiceRequest = (...args: Parameters<typeof srs.getServiceRequest>) =>
+  runAsTenant(args[1], async () => srs.getServiceRequest(...args));
+
 beforeAll(() =>
   seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId, otherUtility] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   srs = await import("../../services/service-request.service.js");
@@ -164,29 +197,34 @@ beforeAll(() =>
 
 afterAll(async () => {
   await prismaImports?.prisma.$disconnect();
+  // `$disconnect` does not dispose a pool the application owns —
+  // that is the driver-adapter contract — so the tenant and
+  // platform pools are ended here. Without it the container stops
+  // while connections are live and Postgres reports 57P01.
+  await prismaImports?.pool.end().catch(() => {});
   await pgContainer?.stop();
 });
 
 describe("service request reads", () => {
   it("lists an account's requests", async () => {
-    const rows = await srs.listByAccount(utilityId, accountId);
+    const rows = await listByAccount(utilityId, accountId);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.requestNumber).toBe("SR-0001");
   });
 
   it("lists a premise's requests", async () => {
-    const rows = await srs.listByPremise(utilityId, premiseId);
+    const rows = await listByPremise(utilityId, premiseId);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.requestNumber).toBe("SR-0001");
   });
 
   it("lists the tenant's requests", async () => {
-    const { data } = await srs.listServiceRequests(utilityId, {});
+    const { data } = await listServiceRequests(utilityId, {});
     expect(data).toHaveLength(1);
   });
 
   it("reads one request", async () => {
-    const sr = await srs.getServiceRequest(requestId, utilityId);
+    const sr = await getServiceRequest(requestId, utilityId);
     expect(sr.requestNumber).toBe("SR-0001");
   });
 
@@ -198,7 +236,7 @@ describe("service request reads", () => {
    * address at all.
    */
   it("carries the premise the agreement is served at, flattened for the caller", async () => {
-    const rows = await srs.listByAccount(utilityId, accountId);
+    const rows = await listByAccount(utilityId, accountId);
     expect(rows[0]!.serviceAgreement).toMatchObject({
       agreementNumber: "SA-0421",
       commodity: { name: "Potable Water" },
@@ -207,16 +245,16 @@ describe("service request reads", () => {
   });
 
   it("gives the same agreement shape on every read path", async () => {
-    const byPremise = await srs.listByPremise(utilityId, premiseId);
-    const tenantWide = await srs.listServiceRequests(utilityId, {});
-    const one = await srs.getServiceRequest(requestId, utilityId);
+    const byPremise = await listByPremise(utilityId, premiseId);
+    const tenantWide = await listServiceRequests(utilityId, {});
+    const one = await getServiceRequest(requestId, utilityId);
     for (const sr of [byPremise[0]!, tenantWide.data[0]!, one]) {
       expect(sr.serviceAgreement?.premise).toEqual({ addressLine1: SERVED_AT });
     }
   });
 
   it("reads no other tenant's requests", async () => {
-    expect(await srs.listByAccount(otherUtility, accountId)).toEqual([]);
-    await expect(srs.getServiceRequest(requestId, otherUtility)).rejects.toThrow();
+    expect(await listByAccount(otherUtility, accountId)).toEqual([]);
+    await expect(getServiceRequest(requestId, otherUtility)).rejects.toThrow();
   });
 });

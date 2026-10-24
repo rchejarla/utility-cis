@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * The tenant-wide receipts list — `GET /api/v1/receipts` / `listReceipts`.
  *
@@ -40,17 +41,26 @@ let otherAccountId: string;
 
 const Q = { page: 1, limit: 25, sort: "effectiveDate" as const, order: "desc" as const };
 
+/**
+ * The services this file calls directly, as a route reaches them: acting
+ * for the tenant, not merely naming it.
+ *
+ * Each already receives the tenant — production passed it from a request
+ * or a job whose scope had been entered, so the argument and the scope
+ * are always the same id. A direct service test has the argument and not
+ * the scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` also overrides a surrounding `seedAsPlatform`, which is
+ * what lets fixture rows be arranged across tenants while the call under
+ * test stays confined to one.
+ */
+const listReceipts = (...args: Parameters<typeof receipts.listReceipts>) =>
+  runAsTenant(args[0], async () => receipts.listReceipts(...args));
+
 beforeAll(() =>
   seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId, otherUtility] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   receipts = await import("../../services/ar/payment.service.js");
@@ -96,6 +106,11 @@ beforeAll(() =>
 
 afterAll(async () => {
   await prismaImports?.prisma.$disconnect();
+  // `$disconnect` does not dispose a pool the application owns —
+  // that is the driver-adapter contract — so the tenant and
+  // platform pools are ended here. Without it the container stops
+  // while connections are live and Postgres reports 57P01.
+  await prismaImports?.pool.end().catch(() => {});
   await pgContainer?.stop();
 });
 
@@ -106,23 +121,37 @@ async function pay(o: {
   ref?: string;
   utility?: string;
 }): Promise<string> {
-  const { prisma } = prismaImports;
-  const u = o.utility ?? utilityId;
-  const entry = await prisma.ledgerEntry.create({
-    data: {
-      utilityId: u,
-      accountId: u === utilityId ? accountId : otherAccountId,
-      type: "PAYMENT",
-      // Stored negative: a payment is a credit.
-      amount: `-${o.amount}`,
-      openAmount: "0.00",
-      dueDate: null,
-      effectiveDate: new Date(o.on),
-      tender: o.tender,
-      externalRef: o.ref ?? null,
-    },
+
+  /*
+
+   * Arranging rows, so the authority the fixtures use. Calls under
+
+   * test re-enter their own tenant scope.
+
+   */
+
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const u = o.utility ?? utilityId;
+    const entry = await prisma.ledgerEntry.create({
+      data: {
+        utilityId: u,
+        accountId: u === utilityId ? accountId : otherAccountId,
+        type: "PAYMENT",
+        // Stored negative: a payment is a credit.
+        amount: `-${o.amount}`,
+        openAmount: "0.00",
+        dueDate: null,
+        effectiveDate: new Date(o.on),
+        tender: o.tender,
+        externalRef: o.ref ?? null,
+      },
+    });
+    return entry.id;
+
+
   });
-  return entry.id;
+
 }
 
 /**
@@ -136,34 +165,41 @@ async function deposit(o: {
   tender?: "CASH" | "CHECK" | "CARD" | "ACH" | "LOCKBOX";
   ref?: string;
 }): Promise<string> {
-  const { prisma } = prismaImports;
-  const entry = await prisma.ledgerEntry.create({
-    data: {
-      utilityId,
-      accountId,
-      type: "DEPOSIT",
-      amount: `-${o.amount}`,
-      openAmount: `-${o.amount}`,
-      dueDate: null,
-      effectiveDate: new Date(o.on),
-      tender: o.tender ?? null,
-      externalRef: o.ref ?? null,
-    },
+  /*
+   * Arranging rows, so the authority the fixtures use. Calls under
+   * test re-enter their own tenant scope.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const entry = await prisma.ledgerEntry.create({
+      data: {
+        utilityId,
+        accountId,
+        type: "DEPOSIT",
+        amount: `-${o.amount}`,
+        openAmount: `-${o.amount}`,
+        dueDate: null,
+        effectiveDate: new Date(o.on),
+        tender: o.tender ?? null,
+        externalRef: o.ref ?? null,
+      },
+    });
+    return entry.id;
+
   });
-  return entry.id;
 }
 
 const refs = (p: { data: { externalRef: string | null }[] }) => p.data.map((r) => r.externalRef);
 
 describe("listReceipts", () => {
   it("returns amounts as positive figures", async () => {
-    const res = await receipts.listReceipts(utilityId, { ...Q, search: "CHQ-8841" });
+    const res = await listReceipts(utilityId, { ...Q, search: "CHQ-8841" });
     // Stored as -25.50; a receipts list is read by someone counting cash.
     expect(res.data[0]!.amount).toBe("25.50");
   });
 
   it("totals the whole filter, not just the page", async () => {
-    const res = await receipts.listReceipts(utilityId, { ...Q, limit: 1 });
+    const res = await listReceipts(utilityId, { ...Q, limit: 1 });
     expect(res.data).toHaveLength(1);
     expect(res.meta.total).toBe(3);
     // 40.00 + 25.50 + 10.00 across all three, despite one row on screen.
@@ -171,7 +207,7 @@ describe("listReceipts", () => {
   });
 
   it("totals one day's takings, for tying out against a bank deposit", async () => {
-    const res = await receipts.listReceipts(utilityId, {
+    const res = await listReceipts(utilityId, {
       ...Q,
       from: "2026-06-01",
       to: "2026-06-01",
@@ -181,7 +217,7 @@ describe("listReceipts", () => {
   });
 
   it("treats `to` as inclusive of that day", async () => {
-    const res = await receipts.listReceipts(utilityId, { ...Q, from: "2026-06-02", to: "2026-06-02" });
+    const res = await listReceipts(utilityId, { ...Q, from: "2026-06-02", to: "2026-06-02" });
     expect(refs(res)).toEqual(["TXN-999"]);
   });
 
@@ -193,53 +229,62 @@ describe("listReceipts", () => {
    * would be short by exactly the deposit — and would look like a
    * complete day's takings while being wrong.
    */
-  it("counts a deposit in the day's takings, because it is on the same bank slip", async () => {
-    const { prisma } = prismaImports;
-    const id = await deposit({ amount: "750.00", on: "2026-06-02", tender: "CASH", ref: "DEP-1" });
-    try {
-      const res = await receipts.listReceipts(utilityId, {
-        ...Q,
-        from: "2026-06-02",
-        to: "2026-06-02",
-      });
-      expect(res.meta.total).toBe(2);
-      // 10.00 of payment plus the 750.00 deposit, as the bank saw it.
-      expect(res.totalReceived).toBe("760.00");
-      expect(res.subtotals).toEqual({ PAYMENT: "10.00", DEPOSIT: "750.00" });
-    } finally {
-      await prisma.ledgerEntry.delete({ where: { id } });
-    }
-  });
+  it("counts a deposit in the day's takings, because it is on the same bank slip", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const id = await deposit({ amount: "750.00", on: "2026-06-02", tender: "CASH", ref: "DEP-1" });
+      try {
+        const res = await listReceipts(utilityId, {
+          ...Q,
+          from: "2026-06-02",
+          to: "2026-06-02",
+        });
+        expect(res.meta.total).toBe(2);
+        // 10.00 of payment plus the 750.00 deposit, as the bank saw it.
+        expect(res.totalReceived).toBe("760.00");
+        expect(res.subtotals).toEqual({ PAYMENT: "10.00", DEPOSIT: "750.00" });
+      } finally {
+        await prisma.ledgerEntry.delete({ where: { id } });
+      }
+  
+    }));
 
-  it("says which kind each receipt is, so a deposit is not read as a bill paid", async () => {
-    const { prisma } = prismaImports;
-    const id = await deposit({ amount: "750.00", on: "2026-06-02", tender: "CASH", ref: "DEP-1" });
-    try {
-      const res = await receipts.listReceipts(utilityId, { ...Q, search: "DEP-1" });
-      expect(res.data[0]!.type).toBe("DEPOSIT");
-      const paid = await receipts.listReceipts(utilityId, { ...Q, search: "TXN-999" });
-      expect(paid.data[0]!.type).toBe("PAYMENT");
-    } finally {
-      await prisma.ledgerEntry.delete({ where: { id } });
-    }
-  });
+  it("says which kind each receipt is, so a deposit is not read as a bill paid", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const id = await deposit({ amount: "750.00", on: "2026-06-02", tender: "CASH", ref: "DEP-1" });
+      try {
+        const res = await listReceipts(utilityId, { ...Q, search: "DEP-1" });
+        expect(res.data[0]!.type).toBe("DEPOSIT");
+        const paid = await listReceipts(utilityId, { ...Q, search: "TXN-999" });
+        expect(paid.data[0]!.type).toBe("PAYMENT");
+      } finally {
+        await prisma.ledgerEntry.delete({ where: { id } });
+      }
+  
+    }));
 
-  it("narrows to one kind on request", async () => {
-    const { prisma } = prismaImports;
-    const id = await deposit({ amount: "750.00", on: "2026-06-02", tender: "CASH", ref: "DEP-1" });
-    const day = { ...Q, from: "2026-06-02", to: "2026-06-02" };
-    try {
-      const onlyPayments = await receipts.listReceipts(utilityId, { ...day, type: "PAYMENT" });
-      expect(refs(onlyPayments)).toEqual(["TXN-999"]);
-      expect(onlyPayments.totalReceived).toBe("10.00");
+  it("narrows to one kind on request", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const id = await deposit({ amount: "750.00", on: "2026-06-02", tender: "CASH", ref: "DEP-1" });
+      const day = { ...Q, from: "2026-06-02", to: "2026-06-02" };
+      try {
+        const onlyPayments = await listReceipts(utilityId, { ...day, type: "PAYMENT" });
+        expect(refs(onlyPayments)).toEqual(["TXN-999"]);
+        expect(onlyPayments.totalReceived).toBe("10.00");
 
-      const onlyDeposits = await receipts.listReceipts(utilityId, { ...day, type: "DEPOSIT" });
-      expect(refs(onlyDeposits)).toEqual(["DEP-1"]);
-      expect(onlyDeposits.totalReceived).toBe("750.00");
-    } finally {
-      await prisma.ledgerEntry.delete({ where: { id } });
-    }
-  });
+        const onlyDeposits = await listReceipts(utilityId, { ...day, type: "DEPOSIT" });
+        expect(refs(onlyDeposits)).toEqual(["DEP-1"]);
+        expect(onlyDeposits.totalReceived).toBe("750.00");
+      } finally {
+        await prisma.ledgerEntry.delete({ where: { id } });
+      }
+  
+    }));
 
   /**
    * A day with no deposits must SAY so. An absent key and a genuine zero
@@ -247,92 +292,98 @@ describe("listReceipts", () => {
    * reason the reconciliation report carries `checked`.
    */
   it("spells out a kind that took nothing, rather than omitting it", async () => {
-    const res = await receipts.listReceipts(utilityId, Q);
+    const res = await listReceipts(utilityId, Q);
     expect(res.subtotals).toEqual({ PAYMENT: "75.50", DEPOSIT: "0.00" });
   });
 
-  it("keeps a reversed payment in the day's total, and marks the row", async () => {
-    const { prisma } = prismaImports;
-    const id = await pay({ amount: "90.00", on: "2026-06-03", tender: "CHECK", ref: "CHQ-BOUNCE" });
-    const rev = await prisma.ledgerEntry.create({
-      data: {
-        utilityId,
-        accountId,
-        type: "REVERSAL",
-        amount: "90.00",
-        openAmount: "0.00",
-        // Bounced two days later. The money WAS in the 3rd's deposit.
-        effectiveDate: new Date("2026-06-05"),
-        reversesId: id,
-      },
-    });
-    try {
-      const res = await receipts.listReceipts(utilityId, {
-        ...Q,
-        from: "2026-06-03",
-        to: "2026-06-03",
+  it("keeps a reversed payment in the day's total, and marks the row", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const id = await pay({ amount: "90.00", on: "2026-06-03", tender: "CHECK", ref: "CHQ-BOUNCE" });
+      const rev = await prisma.ledgerEntry.create({
+        data: {
+          utilityId,
+          accountId,
+          type: "REVERSAL",
+          amount: "90.00",
+          openAmount: "0.00",
+          // Bounced two days later. The money WAS in the 3rd's deposit.
+          effectiveDate: new Date("2026-06-05"),
+          reversesId: id,
+        },
       });
-      expect(res.totalReceived).toBe("90.00");
-      expect(res.data[0]!.reversed).toBe(true);
-    } finally {
-      await prisma.ledgerEntry.delete({ where: { id: rev.id } });
-      await prisma.ledgerEntry.delete({ where: { id } });
-    }
-  });
+      try {
+        const res = await listReceipts(utilityId, {
+          ...Q,
+          from: "2026-06-03",
+          to: "2026-06-03",
+        });
+        expect(res.totalReceived).toBe("90.00");
+        expect(res.data[0]!.reversed).toBe(true);
+      } finally {
+        await prisma.ledgerEntry.delete({ where: { id: rev.id } });
+        await prisma.ledgerEntry.delete({ where: { id } });
+      }
+  
+    }));
 
   it("filters by tender", async () => {
-    const res = await receipts.listReceipts(utilityId, { ...Q, tender: "CASH" });
+    const res = await listReceipts(utilityId, { ...Q, tender: "CASH" });
     expect(refs(res)).toEqual(["DRAWER-1"]);
     expect(res.totalReceived).toBe("40.00");
   });
 
   it("finds a receipt by its external reference", async () => {
-    const res = await receipts.listReceipts(utilityId, { ...Q, search: "chq" });
+    const res = await listReceipts(utilityId, { ...Q, search: "chq" });
     expect(refs(res)).toEqual(["CHQ-8841"]);
   });
 
   it("returns the account number and customer name, not just ids", async () => {
-    const res = await receipts.listReceipts(utilityId, { ...Q, search: "DRAWER-1" });
+    const res = await listReceipts(utilityId, { ...Q, search: "DRAWER-1" });
     expect(res.data[0]!.account.accountNumber).toBe("PAY-001");
     expect(res.data[0]!.account.customerName).toBe("Ada Lovelace");
   });
 
-  it("lists only money received — not charges, fees or reversals", async () => {
-    const { prisma } = prismaImports;
-    // A FEE must cite a reason -- the ledger_entry_reason_required CHECK
-    // added in slice 3.
-    const reason = await prisma.ledgerReasonDef.create({
-      data: { utilityId, code: "LATE_FEE_PL", label: "Late fee", appliesToType: "FEE" },
-    });
-    const fee = await prisma.ledgerEntry.create({
-      data: {
-        utilityId,
-        accountId,
-        type: "FEE",
-        amount: "15.00",
-        openAmount: "15.00",
-        dueDate: new Date("2026-07-01"),
-        effectiveDate: new Date("2026-06-01"),
-        reasonId: reason.id,
-      },
-    });
-    try {
-      const res = await receipts.listReceipts(utilityId, { ...Q, from: "2026-06-01", to: "2026-06-01" });
-      // The fee shares the day but is money owed, not money taken.
-      expect(res.meta.total).toBe(2);
-      expect(res.totalReceived).toBe("65.50");
-    } finally {
-      await prisma.ledgerEntry.delete({ where: { id: fee.id } });
-      await prisma.ledgerReasonDef.delete({ where: { id: reason.id } });
-    }
-  });
+  it("lists only money received — not charges, fees or reversals", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      // A FEE must cite a reason -- the ledger_entry_reason_required CHECK
+      // added in slice 3.
+      const reason = await prisma.ledgerReasonDef.create({
+        data: { utilityId, code: "LATE_FEE_PL", label: "Late fee", appliesToType: "FEE" },
+      });
+      const fee = await prisma.ledgerEntry.create({
+        data: {
+          utilityId,
+          accountId,
+          type: "FEE",
+          amount: "15.00",
+          openAmount: "15.00",
+          dueDate: new Date("2026-07-01"),
+          effectiveDate: new Date("2026-06-01"),
+          reasonId: reason.id,
+        },
+      });
+      try {
+        const res = await listReceipts(utilityId, { ...Q, from: "2026-06-01", to: "2026-06-01" });
+        // The fee shares the day but is money owed, not money taken.
+        expect(res.meta.total).toBe(2);
+        expect(res.totalReceived).toBe("65.50");
+      } finally {
+        await prisma.ledgerEntry.delete({ where: { id: fee.id } });
+        await prisma.ledgerReasonDef.delete({ where: { id: reason.id } });
+      }
+  
+    }));
 
   it("never returns another utility's receipts, nor counts them in the total", async () => {
-    const res = await receipts.listReceipts(utilityId, Q);
+    const res = await listReceipts(utilityId, Q);
     expect(res.meta.total).toBe(3);
     expect(res.totalReceived).toBe("75.50");
 
-    const theirs = await receipts.listReceipts(otherUtility, Q);
+    const theirs = await listReceipts(otherUtility, Q);
     expect(theirs.meta.total).toBe(1);
     expect(theirs.totalReceived).toBe("500.00");
   });

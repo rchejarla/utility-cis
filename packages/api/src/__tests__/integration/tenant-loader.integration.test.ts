@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, resetDb, makeTenantFixture, TENANT_A, endAdminPool } from "./_effective-dating-fixtures.js";
+import { bootPostgres, resetDb, makeTenantFixture, TENANT_A, endAdminPool, seedAsPlatform } from "./_effective-dating-fixtures.js";
 import { TenantLoader } from "../../lib/rate-engine-loaders/loaders/tenant-loader.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * Slice 4 task 4 — TenantLoader integration tests.
  *
@@ -18,14 +19,6 @@ let prismaImports: typeof import("../../lib/prisma.js");
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);
@@ -41,19 +34,48 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
-  const { prisma } = prismaImports;
-  // utility_setting isn't in resetDb's truncate list (post-dates it);
-  // wipe it explicitly so each test starts from a known state.
-  await prisma.$executeRawUnsafe("DELETE FROM utility_setting");
-  await resetDb();
-});
+/**
+ * The loader run the way a route runs it: inside the tenant's scope.
+ *
+ * A loader takes the client and the tenant in its constructor, so the
+ * scope cannot ride in on an argument to `load()` — it has to be around
+ * the call. `runAsTenant` here overrides the surrounding
+ * `seedAsPlatform`, so the fixtures stay free to arrange rows while the
+ * read under test is confined to one tenant.
+ */
+const scoped = <T>(tenant: string, fn: () => Promise<T>): Promise<T> =>
+  runAsTenant(tenant, fn);
+
+beforeEach(() =>
+  seedAsPlatform(async () => {    /* Fixture rows and read-backs under the fixture authority; the
+     * scoped wrappers re-enter their own tenant scope. */
+    const { prisma } = prismaImports;
+    // utility_setting isn't in resetDb's truncate list (post-dates it);
+    // wipe it explicitly so each test starts from a known state.
+    await prisma.$executeRawUnsafe("DELETE FROM utility_setting");
+    await resetDb();
+
+  }));
 
 async function seedSetting(utilityId: string, name: string, value: unknown): Promise<void> {
-  const { prisma } = prismaImports;
-  await prisma.utilitySetting.create({
-    data: { utilityId, name, value: value as object },
+
+  /*
+
+   * Arranging rows, so the authority the fixtures use. Calls under
+
+   * test re-enter their own tenant scope.
+
+   */
+
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    await prisma.utilitySetting.create({
+      data: { utilityId, name, value: value as object },
+    });
+
+
   });
+
 }
 
 describe("TenantLoader", () => {
@@ -62,7 +84,7 @@ describe("TenantLoader", () => {
     await seedSetting(TENANT_A, "drought_stage", 2);
 
     const loader = new TenantLoader(prismaImports.prisma, TENANT_A);
-    const out = await loader.load(["tenant:drought_stage"]);
+    const out = await scoped(TENANT_A, () => loader.load(["tenant:drought_stage"]));
     expect(out.get("tenant:drought_stage")).toBe(2);
   });
 
@@ -70,7 +92,7 @@ describe("TenantLoader", () => {
     await makeTenantFixture(prismaImports.prisma, TENANT_A);
 
     const loader = new TenantLoader(prismaImports.prisma, TENANT_A);
-    const out = await loader.load(["tenant:drought_stage"]);
+    const out = await scoped(TENANT_A, () => loader.load(["tenant:drought_stage"]));
     expect(out.get("tenant:drought_stage")).toBe(0);
   });
 
@@ -79,7 +101,7 @@ describe("TenantLoader", () => {
     await seedSetting(TENANT_A, "flags.autopay", true);
 
     const loader = new TenantLoader(prismaImports.prisma, TENANT_A);
-    const out = await loader.load(["tenant:flags:autopay"]);
+    const out = await scoped(TENANT_A, () => loader.load(["tenant:flags:autopay"]));
     expect(out.get("tenant:flags:autopay")).toBe(true);
   });
 
@@ -87,7 +109,7 @@ describe("TenantLoader", () => {
     await makeTenantFixture(prismaImports.prisma, TENANT_A);
 
     const loader = new TenantLoader(prismaImports.prisma, TENANT_A);
-    const out = await loader.load(["tenant:flags:missing"]);
+    const out = await scoped(TENANT_A, () => loader.load(["tenant:flags:missing"]));
     expect(out.get("tenant:flags:missing")).toBe(false);
   });
 
@@ -105,12 +127,12 @@ describe("TenantLoader", () => {
       .mockImplementation((args) => original(args) as ReturnType<typeof original>);
     try {
       const loader = new TenantLoader(prismaImports.prisma, TENANT_A);
-      const out = await loader.load([
+      const out = await scoped(TENANT_A, () => loader.load([
         "tenant:drought_stage",
         "tenant:flags:autopay",
         "tenant:flags:paperless_default",
         "tenant:flags:missing",
-      ]);
+      ]));
 
       expect(spy).toHaveBeenCalledTimes(1);
       expect(out.get("tenant:drought_stage")).toBe(3);

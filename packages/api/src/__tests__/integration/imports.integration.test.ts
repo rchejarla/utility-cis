@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
+import { runAsTenant } from "../../lib/tenant-context.js";
 import {
   bootPostgres,
   resetDb,
@@ -64,6 +65,20 @@ const ENABLED_MODULES = [
   "agreements",
 ];
 
+/**
+ * The services this file calls directly, as a route reaches them: acting
+ * for the tenant, not merely naming it.
+ *
+ * Each already receives the tenant — production passed it from a request
+ * or a job whose scope had been entered, so the argument and the scope
+ * are always the same id. A direct service test has the argument and not
+ * the scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` also overrides a surrounding `seedAsPlatform`, which is
+ * what lets fixture rows be arranged across tenants while the call under
+ * test stays confined to one.
+ */
 function makeToken(utilityId: string, actorId = "00000000-0000-4000-8000-aaaa00000001") {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
   const payload = Buffer.from(
@@ -124,15 +139,6 @@ function buildMultipart(
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // Its routes run correctly as `cis_app` — no route or service was
-  // found querying a tenant table without a scope — but its own test
-  // bodies arrange and assert on rows through `prisma` directly, which
-  // needs a `seedAsPlatform` or `runAsTenant` per site. See
-  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
-  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
-  // only lets the number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   appImports = await import("../../app.js");
@@ -265,133 +271,139 @@ describe("GET /api/v1/imports/kinds/:kind/template.csv", () => {
 });
 
 describe("POST /api/v1/imports — meter_read happy path", () => {
-  it("uploads a CSV, parses, processes rows, persists Attachment, returns COMPLETE", async () => {
-    const { prisma } = prismaImports;
+  it("uploads a CSV, parses, processes rows, persists Attachment, returns COMPLETE", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    const csv =
-      "meter_number,read_datetime,reading\n" +
-      `${meterNumber},2024-02-01T09:00:00Z,100\n` +
-      `${meter2Number},2024-02-01T09:05:00Z,55\n`;
+      const csv =
+        "meter_number,read_datetime,reading\n" +
+        `${meterNumber},2024-02-01T09:00:00Z,100\n` +
+        `${meter2Number},2024-02-01T09:05:00Z,55\n`;
 
-    const mapping = {
-      meter_number: "meterNumber",
-      read_datetime: "readDatetime",
-      reading: "reading",
-    };
+      const mapping = {
+        meter_number: "meterNumber",
+        read_datetime: "readDatetime",
+        reading: "reading",
+      };
 
-    const { body, contentType } = buildMultipart([
-      { name: "kind", value: "meter_read" },
-      { name: "source", value: "MANUAL_UPLOAD" },
-      { name: "fileName", value: "test.csv" },
-      { name: "mapping", value: JSON.stringify(mapping) },
-      { name: "file", filename: "test.csv", contentType: "text/csv", body: csv },
-    ]);
+      const { body, contentType } = buildMultipart([
+        { name: "kind", value: "meter_read" },
+        { name: "source", value: "MANUAL_UPLOAD" },
+        { name: "fileName", value: "test.csv" },
+        { name: "mapping", value: JSON.stringify(mapping) },
+        { name: "file", filename: "test.csv", contentType: "text/csv", body: csv },
+      ]);
 
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/imports",
-      headers: { ...headers(), "content-type": contentType },
-      payload: body,
-    });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/imports",
+        headers: { ...headers(), "content-type": contentType },
+        payload: body,
+      });
 
-    expect(res.statusCode).toBe(200);
-    const result = JSON.parse(res.body) as {
-      batchId: string;
-      status: string;
-      recordCount: number;
-      importedCount: number;
-      errorCount: number;
-      attachmentId: string;
-    };
-    expect(result.status).toBe("COMPLETE");
-    expect(result.recordCount).toBe(2);
-    expect(result.importedCount).toBe(2);
-    expect(result.errorCount).toBe(0);
-    expect(result.attachmentId).toBeTruthy();
+      expect(res.statusCode).toBe(200);
+      const result = JSON.parse(res.body) as {
+        batchId: string;
+        status: string;
+        recordCount: number;
+        importedCount: number;
+        errorCount: number;
+        attachmentId: string;
+      };
+      expect(result.status).toBe("COMPLETE");
+      expect(result.recordCount).toBe(2);
+      expect(result.importedCount).toBe(2);
+      expect(result.errorCount).toBe(0);
+      expect(result.attachmentId).toBeTruthy();
 
-    // Two MeterRead rows created, both attached to the SA.
-    const reads = await prisma.meterRead.findMany({
-      where: { utilityId: fixA.utilityId },
-    });
-    expect(reads).toHaveLength(2);
-    expect(reads.every((r) => r.serviceAgreementId === saId)).toBe(true);
+      // Two MeterRead rows created, both attached to the SA.
+      const reads = await prisma.meterRead.findMany({
+        where: { utilityId: fixA.utilityId },
+      });
+      expect(reads).toHaveLength(2);
+      expect(reads.every((r) => r.serviceAgreementId === saId)).toBe(true);
 
-    // ImportBatch status correct.
-    const batch = await prisma.importBatch.findUniqueOrThrow({
-      where: { id: result.batchId },
-    });
-    expect(batch.status).toBe("COMPLETE");
-    expect(batch.entityKind).toBe("meter_read");
+      // ImportBatch status correct.
+      const batch = await prisma.importBatch.findUniqueOrThrow({
+        where: { id: result.batchId },
+      });
+      expect(batch.status).toBe("COMPLETE");
+      expect(batch.entityKind).toBe("meter_read");
 
-    // import_row rows: all IMPORTED.
-    const rows = await prisma.importRow.findMany({
-      where: { importBatchId: result.batchId },
-    });
-    expect(rows).toHaveLength(2);
-    expect(rows.every((r) => r.status === "IMPORTED")).toBe(true);
+      // import_row rows: all IMPORTED.
+      const rows = await prisma.importRow.findMany({
+        where: { importBatchId: result.batchId },
+      });
+      expect(rows).toHaveLength(2);
+      expect(rows.every((r) => r.status === "IMPORTED")).toBe(true);
 
-    // Original file persisted as Attachment.
-    const attachment = await prisma.attachment.findUniqueOrThrow({
-      where: { id: result.attachmentId },
-    });
-    expect(attachment.entityType).toBe("ImportBatch");
-    expect(attachment.entityId).toBe(result.batchId);
-    expect(attachment.fileName).toBe("test.csv");
-    expect(attachment.fileType).toBe("text/csv");
-  });
+      // Original file persisted as Attachment.
+      const attachment = await prisma.attachment.findUniqueOrThrow({
+        where: { id: result.attachmentId },
+      });
+      expect(attachment.entityType).toBe("ImportBatch");
+      expect(attachment.entityId).toBe(result.batchId);
+      expect(attachment.fileName).toBe("test.csv");
+      expect(attachment.fileType).toBe("text/csv");
+  
+    }));
 });
 
 describe("POST /api/v1/imports — partial success", () => {
-  it("imports valid rows, marks invalid ones ERROR, batch ends PARTIAL", async () => {
-    const { prisma } = prismaImports;
+  it("imports valid rows, marks invalid ones ERROR, batch ends PARTIAL", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    const csv =
-      "meter_number,read_datetime,reading\n" +
-      `${meterNumber},2024-02-01T09:00:00Z,100\n` +
-      `DOES-NOT-EXIST,2024-02-01T09:00:00Z,200\n` +
-      `${meter2Number},2024-02-01T09:05:00Z,55\n`;
+      const csv =
+        "meter_number,read_datetime,reading\n" +
+        `${meterNumber},2024-02-01T09:00:00Z,100\n` +
+        `DOES-NOT-EXIST,2024-02-01T09:00:00Z,200\n` +
+        `${meter2Number},2024-02-01T09:05:00Z,55\n`;
 
-    const mapping = {
-      meter_number: "meterNumber",
-      read_datetime: "readDatetime",
-      reading: "reading",
-    };
+      const mapping = {
+        meter_number: "meterNumber",
+        read_datetime: "readDatetime",
+        reading: "reading",
+      };
 
-    const { body, contentType } = buildMultipart([
-      { name: "kind", value: "meter_read" },
-      { name: "source", value: "AMR" },
-      { name: "fileName", value: "partial.csv" },
-      { name: "mapping", value: JSON.stringify(mapping) },
-      { name: "file", filename: "partial.csv", contentType: "text/csv", body: csv },
-    ]);
+      const { body, contentType } = buildMultipart([
+        { name: "kind", value: "meter_read" },
+        { name: "source", value: "AMR" },
+        { name: "fileName", value: "partial.csv" },
+        { name: "mapping", value: JSON.stringify(mapping) },
+        { name: "file", filename: "partial.csv", contentType: "text/csv", body: csv },
+      ]);
 
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/imports",
-      headers: { ...headers(), "content-type": contentType },
-      payload: body,
-    });
-    expect(res.statusCode).toBe(200);
-    const result = JSON.parse(res.body) as {
-      batchId: string;
-      status: string;
-      importedCount: number;
-      errorCount: number;
-      errors: Array<{ rowIndex: number; errorCode: string; errorMessage: string }>;
-    };
-    expect(result.status).toBe("PARTIAL");
-    expect(result.importedCount).toBe(2);
-    expect(result.errorCount).toBe(1);
-    expect(result.errors[0].errorCode).toBe("METER_NOT_FOUND");
-    expect(result.errors[0].rowIndex).toBe(2);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/imports",
+        headers: { ...headers(), "content-type": contentType },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(200);
+      const result = JSON.parse(res.body) as {
+        batchId: string;
+        status: string;
+        importedCount: number;
+        errorCount: number;
+        errors: Array<{ rowIndex: number; errorCode: string; errorMessage: string }>;
+      };
+      expect(result.status).toBe("PARTIAL");
+      expect(result.importedCount).toBe(2);
+      expect(result.errorCount).toBe(1);
+      expect(result.errors[0].errorCode).toBe("METER_NOT_FOUND");
+      expect(result.errors[0].rowIndex).toBe(2);
 
-    // import_row table reflects the per-row truth.
-    const rows = await prisma.importRow.findMany({
-      where: { importBatchId: result.batchId },
-      orderBy: { rowIndex: "asc" },
-    });
-    expect(rows.map((r) => r.status)).toEqual(["IMPORTED", "ERROR", "IMPORTED"]);
-  });
+      // import_row table reflects the per-row truth.
+      const rows = await prisma.importRow.findMany({
+        where: { importBatchId: result.batchId },
+        orderBy: { rowIndex: "asc" },
+      });
+      expect(rows.map((r) => r.status)).toEqual(["IMPORTED", "ERROR", "IMPORTED"]);
+  
+    }));
 });
 
 describe("POST /api/v1/imports — mapping validation", () => {
@@ -467,53 +479,56 @@ describe("POST /api/v1/imports — unknown kind", () => {
 });
 
 describe("GET /api/v1/imports — list", () => {
-  it("returns batches across kinds with filters", async () => {
-    const { prisma } = prismaImports;
+  it("returns batches across kinds with filters", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    // Seed two batches directly.
-    await prisma.importBatch.create({
-      data: {
-        utilityId: fixA.utilityId,
-        entityKind: "meter_read",
-        source: "AMR",
-        recordCount: 5,
-        importedCount: 5,
-        errorCount: 0,
-        status: "COMPLETE",
-        createdBy: "00000000-0000-4000-8000-aaaa00000001",
-      },
-    });
-    await prisma.importBatch.create({
-      data: {
-        utilityId: fixA.utilityId,
-        entityKind: "meter_read",
-        source: "MANUAL_UPLOAD",
-        recordCount: 10,
-        importedCount: 7,
-        errorCount: 3,
-        status: "PARTIAL",
-        createdBy: "00000000-0000-4000-8000-aaaa00000001",
-      },
-    });
+      // Seed two batches directly.
+      await prisma.importBatch.create({
+        data: {
+          utilityId: fixA.utilityId,
+          entityKind: "meter_read",
+          source: "AMR",
+          recordCount: 5,
+          importedCount: 5,
+          errorCount: 0,
+          status: "COMPLETE",
+          createdBy: "00000000-0000-4000-8000-aaaa00000001",
+        },
+      });
+      await prisma.importBatch.create({
+        data: {
+          utilityId: fixA.utilityId,
+          entityKind: "meter_read",
+          source: "MANUAL_UPLOAD",
+          recordCount: 10,
+          importedCount: 7,
+          errorCount: 3,
+          status: "PARTIAL",
+          createdBy: "00000000-0000-4000-8000-aaaa00000001",
+        },
+      });
 
-    const all = await app.inject({
-      method: "GET",
-      url: "/api/v1/imports",
-      headers: headers(),
-    });
-    expect(all.statusCode).toBe(200);
-    const allBody = JSON.parse(all.body) as { data: Array<{ status: string }> };
-    expect(allBody.data.length).toBe(2);
+      const all = await app.inject({
+        method: "GET",
+        url: "/api/v1/imports",
+        headers: headers(),
+      });
+      expect(all.statusCode).toBe(200);
+      const allBody = JSON.parse(all.body) as { data: Array<{ status: string }> };
+      expect(allBody.data.length).toBe(2);
 
-    const filtered = await app.inject({
-      method: "GET",
-      url: "/api/v1/imports?status=PARTIAL",
-      headers: headers(),
-    });
-    const filteredBody = JSON.parse(filtered.body) as { data: Array<{ status: string }> };
-    expect(filteredBody.data.length).toBe(1);
-    expect(filteredBody.data[0].status).toBe("PARTIAL");
-  });
+      const filtered = await app.inject({
+        method: "GET",
+        url: "/api/v1/imports?status=PARTIAL",
+        headers: headers(),
+      });
+      const filteredBody = JSON.parse(filtered.body) as { data: Array<{ status: string }> };
+      expect(filteredBody.data.length).toBe(1);
+      expect(filteredBody.data[0].status).toBe("PARTIAL");
+  
+    }));
 });
 
 describe("GET /api/v1/imports/:id/error-summary", () => {
@@ -568,273 +583,294 @@ describe("GET /api/v1/imports/:id/error-summary", () => {
 // listening. Full end-to-end worker tests live in import-worker.
 
 describe("POST /api/v1/imports — async path threshold", () => {
-  it("returns 202 + async:true when recordCount > SYNC_THRESHOLD_ROWS (250)", async () => {
-    const lines = ["meterNumber,readDatetime,reading"];
-    for (let i = 0; i < 251; i++) {
-      const day = String((i % 28) + 1).padStart(2, "0");
-      const hh = String(i % 24).padStart(2, "0");
-      const mm = String(i % 60).padStart(2, "0");
-      lines.push(`${meterNumber},2024-02-${day}T${hh}:${mm}:00Z,${1000 + i}`);
-    }
-    const csv = lines.join("\n");
-    const { body, contentType } = buildMultipart([
-      { name: "kind", value: "meter_read" },
-      { name: "source", value: "MANUAL_UPLOAD" },
-      {
-        name: "mapping",
-        value: JSON.stringify({
-          meterNumber: "meterNumber",
-          readDatetime: "readDatetime",
-          reading: "reading",
-        }),
-      },
-      { name: "file", filename: "251.csv", contentType: "text/csv", body: csv },
-    ]);
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/imports",
-      headers: { ...headers(), "content-type": contentType },
-      payload: body,
-    });
-    expect(res.statusCode).toBe(202);
-    const result = JSON.parse(res.body) as {
-      async: boolean;
-      batchId: string;
-      recordCount: number;
-    };
-    expect(result.async).toBe(true);
-    expect(result.recordCount).toBe(251);
-    expect(result.batchId).toBeTruthy();
+  it("returns 202 + async:true when recordCount > SYNC_THRESHOLD_ROWS (250)", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const lines = ["meterNumber,readDatetime,reading"];
+      for (let i = 0; i < 251; i++) {
+        const day = String((i % 28) + 1).padStart(2, "0");
+        const hh = String(i % 24).padStart(2, "0");
+        const mm = String(i % 60).padStart(2, "0");
+        lines.push(`${meterNumber},2024-02-${day}T${hh}:${mm}:00Z,${1000 + i}`);
+      }
+      const csv = lines.join("\n");
+      const { body, contentType } = buildMultipart([
+        { name: "kind", value: "meter_read" },
+        { name: "source", value: "MANUAL_UPLOAD" },
+        {
+          name: "mapping",
+          value: JSON.stringify({
+            meterNumber: "meterNumber",
+            readDatetime: "readDatetime",
+            reading: "reading",
+          }),
+        },
+        { name: "file", filename: "251.csv", contentType: "text/csv", body: csv },
+      ]);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/imports",
+        headers: { ...headers(), "content-type": contentType },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(202);
+      const result = JSON.parse(res.body) as {
+        async: boolean;
+        batchId: string;
+        recordCount: number;
+      };
+      expect(result.async).toBe(true);
+      expect(result.recordCount).toBe(251);
+      expect(result.batchId).toBeTruthy();
 
-    // Batch is in PENDING because no worker picked it up in this test
-    // (Redis isn't running). That's the expected state for an
-    // un-drained queue.
-    const { prisma } = prismaImports;
-    const batch = await prisma.importBatch.findUniqueOrThrow({
-      where: { id: result.batchId },
-    });
-    expect(batch.status).toBe("PENDING");
-    expect(batch.recordCount).toBe(251);
-  });
+      // Batch is in PENDING because no worker picked it up in this test
+      // (Redis isn't running). That's the expected state for an
+      // un-drained queue.
+      const { prisma } = prismaImports;
+      const batch = await prisma.importBatch.findUniqueOrThrow({
+        where: { id: result.batchId },
+      });
+      expect(batch.status).toBe("PENDING");
+      expect(batch.recordCount).toBe(251);
+  
+    }));
 });
 
 describe("POST /api/v1/imports/:id/cancel", () => {
-  it("flips cancel_requested on a PENDING batch", async () => {
-    const { prisma } = prismaImports;
-    const batch = await prisma.importBatch.create({
-      data: {
-        utilityId: fixA.utilityId,
-        entityKind: "meter_read",
-        source: "MANUAL_UPLOAD",
-        fileName: "x.csv",
-        recordCount: 5,
-        status: "PROCESSING",
-        createdBy: "00000000-0000-4000-8000-aaaa00000001",
-        lastProgressAt: new Date(),
-      },
-    });
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/imports/${batch.id}/cancel`,
-      headers: headers(),
-    });
-    expect(res.statusCode).toBe(200);
-    const updated = await prisma.importBatch.findUniqueOrThrow({
-      where: { id: batch.id },
-    });
-    expect(updated.cancelRequested).toBe(true);
-  });
+  it("flips cancel_requested on a PENDING batch", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const batch = await prisma.importBatch.create({
+        data: {
+          utilityId: fixA.utilityId,
+          entityKind: "meter_read",
+          source: "MANUAL_UPLOAD",
+          fileName: "x.csv",
+          recordCount: 5,
+          status: "PROCESSING",
+          createdBy: "00000000-0000-4000-8000-aaaa00000001",
+          lastProgressAt: new Date(),
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/imports/${batch.id}/cancel`,
+        headers: headers(),
+      });
+      expect(res.statusCode).toBe(200);
+      const updated = await prisma.importBatch.findUniqueOrThrow({
+        where: { id: batch.id },
+      });
+      expect(updated.cancelRequested).toBe(true);
+  
+    }));
 
-  it("is a no-op on terminal batches", async () => {
-    const { prisma } = prismaImports;
-    const batch = await prisma.importBatch.create({
-      data: {
-        utilityId: fixA.utilityId,
-        entityKind: "meter_read",
-        source: "MANUAL_UPLOAD",
-        fileName: "x.csv",
-        recordCount: 5,
-        importedCount: 5,
-        status: "COMPLETE",
-        createdBy: "00000000-0000-4000-8000-aaaa00000001",
-        lastProgressAt: new Date(),
-      },
-    });
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/imports/${batch.id}/cancel`,
-      headers: headers(),
-    });
-    expect(res.statusCode).toBe(200);
-    const updated = await prisma.importBatch.findUniqueOrThrow({
-      where: { id: batch.id },
-    });
-    expect(updated.cancelRequested).toBe(false);
-  });
+  it("is a no-op on terminal batches", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const batch = await prisma.importBatch.create({
+        data: {
+          utilityId: fixA.utilityId,
+          entityKind: "meter_read",
+          source: "MANUAL_UPLOAD",
+          fileName: "x.csv",
+          recordCount: 5,
+          importedCount: 5,
+          status: "COMPLETE",
+          createdBy: "00000000-0000-4000-8000-aaaa00000001",
+          lastProgressAt: new Date(),
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/imports/${batch.id}/cancel`,
+        headers: headers(),
+      });
+      expect(res.statusCode).toBe(200);
+      const updated = await prisma.importBatch.findUniqueOrThrow({
+        where: { id: batch.id },
+      });
+      expect(updated.cancelRequested).toBe(false);
+  
+    }));
 });
 
 describe("POST /api/v1/imports/:id/retry", () => {
-  it("flips PARTIAL → PENDING and clears completedAt", async () => {
-    const { prisma } = prismaImports;
-    const batch = await prisma.importBatch.create({
-      data: {
-        utilityId: fixA.utilityId,
-        entityKind: "meter_read",
-        source: "MANUAL_UPLOAD",
-        fileName: "x.csv",
-        recordCount: 10,
-        importedCount: 7,
-        errorCount: 3,
-        status: "PARTIAL",
-        createdBy: "00000000-0000-4000-8000-aaaa00000001",
-        lastProgressAt: new Date(),
-        completedAt: new Date(),
-      },
-    });
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/imports/${batch.id}/retry`,
-      headers: headers(),
-    });
-    expect(res.statusCode).toBe(202);
-    const updated = await prisma.importBatch.findUniqueOrThrow({
-      where: { id: batch.id },
-    });
-    expect(updated.status).toBe("PENDING");
-    expect(updated.cancelRequested).toBe(false);
-    expect(updated.completedAt).toBeNull();
-  });
+  it("flips PARTIAL → PENDING and clears completedAt", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const batch = await prisma.importBatch.create({
+        data: {
+          utilityId: fixA.utilityId,
+          entityKind: "meter_read",
+          source: "MANUAL_UPLOAD",
+          fileName: "x.csv",
+          recordCount: 10,
+          importedCount: 7,
+          errorCount: 3,
+          status: "PARTIAL",
+          createdBy: "00000000-0000-4000-8000-aaaa00000001",
+          lastProgressAt: new Date(),
+          completedAt: new Date(),
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/imports/${batch.id}/retry`,
+        headers: headers(),
+      });
+      expect(res.statusCode).toBe(202);
+      const updated = await prisma.importBatch.findUniqueOrThrow({
+        where: { id: batch.id },
+      });
+      expect(updated.status).toBe("PENDING");
+      expect(updated.cancelRequested).toBe(false);
+      expect(updated.completedAt).toBeNull();
+  
+    }));
 
-  it("rejects retry on a PROCESSING batch (not retryable)", async () => {
-    const { prisma } = prismaImports;
-    const batch = await prisma.importBatch.create({
-      data: {
-        utilityId: fixA.utilityId,
-        entityKind: "meter_read",
-        source: "MANUAL_UPLOAD",
-        fileName: "x.csv",
-        recordCount: 5,
-        status: "PROCESSING",
-        createdBy: "00000000-0000-4000-8000-aaaa00000001",
-        lastProgressAt: new Date(),
-      },
-    });
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/imports/${batch.id}/retry`,
-      headers: headers(),
-    });
-    expect(res.statusCode).toBe(400);
-    expect(JSON.parse(res.body).error.code).toBe("NOT_RETRYABLE");
-  });
+  it("rejects retry on a PROCESSING batch (not retryable)", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const batch = await prisma.importBatch.create({
+        data: {
+          utilityId: fixA.utilityId,
+          entityKind: "meter_read",
+          source: "MANUAL_UPLOAD",
+          fileName: "x.csv",
+          recordCount: 5,
+          status: "PROCESSING",
+          createdBy: "00000000-0000-4000-8000-aaaa00000001",
+          lastProgressAt: new Date(),
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/imports/${batch.id}/retry`,
+        headers: headers(),
+      });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).error.code).toBe("NOT_RETRYABLE");
+  
+    }));
 });
 
 describe("reclaimZombieBatches", () => {
-  it("flips PROCESSING + stale lastProgressAt back to PENDING", async () => {
-    const { prisma } = prismaImports;
-    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
-    const stale = await prisma.importBatch.create({
-      data: {
-        utilityId: fixA.utilityId,
-        entityKind: "meter_read",
-        source: "MANUAL_UPLOAD",
-        fileName: "stale.csv",
-        recordCount: 5,
-        status: "PROCESSING",
-        createdBy: "00000000-0000-4000-8000-aaaa00000001",
-        lastProgressAt: tenMinutesAgo,
-      },
-    });
-    const fresh = await prisma.importBatch.create({
-      data: {
-        utilityId: fixA.utilityId,
-        entityKind: "meter_read",
-        source: "MANUAL_UPLOAD",
-        fileName: "fresh.csv",
-        recordCount: 5,
-        status: "PROCESSING",
-        createdBy: "00000000-0000-4000-8000-aaaa00000001",
-        lastProgressAt: new Date(),
-      },
-    });
-    const { reclaimZombieBatches } = await import(
-      "../../services/imports/zombie-sweep.service.js"
-    );
-    const ids = await reclaimZombieBatches(new Date());
-    expect(ids).toContain(stale.id);
-    expect(ids).not.toContain(fresh.id);
+  it("flips PROCESSING + stale lastProgressAt back to PENDING", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+      const stale = await prisma.importBatch.create({
+        data: {
+          utilityId: fixA.utilityId,
+          entityKind: "meter_read",
+          source: "MANUAL_UPLOAD",
+          fileName: "stale.csv",
+          recordCount: 5,
+          status: "PROCESSING",
+          createdBy: "00000000-0000-4000-8000-aaaa00000001",
+          lastProgressAt: tenMinutesAgo,
+        },
+      });
+      const fresh = await prisma.importBatch.create({
+        data: {
+          utilityId: fixA.utilityId,
+          entityKind: "meter_read",
+          source: "MANUAL_UPLOAD",
+          fileName: "fresh.csv",
+          recordCount: 5,
+          status: "PROCESSING",
+          createdBy: "00000000-0000-4000-8000-aaaa00000001",
+          lastProgressAt: new Date(),
+        },
+      });
+      const { reclaimZombieBatches } = await import(
+        "../../services/imports/zombie-sweep.service.js"
+      );
+      const ids = await reclaimZombieBatches(new Date());
+      expect(ids).toContain(stale.id);
+      expect(ids).not.toContain(fresh.id);
 
-    const staleAfter = await prisma.importBatch.findUniqueOrThrow({
-      where: { id: stale.id },
-    });
-    const freshAfter = await prisma.importBatch.findUniqueOrThrow({
-      where: { id: fresh.id },
-    });
-    expect(staleAfter.status).toBe("PENDING");
-    expect(freshAfter.status).toBe("PROCESSING");
-  });
+      const staleAfter = await prisma.importBatch.findUniqueOrThrow({
+        where: { id: stale.id },
+      });
+      const freshAfter = await prisma.importBatch.findUniqueOrThrow({
+        where: { id: fresh.id },
+      });
+      expect(staleAfter.status).toBe("PENDING");
+      expect(freshAfter.status).toBe("PROCESSING");
+  
+    }));
 });
 
 // ─── Slice 4a — Premise / Meter / Account handlers ──────────────────
 
 describe("POST /api/v1/imports — premise handler", () => {
-  it("imports a premise; resolves ownerEmail to customerId and commodityCodes to uuid[]", async () => {
-    const { prisma } = prismaImports;
+  it("imports a premise; resolves ownerEmail to customerId and commodityCodes to uuid[]", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    // Seed a customer for the owner-email lookup. The fixture's
-    // commodity is `WATER-<suffix>`, so use that exact code.
-    const owner = await prisma.customer.create({
-      data: {
-        utilityId: fixA.utilityId,
-        customerType: "INDIVIDUAL",
-        firstName: "Owner",
-        lastName: "Test",
-        email: "owner@example.com",
-      },
-    });
-    const commodity = await prisma.commodity.findFirstOrThrow({
-      where: { utilityId: fixA.utilityId },
-    });
+      // Seed a customer for the owner-email lookup. The fixture's
+      // commodity is `WATER-<suffix>`, so use that exact code.
+      const owner = await prisma.customer.create({
+        data: {
+          utilityId: fixA.utilityId,
+          customerType: "INDIVIDUAL",
+          firstName: "Owner",
+          lastName: "Test",
+          email: "owner@example.com",
+        },
+      });
+      const commodity = await prisma.commodity.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId },
+      });
 
-    const csv =
-      "addressLine1,city,state,zip,premiseType,ownerEmail,commodityCodes\n" +
-      `999 Main St,Springfield,IL,62704,RESIDENTIAL,owner@example.com,${commodity.code}\n`;
+      const csv =
+        "addressLine1,city,state,zip,premiseType,ownerEmail,commodityCodes\n" +
+        `999 Main St,Springfield,IL,62704,RESIDENTIAL,owner@example.com,${commodity.code}\n`;
 
-    const mapping = {
-      addressLine1: "addressLine1",
-      city: "city",
-      state: "state",
-      zip: "zip",
-      premiseType: "premiseType",
-      ownerEmail: "ownerEmail",
-      commodityCodes: "commodityCodes",
-    };
+      const mapping = {
+        addressLine1: "addressLine1",
+        city: "city",
+        state: "state",
+        zip: "zip",
+        premiseType: "premiseType",
+        ownerEmail: "ownerEmail",
+        commodityCodes: "commodityCodes",
+      };
 
-    const { body, contentType } = buildMultipart([
-      { name: "kind", value: "premise" },
-      { name: "source", value: "MANUAL_UPLOAD" },
-      { name: "mapping", value: JSON.stringify(mapping) },
-      { name: "file", filename: "p.csv", contentType: "text/csv", body: csv },
-    ]);
+      const { body, contentType } = buildMultipart([
+        { name: "kind", value: "premise" },
+        { name: "source", value: "MANUAL_UPLOAD" },
+        { name: "mapping", value: JSON.stringify(mapping) },
+        { name: "file", filename: "p.csv", contentType: "text/csv", body: csv },
+      ]);
 
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/imports",
-      headers: { ...headers(), "content-type": contentType },
-      payload: body,
-    });
-    expect(res.statusCode).toBe(200);
-    const result = JSON.parse(res.body);
-    expect(result.status).toBe("COMPLETE");
-    expect(result.importedCount).toBe(1);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/imports",
+        headers: { ...headers(), "content-type": contentType },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(200);
+      const result = JSON.parse(res.body);
+      expect(result.status).toBe("COMPLETE");
+      expect(result.importedCount).toBe(1);
 
-    const created = await prisma.premise.findFirstOrThrow({
-      where: { utilityId: fixA.utilityId, addressLine1: "999 Main St" },
-    });
-    expect(created.ownerId).toBe(owner.id);
-    expect(created.commodityIds).toEqual([commodity.id]);
-    expect(created.state).toBe("IL");
-  });
+      const created = await prisma.premise.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId, addressLine1: "999 Main St" },
+      });
+      expect(created.ownerId).toBe(owner.id);
+      expect(created.commodityIds).toEqual([commodity.id]);
+      expect(created.state).toBe("IL");
+  
+    }));
 
   it("rejects rows whose ownerEmail doesn't match any customer", async () => {
     const csv =
@@ -868,249 +904,264 @@ describe("POST /api/v1/imports — premise handler", () => {
 });
 
 describe("POST /api/v1/imports — meter handler", () => {
-  it("imports a meter; resolves premise via (address, zip), commodity by code, UoM by code", async () => {
-    const { prisma } = prismaImports;
-    // Use the existing fixture premise: addressLine1 "1 Test Lane <suffix>", zip "00000".
-    const fixturePremise = await prisma.premise.findFirstOrThrow({
-      where: { utilityId: fixA.utilityId, zip: "00000" },
-    });
-    const commodity = await prisma.commodity.findFirstOrThrow({
-      where: { utilityId: fixA.utilityId },
-    });
-    const uom = await prisma.unitOfMeasure.findFirstOrThrow({
-      where: { utilityId: fixA.utilityId, commodityId: commodity.id },
-    });
+  it("imports a meter; resolves premise via (address, zip), commodity by code, UoM by code", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      // Use the existing fixture premise: addressLine1 "1 Test Lane <suffix>", zip "00000".
+      const fixturePremise = await prisma.premise.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId, zip: "00000" },
+      });
+      const commodity = await prisma.commodity.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId },
+      });
+      const uom = await prisma.unitOfMeasure.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId, commodityId: commodity.id },
+      });
 
-    const csv =
-      "meterNumber,premiseAddress,premiseZip,commodityCode,uomCode,meterType,installDate\n" +
-      `MTR-IMP-1,${fixturePremise.addressLine1},00000,${commodity.code},${uom.code},MANUAL,2025-01-15\n`;
+      const csv =
+        "meterNumber,premiseAddress,premiseZip,commodityCode,uomCode,meterType,installDate\n" +
+        `MTR-IMP-1,${fixturePremise.addressLine1},00000,${commodity.code},${uom.code},MANUAL,2025-01-15\n`;
 
-    const mapping = {
-      meterNumber: "meterNumber",
-      premiseAddress: "premiseAddress",
-      premiseZip: "premiseZip",
-      commodityCode: "commodityCode",
-      uomCode: "uomCode",
-      meterType: "meterType",
-      installDate: "installDate",
-    };
+      const mapping = {
+        meterNumber: "meterNumber",
+        premiseAddress: "premiseAddress",
+        premiseZip: "premiseZip",
+        commodityCode: "commodityCode",
+        uomCode: "uomCode",
+        meterType: "meterType",
+        installDate: "installDate",
+      };
 
-    const { body, contentType } = buildMultipart([
-      { name: "kind", value: "meter" },
-      { name: "source", value: "MANUAL_UPLOAD" },
-      { name: "mapping", value: JSON.stringify(mapping) },
-      { name: "file", filename: "m.csv", contentType: "text/csv", body: csv },
-    ]);
+      const { body, contentType } = buildMultipart([
+        { name: "kind", value: "meter" },
+        { name: "source", value: "MANUAL_UPLOAD" },
+        { name: "mapping", value: JSON.stringify(mapping) },
+        { name: "file", filename: "m.csv", contentType: "text/csv", body: csv },
+      ]);
 
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/imports",
-      headers: { ...headers(), "content-type": contentType },
-      payload: body,
-    });
-    expect(res.statusCode).toBe(200);
-    const result = JSON.parse(res.body);
-    expect(result.status).toBe("COMPLETE");
-    expect(result.importedCount).toBe(1);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/imports",
+        headers: { ...headers(), "content-type": contentType },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(200);
+      const result = JSON.parse(res.body);
+      expect(result.status).toBe("COMPLETE");
+      expect(result.importedCount).toBe(1);
 
-    const created = await prisma.meter.findFirstOrThrow({
-      where: { utilityId: fixA.utilityId, meterNumber: "MTR-IMP-1" },
-    });
-    expect(created.premiseId).toBe(fixturePremise.id);
-    expect(created.commodityId).toBe(commodity.id);
-    expect(created.uomId).toBe(uom.id);
-  });
+      const created = await prisma.meter.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId, meterNumber: "MTR-IMP-1" },
+      });
+      expect(created.premiseId).toBe(fixturePremise.id);
+      expect(created.commodityId).toBe(commodity.id);
+      expect(created.uomId).toBe(uom.id);
+  
+    }));
 
-  it("surfaces DUPLICATE_METER when meter_number already exists", async () => {
-    const { prisma } = prismaImports;
-    const fixturePremise = await prisma.premise.findFirstOrThrow({
-      where: { utilityId: fixA.utilityId, zip: "00000" },
-    });
-    const commodity = await prisma.commodity.findFirstOrThrow({
-      where: { utilityId: fixA.utilityId },
-    });
-    const uom = await prisma.unitOfMeasure.findFirstOrThrow({
-      where: { utilityId: fixA.utilityId, commodityId: commodity.id },
-    });
-    // Pre-insert a meter with the same number.
-    await prisma.meter.create({
-      data: {
-        utilityId: fixA.utilityId,
-        premiseId: fixturePremise.id,
-        commodityId: commodity.id,
-        uomId: uom.id,
-        meterNumber: "MTR-DUP",
-        meterType: "MANUAL",
-        status: "ACTIVE",
-        installDate: new Date("2024-01-01"),
-      },
-    });
+  it("surfaces DUPLICATE_METER when meter_number already exists", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const fixturePremise = await prisma.premise.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId, zip: "00000" },
+      });
+      const commodity = await prisma.commodity.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId },
+      });
+      const uom = await prisma.unitOfMeasure.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId, commodityId: commodity.id },
+      });
+      // Pre-insert a meter with the same number.
+      await prisma.meter.create({
+        data: {
+          utilityId: fixA.utilityId,
+          premiseId: fixturePremise.id,
+          commodityId: commodity.id,
+          uomId: uom.id,
+          meterNumber: "MTR-DUP",
+          meterType: "MANUAL",
+          status: "ACTIVE",
+          installDate: new Date("2024-01-01"),
+        },
+      });
 
-    const csv =
-      "meterNumber,premiseAddress,premiseZip,commodityCode,uomCode,meterType,installDate\n" +
-      `MTR-DUP,${fixturePremise.addressLine1},00000,${commodity.code},${uom.code},MANUAL,2025-01-15\n`;
-    const mapping = {
-      meterNumber: "meterNumber",
-      premiseAddress: "premiseAddress",
-      premiseZip: "premiseZip",
-      commodityCode: "commodityCode",
-      uomCode: "uomCode",
-      meterType: "meterType",
-      installDate: "installDate",
-    };
-    const { body, contentType } = buildMultipart([
-      { name: "kind", value: "meter" },
-      { name: "source", value: "MANUAL_UPLOAD" },
-      { name: "mapping", value: JSON.stringify(mapping) },
-      { name: "file", filename: "m.csv", contentType: "text/csv", body: csv },
-    ]);
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/imports",
-      headers: { ...headers(), "content-type": contentType },
-      payload: body,
-    });
-    expect(res.statusCode).toBe(200);
-    const result = JSON.parse(res.body);
-    expect(result.status).toBe("FAILED");
-    expect(result.errors[0].errorCode).toBe("DUPLICATE_METER");
-  });
+      const csv =
+        "meterNumber,premiseAddress,premiseZip,commodityCode,uomCode,meterType,installDate\n" +
+        `MTR-DUP,${fixturePremise.addressLine1},00000,${commodity.code},${uom.code},MANUAL,2025-01-15\n`;
+      const mapping = {
+        meterNumber: "meterNumber",
+        premiseAddress: "premiseAddress",
+        premiseZip: "premiseZip",
+        commodityCode: "commodityCode",
+        uomCode: "uomCode",
+        meterType: "meterType",
+        installDate: "installDate",
+      };
+      const { body, contentType } = buildMultipart([
+        { name: "kind", value: "meter" },
+        { name: "source", value: "MANUAL_UPLOAD" },
+        { name: "mapping", value: JSON.stringify(mapping) },
+        { name: "file", filename: "m.csv", contentType: "text/csv", body: csv },
+      ]);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/imports",
+        headers: { ...headers(), "content-type": contentType },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(200);
+      const result = JSON.parse(res.body);
+      expect(result.status).toBe("FAILED");
+      expect(result.errors[0].errorCode).toBe("DUPLICATE_METER");
+  
+    }));
 });
 
 describe("POST /api/v1/imports — account handler", () => {
-  it("imports an account; resolves customerEmail to customerId", async () => {
-    const { prisma } = prismaImports;
-    const customer = await prisma.customer.create({
-      data: {
-        utilityId: fixA.utilityId,
-        customerType: "INDIVIDUAL",
-        firstName: "Acct",
-        lastName: "Customer",
-        email: "acct@example.com",
-      },
-    });
+  it("imports an account; resolves customerEmail to customerId", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const customer = await prisma.customer.create({
+        data: {
+          utilityId: fixA.utilityId,
+          customerType: "INDIVIDUAL",
+          firstName: "Acct",
+          lastName: "Customer",
+          email: "acct@example.com",
+        },
+      });
 
-    const csv =
-      "accountNumber,accountType,status,billingCycleCode,customerEmail\n" +
-      `ACC-IMP-1,RESIDENTIAL,ACTIVE,${fixA.billingCycleCode},acct@example.com\n`;
-    const mapping = {
-      accountNumber: "accountNumber",
-      accountType: "accountType",
-      status: "status",
-      billingCycleCode: "billingCycleCode",
-      customerEmail: "customerEmail",
-    };
-    const { body, contentType } = buildMultipart([
-      { name: "kind", value: "account" },
-      { name: "source", value: "MANUAL_UPLOAD" },
-      { name: "mapping", value: JSON.stringify(mapping) },
-      { name: "file", filename: "a.csv", contentType: "text/csv", body: csv },
-    ]);
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/imports",
-      headers: { ...headers(), "content-type": contentType },
-      payload: body,
-    });
-    expect(res.statusCode).toBe(200);
-    const result = JSON.parse(res.body);
-    expect(result.status).toBe("COMPLETE");
-    expect(result.importedCount).toBe(1);
+      const csv =
+        "accountNumber,accountType,status,billingCycleCode,customerEmail\n" +
+        `ACC-IMP-1,RESIDENTIAL,ACTIVE,${fixA.billingCycleCode},acct@example.com\n`;
+      const mapping = {
+        accountNumber: "accountNumber",
+        accountType: "accountType",
+        status: "status",
+        billingCycleCode: "billingCycleCode",
+        customerEmail: "customerEmail",
+      };
+      const { body, contentType } = buildMultipart([
+        { name: "kind", value: "account" },
+        { name: "source", value: "MANUAL_UPLOAD" },
+        { name: "mapping", value: JSON.stringify(mapping) },
+        { name: "file", filename: "a.csv", contentType: "text/csv", body: csv },
+      ]);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/imports",
+        headers: { ...headers(), "content-type": contentType },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(200);
+      const result = JSON.parse(res.body);
+      expect(result.status).toBe("COMPLETE");
+      expect(result.importedCount).toBe(1);
 
-    const created = await prisma.account.findFirstOrThrow({
-      where: { utilityId: fixA.utilityId, accountNumber: "ACC-IMP-1" },
-    });
-    expect(created.customerId).toBe(customer.id);
-    expect(created.accountType).toBe("RESIDENTIAL");
-  });
+      const created = await prisma.account.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId, accountNumber: "ACC-IMP-1" },
+      });
+      expect(created.customerId).toBe(customer.id);
+      expect(created.accountType).toBe("RESIDENTIAL");
+  
+    }));
 
-  it("surfaces DUPLICATE_ACCOUNT when account_number already exists", async () => {
-    // The fixture pre-creates an account with accountNumber=ACCT-<suffix>.
-    const { prisma } = prismaImports;
-    const existing = await prisma.account.findFirstOrThrow({
-      where: { utilityId: fixA.utilityId },
-    });
+  it("surfaces DUPLICATE_ACCOUNT when account_number already exists", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      // The fixture pre-creates an account with accountNumber=ACCT-<suffix>.
+      const { prisma } = prismaImports;
+      const existing = await prisma.account.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId },
+      });
 
-    const csv =
-      "accountNumber,accountType,status,billingCycleCode\n" +
-      `${existing.accountNumber},RESIDENTIAL,ACTIVE,${fixA.billingCycleCode}\n`;
-    const mapping = {
-      accountNumber: "accountNumber",
-      accountType: "accountType",
-      status: "status",
-      billingCycleCode: "billingCycleCode",
-    };
-    const { body, contentType } = buildMultipart([
-      { name: "kind", value: "account" },
-      { name: "source", value: "MANUAL_UPLOAD" },
-      { name: "mapping", value: JSON.stringify(mapping) },
-      { name: "file", filename: "a.csv", contentType: "text/csv", body: csv },
-    ]);
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/imports",
-      headers: { ...headers(), "content-type": contentType },
-      payload: body,
-    });
-    expect(res.statusCode).toBe(200);
-    const result = JSON.parse(res.body);
-    expect(result.status).toBe("FAILED");
-    expect(result.errors[0].errorCode).toBe("DUPLICATE_ACCOUNT");
-  });
+      const csv =
+        "accountNumber,accountType,status,billingCycleCode\n" +
+        `${existing.accountNumber},RESIDENTIAL,ACTIVE,${fixA.billingCycleCode}\n`;
+      const mapping = {
+        accountNumber: "accountNumber",
+        accountType: "accountType",
+        status: "status",
+        billingCycleCode: "billingCycleCode",
+      };
+      const { body, contentType } = buildMultipart([
+        { name: "kind", value: "account" },
+        { name: "source", value: "MANUAL_UPLOAD" },
+        { name: "mapping", value: JSON.stringify(mapping) },
+        { name: "file", filename: "a.csv", contentType: "text/csv", body: csv },
+      ]);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/imports",
+        headers: { ...headers(), "content-type": contentType },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(200);
+      const result = JSON.parse(res.body);
+      expect(result.status).toBe("FAILED");
+      expect(result.errors[0].errorCode).toBe("DUPLICATE_ACCOUNT");
+  
+    }));
 });
 
 describe("processBatch — cancellation", () => {
-  it("finalises CANCELLED when cancelRequested is set before the loop runs", async () => {
-    const { prisma } = prismaImports;
-    // 60 PENDING rows: > PROGRESS_INTERVAL (50) so the cancel check
-    // fires after the first chunk.
-    const batch = await prisma.importBatch.create({
-      data: {
-        utilityId: fixA.utilityId,
-        entityKind: "meter_read",
-        source: "MANUAL_UPLOAD",
-        fileName: "cancel.csv",
-        recordCount: 60,
-        status: "PENDING",
-        cancelRequested: true, // pre-flag so the first heartbeat aborts
-        createdBy: "00000000-0000-4000-8000-aaaa00000001",
-        lastProgressAt: new Date(),
-      },
-    });
-    await prisma.importRow.createMany({
-      data: Array.from({ length: 60 }, (_, i) => ({
-        utilityId: TENANT_A,
-        importBatchId: batch.id,
-        rowIndex: i + 1,
-        rawData: {
-          meterNumber,
-          readDatetime: `2024-02-01T${String(i % 24).padStart(2, "0")}:00:00Z`,
-          reading: String(1000 + i),
+  it("finalises CANCELLED when cancelRequested is set before the loop runs", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      // 60 PENDING rows: > PROGRESS_INTERVAL (50) so the cancel check
+      // fires after the first chunk.
+      const batch = await prisma.importBatch.create({
+        data: {
+          utilityId: fixA.utilityId,
+          entityKind: "meter_read",
+          source: "MANUAL_UPLOAD",
+          fileName: "cancel.csv",
+          recordCount: 60,
+          status: "PENDING",
+          cancelRequested: true, // pre-flag so the first heartbeat aborts
+          createdBy: "00000000-0000-4000-8000-aaaa00000001",
+          lastProgressAt: new Date(),
         },
-        status: "PENDING" as const,
-      })),
-    });
+      });
+      await prisma.importRow.createMany({
+        data: Array.from({ length: 60 }, (_, i) => ({
+          utilityId: TENANT_A,
+          importBatchId: batch.id,
+          rowIndex: i + 1,
+          rawData: {
+            meterNumber,
+            readDatetime: `2024-02-01T${String(i % 24).padStart(2, "0")}:00:00Z`,
+            reading: String(1000 + i),
+          },
+          status: "PENDING" as const,
+        })),
+      });
 
-    const { processBatch } = await import(
-      "../../services/imports/process-batch.service.js"
-    );
-    const result = await processBatch({
-      batchId: batch.id,
-      utilityId: fixA.utilityId,
-      actorId: "00000000-0000-4000-8000-aaaa00000001",
-      actorName: "Tester",
-      scope: "pending",
-    });
-    expect(result.status).toBe("CANCELLED");
+      const { processBatch } = await import(
+        "../../services/imports/process-batch.service.js"
+      );
+      const result = await processBatch({
+        batchId: batch.id,
+        utilityId: fixA.utilityId,
+        actorId: "00000000-0000-4000-8000-aaaa00000001",
+        actorName: "Tester",
+        scope: "pending",
+      });
+      expect(result.status).toBe("CANCELLED");
 
-    const updated = await prisma.importBatch.findUniqueOrThrow({
-      where: { id: batch.id },
-    });
-    expect(updated.status).toBe("CANCELLED");
-    // Some rows may be IMPORTED (the first 50-row chunk processed
-    // before the cancel check fired); the rest stay PENDING.
-    expect(updated.importedCount).toBeLessThanOrEqual(50);
-  });
+      const updated = await prisma.importBatch.findUniqueOrThrow({
+        where: { id: batch.id },
+      });
+      expect(updated.status).toBe("CANCELLED");
+      // Some rows may be IMPORTED (the first 50-row chunk processed
+      // before the cancel check fired); the rest stay PENDING.
+      expect(updated.importedCount).toBeLessThanOrEqual(50);
+  
+    }));
 });
 
 // ─── Reference tables: premise_type_def / account_type_def ───────────
@@ -1137,60 +1188,66 @@ describe("GET /api/v1/premise-types", () => {
 });
 
 describe("POST /api/v1/premise-types", () => {
-  it("creates a tenant-scoped premise type and shadows a global of the same code", async () => {
-    const { prisma } = prismaImports;
-    // Tenant adds a custom code.
-    const create = await app.inject({
-      method: "POST",
-      url: "/api/v1/premise-types",
-      headers: headers(),
-      payload: { code: "agricultural", label: "Agricultural", sortOrder: 25 },
-    });
-    expect(create.statusCode).toBe(201);
-    const created = JSON.parse(create.body);
-    expect(created.code).toBe("AGRICULTURAL"); // service upper-cases
-    expect(created.isGlobal).toBe(false);
+  it("creates a tenant-scoped premise type and shadows a global of the same code", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      // Tenant adds a custom code.
+      const create = await app.inject({
+        method: "POST",
+        url: "/api/v1/premise-types",
+        headers: headers(),
+        payload: { code: "agricultural", label: "Agricultural", sortOrder: 25 },
+      });
+      expect(create.statusCode).toBe(201);
+      const created = JSON.parse(create.body);
+      expect(created.code).toBe("AGRICULTURAL"); // service upper-cases
+      expect(created.isGlobal).toBe(false);
 
-    // Tenant shadows a global by inserting a row with the same code.
-    await prisma.premiseTypeDef.create({
-      data: {
-        utilityId: fixA.utilityId,
-        code: "RESIDENTIAL",
-        label: "Single-Family Residential",
-        sortOrder: 5,
-        isActive: true,
-      },
-    });
-    const list = await app.inject({
-      method: "GET",
-      url: "/api/v1/premise-types",
-      headers: headers(),
-    });
-    const body = JSON.parse(list.body) as {
-      data: Array<{ code: string; label: string; isGlobal: boolean }>;
-    };
-    // RESIDENTIAL appears once, with the tenant's overridden label.
-    const residential = body.data.filter((t) => t.code === "RESIDENTIAL");
-    expect(residential).toHaveLength(1);
-    expect(residential[0].label).toBe("Single-Family Residential");
-    expect(residential[0].isGlobal).toBe(false);
-  });
+      // Tenant shadows a global by inserting a row with the same code.
+      await prisma.premiseTypeDef.create({
+        data: {
+          utilityId: fixA.utilityId,
+          code: "RESIDENTIAL",
+          label: "Single-Family Residential",
+          sortOrder: 5,
+          isActive: true,
+        },
+      });
+      const list = await app.inject({
+        method: "GET",
+        url: "/api/v1/premise-types",
+        headers: headers(),
+      });
+      const body = JSON.parse(list.body) as {
+        data: Array<{ code: string; label: string; isGlobal: boolean }>;
+      };
+      // RESIDENTIAL appears once, with the tenant's overridden label.
+      const residential = body.data.filter((t) => t.code === "RESIDENTIAL");
+      expect(residential).toHaveLength(1);
+      expect(residential[0].label).toBe("Single-Family Residential");
+      expect(residential[0].isGlobal).toBe(false);
+  
+    }));
 });
 
 describe("PATCH /api/v1/premise-types/:id", () => {
-  it("404s when the row is global (read-only)", async () => {
-    const { prisma } = prismaImports;
-    const global = await prisma.premiseTypeDef.findFirstOrThrow({
-      where: { utilityId: null, code: "RESIDENTIAL" },
-    });
-    const res = await app.inject({
-      method: "PATCH",
-      url: `/api/v1/premise-types/${global.id}`,
-      headers: headers(),
-      payload: { label: "Should not work" },
-    });
-    expect(res.statusCode).toBe(404);
-  });
+  it("404s when the row is global (read-only)", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const global = await prisma.premiseTypeDef.findFirstOrThrow({
+        where: { utilityId: null, code: "RESIDENTIAL" },
+      });
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/v1/premise-types/${global.id}`,
+        headers: headers(),
+        payload: { label: "Should not work" },
+      });
+      expect(res.statusCode).toBe(404);
+  
+    }));
 });
 
 describe("POST /api/v1/imports — premise import with unknown type code", () => {
@@ -1255,36 +1312,39 @@ describe("POST /api/v1/imports — account import with unknown type code", () =>
 });
 
 describe("POST /api/v1/imports — account import with new GOVERNMENT code", () => {
-  it("accepts the seeded GOVERNMENT account type (RFP gap closed)", async () => {
-    const { prisma } = prismaImports;
-    const csv =
-      "accountNumber,accountType,status,billingCycleCode\n" +
-      `ACC-GOV-1,GOVERNMENT,ACTIVE,${fixA.billingCycleCode}\n`;
-    const mapping = {
-      accountNumber: "accountNumber",
-      accountType: "accountType",
-      status: "status",
-      billingCycleCode: "billingCycleCode",
-    };
-    const { body, contentType } = buildMultipart([
-      { name: "kind", value: "account" },
-      { name: "source", value: "MANUAL_UPLOAD" },
-      { name: "mapping", value: JSON.stringify(mapping) },
-      { name: "file", filename: "a.csv", contentType: "text/csv", body: csv },
-    ]);
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/imports",
-      headers: { ...headers(), "content-type": contentType },
-      payload: body,
-    });
-    expect(res.statusCode).toBe(200);
-    const result = JSON.parse(res.body);
-    expect(result.status).toBe("COMPLETE");
-    const created = await prisma.account.findFirstOrThrow({
-      where: { utilityId: fixA.utilityId, accountNumber: "ACC-GOV-1" },
-    });
-    expect(created.accountType).toBe("GOVERNMENT");
-  });
+  it("accepts the seeded GOVERNMENT account type (RFP gap closed)", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const csv =
+        "accountNumber,accountType,status,billingCycleCode\n" +
+        `ACC-GOV-1,GOVERNMENT,ACTIVE,${fixA.billingCycleCode}\n`;
+      const mapping = {
+        accountNumber: "accountNumber",
+        accountType: "accountType",
+        status: "status",
+        billingCycleCode: "billingCycleCode",
+      };
+      const { body, contentType } = buildMultipart([
+        { name: "kind", value: "account" },
+        { name: "source", value: "MANUAL_UPLOAD" },
+        { name: "mapping", value: JSON.stringify(mapping) },
+        { name: "file", filename: "a.csv", contentType: "text/csv", body: csv },
+      ]);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/imports",
+        headers: { ...headers(), "content-type": contentType },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(200);
+      const result = JSON.parse(res.body);
+      expect(result.status).toBe("COMPLETE");
+      const created = await prisma.account.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId, accountNumber: "ACC-GOV-1" },
+      });
+      expect(created.accountType).toBe("GOVERNMENT");
+  
+    }));
 });
 

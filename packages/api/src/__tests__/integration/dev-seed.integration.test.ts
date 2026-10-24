@@ -3,7 +3,7 @@ import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * `seed.js` — the database every developer actually works against.
@@ -49,14 +49,6 @@ let svc: typeof import("../../services/billing-run.service.js");
 
 beforeAll(async () => {
   const booted = await bootPostgres();
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
 
   // The real thing, run the way a developer runs it. It shells out to
@@ -84,77 +76,86 @@ afterAll(async () => {
 });
 
 describe("the dev seed produces a database that can bill", () => {
-  it("rates a run end to end, at residential magnitudes", async () => {
-    const { prisma } = prismaImports;
-    const cycle = await prisma.billingCycle.findFirstOrThrow({
-      where: { utilityId: UTILITY_ID, cycleCode: "R01" },
-    });
+  it("rates a run end to end, at residential magnitudes", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const cycle = await prisma.billingCycle.findFirstOrThrow({
+        where: { utilityId: UTILITY_ID, cycleCode: "R01" },
+      });
 
-    const run = await svc.createBillingRun(UTILITY_ID, ACTOR_ID, "Seed test", {
-      billingCycleId: cycle.id,
-    });
-    const done = await svc.processBillingRun({
-      runId: run.id,
-      utilityId: UTILITY_ID,
-      actorId: ACTOR_ID,
-      actorName: "Seed test",
-    });
+      const run = await svc.createBillingRun(UTILITY_ID, ACTOR_ID, "Seed test", {
+        billingCycleId: cycle.id,
+      });
+      const done = await svc.processBillingRun({
+        runId: run.id,
+        utilityId: UTILITY_ID,
+        actorId: ACTOR_ID,
+        actorName: "Seed test",
+      });
 
-    // Nothing may fail. A skip is ordinary — the seed gives most meters
-    // no reads — but a failure means the seed produced data the engine
-    // cannot rate, which is the whole class of fault this file exists
-    // for.
-    expect(done.failedCount).toBe(0);
-    expect(done.billedCount).toBeGreaterThan(0);
+      // Nothing may fail. A skip is ordinary — the seed gives most meters
+      // no reads — but a failure means the seed produced data the engine
+      // cannot rate, which is the whole class of fault this file exists
+      // for.
+      expect(done.failedCount).toBe(0);
+      expect(done.billedCount).toBeGreaterThan(0);
 
-    const billed = await prisma.billingRunItem.findMany({
-      where: { billingRunId: run.id, status: "BILLED" },
-    });
-    for (const item of billed) {
-      // Tens of dollars. $530,257.75 and $33,467.69 both cleared a
-      // "greater than zero" assertion earlier today.
-      expect(Number(item.total)).toBeGreaterThan(1);
-      expect(Number(item.total)).toBeLessThan(500);
-      // One month, not a catch-up from the agreement's start date.
-      const days =
-        (item.servicePeriodEnd!.getTime() - item.servicePeriodStart!.getTime()) / 86_400_000;
-      expect(days).toBeLessThan(45);
-    }
-  }, 600_000);
+      const billed = await prisma.billingRunItem.findMany({
+        where: { billingRunId: run.id, status: "BILLED" },
+      });
+      for (const item of billed) {
+        // Tens of dollars. $530,257.75 and $33,467.69 both cleared a
+        // "greater than zero" assertion earlier today.
+        expect(Number(item.total)).toBeGreaterThan(1);
+        expect(Number(item.total)).toBeLessThan(500);
+        // One month, not a catch-up from the agreement's start date.
+        const days =
+          (item.servicePeriodEnd!.getTime() - item.servicePeriodStart!.getTime()) / 86_400_000;
+        expect(days).toBeLessThan(45);
+      }
+  
+    }), 600_000);
 
-  it("leaves later reads for the next period", async () => {
-    // A seed that stamps every read leaves a run nothing to do, and one
-    // that stamps none makes the first run a catch-up over the whole
-    // meter history. Both were true of this file today.
-    const { prisma } = prismaImports;
-    const unbilled = await prisma.meterRead.count({
-      where: { utilityId: UTILITY_ID, billedAt: null },
-    });
-    expect(unbilled).toBeGreaterThan(0);
-  }, 120_000);
+  it("leaves later reads for the next period", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      // A seed that stamps every read leaves a run nothing to do, and one
+      // that stamps none makes the first run a catch-up over the whole
+      // meter history. Both were true of this file today.
+      const { prisma } = prismaImports;
+      const unbilled = await prisma.meterRead.count({
+        where: { utilityId: UTILITY_ID, billedAt: null },
+      });
+      expect(unbilled).toBeGreaterThan(0);
+  
+    }), 120_000);
 
-  it("gives every water meter a size its tariff can price", async () => {
-    /*
-     * Not a restatement of the seed: the sizes have to be keys of the
-     * tariff's own lookup table. A meter recorded as 0.625 instead of
-     * `5/8"` passes any "is it set" check and still fails to bill.
-     */
-    const { prisma } = prismaImports;
-    const component = await prisma.rateComponent.findFirstOrThrow({
-      where: { utilityId: UTILITY_ID, kindCode: "service_charge", label: "Water Service Charge" },
-    });
-    const table = (component.pricing as { table: Record<string, number> }).table;
+  it("gives every water meter a size its tariff can price", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      /*
+       * Not a restatement of the seed: the sizes have to be keys of the
+       * tariff's own lookup table. A meter recorded as 0.625 instead of
+       * `5/8"` passes any "is it set" check and still fails to bill.
+       */
+      const { prisma } = prismaImports;
+      const component = await prisma.rateComponent.findFirstOrThrow({
+        where: { utilityId: UTILITY_ID, kindCode: "service_charge", label: "Water Service Charge" },
+      });
+      const table = (component.pricing as { table: Record<string, number> }).table;
 
-    const water = await prisma.meter.findMany({
-      where: { utilityId: UTILITY_ID, meterNumber: { startsWith: "WM-" } },
-      select: { meterNumber: true, customFields: true },
-    });
-    expect(water.length).toBeGreaterThan(0);
-    for (const meter of water) {
-      const size = (meter.customFields as Record<string, unknown>).size;
-      expect(Object.keys(table)).toContain(size);
-    }
-  }, 120_000);
+      const water = await prisma.meter.findMany({
+        where: { utilityId: UTILITY_ID, meterNumber: { startsWith: "WM-" } },
+        select: { meterNumber: true, customFields: true },
+      });
+      expect(water.length).toBeGreaterThan(0);
+      for (const meter of water) {
+        const size = (meter.customFields as Record<string, unknown>).size;
+        expect(Object.keys(table)).toContain(size);
+      }
+  
+    }), 120_000);
 
   it("can be re-run over a database that has billed", async () => {
     // `bill_document` and `billing_run` are RESTRICT parents the cleanup

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { MODULES } from "@utility-cis/shared";
+import { runAsPlatform } from "../../lib/tenant-context.js";
 import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
@@ -28,14 +29,6 @@ const OTHER = "00000000-0000-4000-8000-0000000000f2";
 
 beforeAll(async () => {
   const booted = await bootPostgres();
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/provisioning.service.js");
@@ -51,6 +44,21 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
+/**
+ * `provisionTenant` as the platform console calls it.
+ *
+ * Creating a tenant is an above-tenant operation — the route that does
+ * it is a platform route, so the scope its middleware enters is the
+ * platform's, not any tenant's. With a tenant scope, or none, the
+ * `utility` read inside it raises on an empty setting.
+ */
+const provisionTenant = (...args: Parameters<typeof svc.provisionTenant>) =>
+  runAsPlatform(async () => svc.provisionTenant(...args));
+
+/** Listing tenants is above-tenant for the same reason. */
+const listUtilities = (...args: Parameters<typeof svc.listUtilities>) =>
+  runAsPlatform(async () => svc.listUtilities(...args));
+
 beforeEach(() =>
   seedAsPlatform(async () => {
   const { prisma } = prismaImports;
@@ -60,47 +68,57 @@ beforeEach(() =>
     await prisma.cisUser.deleteMany({ where: { utilityId: id } });
     await prisma.role.deleteMany({ where: { utilityId: id } });
     await prisma.utilityModule.deleteMany({ where: { utilityId: id } });
+    // Audit rows too: `provisionTenant` writes them, `utility_id` is a
+    // foreign key with ON DELETE RESTRICT, and so the utility delete
+    // below fails on `audit_log_utility_id_fkey` without this.
+    await prisma.auditLog.deleteMany({ where: { utilityId: id } });
     await prisma.utility.deleteMany({ where: { id } });
   }
 }),
 );
 
 describe("provisionTenant", () => {
-  it("creates a utility, its modules, and the preset roles", async () => {
-    const { prisma } = prismaImports;
+  it("creates a utility, its modules, and the preset roles", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    const result = await svc.provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
+      const result = await provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
 
-    expect(result).toMatchObject({ created: true, rolesCreated: 6, adminCreated: false });
-    expect(result.modulesEnabled).toBe(MODULES.length);
-    expect(await prisma.utility.findUniqueOrThrow({ where: { id: NEW_TENANT } })).toMatchObject({
-      name: "City of Example",
-      status: "ACTIVE",
-    });
-  });
+      expect(result).toMatchObject({ created: true, rolesCreated: 6, adminCreated: false });
+      expect(result.modulesEnabled).toBe(MODULES.length);
+      expect(await prisma.utility.findUniqueOrThrow({ where: { id: NEW_TENANT } })).toMatchObject({
+        name: "City of Example",
+        status: "ACTIVE",
+      });
+  
+    }));
 
-  it("is a no-op when run twice", async () => {
-    const { prisma } = prismaImports;
+  it("is a no-op when run twice", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    await svc.provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
-    const second = await svc.provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
+      await provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
+      const second = await provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
 
-    expect(second).toMatchObject({ created: false, modulesEnabled: 0, rolesCreated: 0 });
-    expect(await prisma.role.count({ where: { utilityId: NEW_TENANT } })).toBe(6);
-    expect(await prisma.utilityModule.count({ where: { utilityId: NEW_TENANT } })).toBe(
-      MODULES.length,
-    );
-  });
+      expect(second).toMatchObject({ created: false, modulesEnabled: 0, rolesCreated: 0 });
+      expect(await prisma.role.count({ where: { utilityId: NEW_TENANT } })).toBe(6);
+      expect(await prisma.utilityModule.count({ where: { utilityId: NEW_TENANT } })).toBe(
+        MODULES.length,
+      );
+  
+    }));
 
   /**
    * Renaming is its own lifecycle operation. Doing it as a side effect of
    * re-provisioning would let a typo in a script rename a live tenant.
    */
   it("refuses to rename an existing utility", async () => {
-    await svc.provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
+    await provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
 
     await expect(
-      svc.provisionTenant({ utilityId: NEW_TENANT, name: "Something Else" }),
+      provisionTenant({ utilityId: NEW_TENANT, name: "Something Else" }),
     ).rejects.toMatchObject({ code: "UTILITY_NAME_MISMATCH" });
   });
 
@@ -115,31 +133,34 @@ describe("provisionTenant", () => {
    * report success for a tenant this call did not create, and the caller
    * who did mean to re-provision has `--utility-id` for it.
    */
-  it("refuses a name another utility already holds", async () => {
-    const { prisma } = prismaImports;
-    await svc.provisionTenant({ utilityId: OTHER, name: "City of Example" });
+  it("refuses a name another utility already holds", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      await provisionTenant({ utilityId: OTHER, name: "City of Example" });
 
-    await expect(
-      svc.provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" }),
-    ).rejects.toMatchObject({ code: "UTILITY_NAME_TAKEN" });
+      await expect(
+        provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" }),
+      ).rejects.toMatchObject({ code: "UTILITY_NAME_TAKEN" });
 
-    // The refusal precedes every write, so the second id does not exist.
-    expect(await prisma.utility.findUnique({ where: { id: NEW_TENANT } })).toBeNull();
-  });
+      // The refusal precedes every write, so the second id does not exist.
+      expect(await prisma.utility.findUnique({ where: { id: NEW_TENANT } })).toBeNull();
+  
+    }));
 
   it("compares the name case-insensitively — two casings are one tenant to a reader", async () => {
-    await svc.provisionTenant({ utilityId: OTHER, name: "City of Example" });
+    await provisionTenant({ utilityId: OTHER, name: "City of Example" });
 
     await expect(
-      svc.provisionTenant({ utilityId: NEW_TENANT, name: "CITY OF EXAMPLE" }),
+      provisionTenant({ utilityId: NEW_TENANT, name: "CITY OF EXAMPLE" }),
     ).rejects.toMatchObject({ code: "UTILITY_NAME_TAKEN" });
   });
 
   it("still re-provisions the tenant that holds the name, by id", async () => {
-    await svc.provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
+    await provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
 
     // The name check must exempt its own holder, or every reseed breaks.
-    const second = await svc.provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
+    const second = await provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
     expect(second).toMatchObject({ created: false, rolesCreated: 0 });
   });
 
@@ -148,119 +169,137 @@ describe("provisionTenant", () => {
    * existence check and cannot administer itself. One transaction, or
    * nothing.
    */
-  it("leaves no tenant behind when provisioning fails partway", async () => {
-    const { prisma } = prismaImports;
+  it("leaves no tenant behind when provisioning fails partway", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    // Fail at the last step, after the utility, 32 modules and 6 roles
-    // are already written: cis_user.email is VARCHAR(255).
-    //
-    // A pre-existing role name does NOT work for this — roles are
-    // created only when absent by (utilityId, name), which is the
-    // idempotency the two no-op tests above rely on, so a squatter row
-    // is skipped rather than colliding.
-    await expect(
-      svc.provisionTenant({
-        utilityId: OTHER,
-        name: "Half Provisioned",
-        firstAdmin: { email: `${"e".repeat(300)}@example.gov`, name: "Too Long" },
-      }),
-    ).rejects.toThrow();
+      // Fail at the last step, after the utility, 32 modules and 6 roles
+      // are already written: cis_user.email is VARCHAR(255).
+      //
+      // A pre-existing role name does NOT work for this — roles are
+      // created only when absent by (utilityId, name), which is the
+      // idempotency the two no-op tests above rely on, so a squatter row
+      // is skipped rather than colliding.
+      await expect(
+        provisionTenant({
+          utilityId: OTHER,
+          name: "Half Provisioned",
+          firstAdmin: { email: `${"e".repeat(300)}@example.gov`, name: "Too Long" },
+        }),
+      ).rejects.toThrow();
 
-    // Nothing at all, not a shell that later reads as provisioned.
-    expect(await prisma.utility.findUnique({ where: { id: OTHER } })).toBeNull();
-    expect(await prisma.role.count({ where: { utilityId: OTHER } })).toBe(0);
-    expect(await prisma.utilityModule.count({ where: { utilityId: OTHER } })).toBe(0);
-    expect(await prisma.cisUser.count({ where: { utilityId: OTHER } })).toBe(0);
-  });
+      // Nothing at all, not a shell that later reads as provisioned.
+      expect(await prisma.utility.findUnique({ where: { id: OTHER } })).toBeNull();
+      expect(await prisma.role.count({ where: { utilityId: OTHER } })).toBe(0);
+      expect(await prisma.utilityModule.count({ where: { utilityId: OTHER } })).toBe(0);
+      expect(await prisma.cisUser.count({ where: { utilityId: OTHER } })).toBe(0);
+  
+    }));
 
-  it("creates a first admin with the System Admin role when asked", async () => {
-    const { prisma } = prismaImports;
+  it("creates a first admin with the System Admin role when asked", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    const result = await svc.provisionTenant({
-      utilityId: NEW_TENANT,
-      name: "City of Example",
-      firstAdmin: { email: "admin@example.gov", name: "Pat Admin" },
-    });
+      const result = await provisionTenant({
+        utilityId: NEW_TENANT,
+        name: "City of Example",
+        firstAdmin: { email: "admin@example.gov", name: "Pat Admin" },
+      });
 
-    expect(result.adminCreated).toBe(true);
-    const user = await prisma.cisUser.findFirstOrThrow({
-      where: { utilityId: NEW_TENANT, email: "admin@example.gov" },
-    });
-    const assignment = await prisma.userRole.findFirstOrThrow({
-      where: { userId: user.id, accountId: null },
-      include: { role: { select: { name: true } } },
-    });
-    expect(assignment.role.name).toBe("System Admin");
-  });
+      expect(result.adminCreated).toBe(true);
+      const user = await prisma.cisUser.findFirstOrThrow({
+        where: { utilityId: NEW_TENANT, email: "admin@example.gov" },
+      });
+      const assignment = await prisma.userRole.findFirstOrThrow({
+        where: { userId: user.id, accountId: null },
+        include: { role: { select: { name: true } } },
+      });
+      expect(assignment.role.name).toBe("System Admin");
+  
+    }));
 
   /**
    * `auth.ts` looks a user up by `email.toLowerCase()`. An admin stored
    * with a capital letter is therefore an admin who cannot log in — and
    * it is the only account the new tenant has.
    */
-  it("stores the first admin's email lowercased, so login can find it", async () => {
-    const { prisma } = prismaImports;
+  it("stores the first admin's email lowercased, so login can find it", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    await svc.provisionTenant({
-      utilityId: NEW_TENANT,
-      name: "City of Example",
-      firstAdmin: { email: "Ops@CityOfExample.gov", name: "Pat Admin" },
-    });
+      await provisionTenant({
+        utilityId: NEW_TENANT,
+        name: "City of Example",
+        firstAdmin: { email: "Ops@CityOfExample.gov", name: "Pat Admin" },
+      });
 
-    const user = await prisma.cisUser.findFirstOrThrow({ where: { utilityId: NEW_TENANT } });
-    expect(user.email).toBe("ops@cityofexample.gov");
-  });
+      const user = await prisma.cisUser.findFirstOrThrow({ where: { utilityId: NEW_TENANT } });
+      expect(user.email).toBe("ops@cityofexample.gov");
+  
+    }));
 
-  it("treats a case variant of the admin email as the same admin", async () => {
-    const { prisma } = prismaImports;
+  it("treats a case variant of the admin email as the same admin", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    await svc.provisionTenant({
-      utilityId: NEW_TENANT,
-      name: "City of Example",
-      firstAdmin: { email: "ops@example.gov", name: "Pat Admin" },
-    });
-    const again = await svc.provisionTenant({
-      utilityId: NEW_TENANT,
-      name: "City of Example",
-      firstAdmin: { email: "OPS@EXAMPLE.GOV", name: "Pat Admin" },
-    });
+      await provisionTenant({
+        utilityId: NEW_TENANT,
+        name: "City of Example",
+        firstAdmin: { email: "ops@example.gov", name: "Pat Admin" },
+      });
+      const again = await provisionTenant({
+        utilityId: NEW_TENANT,
+        name: "City of Example",
+        firstAdmin: { email: "OPS@EXAMPLE.GOV", name: "Pat Admin" },
+      });
 
-    expect(again.adminCreated).toBe(false);
-    expect(await prisma.cisUser.count({ where: { utilityId: NEW_TENANT } })).toBe(1);
-  });
+      expect(again.adminCreated).toBe(false);
+      expect(await prisma.cisUser.count({ where: { utilityId: NEW_TENANT } })).toBe(1);
+  
+    }));
 
-  it("reports an existing admin rather than failing on the unique index", async () => {
-    const { prisma } = prismaImports;
-    const firstAdmin = { email: "admin@example.gov", name: "Pat Admin" };
+  it("reports an existing admin rather than failing on the unique index", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      const firstAdmin = { email: "admin@example.gov", name: "Pat Admin" };
 
-    await svc.provisionTenant({ utilityId: NEW_TENANT, name: "City of Example", firstAdmin });
-    const again = await svc.provisionTenant({
-      utilityId: NEW_TENANT,
-      name: "City of Example",
-      firstAdmin,
-    });
+      await provisionTenant({ utilityId: NEW_TENANT, name: "City of Example", firstAdmin });
+      const again = await provisionTenant({
+        utilityId: NEW_TENANT,
+        name: "City of Example",
+        firstAdmin,
+      });
 
-    expect(again.adminCreated).toBe(false);
-    expect(await prisma.cisUser.count({ where: { utilityId: NEW_TENANT } })).toBe(1);
-  });
+      expect(again.adminCreated).toBe(false);
+      expect(await prisma.cisUser.count({ where: { utilityId: NEW_TENANT } })).toBe(1);
+  
+    }));
 
-  it("enables only modules the code still has", async () => {
-    const { prisma } = prismaImports;
+  it("enables only modules the code still has", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    await svc.provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
+      await provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
 
-    const keys = (
-      await prisma.utilityModule.findMany({
-        where: { utilityId: NEW_TENANT },
-        select: { moduleKey: true },
-      })
-    ).map((m) => m.moduleKey);
-    expect(keys.filter((k) => !(MODULES as readonly string[]).includes(k))).toEqual([]);
-  });
+      const keys = (
+        await prisma.utilityModule.findMany({
+          where: { utilityId: NEW_TENANT },
+          select: { moduleKey: true },
+        })
+      ).map((m) => m.moduleKey);
+      expect(keys.filter((k) => !(MODULES as readonly string[]).includes(k))).toEqual([]);
+  
+    }));
 
   it("rejects a profile it does not know", async () => {
     await expect(
-      svc.provisionTenant({
+      provisionTenant({
         utilityId: NEW_TENANT,
         name: "City of Example",
         profile: "bozeman" as never,
@@ -270,27 +309,30 @@ describe("provisionTenant", () => {
 
   // ─── dry run ───────────────────────────────────────────────────
 
-  it("writes nothing on a dry run, but reports what it would do", async () => {
-    const { prisma } = prismaImports;
+  it("writes nothing on a dry run, but reports what it would do", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
 
-    const planned = await svc.provisionTenant({
-      utilityId: NEW_TENANT,
-      name: "City of Example",
-      firstAdmin: { email: "admin@example.gov", name: "Pat Admin" },
-      dryRun: true,
-    });
+      const planned = await provisionTenant({
+        utilityId: NEW_TENANT,
+        name: "City of Example",
+        firstAdmin: { email: "admin@example.gov", name: "Pat Admin" },
+        dryRun: true,
+      });
 
-    expect(planned).toMatchObject({ created: true, rolesCreated: 6, adminCreated: true });
-    expect(planned.modulesEnabled).toBe(MODULES.length);
-    // The row it claims to have created is absent.
-    expect(await prisma.utility.findUnique({ where: { id: NEW_TENANT } })).toBeNull();
-    expect(await prisma.role.count({ where: { utilityId: NEW_TENANT } })).toBe(0);
-  });
+      expect(planned).toMatchObject({ created: true, rolesCreated: 6, adminCreated: true });
+      expect(planned.modulesEnabled).toBe(MODULES.length);
+      // The row it claims to have created is absent.
+      expect(await prisma.utility.findUnique({ where: { id: NEW_TENANT } })).toBeNull();
+      expect(await prisma.role.count({ where: { utilityId: NEW_TENANT } })).toBe(0);
+  
+    }));
 
   it("reports a dry run against an existing tenant as the no-op it would be", async () => {
-    await svc.provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
+    await provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
 
-    const planned = await svc.provisionTenant({
+    const planned = await provisionTenant({
       utilityId: NEW_TENANT,
       name: "City of Example",
       dryRun: true,
@@ -305,23 +347,23 @@ describe("provisionTenant", () => {
    * commits to it.
    */
   it("refuses a rename on a dry run too", async () => {
-    await svc.provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
+    await provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
 
     await expect(
-      svc.provisionTenant({ utilityId: NEW_TENANT, name: "Something Else", dryRun: true }),
+      provisionTenant({ utilityId: NEW_TENANT, name: "Something Else", dryRun: true }),
     ).rejects.toMatchObject({ code: "UTILITY_NAME_MISMATCH" });
   });
 
   // ─── listing ───────────────────────────────────────────────────
 
   it("lists every utility with what it holds", async () => {
-    await svc.provisionTenant({
+    await provisionTenant({
       utilityId: NEW_TENANT,
       name: "City of Example",
       firstAdmin: { email: "admin@example.gov", name: "Pat Admin" },
     });
 
-    const all = await svc.listUtilities();
+    const all = await listUtilities();
     const mine = all.find((u) => u.id === NEW_TENANT);
 
     expect(mine).toMatchObject({

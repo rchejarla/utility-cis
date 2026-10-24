@@ -2,6 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
+import type { Prisma } from "@utility-cis/shared/src/generated/prisma";
 /**
  * Where days-past-due comes from, now that AR writes the cache.
  *
@@ -31,6 +33,34 @@ let ruleId: string;
 let debitReasonId: string;
 
 /** UTC midnight n days back, so `floor((now - d) / 1 day)` is exactly n. */
+/**
+ * The services this file calls directly, as a route reaches them: acting
+ * for the tenant, not merely naming it.
+ *
+ * Each already receives the tenant — production passed it from a request
+ * or a job whose scope had been entered, so the argument and the scope
+ * are always the same id. A direct service test has the argument and not
+ * the scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` also overrides a surrounding `seedAsPlatform`, which is
+ * what lets fixture rows be arranged across tenants while the call under
+ * test stays confined to one.
+ */
+const evaluateAll = (...args: Parameters<typeof delinquency.evaluateAll>) =>
+  runAsTenant(args[0], async () => delinquency.evaluateAll(...args));
+
+/**
+ * A transaction entered the way a route enters one: inside the tenant's
+ * scope.
+ *
+ * A service taking `(tx, utilityId, …)` cannot receive the scope as an
+ * argument, so it has to be around the call — which is the order a
+ * request does it in.
+ */
+const asTenantTx = <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> =>
+  runAsTenant(utilityId, async () => prismaImports.prisma.$transaction(fn));
+
 function daysAgo(n: number): Date {
   const d = new Date();
   d.setUTCHours(0, 0, 0, 0);
@@ -41,14 +71,6 @@ function daysAgo(n: number): Date {
 beforeAll(() =>
   seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   posting = await import("../../services/ar/posting.service.js");
@@ -101,6 +123,11 @@ beforeAll(() =>
 
 afterAll(async () => {
   await prismaImports?.prisma.$disconnect();
+  // `$disconnect` does not dispose a pool the application owns —
+  // that is the driver-adapter contract — so the tenant and
+  // platform pools are ended here. Without it the container stops
+  // while connections are live and Postgres reports 57P01.
+  await prismaImports?.pool.end().catch(() => {});
   await pgContainer?.stop();
 });
 
@@ -118,80 +145,93 @@ beforeEach(() =>
 
 /** An open debit on the account, due `n` days ago. */
 async function openDebit(amount: string, dueDaysAgo: number) {
-  const { prisma } = prismaImports;
-  await prisma.ledgerEntry.create({
-    data: {
-      utilityId,
-      accountId,
-      type: "ADJUSTMENT_DEBIT",
-      amount,
-      openAmount: amount,
-      dueDate: daysAgo(dueDaysAgo),
-      effectiveDate: daysAgo(dueDaysAgo),
-      reasonId: debitReasonId,
-      createdBy: ACTOR,
-    },
+  /*
+   * Arranging rows, so the authority the fixtures use. Calls under
+   * test re-enter their own tenant scope.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    await prisma.ledgerEntry.create({
+      data: {
+        utilityId,
+        accountId,
+        type: "ADJUSTMENT_DEBIT",
+        amount,
+        openAmount: amount,
+        dueDate: daysAgo(dueDaysAgo),
+        effectiveDate: daysAgo(dueDaysAgo),
+        reasonId: debitReasonId,
+        createdBy: ACTOR,
+      },
+    });
+
   });
 }
 
 describe("delinquency days-past-due, against the AR cache", () => {
-  it("ages from the older of two open debits, not the newer", async () => {
-    const { prisma } = prismaImports;
-    await openDebit("120.00", 100);
-    await openDebit("40.00", 5);
-    await prisma.$transaction((tx) => posting.recomputeAccountCache(tx, utilityId, accountId));
+  it("ages from the older of two open debits, not the newer", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      await openDebit("120.00", 100);
+      await openDebit("40.00", 5);
+      await asTenantTx((tx) => posting.recomputeAccountCache(tx, utilityId, accountId));
 
-    const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
-    expect(account.balance.toFixed(2)).toBe("160.00");
-    expect(account.lastDueDate?.toISOString().slice(0, 10)).toBe(
-      daysAgo(100).toISOString().slice(0, 10),
-    );
+      const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
+      expect(account.balance.toFixed(2)).toBe("160.00");
+      expect(account.lastDueDate?.toISOString().slice(0, 10)).toBe(
+        daysAgo(100).toISOString().slice(0, 10),
+      );
 
-    // The tier fires at 30 days. Read off the newer debit the account
-    // would be 5 days past due and this rule would not apply at all.
-    const result = await delinquency.evaluateAll(utilityId);
-    expect(result.accountsEvaluated).toBe(1);
-    expect(result.actionsCreated).toBe(1);
+      // The tier fires at 30 days. Read off the newer debit the account
+      // would be 5 days past due and this rule would not apply at all.
+      const result = await evaluateAll(utilityId);
+      expect(result.accountsEvaluated).toBe(1);
+      expect(result.actionsCreated).toBe(1);
 
-    const action = await prisma.delinquencyAction.findFirstOrThrow({ where: { accountId } });
-    expect(action.ruleId).toBe(ruleId);
-    expect(action.daysPastDueAtAction).toBe(100);
-    expect(action.balanceAtAction.toFixed(2)).toBe("160.00");
-  });
+      const action = await prisma.delinquencyAction.findFirstOrThrow({ where: { accountId } });
+      expect(action.ruleId).toBe(ruleId);
+      expect(action.daysPastDueAtAction).toBe(100);
+      expect(action.balanceAtAction.toFixed(2)).toBe("160.00");
+  
+    }));
 
-  it("stops ageing the account once the older debit is settled", async () => {
-    const { prisma } = prismaImports;
-    await openDebit("120.00", 100);
-    await openDebit("40.00", 5);
+  it("stops ageing the account once the older debit is settled", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
+       * scoped wrappers re-enter their own tenant scope. */
+      const { prisma } = prismaImports;
+      await openDebit("120.00", 100);
+      await openDebit("40.00", 5);
 
-    // Settle the older one by hand — slice 2 owns payment allocation.
-    const older = await prisma.ledgerEntry.findFirstOrThrow({
-      where: { accountId, amount: "120.00" },
-    });
-    await prisma.$transaction(async (tx) => {
-      await tx.ledgerEntry.update({ where: { id: older.id }, data: { openAmount: "0.00" } });
-      await tx.ledgerEntry.create({
-        data: {
-          utilityId,
-          accountId,
-          type: "PAYMENT",
-          amount: "-120.00",
-          openAmount: "0.00",
-          effectiveDate: daysAgo(1),
-          tender: "CHECK",
-        },
+      // Settle the older one by hand — slice 2 owns payment allocation.
+      const older = await prisma.ledgerEntry.findFirstOrThrow({
+        where: { accountId, amount: "120.00" },
       });
-      await posting.recomputeAccountCache(tx, utilityId, accountId);
-    });
+      await asTenantTx(async (tx) => {
+        await tx.ledgerEntry.update({ where: { id: older.id }, data: { openAmount: "0.00" } });
+        await tx.ledgerEntry.create({
+          data: {
+            utilityId,
+            accountId,
+            type: "PAYMENT",
+            amount: "-120.00",
+            openAmount: "0.00",
+            effectiveDate: daysAgo(1),
+            tender: "CHECK",
+          },
+        });
+        await posting.recomputeAccountCache(tx, utilityId, accountId);
+      });
 
-    const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
-    expect(account.balance.toFixed(2)).toBe("40.00");
-    expect(account.lastDueDate?.toISOString().slice(0, 10)).toBe(
-      daysAgo(5).toISOString().slice(0, 10),
-    );
+      const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
+      expect(account.balance.toFixed(2)).toBe("40.00");
+      expect(account.lastDueDate?.toISOString().slice(0, 10)).toBe(
+        daysAgo(5).toISOString().slice(0, 10),
+      );
 
-    // 5 days past due, below the tier's 30 — no action.
-    const result = await delinquency.evaluateAll(utilityId);
-    expect(result.actionsCreated).toBe(0);
-  });
+      // 5 days past due, below the tier's 30 — no action.
+      const result = await evaluateAll(utilityId);
+      expect(result.actionsCreated).toBe(0);
+  
+    }));
 });

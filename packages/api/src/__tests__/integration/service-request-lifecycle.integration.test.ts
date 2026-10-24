@@ -52,21 +52,28 @@ async function principal(
   roleName: string,
   permissions: Record<string, string[]>,
 ) {
-  const role = await prisma.role.create({
-    data: { utilityId, name: roleName, description: `${roleName} fixture`, permissions },
-    select: { id: true },
-  });
-  await prisma.cisUser.create({
-    data: {
-      id: userId,
-      utilityId,
-      email: `${roleName.replace(/\s+/g, "-").toLowerCase()}@integration.test`,
-      name: roleName,
-      isActive: true,
-    },
-  });
-  await prisma.userRole.create({
-    data: { utilityId, userId, accountId: null, roleId: role.id },
+  /*
+   * Arranging rows, so the authority the fixtures use. Calls under
+   * test re-enter their own tenant scope.
+   */
+  return seedAsPlatform(async () => {
+    const role = await prisma.role.create({
+      data: { utilityId, name: roleName, description: `${roleName} fixture`, permissions },
+      select: { id: true },
+    });
+    await prisma.cisUser.create({
+      data: {
+        id: userId,
+        utilityId,
+        email: `${roleName.replace(/\s+/g, "-").toLowerCase()}@integration.test`,
+        name: roleName,
+        isActive: true,
+      },
+    });
+    await prisma.userRole.create({
+      data: { utilityId, userId, accountId: null, roleId: role.id },
+    });
+
   });
 }
 

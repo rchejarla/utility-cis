@@ -7,9 +7,11 @@ import {
   TENANT_A,
   type TenantFixture,
   endAdminPool,
+  seedAsPlatform,
 } from "./_effective-dating-fixtures.js";
 import { ItemsLoader } from "../../lib/rate-engine-loaders/loaders/items-loader.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * Slice 4 task 6 — ItemsLoader integration tests.
  *
@@ -24,14 +26,6 @@ let prismaImports: typeof import("../../lib/prisma.js");
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
 }, 180_000);
@@ -47,11 +41,26 @@ afterAll(async () => {
   await pgContainer?.stop().catch(() => {});
 });
 
-beforeEach(async () => {
-  const { prisma } = prismaImports;
-  await prisma.$executeRawUnsafe("DELETE FROM container");
-  await resetDb();
-});
+/**
+ * The loader run the way a route runs it: inside the tenant's scope.
+ *
+ * A loader takes the client and the tenant in its constructor, so the
+ * scope cannot ride in on an argument to `load()` — it has to be around
+ * the call. `runAsTenant` here overrides the surrounding
+ * `seedAsPlatform`, so the fixtures stay free to arrange rows while the
+ * read under test is confined to one tenant.
+ */
+const scoped = <T>(tenant: string, fn: () => Promise<T>): Promise<T> =>
+  runAsTenant(tenant, fn);
+
+beforeEach(() =>
+  seedAsPlatform(async () => {    /* Fixture rows and read-backs under the fixture authority; the
+     * scoped wrappers re-enter their own tenant scope. */
+    const { prisma } = prismaImports;
+    await prisma.$executeRawUnsafe("DELETE FROM container");
+    await resetDb();
+
+  }));
 
 interface ItemsFixture {
   fix: TenantFixture;
@@ -59,19 +68,33 @@ interface ItemsFixture {
 }
 
 async function makeItemsFixture(): Promise<ItemsFixture> {
-  const { prisma } = prismaImports;
-  const fix = await makeTenantFixture(prisma, TENANT_A);
-  const sa = await prisma.serviceAgreement.create({
-    data: {
-      utilityId: fix.utilityId,
-      agreementNumber: "SA-ITEMS-1",
-      accountId: fix.accountId,
-      commodityId: fix.commodityId,
-      startDate: new Date("2026-01-01"),
-      status: "ACTIVE",
-    },
+
+  /*
+
+   * Arranging rows, so the authority the fixtures use. Calls under
+
+   * test re-enter their own tenant scope.
+
+   */
+
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const fix = await makeTenantFixture(prisma, TENANT_A);
+    const sa = await prisma.serviceAgreement.create({
+      data: {
+        utilityId: fix.utilityId,
+        agreementNumber: "SA-ITEMS-1",
+        accountId: fix.accountId,
+        commodityId: fix.commodityId,
+        startDate: new Date("2026-01-01"),
+        status: "ACTIVE",
+      },
+    });
+    return { fix, saId: sa.id };
+
+
   });
-  return { fix, saId: sa.id };
+
 }
 
 interface MakeContainerOpts {
@@ -93,22 +116,36 @@ interface MakeContainerOpts {
 }
 
 async function makeContainer(opts: MakeContainerOpts): Promise<string> {
-  const { prisma } = prismaImports;
-  const c = await prisma.container.create({
-    data: {
-      utilityId: opts.utilityId,
-      premiseId: opts.premiseId,
-      serviceAgreementId: opts.saId,
-      containerType: opts.containerType,
-      sizeGallons: opts.sizeGallons,
-      itemType: opts.itemType,
-      size: opts.size ?? null,
-      frequency: opts.frequency ?? null,
-      status: opts.status ?? "ACTIVE",
-      deliveryDate: new Date("2026-01-01"),
-    },
+
+  /*
+
+   * Arranging rows, so the authority the fixtures use. Calls under
+
+   * test re-enter their own tenant scope.
+
+   */
+
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const c = await prisma.container.create({
+      data: {
+        utilityId: opts.utilityId,
+        premiseId: opts.premiseId,
+        serviceAgreementId: opts.saId,
+        containerType: opts.containerType,
+        sizeGallons: opts.sizeGallons,
+        itemType: opts.itemType,
+        size: opts.size ?? null,
+        frequency: opts.frequency ?? null,
+        status: opts.status ?? "ACTIVE",
+        deliveryDate: new Date("2026-01-01"),
+      },
+    });
+    return c.id;
+
+
   });
-  return c.id;
+
 }
 
 describe("ItemsLoader", () => {
@@ -137,7 +174,7 @@ describe("ItemsLoader", () => {
 
     const loader = new ItemsLoader(prismaImports.prisma, TENANT_A, saId);
     const key = "items:sp-1:garbage_cart";
-    const out = await loader.load([key]);
+    const out = await scoped(TENANT_A, () => loader.load([key]));
     const containers = out.get(key) as Array<{ itemType: string; size: string | null }>;
     expect(containers).toHaveLength(1);
     expect(containers[0]!.itemType).toBe("garbage_cart");
@@ -172,11 +209,11 @@ describe("ItemsLoader", () => {
     });
 
     const loader = new ItemsLoader(prismaImports.prisma, TENANT_A, saId);
-    const out = await loader.load([
+    const out = await scoped(TENANT_A, () => loader.load([
       "items:sp-1:garbage_cart",
       "items:sp-1:recycling_cart",
       "items:sp-1:organics_cart",
-    ]);
+    ]));
     expect((out.get("items:sp-1:garbage_cart") as unknown[]).length).toBe(1);
     expect((out.get("items:sp-1:recycling_cart") as unknown[]).length).toBe(1);
     expect((out.get("items:sp-1:organics_cart") as unknown[]).length).toBe(1);
@@ -199,7 +236,7 @@ describe("ItemsLoader", () => {
 
     const loader = new ItemsLoader(prismaImports.prisma, TENANT_A, saId);
     const key = "items:sp-1:organics_cart";
-    const out = await loader.load([key]);
+    const out = await scoped(TENANT_A, () => loader.load([key]));
     expect(out.get(key)).toEqual([]);
   });
 
@@ -235,7 +272,7 @@ describe("ItemsLoader", () => {
 
     const loader = new ItemsLoader(prismaImports.prisma, TENANT_A, saId);
     const key = "items:sp-1:garbage_cart";
-    const out = await loader.load([key]);
+    const out = await scoped(TENANT_A, () => loader.load([key]));
     const containers = out.get(key) as Array<{ sizeGallons: number }>;
     expect(containers).toHaveLength(1);
     expect(containers[0]!.sizeGallons).toBe(96);
