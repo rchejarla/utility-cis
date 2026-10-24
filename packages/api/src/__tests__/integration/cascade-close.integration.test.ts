@@ -7,6 +7,7 @@ import {
   TENANT_A,
   ACTOR,
   type TenantFixture,
+  endAdminPool,
 } from "./_effective-dating-fixtures.js";
 
 /**
@@ -54,6 +55,7 @@ afterAll(async () => {
   // Postgres reports 57P01 as an unhandled error after a green run.
   await prismaImports?.prisma.$disconnect().catch(() => {});
   await prismaImports?.pool.end().catch(() => {});
+  await endAdminPool();
   await pgContainer?.stop().catch(() => {});
 });
 

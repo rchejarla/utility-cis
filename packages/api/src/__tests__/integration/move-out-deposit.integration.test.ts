@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, makeTenantFixture, type TenantFixture, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import { bootPostgres, makeTenantFixture, type TenantFixture, seedAsPlatform, endAdminPool } from "./_effective-dating-fixtures.js";
 
 /**
  * Move-out, and the deposit it used to strand.
@@ -49,6 +49,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await prismaImports?.prisma.$disconnect();
+  await endAdminPool();
   await pgContainer?.stop();
 });
 

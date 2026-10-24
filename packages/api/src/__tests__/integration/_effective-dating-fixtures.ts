@@ -533,6 +533,22 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T | void> {
  * fixture work gets the role that owns the schema. This is `resetDb`'s
  * mechanism with the caller's own list.
  */
+/**
+ * Close the owner pool `resetDb` and `truncateTables` share.
+ *
+ * Call it before stopping the container. It is a second pool, separate
+ * from the application's, so `prisma.$disconnect()` and `pool.end()` do
+ * not touch it — and a container stopped while one of its connections is
+ * live has Postgres report 57P01 as an unhandled error after an
+ * otherwise green run.
+ */
+export async function endAdminPool(): Promise<void> {
+  const open = adminPool;
+  adminPool = undefined;
+  adminUrl = undefined;
+  await open?.end().catch(() => {});
+}
+
 export async function truncateTables(tables: string): Promise<void> {
   const client = await admin().connect();
   try {

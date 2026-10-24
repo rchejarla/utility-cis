@@ -2,7 +2,14 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
 import type { Prisma } from "@utility-cis/shared/src/generated/prisma";
-import { bootPostgres, ensurePrincipal, truncateTables} from "./_effective-dating-fixtures.js";
+import { runAsTenant } from "../../lib/tenant-context.js";
+import {
+  bootPostgres,
+  ensurePrincipal,
+  truncateTables,
+  seedAsPlatform,
+  endAdminPool,
+} from "./_effective-dating-fixtures.js";
 
 /**
  * BillDocument end to end against a real database.
@@ -53,6 +60,8 @@ const MODULES = ["accounts", "portal_billing"];
 let pgContainer: StartedPostgreSqlContainer;
 let prismaImports: typeof import("../../lib/prisma.js");
 let svc: typeof import("../../services/bill-document.service.js");
+let presentation: typeof import("../../services/bill-presentation.service.js");
+let posting: typeof import("../../services/ar/posting.service.js");
 let acError: typeof import("../../lib/apptor-connect/files-client.js").ApptorConnectError;
 let app: FastifyInstance;
 
@@ -68,6 +77,50 @@ let app: FastifyInstance;
  * status mapping rather than RBAC; the difference is that the permission
  * they need is now granted rather than waived.
  */
+/**
+ * The two services as a route reaches them: acting for the tenant, not
+ * merely naming it.
+ *
+ * Both already take the tenant as their first argument, and in
+ * production that value came from a request whose middleware had
+ * entered the scope — so the argument and the scope are always the same
+ * id. A direct service test has the argument and not the scope, and on
+ * a connection `cis_app` holds, a tenant table read with no scope raises
+ * rather than returning the wrong rows. `args[0]` keeps the case that
+ * acts as `OTHER_UTILITY` acting as `OTHER_UTILITY`.
+ */
+const generateBillDocument = (...args: Parameters<typeof svc.generateBillDocument>) =>
+  runAsTenant(args[0], async () => svc.generateBillDocument(...args));
+
+const readBillDocument = (...args: Parameters<typeof svc.readBillDocument>) =>
+  runAsTenant(args[0], async () => svc.readBillDocument(...args));
+
+const loadBillPresentation = (
+  ...args: Parameters<typeof presentation.loadBillPresentation>
+) => runAsTenant(args[0], async () => presentation.loadBillPresentation(...args));
+
+const postBill = (...args: Parameters<typeof posting.postBill>) =>
+  runAsTenant(args[0], async () => posting.postBill(...args));
+
+/**
+ * Every direct database touch in this file, under the fixture authority.
+ *
+ * None of them is the thing under test — the routes are, and each route
+ * call runs as `cis_app` acting for the tenant its own request
+ * establishes. These are rows being arranged, or rows being read back to
+ * check what a route did, and several cases deliberately arrange a
+ * second tenant's bill, which a tenant-scoped connection could not do.
+ *
+ * One accessor rather than forty wraps, so a new case cannot forget.
+ */
+const db = <T>(fn: (p: typeof prismaImports.prisma) => Promise<T>): Promise<T> =>
+  // `async` with an `await` inside, not a bare `() => fn(...)`. A
+  // `PrismaPromise` is lazy: built by the call, executed only when
+  // something awaits it. Returning one out of the scope runs the query
+  // after the scope has exited, which is the exact bug that made
+  // dev-login answer USER_NOT_FOUND against a correct policy.
+  seedAsPlatform(async () => await fn(prismaImports.prisma));
+
 function token(claims: Record<string, unknown> = {}): string {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
   const payload = Buffer.from(
@@ -90,18 +143,11 @@ const portalHeaders = (customerId: string) => ({
 
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [OTHER_UTILITY, UTILITY] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // Its routes run correctly as `cis_app` — no route or service was
-  // found querying a tenant table without a scope — but its own test
-  // bodies arrange and assert on rows through `prisma` directly, which
-  // needs a `seedAsPlatform` or `runAsTenant` per site. See
-  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
-  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
-  // only lets the number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/bill-document.service.js");
+  presentation = await import("../../services/bill-presentation.service.js");
+  posting = await import("../../services/ar/posting.service.js");
   acError = (await import("../../lib/apptor-connect/files-client.js")).ApptorConnectError;
   app = await (await import("../../app.js")).buildApp();
   await app.ready();
@@ -115,31 +161,41 @@ afterAll(async () => {
   // Postgres reports 57P01 as an unhandled error after a green run.
   await prismaImports?.prisma.$disconnect().catch(() => {});
   await prismaImports?.pool.end().catch(() => {});
+  await endAdminPool();
   await pgContainer?.stop().catch(() => {});
 });
 
 beforeEach(async () => {
   put.mockReset().mockResolvedValue(undefined);
   get.mockReset();
-  const { prisma } = prismaImports;
   // Every table postedBill() writes, including the rate rows a
   // bill_segment_line's required source FKs need — leave one out and the
   // second test in the file collides on a unique code rather than
   // testing anything.
   await truncateTables("audit_log, bill_document, bill_segment_line, bill_segment, bill, service_agreement, account, customer, billing_address, billing_cycle, rate_component, rate_component_kind, rate_schedule, commodity, utility_config, utility_module, user_role, cis_user, role, notification, notification_template");
-  await ensurePrincipal(prisma, UTILITY);
+  await ensurePrincipal(prismaImports.prisma, UTILITY);
 });
 
 /** Audit rows this entity produced, oldest first. */
 async function auditTrail(): Promise<Array<{ action: string; eventType: string }>> {
-  const rows = await prismaImports.prisma.auditLog.findMany({
-    where: { entityType: "BillDocument" },
-    orderBy: { createdAt: "asc" },
+  /*
+   * Deliberately cross-tenant, and so platform authority rather than
+   * `runAsTenant`: this read carries no tenant predicate, so it sees
+   * whatever tenant's rows exist, and the cases that post a bill for a
+   * second tenant depend on that. Scoping it would quietly change what
+   * those assertions mean.
+   */
+  return seedAsPlatform(async () => {
+    const rows = await prismaImports.prisma.auditLog.findMany({
+      where: { entityType: "BillDocument" },
+      orderBy: { createdAt: "asc" },
+    });
+    return rows.map((r) => ({
+      action: r.action,
+      eventType: (r.metadata as { eventType?: string } | null)?.eventType ?? "",
+    }));
+
   });
-  return rows.map((r) => ({
-    action: r.action,
-    eventType: (r.metadata as { eventType?: string } | null)?.eventType ?? "",
-  }));
 }
 
 /**
@@ -162,160 +218,168 @@ async function postedBill(
     money?: { lines: [string, string][]; subtotal: string; taxes: string; total: string };
   } = {},
 ): Promise<string> {
-  const { prisma } = prismaImports;
-  const utilityId = opts.utilityId ?? UTILITY;
-  const suffix = utilityId.slice(-4);
-  const amounts =
-    opts.money ??
-    ({
-      lines: [
-        ["Base charge", "20.0000"],
-        ["Usage", "80.0000"],
-      ],
-      subtotal: "100.0000",
-      taxes: "7.5000",
-      total: "107.5000",
-    } as const);
+  /*
+   * Arranging rows, so the authority the fixtures use. The routes under
+   * test still run as `cis_app` acting for the tenant their own request
+   * establishes, which is what this suite exists to exercise.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const utilityId = opts.utilityId ?? UTILITY;
+    const suffix = utilityId.slice(-4);
+    const amounts =
+      opts.money ??
+      ({
+        lines: [
+          ["Base charge", "20.0000"],
+          ["Usage", "80.0000"],
+        ],
+        subtotal: "100.0000",
+        taxes: "7.5000",
+        total: "107.5000",
+      } as const);
 
-  const settings: Record<string, unknown> = {};
-  if (opts.issuer !== null) settings.issuer = opts.issuer ?? ISSUER;
-  if (opts.storage !== false) settings.billDocuments = { storageIntegration: "cis-bills" };
-  await prisma.utilityConfig.create({
-    data: { utilityId, settings: settings as Prisma.InputJsonObject },
-  });
+    const settings: Record<string, unknown> = {};
+    if (opts.issuer !== null) settings.issuer = opts.issuer ?? ISSUER;
+    if (opts.storage !== false) settings.billDocuments = { storageIntegration: "cis-bills" };
+    await prisma.utilityConfig.create({
+      data: { utilityId, settings: settings as Prisma.InputJsonObject },
+    });
 
-  for (const moduleKey of MODULES) {
-    await prisma.utilityModule.create({ data: { utilityId, moduleKey } });
-  }
-  const rbac = await import("../../services/rbac.service.js");
-  await rbac.invalidateTenantModulesCache(utilityId);
+    for (const moduleKey of MODULES) {
+      await prisma.utilityModule.create({ data: { utilityId, moduleKey } });
+    }
+    const rbac = await import("../../services/rbac.service.js");
+    await rbac.invalidateTenantModulesCache(utilityId);
 
-  const commodity = await prisma.commodity.create({
-    data: { utilityId, code: `WATER-${suffix}`, name: "Water" },
-  });
-  const cycle = await prisma.billingCycle.create({
-    data: {
-      utilityId,
-      name: "Residential",
-      cycleCode: `R-${suffix}`,
-      readDayOfMonth: 1, billDayOfMonth: 15,
-      frequency: "MONTHLY",
-    },
-  });
-  const customer = await prisma.customer.create({
-    data: { utilityId, customerType: "INDIVIDUAL", firstName: "Jane", lastName: "Smith" },
-  });
-  const account = await prisma.account.create({
-    data: {
-      utilityId,
-      accountNumber: `A-${suffix}`,
-      accountType: "RESIDENTIAL",
-      status: "ACTIVE",
-      billingCycleId: cycle.id,
-      customerId: customer.id,
-    },
-  });
-  await prisma.billingAddress.create({
-    data: {
-      utilityId,
-      accountId: account.id,
-      addressLine1: "12 Elm St",
-      city: "Testville",
-      state: "MT",
-      zip: "59771",
-    },
-  });
-  const agreement = await prisma.serviceAgreement.create({
-    data: {
-      utilityId,
-      agreementNumber: `SA-${suffix}`,
-      accountId: account.id,
-      commodityId: commodity.id,
-      startDate: new Date("2026-01-01"),
-      status: "ACTIVE",
-    },
-  });
-  const bill = await prisma.bill.create({
-    data: {
-      utilityId,
-      accountId: account.id,
-      billingCycleId: cycle.id,
-      periodStart: new Date("2026-02-01"),
-      periodEnd: new Date("2026-02-28"),
-      billDate: new Date("2026-03-01"),
-      dueDate: new Date("2026-03-31"),
-      subtotal: amounts.subtotal,
-      taxes: amounts.taxes,
-      credits: "0.0000",
-      total: amounts.total,
-      billNumber: `B-${suffix}`,
-      postedAt: new Date("2026-03-01"),
-    },
-  });
-  const segment = await prisma.billSegment.create({
-    data: {
-      utilityId,
-      serviceAgreementId: agreement.id,
-      billId: bill.id,
-      periodStart: new Date("2026-02-01"),
-      periodEnd: new Date("2026-02-28"),
-      subtotal: amounts.subtotal,
-      taxes: amounts.taxes,
-      credits: "0.0000",
-      total: amounts.total,
-      minimumFloorApplied: false,
-      segmentNumber: `SEG-${suffix}`,
-    },
-  });
-  const schedule = await prisma.rateSchedule.create({
-    data: {
-      utilityId,
-      code: `RS-${suffix}`,
-      name: "Residential Water",
-      commodityId: commodity.id,
-      effectiveDate: new Date("2026-01-01"),
-    },
-  });
-  const kind = await prisma.rateComponentKind.create({
-    data: { utilityId, code: `fixed-${suffix}`, label: "Fixed" },
-  });
-  const component = await prisma.rateComponent.create({
-    data: {
-      utilityId,
-      rateScheduleId: schedule.id,
-      kindCode: kind.code,
-      label: "Base charge",
-      predicate: {},
-      quantitySource: { type: "fixed" },
-      pricing: { type: "flat", amount: "20.0000" },
-      sortOrder: 1,
-      effectiveDate: new Date("2026-01-01"),
-    },
-  });
-  for (const [i, [label, amount]] of amounts.lines.entries()) {
-    await prisma.billSegmentLine.create({
+    const commodity = await prisma.commodity.create({
+      data: { utilityId, code: `WATER-${suffix}`, name: "Water" },
+    });
+    const cycle = await prisma.billingCycle.create({
       data: {
         utilityId,
-        billSegmentId: segment.id,
-        label,
-        kindCode: kind.code,
-        amount,
-        sourceScheduleId: schedule.id,
-        sourceComponentId: component.id,
-        sortOrder: i + 1,
+        name: "Residential",
+        cycleCode: `R-${suffix}`,
+        readDayOfMonth: 1, billDayOfMonth: 15,
+        frequency: "MONTHLY",
       },
     });
-  }
+    const customer = await prisma.customer.create({
+      data: { utilityId, customerType: "INDIVIDUAL", firstName: "Jane", lastName: "Smith" },
+    });
+    const account = await prisma.account.create({
+      data: {
+        utilityId,
+        accountNumber: `A-${suffix}`,
+        accountType: "RESIDENTIAL",
+        status: "ACTIVE",
+        billingCycleId: cycle.id,
+        customerId: customer.id,
+      },
+    });
+    await prisma.billingAddress.create({
+      data: {
+        utilityId,
+        accountId: account.id,
+        addressLine1: "12 Elm St",
+        city: "Testville",
+        state: "MT",
+        zip: "59771",
+      },
+    });
+    const agreement = await prisma.serviceAgreement.create({
+      data: {
+        utilityId,
+        agreementNumber: `SA-${suffix}`,
+        accountId: account.id,
+        commodityId: commodity.id,
+        startDate: new Date("2026-01-01"),
+        status: "ACTIVE",
+      },
+    });
+    const bill = await prisma.bill.create({
+      data: {
+        utilityId,
+        accountId: account.id,
+        billingCycleId: cycle.id,
+        periodStart: new Date("2026-02-01"),
+        periodEnd: new Date("2026-02-28"),
+        billDate: new Date("2026-03-01"),
+        dueDate: new Date("2026-03-31"),
+        subtotal: amounts.subtotal,
+        taxes: amounts.taxes,
+        credits: "0.0000",
+        total: amounts.total,
+        billNumber: `B-${suffix}`,
+        postedAt: new Date("2026-03-01"),
+      },
+    });
+    const segment = await prisma.billSegment.create({
+      data: {
+        utilityId,
+        serviceAgreementId: agreement.id,
+        billId: bill.id,
+        periodStart: new Date("2026-02-01"),
+        periodEnd: new Date("2026-02-28"),
+        subtotal: amounts.subtotal,
+        taxes: amounts.taxes,
+        credits: "0.0000",
+        total: amounts.total,
+        minimumFloorApplied: false,
+        segmentNumber: `SEG-${suffix}`,
+      },
+    });
+    const schedule = await prisma.rateSchedule.create({
+      data: {
+        utilityId,
+        code: `RS-${suffix}`,
+        name: "Residential Water",
+        commodityId: commodity.id,
+        effectiveDate: new Date("2026-01-01"),
+      },
+    });
+    const kind = await prisma.rateComponentKind.create({
+      data: { utilityId, code: `fixed-${suffix}`, label: "Fixed" },
+    });
+    const component = await prisma.rateComponent.create({
+      data: {
+        utilityId,
+        rateScheduleId: schedule.id,
+        kindCode: kind.code,
+        label: "Base charge",
+        predicate: {},
+        quantitySource: { type: "fixed" },
+        pricing: { type: "flat", amount: "20.0000" },
+        sortOrder: 1,
+        effectiveDate: new Date("2026-01-01"),
+      },
+    });
+    for (const [i, [label, amount]] of amounts.lines.entries()) {
+      await prisma.billSegmentLine.create({
+        data: {
+          utilityId,
+          billSegmentId: segment.id,
+          label,
+          kindCode: kind.code,
+          amount,
+          sourceScheduleId: schedule.id,
+          sourceComponentId: component.id,
+          sortOrder: i + 1,
+        },
+      });
+    }
 
-  return bill.id;
+    return bill.id;
+
+  });
 }
 
 describe("bill documents", () => {
   it("renders once, stores a pointer, and is idempotent", async () => {
     const billId = await postedBill();
 
-    const first = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
-    const second = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    const first = await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    const second = await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
     expect(put).toHaveBeenCalledTimes(1);
     expect(second.id).toBe(first.id);
@@ -335,11 +399,11 @@ describe("bill documents", () => {
    */
   it("names the actor on the audit row it writes", async () => {
     const billId = await postedBill();
-    const row = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    const row = await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
-    const audit = await prismaImports.prisma.auditLog.findFirstOrThrow({
+    const audit = await db((p) => p.auditLog.findFirstOrThrow({
       where: { utilityId: UTILITY, entityType: "BillDocument", entityId: row.id },
-    });
+    }));
     expect(audit.actorId).toBe(ACTOR);
     expect(audit.actorName).toBe(ACTOR_NAME);
   }, 60_000);
@@ -358,7 +422,7 @@ describe("bill documents", () => {
    */
   it("addresses the file by pointer, never by url", async () => {
     const billId = await postedBill();
-    const row = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    const row = await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
     const args = put.mock.calls[0][0] as Record<string, unknown>;
     expect(args).toMatchObject({
@@ -370,9 +434,9 @@ describe("bill documents", () => {
     // of apptor-connect's minted links.
     expect(row.objectKey).toBe(`bills/${UTILITY}/${billId}.pdf`);
     expect(row.storageIntegration).toBe("cis-bills");
-    const persisted = await prismaImports.prisma.billDocument.findFirstOrThrow({
+    const persisted = await db((p) => p.billDocument.findFirstOrThrow({
       where: { billId },
-    });
+    }));
     expect(Object.values(persisted).join(" ")).not.toMatch(/https?:\/\//);
   }, 60_000);
 
@@ -385,29 +449,29 @@ describe("bill documents", () => {
    */
   it("refuses bytes that do not match the hash recorded for them", async () => {
     const billId = await postedBill();
-    const row = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    const row = await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     // Same length, different content: a size check alone would pass.
     const wrong = Buffer.alloc(row.byteSize, 0x41);
     get.mockResolvedValue(wrong);
 
-    await expect(svc.readBillDocument(UTILITY, billId)).rejects.toThrow(/sha256/i);
+    await expect(readBillDocument(UTILITY, billId)).rejects.toThrow(/sha256/i);
   }, 60_000);
 
   it("refuses bytes of the wrong length for the row", async () => {
     const billId = await postedBill();
-    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     get.mockResolvedValue(Buffer.from("%PDF-truncated"));
 
-    await expect(svc.readBillDocument(UTILITY, billId)).rejects.toThrow(/bytes/i);
+    await expect(readBillDocument(UTILITY, billId)).rejects.toThrow(/bytes/i);
   }, 60_000);
 
   it("round-trips the stored bytes on read", async () => {
     const billId = await postedBill();
-    const row = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    const row = await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     const uploaded = (put.mock.calls[0][0] as { body: Buffer }).body;
     get.mockResolvedValue(uploaded);
 
-    const { bytes } = await svc.readBillDocument(UTILITY, billId);
+    const { bytes } = await readBillDocument(UTILITY, billId);
 
     expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
     expect(bytes.length).toBe(row.byteSize);
@@ -415,9 +479,9 @@ describe("bill documents", () => {
 
   it("re-renders in place when forced, and records the new hash", async () => {
     const billId = await postedBill();
-    const first = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    const first = await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
-    const forced = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME, { force: true });
+    const forced = await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME, { force: true });
 
     expect(put).toHaveBeenCalledTimes(2);
     expect(forced.id).toBe(first.id);
@@ -435,9 +499,9 @@ describe("bill documents", () => {
    */
   it("moves the stored pointer when the tenant's storage integration changes", async () => {
     const billId = await postedBill();
-    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
-    await prismaImports.prisma.utilityConfig.update({
+    await db((p) => p.utilityConfig.update({
       where: { utilityId: UTILITY },
       data: {
         settings: {
@@ -445,13 +509,13 @@ describe("bill documents", () => {
           billDocuments: { storageIntegration: "cis-bills-v2" },
         } as Prisma.InputJsonObject,
       },
-    });
-    const moved = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME, { force: true });
+    }));
+    const moved = await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME, { force: true });
 
     // The upload went to the new integration, so the row has to name it.
     expect(put.mock.calls[1][0]).toMatchObject({ integration: "cis-bills-v2" });
     expect(moved.storageIntegration).toBe("cis-bills-v2");
-    const row = await prismaImports.prisma.billDocument.findFirstOrThrow({ where: { billId } });
+    const row = await db((p) => p.billDocument.findFirstOrThrow({ where: { billId } }));
     expect(row.storageIntegration).toBe("cis-bills-v2");
   }, 60_000);
 
@@ -492,11 +556,11 @@ describe("bill documents", () => {
     });
 
     // A: claims the row, then parks inside putObject.
-    const creator = svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    const creator = generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     await firstUploadStarted;
 
     // B: adopts A's unfinished claim, uploads, and completes it.
-    const adopter = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    const adopter = await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     expect(adopter.sha256).toHaveLength(64);
 
     // A's upload fails, after B has already stored.
@@ -504,7 +568,7 @@ describe("bill documents", () => {
     await expect(creator).rejects.toThrow();
 
     // B's document survives, and the log records one creation, not two.
-    const row = await prismaImports.prisma.billDocument.findFirstOrThrow({ where: { billId } });
+    const row = await db((p) => p.billDocument.findFirstOrThrow({ where: { billId } }));
     expect(row.sha256).toBe(adopter.sha256);
     expect(row.byteSize).toBe(adopter.byteSize);
     const created = (await auditTrail()).filter(
@@ -517,9 +581,9 @@ describe("bill documents", () => {
     const billId = await postedBill();
     put.mockRejectedValueOnce(new acError("rejected", 503, "cis-bills"));
 
-    await expect(svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME)).rejects.toThrow();
+    await expect(generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME)).rejects.toThrow();
 
-    const count = await prismaImports.prisma.billDocument.count({ where: { billId } });
+    const count = await db((p) => p.billDocument.count({ where: { billId } }));
     expect(count).toBe(0);
   }, 60_000);
 
@@ -532,8 +596,8 @@ describe("bill documents", () => {
   it("audits the document once, when it becomes real", async () => {
     const billId = await postedBill();
 
-    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
-    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
     expect(await auditTrail()).toEqual([
       { action: "CREATE", eventType: "bill_document.created" },
@@ -544,16 +608,16 @@ describe("bill documents", () => {
     const billId = await postedBill();
     put.mockRejectedValueOnce(new acError("rejected", 503, "cis-bills"));
 
-    await expect(svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME)).rejects.toThrow();
+    await expect(generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME)).rejects.toThrow();
 
     expect(await auditTrail()).toEqual([]);
   }, 60_000);
 
   it("audits a forced re-render as a revision of the stored document", async () => {
     const billId = await postedBill();
-    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
-    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME, { force: true });
+    await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME, { force: true });
 
     expect(await auditTrail()).toEqual([
       { action: "CREATE", eventType: "bill_document.created" },
@@ -570,71 +634,79 @@ describe("bill documents", () => {
    * shown — a reprint would quietly restate itself. A payment arriving
    * after the bill date belongs on the next bill.
    */
-  it("prints the payments applied to it, and only those by the bill date", async () => {
-    const billId = await postedBill();
-    const { prisma } = prismaImports;
-    const bill = await prisma.bill.findUniqueOrThrow({ where: { id: billId } });
+    /*
+   * Whole body under the fixture authority: it builds a ledger by hand
+   * and the ids are used further down, so wrapping only the writes would
+   * scope their names away. The route call still enters its own tenant
+   * scope.
+   */
+  it("prints the payments applied to it, and only those by the bill date", () =>
+    seedAsPlatform(async () => {
+      const billId = await postedBill();
+      const { prisma } = prismaImports;
+      const bill = await prisma.bill.findUniqueOrThrow({ where: { id: billId } });
 
-    const charge = await prisma.ledgerEntry.create({
-      data: {
-        utilityId: UTILITY,
-        accountId: bill.accountId,
-        type: "BILL_CHARGE",
-        amount: "107.50",
-        openAmount: "37.50",
-        effectiveDate: bill.billDate,
-        billId,
-      },
-    });
-    const byBillDate = await prisma.ledgerEntry.create({
-      data: {
-        utilityId: UTILITY,
-        accountId: bill.accountId,
-        type: "PAYMENT",
-        amount: "-60.00",
-        openAmount: "0.00",
-        effectiveDate: new Date("2026-02-20"),
-        tender: "CHECK",
-      },
-    });
-    const afterBillDate = await prisma.ledgerEntry.create({
-      data: {
-        utilityId: UTILITY,
-        accountId: bill.accountId,
-        type: "PAYMENT",
-        amount: "-10.00",
-        openAmount: "0.00",
-        effectiveDate: new Date("2026-03-20"),
-        tender: "CARD",
-      },
-    });
-    for (const [credit, amount] of [
-      [byBillDate, "60.00"],
-      [afterBillDate, "10.00"],
-    ] as const) {
-      await prisma.ledgerApplication.create({
-        data: { utilityId: UTILITY, creditId: credit.id, debitId: charge.id, amount },
+      const charge = await prisma.ledgerEntry.create({
+        data: {
+          utilityId: UTILITY,
+          accountId: bill.accountId,
+          type: "BILL_CHARGE",
+          amount: "107.50",
+          openAmount: "37.50",
+          effectiveDate: bill.billDate,
+          billId,
+        },
       });
-    }
+      const byBillDate = await prisma.ledgerEntry.create({
+        data: {
+          utilityId: UTILITY,
+          accountId: bill.accountId,
+          type: "PAYMENT",
+          amount: "-60.00",
+          openAmount: "0.00",
+          effectiveDate: new Date("2026-02-20"),
+          tender: "CHECK",
+        },
+      });
+      const afterBillDate = await prisma.ledgerEntry.create({
+        data: {
+          utilityId: UTILITY,
+          accountId: bill.accountId,
+          type: "PAYMENT",
+          amount: "-10.00",
+          openAmount: "0.00",
+          effectiveDate: new Date("2026-03-20"),
+          tender: "CARD",
+        },
+      });
+      for (const [credit, amount] of [
+        [byBillDate, "60.00"],
+        [afterBillDate, "10.00"],
+      ] as const) {
+        await prisma.ledgerApplication.create({
+          data: { utilityId: UTILITY, creditId: credit.id, debitId: charge.id, amount },
+        });
+      }
 
-    const { loadBillPresentation } = await import("../../services/bill-presentation.service.js");
-    const p = await loadBillPresentation(UTILITY, billId);
+      const p = await loadBillPresentation(UTILITY, billId);
 
-    expect(p.settlement?.applied).toHaveLength(1);
-    expect(p.settlement?.applied[0]?.label).toBe("Payment (check)");
-    expect(p.settlement?.applied[0]?.amount).toBe("-60.00");
-    expect(p.settlement?.applied[0]?.date.toISOString().slice(0, 10)).toBe("2026-02-20");
-    expect(p.settlement?.appliedTotal).toBe("-60.00");
-    // 107.50 raised, 60.00 received by the bill date.
-    expect(p.settlement?.amountDue).toBe("47.50");
-    // The stub asks for what is left, not the charge.
-    expect(p.remittance.amountDue).toBe("47.50");
-    expect(p.totals.total).toBe("107.50");
-  }, 60_000);
+      expect(p.settlement?.applied).toHaveLength(1);
+      expect(p.settlement?.applied[0]?.label).toBe("Payment (check)");
+      expect(p.settlement?.applied[0]?.amount).toBe("-60.00");
+      expect(p.settlement?.applied[0]?.date.toISOString().slice(0, 10)).toBe("2026-02-20");
+      expect(p.settlement?.appliedTotal).toBe("-60.00");
+      // 107.50 raised, 60.00 received by the bill date.
+      expect(p.settlement?.amountDue).toBe("47.50");
+      // The stub asks for what is left, not the charge.
+      expect(p.remittance.amountDue).toBe("47.50");
+      expect(p.totals.total).toBe("107.50");
+  
+    }),
+    60_000,
+  );
 
   it("leaves a bill with nothing applied to it unchanged", async () => {
     const billId = await postedBill();
-    const { loadBillPresentation } = await import("../../services/bill-presentation.service.js");
 
     const p = await loadBillPresentation(UTILITY, billId);
 
@@ -644,9 +716,9 @@ describe("bill documents", () => {
 
   it("refuses an unposted bill", async () => {
     const billId = await postedBill();
-    await prismaImports.prisma.bill.update({ where: { id: billId }, data: { postedAt: null } });
+    await db((p) => p.bill.update({ where: { id: billId }, data: { postedAt: null } }));
 
-    await expect(svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME)).rejects.toMatchObject({
+    await expect(generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME)).rejects.toMatchObject({
       code: "NOT_POSTED",
     });
     expect(put).not.toHaveBeenCalled();
@@ -655,7 +727,7 @@ describe("bill documents", () => {
   it("refuses when the tenant has no storage integration configured", async () => {
     const billId = await postedBill({ storage: false });
 
-    await expect(svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME)).rejects.toMatchObject({
+    await expect(generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME)).rejects.toMatchObject({
       code: "STORAGE_NOT_CONFIGURED",
     });
     expect(put).not.toHaveBeenCalled();
@@ -678,7 +750,7 @@ describe("bill documents", () => {
     (cfg.config as { BILL_DOCUMENT_MAX_BYTES: number }).BILL_DOCUMENT_MAX_BYTES = 1024;
 
     try {
-      const err = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME).catch((e: unknown) => e);
+      const err = await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME).catch((e: unknown) => e);
 
       expect((err as { code: string }).code).toBe("DOCUMENT_TOO_LARGE");
       expect((err as Error).message).toMatch(/1024/);
@@ -687,7 +759,7 @@ describe("bill documents", () => {
       // Generated before the claim, so a bill that cannot be stored
       // leaves no row to read as an undownloadable document.
       expect(
-        await prismaImports.prisma.billDocument.findFirst({ where: { billId } }),
+        await db((p) => p.billDocument.findFirst({ where: { billId } })),
       ).toBeNull();
     } finally {
       (cfg.config as { BILL_DOCUMENT_MAX_BYTES: number }).BILL_DOCUMENT_MAX_BYTES = ceiling;
@@ -699,7 +771,7 @@ describe("bill documents", () => {
       issuer: { utilityName: "City of Testville Utilities" },
     });
 
-    const err = await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME).catch((e: unknown) => e);
+    const err = await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME).catch((e: unknown) => e);
 
     expect((err as { code: string }).code).toBe("ISSUER_INCOMPLETE");
     expect((err as { missing: string[] }).missing).toContain("remittanceCity");
@@ -708,14 +780,13 @@ describe("bill documents", () => {
 
   it("keeps a document invisible to another tenant", async () => {
     const billId = await postedBill();
-    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
 
-    await expect(svc.readBillDocument(OTHER_UTILITY, billId)).rejects.toThrow();
+    await expect(readBillDocument(OTHER_UTILITY, billId)).rejects.toThrow();
   }, 60_000);
 
   it("totals on the rendered presentation reconcile to the bill's own columns", async () => {
     const billId = await postedBill();
-    const { loadBillPresentation } = await import("../../services/bill-presentation.service.js");
 
     const p = await loadBillPresentation(UTILITY, billId);
 
@@ -752,7 +823,6 @@ describe("bill documents", () => {
         total: "32.2100",
       },
     });
-    const { loadBillPresentation } = await import("../../services/bill-presentation.service.js");
 
     const p = await loadBillPresentation(UTILITY, billId);
 
@@ -779,51 +849,69 @@ describe("bill documents", () => {
  * about authority has to seed one.
  */
 async function grantAccounts(permissions: string[]): Promise<void> {
-  const { prisma } = prismaImports;
-  const role = await prisma.role.create({
-    data: { utilityId: UTILITY, name: `Role ${permissions.join("-")}`, permissions: { accounts: permissions } },
-  });
-  // Upserted, not created: `ensurePrincipal` in beforeEach already made
-  // this actor so the cases that never call this helper can authenticate
-  // at all. This one narrows the permissions rather than inventing the
-  // user.
-  await prisma.cisUser.upsert({
-    where: { id: ACTOR },
-    update: { utilityId: UTILITY, isActive: true },
-    create: { id: ACTOR, utilityId: UTILITY, email: "tester@example.com", name: "Tester", isActive: true },
-  });
-  const assignment = await prisma.userRole.findFirst({
-    where: { userId: ACTOR, accountId: null },
-    select: { id: true },
-  });
-  if (assignment) {
-    await prisma.userRole.update({ where: { id: assignment.id }, data: { roleId: role.id } });
-  } else {
-    await prisma.userRole.create({
-      data: { utilityId: UTILITY, userId: ACTOR, accountId: null, roleId: role.id },
+  /*
+   * Arranging rows, so the authority the fixtures use. The routes under
+   * test still run as `cis_app` acting for the tenant their own request
+   * establishes, which is what this suite exists to exercise.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const role = await prisma.role.create({
+      data: { utilityId: UTILITY, name: `Role ${permissions.join("-")}`, permissions: { accounts: permissions } },
     });
-  }
-  const rbac = await import("../../services/rbac.service.js");
-  await rbac.invalidateUserRoleCache(ACTOR, UTILITY);
+    // Upserted, not created: `ensurePrincipal` in beforeEach already made
+    // this actor so the cases that never call this helper can authenticate
+    // at all. This one narrows the permissions rather than inventing the
+    // user.
+    await prisma.cisUser.upsert({
+      where: { id: ACTOR },
+      update: { utilityId: UTILITY, isActive: true },
+      create: { id: ACTOR, utilityId: UTILITY, email: "tester@example.com", name: "Tester", isActive: true },
+    });
+    const assignment = await prisma.userRole.findFirst({
+      where: { userId: ACTOR, accountId: null },
+      select: { id: true },
+    });
+    if (assignment) {
+      await prisma.userRole.update({ where: { id: assignment.id }, data: { roleId: role.id } });
+    } else {
+      await prisma.userRole.create({
+        data: { utilityId: UTILITY, userId: ACTOR, accountId: null, roleId: role.id },
+      });
+    }
+    const rbac = await import("../../services/rbac.service.js");
+    await rbac.invalidateUserRoleCache(ACTOR, UTILITY);
+
+  });
 }
 
 /** The customer who holds the account the bill was raised against. */
 async function customerIdOf(billId: string): Promise<string> {
-  const bill = await prismaImports.prisma.bill.findUniqueOrThrow({
-    where: { id: billId },
-    select: { account: { select: { customerId: true } } },
+  /*
+   * Deliberately cross-tenant, and so platform authority rather than
+   * `runAsTenant`: this read carries no tenant predicate, so it sees
+   * whatever tenant's rows exist, and the cases that post a bill for a
+   * second tenant depend on that. Scoping it would quietly change what
+   * those assertions mean.
+   */
+  return seedAsPlatform(async () => {
+    const bill = await prismaImports.prisma.bill.findUniqueOrThrow({
+      where: { id: billId },
+      select: { account: { select: { customerId: true } } },
+    });
+    // Account.customerId is nullable in the schema; the fixture always
+    // sets one, so an absent customer means the fixture broke.
+    const customerId = bill.account.customerId;
+    if (!customerId) throw new Error(`Bill ${billId} has no account customer`);
+    return customerId;
+
   });
-  // Account.customerId is nullable in the schema; the fixture always
-  // sets one, so an absent customer means the fixture broke.
-  const customerId = bill.account.customerId;
-  if (!customerId) throw new Error(`Bill ${billId} has no account customer`);
-  return customerId;
 }
 
 describe("bill document endpoints", () => {
   it("streams the stored PDF as an attachment named for the bill", async () => {
     const billId = await postedBill();
-    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     get.mockResolvedValue((put.mock.calls[0][0] as { body: Buffer }).body);
 
     const res = await app.inject({
@@ -874,10 +962,10 @@ describe("bill document endpoints", () => {
 
   it("answers 409 for a bill that is not posted", async () => {
     const billId = await postedBill();
-    await prismaImports.prisma.bill.update({
+    await db((p) => p.bill.update({
       where: { id: billId },
       data: { postedAt: null },
-    });
+    }));
 
     const res = await app.inject({
       method: "POST",
@@ -912,7 +1000,7 @@ describe("bill document endpoints", () => {
 
   it("lets a customer download a bill on their own account", async () => {
     const billId = await postedBill();
-    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     get.mockResolvedValue((put.mock.calls[0][0] as { body: Buffer }).body);
 
     const res = await app.inject({
@@ -932,7 +1020,7 @@ describe("bill document endpoints", () => {
    */
   it("hides another customer's bill from the portal", async () => {
     const billId = await postedBill();
-    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     get.mockResolvedValue((put.mock.calls[0][0] as { body: Buffer }).body);
 
     const res = await app.inject({
@@ -953,7 +1041,7 @@ describe("bill document endpoints", () => {
   it("refuses to produce a document for a user who only holds accounts:VIEW", async () => {
     const billId = await postedBill();
     await grantAccounts(["VIEW"]);
-    await svc.generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+    await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     get.mockResolvedValue((put.mock.calls[0][0] as { body: Buffer }).body);
     put.mockClear();
 
@@ -1002,7 +1090,7 @@ describe("bill document endpoints", () => {
     // bytes rather than storage — both sides read `undefined` and the
     // assertion passed vacuously. The invariant is checked where it
     // lives instead.
-    expect(await prismaImports.prisma.billDocument.count({ where: { billId } })).toBe(1);
+    expect(await db((p) => p.billDocument.count({ where: { billId } }))).toBe(1);
     // An unforced repeat hands back the same stored generation.
     expect(JSON.parse(again.body)).toEqual(JSON.parse(generate.body));
   }, 60_000);
@@ -1038,7 +1126,7 @@ describe("delivering a posted bill", () => {
 
   /** The tenant's template for the event, without which nothing sends. */
   async function template(): Promise<void> {
-    await prismaImports.prisma.notificationTemplate.create({
+    await db((p) => p.notificationTemplate.create({
       data: {
         utilityId: UTILITY,
         name: "Bill Ready",
@@ -1047,12 +1135,12 @@ describe("delivering a posted bill", () => {
         variables: [],
         isActive: true,
       },
-    });
+    }));
   }
 
   /** A rendered document, which is the thing being delivered. */
   async function document(billId: string): Promise<void> {
-    await prismaImports.prisma.billDocument.create({
+    await db((p) => p.billDocument.create({
       data: {
         utilityId: UTILITY,
         billId,
@@ -1063,19 +1151,19 @@ describe("delivering a posted bill", () => {
         templateKey: "default-bill",
         isPaperless: false,
       },
-    });
+    }));
   }
 
   /** An address to send to. The fixture's customer has none by design. */
   async function reachable(billId: string): Promise<void> {
-    const bill = await prismaImports.prisma.bill.findUniqueOrThrow({
+    const bill = await db((p) => p.bill.findUniqueOrThrow({
       where: { id: billId },
       select: { account: { select: { customerId: true } } },
-    });
-    await prismaImports.prisma.customer.update({
+    }));
+    await db((p) => p.customer.update({
       where: { id: bill.account.customerId! },
       data: { email: "jane.smith@example.com" },
-    });
+    }));
   }
 
   function deliver(billId: string) {
@@ -1095,9 +1183,9 @@ describe("delivering a posted bill", () => {
     expect(res.statusCode).toBe(202);
     const { notificationId } = JSON.parse(res.body);
 
-    const queued = await prismaImports.prisma.notification.findUniqueOrThrow({
+    const queued = await db((p) => p.notification.findUniqueOrThrow({
       where: { id: notificationId },
-    });
+    }));
     // The row is the delivery record: what, to whom, by which channel,
     // and not yet sent — the worker owns that part.
     expect(queued.billId).toBe(billId);
@@ -1111,10 +1199,10 @@ describe("delivering a posted bill", () => {
   it("refuses a bill that has not been posted", async () => {
     const billId = await postedBill();
     await Promise.all([template(), document(billId), reachable(billId)]);
-    await prismaImports.prisma.bill.update({
+    await db((p) => p.bill.update({
       where: { id: billId },
       data: { postedAt: null },
-    });
+    }));
 
     const res = await deliver(billId);
 
@@ -1122,7 +1210,7 @@ describe("delivering a posted bill", () => {
     // money the utility has not decided to charge.
     expect(res.statusCode).toBe(409);
     expect(JSON.parse(res.body).error.code).toBe("BILL_NOT_POSTED");
-    expect(await prismaImports.prisma.notification.count()).toBe(0);
+    expect(await db((p) => p.notification.count())).toBe(0);
   }, 60_000);
 
   it("refuses a bill with nothing rendered to send", async () => {
@@ -1161,7 +1249,7 @@ describe("delivering a posted bill", () => {
 
     expect(res.statusCode).toBe(422);
     expect(JSON.parse(res.body).error.code).toBe("NO_ACTIVE_TEMPLATE");
-    expect(await prismaImports.prisma.notification.count()).toBe(0);
+    expect(await db((p) => p.notification.count())).toBe(0);
   }, 60_000);
 
   it("refuses a second send while the first is still queued", async () => {
@@ -1175,33 +1263,33 @@ describe("delivering a posted bill", () => {
     // operator's double-click is not.
     expect(second.statusCode).toBe(409);
     expect(JSON.parse(second.body).error.code).toBe("DELIVERY_IN_FLIGHT");
-    expect(await prismaImports.prisma.notification.count({ where: { billId } })).toBe(1);
+    expect(await db((p) => p.notification.count({ where: { billId } }))).toBe(1);
   }, 60_000);
 
   it("allows a resend once the first attempt has finished", async () => {
     const billId = await postedBill();
     await Promise.all([template(), document(billId), reachable(billId)]);
     const first = JSON.parse((await deliver(billId)).body).notificationId;
-    await prismaImports.prisma.notification.update({
+    await db((p) => p.notification.update({
       where: { id: first },
       data: { status: "SENT", sentAt: new Date() },
-    });
+    }));
 
     // Utilities resend bills constantly — a deleted email, a wrong
     // address, a customer asking on the phone — and each attempt is its
     // own fact rather than an overwrite of the last.
     expect((await deliver(billId)).statusCode).toBe(202);
-    expect(await prismaImports.prisma.notification.count({ where: { billId } })).toBe(2);
+    expect(await db((p) => p.notification.count({ where: { billId } }))).toBe(2);
   }, 60_000);
 
   it("lists every attempt against the bill, newest first", async () => {
     const billId = await postedBill();
     await Promise.all([template(), document(billId), reachable(billId)]);
     const first = JSON.parse((await deliver(billId)).body).notificationId;
-    await prismaImports.prisma.notification.update({
+    await db((p) => p.notification.update({
       where: { id: first },
       data: { status: "FAILED", error: "mailbox unavailable", attempts: 1 },
-    });
+    }));
     await deliver(billId);
 
     const res = await app.inject({
@@ -1256,10 +1344,10 @@ describe("holding a bill", () => {
   /** An unposted bill, which is what a hold usually meets. */
   async function unposted(): Promise<string> {
     const billId = await postedBill();
-    await prismaImports.prisma.bill.update({
+    await db((p) => p.bill.update({
       where: { id: billId },
       data: { postedAt: null },
-    });
+    }));
     return billId;
   }
 
@@ -1267,16 +1355,15 @@ describe("holding a bill", () => {
     const billId = await unposted();
     expect((await hold(billId)).statusCode).toBe(204);
 
-    const { postBill } = await import("../../services/ar/posting.service.js");
     await expect(
       postBill(UTILITY, ACTOR, "Tester", billId),
     ).rejects.toMatchObject({ code: "BILL_ON_HOLD" });
 
     // Not posted, and nothing on the ledger — the hold stops the whole
     // act rather than leaving a half-written one.
-    const after = await prismaImports.prisma.bill.findUniqueOrThrow({ where: { id: billId } });
+    const after = await db((p) => p.bill.findUniqueOrThrow({ where: { id: billId } }));
     expect(after.postedAt).toBeNull();
-    expect(await prismaImports.prisma.ledgerEntry.count({ where: { billId } })).toBe(0);
+    expect(await db((p) => p.ledgerEntry.count({ where: { billId } }))).toBe(0);
   }, 60_000);
 
   it("stops the bill leaving the building", async () => {
@@ -1316,7 +1403,6 @@ describe("holding a bill", () => {
     await hold(billId);
     expect((await release(billId)).statusCode).toBe(204);
 
-    const { postBill } = await import("../../services/ar/posting.service.js");
     await expect(
       postBill(UTILITY, ACTOR, "Tester", billId),
     ).resolves.toMatchObject({ billId });
@@ -1367,10 +1453,10 @@ describe("holding a bill", () => {
  */
 describe("holding an account's billing", () => {
   async function accountOf(billId: string): Promise<string> {
-    const bill = await prismaImports.prisma.bill.findUniqueOrThrow({
+    const bill = await db((p) => p.bill.findUniqueOrThrow({
       where: { id: billId },
       select: { accountId: true },
-    });
+    }));
     return bill.accountId;
   }
 
@@ -1394,10 +1480,10 @@ describe("holding an account's billing", () => {
   /** An unposted bill on a held account. */
   async function heldByAccount(): Promise<{ billId: string; accountId: string }> {
     const billId = await postedBill();
-    await prismaImports.prisma.bill.update({
+    await db((p) => p.bill.update({
       where: { id: billId },
       data: { postedAt: null },
-    });
+    }));
     const accountId = await accountOf(billId);
     expect((await holdAccount(accountId)).statusCode).toBe(200);
     return { billId, accountId };
@@ -1406,14 +1492,13 @@ describe("holding an account's billing", () => {
   it("stops its bills posting, without touching the bills themselves", async () => {
     const { billId } = await heldByAccount();
 
-    const { postBill } = await import("../../services/ar/posting.service.js");
     await expect(
       postBill(UTILITY, ACTOR, "Tester", billId),
     ).rejects.toMatchObject({ code: "BILL_ON_HOLD" });
 
     // The rule did the stopping. The bill carries no reason of its own,
     // which is what makes releasing the account sufficient.
-    const after = await prismaImports.prisma.bill.findUniqueOrThrow({ where: { id: billId } });
+    const after = await db((p) => p.bill.findUniqueOrThrow({ where: { id: billId } }));
     expect(after.holdReason).toBeNull();
     expect(after.postedAt).toBeNull();
   }, 60_000);
@@ -1440,7 +1525,6 @@ describe("holding an account's billing", () => {
 
     expect((await releaseAccount(accountId)).statusCode).toBe(200);
 
-    const { postBill } = await import("../../services/ar/posting.service.js");
     await expect(
       postBill(UTILITY, ACTOR, "Tester", billId),
     ).resolves.toMatchObject({ billId });
@@ -1459,9 +1543,8 @@ describe("holding an account's billing", () => {
 
     // True by construction now rather than by matching reason strings:
     // releasing an account was never a decision about this bill.
-    const after = await prismaImports.prisma.bill.findUniqueOrThrow({ where: { id: billId } });
+    const after = await db((p) => p.bill.findUniqueOrThrow({ where: { id: billId } }));
     expect(after.holdReason).toBe("Disputed line");
-    const { postBill } = await import("../../services/ar/posting.service.js");
     await expect(
       postBill(UTILITY, ACTOR, "Tester", billId),
     ).rejects.toMatchObject({ code: "BILL_ON_HOLD" });
@@ -1515,10 +1598,10 @@ describe("a bill list says why a bill cannot be sent", () => {
 
   it("names the hold", async () => {
     const billId = await postedBill();
-    await prismaImports.prisma.bill.update({
+    await db((p) => p.bill.update({
       where: { id: billId },
       data: { holdReason: "Disputed" },
-    });
+    }));
 
     expect((await listed(billId)).blockedReason).toBe("BILL_ON_HOLD");
   }, 60_000);
@@ -1532,7 +1615,7 @@ describe("a bill list says why a bill cannot be sent", () => {
 
   it("names a missing address", async () => {
     const billId = await postedBill();
-    await prismaImports.prisma.billDocument.create({
+    await db((p) => p.billDocument.create({
       data: {
         utilityId: UTILITY,
         billId,
@@ -1543,7 +1626,7 @@ describe("a bill list says why a bill cannot be sent", () => {
         templateKey: "default-bill",
         isPaperless: false,
       },
-    });
+    }));
 
     // The fixture's customer has no email by design.
     expect((await listed(billId)).blockedReason).toBe("NO_EMAIL_ADDRESS");
@@ -1551,7 +1634,7 @@ describe("a bill list says why a bill cannot be sent", () => {
 
   it("says nothing is in the way when a bill is ready to go", async () => {
     const billId = await postedBill();
-    await prismaImports.prisma.billDocument.create({
+    await db((p) => p.billDocument.create({
       data: {
         utilityId: UTILITY,
         billId,
@@ -1562,15 +1645,15 @@ describe("a bill list says why a bill cannot be sent", () => {
         templateKey: "default-bill",
         isPaperless: false,
       },
-    });
-    const bill = await prismaImports.prisma.bill.findUniqueOrThrow({
+    }));
+    const bill = await db((p) => p.bill.findUniqueOrThrow({
       where: { id: billId },
       select: { account: { select: { customerId: true } } },
-    });
-    await prismaImports.prisma.customer.update({
+    }));
+    await db((p) => p.customer.update({
       where: { id: bill.account.customerId! },
       data: { email: "jane.smith@example.com" },
-    });
+    }));
 
     // Null is the only state an operator acts on by pressing Send.
     expect((await listed(billId)).blockedReason).toBeNull();

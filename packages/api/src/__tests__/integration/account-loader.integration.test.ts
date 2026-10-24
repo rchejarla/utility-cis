@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, resetDb, makeTenantFixture, TENANT_A } from "./_effective-dating-fixtures.js";
+import { bootPostgres, resetDb, makeTenantFixture, TENANT_A, endAdminPool } from "./_effective-dating-fixtures.js";
 import { AccountLoader } from "../../lib/rate-engine-loaders/loaders/account-loader.js";
 
 /**
@@ -36,6 +36,7 @@ afterAll(async () => {
   // Postgres reports 57P01 as an unhandled error after a green run.
   await prismaImports?.prisma.$disconnect().catch(() => {});
   await prismaImports?.pool.end().catch(() => {});
+  await endAdminPool();
   await pgContainer?.stop().catch(() => {});
 });
 

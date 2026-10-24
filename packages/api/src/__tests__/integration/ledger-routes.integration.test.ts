@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, ensurePrincipal, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import { bootPostgres, ensurePrincipal, seedAsPlatform, endAdminPool } from "./_effective-dating-fixtures.js";
 
 /**
  * Slice 1 — HTTP surface for manual posting: persistence, duplicate-post
@@ -48,15 +48,6 @@ const headers = (sub?: string) => ({ authorization: `Bearer ${makeToken(sub)}` }
 beforeAll(() =>
   seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId, otherUtilityId] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // Its routes run correctly as `cis_app` — no route or service was
-  // found querying a tenant table without a scope — but its own test
-  // bodies arrange and assert on rows through `prisma` directly, which
-  // needs a `seedAsPlatform` or `runAsTenant` per site. See
-  // `rate-schedule-revise-copy.integration.test.ts` for both shapes.
-  // Counted by `src/__tests__/app/rls-suite-coverage.test.ts`, which
-  // only lets the number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   const appImports = await import("../../app.js");
@@ -147,9 +138,15 @@ beforeAll(() =>
 }), 180_000);
 
 afterAll(async () => {
-  await app?.close();
-  await prismaImports?.prisma.$disconnect();
-  await pgContainer?.stop();
+  await app?.close().catch(() => {});
+  // `$disconnect` does not dispose a pool the application owns — that is
+  // the driver-adapter contract — and the fixtures' owner pool is a
+  // third one. A container stopped while any of them holds a live
+  // connection has Postgres report 57P01 after an otherwise green run.
+  await prismaImports?.prisma.$disconnect().catch(() => {});
+  await prismaImports?.pool.end().catch(() => {});
+  await endAdminPool();
+  await pgContainer?.stop().catch(() => {});
 });
 
 beforeEach(() =>
@@ -172,46 +169,57 @@ async function makeBill(
     billingCycleId,
   },
 ): Promise<string> {
-  const { prisma } = prismaImports;
-  const bill = await prisma.bill.create({
-    data: {
-      utilityId: tenant.utilityId,
-      accountId: tenant.accountId,
-      billingCycleId: tenant.billingCycleId,
-      periodStart: new Date("2026-04-16"),
-      periodEnd: new Date("2026-05-15"),
-      billDate: new Date("2026-05-15"),
-      dueDate: new Date("2026-06-14"),
-      subtotal: total,
-      taxes: "0",
-      credits: "0",
-      total,
-      billNumber: `BILL-R-${Math.random().toString(36).slice(2, 8)}`,
-    },
+  /*
+   * Arranging rows, so the authority the fixtures use. The routes under
+   * test still run as `cis_app` acting for the tenant their own request
+   * establishes.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const bill = await prisma.bill.create({
+      data: {
+        utilityId: tenant.utilityId,
+        accountId: tenant.accountId,
+        billingCycleId: tenant.billingCycleId,
+        periodStart: new Date("2026-04-16"),
+        periodEnd: new Date("2026-05-15"),
+        billDate: new Date("2026-05-15"),
+        dueDate: new Date("2026-06-14"),
+        subtotal: total,
+        taxes: "0",
+        credits: "0",
+        total,
+        billNumber: `BILL-R-${Math.random().toString(36).slice(2, 8)}`,
+      },
+    });
+    return bill.id;
+
   });
-  return bill.id;
 }
 
 describe("POST /api/v1/bills/:id/post", () => {
-  it("posts the bill and returns the new balance", async () => {
-    const billId = await makeBill();
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/bills/${billId}/post`,
-      headers: headers(),
-      payload: {},
-    });
-    expect(res.statusCode).toBe(201);
-    const body = JSON.parse(res.body);
-    expect(body.amount).toBe("25.00");
-    expect(body.balance).toBe("25.00");
+  it("posts the bill and returns the new balance", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
+      const billId = await makeBill();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/bills/${billId}/post`,
+        headers: headers(),
+        payload: {},
+      });
+      expect(res.statusCode).toBe(201);
+      const body = JSON.parse(res.body);
+      expect(body.amount).toBe("25.00");
+      expect(body.balance).toBe("25.00");
 
-    // Persistence, not just a response body.
-    const { prisma } = prismaImports;
-    expect(await prisma.ledgerEntry.count()).toBe(1);
-    const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
-    expect(account.balance.toString()).toBe("25");
-  });
+      // Persistence, not just a response body.
+      const { prisma } = prismaImports;
+      expect(await prisma.ledgerEntry.count()).toBe(1);
+      const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
+      expect(account.balance.toString()).toBe("25");
+  
+    }));
 
   // Review Focus: duplicate post must be a clean 409
   it("returns 409 when the bill is already posted", async () => {
@@ -239,18 +247,21 @@ describe("POST /api/v1/bills/:id/post", () => {
   // answered 400 PRISMA_VALIDATION — "the database client rejected the
   // input shape" for what is plainly a bad request body. Asserting the
   // code, not just the status, is what makes this test discriminate.
-  it("returns 400 for an effectiveDate that is not a real date", async () => {
-    const billId = await makeBill();
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/bills/${billId}/post`,
-      headers: headers(),
-      payload: { effectiveDate: "2026-13-45" },
-    });
-    expect(res.statusCode).toBe(400);
-    expect(JSON.parse(res.body).error.code).toBe("VALIDATION_ERROR");
-    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
-  });
+  it("returns 400 for an effectiveDate that is not a real date", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
+      const billId = await makeBill();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/bills/${billId}/post`,
+        headers: headers(),
+        payload: { effectiveDate: "2026-13-45" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).error.code).toBe("VALIDATION_ERROR");
+      expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  
+    }));
 
   it("returns 404 for an unknown bill", async () => {
     const res = await app.inject({
@@ -263,37 +274,43 @@ describe("POST /api/v1/bills/:id/post", () => {
     expect(JSON.parse(res.body).error.code).toBe("BILL_NOT_FOUND");
   });
 
-  it("returns 404 for another tenant's bill and posts nothing", async () => {
-    const otherBill = await makeBill("30.0000", {
-      utilityId: otherUtilityId,
-      accountId: otherAccountId,
-      billingCycleId: otherBillingCycleId,
-    });
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/bills/${otherBill}/post`,
-      headers: headers(),
-      payload: {},
-    });
-    expect(res.statusCode).toBe(404);
-    expect(JSON.parse(res.body).error.code).toBe("BILL_NOT_FOUND");
-    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
-  });
-
-  it("returns 403 for a user without accounts:EDIT and posts nothing", async () => {
-    const billId = await makeBill();
-    for (const sub of [VIEWER, NO_PERMS]) {
+  it("returns 404 for another tenant's bill and posts nothing", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
+      const otherBill = await makeBill("30.0000", {
+        utilityId: otherUtilityId,
+        accountId: otherAccountId,
+        billingCycleId: otherBillingCycleId,
+      });
       const res = await app.inject({
         method: "POST",
-        url: `/api/v1/bills/${billId}/post`,
-        headers: headers(sub),
+        url: `/api/v1/bills/${otherBill}/post`,
+        headers: headers(),
         payload: {},
       });
-      expect(res.statusCode).toBe(403);
-      expect(JSON.parse(res.body).error.code).toBe("FORBIDDEN");
-    }
-    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
-  });
+      expect(res.statusCode).toBe(404);
+      expect(JSON.parse(res.body).error.code).toBe("BILL_NOT_FOUND");
+      expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  
+    }));
+
+  it("returns 403 for a user without accounts:EDIT and posts nothing", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
+      const billId = await makeBill();
+      for (const sub of [VIEWER, NO_PERMS]) {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/v1/bills/${billId}/post`,
+          headers: headers(sub),
+          payload: {},
+        });
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(res.body).error.code).toBe("FORBIDDEN");
+      }
+      expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  
+    }));
 });
 
 describe("GET /api/v1/accounts/:id/unposted-bills", () => {
@@ -385,10 +402,12 @@ describe("GET /api/v1/ar/reconciliation", () => {
     // way the cache can drift is something that is not the ledger
     // writing it.
     const { prisma } = prismaImports;
-    await prisma.$executeRawUnsafe(
-      "UPDATE account SET balance = 999.99 WHERE id = $1::uuid",
-      accountId,
-    );
+    await seedAsPlatform(async () => {
+      await prisma.$executeRawUnsafe(
+        "UPDATE account SET balance = 999.99 WHERE id = $1::uuid",
+        accountId,
+      );
+    });
 
     const res = await app.inject({
       method: "GET",
@@ -448,44 +467,53 @@ describe("POST /api/v1/accounts/:id/payments", () => {
   });
 
   // Review Focus: a negative amount must not become a charge.
-  it("returns 400 for a negative or zero amount and records nothing", async () => {
-    for (const amount of ["-10.00", "0.00"]) {
-      const res = await app.inject({
-        method: "POST",
-        url: `/api/v1/accounts/${accountId}/payments`,
-        headers: headers(PAYER),
-        payload: { amount, tender: "CHECK" },
-      });
-      expect(res.statusCode).toBe(400);
-      expect(JSON.parse(res.body).error.code).toBe("VALIDATION_ERROR");
-    }
-    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
-  });
+  it("returns 400 for a negative or zero amount and records nothing", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
+      for (const amount of ["-10.00", "0.00"]) {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/v1/accounts/${accountId}/payments`,
+          headers: headers(PAYER),
+          payload: { amount, tender: "CHECK" },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(res.body).error.code).toBe("VALIDATION_ERROR");
+      }
+      expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  
+    }));
 
-  it("returns 403 without payments:CREATE and records nothing", async () => {
-    for (const sub of [VIEWER, NO_PERMS]) {
+  it("returns 403 without payments:CREATE and records nothing", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
+      for (const sub of [VIEWER, NO_PERMS]) {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/v1/accounts/${accountId}/payments`,
+          headers: headers(sub),
+          payload: { amount: "10.00", tender: "CHECK" },
+        });
+        expect(res.statusCode).toBe(403);
+      }
+      expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  
+    }));
+
+  it("returns 404 for another tenant's account and records nothing", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
       const res = await app.inject({
         method: "POST",
-        url: `/api/v1/accounts/${accountId}/payments`,
-        headers: headers(sub),
+        url: `/api/v1/accounts/${otherAccountId}/payments`,
+        headers: headers(PAYER),
         payload: { amount: "10.00", tender: "CHECK" },
       });
-      expect(res.statusCode).toBe(403);
-    }
-    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
-  });
-
-  it("returns 404 for another tenant's account and records nothing", async () => {
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/accounts/${otherAccountId}/payments`,
-      headers: headers(PAYER),
-      payload: { amount: "10.00", tender: "CHECK" },
-    });
-    expect(res.statusCode).toBe(404);
-    expect(JSON.parse(res.body).error.code).toBe("ACCOUNT_NOT_FOUND");
-    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
-  });
+      expect(res.statusCode).toBe(404);
+      expect(JSON.parse(res.body).error.code).toBe("ACCOUNT_NOT_FOUND");
+      expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  
+    }));
 });
 
 describe("POST /api/v1/ledger-entries/:id/reverse", () => {
@@ -546,49 +574,55 @@ describe("POST /api/v1/ledger-entries/:id/reverse", () => {
     expect(JSON.parse(second.body).error.code).toBe("ENTRY_ALREADY_REVERSED");
   });
 
-  it("returns 403 without payments:EDIT", async () => {
-    const entryId = await postedEntryId();
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/ledger-entries/${entryId}/reverse`,
-      headers: headers(VIEWER),
-      payload: {},
-    });
-    expect(res.statusCode).toBe(403);
-    expect(await prismaImports.prisma.ledgerEntry.count({ where: { type: "REVERSAL" } })).toBe(0);
-  });
+  it("returns 403 without payments:EDIT", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
+      const entryId = await postedEntryId();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/ledger-entries/${entryId}/reverse`,
+        headers: headers(VIEWER),
+        payload: {},
+      });
+      expect(res.statusCode).toBe(403);
+      expect(await prismaImports.prisma.ledgerEntry.count({ where: { type: "REVERSAL" } })).toBe(0);
+  
+    }));
 
-  it("returns 404 for an entry in another tenant", async () => {
-    const { prisma } = prismaImports;
-    const strayReason = await prisma.ledgerReasonDef.create({
-      data: {
-        utilityId: otherUtilityId,
-        code: `ROUTES-STRAY-${Math.random().toString(36).slice(2, 7)}`,
-        label: "Stray",
-        appliesToType: "ADJUSTMENT_DEBIT",
-      },
-    });
-    const stray = await prisma.ledgerEntry.create({
-      data: {
-        utilityId: otherUtilityId,
-        accountId: otherAccountId,
-        type: "ADJUSTMENT_DEBIT",
-        amount: "10.00",
-        openAmount: "10.00",
-        dueDate: new Date("2026-06-14"),
-        effectiveDate: new Date("2026-06-14"),
-        reasonId: strayReason.id,
-      },
-    });
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/ledger-entries/${stray.id}/reverse`,
-      headers: headers(PAYER),
-      payload: {},
-    });
-    expect(res.statusCode).toBe(404);
-    expect(JSON.parse(res.body).error.code).toBe("ENTRY_NOT_FOUND");
-  });
+  it("returns 404 for an entry in another tenant", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
+      const { prisma } = prismaImports;
+      const strayReason = await prisma.ledgerReasonDef.create({
+        data: {
+          utilityId: otherUtilityId,
+          code: `ROUTES-STRAY-${Math.random().toString(36).slice(2, 7)}`,
+          label: "Stray",
+          appliesToType: "ADJUSTMENT_DEBIT",
+        },
+      });
+      const stray = await prisma.ledgerEntry.create({
+        data: {
+          utilityId: otherUtilityId,
+          accountId: otherAccountId,
+          type: "ADJUSTMENT_DEBIT",
+          amount: "10.00",
+          openAmount: "10.00",
+          dueDate: new Date("2026-06-14"),
+          effectiveDate: new Date("2026-06-14"),
+          reasonId: strayReason.id,
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/ledger-entries/${stray.id}/reverse`,
+        headers: headers(PAYER),
+        payload: {},
+      });
+      expect(res.statusCode).toBe(404);
+      expect(JSON.parse(res.body).error.code).toBe("ENTRY_NOT_FOUND");
+  
+    }));
 
   it("returns 400 for a reasonId that is not a uuid", async () => {
     const entryId = await postedEntryId();
@@ -650,43 +684,52 @@ describe("POST /api/v1/accounts/:id/fees", () => {
     expect(body.balance).toBe("25.00");
   });
 
-  it("returns 400 without a reasonId and writes nothing", async () => {
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/accounts/${accountId}/fees`,
-      headers: headers(ADJUSTER),
-      payload: { amount: "25.00" },
-    });
-    expect(res.statusCode).toBe(400);
-    expect(JSON.parse(res.body).error.code).toBe("VALIDATION_ERROR");
-    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
-  });
-
-  // Review Focus, through HTTP: the reason has to suit the type.
-  it("returns 422 when the reason is not a FEE reason", async () => {
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/accounts/${accountId}/fees`,
-      headers: headers(ADJUSTER),
-      payload: { amount: "25.00", reasonId: reasonIdFor.WRITE_OFF },
-    });
-    expect(res.statusCode).toBe(422);
-    expect(JSON.parse(res.body).error.code).toBe("REASON_TYPE_MISMATCH");
-    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
-  });
-
-  it("returns 403 without ar_adjustments:CREATE and writes nothing", async () => {
-    for (const sub of [VIEWER, PAYER]) {
+  it("returns 400 without a reasonId and writes nothing", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
       const res = await app.inject({
         method: "POST",
         url: `/api/v1/accounts/${accountId}/fees`,
-        headers: headers(sub),
-        payload: { amount: "25.00", reasonId: reasonIdFor.FEE },
+        headers: headers(ADJUSTER),
+        payload: { amount: "25.00" },
       });
-      expect(res.statusCode).toBe(403);
-    }
-    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
-  });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).error.code).toBe("VALIDATION_ERROR");
+      expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  
+    }));
+
+  // Review Focus, through HTTP: the reason has to suit the type.
+  it("returns 422 when the reason is not a FEE reason", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/accounts/${accountId}/fees`,
+        headers: headers(ADJUSTER),
+        payload: { amount: "25.00", reasonId: reasonIdFor.WRITE_OFF },
+      });
+      expect(res.statusCode).toBe(422);
+      expect(JSON.parse(res.body).error.code).toBe("REASON_TYPE_MISMATCH");
+      expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  
+    }));
+
+  it("returns 403 without ar_adjustments:CREATE and writes nothing", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
+      for (const sub of [VIEWER, PAYER]) {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/v1/accounts/${accountId}/fees`,
+          headers: headers(sub),
+          payload: { amount: "25.00", reasonId: reasonIdFor.FEE },
+        });
+        expect(res.statusCode).toBe(403);
+      }
+      expect(await prismaImports.prisma.ledgerEntry.count()).toBe(0);
+  
+    }));
 
   it("returns 404 for another tenant's account", async () => {
     const res = await app.inject({
@@ -751,20 +794,23 @@ describe("POST /api/v1/accounts/:id/waivers and /write-offs", () => {
     expect(body.balance).toBe("0.00");
   });
 
-  it("writes off a posted charge as a distinct act", async () => {
-    const entryId = await postedCharge();
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/accounts/${accountId}/write-offs`,
-      headers: headers(ADJUSTER),
-      payload: { amount: "25.00", reasonId: reasonIdFor.WRITE_OFF, debitId: entryId },
-    });
-    expect(res.statusCode).toBe(201);
-    expect(JSON.parse(res.body).balance).toBe("0.00");
-    const { prisma } = prismaImports;
-    expect(await prisma.ledgerEntry.count({ where: { type: "WRITE_OFF" } })).toBe(1);
-    expect(await prisma.ledgerEntry.count({ where: { type: "ADJUSTMENT_CREDIT" } })).toBe(0);
-  });
+  it("writes off a posted charge as a distinct act", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
+      const entryId = await postedCharge();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/accounts/${accountId}/write-offs`,
+        headers: headers(ADJUSTER),
+        payload: { amount: "25.00", reasonId: reasonIdFor.WRITE_OFF, debitId: entryId },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(JSON.parse(res.body).balance).toBe("0.00");
+      const { prisma } = prismaImports;
+      expect(await prisma.ledgerEntry.count({ where: { type: "WRITE_OFF" } })).toBe(1);
+      expect(await prisma.ledgerEntry.count({ where: { type: "ADJUSTMENT_CREDIT" } })).toBe(0);
+  
+    }));
 
   it("returns 422 when a waiver cites a WRITE_OFF reason", async () => {
     const entryId = await postedCharge();
@@ -788,20 +834,23 @@ describe("POST /api/v1/accounts/:id/waivers and /write-offs", () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it("returns 403 without ar_adjustments:EDIT and writes nothing", async () => {
-    const entryId = await postedCharge();
-    const before = await prismaImports.prisma.ledgerEntry.count();
-    for (const sub of [VIEWER, PAYER]) {
-      const res = await app.inject({
-        method: "POST",
-        url: `/api/v1/accounts/${accountId}/waivers`,
-        headers: headers(sub),
-        payload: { amount: "25.00", reasonId: reasonIdFor.ADJUSTMENT_CREDIT, debitId: entryId },
-      });
-      expect(res.statusCode).toBe(403);
-    }
-    expect(await prismaImports.prisma.ledgerEntry.count()).toBe(before);
-  });
+  it("returns 403 without ar_adjustments:EDIT and writes nothing", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
+      const entryId = await postedCharge();
+      const before = await prismaImports.prisma.ledgerEntry.count();
+      for (const sub of [VIEWER, PAYER]) {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/v1/accounts/${accountId}/waivers`,
+          headers: headers(sub),
+          payload: { amount: "25.00", reasonId: reasonIdFor.ADJUSTMENT_CREDIT, debitId: entryId },
+        });
+        expect(res.statusCode).toBe(403);
+      }
+      expect(await prismaImports.prisma.ledgerEntry.count()).toBe(before);
+  
+    }));
 });
 
 describe("POST /api/v1/ar/reasons/seed-defaults", () => {
@@ -957,32 +1006,38 @@ describe("GET /api/v1/receipts", () => {
   const DAY = "2027-03-01";
 
   async function seedReceiptsDay(): Promise<void> {
-    const { prisma } = prismaImports;
-    await prisma.ledgerEntry.deleteMany({ where: { utilityId, effectiveDate: new Date(DAY) } });
-    await prisma.ledgerEntry.create({
-      data: {
-        utilityId,
-        accountId,
-        type: "PAYMENT",
-        amount: "-30.00",
-        openAmount: "0.00",
-        effectiveDate: new Date(DAY),
-        tender: "CASH",
-        externalRef: "RCPT-PAY",
-      },
+
+    return seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      await prisma.ledgerEntry.deleteMany({ where: { utilityId, effectiveDate: new Date(DAY) } });
+      await prisma.ledgerEntry.create({
+        data: {
+          utilityId,
+          accountId,
+          type: "PAYMENT",
+          amount: "-30.00",
+          openAmount: "0.00",
+          effectiveDate: new Date(DAY),
+          tender: "CASH",
+          externalRef: "RCPT-PAY",
+        },
+      });
+      await prisma.ledgerEntry.create({
+        data: {
+          utilityId,
+          accountId,
+          type: "DEPOSIT",
+          amount: "-120.00",
+          openAmount: "-120.00",
+          effectiveDate: new Date(DAY),
+          tender: "CHECK",
+          externalRef: "RCPT-DEP",
+        },
+      });
+  
+
     });
-    await prisma.ledgerEntry.create({
-      data: {
-        utilityId,
-        accountId,
-        type: "DEPOSIT",
-        amount: "-120.00",
-        openAmount: "-120.00",
-        effectiveDate: new Date(DAY),
-        tender: "CHECK",
-        externalRef: "RCPT-DEP",
-      },
-    });
+
   }
 
   it("returns payments and deposits together, with the split beside the total", async () => {
@@ -1064,35 +1119,38 @@ describe("GET /api/v1/receipts", () => {
     expect(allowed.statusCode, "payments:VIEW alone must suffice").toBe(200);
   });
 
-  it("never returns another tenant's receipts", async () => {
-    const { prisma } = prismaImports;
-    await seedReceiptsDay();
-    const theirs = await prisma.ledgerEntry.create({
-      data: {
-        utilityId: otherUtilityId,
-        accountId: otherAccountId,
-        type: "PAYMENT",
-        amount: "-999.00",
-        openAmount: "0.00",
-        effectiveDate: new Date(DAY),
-        tender: "CASH",
-        externalRef: "THEIRS",
-      },
-    });
-    try {
-      const res = await app.inject({
-        method: "GET",
-        url: `/api/v1/receipts?from=${DAY}&to=${DAY}`,
-        headers: headers(PAYER),
+  it("never returns another tenant's receipts", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
+      const { prisma } = prismaImports;
+      await seedReceiptsDay();
+      const theirs = await prisma.ledgerEntry.create({
+        data: {
+          utilityId: otherUtilityId,
+          accountId: otherAccountId,
+          type: "PAYMENT",
+          amount: "-999.00",
+          openAmount: "0.00",
+          effectiveDate: new Date(DAY),
+          tender: "CASH",
+          externalRef: "THEIRS",
+        },
       });
-      const body = JSON.parse(res.body);
-      expect(body.meta.total).toBe(2);
-      expect(body.totalReceived).toBe("150.00");
-      expect(JSON.stringify(body)).not.toContain("THEIRS");
-    } finally {
-      await prisma.ledgerEntry.delete({ where: { id: theirs.id } });
-    }
-  });
+      try {
+        const res = await app.inject({
+          method: "GET",
+          url: `/api/v1/receipts?from=${DAY}&to=${DAY}`,
+          headers: headers(PAYER),
+        });
+        const body = JSON.parse(res.body);
+        expect(body.meta.total).toBe(2);
+        expect(body.totalReceived).toBe("150.00");
+        expect(JSON.stringify(body)).not.toContain("THEIRS");
+      } finally {
+        await prisma.ledgerEntry.delete({ where: { id: theirs.id } });
+      }
+  
+    }));
 });
 
 /**
@@ -1156,22 +1214,25 @@ describe("POST /api/v1/accounts/:id/refunds", () => {
     expect(body.applied).toHaveLength(1);
   });
 
-  it("returns 422 naming the available figure, and writes nothing", async () => {
-    const { prisma } = prismaImports;
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/accounts/${refundAccountId}/refunds`,
-      headers: headers(PAYER),
-      payload: { amount: "100.00", source: "CREDIT" },
-    });
-    expect(res.statusCode).toBe(422);
-    const body = JSON.parse(res.body);
-    expect(body.error.code).toBe("REFUND_EXCEEDS_AVAILABLE");
-    expect(body.error.message).toContain("80.00");
-    expect(
-      await prisma.ledgerEntry.count({ where: { accountId: refundAccountId, type: "REFUND" } }),
-    ).toBe(0);
-  });
+  it("returns 422 naming the available figure, and writes nothing", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs, under the fixture authority; each
+       * route call below still enters its own tenant scope. */
+      const { prisma } = prismaImports;
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/accounts/${refundAccountId}/refunds`,
+        headers: headers(PAYER),
+        payload: { amount: "100.00", source: "CREDIT" },
+      });
+      expect(res.statusCode).toBe(422);
+      const body = JSON.parse(res.body);
+      expect(body.error.code).toBe("REFUND_EXCEEDS_AVAILABLE");
+      expect(body.error.message).toContain("80.00");
+      expect(
+        await prisma.ledgerEntry.count({ where: { accountId: refundAccountId, type: "REFUND" } }),
+      ).toBe(0);
+  
+    }));
 
   // `source` has no default on purpose: returning an overpayment and
   // releasing a deposit are different acts, and a default would pick one.

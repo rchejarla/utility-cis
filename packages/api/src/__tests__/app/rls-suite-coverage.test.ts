@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
  * route that reads another tenant's rows passes exactly as a correct one
  * does.
  *
- * 58 of the 76 suites do override it, and for a reason rather than an
+ * 55 of the 76 suites do override it, and for a reason rather than an
  * oversight. Two reasons, measured on 2026-10-24 rather than assumed:
  *
  *   - 44 call services directly instead of through a route, so no
@@ -44,7 +44,7 @@ const INTEGRATION_DIR = path.resolve(
  * The count as of 2026-10-24. **Only ever lower this.** Raising it is
  * how the exempt set grows back, which is the thing being prevented.
  */
-const OPTED_OUT_CEILING = 58;
+const OPTED_OUT_CEILING = 55;
 
 const MARKER = "RLS-OPT-OUT";
 
@@ -83,6 +83,9 @@ describe("which integration suites run as a role RLS applies to", () => {
     "rls-enforcement.integration.test.ts",
     "rls-boot-guard.integration.test.ts",
     "worker-tenancy-rls.integration.test.ts",
+    "bill-document.integration.test.ts",
+    "billing-run.integration.test.ts",
+    "ledger-routes.integration.test.ts",
     "platform-authority.integration.test.ts",
     "sign-in-rls.integration.test.ts",
   ]);
@@ -109,6 +112,9 @@ describe("which integration suites run as a role RLS applies to", () => {
    * A name leaving this list is a regression, and the `toEqual` says so.
    */
   const PROVEN_ON_CIS_APP = [
+    "bill-document.integration.test.ts",
+    "billing-run.integration.test.ts",
+    "ledger-routes.integration.test.ts",
     "platform-authority.integration.test.ts",
     "rate-assignment-roles.integration.test.ts",
     "rate-component-cycle-check.integration.test.ts",

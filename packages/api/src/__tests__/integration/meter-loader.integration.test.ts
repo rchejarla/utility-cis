@@ -7,6 +7,7 @@ import {
   makeTenantFixture,
   TENANT_A,
   type TenantFixture,
+  endAdminPool,
 } from "./_effective-dating-fixtures.js";
 import { MeterLoader } from "../../lib/rate-engine-loaders/loaders/meter-loader.js";
 import { UnsupportedInSlice4Error } from "../../lib/rate-engine-loaders/types.js";
@@ -50,6 +51,7 @@ afterAll(async () => {
   // Postgres reports 57P01 as an unhandled error after a green run.
   await prismaImports?.prisma.$disconnect().catch(() => {});
   await prismaImports?.pool.end().catch(() => {});
+  await endAdminPool();
   await pgContainer?.stop().catch(() => {});
 });
 
