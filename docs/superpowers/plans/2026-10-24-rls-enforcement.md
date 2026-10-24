@@ -419,12 +419,12 @@ Review Focus 3. A sweep that returns zero rows reports success, so the test asse
 **Interfaces:**
 - Produces: `DATABASE_URL` pointing at `cis_app`; `DATABASE_URL_PLATFORM` at `cis_platform`; `DATABASE_URL_MIGRATE` at `cis`.
 
-- [ ] **Step 1: Invert Task 1's characterisation test** — "lets the application role read another tenant's rows today" becomes **"refuses another tenant's rows"**, asserting an empty result for a scoped read and `22023` for an unscoped one.
-- [ ] **Step 2: Run it** — Expected: FAIL while the app still connects as `cis`.
-- [ ] **Step 3: Point the application at `cis_app`** and migrations at `cis`. Keep `ALTER ROLE cis SUPERUSER` for the owner only.
-- [ ] **Step 4: Run it** — Expected: PASS.
-- [ ] **Step 5: Run every suite** — full API unit, every `*.integration.test.ts`, and the web suite. Expected: this is where a query that never had tenant context surfaces, as an empty result or a `22023`. Each one found is a real defect of the kind §7.1 describes, not a test to adjust: fix the query, and record it in the commit.
-- [ ] **Step 6: Commit** — `feat(db): the application connects as a role RLS applies to`
+- [x] **Step 1: Invert Task 1's characterisation test** — "lets the application role read another tenant's rows today" becomes **"refuses another tenant's rows"**, asserting an empty result for a scoped read and `22023` for an unscoped one.
+- [x] **Step 2: Run it** — Expected: FAIL while the app still connects as `cis`.
+- [x] **Step 3: Point the application at `cis_app`** and migrations at `cis`. Keep `ALTER ROLE cis SUPERUSER` for the owner only.
+- [x] **Step 4: Run it** — Expected: PASS.
+- [x] **Step 5: Run every suite** — full API unit, every `*.integration.test.ts`, and the web suite. Expected: this is where a query that never had tenant context surfaces, as an empty result or a `22023`. Each one found is a real defect of the kind §7.1 describes, not a test to adjust: fix the query, and record it in the commit.
+- [x] **Step 6: Commit** — `feat(db): the application connects as a role RLS applies to`
 
 ---
 
@@ -439,11 +439,11 @@ Review Focus 3. A sweep that returns zero rows reports success, so the test asse
 
 The whole plan is undone by one `ALTER ROLE ... SUPERUSER` in a deployment script. This makes that a startup failure rather than a silent regression, which is the same reason `schema-invariants.integration.test.ts` exists.
 
-- [ ] **Step 1: Write the failing test** — that boot throws when `current_user` is `rolsuper` or `rolbypassrls`, or when any policied table lacks `relforcerowsecurity`, and that in development it warns and continues instead.
-- [ ] **Step 2: Run it** — Expected: FAIL, function not defined.
-- [ ] **Step 3: Implement** — one query against `pg_roles` and `pg_class`; throw in production, `logger.warn` otherwise.
-- [ ] **Step 4: Run it** — Expected: PASS.
-- [ ] **Step 5: Commit** — `feat(api): refuse to start in production as a role that bypasses RLS`
+- [x] **Step 1: Write the failing test** — that boot throws when `current_user` is `rolsuper` or `rolbypassrls`, or when any policied table lacks `relforcerowsecurity`, and that in development it warns and continues instead.
+- [x] **Step 2: Run it** — Expected: FAIL, function not defined.
+- [x] **Step 3: Implement** — one query against `pg_roles` and `pg_class`; throw in production, `logger.warn` otherwise.
+- [x] **Step 4: Run it** — Expected: PASS.
+- [x] **Step 5: Commit** — `feat(api): refuse to start in production as a role that bypasses RLS`
 
 ---
 
@@ -454,10 +454,10 @@ The whole plan is undone by one `ALTER ROLE ... SUPERUSER` in a deployment scrip
 - Modify: `CLAUDE.md` (Multi-tenancy section)
 - Modify: `docs/specs/19-rbac.md`
 
-- [ ] **Step 1: Rewrite §7.1's "RLS does not currently enforce"** as what was wrong, what was done and what the reader must not undo — the two bypasses, the role split, FORCE, the unified fail-loud form, and the two deliberate `BYPASSRLS` paths with the list of what uses them.
-- [ ] **Step 2: Correct the three places that say isolation rests only on application predicates** (architecture line 86, line 126, CLAUDE.md's Multi-tenancy paragraph). They are accurate today and must not be left behind as the reason someone re-reads this as unsolved.
-- [ ] **Step 3: Record what is exempt and why** — `_prisma_migrations` (not tenant data) and `utility` (its own `id` is the tenant id, which its policy uses). `import_row` is no longer an exemption; Task 2b gave it a column.
-- [ ] **Step 4: Commit** — `docs: RLS enforces, and here is what not to undo`
+- [x] **Step 1: Rewrite §7.1's "RLS does not currently enforce"** as what was wrong, what was done and what the reader must not undo — the two bypasses, the role split, FORCE, the unified fail-loud form, and the two deliberate `BYPASSRLS` paths with the list of what uses them.
+- [x] **Step 2: Correct the three places that say isolation rests only on application predicates** (architecture line 86, line 126, CLAUDE.md's Multi-tenancy paragraph). They are accurate today and must not be left behind as the reason someone re-reads this as unsolved.
+- [x] **Step 3: Record what is exempt and why** — `_prisma_migrations` (not tenant data) and `utility` (its own `id` is the tenant id, which its policy uses). `import_row` is no longer an exemption; Task 2b gave it a column.
+- [x] **Step 4: Commit** — `docs: RLS enforces, and here is what not to undo`
 
 ---
 

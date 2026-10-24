@@ -12,6 +12,35 @@ Role-based access control for the Utility CIS. Hybrid model: external SSO handle
 
 A single permission model drives both navigation visibility and operation access — no dual mapping.
 
+### What this module does *not* do: keep tenants apart
+
+Permissions answer "may this user do this?", never "whose rows are these?".
+A tenant's System Admin holds every permission this module can grant and
+still reads only its own tenant's data, and that is not because the
+permission set withholds anything — it is a separate mechanism.
+
+Tenant isolation is enforced by PostgreSQL row-level security on the
+connection: the application connects as `cis_app`, a role with no bypass,
+and the acting tenant reaches the policies through
+`runAsTenant`/`runAsPlatform` (`lib/tenant-context.ts`). Two consequences
+land in this module's territory:
+
+- **The platform actor is above tenants, not a role within one.** It is a
+  `cis_user` with a null `utility_id` and *no* `user_role` row — being the
+  platform actor is the authority. Platform routes declare
+  `{ config: { platform: true } }` rather than a module and permission, and
+  a tenant's System Admin is refused there. Its database authority is
+  `cis_platform`, which holds BYPASSRLS and is the only role that may cross
+  tenants.
+- **Granting a portal token a staff permission would not be a wider
+  permission, it would be a data leak.** The portal routes carry their
+  ownership check in the query because the staff equivalents filter on
+  tenant and account only — a CSR may read any account in the tenant. RLS
+  confines a portal user to their tenant; it does not confine them to their
+  own customer.
+
+Full account: `docs/design/utility-cis-architecture.md` §7.1.
+
 ---
 
 ## Entities

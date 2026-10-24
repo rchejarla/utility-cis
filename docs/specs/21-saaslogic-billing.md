@@ -105,7 +105,7 @@ Payment records themselves are **not** defined here — they belong to module 23
 ## Security and compliance
 
 - **PCI:** no cardholder data path in CIS. Hosted payment page behind a redirect. Scope effectively zero.
-- **RLS:** new tables and columns carry `utility_id` and use the standard tenant policy. Note the caveat in module 19 — the policies do not currently enforce, because the application role bypasses RLS.
+- **RLS:** new tables and columns carry `utility_id` and use the standard tenant policy, which **enforces** — the application connects as `cis_app`, a role with no bypass, and every policied table FORCEs RLS (2026-10-24). A new tenant table therefore needs its policy *and* its FORCE, or `assertRlsEnforced` refuses to start in production; and work on it must run inside `runAsTenant`, because an unscoped read raises rather than returning nothing. See `docs/design/utility-cis-architecture.md` §7.1.
 - **Secrets:** **no SaaSLogic credential is stored in CIS at all** — apptor-connect holds it and never hands it out. This reverses the prior line here, which specified per-tenant encrypted credential storage and redaction from `saaslogic_call_log.request_body`; there is neither a credential nor that table to redact. The comment at `packages/shared/src/validators/tenant-settings.ts:22-24` still promises "a separate entity" for encrypted API-key storage and is wrong as of 2026-10-21.
 - **Webhooks:** signature verification is the events plane's, not ours — it delivers verified, deduplicated events read by cursor. What we verify is that the event names a bill and an amount we recognise before anything posts.
 

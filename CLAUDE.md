@@ -165,7 +165,15 @@ line by line before keeping it.
 
 ## Multi-tenancy
 
-Every entity has `utility_id`, and since 2026-10-18 it is a **foreign key to `utility(id)`** (`ON DELETE RESTRICT`) — a tenant is a row, so a write naming one that does not exist is refused. It is nullable on seven global reference tables, where NULL means "belongs to no tenant". PostgreSQL RLS enforces tenant isolation at DB level, though the policies are inert while the app role is a superuser that owns the tables. The API sets `app.current_utility_id` per request via JWT claims. Dev tenant UUID: `00000000-0000-4000-8000-000000000001`.
+Every entity has `utility_id`, and since 2026-10-18 it is a **foreign key to `utility(id)`** (`ON DELETE RESTRICT`) — a tenant is a row, so a write naming one that does not exist is refused. It is nullable on seven global reference tables, where NULL means "belongs to no tenant". PostgreSQL RLS enforces tenant isolation at DB level, and since 2026-10-24 it genuinely does: the app connects as **`cis_app`**, a non-owning role with no bypass, while `cis` stays the owner for migrations and `cis_platform` holds BYPASSRLS for work that crosses tenants by design. Every policied table FORCEs RLS, so the owner exemption is closed too. Dev tenant UUID: `00000000-0000-4000-8000-000000000001`.
+
+**The acting tenant travels in AsyncLocalStorage, not in a parameter.** `runAsTenant(utilityId, fn)` / `runAsPlatform(fn)` (`lib/tenant-context.ts`) declare which authority the work runs under; `lib/prisma.ts` owns the `pg` pool and applies `app.current_utility_id` once per connection checkout, and picks the tenant or platform pool from the same context. Requests get their scope from a Fastify hook, queue jobs from `QUEUE_TENANCY` via `scopedJob`. Three things follow:
+
+- **`await` inside the callback.** `runAsTenant(id, () => prisma.x.findFirst(…))` is a bug: a `PrismaPromise` is lazy, so returning one out of the scope executes it after the scope has exited. The scope covers the whole handler, not one query.
+- **An unscoped read of a tenant table raises**, it does not return zero rows — `''::uuid` is a 22P02, which surfaces as a 400 `PRISMA_P2007`. That is deliberate: an empty result reads as "nothing is wrong". The eight policies that admit tenant-less rows are `nullif(…, '')` guarded.
+- **A cross-tenant sweep needs `cis_platform`** or it finds nothing and reports success. That is why `/platform/cluster/queues` and `queue-scope.ts` exist in the shape they do.
+
+`assertRlsEnforced` refuses to start in production on a bypassing role, an unFORCEd policied table, or a confined `DATABASE_URL` with no `DATABASE_URL_PLATFORM`; outside production it warns, since a dev superuser is normal. Full account, including what would undo it: `docs/design/utility-cis-architecture.md` §7.1.
 
 **The platform actor** is a `CisUser` with a **null `utility_id`** — the one identity that sits above tenants (tenancy design note Q2). It holds no `user_role` row: being the platform actor *is* the authority, so platform routes declare `{ config: { platform: true } }` instead of a module and permission, and `getPlatformActor` gates them on a real row with `utility_id IS NULL` and `is_active`. A tenant's own System Admin is refused there, which is the point — it holds every permission a *tenant* can grant, which is not the same authority.
 

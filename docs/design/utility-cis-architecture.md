@@ -83,7 +83,7 @@ utility-cis/
 
 ### 3.3 Multi-Tenancy
 
-Every entity is scoped by `utility_id`. Tenant isolation is *designed* to be enforced at the database level via PostgreSQL Row-Level Security policies, and the policies below are created by every migration — but they are inert while the application role is a superuser, which it is today. See §7.1. Right now the `utility_id` predicates in application code are what separates tenants.
+Every entity is scoped by `utility_id`, and tenant isolation **is** enforced at the database level by the PostgreSQL Row-Level Security policies below, which every migration creates. It was not until 2026-10-24: the application role was a superuser *and* owned the tables, and PostgreSQL exempts both independently, so the policies were inert and the `utility_id` predicates in application code were the whole of the separation. Those predicates remain, now as the second line rather than the only one. What makes the policies bite — and what would undo it — is §7.1.
 
 ```sql
 ALTER TABLE premise ENABLE ROW LEVEL SECURITY;
@@ -122,8 +122,10 @@ Two of the three costs below are therefore closed:
   minted before the suspension stops working rather than running out its lifetime. Suspension
   deletes nothing; purge is a separate, deferred capability.
 - **No cross-tenant integrity guarantee.** Still open, and unchanged by the root: the foreign key
-  proves each row's tenant exists, not that two rows in a relationship share one. Separation still
-  rests on explicit `utility_id` predicates in queries (§7.1, and §1.7 of the tenancy note).
+  proves each row's tenant exists, not that two rows in a relationship share one. RLS closes the
+  case where a row belongs to the wrong tenant outright; it does not police a *relationship*
+  between two rows that each belong to the acting tenant legitimately, which is what this gap is
+  about (§7.1, and §1.7 of the tenancy note).
 
 Why it went unfixed for so long: a local `Utility` row largely mirrors provider-owned data, and a mirror is a second copy free to disagree with its source. That decision — whether the identity provider, this database, or both with a defined direction own tenancy — was settled on 2026-10-18 as Q2 of the tenancy note: apptorID eventually, for every identity rather than this one, and until then the CIS holds the row.
 
@@ -960,62 +962,82 @@ Eight pages behind the platform actor, outside the tenant permission model.
 
 ### 7.1 Current gaps
 
-Two conditions make the list above weaker than it reads. Both are known and
-accepted for development; neither is acceptable for a production tenant, and
-anyone citing this section externally needs to read this subsection with it.
+Row-level security **enforces** as of 2026-10-24. This subsection used to
+say it did not, and most of what it said was accurate; it is kept here as
+the record of what was wrong, because every item was a separate bypass and
+any one of them restored puts isolation back to resting on application
+predicates alone.
 
-**RLS does not currently enforce.** The policies are real and are created by
-every migration, but the application role `cis` is a SUPERUSER
-(`docker/init-cis-user.sh`), and PostgreSQL exempts superusers from row-level
-security entirely. So tenant isolation today rests **only** on the `utility_id`
-predicates in application code — the "defense in depth" bullet is in fact the
-sole defense. Until that changes, a query that forgets its `utility_id`
-predicate crosses tenants silently.
+**What was wrong.** PostgreSQL exempts a role from RLS on two independent
+grounds, and `cis` qualified on both: it was a SUPERUSER
+(`docker/init-cis-user.sh`), and it owned every table, because
+`ALTER DATABASE utility_cis OWNER TO cis` and migrations run as `cis`. An
+owner is exempt from its own tables' policies unless the table FORCEs them,
+and `pg_class.relforcerowsecurity` was `false` throughout. So
+`ALTER ROLE cis NOSUPERUSER` alone would have changed nothing — which is
+the part most likely to be misread, then and now. The policies themselves
+also disagreed about how to fail: most used the one-argument
+`current_setting`, which raises when unset, while 21 used the two-argument
+form, which returns NULL and silently filters every row.
 
-Dropping SUPERUSER is necessary but **not** sufficient, and it is worth being
-precise about why, because "revoke superuser and the policies start working"
-is wrong in two separate ways:
+**What was done.** Four things, and each is load-bearing:
 
-1. **`cis` owns the tables.** `init-cis-user.sh` does
-   `ALTER DATABASE utility_cis OWNER TO cis`, and migrations run as `cis`, so
-   it owns every table (`pg_class.relowner`). PostgreSQL exempts a table's
-   owner from RLS independently of superuser, and
-   `pg_class.relforcerowsecurity` is `false` throughout. So after
-   `ALTER ROLE cis NOSUPERUSER` the policies are *still* inert. Making them
-   bite needs either `FORCE ROW LEVEL SECURITY` on each table, or splitting
-   the role in two: an owner that runs migrations and seeds, and a
-   non-owning application role. Note also that `prisma migrate dev` builds a
-   shadow database, so a de-privileged role needs an explicit `CREATEDB`
-   grant.
-2. **Tenant context has to be established per transaction, not per
-   request.** *(The leak described here is fixed; the consequence for
-   enabling RLS remains.)* `setTenantContext` used to issue
-   `set_config('app.current_utility_id', …, false)` — *session*-scoped — as
-   its own statement against a pooled connection, from `tenantMiddleware`.
-   It failed twice over: the service queries that followed could be handed a
-   different connection and never see it, and the setting outlived the
-   request on the connection that did receive it, so the next request to be
-   handed that connection inherited the previous tenant's id. With RLS live
-   that is a cross-tenant read raising no error. Measured with the pool
-   pinned to one connection, the residue was still there after the request
-   and after an intervening `withTenant` transaction, which it shadowed.
+1. **The role is split.** `cis` remains the owner and runs migrations.
+   `cis_app` is a non-owning role with no bypass, and it is what the
+   application connects as (`DATABASE_URL`). `cis_platform` holds
+   BYPASSRLS and nothing else, for work that crosses tenants by design
+   (`DATABASE_URL_PLATFORM`).
+2. **Every policied table FORCEs RLS**, so the owner exemption is closed
+   too, not just the superuser one.
+3. **The policies fail loud, uniformly.** A tenant table's policy raises
+   on an unset context rather than returning zero rows, because an empty
+   result is read as "nothing is wrong". Eight policies admit rows with a
+   null `utility_id` — the seven global reference tables and `cis_user` —
+   and those are `nullif(current_setting(…, true), '')::uuid` guarded,
+   because a transaction-local `set_config` leaves the GUC as the empty
+   string after commit and `''::uuid` raises 22P02 where `IS NULL` would
+   have matched. That was found by a failing test, not by reading the SQL.
+4. **The acting tenant travels in AsyncLocalStorage and is applied to the
+   connection**, not threaded through call sites. `withTenant` had five
+   call sites against 432 bare-client query sites, so requiring it
+   everywhere would have left isolation resting on code remembering
+   something. `lib/prisma.ts` owns the `pg` pool and sets
+   `app.current_utility_id` once per checkout; `runAsTenant` and
+   `runAsPlatform` in `lib/tenant-context.ts` are how a caller declares
+   which it is. This needed Prisma 7: Prisma 6's query engine was a process
+   boundary that dropped the context, measured both ways before the
+   upgrade.
 
-   `setTenantContext` is now removed and `tenantMiddleware` only rejects a
-   request that has no tenant. `withTenant` is the single supported way in:
-   one transaction, `set_config(…, true)`, so the setting and the queries
-   share a connection and expire together. Regression test:
-   `tenant-context.integration.test.ts`.
+**What must not be undone.** `ALTER ROLE ... SUPERUSER` or `... BYPASSRLS`
+on `cis_app`; dropping FORCE from a table; pointing `DATABASE_URL` at the
+owner role; or widening a policy with an `OR current_setting(...)` escape
+hatch, which is reachable from any code path that can set a GUC and so puts
+the invariant back into application code. The first three are refused at
+startup in production by `assertRlsEnforced` (`lib/prisma.ts`), which is
+also why a dev stack on a superuser only warns.
 
-   What this leaves for whoever enables RLS: tenant-scoped reads have to go
-   through `withTenant`, because middleware cannot pin a connection to a
-   request and so cannot set this safely. `withTenant` currently has one
-   caller, so that is a sweep, not a switch.
+**The two deliberate bypasses**, both on `cis_platform` and both
+cross-tenant by nature: the platform console's routes, which exist to read
+across tenants, and the six all-tenants queue sweeps, which find work in
+every tenant in one pass. A sweep with no authority reads nothing and
+reports success — no rows flipped, no error raised, nobody's SLA breached
+overnight — so `lib/queue-scope.ts` derives the authority from
+`QUEUE_TENANCY` rather than applying it by hand. The two per-tenant queues
+are confined to the tenant named in their job payload, and a per-tenant job
+carrying no tenant is refused rather than widened.
 
-The policies themselves also disagree about how to fail: most use
-`current_setting('app.current_utility_id')`, which raises when unset, while
-the `ledger_*` tables use the two-argument form, which returns NULL and so
-silently filters every row. Fail-loud is the safer of the two for a table
-whose emptiness would be read as "nothing is wrong".
+**What is exempt, and why.** `_prisma_migrations`, which is not tenant
+data; and `utility`, whose own `id` *is* the tenant id and whose policy
+uses it. `import_row` was an exemption until 2026-10-24 and is not one any
+more — it was given a `utility_id` column, since a table that holds rows of
+a tenant's imported data has a tenant.
+
+**Sign-in is the one place with no scope to inherit.** The three
+unauthenticated routes read the database before a request scope exists, so
+each names its tenant explicitly and holds it for the whole handler. Portal
+registration used to look an account number up with no tenant at all;
+account numbers are unique per tenant, so it now requires one.
+Coverage: `sign-in-rls.integration.test.ts`.
 
 **"A query that forgets its predicate" is not hypothetical — one audit found
 seven.** On 2026-10-17, auditing the two queues that run several tenants'
