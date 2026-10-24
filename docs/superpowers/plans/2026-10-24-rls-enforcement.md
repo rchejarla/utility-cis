@@ -20,7 +20,7 @@ Verified against the running dev database on 2026-10-24, not inferred:
 | Tables with RLS enabled | 62 of 64 (`_prisma_migrations` and `import_row` have none) |
 | Tables with `relforcerowsecurity` | **0** |
 | Policies | 62, all `FOR ALL`, all on `utility_id = current_setting('app.current_utility_id')::uuid` |
-| Policy failure mode | **36 one-arg** (raises when unset) / **26 two-arg** (returns NULL — silently filters every row) |
+| Policy failure mode | 36 one-arg (raises when unset) / 26 two-arg — but see the breakdown below, which is what matters |
 | `withTenant` call sites | 5 |
 | Bare `prisma.<model>.<op>(` call sites, non-test | 432 across 83 files |
 | `tx.<model>.<op>(` call sites, non-test | 162 |
@@ -36,7 +36,55 @@ as an ordinary role:       Seq Scan on account
                              Filter: (utility_id = (current_setting('app.current_utility_id'))::uuid)
 ```
 
-So this plan changes **who connects**, not what the policies say.
+So this plan mostly changes **who connects**, not what the policies say. The
+exceptions are below, and they are not the ones a count of one-arg versus
+two-arg suggests.
+
+### How every policy is created
+
+All of it comes from migrations. There is no manual step and no standalone
+script: `setup_db.bat` starts the containers and runs `prisma migrate deploy`,
+and the 8 migrations on disk are the whole database. The 62 `ENABLE ROW LEVEL
+SECURITY` statements, the 62 `CREATE POLICY` statements and the 35 CHECK
+constraints all live in one 394-line file,
+`20261018150001_database_features/migration.sql`, hand-written as literal DDL
+per table — `schema.prisma` cannot express any of it, which is why
+`prisma migrate dev` is forbidden here.
+
+One correction to CLAUDE.md while we are here: it describes `setup_db.bat` as
+"start containers + push schema + apply RLS". There is no `db push` and no
+separate RLS step; it is `migrate deploy` and nothing else.
+
+### The four kinds of policy, which is what Task 2 acts on
+
+Classifying all 62 by what they actually do when `app.current_utility_id` is
+unset:
+
+| Group | Count | Form | Verdict |
+|---|---|---|---|
+| Tenant tables, one-arg | 33 | `utility_id = current_setting(…)` | **Correct** — raises `22023` |
+| Tenant tables, two-arg, no NULL branch | 21 | `utility_id = current_setting(…, true)` | **Wrong** — NULL comparison yields no rows and no error. `bill`, `ledger_entry`, `billing_run`, `utility`, `user_role` among them |
+| Global reference, two-arg **with** `utility_id IS NULL OR …` | 5 | `account_type_def`, `measure_type_def`, `premise_type_def`, `rate_assignment_role`, `rate_component_kind` | **Correct as written** — a global row matches through the NULL branch regardless, so an unset context yields the globals rather than an error. Do **not** convert these |
+| Global reference, one-arg with a NULL branch | 2 | `service_request_type_def`, `suspension_type_def` | Raises where the five above return globals. Harmless but inconsistent |
+
+The naive reading — "unify all 26 two-arg policies on the fail-loud form" —
+would break the five global reference tables by making a legitimate read of
+rows that belong to no tenant raise. **The scope is the 21 tenant tables.**
+
+### A defect this classification found: the platform actor is invisible to itself
+
+`cis_user` has a nullable `utility_id`, and the platform actor is *defined* as
+the row where it is null. Its policy is:
+
+```sql
+CREATE POLICY tenant_isolation ON cis_user
+  USING (utility_id = current_setting('app.current_utility_id')::uuid);
+```
+
+No `IS NULL` branch. So the moment RLS binds, `getPlatformActor` cannot read
+the row that authorises every platform route, and all 24 of them answer 403 —
+for a reason that has nothing to do with the role split in Task 6 and would
+look exactly like it. Task 2a fixes this, and it must land before Task 8.
 
 ## Global Constraints
 
@@ -52,7 +100,8 @@ So this plan changes **who connects**, not what the policies say.
 
 Input classes and failure modes the spec implies that no task's tests exercise directly. Each line's test is added to the owning task.
 
-1. **A query that runs with no tenant context at all.** 26 policies return NULL when `app.current_utility_id` is unset and so filter every row away silently; an empty result reads as "nothing is wrong". Task 2 unifies the form and Task 9 asserts the refusal is loud.
+1. **A query that runs with no tenant context at all.** 21 tenant-table policies return NULL when `app.current_utility_id` is unset and so filter every row away silently; an empty result reads as "nothing is wrong". Task 2 makes those raise — and its second case stops the fix reaching the 7 policies where a NULL branch is the correct answer.
+1b. **A read of rows that belong to no tenant.** The global reference tables and the platform actor's own `cis_user` row are legitimately tenant-less. Task 2's second case and Task 2a cover them; getting this wrong fails closed and looks like a role problem.
 2. **A connection returned to the pool still carrying a tenant.** This is the leak §7.1 measured and had removed; the driver adapter reintroduces the shape and must reset on release. Task 5.
 3. **An all-tenants worker sweeping under `cis_app`.** Six queues pass over every tenant in one process; under RLS they would return zero rows and report success. Task 7.
 4. **A platform route under `cis_app`.** 24 routes list or act across tenants; the console would render empty rather than error. Task 6.
@@ -115,31 +164,75 @@ git commit -m "feat(db): a non-owning application role, and FORCE on every polic
 
 **Interfaces:**
 - Consumes: the roles from Task 1.
-- Produces: every policy on the one-argument `current_setting('app.current_utility_id')::uuid` form, which raises `22023` when unset.
+- Produces: all 54 tenant-table policies on the one-argument form, which raises `22023` when unset. The 7 global reference policies keep a NULL branch and stay silent-but-correct.
 
-§7.1: *"fail-loud is the safer of the two for a table whose emptiness would be read as 'nothing is wrong'"*. The 26 two-argument policies are all `ledger_*`, which is exactly where an empty result is most dangerous.
+§7.1: *"fail-loud is the safer of the two for a table whose emptiness would be read as 'nothing is wrong'"*. That applies to a **tenant** table. It does not apply to a table whose rows legitimately belong to no tenant, where the NULL branch is the answer and raising would be the bug — which is why the scope here is 21 tables and not 26. See "The four kinds of policy" above.
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-it("refuses loudly, not emptily, when no tenant is set", async () => {
+it("refuses loudly, not emptily, when a tenant table is read with no tenant set", async () => {
   await expect(
     asRole("cis_app", (c) => c.query("SELECT id FROM ledger_entry")),
-  ).rejects.toMatchObject({ code: "22023" }); // unrecognized configuration parameter
+  ).rejects.toMatchObject({ code: "22023" });
 });
 
-it("uses one failure mode across every policy", async () => {
-  const [{ two_arg }] = await prisma.$queryRaw<{ two_arg: bigint }[]>`
-    SELECT count(*) AS two_arg FROM pg_policies
-    WHERE schemaname = 'public' AND qual LIKE '%, true)%'`;
-  expect(Number(two_arg)).toBe(0); // fails at 26 today
+it("still serves rows that belong to no tenant, with no tenant set", async () => {
+  // The five global reference tables are not a bug to be unified away.
+  const rows = await asRole("cis_app", (c) =>
+    c.query("SELECT code FROM account_type_def WHERE utility_id IS NULL"));
+  expect(rows.rowCount).toBeGreaterThan(0);
+});
+
+it("leaves no tenant table able to answer emptily", async () => {
+  const [{ silent }] = await prisma.$queryRaw<{ silent: bigint }[]>`
+    SELECT count(*) AS silent FROM pg_policies
+    WHERE schemaname = 'public' AND qual LIKE '%, true)%' AND qual NOT LIKE '%IS NULL%'`;
+  expect(Number(silent)).toBe(0); // fails at 21 today
 });
 ```
 
-- [ ] **Step 2: Run it** — Expected: FAIL, `expected 26 to be 0`.
-- [ ] **Step 3: Write the migration** — `DROP POLICY` / `CREATE POLICY` per affected table, generated from `pg_policies` where the qual contains the two-argument form. Keep the policy name `tenant_isolation`.
-- [ ] **Step 4: Run it** — Expected: PASS.
-- [ ] **Step 5: Commit** — `fix(db): one failure mode for every tenant policy, and it is loud`
+- [ ] **Step 2: Run it** — Expected: the third case FAILS with `expected 21 to be 0`; the second already passes and is there to stop the fix overreaching.
+- [ ] **Step 3: Write the migration** — `DROP POLICY` / `CREATE POLICY` for the 21 tables whose qual has the two-argument form **and no `IS NULL` branch**, generated from `pg_policies` with exactly that predicate so the five global ones cannot be swept up. Keep the name `tenant_isolation`. `utility`'s policy is keyed on `id`, not `utility_id` — preserve that.
+- [ ] **Step 4: Run it** — Expected: PASS, all three.
+- [ ] **Step 5: Commit** — `fix(db): a tenant table may not answer emptily when no tenant is set`
+
+---
+
+### Task 2a: Let the platform actor be read
+
+**Files:**
+- Create: `packages/shared/prisma/migrations/20261024120000_rls_platform_actor/migration.sql`
+- Modify: `packages/api/src/__tests__/integration/rls-enforcement.integration.test.ts`
+
+**Interfaces:**
+- Produces: `cis_user`'s policy admitting the row whose `utility_id` is null.
+
+Found while classifying the policies for Task 2, and it must land before Task 8 or Task 6 fails for the wrong reason. The platform actor *is* the `cis_user` row with a null `utility_id`; the current policy has no NULL branch and so hides it from the query that authorises all 24 platform routes.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+it("can still find the platform actor once RLS binds", async () => {
+  await seedPlatformActor(prisma); // utility_id: null, is_active: true
+  const rows = await asRole("cis_app", (c) =>
+    c.query("SELECT id FROM cis_user WHERE utility_id IS NULL"));
+  expect(rows.rowCount).toBe(1);
+});
+
+it("does not thereby expose another tenant's staff", async () => {
+  // The NULL branch must widen the policy by exactly one row shape.
+  await asRole("cis_app", (c) =>
+    c.query("SELECT set_config('app.current_utility_id', $1, false)", [TENANT_A]));
+  const rows = await asRole("cis_app", (c) => c.query("SELECT utility_id FROM cis_user"));
+  expect(rows.rows.every((r) => r.utility_id === null || r.utility_id === TENANT_A)).toBe(true);
+});
+```
+
+- [ ] **Step 2: Run it** — Expected: the first FAILS with `expected 0 to be 1`.
+- [ ] **Step 3: Write the migration** — recreate `cis_user`'s policy as `utility_id IS NULL OR utility_id = current_setting('app.current_utility_id')::uuid`, matching the shape the global reference tables already use.
+- [ ] **Step 4: Run it** — Expected: PASS, both.
+- [ ] **Step 5: Commit** — `fix(db): the platform actor is a row RLS was hiding from the query that reads it`
 
 ---
 
@@ -325,6 +418,8 @@ The whole plan is undone by one `ALTER ROLE ... SUPERUSER` in a deployment scrip
 ## Self-review
 
 **Spec coverage.** §7.1 names: superuser bypass (Task 8), owner bypass (Task 1 FORCE + role split), `CREATEDB` for the shadow database (not applicable — `migrate dev` is forbidden here, noted in Global Constraints), per-transaction context (Tasks 4–5), the policy fail-mode split (Task 2), and that `withTenant` being a sweep rather than a switch is why the adapter exists (Task 3–5). The audit of seven unscoped queries is the *reason* for the plan, not a task.
+
+**Where this plan corrects §7.1.** §7.1 says the two-argument policies are "the `ledger_*` tables". They are 26 policies across four different situations, only 21 of which are wrong, and `ledger_*` is three of those 21. Task 2's scope comes from the classification above, not from that sentence. §7.1 also does not mention `cis_user`'s missing NULL branch, which is Task 2a and is the single defect here most likely to be misread as something else.
 
 **Interface consistency.** `runAsTenant` / `runAsPlatform` / `currentTenant` are produced in Task 4 and consumed in 5, 6 and 7 under those exact names. `pool` is produced in 3 and consumed in 5. `prismaPlatform` is produced in 6 and consumed in 7.
 
