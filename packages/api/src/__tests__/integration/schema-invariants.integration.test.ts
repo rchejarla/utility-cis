@@ -58,6 +58,49 @@ describe("every tenant-scoped table", () => {
     expect(missing.map((r) => r.table_name)).toEqual([]);
   });
 
+  /**
+   * The blind spot in the policy check below: it derives "tenant-scoped"
+   * from *having* a `utility_id`, so a table that ought to carry one and
+   * does not is invisible to it — no column, therefore not in the set,
+   * therefore never asked whether it has a policy.
+   *
+   * `import_row` sat in exactly that hole. It holds `raw_data` — the
+   * imported CSV, so customer names, addresses and meter readings — and
+   * reached a tenant only through `import_batch_id`. Every read derived
+   * from a batch whose ownership the caller had proved, so it was safe;
+   * but caller discipline is the thing RLS is meant to stop being the
+   * only defence, and with no column no policy could back it up.
+   *
+   * Pinned by name rather than derived, like the nullable set below: a
+   * table without a tenant column is a claim that its rows belong to
+   * nobody, and that claim should have to be made out loud.
+   */
+  it("gives every table holding a tenant's data a column to be scoped by", async () => {
+    const { prisma } = prismaImports;
+
+    // `_prisma_migrations` is Prisma's own bookkeeping and holds no
+    // tenant data. `utility` IS the tenant: its primary key is the id
+    // every other table points at, which is what its policy uses.
+    const EXEMPT = ["_prisma_migrations", UTILITY_TABLE];
+
+    const untenanted = await prisma.$queryRaw<{ table_name: string }[]>`
+      SELECT c.relname AS table_name
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public'
+        AND c.relkind = 'r'
+        AND NOT EXISTS (
+          SELECT 1 FROM pg_attribute a
+          WHERE a.attrelid = c.oid
+            AND a.attname = 'utility_id'
+            AND a.attnum > 0
+            AND NOT a.attisdropped
+        )
+      ORDER BY 1`;
+
+    expect(untenanted.map((r) => r.table_name).filter((t) => !EXEMPT.includes(t))).toEqual([]);
+  });
+
   it("has row-level security enabled, with a policy", async () => {
     const { prisma } = prismaImports;
 

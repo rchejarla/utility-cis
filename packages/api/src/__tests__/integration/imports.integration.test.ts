@@ -1061,6 +1061,7 @@ describe("processBatch — cancellation", () => {
     });
     await prisma.importRow.createMany({
       data: Array.from({ length: 60 }, (_, i) => ({
+        utilityId: TENANT_A,
         importBatchId: batch.id,
         rowIndex: i + 1,
         rawData: {

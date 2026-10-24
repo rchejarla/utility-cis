@@ -57,6 +57,7 @@ model Utility {
   delinquencyActions     DelinquencyAction[]
   delinquencyRules       DelinquencyRule[]
   importBatchs           ImportBatch[]
+  importRows             ImportRow[]
   inAppNotifications     InAppNotification[]
   ledgerApplications     LedgerApplication[]
   ledgerEntrys           LedgerEntry[]
@@ -1538,6 +1539,12 @@ enum ImportRowStatus {
 
 model ImportRow {
   id              String          @id @default(uuid()) @db.Uuid
+  /// Denormalised from the batch, because a policy has to read the
+  /// tenant off the row. Joining through `import_batch` in a USING
+  /// clause would evaluate a subquery per row, and there is one row per
+  /// line of an imported CSV.
+  utilityId       String          @map("utility_id") @db.Uuid
+  utility         Utility         @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   importBatchId   String          @map("import_batch_id") @db.Uuid
   /// 1-based; matches what the operator sees in their CSV.
   rowIndex        Int             @map("row_index")
@@ -1555,6 +1562,7 @@ model ImportRow {
 
   @@index([importBatchId, status])
   @@index([importBatchId, rowIndex])
+  @@index([utilityId])
   @@map("import_row")
 }
 

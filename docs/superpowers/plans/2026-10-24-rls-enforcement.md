@@ -240,7 +240,7 @@ it("does not thereby expose another tenant's staff", async () => {
 
 ---
 
-### Task 2b: Give `import_row` a tenant to be scoped by
+### Task 2b: Give `import_row` a tenant to be scoped by — **DONE 2026-10-24**
 
 **Files:**
 - Create: `packages/shared/prisma/migrations/20261024130000_import_row_tenant/migration.sql`
@@ -257,12 +257,12 @@ It is safe today, and the way it is safe is the problem: every read derives from
 
 Denormalising the column is the right fix rather than a policy that joins through the batch: a subquery in a `USING` clause runs per row, and this table holds one row per imported CSV line.
 
-- [ ] **Step 1: Write the failing test** — in `schema-invariants`, assert that every table carrying tenant data has a `utility_id` and a `tenant_isolation` policy, with `_prisma_migrations` and `utility` as the only exemptions (`utility` because its own `id` *is* the tenant id, which its policy already uses).
-- [ ] **Step 2: Run it** — Expected: FAIL, naming `import_row`.
-- [ ] **Step 3: Write the migration** — add the column nullable, `UPDATE import_row r SET utility_id = b.utility_id FROM import_batch b WHERE b.id = r.import_batch_id`, then `SET NOT NULL`, add the FK, `ENABLE` + `FORCE ROW LEVEL SECURITY`, and the one-argument `tenant_isolation` policy.
-- [ ] **Step 4: Set it on write** — `imports.service.ts:170`'s `createMany` is the only creator; it already has the batch in hand.
-- [ ] **Step 5: Run it** — Expected: PASS. Then run the imports integration suite; the 4 `update` sites address rows by id and need nothing.
-- [ ] **Step 6: Commit** — `fix(db): import_row carries the tenant whose data it holds`
+- [x] **Step 1: Write the failing test** — in `schema-invariants`, assert that every table carrying tenant data has a `utility_id` and a `tenant_isolation` policy, with `_prisma_migrations` and `utility` as the only exemptions (`utility` because its own `id` *is* the tenant id, which its policy already uses).
+- [x] **Step 2: Run it** — FAILED with `expected [ 'import_row' ] to deeply equal []`.
+- [x] **Step 3: Write the migration** — add the column nullable, `UPDATE import_row r SET utility_id = b.utility_id FROM import_batch b WHERE b.id = r.import_batch_id`, then `SET NOT NULL`, add the FK, `ENABLE` + `FORCE ROW LEVEL SECURITY`, and the one-argument `tenant_isolation` policy.
+- [x] **Step 4: Set it on write** — `imports.service.ts:170`'s `createMany` is the only creator; it already has the batch in hand.
+- [x] **Step 5: Run it** — invariants 4/4, imports integration 28/28. The 4 `update` sites addressed rows by id and needed nothing.
+- [x] **Step 6: Commit** — `fix(db): import_row carries the tenant whose data it holds`
 
 ---
 

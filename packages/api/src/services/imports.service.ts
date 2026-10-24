@@ -169,6 +169,11 @@ export async function createImport(
   // what operators see in their CSV (header row is row 0 implicitly).
   await prisma.importRow.createMany({
     data: mappedRows.map((row, i) => ({
+      // Denormalised from the batch so the row can be scoped by a policy
+      // rather than only by the caller remembering to filter on its
+      // batch. The two cannot disagree: the batch is created a few lines
+      // above, for this same tenant.
+      utilityId,
       importBatchId: batch.id,
       rowIndex: i + 1,
       rawData: row as Prisma.InputJsonValue,

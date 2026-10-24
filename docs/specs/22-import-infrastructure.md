@@ -86,6 +86,7 @@ Per-row state. **Reason for a separate table over a JSON column:** a 100k-row im
 ```
 model ImportRow {
   id              String      @id @default(uuid()) @db.Uuid
+  utilityId       String      @map("utility_id") @db.Uuid         // denormalised from the batch; see below
   importBatchId   String      @map("import_batch_id") @db.Uuid
   rowIndex        Int         @map("row_index")          // 1-based, matches what the operator sees
   rawData         Json        @map("raw_data")           // the source row (post-mapping) used by the handler
@@ -98,6 +99,7 @@ model ImportRow {
 
   @@index([importBatchId, status])
   @@index([importBatchId, rowIndex])
+  @@index([utilityId])
 }
 
 enum ImportRowStatus {
@@ -107,6 +109,30 @@ enum ImportRowStatus {
   SKIPPED       // pre-empted (e.g., kind handler said "skip silently")
 }
 ```
+
+**`utility_id` is denormalised from the batch, and that is deliberate.** This
+was the one tenant-bearing table in the schema with no tenant column, no
+policy, and row-level security not even enabled — so until 2026-10-24 no
+database rule could scope it. `raw_data` is the imported CSV, which means
+customer names, addresses and meter readings.
+
+It was not leaking. Every read derives from a batch whose ownership the caller
+proved first — `imports.service.ts` does
+`findFirstOrThrow({ where: { id: batchId, utilityId } })` before filtering by
+`importBatchId`, and all nine read sites follow that shape. But caller
+discipline is exactly what RLS exists to stop being the only defence, and a
+policy has to read the tenant off the row it is filtering.
+
+Joining through `import_batch` in a `USING` clause was rejected: a subquery
+there is evaluated per row, and this table holds one row per line of an
+imported CSV — a 12,000-row batch would mean 12,000 subqueries per scan. The
+column cannot drift from the batch, because the only writer creates both in
+the same call. `schema-invariants.integration.test.ts` now asserts that every
+table holding a tenant's data has a column to be scoped by, with
+`_prisma_migrations` and `utility` the only exemptions — the previous RLS
+invariant derived "tenant-scoped" from *having* a `utility_id`, so a table
+that ought to carry one and did not was invisible to it, which is the hole
+this sat in.
 
 This table is bounded — rows are created at batch creation and never updated except to flip status / record errorCode. After a batch is COMPLETE for ≥ 90 days, a retention sweep can drop `import_row` rows for it, keeping just the aggregate counts on `ImportBatch`. Out-of-scope for Phase 1.
 
