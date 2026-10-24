@@ -7,6 +7,7 @@ import { loggerOptions } from "./lib/logger.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { tenantMiddleware } from "./middleware/tenant.js";
 import { authorizationMiddleware } from "./middleware/authorization.js";
+import { actingContextMiddleware } from "./middleware/acting-context.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { redis } from "./lib/cache-redis.js";
 import { commodityRoutes } from "./routes/commodities.js";
@@ -95,6 +96,9 @@ export async function buildApp() {
   app.addHook("onRequest", authMiddleware);
   app.addHook("onRequest", tenantMiddleware);
   app.addHook("onRequest", authorizationMiddleware);
+  // After authorization, which is what decides whether this is a tenant's
+  // request or the platform's. See the file for why it is a callback hook.
+  app.addHook("onRequest", actingContextMiddleware);
 
   /**
    * Liveness, plus the one dependency whose state is invisible from

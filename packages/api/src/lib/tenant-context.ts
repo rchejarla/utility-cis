@@ -74,3 +74,24 @@ export function runAsPlatform<T>(fn: () => Promise<T>): Promise<T> {
 export function currentTenant(): ActingAs | null {
   return store.getStore() ?? null;
 }
+
+/**
+ * Establish a scope around a *callback*, for Fastify's hooks.
+ *
+ * `runAsTenant` and `runAsPlatform` take an async function and are what
+ * application code uses. A request cannot be scoped that way: an
+ * `onRequest` hook that awaited something would unwind its own scope
+ * before the handler ran. The callback form works because Fastify
+ * invokes the next step of the lifecycle from `done()`, which happens
+ * inside `run` — so the handler inherits the context.
+ *
+ * `middleware/acting-context.ts` is the only caller, and
+ * `platform-authority.integration.test.ts` is what proves the
+ * inheritance actually holds rather than merely being plausible.
+ */
+export function enterScope<T>(acting: ActingAs, fn: () => T): T {
+  if (acting.kind === "tenant" && !UUID_RE.test(acting.utilityId)) {
+    throw new Error(`Invalid utility id: ${JSON.stringify(acting.utilityId)}`);
+  }
+  return store.run(acting, fn);
+}

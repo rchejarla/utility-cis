@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
 import { bootPostgres, TENANT_A, TENANT_B } from "./_effective-dating-fixtures.js";
 
 /**
@@ -29,33 +30,75 @@ let prismaImports: typeof import("../../lib/prisma.js");
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [utilityId, otherUtility] });
   pgContainer = booted.container;
-  prismaImports = await import("../../lib/prisma.js");
 
-  const { prisma } = prismaImports;
-  for (const [uid, number] of [
-    [utilityId, "CTX-A-001"],
-    [otherUtility, "CTX-B-001"],
-  ] as const) {
-    const cycle = await prisma.billingCycle.create({
-      data: {
-        utilityId: uid,
-        name: "R1",
-        cycleCode: "R01",
-        readDayOfMonth: 1,
-        billDayOfMonth: 15,
-        frequency: "MONTHLY",
-      },
-    });
-    await prisma.account.create({
-      data: {
-        utilityId: uid,
-        accountNumber: number,
-        accountType: "RESIDENTIAL",
-        status: "ACTIVE",
-        billingCycleId: cycle.id,
-      },
-    });
+  /*
+   * Everything below runs as the roles a deployment will actually use —
+   * `cis_app` for tenant work and `cis_platform` for work that crosses
+   * tenants — rather than as the container's superuser. That is the
+   * whole point: a superuser is exempt from RLS, so a suite running as
+   * one cannot tell whether any of this works.
+   *
+   * The migration creates both roles NOLOGIN with no password on
+   * purpose, since credentials are not a migration's business
+   * (`scripts/grant-dev-db-logins.sql` does it for dev). This grants
+   * them for the container's lifetime, which is a few seconds.
+   *
+   * Fixtures are inserted over a plain superuser connection first,
+   * because `cis_app` could not create a row for two different tenants
+   * in one pass — which is the policy working, not a problem to route
+   * around.
+   */
+  const superuserPool = new pg.Pool({ connectionString: booted.dbUrl });
+  try {
+    await superuserPool.query(`ALTER ROLE cis_app LOGIN PASSWORD 'probe'`);
+    await superuserPool.query(`ALTER ROLE cis_platform LOGIN PASSWORD 'probe'`);
+
+    // Through a throwaway Prisma client rather than hand-written INSERTs:
+    // the column list is the schema's business, and restating it here
+    // only creates a second place to get it wrong.
+    const { PrismaClient } = await import("@utility-cis/shared/src/generated/prisma");
+    const { PrismaPg } = await import("@prisma/adapter-pg");
+    const seeder = new PrismaClient({ adapter: new PrismaPg(superuserPool) });
+    try {
+      for (const [uid, number] of [
+        [utilityId, "CTX-A-001"],
+        [otherUtility, "CTX-B-001"],
+      ] as const) {
+        const cycle = await seeder.billingCycle.create({
+          data: {
+            utilityId: uid,
+            name: "R1",
+            cycleCode: "R01",
+            readDayOfMonth: 1,
+            billDayOfMonth: 15,
+            frequency: "MONTHLY",
+          },
+        });
+        await seeder.account.create({
+          data: {
+            utilityId: uid,
+            accountNumber: number,
+            accountType: "RESIDENTIAL",
+            status: "ACTIVE",
+            billingCycleId: cycle.id,
+          },
+        });
+      }
+    } finally {
+      await seeder.$disconnect().catch(() => {});
+    }
+  } finally {
+    await superuserPool.end();
   }
+
+  // Point the client at the de-privileged roles *before* importing it:
+  // `config.ts` reads the environment once, at module load.
+  const asRoleUrl = (role: string) =>
+    booted.dbUrl.replace(/\/\/[^@]+@/, `//${role}:probe@`);
+  process.env.DATABASE_URL = asRoleUrl("cis_app");
+  process.env.DATABASE_URL_PLATFORM = asRoleUrl("cis_platform");
+
+  prismaImports = await import("../../lib/prisma.js");
 }, 240_000);
 
 afterAll(async () => {
@@ -81,10 +124,19 @@ describe("the connection pool", () => {
 
   it("carries every query, including the raw SQL and the generated client", async () => {
     const { prisma } = prismaImports;
-    const viaClient = await prisma.account.count();
-    const [{ n }] = await prisma.$queryRaw<{ n: bigint }[]>`SELECT count(*)::bigint AS n FROM account`;
-    expect(viaClient).toBe(2);
-    expect(Number(n)).toBe(2);
+    const { runAsTenant } = await import("../../lib/tenant-context.js");
+    // Scoped, because the client now connects as a role the policies
+    // bind to: an unscoped read of a tenant table is refused, which is
+    // the behaviour the rest of this suite exists to establish.
+    const { viaClient, viaRaw } = await runAsTenant(utilityId, async () => ({
+      viaClient: await prisma.account.count(),
+      viaRaw: Number(
+        (await prisma.$queryRaw<{ n: bigint }[]>`SELECT count(*)::bigint AS n FROM account`)[0].n,
+      ),
+    }));
+    // One, not two: the other tenant's row is there and is not visible.
+    expect(viaClient).toBe(1);
+    expect(viaRaw).toBe(1);
   });
 });
 
@@ -169,5 +221,45 @@ describe("the acting tenant on a connection", () => {
   it("sets nothing for platform work, which is meant to cross tenants", async () => {
     const { runAsPlatform } = await import("../../lib/tenant-context.js");
     expect((await runAsPlatform(setting)) ?? "").toBe("");
+  });
+
+  /*
+   * Task 6. Setting nothing is not enough on its own: with RLS enforced,
+   * a connection carrying no tenant reads nothing rather than
+   * everything. Platform work needs a role the policies do not bind to,
+   * and `runAsPlatform` is what selects it.
+   *
+   * Which role a query runs as therefore follows the same context the
+   * tenant does, rather than being threaded through call sites. It has
+   * to: `role.service` and `utility-readiness.service` are each imported
+   * by both a platform route and a tenant route, so a client passed by
+   * hand would have to be passed differently to the same function
+   * depending on who called it.
+   */
+  it("runs platform work as a role that may cross tenants, and tenant work as one that may not", async () => {
+    const { runAsTenant, runAsPlatform } = await import("../../lib/tenant-context.js");
+    const whoami = async () => {
+      const [{ u }] = await prismaImports.prisma.$queryRaw<{ u: string }[]>`
+        SELECT current_user AS u`;
+      return u;
+    };
+    expect(await runAsPlatform(whoami)).toBe("cis_platform");
+    expect(await runAsTenant(utilityId, whoami)).toBe("cis_app");
+  });
+
+  /*
+   * The point of the role, stated as what it can see. Asserted on a
+   * tenant-scoped table with two tenants' rows in it, so "crosses
+   * tenants" is a count and not a claim.
+   */
+  it("lets platform work read every tenant's rows, and a tenant's only its own", async () => {
+    const { runAsTenant, runAsPlatform } = await import("../../lib/tenant-context.js");
+    const tenantsVisible = async () => {
+      const rows = await prismaImports.prisma.$queryRaw<{ utility_id: string }[]>`
+        SELECT DISTINCT utility_id::text FROM account`;
+      return rows.map((r) => r.utility_id).sort();
+    };
+    expect(await runAsPlatform(tenantsVisible)).toEqual([utilityId, otherUtility].sort());
+    expect(await runAsTenant(utilityId, tenantsVisible)).toEqual([utilityId]);
   });
 });

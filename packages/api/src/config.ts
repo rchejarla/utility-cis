@@ -37,6 +37,19 @@ export const configSchema = z.object({
   // or wrong, so the guard doesn't disappear; it just moves to the
   // place that actually depends on it.
   DATABASE_URL: z.string().default(""),
+  /**
+   * The database role for work that crosses tenants by design — the
+   * platform console's routes and the all-tenants queue sweeps. It
+   * holds BYPASSRLS; `DATABASE_URL`'s role does not.
+   *
+   * Defaults to `DATABASE_URL`, which is the correct behaviour for a
+   * deployment where the application role is still exempt from RLS
+   * anyway (a superuser or a table owner). Once the application connects
+   * as a role the policies bind to, leaving this unset means the
+   * platform console reads nothing — so `assertRlsEnforced` checks for
+   * exactly that pairing rather than letting it fail as a blank screen.
+   */
+  DATABASE_URL_PLATFORM: z.string().default(""),
   REDIS_URL: z.string().default("redis://localhost:6379"),
 
   // Logging. Accept either case from the env (DEBUG vs debug) — pino

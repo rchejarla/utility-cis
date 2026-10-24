@@ -18,7 +18,43 @@ import { currentTenant } from "./tenant-context.js";
  * Exported for that reason and no other. Nothing should query through it
  * directly; `prisma` is the interface.
  */
-export const pool = new pg.Pool({ connectionString: config.DATABASE_URL });
+/**
+ * Tenant work, on a role the policies bind to.
+ */
+const tenantPool = new pg.Pool({ connectionString: config.DATABASE_URL });
+
+/**
+ * Work that crosses tenants by design, on a role holding BYPASSRLS — the
+ * platform console's 24 routes and the 6 all-tenants queue sweeps.
+ *
+ * A separate role rather than a widened policy: an `OR
+ * current_setting(...)` escape hatch is reachable from any code path
+ * that can set a GUC, which puts the invariant back into application
+ * code remembering something. This cannot be assumed from SQL.
+ *
+ * Falls back to `DATABASE_URL` when unset, which is right for a
+ * deployment whose application role is still exempt anyway. Once it is
+ * not, an unset value means the platform console reads nothing —
+ * `assertRlsEnforced` checks for exactly that pairing rather than
+ * letting it present as a blank screen.
+ */
+const platformPool = new pg.Pool({
+  connectionString: config.DATABASE_URL_PLATFORM || config.DATABASE_URL,
+});
+
+/**
+ * Which authority this query runs under, from the same context that
+ * carries the tenant.
+ *
+ * It has to follow the context rather than be passed in.
+ * `role.service` and `utility-readiness.service` are each imported by a
+ * platform route *and* a tenant route, so a client threaded through
+ * call sites would have to be threaded differently into the same
+ * function depending on who called it.
+ */
+function poolFor(): pg.Pool {
+  return currentTenant()?.kind === "platform" ? platformPool : tenantPool;
+}
 
 /** The value this physical connection currently carries, so it is set once. */
 type TaggedClient = pg.PoolClient & { __acting?: string };
@@ -71,11 +107,11 @@ async function applyActingTenant(client: TaggedClient): Promise<void> {
   client.__acting = want;
 }
 
-const baseConnect = pool.connect.bind(pool) as () => Promise<pg.PoolClient>;
+const baseConnect = () => poolFor().connect();
 
 // Transactions: the adapter holds this client for their duration, so what
 // is set here covers every statement inside them.
-pool.connect = (async () => {
+async function connectWithTenant(): Promise<pg.PoolClient> {
   const client = (await baseConnect()) as TaggedClient;
   try {
     await applyActingTenant(client);
@@ -84,13 +120,13 @@ pool.connect = (async () => {
     throw err;
   }
   return client;
-}) as typeof pool.connect;
+}
 
 // Plain queries: `pool.query` checks a client out and returns it
 // internally, with no room to set anything in between — so the checkout
 // happens here instead, which is the only way a single query can carry a
 // tenant at all.
-pool.query = (async (text: unknown, values?: unknown) => {
+async function queryWithTenant(text: unknown, values?: unknown): Promise<unknown> {
   const client = (await baseConnect()) as TaggedClient;
   let failed: Error | undefined;
   try {
@@ -105,7 +141,30 @@ pool.query = (async (text: unknown, values?: unknown) => {
     // caller to trip over.
     client.release(failed);
   }
-}) as typeof pool.query;
+}
+
+/**
+ * One pool-shaped thing over two real pools.
+ *
+ * The adapter takes a single pool and reaches it as `this.client`, so
+ * the choice between roles has to happen inside the object it was
+ * handed. A proxy rather than a hand-written façade, so anything the
+ * adapter touches beyond `connect`, `query` and `end` still reaches a
+ * real pool instead of becoming undefined on a Prisma upgrade.
+ */
+export const pool = new Proxy(tenantPool, {
+  get(target, prop, receiver) {
+    if (prop === "connect") return connectWithTenant;
+    if (prop === "query") return queryWithTenant;
+    if (prop === "end") return async () => {
+      await Promise.all([tenantPool.end(), platformPool.end()]);
+    };
+    const value = Reflect.get(target, prop, receiver);
+    // Bound to the real pool: an unbound method called on the proxy
+    // would run with `this` as the proxy and recurse through this trap.
+    return typeof value === "function" ? value.bind(target) : value;
+  },
+}) as pg.Pool;
 
 export const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
