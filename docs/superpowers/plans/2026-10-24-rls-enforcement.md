@@ -17,7 +17,11 @@ Verified against the running dev database on 2026-10-24, not inferred:
 | Fact | Value |
 |---|---|
 | App role | `cis` — `rolsuper = true`, owns all 64 public tables |
-| Tables with RLS enabled | 62 of 64 (`_prisma_migrations` and `import_row` have none) |
+| Tables with RLS enabled | 62 of 64 (`_prisma_migrations` and `import_row` have none — see Task 2b) |
+| Tables with both `id` and `utility_id` | 60 |
+| `utility` | `id` only — it **is** the tenant, so its policy keys on `id` |
+| `service_request_counter` | `utility_id` only, composite PK `(utility_id, year)`, policied |
+| `import_row` | `id` only, no tenant column, no policy |
 | Tables with `relforcerowsecurity` | **0** |
 | Policies | 62, all `FOR ALL`, all on `utility_id = current_setting('app.current_utility_id')::uuid` |
 | Policy failure mode | 36 one-arg (raises when unset) / 26 two-arg — but see the breakdown below, which is what matters |
@@ -236,6 +240,32 @@ it("does not thereby expose another tenant's staff", async () => {
 
 ---
 
+### Task 2b: Give `import_row` a tenant to be scoped by
+
+**Files:**
+- Create: `packages/shared/prisma/migrations/20261024130000_import_row_tenant/migration.sql`
+- Modify: `packages/shared/prisma/schema.prisma` (`ImportRow`)
+- Modify: `packages/api/src/services/imports.service.ts` (the one `createMany`)
+- Modify: `packages/api/src/__tests__/integration/schema-invariants.integration.test.ts`
+
+**Interfaces:**
+- Produces: `import_row.utility_id`, NOT NULL, FK to `utility(id)` `ON DELETE RESTRICT`, with RLS enabled, forced, and a `tenant_isolation` policy like every other tenant table's.
+
+`import_row` is the one tenant-bearing table with **no `utility_id`, no policy, and RLS not even enabled**. It holds `raw_data jsonb` — the imported CSV content, so customer names, addresses and meter data — and reaches a tenant only through `import_batch_id → import_batch.utility_id`.
+
+It is safe today, and the way it is safe is the problem: every read derives from a batch whose ownership the caller proved first (`imports.service.ts:441` is the good example — `findFirstOrThrow({ where: { id: batchId, utilityId } })` before anything else). That is caller discipline, which is precisely what this plan exists to stop being the only defence. With no `utility_id` column, no policy can back it up — not even after Task 8.
+
+Denormalising the column is the right fix rather than a policy that joins through the batch: a subquery in a `USING` clause runs per row, and this table holds one row per imported CSV line.
+
+- [ ] **Step 1: Write the failing test** — in `schema-invariants`, assert that every table carrying tenant data has a `utility_id` and a `tenant_isolation` policy, with `_prisma_migrations` and `utility` as the only exemptions (`utility` because its own `id` *is* the tenant id, which its policy already uses).
+- [ ] **Step 2: Run it** — Expected: FAIL, naming `import_row`.
+- [ ] **Step 3: Write the migration** — add the column nullable, `UPDATE import_row r SET utility_id = b.utility_id FROM import_batch b WHERE b.id = r.import_batch_id`, then `SET NOT NULL`, add the FK, `ENABLE` + `FORCE ROW LEVEL SECURITY`, and the one-argument `tenant_isolation` policy.
+- [ ] **Step 4: Set it on write** — `imports.service.ts:170`'s `createMany` is the only creator; it already has the batch in hand.
+- [ ] **Step 5: Run it** — Expected: PASS. Then run the imports integration suite; the 4 `update` sites address rows by id and need nothing.
+- [ ] **Step 6: Commit** — `fix(db): import_row carries the tenant whose data it holds`
+
+---
+
 ### Task 3: Enable driver adapters
 
 **Files:**
@@ -410,7 +440,7 @@ The whole plan is undone by one `ALTER ROLE ... SUPERUSER` in a deployment scrip
 
 - [ ] **Step 1: Rewrite §7.1's "RLS does not currently enforce"** as what was wrong, what was done and what the reader must not undo — the two bypasses, the role split, FORCE, the unified fail-loud form, and the two deliberate `BYPASSRLS` paths with the list of what uses them.
 - [ ] **Step 2: Correct the three places that say isolation rests only on application predicates** (architecture line 86, line 126, CLAUDE.md's Multi-tenancy paragraph). They are accurate today and must not be left behind as the reason someone re-reads this as unsolved.
-- [ ] **Step 3: Record the two tables with no policy** — `_prisma_migrations` (not tenant data) and `import_row` (scope inherited from its batch; confirm and state which).
+- [ ] **Step 3: Record what is exempt and why** — `_prisma_migrations` (not tenant data) and `utility` (its own `id` is the tenant id, which its policy uses). `import_row` is no longer an exemption; Task 2b gave it a column.
 - [ ] **Step 4: Commit** — `docs: RLS enforces, and here is what not to undo`
 
 ---
