@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
  * route that reads another tenant's rows passes exactly as a correct one
  * does.
  *
- * 55 of the 76 suites do override it, and for a reason rather than an
+ * 44 of the 76 suites do override it, and for a reason rather than an
  * oversight. Two reasons, measured on 2026-10-24 rather than assumed:
  *
  *   - 44 call services directly instead of through a route, so no
@@ -44,7 +44,7 @@ const INTEGRATION_DIR = path.resolve(
  * The count as of 2026-10-24. **Only ever lower this.** Raising it is
  * how the exempt set grows back, which is the thing being prevented.
  */
-const OPTED_OUT_CEILING = 55;
+const OPTED_OUT_CEILING = 44;
 
 const MARKER = "RLS-OPT-OUT";
 
@@ -85,7 +85,18 @@ describe("which integration suites run as a role RLS applies to", () => {
     "worker-tenancy-rls.integration.test.ts",
     "bill-document.integration.test.ts",
     "billing-run.integration.test.ts",
+    "ledger-adjustment.integration.test.ts",
+    "ledger-allocation.integration.test.ts",
+    "ledger-autopost.integration.test.ts",
+    "ledger-fee.integration.test.ts",
+    "ledger-list.integration.test.ts",
+    "ledger-payment.integration.test.ts",
+    "ledger-posting.integration.test.ts",
+    "ledger-reason.integration.test.ts",
+    "ledger-reconciliation.integration.test.ts",
+    "ledger-reversal.integration.test.ts",
     "ledger-routes.integration.test.ts",
+    "ledger-shape.integration.test.ts",
     "platform-authority.integration.test.ts",
     "sign-in-rls.integration.test.ts",
   ]);

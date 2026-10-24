@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import type { Prisma } from "@utility-cis/shared/src/generated/prisma";
+import { runAsTenant } from "../../lib/tenant-context.js";
 import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
@@ -33,14 +35,6 @@ const reasonIdFor: Record<string, string> = {};
 beforeAll(() =>
   seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId, other] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   allocation = await import("../../services/ar/allocation.service.js");
@@ -69,8 +63,13 @@ beforeAll(() =>
 }), 180_000);
 
 afterAll(async () => {
-  await prismaImports?.prisma.$disconnect();
-  await pgContainer?.stop();
+  // `$disconnect` does not dispose a pool the application owns — that is
+  // the driver-adapter contract — so the tenant and platform pools are
+  // ended here. Without it the container stops while connections are
+  // live and Postgres reports 57P01 after an otherwise green run.
+  await prismaImports?.prisma.$disconnect().catch(() => {});
+  await prismaImports?.pool.end().catch(() => {});
+  await pgContainer?.stop().catch(() => {});
 });
 
 beforeEach(() =>
@@ -85,49 +84,83 @@ beforeEach(() =>
 }),
 );
 
+/**
+ * A transaction entered the way a route enters one: inside the tenant's
+ * scope.
+ *
+ * The allocation service takes the transaction client as its first
+ * argument and the tenant as its second, so the scope cannot ride in on
+ * an argument — it has to be around the call. In production the request's
+ * middleware had already entered it before the transaction opened, which
+ * is what this reproduces.
+ */
+const asTenantTx = <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> =>
+  runAsTenant(utilityId, async () => prismaImports.prisma.$transaction(fn));
+
 async function debit(
   type: "FEE" | "ADJUSTMENT_DEBIT",
   amount: string,
   dueDate: string,
 ): Promise<string> {
-  const { prisma } = prismaImports;
-  const e = await prisma.ledgerEntry.create({
-    data: {
-      utilityId,
-      accountId,
-      type,
-      amount,
-      openAmount: amount,
-      dueDate: new Date(dueDate),
-      effectiveDate: new Date(dueDate),
-      reasonId: reasonIdFor[type]!,
-      createdBy: ACTOR,
-    },
+  /*
+   * Arranging rows, so the authority the fixtures use. Calls under test
+   * re-enter their own tenant scope, so they still run as `cis_app`.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const e = await prisma.ledgerEntry.create({
+      data: {
+        utilityId,
+        accountId,
+        type,
+        amount,
+        openAmount: amount,
+        dueDate: new Date(dueDate),
+        effectiveDate: new Date(dueDate),
+        reasonId: reasonIdFor[type]!,
+        createdBy: ACTOR,
+      },
+    });
+    return e.id;
+
   });
-  return e.id;
 }
 
 async function credit(amount: string): Promise<string> {
-  const { prisma } = prismaImports;
-  const e = await prisma.ledgerEntry.create({
-    data: {
-      utilityId,
-      accountId,
-      type: "PAYMENT",
-      amount: `-${amount}`,
-      openAmount: `-${amount}`,
-      effectiveDate: new Date("2026-06-01"),
-      tender: "CHECK",
-      createdBy: ACTOR,
-    },
+  /*
+   * Arranging rows, so the authority the fixtures use. Calls under test
+   * re-enter their own tenant scope, so they still run as `cis_app`.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const e = await prisma.ledgerEntry.create({
+      data: {
+        utilityId,
+        accountId,
+        type: "PAYMENT",
+        amount: `-${amount}`,
+        openAmount: `-${amount}`,
+        effectiveDate: new Date("2026-06-01"),
+        tender: "CHECK",
+        createdBy: ACTOR,
+      },
+    });
+    return e.id;
+
   });
-  return e.id;
 }
 
 async function openOf(id: string): Promise<string> {
-  const { prisma } = prismaImports;
-  const e = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id } });
-  return e.openAmount.toFixed(2);
+  /*
+   * Arranging rows, so the authority the fixtures use. Calls under test
+   * re-enter their own tenant scope, so they still run as `cis_app`.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const e = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id } });
+    return e.openAmount.toFixed(2);
+
+  });
 }
 
 describe("rankDebitType", () => {
@@ -155,7 +188,7 @@ describe("applyCreditToDebits", () => {
     const d = await debit("ADJUSTMENT_DEBIT", "40.00", "2026-06-14");
     const c = await credit("40.00");
 
-    const made = await prisma.$transaction((tx) =>
+    const made = await asTenantTx((tx) =>
       allocation.applyCreditToDebits(tx, utilityId, accountId, c),
     );
 
@@ -172,7 +205,7 @@ describe("applyCreditToDebits", () => {
     const fee = await debit("FEE", "25.00", "2026-06-30");
     const c = await credit("25.00");
 
-    await prisma.$transaction((tx) =>
+    await asTenantTx((tx) =>
       allocation.applyCreditToDebits(tx, utilityId, accountId, c),
     );
 
@@ -186,7 +219,7 @@ describe("applyCreditToDebits", () => {
     const older = await debit("ADJUSTMENT_DEBIT", "30.00", "2026-05-14");
     const c = await credit("30.00");
 
-    await prisma.$transaction((tx) =>
+    await asTenantTx((tx) =>
       allocation.applyCreditToDebits(tx, utilityId, accountId, c),
     );
 
@@ -200,7 +233,7 @@ describe("applyCreditToDebits", () => {
     const b = await debit("ADJUSTMENT_DEBIT", "30.00", "2026-06-14");
     const c = await credit("45.00");
 
-    const made = await prisma.$transaction((tx) =>
+    const made = await asTenantTx((tx) =>
       allocation.applyCreditToDebits(tx, utilityId, accountId, c),
     );
 
@@ -226,11 +259,13 @@ describe("applyCreditToDebits", () => {
     const a = await debit("ADJUSTMENT_DEBIT", "30.00", "2026-06-14");
     const b = await debit("ADJUSTMENT_DEBIT", "30.00", "2026-06-14");
     // Force postedAt equal as well, so id is the only thing left.
-    await prisma.$executeRaw`UPDATE ledger_entry SET posted_at = timestamptz '2026-06-02 12:00:00+00'
-                              WHERE id IN (${a}::uuid, ${b}::uuid)`;
+    await seedAsPlatform(async () => {
+      await prisma.$executeRaw`UPDATE ledger_entry SET posted_at = timestamptz '2026-06-02 12:00:00+00'
+                                WHERE id IN (${a}::uuid, ${b}::uuid)`;
+    });
     const c = await credit("30.00");
 
-    await prisma.$transaction((tx) =>
+    await asTenantTx((tx) =>
       allocation.applyCreditToDebits(tx, utilityId, accountId, c),
     );
 
@@ -243,7 +278,7 @@ describe("applyCreditToDebits", () => {
     const { prisma } = prismaImports;
     const c = await credit("25.00");
 
-    const made = await prisma.$transaction((tx) =>
+    const made = await asTenantTx((tx) =>
       allocation.applyCreditToDebits(tx, utilityId, accountId, c),
     );
 
@@ -251,95 +286,107 @@ describe("applyCreditToDebits", () => {
     expect(await openOf(c)).toBe("-25.00");
   });
 
-  it("is a no-op on a credit that is already fully applied", async () => {
-    const { prisma } = prismaImports;
-    await debit("ADJUSTMENT_DEBIT", "40.00", "2026-06-14");
-    const c = await credit("10.00");
-    await prisma.ledgerEntry.update({ where: { id: c }, data: { openAmount: "0.00" } });
+  it("is a no-op on a credit that is already fully applied", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority. The
+       * scoped service wrappers below re-enter their own tenant scope,
+       * so the calls under test still run as `cis_app`. */
+      const { prisma } = prismaImports;
+      await debit("ADJUSTMENT_DEBIT", "40.00", "2026-06-14");
+      const c = await credit("10.00");
+      await prisma.ledgerEntry.update({ where: { id: c }, data: { openAmount: "0.00" } });
 
-    const made = await prisma.$transaction((tx) =>
-      allocation.applyCreditToDebits(tx, utilityId, accountId, c),
-    );
-    expect(made).toEqual([]);
-  });
-
-  it("writes one LedgerApplication row per application, all positive", async () => {
-    const { prisma } = prismaImports;
-    await debit("ADJUSTMENT_DEBIT", "30.00", "2026-05-14");
-    await debit("ADJUSTMENT_DEBIT", "30.00", "2026-06-14");
-    const c = await credit("45.00");
-
-    await prisma.$transaction((tx) =>
-      allocation.applyCreditToDebits(tx, utilityId, accountId, c),
-    );
-
-    const apps = await prisma.ledgerApplication.findMany({ where: { utilityId } });
-    expect(apps).toHaveLength(2);
-    for (const a of apps) expect(Number(a.amount)).toBeGreaterThan(0);
-  });
-
-  it("does not touch another tenant's debits", async () => {
-    const { prisma } = prismaImports;
-    const otherCycle = await prisma.billingCycle.create({
-      data: {
-        utilityId: other,
-        name: "R1",
-        cycleCode: "R01",
-        readDayOfMonth: 1, billDayOfMonth: 15,
-        frequency: "MONTHLY",
-      },
-    });
-    const otherAccount = await prisma.account.create({
-      data: {
-        utilityId: other,
-        accountNumber: "ALLOC-OTHER",
-        accountType: "RESIDENTIAL",
-        status: "ACTIVE",
-        billingCycleId: otherCycle.id,
-      },
-    });
-    const strayReason = await prisma.ledgerReasonDef.create({
-      data: {
-        utilityId: other,
-        code: "ALLOC-STRAY",
-        label: "Stray",
-        appliesToType: "ADJUSTMENT_DEBIT",
-      },
-    });
-    const strayDebit = await prisma.ledgerEntry.create({
-      data: {
-        utilityId: other,
-        accountId: otherAccount.id,
-        type: "ADJUSTMENT_DEBIT",
-        amount: "90.00",
-        openAmount: "90.00",
-        dueDate: new Date("2026-01-01"),
-        effectiveDate: new Date("2026-01-01"),
-        reasonId: strayReason.id,
-      },
-    });
-    const c = await credit("90.00");
-
-    try {
-      const made = await prisma.$transaction((tx) =>
+      const made = await asTenantTx((tx) =>
         allocation.applyCreditToDebits(tx, utilityId, accountId, c),
       );
       expect(made).toEqual([]);
-      const stray = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id: strayDebit.id } });
-      expect(stray.openAmount.toFixed(2)).toBe("90.00");
-    } finally {
-      await prisma.ledgerEntry.delete({ where: { id: strayDebit.id } });
-      await prisma.ledgerReasonDef.delete({ where: { id: strayReason.id } });
-      await prisma.account.delete({ where: { id: otherAccount.id } });
-      await prisma.billingCycle.delete({ where: { id: otherCycle.id } });
-    }
-  });
+  
+    }));
+
+  it("writes one LedgerApplication row per application, all positive", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority. The
+       * scoped service wrappers below re-enter their own tenant scope,
+       * so the calls under test still run as `cis_app`. */
+      const { prisma } = prismaImports;
+      await debit("ADJUSTMENT_DEBIT", "30.00", "2026-05-14");
+      await debit("ADJUSTMENT_DEBIT", "30.00", "2026-06-14");
+      const c = await credit("45.00");
+
+      await asTenantTx((tx) =>
+        allocation.applyCreditToDebits(tx, utilityId, accountId, c),
+      );
+
+      const apps = await prisma.ledgerApplication.findMany({ where: { utilityId } });
+      expect(apps).toHaveLength(2);
+      for (const a of apps) expect(Number(a.amount)).toBeGreaterThan(0);
+  
+    }));
+
+  it("does not touch another tenant's debits", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority. The
+       * scoped service wrappers below re-enter their own tenant scope,
+       * so the calls under test still run as `cis_app`. */
+      const { prisma } = prismaImports;
+      const otherCycle = await prisma.billingCycle.create({
+        data: {
+          utilityId: other,
+          name: "R1",
+          cycleCode: "R01",
+          readDayOfMonth: 1, billDayOfMonth: 15,
+          frequency: "MONTHLY",
+        },
+      });
+      const otherAccount = await prisma.account.create({
+        data: {
+          utilityId: other,
+          accountNumber: "ALLOC-OTHER",
+          accountType: "RESIDENTIAL",
+          status: "ACTIVE",
+          billingCycleId: otherCycle.id,
+        },
+      });
+      const strayReason = await prisma.ledgerReasonDef.create({
+        data: {
+          utilityId: other,
+          code: "ALLOC-STRAY",
+          label: "Stray",
+          appliesToType: "ADJUSTMENT_DEBIT",
+        },
+      });
+      const strayDebit = await prisma.ledgerEntry.create({
+        data: {
+          utilityId: other,
+          accountId: otherAccount.id,
+          type: "ADJUSTMENT_DEBIT",
+          amount: "90.00",
+          openAmount: "90.00",
+          dueDate: new Date("2026-01-01"),
+          effectiveDate: new Date("2026-01-01"),
+          reasonId: strayReason.id,
+        },
+      });
+      const c = await credit("90.00");
+
+      try {
+        const made = await asTenantTx((tx) =>
+          allocation.applyCreditToDebits(tx, utilityId, accountId, c),
+        );
+        expect(made).toEqual([]);
+        const stray = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id: strayDebit.id } });
+        expect(stray.openAmount.toFixed(2)).toBe("90.00");
+      } finally {
+        await prisma.ledgerEntry.delete({ where: { id: strayDebit.id } });
+        await prisma.ledgerReasonDef.delete({ where: { id: strayReason.id } });
+        await prisma.account.delete({ where: { id: otherAccount.id } });
+        await prisma.billingCycle.delete({ where: { id: otherCycle.id } });
+      }
+  
+    }));
 
   it("refuses an account in another tenant", async () => {
     const { prisma } = prismaImports;
     const c = await credit("10.00");
     await expect(
-      prisma.$transaction((tx) =>
+      asTenantTx((tx) =>
         allocation.applyCreditToDebits(
           tx,
           "00000000-0000-4000-8000-0000000000bb",
@@ -357,11 +404,13 @@ describe("applyCreditsToDebit", () => {
     const first = await credit("10.00");
     const second = await credit("10.00");
     // postedAt defaults to now(); force a deterministic order.
-    await prisma.$executeRaw`UPDATE ledger_entry SET posted_at = now() - interval '2 days' WHERE id = ${first}::uuid`;
-    await prisma.$executeRaw`UPDATE ledger_entry SET posted_at = now() - interval '1 day' WHERE id = ${second}::uuid`;
+    await seedAsPlatform(async () => {
+      await prisma.$executeRaw`UPDATE ledger_entry SET posted_at = now() - interval '2 days' WHERE id = ${first}::uuid`;
+      await prisma.$executeRaw`UPDATE ledger_entry SET posted_at = now() - interval '1 day' WHERE id = ${second}::uuid`;
+    });
     const d = await debit("ADJUSTMENT_DEBIT", "15.00", "2026-06-14");
 
-    const made = await prisma.$transaction((tx) =>
+    const made = await asTenantTx((tx) =>
       allocation.applyCreditsToDebit(tx, utilityId, accountId, d),
     );
 
@@ -374,22 +423,26 @@ describe("applyCreditsToDebit", () => {
   it("is a no-op when no credit is open", async () => {
     const { prisma } = prismaImports;
     const d = await debit("ADJUSTMENT_DEBIT", "15.00", "2026-06-14");
-    const made = await prisma.$transaction((tx) =>
+    const made = await asTenantTx((tx) =>
       allocation.applyCreditsToDebit(tx, utilityId, accountId, d),
     );
     expect(made).toEqual([]);
     expect(await openOf(d)).toBe("15.00");
   });
 
-  it("is a no-op on a debit that is already settled", async () => {
-    const { prisma } = prismaImports;
-    await credit("10.00");
-    const d = await debit("ADJUSTMENT_DEBIT", "15.00", "2026-06-14");
-    await prisma.ledgerEntry.update({ where: { id: d }, data: { openAmount: "0.00" } });
+  it("is a no-op on a debit that is already settled", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority. The
+       * scoped service wrappers below re-enter their own tenant scope,
+       * so the calls under test still run as `cis_app`. */
+      const { prisma } = prismaImports;
+      await credit("10.00");
+      const d = await debit("ADJUSTMENT_DEBIT", "15.00", "2026-06-14");
+      await prisma.ledgerEntry.update({ where: { id: d }, data: { openAmount: "0.00" } });
 
-    const made = await prisma.$transaction((tx) =>
-      allocation.applyCreditsToDebit(tx, utilityId, accountId, d),
-    );
-    expect(made).toEqual([]);
-  });
+      const made = await asTenantTx((tx) =>
+        allocation.applyCreditsToDebit(tx, utilityId, accountId, d),
+      );
+      expect(made).toEqual([]);
+  
+    }));
 });

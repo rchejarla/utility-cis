@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * Slice 2 — reversing a posted entry (§6.6).
  *
@@ -26,17 +27,30 @@ let accountId: string;
 let debitReasonId: string;
 let feeReasonId: string;
 
+/**
+ * The services this file calls directly, as a route reaches them:
+ * acting for the tenant, not merely naming it.
+ *
+ * Each already takes the tenant as its first argument, and in
+ * production that value came from a request or a job whose scope was
+ * entered before the call — so the argument and the scope are always
+ * the same id. A direct service test has the argument and not the
+ * scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` here also overrides the surrounding
+ * `seedAsPlatform`, which is what lets fixture rows be arranged
+ * across tenants while the call under test stays confined to one.
+ */
+const recordPayment = (...args: Parameters<typeof payment.recordPayment>) =>
+  runAsTenant(args[0], async () => payment.recordPayment(...args));
+
+const reverseEntry = (...args: Parameters<typeof reversal.reverseEntry>) =>
+  runAsTenant(args[0], async () => reversal.reverseEntry(...args));
+
 beforeAll(() =>
   seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   posting = await import("../../services/ar/posting.service.js");
@@ -75,8 +89,13 @@ beforeAll(() =>
 }), 180_000);
 
 afterAll(async () => {
-  await prismaImports?.prisma.$disconnect();
-  await pgContainer?.stop();
+  // `$disconnect` does not dispose a pool the application owns — that is
+  // the driver-adapter contract — so the tenant and platform pools are
+  // ended here. Without it the container stops while connections are
+  // live and Postgres reports 57P01 after an otherwise green run.
+  await prismaImports?.prisma.$disconnect().catch(() => {});
+  await prismaImports?.pool.end().catch(() => {});
+  await pgContainer?.stop().catch(() => {});
 });
 
 beforeEach(() =>
@@ -93,72 +112,90 @@ beforeEach(() =>
 );
 
 async function debit(amount: string, dueDate: string): Promise<string> {
-  const { prisma } = prismaImports;
-  const e = await prisma.ledgerEntry.create({
-    data: {
-      utilityId,
-      accountId,
-      type: "ADJUSTMENT_DEBIT",
-      amount,
-      openAmount: amount,
-      dueDate: new Date(dueDate),
-      effectiveDate: new Date(dueDate),
-      reasonId: debitReasonId,
-      createdBy: ACTOR,
-    },
+  /*
+   * Arranging rows, so the authority the fixtures use. Calls under test
+   * re-enter their own tenant scope, so they still run as `cis_app`.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const e = await prisma.ledgerEntry.create({
+      data: {
+        utilityId,
+        accountId,
+        type: "ADJUSTMENT_DEBIT",
+        amount,
+        openAmount: amount,
+        dueDate: new Date(dueDate),
+        effectiveDate: new Date(dueDate),
+        reasonId: debitReasonId,
+        createdBy: ACTOR,
+      },
+    });
+    await prisma.$transaction((tx) => posting.recomputeAccountCache(tx, utilityId, accountId));
+    return e.id;
+
   });
-  await prisma.$transaction((tx) => posting.recomputeAccountCache(tx, utilityId, accountId));
-  return e.id;
 }
 
 async function openOf(id: string): Promise<string> {
-  const { prisma } = prismaImports;
-  const e = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id } });
-  return e.openAmount.toFixed(2);
+  /*
+   * Arranging rows, so the authority the fixtures use. Calls under test
+   * re-enter their own tenant scope, so they still run as `cis_app`.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const e = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id } });
+    return e.openAmount.toFixed(2);
+
+  });
 }
 
 describe("reverseEntry", () => {
   // Review Focus: restore exactly what was consumed, no more.
-  it("restores a partially applied payment and leaves no reusable credit", async () => {
-    const { prisma } = prismaImports;
-    const d = await debit("100.00", "2026-06-14");
-    const pay = await payment.recordPayment(utilityId, ACTOR, "T", accountId, {
-      amount: "40.00",
-      tender: "CHECK",
-    });
-    expect(await openOf(d)).toBe("60.00");
+  it("restores a partially applied payment and leaves no reusable credit", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority. The
+       * scoped service wrappers below re-enter their own tenant scope,
+       * so the calls under test still run as `cis_app`. */
+      const { prisma } = prismaImports;
+      const d = await debit("100.00", "2026-06-14");
+      const pay = await recordPayment(utilityId, ACTOR, "T", accountId, {
+        amount: "40.00",
+        tender: "CHECK",
+      });
+      expect(await openOf(d)).toBe("60.00");
 
-    const res = await reversal.reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {});
+      const res = await reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {});
 
-    // The 40.00 it consumed comes back on the debit — and only that.
-    expect(await openOf(d)).toBe("100.00");
-    expect(res.restored).toEqual([{ entryId: d, openAmount: "100.00" }]);
-    // The bounced payment is closed, not left open for allocation to spend.
-    expect(await openOf(pay.paymentId)).toBe("0.00");
-    expect(await openOf(res.reversalId)).toBe("0.00");
-    expect(res.balance).toBe("100.00");
+      // The 40.00 it consumed comes back on the debit — and only that.
+      expect(await openOf(d)).toBe("100.00");
+      expect(res.restored).toEqual([{ entryId: d, openAmount: "100.00" }]);
+      // The bounced payment is closed, not left open for allocation to spend.
+      expect(await openOf(pay.paymentId)).toBe("0.00");
+      expect(await openOf(res.reversalId)).toBe("0.00");
+      expect(res.balance).toBe("100.00");
 
-    const rev = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id: res.reversalId } });
-    expect(rev.type).toBe("REVERSAL");
-    expect(rev.amount.toFixed(2)).toBe("40.00");
-    expect(rev.reversesId).toBe(pay.paymentId);
+      const rev = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id: res.reversalId } });
+      expect(rev.type).toBe("REVERSAL");
+      expect(rev.amount.toFixed(2)).toBe("40.00");
+      expect(rev.reversesId).toBe(pay.paymentId);
 
-    // The application it undid is gone, replaced by the settling one.
-    const apps = await prisma.ledgerApplication.findMany({ where: { utilityId } });
-    expect(apps).toHaveLength(1);
-    expect(apps[0]!.creditId).toBe(pay.paymentId);
-    expect(apps[0]!.debitId).toBe(res.reversalId);
-    expect(apps[0]!.amount.toFixed(2)).toBe("40.00");
-  });
+      // The application it undid is gone, replaced by the settling one.
+      const apps = await prisma.ledgerApplication.findMany({ where: { utilityId } });
+      expect(apps).toHaveLength(1);
+      expect(apps[0]!.creditId).toBe(pay.paymentId);
+      expect(apps[0]!.debitId).toBe(res.reversalId);
+      expect(apps[0]!.amount.toFixed(2)).toBe("40.00");
+  
+    }));
 
   it("reversing a charge that was partly paid leaves the payment as a credit", async () => {
     const d = await debit("100.00", "2026-06-14");
-    const pay = await payment.recordPayment(utilityId, ACTOR, "T", accountId, {
+    const pay = await recordPayment(utilityId, ACTOR, "T", accountId, {
       amount: "30.00",
       tender: "CHECK",
     });
 
-    const res = await reversal.reverseEntry(utilityId, ACTOR, "T", d, {});
+    const res = await reverseEntry(utilityId, ACTOR, "T", d, {});
 
     expect(await openOf(d)).toBe("0.00");
     expect(await openOf(res.reversalId)).toBe("0.00");
@@ -169,11 +206,11 @@ describe("reverseEntry", () => {
   });
 
   it("reverses an unapplied payment with nothing to restore", async () => {
-    const pay = await payment.recordPayment(utilityId, ACTOR, "T", accountId, {
+    const pay = await recordPayment(utilityId, ACTOR, "T", accountId, {
       amount: "25.00",
       tender: "CASH",
     });
-    const res = await reversal.reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {});
+    const res = await reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {});
     expect(res.restored).toEqual([]);
     expect(res.balance).toBe("0.00");
     expect(await openOf(pay.paymentId)).toBe("0.00");
@@ -183,14 +220,14 @@ describe("reverseEntry", () => {
   it("restores every debit a payment was spread across", async () => {
     const a = await debit("30.00", "2026-05-14");
     const b = await debit("30.00", "2026-06-14");
-    const pay = await payment.recordPayment(utilityId, ACTOR, "T", accountId, {
+    const pay = await recordPayment(utilityId, ACTOR, "T", accountId, {
       amount: "45.00",
       tender: "CHECK",
     });
     expect(await openOf(a)).toBe("0.00");
     expect(await openOf(b)).toBe("15.00");
 
-    const res = await reversal.reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {});
+    const res = await reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {});
 
     expect(await openOf(a)).toBe("30.00");
     expect(await openOf(b)).toBe("30.00");
@@ -200,59 +237,63 @@ describe("reverseEntry", () => {
 
   // Review Focus: both refusals.
   it("refuses to reverse the same entry twice", async () => {
-    const pay = await payment.recordPayment(utilityId, ACTOR, "T", accountId, {
+    const pay = await recordPayment(utilityId, ACTOR, "T", accountId, {
       amount: "25.00",
       tender: "CASH",
     });
-    await reversal.reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {});
+    await reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {});
     await expect(
-      reversal.reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {}),
+      reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {}),
     ).rejects.toMatchObject({ code: "ENTRY_ALREADY_REVERSED" });
   });
 
   it("refuses to reverse a REVERSAL", async () => {
-    const pay = await payment.recordPayment(utilityId, ACTOR, "T", accountId, {
+    const pay = await recordPayment(utilityId, ACTOR, "T", accountId, {
       amount: "25.00",
       tender: "CASH",
     });
-    const res = await reversal.reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {});
+    const res = await reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {});
     await expect(
-      reversal.reverseEntry(utilityId, ACTOR, "T", res.reversalId, {}),
+      reverseEntry(utilityId, ACTOR, "T", res.reversalId, {}),
     ).rejects.toMatchObject({ code: "CANNOT_REVERSE_REVERSAL" });
   });
 
-  it("reports dependent fees without reversing them", async () => {
-    const { prisma } = prismaImports;
-    const charge = await debit("100.00", "2026-06-14");
-    const fee = await prisma.ledgerEntry.create({
-      data: {
-        utilityId,
-        accountId,
-        type: "FEE",
-        amount: "15.00",
-        openAmount: "15.00",
-        dueDate: new Date("2026-07-14"),
-        effectiveDate: new Date("2026-06-20"),
-        reasonId: feeReasonId,
-        assessedOnId: charge,
-        createdBy: ACTOR,
-      },
-    });
+  it("reports dependent fees without reversing them", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority. The
+       * scoped service wrappers below re-enter their own tenant scope,
+       * so the calls under test still run as `cis_app`. */
+      const { prisma } = prismaImports;
+      const charge = await debit("100.00", "2026-06-14");
+      const fee = await prisma.ledgerEntry.create({
+        data: {
+          utilityId,
+          accountId,
+          type: "FEE",
+          amount: "15.00",
+          openAmount: "15.00",
+          dueDate: new Date("2026-07-14"),
+          effectiveDate: new Date("2026-06-20"),
+          reasonId: feeReasonId,
+          assessedOnId: charge,
+          createdBy: ACTOR,
+        },
+      });
 
-    const res = await reversal.reverseEntry(utilityId, ACTOR, "T", charge, {});
+      const res = await reverseEntry(utilityId, ACTOR, "T", charge, {});
 
-    expect(res.dependentFees).toEqual([{ id: fee.id, amount: "15.00", dueDate: "2026-07-14" }]);
-    // Reported, not reversed — §6.6 is explicit that this is a human call.
-    const stillThere = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id: fee.id } });
-    expect(stillThere.openAmount.toFixed(2)).toBe("15.00");
-    expect(await prisma.ledgerEntry.count({ where: { reversesId: fee.id } })).toBe(0);
-    // The fee still stands, so it is still owed.
-    expect(res.balance).toBe("15.00");
-  });
+      expect(res.dependentFees).toEqual([{ id: fee.id, amount: "15.00", dueDate: "2026-07-14" }]);
+      // Reported, not reversed — §6.6 is explicit that this is a human call.
+      const stillThere = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id: fee.id } });
+      expect(stillThere.openAmount.toFixed(2)).toBe("15.00");
+      expect(await prisma.ledgerEntry.count({ where: { reversesId: fee.id } })).toBe(0);
+      // The fee still stands, so it is still owed.
+      expect(res.balance).toBe("15.00");
+  
+    }));
 
   it("refuses an unknown entry and an entry in another tenant", async () => {
     await expect(
-      reversal.reverseEntry(
+      reverseEntry(
         utilityId,
         ACTOR,
         "T",
@@ -263,67 +304,79 @@ describe("reverseEntry", () => {
 
     const mine = await debit("10.00", "2026-06-14");
     await expect(
-      reversal.reverseEntry("00000000-0000-4000-8000-0000000000bb", ACTOR, "T", mine, {}),
+      reverseEntry("00000000-0000-4000-8000-0000000000bb", ACTOR, "T", mine, {}),
     ).rejects.toMatchObject({ code: "ENTRY_NOT_FOUND" });
   });
 
-  it("records the reason and memo when given", async () => {
-    const { prisma } = prismaImports;
-    const reasonId = "00000000-0000-4000-8000-00000000aa01";
-    await prisma.ledgerReasonDef.create({
-      data: {
-        id: reasonId,
-        utilityId,
-        code: "NSF",
-        label: "Returned unpaid",
-        appliesToType: "REVERSAL",
-      },
-    });
-    const pay = await payment.recordPayment(utilityId, ACTOR, "T", accountId, {
-      amount: "10.00",
-      tender: "CHECK",
-    });
-    const res = await reversal.reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {
-      reasonId,
-      memo: "cheque returned",
-    });
-    const rev = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id: res.reversalId } });
-    expect(rev.reasonId).toBe(reasonId);
-    expect(rev.memo).toBe("cheque returned");
-  });
+  it("records the reason and memo when given", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority. The
+       * scoped service wrappers below re-enter their own tenant scope,
+       * so the calls under test still run as `cis_app`. */
+      const { prisma } = prismaImports;
+      const reasonId = "00000000-0000-4000-8000-00000000aa01";
+      await prisma.ledgerReasonDef.create({
+        data: {
+          id: reasonId,
+          utilityId,
+          code: "NSF",
+          label: "Returned unpaid",
+          appliesToType: "REVERSAL",
+        },
+      });
+      const pay = await recordPayment(utilityId, ACTOR, "T", accountId, {
+        amount: "10.00",
+        tender: "CHECK",
+      });
+      const res = await reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {
+        reasonId,
+        memo: "cheque returned",
+      });
+      const rev = await prisma.ledgerEntry.findUniqueOrThrow({ where: { id: res.reversalId } });
+      expect(rev.reasonId).toBe(reasonId);
+      expect(rev.memo).toBe("cheque returned");
+  
+    }));
 
-  it("writes one audit row for the reversal", async () => {
-    const { prisma } = prismaImports;
-    const pay = await payment.recordPayment(utilityId, ACTOR, "T", accountId, {
-      amount: "10.00",
-      tender: "CASH",
-    });
-    const res = await reversal.reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {});
-    const audits = await prisma.auditLog.findMany({
-      where: { entityType: "LedgerEntry", entityId: res.reversalId },
-    });
-    expect(audits).toHaveLength(1);
-    expect(audits[0]!.action).toBe("CREATE");
-  });
+  it("writes one audit row for the reversal", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority. The
+       * scoped service wrappers below re-enter their own tenant scope,
+       * so the calls under test still run as `cis_app`. */
+      const { prisma } = prismaImports;
+      const pay = await recordPayment(utilityId, ACTOR, "T", accountId, {
+        amount: "10.00",
+        tender: "CASH",
+      });
+      const res = await reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {});
+      const audits = await prisma.auditLog.findMany({
+        where: { entityType: "LedgerEntry", entityId: res.reversalId },
+      });
+      expect(audits).toHaveLength(1);
+      expect(audits[0]!.action).toBe("CREATE");
+  
+    }));
 
-  it("leaves nothing behind when the caller's transaction rolls back", async () => {
-    const { prisma } = prismaImports;
-    const d = await debit("100.00", "2026-06-14");
-    const pay = await payment.recordPayment(utilityId, ACTOR, "T", accountId, {
-      amount: "40.00",
-      tender: "CHECK",
-    });
+  it("leaves nothing behind when the caller's transaction rolls back", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority. The
+       * scoped service wrappers below re-enter their own tenant scope,
+       * so the calls under test still run as `cis_app`. */
+      const { prisma } = prismaImports;
+      const d = await debit("100.00", "2026-06-14");
+      const pay = await recordPayment(utilityId, ACTOR, "T", accountId, {
+        amount: "40.00",
+        tender: "CHECK",
+      });
 
-    await expect(
-      prisma.$transaction(async (tx) => {
-        await reversal.reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {}, tx);
-        throw new Error("boom");
-      }),
-    ).rejects.toThrow("boom");
+      await expect(
+        prisma.$transaction(async (tx) => {
+          await reverseEntry(utilityId, ACTOR, "T", pay.paymentId, {}, tx);
+          throw new Error("boom");
+        }),
+      ).rejects.toThrow("boom");
 
-    // The application it would have deleted is still there.
-    expect(await openOf(d)).toBe("60.00");
-    expect(await prisma.ledgerApplication.count({ where: { creditId: pay.paymentId } })).toBe(1);
-    expect(await prisma.ledgerEntry.count({ where: { type: "REVERSAL" } })).toBe(0);
-  });
+      // The application it would have deleted is still there.
+      expect(await openOf(d)).toBe("60.00");
+      expect(await prisma.ledgerApplication.count({ where: { creditId: pay.paymentId } })).toBe(1);
+      expect(await prisma.ledgerEntry.count({ where: { type: "REVERSAL" } })).toBe(0);
+  
+    }));
 });

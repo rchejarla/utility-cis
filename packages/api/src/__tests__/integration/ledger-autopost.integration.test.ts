@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
+import { runAsTenant } from "../../lib/tenant-context.js";
 /**
  * Slice 1 — auto-post resolution. Tenant default, overridable per
  * account, default on. Covers the Review Focus case where the account
@@ -24,17 +25,27 @@ const utilityId = "00000000-0000-4000-8000-0000000000aa";
 let accountId: string;
 let serviceAgreementId: string;
 
+/**
+ * The services this file calls directly, as a route reaches them:
+ * acting for the tenant, not merely naming it.
+ *
+ * Each already takes the tenant as its first argument, and in
+ * production that value came from a request or a job whose scope was
+ * entered before the call — so the argument and the scope are always
+ * the same id. A direct service test has the argument and not the
+ * scope, and under `cis_app` a tenant table read with no scope raises
+ * rather than returning the wrong rows.
+ *
+ * `runAsTenant` here also overrides the surrounding
+ * `seedAsPlatform`, which is what lets fixture rows be arranged
+ * across tenants while the call under test stays confined to one.
+ */
+const generateBillForAccount = (...args: Parameters<typeof billing.generateBillForAccount>) =>
+  runAsTenant(args[0], async () => billing.generateBillForAccount(...args));
+
 beforeAll(() =>
   seedAsPlatform(async () => {
   const booted = await bootPostgres({ utilities: [utilityId] });
-  // RLS-OPT-OUT: this suite still connects as the migration owner.
-  // It calls services directly rather than through a route, so there is
-  // no middleware to enter a tenant scope and each test would need its
-  // own `runAsTenant` — see `bill-list.integration.test.ts` for the
-  // shape that conversion takes. Counted by
-  // `src/__tests__/app/rls-suite-coverage.test.ts`, which only lets the
-  // number go down.
-  process.env.DATABASE_URL = booted.dbUrl;
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   posting = await import("../../services/ar/posting.service.js");
@@ -84,8 +95,13 @@ beforeAll(() =>
 }), 180_000);
 
 afterAll(async () => {
-  await prismaImports?.prisma.$disconnect();
-  await pgContainer?.stop();
+  // `$disconnect` does not dispose a pool the application owns — that is
+  // the driver-adapter contract — so the tenant and platform pools are
+  // ended here. Without it the container stops while connections are
+  // live and Postgres reports 57P01 after an otherwise green run.
+  await prismaImports?.prisma.$disconnect().catch(() => {});
+  await prismaImports?.pool.end().catch(() => {});
+  await pgContainer?.stop().catch(() => {});
 });
 
 beforeEach(() =>
@@ -102,14 +118,38 @@ beforeEach(() =>
 }),
 );
 
+/**
+ * `resolveAutoPostBills` as a route reaches it.
+ *
+ * Its tenant is the second argument, after the client it runs on, so the
+ * scope is entered around the call rather than passed into it.
+ */
+const resolveAutoPostBills = (
+  ...args: Parameters<typeof posting.resolveAutoPostBills>
+) => runAsTenant(args[1], async () => posting.resolveAutoPostBills(...args));
+
 async function setTenant(autoPostBills: boolean) {
-  const { prisma } = prismaImports;
-  await prisma.utilityConfig.create({ data: { utilityId, autoPostBills } });
+  /*
+   * Arranging rows, so the authority the fixtures use. Calls under test
+   * re-enter their own tenant scope, so they still run as `cis_app`.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    await prisma.utilityConfig.create({ data: { utilityId, autoPostBills } });
+
+  });
 }
 
 async function setAccount(autoPostBills: boolean | null) {
-  const { prisma } = prismaImports;
-  await prisma.account.update({ where: { id: accountId }, data: { autoPostBills } });
+  /*
+   * Arranging rows, so the authority the fixtures use. Calls under test
+   * re-enter their own tenant scope, so they still run as `cis_app`.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    await prisma.account.update({ where: { id: accountId }, data: { autoPostBills } });
+
+  });
 }
 
 /**
@@ -117,25 +157,32 @@ async function setAccount(autoPostBills: boolean | null) {
  * for a billDay=15 monthly cycle: [2026-04-16, 2026-05-15].
  */
 async function makeSegment(total: string) {
-  const { prisma } = prismaImports;
-  await prisma.billSegment.create({
-    data: {
-      utilityId,
-      serviceAgreementId,
-      periodStart: new Date("2026-04-16"),
-      periodEnd: new Date("2026-05-15"),
-      subtotal: total,
-      taxes: "0",
-      credits: "0",
-      total,
-      minimumFloorApplied: false,
-      segmentNumber: `SEG-AP-${Math.random().toString(36).slice(2, 10)}`,
-    },
+  /*
+   * Arranging rows, so the authority the fixtures use. Calls under test
+   * re-enter their own tenant scope, so they still run as `cis_app`.
+   */
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    await prisma.billSegment.create({
+      data: {
+        utilityId,
+        serviceAgreementId,
+        periodStart: new Date("2026-04-16"),
+        periodEnd: new Date("2026-05-15"),
+        subtotal: total,
+        taxes: "0",
+        credits: "0",
+        total,
+        minimumFloorApplied: false,
+        segmentNumber: `SEG-AP-${Math.random().toString(36).slice(2, 10)}`,
+      },
+    });
+
   });
 }
 
 function generate() {
-  return billing.generateBillForAccount(utilityId, ACTOR, "Tester", accountId, {
+  return generateBillForAccount(utilityId, ACTOR, "Tester", accountId, {
     asOfDate: new Date("2026-05-15T00:00:00Z"),
   });
 }
@@ -143,71 +190,83 @@ function generate() {
 describe("resolveAutoPostBills", () => {
   it("defaults to true when no tenant config row exists", async () => {
     const { prisma } = prismaImports;
-    await expect(posting.resolveAutoPostBills(prisma, utilityId, accountId)).resolves.toBe(true);
+    await expect(resolveAutoPostBills(prisma, utilityId, accountId)).resolves.toBe(true);
   });
 
-  it("follows the tenant default when the account does not override", async () => {
-    const { prisma } = prismaImports;
-    await setTenant(false);
-    await expect(posting.resolveAutoPostBills(prisma, utilityId, accountId)).resolves.toBe(false);
-    await prisma.utilityConfig.deleteMany({ where: { utilityId } });
-    await setTenant(true);
-    await expect(posting.resolveAutoPostBills(prisma, utilityId, accountId)).resolves.toBe(true);
-  });
+  it("follows the tenant default when the account does not override", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority. The
+       * scoped service wrappers below re-enter their own tenant scope,
+       * so the calls under test still run as `cis_app`. */
+      const { prisma } = prismaImports;
+      await setTenant(false);
+      await expect(resolveAutoPostBills(prisma, utilityId, accountId)).resolves.toBe(false);
+      await prisma.utilityConfig.deleteMany({ where: { utilityId } });
+      await setTenant(true);
+      await expect(resolveAutoPostBills(prisma, utilityId, accountId)).resolves.toBe(true);
+  
+    }));
 
   // Review Focus: the override must win, including when it is `false`
   it("lets an account override of false beat a tenant default of true", async () => {
     const { prisma } = prismaImports;
     await setTenant(true);
     await setAccount(false);
-    await expect(posting.resolveAutoPostBills(prisma, utilityId, accountId)).resolves.toBe(false);
+    await expect(resolveAutoPostBills(prisma, utilityId, accountId)).resolves.toBe(false);
   });
 
   it("lets an account override of true beat a tenant default of false", async () => {
     const { prisma } = prismaImports;
     await setTenant(false);
     await setAccount(true);
-    await expect(posting.resolveAutoPostBills(prisma, utilityId, accountId)).resolves.toBe(true);
+    await expect(resolveAutoPostBills(prisma, utilityId, accountId)).resolves.toBe(true);
   });
 });
 
 describe("generateBillForAccount — auto-post wiring", () => {
-  it("posts the bill it generated when auto-post resolves true", async () => {
-    const { prisma } = prismaImports;
-    await setTenant(true);
-    await makeSegment("64.0000");
+  it("posts the bill it generated when auto-post resolves true", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority. The
+       * scoped service wrappers below re-enter their own tenant scope,
+       * so the calls under test still run as `cis_app`. */
+      const { prisma } = prismaImports;
+      await setTenant(true);
+      await makeSegment("64.0000");
 
-    const bill = await generate();
-    expect(bill.total).toBe("64.0000");
+      const bill = await generate();
+      expect(bill.total).toBe("64.0000");
 
-    const entry = await prisma.ledgerEntry.findFirstOrThrow({ where: { billId: bill.id } });
-    expect(entry.type).toBe("BILL_CHARGE");
-    expect(entry.amount.toFixed(2)).toBe("64.00");
-    expect(entry.openAmount.toFixed(2)).toBe("64.00");
-    expect(entry.dueDate?.toISOString().slice(0, 10)).toBe("2026-06-14");
+      const entry = await prisma.ledgerEntry.findFirstOrThrow({ where: { billId: bill.id } });
+      expect(entry.type).toBe("BILL_CHARGE");
+      expect(entry.amount.toFixed(2)).toBe("64.00");
+      expect(entry.openAmount.toFixed(2)).toBe("64.00");
+      expect(entry.dueDate?.toISOString().slice(0, 10)).toBe("2026-06-14");
 
-    const dbBill = await prisma.bill.findUniqueOrThrow({ where: { id: bill.id } });
-    expect(dbBill.postedAt).not.toBeNull();
+      const dbBill = await prisma.bill.findUniqueOrThrow({ where: { id: bill.id } });
+      expect(dbBill.postedAt).not.toBeNull();
 
-    const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
-    expect(account.balance.toFixed(2)).toBe("64.00");
-    expect(account.lastDueDate?.toISOString().slice(0, 10)).toBe("2026-06-14");
-  }, 60_000);
+      const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
+      expect(account.balance.toFixed(2)).toBe("64.00");
+      expect(account.lastDueDate?.toISOString().slice(0, 10)).toBe("2026-06-14");
+  
+    }), 60_000);
 
-  it("leaves the generated bill unposted when the account overrides auto-post to false", async () => {
-    const { prisma } = prismaImports;
-    await setTenant(true);
-    await setAccount(false);
-    await makeSegment("64.0000");
+  it("leaves the generated bill unposted when the account overrides auto-post to false", () =>
+    seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority. The
+       * scoped service wrappers below re-enter their own tenant scope,
+       * so the calls under test still run as `cis_app`. */
+      const { prisma } = prismaImports;
+      await setTenant(true);
+      await setAccount(false);
+      await makeSegment("64.0000");
 
-    const bill = await generate();
+      const bill = await generate();
 
-    const dbBill = await prisma.bill.findUniqueOrThrow({ where: { id: bill.id } });
-    expect(dbBill.postedAt).toBeNull();
-    expect(await prisma.ledgerEntry.count({ where: { utilityId, accountId } })).toBe(0);
+      const dbBill = await prisma.bill.findUniqueOrThrow({ where: { id: bill.id } });
+      expect(dbBill.postedAt).toBeNull();
+      expect(await prisma.ledgerEntry.count({ where: { utilityId, accountId } })).toBe(0);
 
-    const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
-    expect(account.balance.toFixed(2)).toBe("0.00");
-    expect(account.lastDueDate).toBeNull();
-  }, 60_000);
+      const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
+      expect(account.balance.toFixed(2)).toBe("0.00");
+      expect(account.lastDueDate).toBeNull();
+  
+    }), 60_000);
 });
