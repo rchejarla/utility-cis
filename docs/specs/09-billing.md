@@ -713,6 +713,42 @@ that died halfway left a run half-posted with nothing to pick it up —
 posting had neither. Moving it finishes a pattern the codebase started
 rather than introducing one.
 
+**A posting pass renders each bill's PDF.** `generateBillDocument` had a
+single caller — the staff button — so after a run no bill had a document:
+bulk send mostly reported `NO_BILL_DOCUMENT`, and a portal customer could
+not download their own bill at all, since generating is `accounts:EDIT` and
+no portal token holds it. The pass now ensures one for every bill it leaves
+posted, and returns `documented` / `documentsFailed` / `documentsSkipped`
+alongside the posting counts.
+
+**Outside `postBill`'s transaction, deliberately.** Rendering ends in an HTTP
+call to apptor-connect's files plane. Inside the transaction that would hold
+a per-account lock across a vendor round trip, and a storage failure would
+roll the posting back — making what a customer owes contingent on whether a
+letter rendered. `generateBillDocument` is also already a multi-transaction
+design (claim, upload, complete) so that a crash cannot leave a claim that
+looks like a document; collapsing it into one would break that.
+
+**The skip is per-concern, and that is load-bearing for resume.** The loop
+used to `continue` on an already-posted bill. Rendering after `postBill`
+inside that shape would skip exactly the bills a *resumed* pass exists to
+finish — posted by the dead pass, never documented, stepped over forever:
+the recovery path would have manufactured the state it was meant to clear.
+Posting and documenting are now decided separately for each bill, so both
+halves converge on a re-run. A held bill gets neither, since a document is
+of a posted bill.
+
+**A render failure is counted apart and never raised.** The bill is posted
+and owed either way, the PDF button still generates on demand, and calling
+it a posting failure would send an operator to the ledger to fix a render.
+Two faults are tenant-level rather than per-bill — `STORAGE_NOT_CONFIGURED`
+(nowhere to put it) and `ISSUER_INCOMPLETE` (no name or remittance address
+to print on it) — and those stop the pass trying, logging once and carrying
+the sentence out as `documentsSkipped`, because twelve thousand copies of
+one misconfiguration is the failure mode bulk send already refuses outright.
+`RECIPIENT_INCOMPLETE` and `NO_CHARGES` stay per-bill: they are facts about
+one customer or one bill, and the next may well be fine.
+
 **`BillingRun.postingStartedAt` is the marker a dead replica leaves.**
 `postedAt` is stamped after the loop, so it cannot describe the middle of a
 pass; this is posting's equivalent of generation's `status = RUNNING`. A

@@ -26,6 +26,38 @@ vi.mock("../../lib/queues.js", async (importOriginal) => ({
   enqueueSafely: vi.fn(async () => "test-job-id"),
 }));
 
+/*
+ * Posting a run now renders each bill's PDF, which ends in a call to
+ * apptor-connect's files plane. Stubbed here for the same reason the
+ * enqueue is: it is this file's side effect, never its subject. The
+ * plane has its own contract test
+ * (src/__tests__/lib/apptor-connect-files-client.test.ts), and
+ * bill-document.integration.test.ts owns the generation behaviour.
+ */
+/**
+ * What a bill needs before it can be produced at all: somewhere to put
+ * the PDF, and an issuer identity to print on it. Both are tenant-level,
+ * and a tenant missing either is its own case below rather than the
+ * silent default for the whole suite.
+ */
+const BILL_PRODUCTION_SETTINGS = {
+  billDocuments: { storageIntegration: "cis-bills" },
+  issuer: {
+    utilityName: "City of Testville Utilities",
+    utilityLegalName: "City of Testville, Montana",
+    remittanceAddressLine1: "PO Box 1230",
+    remittanceCity: "Testville",
+    remittanceState: "MT",
+    remittancePostalCode: "59771",
+  },
+};
+
+const put = vi.fn(async () => undefined);
+vi.mock("../../lib/apptor-connect/files-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/apptor-connect/files-client.js")>()),
+  putObject: (...args: unknown[]) => put(...(args as [])),
+}));
+
 
 /**
  * The billing run: one initiated pass over a cycle, account by account.
@@ -127,6 +159,51 @@ beforeAll(async () => {
     new Date("2025-01-01T00:00:00Z").toISOString(),
     utilityId,
   );
+
+  /*
+   * Somewhere for a posted bill's PDF to go. A posting pass renders one
+   * per bill, and without this every tenant here is the
+   * STORAGE_NOT_CONFIGURED case — which has its own test rather than
+   * being the silent default for the whole suite.
+   */
+  await prisma.utilityConfig.upsert({
+    where: { utilityId },
+    update: { settings: BILL_PRODUCTION_SETTINGS },
+    create: { utilityId, settings: BILL_PRODUCTION_SETTINGS },
+  });
+
+  /*
+   * Somebody for each bill to be addressed to. A bill with no recipient
+   * name and no billing address cannot say who it is for, so
+   * `loadBillPresentation` refuses it with RECIPIENT_INCOMPLETE — which
+   * is a fact about that one account, unlike the two tenant-level
+   * settings above, and so would fail these bills one at a time.
+   */
+  const accounts = await prisma.account.findMany({
+    where: { utilityId },
+    select: { id: true, customerId: true },
+  });
+  for (const account of accounts) {
+    if (!account.customerId) {
+      const customer = await prisma.customer.create({
+        data: { utilityId, customerType: "INDIVIDUAL", firstName: "Ada", lastName: "Lovelace" },
+      });
+      await prisma.account.update({
+        where: { id: account.id },
+        data: { customerId: customer.id },
+      });
+    }
+    await prisma.billingAddress.create({
+      data: {
+        utilityId,
+        accountId: account.id,
+        addressLine1: "1 Test Way",
+        city: "Testville",
+        state: "MT",
+        zip: "59771",
+      },
+    });
+  }
 }, 180_000);
 
 afterAll(async () => {
@@ -559,6 +636,25 @@ describe("posting a run", () => {
     const after = await prisma.billingRun.findUniqueOrThrow({ where: { id: run.id } });
     expect(after.postingStartedAt).not.toBeNull();
 
+    /*
+     * And it reaches the client, which is the only way the screen can
+     * know a pass is running. Asserted on the wire rather than the row:
+     * the column existed and the page polled on a field the API was
+     * never sending, so the banner could not have appeared and the
+     * fixture's own default was hiding it.
+     */
+    const onTheWire = JSON.parse(
+      (
+        await app.inject({
+          method: "GET",
+          url: `/api/v1/billing-runs/${run.id}`,
+          headers: headers(),
+        })
+      ).body,
+    );
+    expect(onTheWire).toHaveProperty("postingStartedAt");
+    expect(onTheWire.postingStartedAt).not.toBeNull();
+
     // A finished pass is not a zombie, even though it is marked.
     const worker = await import("../../workers/billing-run-worker.js");
     const queues = await import("../../lib/queues.js");
@@ -581,6 +677,122 @@ describe("posting a run", () => {
       "post-billing-run",
       expect.objectContaining({ runId: run.id }),
     );
+  }, 300_000);
+
+  /*
+   * Every bill a posting pass leaves posted gets a document, including
+   * one it found already posted.
+   *
+   * That last part is the whole case. The loop used to `continue` on an
+   * already-posted bill, and a document step bolted after `postBill`
+   * inside it would therefore skip exactly the bills a *resumed* pass
+   * needs to finish: posted by the dead pass, never documented, and
+   * stepped over forever. The skip is per-concern now — posting and
+   * documenting are decided separately for each bill.
+   *
+   * It matters because a bill with no PDF cannot be sent (bulk send
+   * reports NO_BILL_DOCUMENT) and a portal customer cannot download it:
+   * generating is accounts:EDIT, which no portal token holds.
+   */
+  it("gives a document to every bill it leaves posted, including one already posted", async () => {
+    const run = JSON.parse((await startRun()).body);
+    await svc.processBillingRun({
+      runId: run.id,
+      utilityId,
+      actorId: ACTOR_ID,
+      actorName: "Tester",
+    });
+
+    const { prisma } = prismaImports;
+    const billed = await prisma.billingRunItem.findMany({
+      where: { billingRunId: run.id, status: "BILLED" },
+      select: { billId: true },
+    });
+    expect(billed.length).toBeGreaterThanOrEqual(2);
+
+    // Posted by hand, with no document — the state a resumed pass finds.
+    const { postBill } = await import("../../services/ar/posting.service.js");
+    const handPosted = billed[0].billId as string;
+    await postBill(utilityId, ACTOR_ID, "Tester", handPosted);
+    expect(await prisma.billDocument.count({ where: { billId: handPosted } })).toBe(0);
+
+    const result = await svc.postBillingRun(utilityId, ACTOR_ID, "Tester", run.id);
+    expect(result.alreadyPosted).toBe(1);
+
+    for (const b of billed) {
+      const doc = await prisma.billDocument.findFirst({
+        where: { billId: b.billId as string, documentType: "PDF" },
+      });
+      expect(doc, `bill ${b.billId} has no document`).not.toBeNull();
+      // Claimed is not stored: a row without a sha256 is an unfinished
+      // claim that nothing can download.
+      expect(doc!.sha256).not.toBeNull();
+    }
+  }, 300_000);
+
+  /*
+   * A render that fails must not undo the posting or be reported as a
+   * posting failure. What the customer owes is a fact about the ledger,
+   * not about whether a letter rendered — and the PDF button generates
+   * on demand, so a missing document is recoverable where an unposted
+   * bill in a run marked posted is not.
+   */
+  it("still posts when a document cannot be stored, and counts that apart", async () => {
+    const run = JSON.parse((await startRun()).body);
+    await svc.processBillingRun({
+      runId: run.id,
+      utilityId,
+      actorId: ACTOR_ID,
+      actorName: "Tester",
+    });
+    put.mockRejectedValueOnce(new Error("files plane unreachable"));
+
+    const result = await svc.postBillingRun(utilityId, ACTOR_ID, "Tester", run.id);
+    expect(result.failed).toBe(0);
+    expect(result.posted).toBeGreaterThan(0);
+    expect(result.documentsFailed).toBe(1);
+
+    const { prisma } = prismaImports;
+    const unposted = await prisma.bill.count({
+      where: { utilityId, postedAt: null, holdReason: null },
+    });
+    expect(unposted).toBe(0);
+  }, 300_000);
+
+  /*
+   * A tenant with nowhere to store a PDF is one fact about the tenant,
+   * not twelve thousand failures — the same reason bulk send refuses an
+   * unposted run outright rather than reporting it per bill. The pass
+   * stops trying and carries the sentence out, so the operator reads a
+   * cause rather than a count of zero.
+   */
+  it("stops trying, once, when the tenant has nowhere to store a document", async () => {
+    const { prisma } = prismaImports;
+    await prisma.utilityConfig.update({
+      where: { utilityId },
+      data: { settings: {} },
+    });
+    try {
+      const run = JSON.parse((await startRun()).body);
+      await svc.processBillingRun({
+        runId: run.id,
+        utilityId,
+        actorId: ACTOR_ID,
+        actorName: "Tester",
+      });
+
+      const result = await svc.postBillingRun(utilityId, ACTOR_ID, "Tester", run.id);
+      expect(result.posted).toBeGreaterThan(1);
+      expect(result.documented).toBe(0);
+      // Not counted as failures, and the reason is named once.
+      expect(result.documentsFailed).toBe(0);
+      expect(result.documentsSkipped).toMatch(/storage integration/i);
+    } finally {
+      await prisma.utilityConfig.update({
+        where: { utilityId },
+        data: { settings: BILL_PRODUCTION_SETTINGS },
+      });
+    }
   }, 300_000);
 
   it("says how many bills are posted and how many a Post would still act on", async () => {
