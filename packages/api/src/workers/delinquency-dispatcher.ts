@@ -7,6 +7,7 @@ import {
   enqueueSafely,
   workerOptions,
 } from "../lib/queues.js";
+import { scopedJob } from "../lib/queue-scope.js";
 import { localHour, formatInTimeZone } from "../lib/iana-tz.js";
 import { priorityForTenant } from "../services/automation-config.service.js";
 import { prisma } from "../lib/prisma.js";
@@ -99,7 +100,7 @@ export async function dispatchDelinquency(now: Date = new Date()): Promise<Dispa
 export function buildDelinquencyDispatcher(): Worker {
   const worker = new Worker(
     QUEUE_NAMES.delinquencyDispatch,
-    async () => {
+    scopedJob(QUEUE_NAMES.delinquencyDispatch, async () => {
       const result = await withTelemetry(
         QUEUE_NAMES.delinquencyDispatch,
         () => dispatchDelinquency(new Date()),
@@ -114,7 +115,7 @@ export function buildDelinquencyDispatcher(): Worker {
         );
       }
       return result;
-    },
+    }),
     {
       ...workerOptions(QUEUE_NAMES.delinquencyDispatch),
     },

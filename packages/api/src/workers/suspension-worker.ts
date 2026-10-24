@@ -6,6 +6,7 @@ import {
   getQueue,
   workerOptions,
 } from "../lib/queues.js";
+import { scopedJob } from "../lib/queue-scope.js";
 import { sweepSuspensionsAllTenants } from "../services/service-suspension.service.js";
 
 /**
@@ -29,7 +30,7 @@ export const SUSPENSION_JOB_NAME = "transition-suspensions";
 export function buildSuspensionWorker(): Worker {
   const worker = new Worker(
     QUEUE_NAMES.suspensionTransitions,
-    async () => {
+    scopedJob(QUEUE_NAMES.suspensionTransitions, async () => {
       const result = await withTelemetry(
         QUEUE_NAMES.suspensionTransitions,
         () => sweepSuspensionsAllTenants(new Date()),
@@ -45,7 +46,7 @@ export function buildSuspensionWorker(): Worker {
         );
       }
       return result;
-    },
+    }),
     {
       ...workerOptions(QUEUE_NAMES.suspensionTransitions),
     },

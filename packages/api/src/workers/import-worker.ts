@@ -6,6 +6,7 @@ import {
   enqueueSafely,
   workerOptions,
 } from "../lib/queues.js";
+import { scopedJob } from "../lib/queue-scope.js";
 import {
   processBatch,
   type ProcessScope,
@@ -43,7 +44,7 @@ export interface ImportJobData {
 export function buildImportWorker(): Worker<ImportJobData> {
   const worker = new Worker<ImportJobData>(
     QUEUE_NAMES.imports,
-    async (job) => {
+    scopedJob(QUEUE_NAMES.imports, async (job) => {
       const { batchId, utilityId, actorId, actorName, scope } = job.data;
       const result = await withTelemetry(QUEUE_NAMES.imports, () =>
         processBatch({ batchId, utilityId, actorId, actorName, scope }),
@@ -70,7 +71,7 @@ export function buildImportWorker(): Worker<ImportJobData> {
         "Import batch finalised",
       );
       return result;
-    },
+    }),
     {
       ...workerOptions(QUEUE_NAMES.imports),
     },

@@ -6,6 +6,7 @@ import {
   getQueue,
   workerOptions,
 } from "../lib/queues.js";
+import { scopedJob } from "../lib/queue-scope.js";
 import { sweepBreachedSRs } from "../services/service-request.service.js";
 
 /**
@@ -25,7 +26,7 @@ export const SLA_BREACH_JOB_NAME = "sweep-for-sla-breaches";
 export function buildSlaBreachWorker(): Worker {
   const worker = new Worker(
     QUEUE_NAMES.slaBreachSweep,
-    async () => {
+    scopedJob(QUEUE_NAMES.slaBreachSweep, async () => {
       const result = await withTelemetry(
         QUEUE_NAMES.slaBreachSweep,
         () => sweepBreachedSRs(new Date()),
@@ -37,7 +38,7 @@ export function buildSlaBreachWorker(): Worker {
         );
       }
       return result;
-    },
+    }),
     {
       ...workerOptions(QUEUE_NAMES.slaBreachSweep),
     },

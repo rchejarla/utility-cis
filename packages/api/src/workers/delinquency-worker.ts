@@ -5,6 +5,7 @@ import {
   QUEUE_NAMES,
   workerOptions,
 } from "../lib/queues.js";
+import { scopedJob } from "../lib/queue-scope.js";
 import { evaluateDelinquencyForTenant } from "../services/delinquency.service.js";
 
 /**
@@ -27,7 +28,7 @@ interface DelinquencyTenantJobData {
 export function buildDelinquencyWorker(): Worker<DelinquencyTenantJobData> {
   const worker = new Worker<DelinquencyTenantJobData>(
     QUEUE_NAMES.delinquencyTenant,
-    async (job: Job<DelinquencyTenantJobData>) => {
+    scopedJob(QUEUE_NAMES.delinquencyTenant, async (job: Job<DelinquencyTenantJobData>) => {
       const { utilityId, reason } = job.data;
       const result = await withTelemetry(
         QUEUE_NAMES.delinquencyTenant,
@@ -45,7 +46,7 @@ export function buildDelinquencyWorker(): Worker<DelinquencyTenantJobData> {
         );
       }
       return result;
-    },
+    }),
     {
       ...workerOptions(QUEUE_NAMES.delinquencyTenant),
     },

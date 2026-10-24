@@ -6,6 +6,7 @@ import {
   getQueue,
   workerOptions,
 } from "../lib/queues.js";
+import { scopedJob } from "../lib/queue-scope.js";
 import { processPendingNotificationsWithQuietHours } from "../services/notification.service.js";
 
 /**
@@ -29,7 +30,7 @@ export const NOTIFICATION_JOB_NAME = "process-notification-batch";
 export function buildNotificationWorker(): Worker {
   const worker = new Worker(
     QUEUE_NAMES.notificationSend,
-    async () => {
+    scopedJob(QUEUE_NAMES.notificationSend, async () => {
       const result = await withTelemetry(
         QUEUE_NAMES.notificationSend,
         () => processPendingNotificationsWithQuietHours(new Date()),
@@ -49,7 +50,7 @@ export function buildNotificationWorker(): Worker {
         );
       }
       return result;
-    },
+    }),
     {
       ...workerOptions(QUEUE_NAMES.notificationSend),
     },

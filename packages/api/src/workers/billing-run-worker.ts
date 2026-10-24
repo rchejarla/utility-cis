@@ -6,6 +6,7 @@ import {
   enqueueSafely,
   workerOptions,
 } from "../lib/queues.js";
+import { scopedJob } from "../lib/queue-scope.js";
 import { processBillingRun, postBillingRun } from "../services/billing-run.service.js";
 import { prisma } from "../lib/prisma.js";
 
@@ -54,7 +55,7 @@ export interface BillingRunJobData {
 export function buildBillingRunWorker(): Worker<BillingRunJobData> {
   const worker = new Worker<BillingRunJobData>(
     QUEUE_NAMES.billingRuns,
-    async (job) => {
+    scopedJob(QUEUE_NAMES.billingRuns, async (job) => {
       const { runId, utilityId, actorId, actorName } = job.data;
 
       if (job.name === BILLING_RUN_POST_JOB_NAME) {
@@ -84,7 +85,7 @@ export function buildBillingRunWorker(): Worker<BillingRunJobData> {
         "Billing run finished",
       );
       return result;
-    },
+    }),
     {
       ...workerOptions(QUEUE_NAMES.billingRuns),
     },

@@ -6,6 +6,7 @@ import {
   getQueue,
   workerOptions,
 } from "../lib/queues.js";
+import { scopedJob } from "../lib/queue-scope.js";
 import { sweepExpiredSchedulerAudits } from "../services/audit-retention.service.js";
 
 /**
@@ -30,7 +31,7 @@ export const AUDIT_RETENTION_JOB_NAME = "sweep-expired-audits";
 export function buildAuditRetentionWorker(): Worker {
   const worker = new Worker(
     QUEUE_NAMES.auditRetention,
-    async () => {
+    scopedJob(QUEUE_NAMES.auditRetention, async () => {
       const result = await withTelemetry(
         QUEUE_NAMES.auditRetention,
         () => sweepExpiredSchedulerAudits(new Date()),
@@ -49,7 +50,7 @@ export function buildAuditRetentionWorker(): Worker {
         );
       }
       return result;
-    },
+    }),
     {
       ...workerOptions(QUEUE_NAMES.auditRetention),
     },
