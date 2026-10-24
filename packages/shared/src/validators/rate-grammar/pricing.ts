@@ -36,6 +36,13 @@ const tieredSchema = z
      * normal one looks like, so only the tariff can say.
      */
     standard_days: z.number().int().positive().optional(),
+    /**
+     * What one unit of the priced quantity is called, for the bill line
+     * — "HCF", "MONTH", "kWh". `rate.ts` copies it onto the emitted
+     * line, which is the only reason it exists: without it a bill says
+     * a quantity and never what was counted.
+     */
+    unit: z.string().optional(),
   })
   .strict();
 
@@ -44,6 +51,13 @@ const lookupSchema = z
     type: z.literal("lookup"),
     by: z.string().min(1),
     table: z.record(z.string(), z.number()),
+    /**
+     * What one unit of the priced quantity is called, for the bill line
+     * — "HCF", "MONTH", "kWh". `rate.ts` copies it onto the emitted
+     * line, which is the only reason it exists: without it a bill says
+     * a quantity and never what was counted.
+     */
+    unit: z.string().optional(),
   })
   .strict();
 
