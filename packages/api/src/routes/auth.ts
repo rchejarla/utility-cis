@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getAuthMe, invalidateUserRoleCache } from "../services/rbac.service.js";
 import { prisma } from "../lib/prisma.js";
+import { runAsTenant } from "../lib/tenant-context.js";
 import { config } from "../config.js";
 
 const IS_PROD = config.NODE_ENV === "production";
@@ -96,25 +97,42 @@ export async function authRoutes(app: FastifyInstance) {
           });
         }
 
-        const user = await prisma.cisUser.findFirst({
-          where: { utilityId, email: email.toLowerCase(), isActive: true },
+        /*
+         * Scoped explicitly, because sign-in happens before there is a
+         * tenant to inherit one from — the hooks establish a scope from
+         * `request.user`, and this route is `skipAuth` precisely
+         * because no such user exists yet.
+         *
+         * The tenant comes from the request body, so an unauthenticated
+         * caller chooses which tenant this lookup runs against. That is
+         * narrower than it sounds and narrower than before: the handler
+         * answers only "is there an active user with this email in this
+         * tenant", and under the old superuser connection it searched
+         * every tenant regardless.
+         */
+        const signedIn = await runAsTenant(utilityId, async () => {
+          const found = await prisma.cisUser.findFirst({
+            where: { utilityId, email: email.toLowerCase(), isActive: true },
+          });
+          if (!found) return null;
+
+          // Tenant-wide role lives in user_role with account_id NULL.
+          // Per-account portal roles are resolved by the portal's active-
+          // account middleware later; this dev-login token captures the
+          // tenant-wide identity only.
+          const tenantWide = await prisma.userRole.findFirst({
+            where: { userId: found.id, utilityId, accountId: null },
+            include: { role: { select: { name: true } } },
+          });
+          return { found, roleName: tenantWide?.role.name ?? "Portal Customer" };
         });
 
-        if (!user) {
+        if (!signedIn) {
           return reply.status(401).send({
             error: { code: "USER_NOT_FOUND", message: "No active user found with this email" },
           });
         }
-
-        // Tenant-wide role lives in user_role with account_id NULL.
-        // Per-account portal roles are resolved by the portal's active-
-        // account middleware later; this dev-login token captures the
-        // tenant-wide identity only.
-        const tenantWide = await prisma.userRole.findFirst({
-          where: { userId: user.id, utilityId, accountId: null },
-          include: { role: { select: { name: true } } },
-        });
-        const roleName = tenantWide?.role.name ?? "Portal Customer";
+        const { found: user, roleName } = signedIn;
 
         const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
         const payload = Buffer.from(JSON.stringify({

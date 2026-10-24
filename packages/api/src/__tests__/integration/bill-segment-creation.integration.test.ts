@@ -143,7 +143,12 @@ const TWELVE_HCF_IN_GALLONS = (12 * 172800) / 231;
 
 afterAll(async () => {
   await app?.close().catch(() => {});
+  // `$disconnect` does not dispose a pool the application owns — that
+  // is the driver-adapter contract — so the pools are ended here.
+  // Without it the container stops while connections are live and
+  // Postgres reports 57P01 as an unhandled error after a green run.
   await prismaImports?.prisma.$disconnect().catch(() => {});
+  await prismaImports?.pool.end().catch(() => {});
   await pgContainer?.stop().catch(() => {});
 });
 

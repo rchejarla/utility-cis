@@ -16,6 +16,8 @@ const inputStyle = {
   width: "100%",
 } as const;
 
+const DEV_UTILITY_ID = "00000000-0000-4000-8000-000000000001";
+
 export default function PortalRegisterPage() {
   const router = useRouter();
   const [accountNumber, setAccountNumber] = useState("");
@@ -33,7 +35,11 @@ export default function PortalRegisterPage() {
       const res = await fetch("http://localhost:3001/portal/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountNumber, email, name }),
+        // The tenant is required, not discovered: an account number is
+        // unique per utility, so the API will not guess which one this
+        // is. Hardcoded here the same way `lib/auth.ts` hardcodes it for
+        // portal login, until the portal is served per tenant.
+        body: JSON.stringify({ accountNumber, email, name, utilityId: DEV_UTILITY_ID }),
       });
       const data = await res.json();
 
