@@ -8,7 +8,11 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  /// No `url` here: Prisma 7 refuses it in the schema (P1012). The URL
+  /// that migrations connect with lives in `prisma.config.ts`, and the
+  /// application passes a driver adapter to the client instead — the
+  /// built-in query engine is gone in 7, so an adapter is mandatory
+  /// rather than opt-in.
 }
 
 // ─── The tenant ───────────────────────────────────────────────────────────────

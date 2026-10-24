@@ -4,9 +4,16 @@ import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { EVENT_TYPES, roundToCents } from "@utility-cis/shared";
 import { applyCreditsToDebit, type Application } from "./allocation.service.js";
 
+/*
+ * Mirrors Prisma's own `TransactionClient`, which in Prisma 7 no longer
+ * denies `$transaction` — nested transactions are permitted, so the
+ * deny list is `$connect | $disconnect | $on | $use | $extends`. Omitting
+ * `$transaction` here as well made this type narrower than
+ * `Prisma.TransactionClient` and so unassignable to it.
+ */
 type TxClient = Omit<
   typeof prisma,
-  "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"
+  "$connect" | "$disconnect" | "$on" | "$use" | "$extends"
 >;
 
 /**

@@ -1,6 +1,16 @@
 import { PrismaClient } from "../src/generated/prisma";
+import { PrismaPg } from "@prisma/adapter-pg";
+import pg from "pg";
 
-const prisma = new PrismaClient();
+/*
+ * Prisma 7 removed the built-in query engine, so a client is always
+ * constructed over a driver adapter — there is no longer a no-argument
+ * form. The URL comes from the environment here as it did before; it is
+ * `prisma.config.ts` that supplies it to the CLI, not to this.
+ */
+const prisma = new PrismaClient({
+  adapter: new PrismaPg(new pg.Pool({ connectionString: process.env.DATABASE_URL })),
+});
 
 const UTILITY_ID = "00000000-0000-4000-8000-000000000001";
 

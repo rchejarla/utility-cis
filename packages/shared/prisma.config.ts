@@ -1,4 +1,4 @@
-// Prisma v6 config. We can't use `env("DATABASE_URL")` here because that
+// Prisma v7 config. We can't use `env("DATABASE_URL")` here because that
 // helper evaluates eagerly at config-load time and throws when the env
 // var is missing (e.g. `prisma generate` in CI, which doesn't need a
 // real database). Using `process.env.DATABASE_URL` with a placeholder
@@ -12,7 +12,11 @@ export default defineConfig({
   migrations: {
     path: "prisma/migrations",
   },
-  engine: "classic",
+  // No `engine: "classic"`: Prisma 7 removed the Rust query engine in
+  // favour of an in-process query compiler driven by an adapter. That
+  // change is the reason for this upgrade — the engine was a boundary
+  // that dropped AsyncLocalStorage, so tenant context could not reach
+  // the connection a query ran on.
   datasource: {
     // `.invalid` is reserved by RFC 2606 and guaranteed never to resolve,
     // so if DATABASE_URL is missing when a command actually needs a

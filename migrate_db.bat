@@ -30,13 +30,14 @@ if not exist "%PRISMA%.CMD" (
 )
 
 echo Checking what is pending...
-call "%PRISMA%" migrate status --schema "%SCHEMA%"
+REM No --schema: Prisma 7 takes it from prisma.config.ts.
+call "%PRISMA%" migrate status
 echo.
 echo Applying pending migrations...
 echo Note: some migrations add PostgreSQL enum values, which cannot be
 echo       removed again. This is forward-only.
 echo.
-call "%PRISMA%" migrate deploy --schema "%SCHEMA%"
+call "%PRISMA%" migrate deploy
 if errorlevel 1 goto :failed
 echo.
 echo Done. Restart the API so Prisma reconnects:

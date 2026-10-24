@@ -12,10 +12,15 @@ import type {
  * own transaction. Captured as a derived type rather than typed
  * literally so it stays in sync with whichever Prisma version we run.
  */
-export type ImportTx = Omit<
-  Prisma.TransactionClient,
-  "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"
->;
+/*
+ * `Prisma.TransactionClient` already has the deny list applied, so
+ * re-omitting those members only made this narrower than the thing it
+ * claims to be — and since Prisma 7 permits nested transactions, the
+ * extra `$transaction` omission made it unassignable to `TxClient`.
+ * Derived from Prisma rather than restated, which was the original
+ * intent of the comment above.
+ */
+export type ImportTx = Prisma.TransactionClient;
 
 export interface HandlerContext {
   utilityId: string;

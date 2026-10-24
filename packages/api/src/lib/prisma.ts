@@ -1,7 +1,25 @@
 import { PrismaClient } from "@utility-cis/shared/src/generated/prisma";
+import { PrismaPg } from "@prisma/adapter-pg";
+import pg from "pg";
 import { logger } from "./logger.js";
+import { config } from "../config.js";
 
-export const prisma = new PrismaClient();
+/**
+ * The connection pool, owned here rather than inside Prisma.
+ *
+ * Prisma 7 removed the built-in query engine, so a driver adapter is how
+ * the client talks to Postgres at all — it is no longer an opt-in. That
+ * also means this process owns the pool, which is what row-level
+ * security needs: `app.current_utility_id` is a setting on the
+ * connection a query runs on, and a pool we construct is a pool whose
+ * checkouts we can hook.
+ *
+ * Exported for that reason and no other. Nothing should query through it
+ * directly; `prisma` is the interface.
+ */
+export const pool = new pg.Pool({ connectionString: config.DATABASE_URL });
+
+export const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
 // Warm up connection pool on import
 prisma.$connect().catch((err) => logger.error({ err, component: "prisma" }, "Failed to connect"));

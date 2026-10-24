@@ -1,7 +1,13 @@
 const { PrismaClient } = require("./packages/shared/src/generated/prisma");
+const { PrismaPg } = require("@prisma/adapter-pg");
+const pg = require("pg");
 const { execSync } = require("node:child_process");
 const path = require("node:path");
-const p = new PrismaClient();
+// Prisma 7 has no engine of its own, so a client is always built over a
+// driver adapter. There is no no-argument form any more.
+const p = new PrismaClient({
+  adapter: new PrismaPg(new pg.Pool({ connectionString: process.env.DATABASE_URL })),
+});
 const UID = "00000000-0000-4000-8000-000000000001";
 
 async function main() {
