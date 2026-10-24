@@ -1033,6 +1033,25 @@ export interface BillingRunDetail extends BillingRunSummary {
    * while a run is the thing an operator comes back to days later.
    */
   sentCount: number;
+  /** How many of this run's bills are posted and so actually owed. */
+  postedCount: number;
+  /**
+   * How many of this run's bills a Post would still act on.
+   *
+   * Not `billedCount - postedCount`: a held bill is deliberately
+   * unposted, and a screen gating on the difference would offer a Post
+   * whose only possible outcome is to report it held again. Nor can the
+   * two be subtracted anyway — holding a bill after it posts is allowed,
+   * so the sets overlap.
+   *
+   * This is the figure a Post button belongs on, in place of
+   * `!postedAt`: that stamp says a posting pass ran, which is not the
+   * same as nothing being left. It is written unconditionally at the end
+   * of the loop, so a run where three bills threw is marked posted with
+   * three unposted bills still in it — and the screen hid the only way
+   * to finish them.
+   */
+  awaitingPostCount: number;
 }
 
 export async function getBillingRun(utilityId: string, runId: string): Promise<BillingRunDetail> {
@@ -1069,12 +1088,39 @@ export async function getBillingRun(utilityId: string, runId: string): Promise<B
           where: { utilityId, status: "SENT", billId: { in: billIds } },
         });
 
+  /*
+   * Counted with the same predicate `postBillingRun`'s loop skips on, so
+   * the figure a Post button is gated on cannot disagree with what a
+   * Post would actually do: posted bills are done, and a bill held
+   * either on itself or through its account is somebody's decision
+   * rather than work outstanding.
+   */
+  const [postedCount, awaitingPostCount] =
+    billIds.length === 0
+      ? [0, 0]
+      : await Promise.all([
+          prisma.bill.count({
+            where: { utilityId, id: { in: billIds }, postedAt: { not: null } },
+          }),
+          prisma.bill.count({
+            where: {
+              utilityId,
+              id: { in: billIds },
+              postedAt: null,
+              holdReason: null,
+              account: { billingHoldReason: null },
+            },
+          }),
+        ]);
+
   return {
     ...toSummary(run),
     // Summed at 4dp like the column, and rounded by whatever prints it —
     // the same order as a bill's own subtotals.
     billedTotal: (billed._sum.total ?? new Prisma.Decimal(0)).toFixed(4),
     sentCount: sent.length,
+    postedCount,
+    awaitingPostCount,
   };
 }
 

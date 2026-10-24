@@ -40,6 +40,20 @@ interface RunDetail extends BillingRunRow {
    * answers this for ten seconds and a reload loses it.
    */
   sentCount: number;
+  /** How many of this run's bills are posted and so actually owed. */
+  postedCount: number;
+  /**
+   * How many of this run's bills a Post would still act on — unposted,
+   * and held by neither the bill nor its account.
+   *
+   * This is what the Post button is gated on, in place of `!postedAt`.
+   * That stamp says a posting pass ran, which is not the same as nothing
+   * being left: it is written unconditionally at the end of the loop, so
+   * a run where three bills threw came back marked posted, the button
+   * disappeared, and the banner said the bills were now receivables on
+   * their accounts — of all of them.
+   */
+  awaitingPostCount: number;
 }
 
 /** One cause, and how much of the run it accounts for. */
@@ -268,7 +282,13 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
   if (!run) return <p style={{ color: "var(--text-muted)", padding: "20px 0" }}>Loading…</p>;
 
   const finished = !inFlight;
-  const canPost = canEdit && finished && run.billedCount > 0 && !run.postedAt;
+  const canPost = canEdit && finished && run.awaitingPostCount > 0;
+  /*
+   * Posted, and not everything landed. Held bills are not in this
+   * figure, so it is the ones that threw — work, and the Post above
+   * finishes them.
+   */
+  const postedIncomplete = run.postedAt !== null && run.awaitingPostCount > 0;
   /*
    * FAILED, PARTIAL and CANCELLED all mean the same thing — some
    * accounts are not billed — and all three are dead ends without this,
@@ -367,9 +387,16 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
         </div>
       )}
 
-      {run.postedAt && (
+      {run.postedAt && !postedIncomplete && (
         <Banner tone="success">
           Posted {fmtDate(run.postedAt)} — these bills are now receivables on their accounts.
+        </Banner>
+      )}
+      {postedIncomplete && (
+        <Banner tone="warning">
+          Posted {fmtDate(run.postedAt!)} — {run.awaitingPostCount.toLocaleString()} of{" "}
+          {run.billedCount.toLocaleString()} could not post, so nobody owes those yet. Post the
+          run again to finish them; the ones already posted are left alone.
         </Banner>
       )}
       {run.cancelRequested && inFlight && (

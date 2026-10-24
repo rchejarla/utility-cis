@@ -419,7 +419,7 @@ act repeated rather than a new kind of power.
 | POST | `/api/v1/billing-runs` | `accounts:EDIT` | Start a run. **202** with the PENDING run and `queued` — the work is minutes long, so the response is the record to watch rather than the result |
 | GET | `/api/v1/billing-runs` | `accounts:VIEW` | The 100 most recent runs, newest first |
 | GET | `/api/v1/billing-runs/preview` | `accounts:VIEW` | What starting a run would do — resolved window, dates, and how many accounts are due — without writing anything. Same fields as the create body, as a query |
-| GET | `/api/v1/billing-runs/:id` | `accounts:VIEW` | One run's counts and status, plus `billedTotal` — what posting would raise |
+| GET | `/api/v1/billing-runs/:id` | `accounts:VIEW` | One run's counts and status, plus `billedTotal` — what posting would raise — and `postedCount` / `awaitingPostCount`, which is what the Post button is gated on rather than `postedAt` |
 | GET | `/api/v1/billing-runs/:id/items` | `accounts:VIEW` | The item list. `?status=FAILED` is the work queue; `limit` (≤500) / `offset` |
 | POST | `/api/v1/billing-runs/:id/post` | `accounts:EDIT` | Post every bill the run produced. **201** with `{ posted, alreadyPosted, failed }` |
 | POST | `/api/v1/billing-runs/:id/cancel` | `accounts:EDIT` | Ask a run to stop; it finishes the account it is on |
@@ -692,11 +692,42 @@ column's reason for existing.
 **Post this run** is the review gate and the only control here that moves
 money. It names the count and the amount before raising anything, says that
 posting cannot be undone, and says how many accounts failed and will stay
-unbilled. It is absent for a user without `accounts:EDIT`, absent while the
-run is still going (the API refuses with `RUN_NOT_FINISHED`), and absent
-once posted. **Cancel run** is offered in its place while a run is in
+unbilled. It is absent for a user without `accounts:EDIT` and absent while
+the run is still going (the API refuses with `RUN_NOT_FINISHED`).
+**Cancel run** is offered in its place while a run is in
 flight, and says what cancelling does: stops after the current account,
 leaves what has billed billed.
+
+**It is gated on what is left to post, not on `postedAt`.** The run detail
+carries two derived figures for this: `postedCount`, how many of the run's
+bills are posted and so actually owed, and `awaitingPostCount`, how many a
+Post would still act on — unposted, and held by neither the bill nor its
+account. The button appears while `awaitingPostCount > 0`, whatever
+`postedAt` says.
+
+It used to be gated on `!postedAt`, and that was wrong in a way nobody
+would notice until it mattered. `postBillingRun` stamps `postedAt`
+unconditionally at the end of its loop, so a run where three bills threw
+came back marked posted — the button vanished, taking the only run-level
+way to finish them, while the banner read *"these bills are now receivables
+on their accounts"* of all of them. The stragglers were reachable only one
+at a time from the Bills page. The API never refused a second post (the
+guard is on `PENDING`/`RUNNING` only, and the loop counts an already-posted
+bill as `alreadyPosted`), so the whole fault was the screen's.
+
+`awaitingPostCount` is counted with the same predicate the loop skips on,
+so the gate and the act cannot disagree. It is deliberately **not**
+`billedCount - postedCount`: a held bill is somebody's decision rather than
+work outstanding, and subtraction would offer a Post whose only possible
+outcome is to report it held again. The two sets overlap in any case —
+holding a bill after it posts is allowed — so the difference is not a count
+of anything.
+
+Posted runs therefore carry one of two banners. Everything landed: *"Posted
+{date} — these bills are now receivables on their accounts."* Something did
+not: *"Posted {date} — 3 of 118 could not post, so nobody owes those yet.
+Post the run again to finish them; the ones already posted are left
+alone."*
 
 Two banners carry what no other screen in this app has to say, because
 every other screen shows bills that are already owed: a finished unposted

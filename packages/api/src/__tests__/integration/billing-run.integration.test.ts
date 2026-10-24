@@ -485,6 +485,52 @@ describe("posting a run", () => {
       expect(charge).not.toBeNull();
     }
   }, 300_000);
+
+  /*
+   * What the run still has to post, as distinct from whether a posting
+   * pass has run.
+   *
+   * `postedAt` is stamped unconditionally at the end of the loop, so a
+   * run where three bills threw is marked posted with three unposted
+   * bills in it. The screen gated its Post button on `!postedAt` and so
+   * hid the only way to finish the job, while the banner said the bills
+   * "are now receivables on their accounts" — of all of them.
+   *
+   * A held bill is not what is missing, which is why the two figures are
+   * separate: a gate counting it would offer a Post that can only ever
+   * report it held again.
+   */
+  it("says how many bills are posted and how many a Post would still act on", async () => {
+    const run = JSON.parse((await startRun()).body);
+    await svc.processBillingRun({
+      runId: run.id,
+      utilityId,
+      actorId: ACTOR_ID,
+      actorName: "Tester",
+    });
+
+    const { prisma } = prismaImports;
+    const billed = await prisma.billingRunItem.findMany({
+      where: { billingRunId: run.id, status: "BILLED" },
+      select: { billId: true },
+    });
+    expect(billed.length).toBeGreaterThanOrEqual(3);
+
+    const before = await svc.getBillingRun(utilityId, run.id);
+    expect(before.postedCount).toBe(0);
+    expect(before.awaitingPostCount).toBe(billed.length);
+
+    // One posted, one held, the rest still waiting.
+    const { postBill } = await import("../../services/ar/posting.service.js");
+    await postBill(utilityId, ACTOR_ID, "Tester", billed[0].billId as string);
+    const { holdBill } = await import("../../services/bill-hold.service.js");
+    await holdBill(utilityId, ACTOR_ID, "Tester", billed[1].billId as string, "Disputed reading");
+
+    const after = await svc.getBillingRun(utilityId, run.id);
+    expect(after.postedCount).toBe(1);
+    // The held one is not waiting on anybody.
+    expect(after.awaitingPostCount).toBe(billed.length - 2);
+  }, 300_000);
 });
 
 /**

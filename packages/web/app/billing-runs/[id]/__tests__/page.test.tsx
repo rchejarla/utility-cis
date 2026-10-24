@@ -46,6 +46,10 @@ function detail(over: Record<string, unknown> = {}) {
     // Always present on the wire, so the fixture carries it too rather
     // than letting the page defend against a field the API guarantees.
     sentCount: 0,
+    // Also guaranteed on the wire. The default is an unposted run, so
+    // everything billed is still waiting.
+    postedCount: 0,
+    awaitingPostCount: 118,
     postedAt: null,
     cancelRequested: false,
     lastProgressAt: "2026-10-15T10:00:00.000Z",
@@ -213,7 +217,12 @@ describe("Billing run detail — the posting gate", () => {
 
   it("says a posted run is already on the accounts, and offers no second posting", async () => {
     routeGets({
-      run: detail({ status: "COMPLETE", postedAt: "2026-10-15" }),
+      run: detail({
+        status: "COMPLETE",
+        postedAt: "2026-10-15",
+        postedCount: 118,
+        awaitingPostCount: 0,
+      }),
       byStatus: { FAILED: [] },
     });
     await renderPage();
@@ -223,6 +232,55 @@ describe("Billing run detail — the posting gate", () => {
       screen.getByText(/Posted 10\/15\/2026 — these bills are now receivables/),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Post this run" })).not.toBeInTheDocument();
+  });
+
+  /*
+   * `postedAt` says a posting pass ran, not that nothing is left. It is
+   * stamped unconditionally at the end of the loop, so a run where three
+   * bills threw was marked posted — and gating the button on it hid the
+   * only way to finish them, under a banner saying the bills were now
+   * receivables on their accounts.
+   */
+  it("keeps Post on a posted run whose bills did not all post, and says how many are left", async () => {
+    routeGets({
+      run: detail({
+        status: "COMPLETE",
+        postedAt: "2026-10-15",
+        postedCount: 115,
+        awaitingPostCount: 3,
+      }),
+      byStatus: { FAILED: [] },
+    });
+    await renderPage();
+
+    await loaded();
+    expect(screen.getByRole("button", { name: "Post this run" })).toBeInTheDocument();
+    expect(screen.getByText(/3 of 118 could not post/i)).toBeInTheDocument();
+    // And it must not also claim they all landed.
+    expect(screen.queryByText(/these bills are now receivables/)).not.toBeInTheDocument();
+  });
+
+  /*
+   * The distinction the two figures exist for. 115 posted of 118 with
+   * nothing awaiting means the other three are held — somebody's
+   * decision, not work outstanding. Counting the difference would offer
+   * a Post whose only possible outcome is to report them held again.
+   */
+  it("does not call a held bill a failure, or offer a Post that cannot help it", async () => {
+    routeGets({
+      run: detail({
+        status: "COMPLETE",
+        postedAt: "2026-10-15",
+        postedCount: 115,
+        awaitingPostCount: 0,
+      }),
+      byStatus: { FAILED: [] },
+    });
+    await renderPage();
+
+    await loaded();
+    expect(screen.queryByRole("button", { name: "Post this run" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/could not post/i)).not.toBeInTheDocument();
   });
 });
 
