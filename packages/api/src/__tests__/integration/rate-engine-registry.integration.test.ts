@@ -3,6 +3,8 @@ import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@utility-cis/shared/src/generated/prisma";
+import { PrismaPg } from "@prisma/adapter-pg";
+import pg from "pg";
 import { bootPostgres, type BootedContainer } from "./_effective-dating-fixtures.js";
 import { buildRegistry } from "../../lib/rate-engine-registry.js";
 
@@ -24,7 +26,11 @@ beforeAll(async () => {
     env: { ...process.env, DATABASE_URL: booted.dbUrl },
     stdio: "pipe",
   });
-  prisma = new PrismaClient({ datasources: { db: { url: booted.dbUrl } } });
+      // Prisma 7 removed `datasources`; a client is created over a driver
+      // adapter instead, which is also how `lib/prisma.ts` builds the
+      // real one. The pool is this test's to close, hence `$disconnect`
+      // in afterAll below.
+  prisma = new PrismaClient({ adapter: new PrismaPg(new pg.Pool({ connectionString: booted.dbUrl })) });
 }, 600_000);
 
 afterAll(async () => {

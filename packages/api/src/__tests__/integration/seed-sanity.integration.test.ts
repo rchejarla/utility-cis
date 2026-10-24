@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { PrismaClient } from "@utility-cis/shared/src/generated/prisma";
+import { PrismaPg } from "@prisma/adapter-pg";
+import pg from "pg";
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,7 +53,11 @@ beforeAll(async () => {
     stdio: "pipe",
   });
 
-  prisma = new PrismaClient({ datasources: { db: { url: booted.dbUrl } } });
+      // Prisma 7 removed `datasources`; a client is created over a driver
+      // adapter instead, which is also how `lib/prisma.ts` builds the
+      // real one. The pool is this test's to close, hence `$disconnect`
+      // in afterAll below.
+  prisma = new PrismaClient({ adapter: new PrismaPg(new pg.Pool({ connectionString: booted.dbUrl })) });
 }, 300_000);
 
 afterAll(async () => {

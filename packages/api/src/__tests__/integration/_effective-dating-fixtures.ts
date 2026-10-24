@@ -220,7 +220,9 @@ export async function bootPostgres(
   // only just set DATABASE_URL, and the caller imports `lib/prisma.js`
   // afterwards precisely so the singleton reads it.
   if (opts.utilities && opts.utilities.length > 0) {
-    execSync("pnpm prisma db execute --stdin --schema prisma/schema.prisma", {
+    // No `--schema`: Prisma 7 removed the flag from `db execute`, which
+    // now takes the schema path from prisma.config.ts.
+    execSync("pnpm prisma db execute --stdin", {
       cwd: SHARED_DIR,
       env: { ...process.env, DATABASE_URL: dbUrl },
       input: utilityInsertSql(opts.utilities),

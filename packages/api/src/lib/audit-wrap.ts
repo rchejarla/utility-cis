@@ -1,7 +1,17 @@
 import { Prisma } from "@utility-cis/shared/src/generated/prisma";
 import { prisma } from "./prisma.js";
 
-type TxClient = Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends">;
+/*
+ * Mirrors Prisma's own `TransactionClient`, which in Prisma 7 no longer
+ * denies `$transaction` — nested transactions are permitted, so the
+ * deny list is `$connect | $disconnect | $on | $use | $extends`. Omitting
+ * `$transaction` here as well made this type narrower than
+ * `Prisma.TransactionClient` and so unassignable to it.
+ */
+type TxClient = Omit<
+  typeof prisma,
+  "$connect" | "$disconnect" | "$on" | "$use" | "$extends"
+>;
 
 /**
  * Audit-row emission helpers. Every mutating service uses these to wrap
