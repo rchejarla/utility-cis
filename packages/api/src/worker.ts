@@ -1,4 +1,5 @@
 import { config, resolveWorkerQueues } from "./config.js";
+import { assertRlsEnforced } from "./lib/prisma.js";
 import { logger } from "./lib/logger.js";
 import { queueRedisConnection } from "./lib/queue-redis.js";
 import { startHealthServer } from "./lib/health-server.js";
@@ -166,6 +167,14 @@ async function main(): Promise<void> {
     );
     process.exit(0);
   }
+
+  /*
+   * The same gate the API has, and it matters more here: six of the
+   * eight queues sweep every tenant, so a worker on a database that is
+   * not enforcing isolation is the one process whose every job is
+   * cross-tenant by design and cannot tell the difference.
+   */
+  await assertRlsEnforced();
 
   const requestedQueues = resolveWorkerQueues();
   const activeQueues: readonly QueueName[] =

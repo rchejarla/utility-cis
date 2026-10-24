@@ -4,6 +4,7 @@ import pg from "pg";
 import { logger } from "./logger.js";
 import { config } from "../config.js";
 import { currentTenant } from "./tenant-context.js";
+import { rlsComplaints } from "./rls-guard.js";
 
 /**
  * The connection pool, owned here rather than inside Prisma.
@@ -170,6 +171,73 @@ export const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
 // Warm up connection pool on import
 prisma.$connect().catch((err) => logger.error({ err, component: "prisma" }, "Failed to connect"));
+
+/**
+ * Refuse to start in production on a database that is not enforcing
+ * isolation — and say so loudly anywhere else.
+ *
+ * Everything else in this file assumes the policies bite. If the
+ * application's role is exempt they do not, and nothing reports it:
+ * queries succeed, rows come back, and every tenant's rows are among
+ * them. The regression is one line in a deployment script
+ * (`ALTER ROLE ... SUPERUSER`) and it has no symptom until a customer
+ * sees another customer's bill.
+ *
+ * Development warns and continues on purpose. A dev stack pointed at a
+ * superuser is a normal thing to have — `migrate deploy` needs one —
+ * and refusing to boot would make the warning something to route
+ * around rather than read.
+ *
+ * Checked against the tenant pool, which is the connection that must be
+ * confined. The platform pool is *expected* to bypass; that is its job.
+ */
+export async function assertRlsEnforced(): Promise<void> {
+  const [{ current_user: currentUser, bypasses }] = await tenantPool.query<{
+    current_user: string;
+    bypasses: boolean;
+  }>(
+    `SELECT current_user, (rolsuper OR rolbypassrls) AS bypasses
+       FROM pg_roles WHERE rolname = current_user`,
+  ).then((r) => r.rows);
+
+  /*
+   * A table with a policy and no FORCE is one its owner reads freely.
+   * Asked of the catalog rather than of a list kept here, so a table
+   * added by a later migration is covered by having been created.
+   */
+  const unforced = await tenantPool.query<{ relname: string }>(
+    `SELECT DISTINCT c.relname
+       FROM pg_class c
+       JOIN pg_policy p ON p.polrelid = c.oid
+      WHERE c.relnamespace = 'public'::regnamespace
+        AND NOT c.relforcerowsecurity
+      ORDER BY c.relname`,
+  );
+
+  const complaints = rlsComplaints({
+    currentUser,
+    bypasses,
+    unforcedPoliciedTables: unforced.rows.map((r) => r.relname),
+    platformUrlSet: config.DATABASE_URL_PLATFORM !== "",
+  });
+
+  if (complaints.length === 0) {
+    logger.info(
+      { component: "rls", role: currentUser },
+      "Row-level security is enforced for the application role",
+    );
+    return;
+  }
+
+  if (config.NODE_ENV === "production") {
+    throw new Error(
+      `Refusing to start: tenant isolation is not enforced.\n- ${complaints.join("\n- ")}`,
+    );
+  }
+  for (const complaint of complaints) {
+    logger.warn({ component: "rls", role: currentUser }, complaint);
+  }
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
