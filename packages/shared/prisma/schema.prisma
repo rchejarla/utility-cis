@@ -1754,6 +1754,22 @@ model DelinquencyRule {
   /// REPLACE_LOWER_TIERS on a tier that charges nothing: that would be
   /// a way to spell forgiveness, and forgiveness is a waiver.
   feeMode               DelinquencyFeeMode @default(ACCUMULATE) @map("fee_mode")
+
+  /// The field work this tier dispatches, by service-request type code,
+  /// or null for a tier that dispatches none. Configuration rather than
+  /// something inferred from `actionType`, because a utility whose crews
+  /// work off their own system wants the notice tiers and no work
+  /// orders at all — and because the codes are the tenant's own.
+  ///
+  /// Validated at save time by `assertServiceRequestTypeCode` rather
+  /// than by a foreign key: `service_request_type_def` admits global
+  /// rows with a null `utility_id`, which a tenant-scoped composite key
+  /// cannot reference.
+  serviceRequestTypeCode        String? @map("service_request_type_code") @db.VarChar(100)
+  /// And the one raised when the account pays and asks to be turned
+  /// back on. It lives beside the shut-off code so the two cannot
+  /// disagree about which rung of the ladder they belong to.
+  reconnectRequestTypeCode      String? @map("reconnect_request_type_code") @db.VarChar(100)
   createdAt             DateTime     @default(now()) @map("created_at") @db.Timestamptz
   updatedAt             DateTime     @updatedAt @map("updated_at") @db.Timestamptz
 

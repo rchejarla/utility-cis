@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { serviceRequestTypeCode } from "./service-request-type-def";
 
 export const delinquencyActionTypes = [
   "NOTICE_EMAIL",
@@ -47,6 +48,15 @@ const feeFields = {
   maxFee: feeCapString.nullable().optional(),
   feeReasonId: z.string().uuid().nullable().optional(),
   feeMode: z.enum(delinquencyFeeModes).optional(),
+  /*
+   * The field work this tier dispatches. Shaped like a service-request
+   * type code rather than validated against the tenant's own list here,
+   * which needs a query — the route does that with
+   * `assertServiceRequestTypeCode`, the same gate the request itself
+   * goes through.
+   */
+  serviceRequestTypeCode: serviceRequestTypeCode.nullable().optional(),
+  reconnectRequestTypeCode: serviceRequestTypeCode.nullable().optional(),
 };
 
 const FEE_TRIO = ["feeType", "feeAmount", "feeReasonId"] as const;
