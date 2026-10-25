@@ -7,6 +7,19 @@ import { sendNotification } from "./notification.service.js";
  * tenant's delinquency rules tier by tier.
  */
 
+/**
+ * A unique violation on `delinquency_action_one_live_per_rule` — the
+ * partial index that makes "one live action per account per tier" true
+ * across processes rather than only within one loop.
+ */
+function isDuplicateAction(e: unknown): boolean {
+  return (
+    typeof e === "object" &&
+    e !== null &&
+    (e as { code?: string }).code === "P2002"
+  );
+}
+
 export async function evaluateAll(utilityId: string): Promise<{
   accountsEvaluated: number;
   actionsCreated: number;
@@ -59,11 +72,25 @@ export async function evaluateAll(utilityId: string): Promise<{
 
     const balance = Number(account.balance);
 
+    /*
+     * A rule reaches only debt that came due while it was in force.
+     * Gated against `lastDueDate` and not against today, because the
+     * question is whether the tier existed when the account fell
+     * behind — otherwise configuring a tier this afternoon fires it at
+     * every account that has ever been past due, retroactively.
+     *
+     * Both columns are DATE, so Prisma hands back UTC midnight on each
+     * side and this is a day-level comparison. Equal dates pass: a tier
+     * that came into force on the day the debt came due was in force.
+     */
+    const dueMs = new Date(account.lastDueDate).getTime();
+
     const applicableRules = rules.filter((r) => {
       if (r.accountType && r.accountType !== account.accountType) return false;
       if (r.daysPastDue > daysPastDue) return false;
       if (Number(r.minBalance) > balance) return false;
       if (!r.autoApply) return false;
+      if (new Date(r.effectiveDate).getTime() > dueMs) return false;
       return true;
     });
 
@@ -96,20 +123,40 @@ export async function evaluateAll(utilityId: string): Promise<{
         });
       }
 
-      await prisma.delinquencyAction.create({
-        data: {
-          utilityId,
-          accountId: account.id,
-          ruleId: rule.id,
-          tier: rule.tier,
-          actionType: rule.actionType,
-          status: notificationId ? "COMPLETED" : "PENDING",
-          balanceAtAction: balance,
-          daysPastDueAtAction: daysPastDue,
-          triggeredBy: "AUTOMATED",
-          notificationId,
-        },
-      });
+      try {
+        await prisma.delinquencyAction.create({
+          data: {
+            utilityId,
+            accountId: account.id,
+            ruleId: rule.id,
+            tier: rule.tier,
+            actionType: rule.actionType,
+            status: notificationId ? "COMPLETED" : "PENDING",
+            balanceAtAction: balance,
+            daysPastDueAtAction: daysPastDue,
+            triggeredBy: "AUTOMATED",
+            notificationId,
+          },
+        });
+      } catch (e) {
+        /*
+         * Another process created this action between our read of the
+         * live set and this insert. `actionSet` cannot see across
+         * processes, so the partial unique index is what turns that
+         * into a refusal instead of a duplicate; record it as taken
+         * and carry on rather than failing the whole tenant's sweep
+         * over one account.
+         *
+         * The notice above has already gone out by this point, so the
+         * loser of the race still sends a duplicate notice — strictly
+         * better than today, where it also wrote a duplicate action,
+         * and closed when the notification moves after the action's
+         * transaction (plan task 3).
+         */
+        if (!isDuplicateAction(e)) throw e;
+        actionSet.add(key);
+        continue;
+      }
 
       actionSet.add(key);
       actionsCreated++;
