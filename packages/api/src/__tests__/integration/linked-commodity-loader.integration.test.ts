@@ -65,10 +65,17 @@ const scoped = <T>(tenant: string, fn: () => Promise<T>): Promise<T> =>
 beforeEach(() =>
   seedAsPlatform(async () => {    /* Fixture rows and read-backs under the fixture authority; the
      * scoped wrappers re-enter their own tenant scope. */
-    const { prisma } = prismaImports;
-    await prisma.$executeRawUnsafe("DELETE FROM meter_read");
-    await prisma.$executeRawUnsafe("DELETE FROM service_point_meter");
-    await prisma.$executeRawUnsafe("DELETE FROM service_point");
+    /*
+     * `resetDb` alone. The bare `DELETE FROM meter_read` that used to run
+     * here was redundant *and* unprotected: redundant because
+     * `resetDb`'s `TRUNCATE … CASCADE` reaches `meter_read` through its
+     * foreign key to `meter`, and unprotected because a statement issued
+     * straight at the client carries no `lock_timeout` — PostgreSQL has
+     * no default, so a collision with one of Timescale's background
+     * workers over a chunk lock waits forever. That is how this suite
+     * spent 357 seconds in a 120-second hook during the 2026-10-25
+     * full-suite run. `resetDb` bounds the same work and retries it.
+     */
     await resetDb();
 
   }));

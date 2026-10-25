@@ -552,7 +552,27 @@ export async function endAdminPool(): Promise<void> {
 export async function truncateTables(tables: string): Promise<void> {
   const client = await admin().connect();
   try {
-    await client.query(`TRUNCATE TABLE ${tables} RESTART IDENTITY CASCADE`);
+    /*
+     * Bounded, for the reason `resetDb` is. PostgreSQL has no default
+     * `lock_timeout`, so a TRUNCATE that collides with another session's
+     * lock waits forever — and a caller's list may well reach a
+     * Timescale hypertable through CASCADE, whose chunks background
+     * workers lock periodically. Unbounded, that is a hook that dies on
+     * its timeout saying nothing about a lock; `meter-loader` spent 357
+     * seconds inside a 120-second hook that way on 2026-10-25.
+     *
+     * One connection, because `SET LOCAL` and the TRUNCATE have to share
+     * a transaction or the timeout applies to nothing.
+     */
+    await client.query("BEGIN");
+    try {
+      await client.query(`SET LOCAL lock_timeout = ${LOCK_TIMEOUT_MS}`);
+      await client.query(`TRUNCATE TABLE ${tables} RESTART IDENTITY CASCADE`);
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    }
   } finally {
     client.release();
   }
