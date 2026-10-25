@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { sendNotification } from "./notification.service.js";
 import { assessFee } from "./ar/fee.service.js";
+import { tierFeeAmount } from "./delinquency-fee.js";
 
 /**
  * Who the ledger records as having raised an automated fee.
@@ -154,19 +155,30 @@ export async function evaluateAll(utilityId: string): Promise<{
           let feeEntryId: string | null = null;
 
           if (rule.feeType && rule.feeAmount && rule.feeReasonId) {
-            const fee = await assessFee(
-              utilityId,
-              AUTOMATED_ACTOR_ID,
-              AUTOMATED_ACTOR_NAME,
-              account.id,
-              {
-                amount: rule.feeAmount.toFixed(2),
-                reasonId: rule.feeReasonId,
-                memo: `${rule.name} — ${daysPastDue} days past due`,
-              },
-              tx,
-            );
-            feeEntryId = fee.feeId;
+            const amount = await tierFeeAmount(tx, utilityId, account.id, {
+              feeType: rule.feeType,
+              feeAmount: rule.feeAmount,
+              maxFee: rule.maxFee,
+            });
+
+            // Null means there was nothing to charge — a percentage of
+            // a base that rounds to nothing. The action is still
+            // written: the account passed the tier.
+            if (amount) {
+              const fee = await assessFee(
+                utilityId,
+                AUTOMATED_ACTOR_ID,
+                AUTOMATED_ACTOR_NAME,
+                account.id,
+                {
+                  amount,
+                  reasonId: rule.feeReasonId,
+                  memo: `${rule.name} — ${daysPastDue} days past due`,
+                },
+                tx,
+              );
+              feeEntryId = fee.feeId;
+            }
           }
 
           await tx.delinquencyAction.create({

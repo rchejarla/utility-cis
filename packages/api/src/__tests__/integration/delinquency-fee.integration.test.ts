@@ -97,10 +97,46 @@ async function makeFeeReason(code: string, label: string): Promise<string> {
   });
 }
 
+/** A ledger entry already on the account, as prior history. */
+async function entryOf(opts: {
+  type: "ADJUSTMENT_DEBIT" | "FEE";
+  amount: string;
+  reasonCode: string;
+}) {
+  const reason = await reasonId(opts.reasonCode);
+  return seedAsPlatform(async () =>
+    prismaImports.prisma.ledgerEntry.create({
+      data: {
+        utilityId: TENANT_A,
+        accountId: fix.accountId,
+        type: opts.type,
+        amount: opts.amount,
+        openAmount: opts.amount,
+        effectiveDate: daysAgo(40),
+        dueDate: daysAgo(30),
+        reasonId: reason,
+      },
+    }),
+  );
+}
+
+/** The fee the ladder raised, found the way Task 5 will find it. */
+async function ladderFee() {
+  const [action] = await actions();
+  expect(action!.feeEntryId).not.toBeNull();
+  return seedAsPlatform(async () =>
+    prismaImports.prisma.ledgerEntry.findUniqueOrThrow({
+      where: { id: action!.feeEntryId! },
+    }),
+  );
+}
+
 async function ruleWithFee(opts: {
   tier?: number;
   daysPastDue?: number;
+  feeType?: "FLAT_FEE" | "PERCENT_OF_BALANCE";
   feeAmount: string | null;
+  maxFee?: string;
   feeReasonId?: string | null;
 }) {
   const charging = opts.feeAmount !== null;
@@ -116,8 +152,9 @@ async function ruleWithFee(opts: {
         autoApply: true,
         isActive: true,
         effectiveDate: daysAgo(365),
-        feeType: charging ? "FLAT_FEE" : null,
+        feeType: charging ? (opts.feeType ?? "FLAT_FEE") : null,
         feeAmount: opts.feeAmount,
+        maxFee: opts.maxFee ?? null,
         feeReasonId: charging
           ? (opts.feeReasonId ?? (await reasonId("LATE_FEE")))
           : null,
@@ -288,6 +325,108 @@ describe("a delinquency tier that charges a flat fee", () => {
       }),
     );
     expect(account.balance.toString()).toBe("25");
+  });
+});
+
+/**
+ * Task 4: a tier that charges a percentage.
+ *
+ * The base is what the account owes in *principal*. Including earlier
+ * penalties charges 1.5% of tier 1's own fee; excluding every `FEE`
+ * would stop a late fee applying to an unpaid tap fee, which is money
+ * owed for work actually done. `LedgerReasonDef.isPenalty` is the only
+ * thing that separates them, and it cannot be a list of codes.
+ */
+describe("a delinquency tier that charges a percentage", () => {
+  it("charges the rate against what the account owes", async () => {
+    await entryOf({ type: "ADJUSTMENT_DEBIT", amount: "200.00", reasonCode: "OPENING_BALANCE" });
+    await ruleWithFee({ feeType: "PERCENT_OF_BALANCE", feeAmount: "0.0150" });
+    await pastDue({ balance: "200.00", days: 15 });
+
+    await evaluateAll(TENANT_A);
+
+    expect((await ladderFee()).amount.toString()).toBe("3");
+  });
+
+  it("caps a percentage fee at maxFee", async () => {
+    await entryOf({ type: "ADJUSTMENT_DEBIT", amount: "200.00", reasonCode: "OPENING_BALANCE" });
+    await ruleWithFee({ feeType: "PERCENT_OF_BALANCE", feeAmount: "0.1000", maxFee: "5.00" });
+    await pastDue({ balance: "200.00", days: 15 });
+
+    await evaluateAll(TENANT_A);
+
+    expect((await ladderFee()).amount.toString()).toBe("5");
+  });
+
+  /*
+   * Review Focus 4, and the whole reason `isPenalty` exists. $100 of
+   * opening balance plus a $40 unpaid tap fee is $140 of principal; a
+   * $10 late fee already raised is not. 10% of 140 is 14, not 15.
+   */
+  it("excludes a prior penalty from the base but not an ordinary fee", async () => {
+    await entryOf({ type: "ADJUSTMENT_DEBIT", amount: "100.00", reasonCode: "OPENING_BALANCE" });
+    await entryOf({ type: "FEE", amount: "40.00", reasonCode: "TAP_FEE" });
+    await entryOf({ type: "FEE", amount: "10.00", reasonCode: "LATE_FEE" });
+    await ruleWithFee({ feeType: "PERCENT_OF_BALANCE", feeAmount: "0.1000" });
+    await pastDue({ balance: "150.00", days: 15 });
+
+    await evaluateAll(TENANT_A);
+
+    expect((await ladderFee()).amount.toString()).toBe("14");
+  });
+
+  it("rounds a percentage fee to cents, half up", async () => {
+    await entryOf({ type: "ADJUSTMENT_DEBIT", amount: "100.00", reasonCode: "OPENING_BALANCE" });
+    await ruleWithFee({ feeType: "PERCENT_OF_BALANCE", feeAmount: "0.0333" });
+    await pastDue({ balance: "100.00", days: 15 });
+
+    await evaluateAll(TENANT_A);
+
+    expect((await ladderFee()).amount.toString()).toBe("3.33");
+  });
+
+  /*
+   * The tier still happened — the account passed it and the notice is
+   * owed — there was simply nothing to charge. An action with no fee is
+   * the honest record of that.
+   */
+  it("raises nothing when the computed fee rounds to zero", async () => {
+    await entryOf({ type: "ADJUSTMENT_DEBIT", amount: "1.00", reasonCode: "OPENING_BALANCE" });
+    await ruleWithFee({ feeType: "PERCENT_OF_BALANCE", feeAmount: "0.0001" });
+    await pastDue({ balance: "1.00", days: 15 });
+
+    await evaluateAll(TENANT_A);
+
+    expect(await actions()).toHaveLength(1);
+    expect(await feeEntries()).toHaveLength(0);
+  });
+
+  /*
+   * An open credit the ladder has not yet applied is money the customer
+   * has already handed over. Charging a percentage on it would charge
+   * them for debt they have paid.
+   */
+  it("counts an open credit against the base", async () => {
+    await entryOf({ type: "ADJUSTMENT_DEBIT", amount: "200.00", reasonCode: "OPENING_BALANCE" });
+    await seedAsPlatform(async () =>
+      prismaImports.prisma.ledgerEntry.create({
+        data: {
+          utilityId: TENANT_A,
+          accountId: fix.accountId,
+          type: "PAYMENT",
+          amount: "-50.00",
+          openAmount: "-50.00",
+          effectiveDate: daysAgo(20),
+          tender: "CASH",
+        },
+      }),
+    );
+    await ruleWithFee({ feeType: "PERCENT_OF_BALANCE", feeAmount: "0.1000" });
+    await pastDue({ balance: "150.00", days: 15 });
+
+    await evaluateAll(TENANT_A);
+
+    expect((await ladderFee()).amount.toString()).toBe("15");
   });
 });
 
