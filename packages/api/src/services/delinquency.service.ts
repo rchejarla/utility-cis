@@ -1,5 +1,19 @@
 import { prisma } from "../lib/prisma.js";
 import { sendNotification } from "./notification.service.js";
+import { assessFee } from "./ar/fee.service.js";
+
+/**
+ * Who the ledger records as having raised an automated fee.
+ *
+ * A constant and not a seeded `cis_user` row: neither
+ * `ledger_entry.created_by` nor `audit_log.actor_id` is a foreign key to
+ * that table, and the only reader that turns an actor id into a name is
+ * the audit list, which does so only for rows whose `actor_name` is null
+ * — and these carry one. Seeding a reserved user per tenant would buy
+ * nothing and cost a provisioning change plus a fixture in every suite.
+ */
+export const AUTOMATED_ACTOR_ID = "00000000-0000-4000-8000-00000000de10";
+export const AUTOMATED_ACTOR_NAME = "Delinquency (automated)";
 
 /**
  * Delinquency evaluation engine. The nightly job calls evaluateAll()
@@ -124,19 +138,52 @@ export async function evaluateAll(utilityId: string): Promise<{
       }
 
       try {
-        await prisma.delinquencyAction.create({
-          data: {
-            utilityId,
-            accountId: account.id,
-            ruleId: rule.id,
-            tier: rule.tier,
-            actionType: rule.actionType,
-            status: notificationId ? "COMPLETED" : "PENDING",
-            balanceAtAction: balance,
-            daysPastDueAtAction: daysPastDue,
-            triggeredBy: "AUTOMATED",
-            notificationId,
-          },
+        /*
+         * The fee and the action commit together. An account marked
+         * delinquent with no charge, or charged with no record of which
+         * tier did it, are both worse than a sweep that fails and can be
+         * re-run — and a duplicate fee is a wrong bill, which is why
+         * this is a transaction and not two statements.
+         *
+         * The fee is written first so the action can name it in one
+         * insert rather than an insert and an update. A unique violation
+         * on the action therefore rolls the fee back with it, which is
+         * what makes the race safe to lose.
+         */
+        await prisma.$transaction(async (tx) => {
+          let feeEntryId: string | null = null;
+
+          if (rule.feeType && rule.feeAmount && rule.feeReasonId) {
+            const fee = await assessFee(
+              utilityId,
+              AUTOMATED_ACTOR_ID,
+              AUTOMATED_ACTOR_NAME,
+              account.id,
+              {
+                amount: rule.feeAmount.toFixed(2),
+                reasonId: rule.feeReasonId,
+                memo: `${rule.name} — ${daysPastDue} days past due`,
+              },
+              tx,
+            );
+            feeEntryId = fee.feeId;
+          }
+
+          await tx.delinquencyAction.create({
+            data: {
+              utilityId,
+              accountId: account.id,
+              ruleId: rule.id,
+              tier: rule.tier,
+              actionType: rule.actionType,
+              status: notificationId ? "COMPLETED" : "PENDING",
+              balanceAtAction: balance,
+              daysPastDueAtAction: daysPastDue,
+              triggeredBy: "AUTOMATED",
+              notificationId,
+              feeEntryId,
+            },
+          });
         });
       } catch (e) {
         /*

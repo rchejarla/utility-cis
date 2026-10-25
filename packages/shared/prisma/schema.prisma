@@ -1693,6 +1693,16 @@ enum DelinquencyActionStatus {
   @@map("delinquency_action_status")
 }
 
+/// How a tier's late fee is computed. FLAT_FEE reads `feeAmount` as an
+/// amount of money; PERCENT_OF_BALANCE reads it as a rate, so 0.0150 is
+/// 1.5%, applied to what the account owes in principal.
+enum DelinquencyFeeType {
+  FLAT_FEE
+  PERCENT_OF_BALANCE
+
+  @@map("delinquency_fee_type")
+}
+
 model DelinquencyRule {
   id                    String       @id @default(uuid()) @db.Uuid
   utilityId             String       @map("utility_id") @db.Uuid
@@ -1708,6 +1718,24 @@ model DelinquencyRule {
   autoApply             Boolean      @default(true) @map("auto_apply")
   isActive              Boolean      @default(true) @map("is_active")
   effectiveDate         DateTime     @default(now()) @map("effective_date") @db.Date
+
+  /// What this tier charges, or nothing. The three move together — an
+  /// amount with no reason is a charge nobody can explain, a reason with
+  /// no amount is dead configuration — which a CHECK enforces.
+  ///
+  /// `feeReasonId` is configuration rather than something the sweep could
+  /// know: reason codes are tenant-configurable, so there is no code this
+  /// codebase could hardcode. Its foreign key is
+  /// `(utility_id, fee_reason_id) -> ledger_reason_def (utility_id, id)`
+  /// and lives in the migration, because Prisma cannot express a
+  /// composite relation whose referencing `utility_id` is not optional.
+  feeType               DelinquencyFeeType? @map("fee_type")
+  /// Decimal(10,4): an amount for FLAT_FEE, a rate for PERCENT_OF_BALANCE.
+  feeAmount             Decimal?     @map("fee_amount") @db.Decimal(10, 4)
+  /// A ceiling on a percentage fee. Meaningless on a flat one, so a CHECK
+  /// refuses the combination.
+  maxFee                Decimal?     @map("max_fee") @db.Decimal(10, 2)
+  feeReasonId           String?      @map("fee_reason_id") @db.Uuid
   createdAt             DateTime     @default(now()) @map("created_at") @db.Timestamptz
   updatedAt             DateTime     @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -1733,6 +1761,15 @@ model DelinquencyAction {
   triggeredBy         String                  @map("triggered_by") @db.VarChar(20)
   triggeredByUserId   String?                 @map("triggered_by_user_id") @db.Uuid
   notificationId      String?                 @map("notification_id") @db.Uuid
+  /// The fee this action raised, when its tier charges one.
+  ///
+  /// A tier that replaces what the ladder charged below it walks these
+  /// links to find its candidates, which is what keeps a bounced-payment
+  /// fee and an operator's manual late fee out of reach however the
+  /// tenant has named its reasons: neither has a delinquency action. The
+  /// question is ownership, not category, so it cannot be a filter on
+  /// the reason. Composite foreign key in the migration, as above.
+  feeEntryId          String?                 @map("fee_entry_id") @db.Uuid
   resolvedAt          DateTime?               @map("resolved_at") @db.Timestamptz
   resolutionType      String?                 @map("resolution_type") @db.VarChar(50)
   notes               String?                 @db.Text
