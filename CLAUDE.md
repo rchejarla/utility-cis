@@ -115,6 +115,14 @@ Its ownership hierarchy is `PLATFORM ⊃ TENANT ⊃ CUSTOMER ⊃ SUBJECT`, which
 - `node seed.js` — Alternative seed (CommonJS, so no `tsx` to run it — but it shells out to `scripts/provision-tenant.ts` for the tenant, and resolves `tsx` from the pnpm store, so a non-pnpm install fails here)
 - `start_prod.bat` — Build + run in production mode
 - `pnpm --filter @utility-cis/api dev:worker` — the BullMQ worker process. **`start_dev.bat` does not start it**, so by default every queue fills up and nothing in it ever runs: the repeatable schedulers go overdue, and enqueued billing runs and imports sit in `waiting` indefinitely. That is why `/platform/cluster/queues` reports worker attachment per queue — zero workers and a healthy-looking set of counts are the same picture otherwise. `WORKER_QUEUES=<comma-list>` serves a subset; **starting it will run whatever has accumulated**, so check what is waiting first — the five cron queues go overdue as soon as nothing is attached, and `notification-send` dispatches outward while `audit-retention` deletes rows. The platform console's Workers page (`/platform/cluster/workers`) can also start and stop it (`WORKER_CONTROL_ENABLED`, on by default outside production), which spawns the same process detached and records it in the `platform:workers` Redis hash so a `tsx watch` reload does not lose it.
+- `node packages/api/scripts/grant-db-logins.mjs` — **the production step that makes `cis_app` and `cis_platform` connectable.** The `rls_roles` migration creates both NOLOGIN with no password on purpose: a password in a migration is a password in every clone of the repo forever. Dev gets throwaway logins from `scripts/grant-dev-db-logins.sql` (run by `setup_db.bat`); production runs this instead, after `migrate deploy` and before the app starts.
+
+  Reads three environment variables, all deployment secrets: `ADMIN_DATABASE_URL` (a connection that may `ALTER ROLE` — the owner or a superuser, deliberately *not* `DATABASE_URL`, which by then names `cis_app`), `CIS_APP_PASSWORD` and `CIS_PLATFORM_PASSWORD`. Idempotent, so it is also how a password is rotated.
+
+  **It computes the SCRAM-SHA-256 verifier locally and sends that, never the cleartext.** `ALTER ROLE … PASSWORD 'secret'` puts the password in a statement, which is visible in `pg_stat_activity` while it runs and is written to the server log under `log_statement = ddl` or `all` — a setting plenty of production databases use for audit, which would leave a database credential sitting in a log file. Passwords must be printable ASCII: PostgreSQL applies SASLprep before deriving its own verifier, and SASLprep is a no-op only for that range, so anything else would leave a role with a password nobody can use. The script refuses rather than hand back a credential that silently does not work.
+
+  It also refuses to proceed if the roles are not shaped the way the migration left them — `cis_app` holding SUPERUSER or BYPASSRLS, `cis_platform` holding neither, or either role being a *member* of the other (it could then `SET ROLE` and inherit the bypass, leaving the split decorative while every attribute still looked right). `assertRlsEnforced` catches the first of those at startup; this catches all three while someone is still watching a terminal. Covered by `grant-db-logins.integration.test.ts`, which proves the credential it sets can actually log in.
+
 - `npx tsx scripts/provision-tenant.ts --list` — list tenants with their module, role and user counts
 - `npx tsx scripts/provision-tenant.ts --name "<name>" [--dry-run]` — create a tenant: utility row, all 32 modules, the six preset roles, optionally a first admin (`--admin-email`, `--admin-name`). On Windows `tsx` resolves at `node_modules/.pnpm/node_modules/.bin/tsx.cmd`.
 
@@ -156,7 +164,15 @@ that does not fit a new design is reseeded, never migrated.
 `database_features` migration holds 35 CHECK constraints, 6 generated
 columns, 62 RLS policies, a hypertable, a trigger, an exclusion
 constraint and 6 partial indexes — none of which `schema.prisma` can
-express. `migrate dev` compares the database against the model, finds
+express. Since 2026-10-25 add the 64 **tenant-scoped foreign keys** to
+that list: every key between two tenant-scoped tables is
+`(utility_id, <fk>) -> parent (utility_id, id)`, so a row in one tenant
+cannot reference a row in another — which RLS cannot enforce, because a
+referential-integrity check is not a row read. Prisma cannot express 17
+of them (it requires every referencing field of a `SetNull` relation to
+be optional, and `utility_id` is not), so all 64 stay in SQL and
+`schema-invariants.integration.test.ts` fails if any regresses to a
+single column. `migrate dev` compares the database against the model, finds
 all of it undescribed, and generates a migration *reverting* it. It
 reads as a routine drift fix and would silently drop the ledger's
 invariants and full-text search. Use `migrate deploy`; write schema

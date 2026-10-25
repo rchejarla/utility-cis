@@ -135,6 +135,48 @@ describe("every tenant-scoped table", () => {
   });
 
   /**
+   * Every foreign key between two tenant-scoped tables carries the
+   * tenant, so the two rows cannot belong to different ones.
+   *
+   * RLS cannot enforce this and never could: its policies filter which
+   * rows a query *reads*, and a foreign key is not a read —
+   * PostgreSQL's referential-integrity checks run as the table owner and
+   * are exempt. A single-column key is therefore satisfied by a parent
+   * the acting tenant cannot see, which was measurably writable before
+   * the `tenant_scoped_foreign_keys` migration.
+   *
+   * Pinned as an empty set rather than a count, so a relation added
+   * single-column fails here and names itself. Two kinds are excluded
+   * because a composite key would be wrong, not merely unnecessary:
+   * keys pointing at `utility`, which has no `utility_id` of its own,
+   * and keys pointing at a global reference table, whose nullable
+   * `utility_id` means "belongs to no tenant" and can never equal a
+   * child's tenant.
+   */
+  it("puts the tenant in every foreign key between two tenant-scoped tables", async () => {
+    const { prisma } = prismaImports;
+
+    const single = await prisma.$queryRaw<{ child: string; fk: string; parent: string }[]>`
+      SELECT child.relname AS child, att.attname AS fk, parent.relname AS parent
+      FROM pg_constraint con
+      JOIN pg_class child  ON child.oid  = con.conrelid
+      JOIN pg_class parent ON parent.oid = con.confrelid
+      JOIN pg_namespace n  ON n.oid      = child.relnamespace
+      JOIN pg_attribute att ON att.attrelid = con.conrelid
+                           AND att.attnum   = con.conkey[1]
+      WHERE con.contype = 'f'
+        AND n.nspname = 'public'
+        AND array_length(con.conkey, 1) = 1
+        AND EXISTS (SELECT 1 FROM pg_attribute
+                     WHERE attrelid = child.oid  AND attname = 'utility_id' AND attnotnull)
+        AND EXISTS (SELECT 1 FROM pg_attribute
+                     WHERE attrelid = parent.oid AND attname = 'utility_id' AND attnotnull)
+      ORDER BY 1, 2`;
+
+    expect(single.map((r) => `${r.child}.${r.fk} -> ${r.parent}`)).toEqual([]);
+  });
+
+  /**
    * A nullable `utility_id` means "belongs to no tenant", and that is
    * meaningful for exactly two reasons: a global reference row every
    * tenant reads (§1.3), and the platform actor, whose entire definition

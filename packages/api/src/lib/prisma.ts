@@ -266,16 +266,25 @@ function assertUtilityId(utilityId: string): void {
  * rather than fixed: it was a bare, session-scoped statement, so it both
  * failed to reach its own queries and left another tenant's id behind.
  * The RLS policies read this setting, so residue is a cross-tenant read
- * that raises no error — inert only for as long as the application role
- * stays a superuser and bypasses RLS entirely.
+ * that raises no error.
  *
- * Nothing depended on it: every reader of the setting establishes it
- * itself, inside its own transaction — `audit-wrap.ts`'s `writeAuditRow`,
- * the two `effective-dating-queries.ts` handlers, and this function.
+ * **`runAsTenant` is the way in, not this.** This comment used to end by
+ * saying that turning RLS on meant routing tenant-scoped reads through
+ * here. That is the opposite of what happened on 2026-10-24, and the
+ * reason is worth keeping: `withTenant` had five call sites against 432
+ * bare-client query sites, so requiring it everywhere would have changed
+ * every service signature and still left isolation resting on each call
+ * site remembering. The tenant now travels in `AsyncLocalStorage` and is
+ * applied to the connection as it is checked out, above every query
+ * whether or not the author thought about it.
  *
- * Tenant separation today rests on the explicit `utility_id` predicates
- * in queries. Turning RLS on for real means routing tenant-scoped reads
- * through here; see docs/design/utility-cis-architecture.md §7.1.
+ * What is left for this function is one caller,
+ * `ar/reconciliation.service.ts`, which wants an explicit transaction
+ * anyway. Inside a `runAsTenant` scope its `set_config(…, true)` is
+ * redundant — the checkout already carried the tenant — and harmless:
+ * `tenant-context.integration.test.ts` pins that a transaction-local set
+ * does not destroy the session value around it. Treat it as legacy with
+ * a live caller rather than as the supported entry point.
  */
 export async function withTenant<T>(
   utilityId: string,

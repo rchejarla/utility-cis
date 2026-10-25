@@ -417,7 +417,7 @@ Review Focus 3. A sweep that returns zero rows reports success, so the test asse
 - Modify: `packages/api/src/__tests__/integration/rls-enforcement.integration.test.ts`
 
 **Interfaces:**
-- Produces: `DATABASE_URL` pointing at `cis_app`; `DATABASE_URL_PLATFORM` at `cis_platform`; `DATABASE_URL_MIGRATE` at `cis`.
+- Produces: `DATABASE_URL` pointing at `cis_app`; `DATABASE_URL_PLATFORM` at `cis_platform`. *(`DATABASE_URL_MIGRATE` was planned here and not built: migrations are run by hand or by `migrate_db.bat` with the URL passed explicitly, so a third variable would have been a name nothing read. Do not go looking for it.)*
 
 - [x] **Step 1: Invert Task 1's characterisation test** — "lets the application role read another tenant's rows today" becomes **"refuses another tenant's rows"**, asserting an empty result for a scoped read and `22023` for an unscoped one.
 - [x] **Step 2: Run it** — Expected: FAIL while the app still connects as `cis`.

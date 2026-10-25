@@ -42,9 +42,28 @@ The column stays nullable, because the rows already written cannot be repaired: 
 
 **Indexes:** `[utility_id, entity_type, entity_id]`, `[utility_id, created_at DESC]`, `[utility_id, actor_id]`
 
-**Retention:** AuditLog records are never deleted. They are the system of record for all state changes.
+**Retention:** A user's audit records are never deleted — they are the
+system of record for every state change a person made. *Scheduler*
+records are not, and this line used to say otherwise while the table
+above already described the sweep that deletes them. The
+`audit-retention` queue removes rows whose `source LIKE 'scheduler:%'`
+once they are older than the tenant's
+`scheduler_audit_retention_days`, in batches, and user rows are outside
+its filter by construction rather than by care.
 
-**RLS:** Row-Level Security enforced — utility_id is always set from the JWT context. Audit entries from one tenant are never visible to another.
+Worth knowing if you are reading sweep output: that sweep aborted on
+every run until 2026-10-25. It compared `created_at` against an untyped
+bound parameter minus an interval, which PostgreSQL resolved as interval
+arithmetic, leaving `timestamptz < interval` — error 42883. So any
+deployment older than that date has retained *everything*, whatever its
+configured window says.
+
+**RLS:** enforced, and since 2026-10-24 actually so — the application
+connects as `cis_app`, which holds no bypass, and `audit_log` FORCEs row
+level security like every other tenant table. The acting tenant arrives
+on the connection from `AsyncLocalStorage`, not from a per-request `SET`.
+Audit entries from one tenant are not visible to another, and a read with
+no tenant scope raises rather than returning an empty page.
 
 ### Attachment (Built — Phase 2)
 

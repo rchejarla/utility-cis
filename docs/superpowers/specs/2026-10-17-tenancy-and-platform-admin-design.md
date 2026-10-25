@@ -137,6 +137,17 @@ is about keeping that actor as small as possible.
 
 ### 1.7 Tenant separation is predicate-based, and the predicates have holes
 
+> **Superseded 2026-10-24.** RLS enforces now: the application connects
+> as `cis_app`, which is neither a superuser nor the tables' owner, every
+> policied table FORCEs row-level security, and every foreign key between
+> two tenant-scoped tables carries the tenant. The predicates described
+> below remain in the code and are still worth the audit this section
+> records — they are the half that still holds if someone connects as a
+> bypassing role — but they are no longer the *only* thing separating
+> tenants. Read architecture §7.1 for what enforces and what would undo
+> it. The rest of this section is kept as written, because the audit it
+> reports is what motivated the change.
+
 RLS is inert today — the application role is a superuser and owns the
 tables — so the `utility_id` predicates in application code are the only
 thing separating tenants (`lib/prisma.ts:43-45`, architecture doc §7.1).
@@ -354,6 +365,20 @@ that admit an explicit platform context — a second setting the policy
 ORs in. The question is live but not urgent: the policies are inert
 today because the application role is a superuser that owns the tables
 (§1.7).
+
+> **Settled 2026-10-24, and the other way round.** The two options above
+> were weighed again while the policies were being written, and the
+> exempt role won: `cis_platform` holds BYPASSRLS, has its own pool, and
+> is chosen by `runAsPlatform` rather than per call site. The reason the
+> "narrower" option lost is that it was not narrower where it counted —
+> an `OR current_setting('app.is_platform', true)` branch is reachable
+> from any code path able to set a GUC, so the invariant would have gone
+> back to application code remembering not to set it, which is the
+> arrangement §1.7 above exists to complain about. A role is enforced by
+> PostgreSQL and cannot be assumed from SQL. Its costs were real and were
+> paid: a second pool, second credentials, and exemption for every query
+> that role runs — which is why `queue-scope.ts` derives the authority
+> from `QUEUE_TENANCY` instead of letting a handler pick it.
 
 **Q4 — Who chooses a tenant's seed profile at provisioning time?**
 Related to the seed-profile split (commodities, UOMs, cycles and tariffs

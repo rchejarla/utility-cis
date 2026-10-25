@@ -176,7 +176,7 @@
 
 | ID | Rule | Enforcement |
 |----|------|-------------|
-| BR-TN-001 | Every entity is scoped by utility_id. Cross-tenant data access is never permitted. | PostgreSQL RLS policies |
+| BR-TN-001 | Every entity is scoped by utility_id. Cross-tenant data access is never permitted. | PostgreSQL RLS policies on 62 tables, FORCEd, with the app connecting as a role that holds no bypass (`cis_app`); plus composite foreign keys `(utility_id, fk)` so a row in one tenant cannot *reference* one in another, which RLS cannot enforce. Enforced from 2026-10-24; before that the policies existed but were inert and the `utility_id` predicates in application code were the whole of it |
 | BR-TN-002 | JWT signatures are verified using NEXTAUTH_SECRET. Forged tokens are rejected. | jose JWT verification |
 | BR-TN-003 | utility_id must be a valid UUID format before SQL execution. | UUID regex validation |
 | BR-TN-004 | All GET-by-ID queries include utility_id in WHERE clause (defense in depth). | API service layer |

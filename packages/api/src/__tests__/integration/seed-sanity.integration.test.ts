@@ -35,6 +35,7 @@ const SHARED_DIR = path.resolve(__dirname, "../../../../shared");
 
 let booted: BootedContainer;
 let prisma: PrismaClient;
+let ownPool: pg.Pool;
 
 beforeAll(async () => {
   booted = await bootPostgres();
@@ -58,11 +59,16 @@ beforeAll(async () => {
       // adapter instead, which is also how `lib/prisma.ts` builds the
       // real one. The pool is this test's to close, hence `$disconnect`
       // in afterAll below.
-  prisma = new PrismaClient({ adapter: new PrismaPg(new pg.Pool({ connectionString: booted.dbUrl })) });
+  // The pool is held rather than built inline, because the teardown has
+  // to end it: a container stopped while its connections are live has
+  // Postgres report 57P01 after an otherwise green run.
+  ownPool = new pg.Pool({ connectionString: booted.dbUrl });
+  prisma = new PrismaClient({ adapter: new PrismaPg(ownPool) });
 }, 300_000);
 
 afterAll(async () => {
   await prisma?.$disconnect().catch(() => {});
+  await ownPool?.end().catch(() => {});
   await booted?.container.stop().catch(() => {});
 });
 

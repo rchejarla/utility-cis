@@ -99,15 +99,47 @@ tables — `account_type_def`, `premise_type_def`, `suspension_type_def`, `servi
 marks a row that belongs to no tenant and is readable by all of them; a tenant shadows one by
 adding its own row with the same code.
 
-RLS policies are enabled on all 62 tenant-carrying tables:
+RLS is enabled, FORCEd and enforced on all 62 tenant-carrying tables:
 
 ```sql
 ALTER TABLE premise ENABLE ROW LEVEL SECURITY;
+ALTER TABLE premise FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON premise
   USING (utility_id = current_setting('app.current_utility_id')::uuid);
 ```
 
-The API validates `utility_id` as a UUID before interpolation and sets the RLS context per-request via `SET app.current_utility_id`. Defense in depth: all `GET /:id` queries also include `utility_id` in the `WHERE` clause.
+**FORCE is not decoration.** PostgreSQL exempts a table's owner from its
+own policies independently of superuser, so without it the policies are
+inert for whoever ran the migrations. The application therefore connects
+as `cis_app` — neither owner nor superuser — while `cis` stays the
+owner/migrator and `cis_platform` holds BYPASSRLS for the work that
+crosses tenants by design (the platform console and the all-tenants
+queue sweeps).
+
+**How the tenant reaches the policy.** Not by a per-request
+`SET app.current_utility_id` — that was removed, because a bare
+session-scoped statement lands on whichever pooled connection it is
+handed, so the queries that follow may get a different one and never see
+it, while the connection that did receive it carries the tenant into the
+next request. The acting tenant now travels in `AsyncLocalStorage`
+(`lib/tenant-context.ts`) and `lib/prisma.ts` applies it to each
+connection as it is checked out. A tenant-scoped read with no scope
+**raises** rather than returning zero rows, because an empty result reads
+as "nothing is wrong".
+
+**Relationships carry the tenant too.** Every foreign key between two
+tenant-scoped tables is `(utility_id, <fk>) -> parent (utility_id, id)`,
+so a row in one tenant cannot reference a row in another. RLS cannot
+enforce that on its own: its policies filter which rows a query *reads*,
+and a referential-integrity check is not a read — PostgreSQL runs those
+as the table owner, exempt from RLS.
+
+Defense in depth: `GET /:id` queries still include `utility_id` in the
+`WHERE` clause. That predicate is now the second line rather than the
+only one, and it is the half that still holds if a deployment connects as
+a bypassing role.
+
+Full account, including what would undo it: `docs/design/utility-cis-architecture.md` §7.1.
 
 ## Design Principles
 

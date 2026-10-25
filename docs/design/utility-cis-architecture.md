@@ -122,10 +122,10 @@ Two of the three costs below are therefore closed:
   minted before the suspension stops working rather than running out its lifetime. Suspension
   deletes nothing; purge is a separate, deferred capability.
 - **No cross-tenant integrity guarantee.** Still open, and unchanged by the root: the foreign key
-  proves each row's tenant exists, not that two rows in a relationship share one. RLS closes the
-  case where a row belongs to the wrong tenant outright; it does not police a *relationship*
-  between two rows that each belong to the acting tenant legitimately, which is what this gap is
-  about (§7.1, and §1.7 of the tenancy note).
+  proved each row's tenant exists, not that two rows in a relationship shared one. **Closed on
+  2026-10-25** by putting the tenant in the key: every foreign key between two tenant-scoped
+  tables is now `(utility_id, <fk>) -> parent (utility_id, id)`, so a child in one tenant cannot
+  reference a parent in another. See §7.1.
 
 Why it went unfixed for so long: a local `Utility` row largely mirrors provider-owned data, and a mirror is a second copy free to disagree with its source. That decision — whether the identity provider, this database, or both with a defined direction own tenancy — was settled on 2026-10-18 as Q2 of the tenancy note: apptorID eventually, for every identity rather than this one, and until then the CIS holds the row.
 
@@ -1008,6 +1008,27 @@ form, which returns NULL and silently filters every row.
    boundary that dropped the context, measured both ways before the
    upgrade.
 
+**Where production's credentials come from.** The `rls_roles` migration
+creates `cis_app` and `cis_platform` NOLOGIN with no password, because a
+password written into a migration is a password in every clone of the
+repository for as long as it exists. Development gets throwaway logins
+from `scripts/grant-dev-db-logins.sql`, run by `setup_db.bat` after
+`migrate deploy` — it cannot live in `docker/init-cis-user.sh`, which
+runs on first init of an empty volume, before any migration has created
+the roles it would alter.
+
+Production runs `packages/api/scripts/grant-db-logins.mjs`, which takes
+`CIS_APP_PASSWORD`, `CIS_PLATFORM_PASSWORD` and an `ADMIN_DATABASE_URL`
+from deployment secrets, in that order of the deploy: migrate, grant,
+start. It derives the SCRAM-SHA-256 verifier locally and sends that
+rather than the password, because `ALTER ROLE … PASSWORD 'secret'` is a
+statement — visible in `pg_stat_activity` and logged under
+`log_statement = ddl`, which would put a database credential in a log
+file. It also refuses a database whose roles are mis-shaped, including
+the case where one role is a *member* of the other and could `SET ROLE`
+into the bypass; handing out credentials is the wrong moment to discover
+that the split is decorative.
+
 **What must not be undone.** `ALTER ROLE ... SUPERUSER` or `... BYPASSRLS`
 on `cis_app`; dropping FORCE from a table; pointing `DATABASE_URL` at the
 owner role; or widening a policy with an `OR current_setting(...)` escape
@@ -1025,6 +1046,31 @@ overnight — so `lib/queue-scope.ts` derives the authority from
 `QUEUE_TENANCY` rather than applying it by hand. The two per-tenant queues
 are confined to the tenant named in their job payload, and a per-tenant job
 carrying no tenant is refused rather than widened.
+
+**Relationships carry the tenant too, and must.** Row-level security
+cannot police a foreign key, and not by oversight: its policies filter
+which rows a query *reads*, and a referential-integrity check is not a
+read — PostgreSQL runs those as the table owner, exempt from RLS. A
+single-column key was therefore satisfied by a parent the acting tenant
+could not see, and a mismatched pair was writable; measured, not
+assumed, in `cross-tenant-fk.integration.test.ts`. The
+`tenant_scoped_foreign_keys` migration rewrites all 64 such keys as
+`(utility_id, <fk>) -> parent (utility_id, id)`, derived from the
+catalog rather than listed, so each one keeps its own `ON DELETE`
+action. Two kinds stay single-column because a composite key would be
+*wrong* rather than redundant: keys pointing at `utility`, which has no
+`utility_id` of its own, and keys pointing at a global reference table,
+whose nullable `utility_id` means "belongs to no tenant" and can never
+equal a child's tenant.
+
+**These keys are SQL-only, like the policies.** `schema.prisma` cannot
+express 17 of them: Prisma requires every referencing field of a
+`SetNull` relation to be optional, and `utility_id` is required. The
+alternative was to declare a referential action Prisma would not
+perform, so the keys live in the migration and
+`schema-invariants.integration.test.ts` pins the absence of any
+single-column survivor — a relation added without the tenant fails there
+and names itself.
 
 **What is exempt, and why.** `_prisma_migrations`, which is not tenant
 data; and `utility`, whose own `id` *is* the tenant id and whose policy
@@ -1122,18 +1168,32 @@ uuid can only be referenced by its owner's rows, and the delete itself is
 rests on an invariant rather than on a predicate, which is the distinction this
 whole subsection exists to make.
 
-**Q3 of the tenancy note, settled 2026-10-18: how a lifecycle operation reads
-past a policy comparing against a NULL setting.** With no tenant context,
-`current_setting('app.current_utility_id', true)` is NULL, every policy compares
-`utility_id = NULL`, and a platform actor's lifecycle read would therefore
-return nothing. The resolution is that the policies admit an explicit platform
-context — a second setting the policy ORs in — rather than a `BYPASSRLS` role,
-which would need its own connection pool and credentials and would exempt all of
-that role's queries instead of only the lifecycle ones. **Not built yet, and
-deliberately:** all 62 policies are inert while the application role is a
-superuser that owns the tables, the change is mechanical when it is needed, and
-writing it now is 62 policy rewrites nothing reads. Whoever turns RLS on owns
-both halves together.
+**Q3 of the tenancy note: how a lifecycle operation reads past a policy
+comparing against an unset setting. Settled 2026-10-18, reversed 2026-10-24 —
+and the reversal is the part to read.** With no tenant context,
+`current_setting('app.current_utility_id', true)` returns nothing, every policy
+compares against it, and a platform actor's lifecycle read returns nothing.
+
+The 2026-10-18 resolution was that the policies would admit an explicit platform
+context — a second setting the policy ORs in — *rather than* a `BYPASSRLS` role,
+on the grounds that a role needs its own connection pool and credentials and
+exempts all of its queries instead of only the lifecycle ones.
+
+**What was built on 2026-10-24 is the role.** `cis_platform` holds BYPASSRLS, has
+its own pool in `lib/prisma.ts`, and is selected by `runAsPlatform` rather than
+by a call site. The objections above were all real and were paid: there is a
+second pool, there are second credentials, and every query that role runs is
+exempt, which is why `queue-scope.ts` derives authority from `QUEUE_TENANCY`
+instead of letting a handler choose.
+
+They were paid because the alternative is worse in a way that only became clear
+while writing the policies. An `OR current_setting('app.is_platform', true)`
+escape hatch is reachable from *any* code path that can set a GUC — a raw query,
+a forgotten `set_config`, a service called from the wrong place — so the
+invariant would live in application code remembering not to set it, which is
+precisely the arrangement §7.1 exists to end. A role is enforced by PostgreSQL
+and cannot be assumed from SQL. The narrower exemption was not narrower in the
+way that mattered.
 
 ---
 
