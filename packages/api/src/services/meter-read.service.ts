@@ -665,7 +665,13 @@ export async function deleteMeterRead(
     await writeAuditRow(
       tx,
       { utilityId, actorId, actorName, entityType: "MeterRead" },
-      "meter_read.updated",
+      // `.deleted`, because `mapEventTypeToAction` derives the audit
+      // `action` column from this suffix and anything that is not
+      // `.created` or `.deleted` becomes UPDATE. This said `.updated`,
+      // so removing a read — the data a bill is computed from — was
+      // recorded as an edit, and an audit filtering on DELETE found
+      // nothing.
+      "meter_read.deleted",
       before.id,
       before,
       null,
