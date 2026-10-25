@@ -54,7 +54,12 @@ export async function sweepExpiredSchedulerAudits(
         FROM audit_log al
         INNER JOIN utility_config tc ON tc.utility_id = al.utility_id
         WHERE al.source LIKE 'scheduler:%'
-          AND al.created_at < ${now} - (tc.scheduler_audit_retention_days || ' days')::interval
+          -- The ::timestamptz cast is load-bearing, not decoration.
+          -- Bound untyped, Postgres has nothing to infer the parameter
+          -- from and resolves it as interval arithmetic, leaving
+          -- timestamptz < interval -- 42883, which aborts the sweep.
+          AND al.created_at < ${now}::timestamptz
+                              - (tc.scheduler_audit_retention_days || ' days')::interval
         LIMIT ${BATCH_SIZE}
       )
     `;

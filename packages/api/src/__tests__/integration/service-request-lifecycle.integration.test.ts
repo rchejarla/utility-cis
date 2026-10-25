@@ -150,6 +150,11 @@ beforeAll(() =>
 afterAll(async () => {
   if (app) await app.close();
   await prismaImports?.prisma.$disconnect();
+  // `$disconnect` does not dispose a pool the application owns — that is
+  // the driver-adapter contract — so the tenant and platform pools are
+  // ended here. Without it the container stops while connections are
+  // live and Postgres reports 57P01 after an otherwise green run.
+  await prismaImports?.pool.end().catch(() => {});
   await pgContainer?.stop();
 });
 
