@@ -85,3 +85,92 @@ jobs:
         # missing from the CI workflow, which is why regressions in the
         # web test suite weren't catching fire in CI until now.
         run: pnpm --filter @utility-cis/web test
+
+  integration:
+    name: Integration (Postgres via testcontainers) — shard ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    # Each of the 85 suites boots its own Postgres container and runs
+    # `migrate deploy` into it, so the wall clock is container setup, not
+    # assertions. Sharded four ways to keep a shard near ten minutes;
+    # raise the shard count rather than this timeout if it creeps.
+    timeout-minutes: 30
+
+    # No `needs:` on purpose. Typecheck feedback from `verify` should not
+    # wait behind twenty minutes of containers, and neither job's result
+    # tells you anything about the other's.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    services:
+      # Not strictly required — `clearRbacCaches` in the fixtures is
+      # best-effort and bounded at 2s. But unreachable Redis means every
+      # `resetDb` pays that 2s, roughly twenty suites' worth of resets,
+      # and a reachable cache is also the only way the RBAC
+      # cache-invalidation paths get exercised at all.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Configure Font Awesome Pro registry
+        env:
+          FONTAWESOME_TOKEN: ${{ secrets.FONTAWESOME_TOKEN }}
+        run: |
+          if [ -z "$FONTAWESOME_TOKEN" ]; then
+            echo "::error::FONTAWESOME_TOKEN secret is not set. Add it under repo Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          {
+            echo "@fortawesome:registry=https://npm.fontawesome.com/"
+            echo "//npm.fontawesome.com/:_authToken=$FONTAWESOME_TOKEN"
+          } > .npmrc
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        # The generated client is gitignored and nothing regenerates it on
+        # install, so this is not optional here: the suites import it.
+        run: pnpm --filter @utility-cis/shared exec prisma generate
+
+      - name: Build shared package
+        run: pnpm --filter @utility-cis/shared build
+
+      - name: Pre-pull the database image
+        # Pulled once per job rather than lazily by whichever suite boots
+        # first, so a slow pull is not charged to one test's 240s timeout.
+        run: docker pull timescale/timescaledb:latest-pg16
+
+      - name: Integration tests — api
+        # The suites reach the database only through containers they start
+        # themselves; `DATABASE_URL` is set per suite by `bootPostgres`,
+        # which points it at `cis_app` so the row-level security policies
+        # actually apply. Nothing here needs a database of its own.
+        env:
+          REDIS_URL: redis://localhost:6379
+        run: >-
+          pnpm --filter @utility-cis/api exec vitest run
+          --config vitest.integration.config.ts
+          --shard=${{ matrix.shard }}/4
