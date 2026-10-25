@@ -71,8 +71,9 @@ export interface BillPresentationSettlement {
 }
 
 /**
- * Everything that happened on the account between this bill and the one
- * before it, other than the bills themselves.
+ * The fees and adjustments group: everything charged to the account
+ * between this bill and the one before it that did not come from the
+ * rate engine.
  *
  * A late fee raises the balance and produces no `BillSegmentLine` —
  * lines come entirely from rating, and each carries a
@@ -89,10 +90,9 @@ export interface BillPresentationSettlement {
  * `null` when nothing happened, so an ordinary bill prints exactly as it
  * did before.
  */
-export interface BillPresentationActivity {
-  entries: Array<{ date: Date; label: string; amount: string }>;
-  /** Signed: positive is money added to what the account owes. */
-  total: string;
+/** `2026-02-10`, for a fee label. Fixed format, so bytes stay stable. */
+function ymd(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
 export interface BillPresentation {
@@ -116,10 +116,11 @@ export interface BillPresentation {
      * agree — which is most bills. Printed only when present.
      */
     rounding: string | null;
+    /** The fees group's subtotal, or null when there are none. */
+    fees: string | null;
     total: string;
   };
   settlement: BillPresentationSettlement | null;
-  activity: BillPresentationActivity | null;
   messages: Array<{ label: string; body: string }>;
   branding: { logoUrl: string | null; primaryColor: string; fontFamily: string };
   remittance: { payTo: string; addressLines: string[]; amountDue: string; dueDate: Date };
@@ -366,45 +367,6 @@ export async function loadBillPresentation(
     .filter((line): line is string => present(line))
     .map((line) => line.trim());
 
-  /*
-   * The totals box is built from the printed group subtotals, not from
-   * the stored 4dp columns.
-   *
-   * The per-group rule above — sum the already-rounded lines, because the
-   * customer can add those up — was applied to the groups and then
-   * contradicted here, where `subtotal` rounded `bill.subtotal`. Two
-   * lines of 16.1050 print as 16.11 and 16.11 under a group subtotal of
-   * 32.22, while `bill.subtotal` of 32.2100 rounds to 32.21: one page
-   * stating both, and the customer holding it can see that it does not
-   * add up. Every fixture on this branch happens to be exact to cents,
-   * so nothing caught it.
-   *
-   * `total` stays tied to `bill.total`, because that is what the ledger
-   * raised as the charge and what the remittance stub asks for; a bill
-   * must not ask for a number the account does not owe. When the two
-   * rounding orders differ, the cent between them is therefore shown as
-   * its own line rather than hidden in a total that does not follow from
-   * the lines above it. A bill whose figures visibly reconcile, rounding
-   * included, is worth more than one that silently absorbs the
-   * difference.
-   */
-  const printedSubtotal = groups.reduce(
-    (acc, group) => acc.plus(new Decimal(group.subtotal)),
-    new Decimal(0),
-  );
-  const taxes = new Decimal(money(bill.taxes));
-  const credits = new Decimal(money(bill.credits));
-  const total = new Decimal(money(bill.total));
-  const rounding = total.minus(printedSubtotal.plus(taxes).minus(credits));
-
-  const totals = {
-    subtotal: printedSubtotal.toFixed(2),
-    taxes: taxes.toFixed(2),
-    credits: credits.toFixed(2),
-    rounding: rounding.isZero() ? null : rounding.toFixed(2),
-    total: total.toFixed(2),
-  };
-
   // ─── What has been paid against it ─────────────────────────────────
   // Through the applications rather than the charge's own open_amount,
   // because the bill has to say what arrived and when, not just that
@@ -428,27 +390,7 @@ export async function loadBillPresentation(
       })
     : [];
 
-  let settlement: BillPresentationSettlement | null = null;
-  if (applications.length > 0) {
-    const appliedTotal = applications.reduce(
-      (acc, app) => acc.plus(new Decimal(money(app.amount))),
-      new Decimal(0),
-    );
-    settlement = {
-      // `ledger_application.amount` is positive by check constraint —
-      // it is how much of a credit went onto this debit. On the bill it
-      // reduces what is owed, so it prints signed.
-      applied: applications.map((app) => ({
-        date: app.credit.effectiveDate,
-        label: settlementLabel(app.credit.type, app.credit.tender),
-        amount: `-${money(app.amount)}`,
-      })),
-      appliedTotal: `-${appliedTotal.toFixed(2)}`,
-      amountDue: total.minus(appliedTotal).toFixed(2),
-    };
-  }
-
-  // ─── Account activity ──────────────────────────────────────────────
+  // ─── Fees and adjustments, as a group of lines ─────────────────────
   /*
    * The previous bill on this account, which is where the window opens.
    * There is no such notion elsewhere in this service, so this
@@ -501,29 +443,110 @@ export async function loadBillPresentation(
     orderBy: [{ effectiveDate: "asc" }, { id: "asc" }],
   });
 
-  let activity: BillPresentationActivity | null = null;
+  /*
+   * A group, not a block of its own, because a late fee is a charge on
+   * this bill and has to read as one. It cannot be a stored
+   * `BillSegmentLine`: `source_schedule_id` and `source_component_id`
+   * are NOT NULL, because a line *is* a rated charge and a fee has no
+   * rate component. A presentation group costs no schema and prints
+   * identically — label, amount, and its own subtotal that the customer
+   * can add up.
+   */
+  let feeGroup: BillPresentationGroup | null = null;
   if (activityEntries.length > 0) {
-    const activityTotal = activityEntries.reduce(
-      (acc, entry) => acc.plus(new Decimal(money(entry.amount))),
-      new Decimal(0),
-    );
-    activity = {
-      entries: activityEntries.map((entry) => ({
-        date: entry.effectiveDate,
-        /*
-         * The tenant's own wording for the reason, never a code and
-         * never a string from here: a utility that calls its late fee a
-         * "Late charge" should see that on the bill. The entry type is
-         * the fallback for the entries that cite no reason — a payment,
-         * or the reversal a replacing tier writes.
-         */
-        label: entry.reason?.label ?? settlementLabel(entry.type, entry.tender),
-        amount: money(entry.amount),
-      })),
-      total: activityTotal.toFixed(2),
+    const feeLines = activityEntries.map((entry) => ({
+      /*
+       * The tenant's own wording for the reason, never a code and never
+       * a string from here: a utility that calls its late fee a "Late
+       * charge" should see that on the bill. The entry type is the
+       * fallback for an entry citing no reason — the reversal a
+       * replacing tier writes. The date rides in the label because a
+       * charge group has no date column, and "when" is the first thing
+       * a customer asks about a fee.
+       */
+      label: `${entry.reason?.label ?? settlementLabel(entry.type, entry.tender)} ${ymd(entry.effectiveDate)}`,
+      quantity: null,
+      amount: money(entry.amount),
+    }));
+    feeGroup = {
+      heading: "Fees and adjustments",
+      lines: feeLines,
+      subtotal: feeLines
+        .reduce((acc, line) => acc.plus(new Decimal(line.amount)), new Decimal(0))
+        .toFixed(2),
     };
   }
 
+  /*
+   * The totals box is built from the printed group subtotals, not from
+   * the stored 4dp columns.
+   *
+   * The per-group rule above — sum the already-rounded lines, because the
+   * customer can add those up — was applied to the groups and then
+   * contradicted here, where `subtotal` rounded `bill.subtotal`. Two
+   * lines of 16.1050 print as 16.11 and 16.11 under a group subtotal of
+   * 32.22, while `bill.subtotal` of 32.2100 rounds to 32.21: one page
+   * stating both, and the customer holding it can see that it does not
+   * add up. Every fixture on this branch happens to be exact to cents,
+   * so nothing caught it.
+   *
+   * `ratedTotal` stays tied to `bill.total` — that is what the rating
+   * engine computed and what the bill's own `BILL_CHARGE` raised — and
+   * the rounding line reconciles against it alone. The **printed**
+   * total adds the fees group, because a line item the customer cannot
+   * add into the total is not a line item. So the printed total no
+   * longer equals `bill.total` whenever a fee is on the page, and that
+   * is deliberate: the two numbers answer different questions, and the
+   * stub has to ask for what the account owes. When the two
+   * rounding orders differ, the cent between them is therefore shown as
+   * its own line rather than hidden in a total that does not follow from
+   * the lines above it. A bill whose figures visibly reconcile, rounding
+   * included, is worth more than one that silently absorbs the
+   * difference.
+   */
+  const printedSubtotal = groups.reduce(
+    (acc, group) => acc.plus(new Decimal(group.subtotal)),
+    new Decimal(0),
+  );
+  const taxes = new Decimal(money(bill.taxes));
+  const credits = new Decimal(money(bill.credits));
+  const ratedTotal = new Decimal(money(bill.total));
+  const rounding = ratedTotal.minus(printedSubtotal.plus(taxes).minus(credits));
+  const fees = new Decimal(feeGroup?.subtotal ?? 0);
+  const total = ratedTotal.plus(fees);
+
+  const totals = {
+    subtotal: printedSubtotal.toFixed(2),
+    taxes: taxes.toFixed(2),
+    credits: credits.toFixed(2),
+    rounding: rounding.isZero() ? null : rounding.toFixed(2),
+    fees: fees.isZero() ? null : fees.toFixed(2),
+    total: total.toFixed(2),
+  };
+
+  // After the totals, so the rounding line above reconciles the rated
+  // charges against `bill.total` without a fee in the way.
+  if (feeGroup) groups.push(feeGroup);
+
+  let settlement: BillPresentationSettlement | null = null;
+  if (applications.length > 0) {
+    const appliedTotal = applications.reduce(
+      (acc, app) => acc.plus(new Decimal(money(app.amount))),
+      new Decimal(0),
+    );
+    settlement = {
+      // `ledger_application.amount` is positive by check constraint —
+      // it is how much of a credit went onto this debit. On the bill it
+      // reduces what is owed, so it prints signed.
+      applied: applications.map((app) => ({
+        date: app.credit.effectiveDate,
+        label: settlementLabel(app.credit.type, app.credit.tender),
+        amount: `-${money(app.amount)}`,
+      })),
+      appliedTotal: `-${appliedTotal.toFixed(2)}`,
+      amountDue: total.minus(appliedTotal).toFixed(2),
+    };
+  }
   return {
     issuer: {
       name: issuer.utilityName as string,
@@ -554,7 +577,6 @@ export async function loadBillPresentation(
     groups,
     totals,
     settlement,
-    activity,
     messages: messages.map((m) => ({ label: m.label, body: m.body })),
     branding,
     remittance: {

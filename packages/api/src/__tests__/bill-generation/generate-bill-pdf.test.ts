@@ -2,12 +2,16 @@ import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
 import { constants, inflateSync } from "node:zlib";
 import { generateBillPdf } from "../../bill-generation/generate-bill-pdf.js";
-import type { BillPresentation } from "../../services/bill-presentation.service.js";
+import { Decimal } from "decimal.js";
+import type {
+  BillPresentation,
+  BillPresentationGroup,
+} from "../../services/bill-presentation.service.js";
 
 function presentation(
   lineCount: number,
   settlement: BillPresentation["settlement"] = null,
-  activity: BillPresentation["activity"] = null,
+  fees: BillPresentationGroup | null = null,
 ): BillPresentation {
   return {
     issuer: {
@@ -37,16 +41,19 @@ function presentation(
         })),
         subtotal: `${lineCount}.00`,
       },
+      ...(fees ? [fees] : []),
     ],
     totals: {
       subtotal: `${lineCount}.00`,
       taxes: "0.00",
       credits: "0.00",
       rounding: null,
-      total: `${lineCount}.00`,
+      fees: fees ? fees.subtotal : null,
+      total: fees
+        ? new Decimal(lineCount).plus(fees.subtotal).toFixed(2)
+        : `${lineCount}.00`,
     },
     settlement,
-    activity,
     messages: [{ label: "Notice", body: "Water restrictions begin June 1." }],
     branding: { logoUrl: null, primaryColor: "#1f2937", fontFamily: "Helvetica" },
     remittance: {
@@ -192,29 +199,33 @@ describe("generateBillPdf", () => {
    * owes more than the bill says with nothing explaining the
    * difference. Itemised and dated for the same reason payments are.
    */
-  it("itemises other activity on the account, in the tenant's own wording", async () => {
+  it("prints fees as charge lines, and carries them into the total", async () => {
     const pdf = await generateBillPdf(
       presentation(3, null, {
-        entries: [
-          { date: new Date("2026-02-10"), label: "Late payment fee", amount: "25.00" },
-          { date: new Date("2026-02-18"), label: "Credit adjustment", amount: "-5.00" },
+        heading: "Fees and adjustments",
+        lines: [
+          { label: "Late payment fee 2026-02-10", quantity: null, amount: "25.00" },
+          { label: "Credit adjustment 2026-02-18", quantity: null, amount: "-5.00" },
         ],
-        total: "20.00",
+        subtotal: "20.00",
       }),
     );
     const text = extractText(pdf);
 
-    expect(text).toContain("OTHER ACTIVITY ON YOUR ACCOUNT");
+    // A group heading like any other, among the commodity charges.
+    expect(text).toContain("Fees and adjustments");
     expect(text).toContain("Late payment fee 2026-02-10");
     expect(text).toContain("$25.00");
     expect(text).toContain("Credit adjustment 2026-02-18");
     expect(text).toContain("-$5.00");
-    expect(text).toContain("Total other activity$20.00");
+    // And the page adds up: the group subtotal reaches the total.
+    expect(text).toContain("Total due$23.00");
   });
 
-  it("prints no activity block when there is none", async () => {
+  it("prints no fees row when there are none", async () => {
     const text = extractText(await generateBillPdf(presentation(3)));
-    expect(text).not.toContain("OTHER ACTIVITY ON YOUR ACCOUNT");
+    expect(text).not.toContain("Fees and adjustments");
+    expect(text).toContain("Total due$3.00");
   });
 
   it("leaves an unpaid bill exactly as it was, with no zero-credit line", async () => {

@@ -1816,6 +1816,11 @@ describe("account activity on a bill", () => {
     });
   }
 
+  /** The fees group, if the bill has one. */
+  function feesOf(p: Awaited<ReturnType<typeof loadBillPresentation>>) {
+    return p.groups.find((g) => g.heading === "Fees and adjustments") ?? null;
+  }
+
   it("shows a fee raised before the bill date, in the tenant's own words", async () => {
     const billId = await postedBill();
     const ctx = await context(billId);
@@ -1825,11 +1830,17 @@ describe("account activity on a bill", () => {
 
     const p = await loadBillPresentation(UTILITY, billId);
 
-    expect(p.activity).not.toBeNull();
-    expect(p.activity!.entries).toHaveLength(1);
-    expect(p.activity!.entries[0]!.label).toBe("Late payment fee");
-    expect(p.activity!.entries[0]!.amount).toBe("25.00");
-    expect(p.activity!.total).toBe("25.00");
+    const fees = feesOf(p);
+    expect(fees).not.toBeNull();
+    expect(fees!.lines).toHaveLength(1);
+    // The reason's own wording, with the date the customer will ask about.
+    expect(fees!.lines[0]!.label).toBe("Late payment fee 2026-02-10");
+    expect(fees!.lines[0]!.amount).toBe("25.00");
+    expect(fees!.subtotal).toBe("25.00");
+    // A line item has to be in the total, or it is not a line item.
+    expect(p.totals.fees).toBe("25.00");
+    expect(p.totals.total).toBe("132.50");
+    expect(p.remittance.amountDue).toBe("132.50");
   });
 
   it("does not show a fee raised after the bill date", async () => {
@@ -1841,7 +1852,10 @@ describe("account activity on a bill", () => {
 
     const p = await loadBillPresentation(UTILITY, billId);
 
-    expect(p.activity).toBeNull();
+    expect(feesOf(p)).toBeNull();
+    expect(p.totals.fees).toBeNull();
+    // And the total is the rated one, untouched.
+    expect(p.totals.total).toBe("107.50");
   });
 
   it("shows only what happened since the previous bill", async () => {
@@ -1861,8 +1875,8 @@ describe("account activity on a bill", () => {
     const first = await loadBillPresentation(UTILITY, firstId);
     const second = await loadBillPresentation(UTILITY, secondId);
 
-    expect(first.activity!.entries.map((e) => e.label)).toEqual(["Earlier charge"]);
-    expect(second.activity!.entries.map((e) => e.label)).toEqual(["Late payment fee"]);
+    expect(feesOf(first)!.lines.map((l) => l.label)).toEqual(["Earlier charge 2026-02-10"]);
+    expect(feesOf(second)!.lines.map((l) => l.label)).toEqual(["Late payment fee 2026-03-20"]);
   });
 
   it("prints no activity block when nothing happened", async () => {
@@ -1870,7 +1884,7 @@ describe("account activity on a bill", () => {
 
     const p = await loadBillPresentation(UTILITY, billId);
 
-    expect(p.activity).toBeNull();
+    expect(feesOf(p)).toBeNull();
   });
 
   /*
@@ -1884,7 +1898,7 @@ describe("account activity on a bill", () => {
 
     const p = await loadBillPresentation(UTILITY, billId);
 
-    expect(p.activity).toBeNull();
+    expect(feesOf(p)).toBeNull();
   });
 
   /*
@@ -1920,7 +1934,7 @@ describe("account activity on a bill", () => {
     const p = await loadBillPresentation(UTILITY, billId);
 
     expect(p.settlement!.applied).toHaveLength(1);
-    expect(p.activity).toBeNull();
+    expect(feesOf(p)).toBeNull();
   });
 
   /*
@@ -1947,7 +1961,7 @@ describe("account activity on a bill", () => {
 
     const p = await loadBillPresentation(UTILITY, billId);
 
-    expect(p.activity).toBeNull();
+    expect(feesOf(p)).toBeNull();
   });
 
   /*
@@ -1980,7 +1994,7 @@ describe("account activity on a bill", () => {
 
     const p = await loadBillPresentation(UTILITY, billId);
 
-    expect(p.activity).toBeNull();
+    expect(feesOf(p)).toBeNull();
   });
 
   /*
