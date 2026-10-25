@@ -21,6 +21,36 @@ interface DelinquencyRule {
   notificationEventType?: string;
   autoApply: boolean;
   isActive: boolean;
+  feeType?: "FLAT_FEE" | "PERCENT_OF_BALANCE" | null;
+  /** A dollar amount under FLAT_FEE; a rate under PERCENT_OF_BALANCE, so "0.015" is 1.5%. */
+  feeAmount?: string | null;
+  maxFee?: string | null;
+  feeReasonId?: string | null;
+  feeMode?: "ACCUMULATE" | "REPLACE_LOWER_TIERS";
+  serviceRequestTypeCode?: string | null;
+  reconnectRequestTypeCode?: string | null;
+}
+
+interface FeeReason {
+  id: string;
+  code: string;
+  label: string;
+}
+
+interface RequestType {
+  code: string;
+  label: string;
+}
+
+/** What a tier charges, in one short phrase for the table. */
+function feeSummary(r: DelinquencyRule): string {
+  if (!r.feeType || !r.feeAmount) return "—";
+  const amount =
+    r.feeType === "FLAT_FEE"
+      ? `$${Number(r.feeAmount).toFixed(2)}`
+      // 1.5%, not 1.50% — while 0.01% keeps the digits it needs.
+      : `${(Number(r.feeAmount) * 100).toFixed(2).replace(/\.?0+$/, "")}%${r.maxFee ? ` max $${Number(r.maxFee).toFixed(2)}` : ""}`;
+  return r.feeMode === "REPLACE_LOWER_TIERS" ? `${amount} (replaces)` : amount;
 }
 
 export default function DelinquencyRulesPage() {
@@ -57,11 +87,14 @@ export default function DelinquencyRulesPage() {
       <PageHeader title="Delinquency Rules" subtitle="Configure the escalation chain — each tier defines when and how to act on past-due accounts" />
       <PageDescription storageKey="delinquency-rules">
         A <b>rule</b> fires when an account's <b>days past due</b> and
-        <b> balance</b> both cross its tier's thresholds. Tiers <b>chain</b>:
-        tier 2 can't fire until tier 1 has resolved on the same account, so the
-        escalation is sequential rather than parallel. The nightly scheduler
+        <b> balance</b> both cross its tier's thresholds, and when the rule was
+        already in force on the day the debt came due. Every tier an account
+        has passed fires, not just the next one: 50 days past due against
+        tiers at 15, 30 and 45 files three actions. The hourly scheduler
         evaluates active rules and files <b>DelinquencyActions</b> — notices,
-        door hangers, shut-off eligibility — against matching accounts.
+        door hangers, shut-off eligibility — and a tier that configures a
+        <b> late fee</b> charges it to the account ledger at the same time,
+        where it appears on the customer&apos;s next bill.
       </PageDescription>
       {canCreate && (
         <div style={{ marginBottom: 16 }}>
@@ -109,6 +142,7 @@ export default function DelinquencyRulesPage() {
                 <Th>Days Past Due</Th>
                 <Th>Min Balance</Th>
                 <Th>Action</Th>
+                <Th>Late Fee</Th>
                 <Th>Auto</Th>
                 <Th>Status</Th>
               </tr>
@@ -127,6 +161,11 @@ export default function DelinquencyRulesPage() {
                   <Td>{r.daysPastDue} days</Td>
                   <Td><span style={{ fontFamily: "'JetBrains Mono', monospace" }}>${Number(r.minBalance).toFixed(2)}</span></Td>
                   <Td><span style={{ fontSize: 11, color: "var(--text-muted)" }}>{r.actionType}</span></Td>
+                  <Td>
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", color: r.feeType ? "var(--text-primary)" : "var(--text-muted)" }}>
+                      {feeSummary(r)}
+                    </span>
+                  </Td>
                   <Td>{r.autoApply ? "✓" : "—"}</Td>
                   <Td><StatusBadge status={r.isActive ? "Active" : "Inactive"} /></Td>
                 </tr>
@@ -165,6 +204,50 @@ function RuleEditor({ rule, onSave, onCancel, nextTier }: { rule?: DelinquencyRu
   const [autoApply, setAutoApply] = useState(rule?.autoApply ?? true);
   const [isActive, setIsActive] = useState(rule?.isActive ?? true);
   const [saving, setSaving] = useState(false);
+  const { toast } = useToast();
+
+  const [feeType, setFeeType] = useState<"" | "FLAT_FEE" | "PERCENT_OF_BALANCE">(rule?.feeType ?? "");
+  /*
+   * Held in the operator's units, not the API's. A percentage tier
+   * stores a rate — 0.0150 is 1.5% — and asking someone to type 0.015
+   * into a field labelled "rate" is how a 1.5% fee becomes a 0.015%
+   * one. The conversion happens on save and on load, in one place each.
+   */
+  const [feeInput, setFeeInput] = useState(
+    rule?.feeAmount == null
+      ? ""
+      : rule.feeType === "PERCENT_OF_BALANCE"
+        ? String(Number(rule.feeAmount) * 100)
+        : String(Number(rule.feeAmount)),
+  );
+  const [maxFee, setMaxFee] = useState(rule?.maxFee == null ? "" : String(Number(rule.maxFee)));
+  const [feeReasonId, setFeeReasonId] = useState(rule?.feeReasonId ?? "");
+  const [feeMode, setFeeMode] = useState<"ACCUMULATE" | "REPLACE_LOWER_TIERS">(rule?.feeMode ?? "ACCUMULATE");
+  const [srCode, setSrCode] = useState(rule?.serviceRequestTypeCode ?? "");
+  const [reconnectCode, setReconnectCode] = useState(rule?.reconnectRequestTypeCode ?? "");
+
+  /*
+   * Both pickers live behind other modules — `ar_adjustments:VIEW` for
+   * the reasons, `service_requests:VIEW` for the types — so a role with
+   * only delinquency permissions cannot load them. Say so instead of
+   * showing an empty dropdown, which reads as "this tenant has none".
+   */
+  const [reasons, setReasons] = useState<FeeReason[] | "denied" | null>(null);
+  const [requestTypes, setRequestTypes] = useState<RequestType[] | "denied" | null>(null);
+
+  useEffect(() => {
+    apiClient
+      .get<{ data: FeeReason[] }>("/api/v1/ar/reasons", { appliesToType: "FEE" })
+      .then((res) => setReasons(res.data ?? []))
+      .catch(() => setReasons("denied"));
+    apiClient
+      .get<RequestType[]>("/api/v1/service-request-types")
+      .then((res) => setRequestTypes(Array.isArray(res) ? res : []))
+      .catch(() => setRequestTypes("denied"));
+  }, []);
+
+  const charging = feeType !== "";
+  const fid = (field: string) => `${rule?.id ?? "new"}-${field}`;
 
   const ACTION_TYPES = [
     { value: "NOTICE_EMAIL", label: "Send Email Notice" },
@@ -190,37 +273,130 @@ function RuleEditor({ rule, onSave, onCancel, nextTier }: { rule?: DelinquencyRu
       <div style={{ display: "grid", gridTemplateColumns: isCreate ? "0.5fr 1fr 1fr 1fr" : "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
         {isCreate && (
           <div>
-            <Label>Tier</Label>
-            <input type="number" min={1} style={{ ...settingInputStyle, width: "100%" }} value={tier} onChange={(e) => setTier(e.target.value)} />
+            <Label htmlFor={fid("tier")}>Tier</Label>
+            <input id={fid("tier")} type="number" min={1} style={{ ...settingInputStyle, width: "100%" }} value={tier} onChange={(e) => setTier(e.target.value)} />
           </div>
         )}
         <div>
-          <Label>Name</Label>
-          <input style={{ ...settingInputStyle, width: "100%" }} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Final Warning" />
+          <Label htmlFor={fid("name")}>Name</Label>
+          <input id={fid("name")} style={{ ...settingInputStyle, width: "100%" }} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Final Warning" />
         </div>
         <div>
-          <Label>Days past due</Label>
-          <input type="number" style={{ ...settingInputStyle, width: "100%" }} value={daysPastDue} onChange={(e) => setDaysPastDue(e.target.value)} placeholder="e.g. 30" />
+          <Label htmlFor={fid("daysPastDue")}>Days past due</Label>
+          <input id={fid("daysPastDue")} type="number" style={{ ...settingInputStyle, width: "100%" }} value={daysPastDue} onChange={(e) => setDaysPastDue(e.target.value)} placeholder="e.g. 30" />
         </div>
         <div>
-          <Label>Min balance ($)</Label>
-          <input type="number" style={{ ...settingInputStyle, width: "100%" }} value={minBalance} onChange={(e) => setMinBalance(e.target.value)} placeholder="e.g. 50" />
+          <Label htmlFor={fid("minBalance")}>Min balance ($)</Label>
+          <input id={fid("minBalance")} type="number" style={{ ...settingInputStyle, width: "100%" }} value={minBalance} onChange={(e) => setMinBalance(e.target.value)} placeholder="e.g. 50" />
         </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
         <div>
-          <Label>Action type</Label>
-          <select style={{ ...settingInputStyle, width: "100%" }} value={actionType} onChange={(e) => setActionType(e.target.value)}>
+          <Label htmlFor={fid("actionType")}>Action type</Label>
+          <select id={fid("actionType")} style={{ ...settingInputStyle, width: "100%" }} value={actionType} onChange={(e) => setActionType(e.target.value)}>
             {ACTION_TYPES.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
           </select>
         </div>
         <div>
-          <Label>Notification template</Label>
-          <select style={{ ...settingInputStyle, width: "100%" }} value={notificationEventType} onChange={(e) => setNotificationEventType(e.target.value)}>
+          <Label htmlFor={fid("notificationEventType")}>Notification template</Label>
+          <select id={fid("notificationEventType")} style={{ ...settingInputStyle, width: "100%" }} value={notificationEventType} onChange={(e) => setNotificationEventType(e.target.value)}>
             {NOTIF_EVENTS.map((n) => <option key={n.value} value={n.value}>{n.label}</option>)}
           </select>
         </div>
       </div>
+      <SectionLabel>Late fee</SectionLabel>
+      <div style={{ display: "grid", gridTemplateColumns: charging ? "1fr 1fr 1fr" : "1fr", gap: 12, marginBottom: charging ? 12 : 16 }}>
+        <div>
+          <Label htmlFor={fid("feeType")}>Charge</Label>
+          <select
+            id={fid("feeType")}
+            style={{ ...settingInputStyle, width: "100%" }}
+            value={feeType}
+            onChange={(e) => {
+              const next = e.target.value as typeof feeType;
+              setFeeType(next);
+              // A cap means nothing on a flat amount, which is its own
+              // cap, and the database refuses the combination.
+              if (next !== "PERCENT_OF_BALANCE") setMaxFee("");
+              if (next === "") setFeeMode("ACCUMULATE");
+            }}
+          >
+            <option value="">Nothing — notice only</option>
+            <option value="FLAT_FEE">A flat amount</option>
+            <option value="PERCENT_OF_BALANCE">A percentage of the balance</option>
+          </select>
+        </div>
+        {charging && (
+          <div>
+            <Label htmlFor={fid("feeAmount")}>{feeType === "FLAT_FEE" ? "Amount ($)" : "Rate (%)"}</Label>
+            <input
+              id={fid("feeAmount")}
+              type="number"
+              min={0}
+              step={0.01}
+              style={{ ...settingInputStyle, width: "100%" }}
+              value={feeInput}
+              onChange={(e) => setFeeInput(e.target.value)}
+              placeholder={feeType === "FLAT_FEE" ? "e.g. 25.00" : "e.g. 1.5"}
+            />
+          </div>
+        )}
+        {feeType === "PERCENT_OF_BALANCE" && (
+          <div>
+            <Label htmlFor={fid("maxFee")}>Cap ($, optional)</Label>
+            <input id={fid("maxFee")} type="number" min={0} step={0.01} style={{ ...settingInputStyle, width: "100%" }} value={maxFee} onChange={(e) => setMaxFee(e.target.value)} placeholder="e.g. 50.00" />
+          </div>
+        )}
+      </div>
+      {charging && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+          <div>
+            <Label htmlFor={fid("feeReasonId")}>Book it to</Label>
+            {reasons === "denied" ? (
+              <Blocked>Needs AR adjustments view permission</Blocked>
+            ) : (
+              <select id={fid("feeReasonId")} style={{ ...settingInputStyle, width: "100%" }} value={feeReasonId} onChange={(e) => setFeeReasonId(e.target.value)}>
+                <option value="">Choose a fee reason…</option>
+                {(reasons ?? []).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+              </select>
+            )}
+          </div>
+          <div>
+            <Label htmlFor={fid("feeMode")}>When a higher tier charges</Label>
+            <select id={fid("feeMode")} style={{ ...settingInputStyle, width: "100%" }} value={feeMode} onChange={(e) => setFeeMode(e.target.value as typeof feeMode)}>
+              <option value="ACCUMULATE">Keep this fee as well</option>
+              <option value="REPLACE_LOWER_TIERS">Replace the fees below it</option>
+            </select>
+          </div>
+        </div>
+      )}
+
+      <SectionLabel>Field work</SectionLabel>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+        <div>
+          <Label htmlFor={fid("serviceRequestTypeCode")}>Work order this tier raises</Label>
+          {requestTypes === "denied" ? (
+            <Blocked>Needs service requests view permission</Blocked>
+          ) : (
+            <select id={fid("serviceRequestTypeCode")} style={{ ...settingInputStyle, width: "100%" }} value={srCode} onChange={(e) => setSrCode(e.target.value)}>
+              <option value="">None</option>
+              {(requestTypes ?? []).map((t) => <option key={t.code} value={t.code}>{t.label}</option>)}
+            </select>
+          )}
+        </div>
+        <div>
+          <Label htmlFor={fid("reconnectRequestTypeCode")}>Reconnection when the balance clears</Label>
+          {requestTypes === "denied" ? (
+            <Blocked>Needs service requests view permission</Blocked>
+          ) : (
+            <select id={fid("reconnectRequestTypeCode")} style={{ ...settingInputStyle, width: "100%" }} value={reconnectCode} onChange={(e) => setReconnectCode(e.target.value)}>
+              <option value="">None</option>
+              {(requestTypes ?? []).map((t) => <option key={t.code} value={t.code}>{t.label}</option>)}
+            </select>
+          )}
+        </div>
+      </div>
+
       <div style={{ display: "flex", gap: 16, marginBottom: 16 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text-secondary)", cursor: "pointer" }}>
           <input type="checkbox" checked={autoApply} onChange={(e) => setAutoApply(e.target.checked)} style={{ width: 16, height: 16, accentColor: "var(--accent-primary)" }} />
@@ -235,6 +411,14 @@ function RuleEditor({ rule, onSave, onCancel, nextTier }: { rule?: DelinquencyRu
         <button onClick={onCancel} style={{ padding: "8px 16px", fontSize: 13, background: "transparent", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text-secondary)", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
         <button
           onClick={async () => {
+            if (charging && !(Number(feeInput) > 0)) {
+              toast(feeType === "FLAT_FEE" ? "Enter an amount above zero" : "Enter a rate above zero", "error");
+              return;
+            }
+            if (charging && !feeReasonId) {
+              toast("Choose the fee reason this tier books to", "error");
+              return;
+            }
             setSaving(true);
             try {
               await onSave({
@@ -246,6 +430,25 @@ function RuleEditor({ rule, onSave, onCancel, nextTier }: { rule?: DelinquencyRu
                 notificationEventType: notificationEventType || undefined,
                 autoApply,
                 isActive,
+                /*
+                 * The three fee fields are sent as a group, always.
+                 * The API refuses a partial update of them — an amount
+                 * with no reason is a charge nobody can explain — and
+                 * sending all three also sidesteps `feeMode` being
+                 * rejected on its own, which it is when the server
+                 * cannot see the stored `feeType`.
+                 */
+                feeType: charging ? feeType : null,
+                feeAmount: charging
+                  ? feeType === "FLAT_FEE"
+                    ? Number(feeInput).toFixed(2)
+                    : (Number(feeInput) / 100).toFixed(4)
+                  : null,
+                feeReasonId: charging ? feeReasonId : null,
+                maxFee: feeType === "PERCENT_OF_BALANCE" && Number(maxFee) > 0 ? Number(maxFee).toFixed(2) : null,
+                feeMode: charging ? feeMode : "ACCUMULATE",
+                serviceRequestTypeCode: srCode || null,
+                reconnectRequestTypeCode: reconnectCode || null,
               });
             } finally { setSaving(false); }
           }}
@@ -259,8 +462,38 @@ function RuleEditor({ rule, onSave, onCancel, nextTier }: { rule?: DelinquencyRu
   );
 }
 
-function Label({ children }: { children: React.ReactNode }) {
-  return <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{children}</div>;
+/** A heading inside the editor, so the fee and field-work fields read as groups. */
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8, paddingTop: 4, borderTop: "1px solid var(--border-subtle)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+      {children}
+    </div>
+  );
+}
+
+/** A field the operator's role cannot populate, said plainly. */
+function Blocked({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ ...settingInputStyle, width: "100%", color: "var(--text-muted)", fontStyle: "italic", cursor: "not-allowed" }}>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * A real `<label>` bound to its field. It was a bare `<div>`, so no
+ * input on this form was reachable by its name — not by a screen
+ * reader, and not by a test that wants to fill the thing in.
+ */
+function Label({ children, htmlFor }: { children: React.ReactNode; htmlFor?: string }) {
+  return (
+    <label
+      htmlFor={htmlFor}
+      style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}
+    >
+      {children}
+    </label>
+  );
 }
 
 function Th({ children }: { children: React.ReactNode }) {

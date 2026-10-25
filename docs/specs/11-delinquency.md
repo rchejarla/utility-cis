@@ -347,22 +347,35 @@ failing the tenant's whole pass over one account.
 - Current balance and days past due at the top
 - Protection toggle (admin only)
 
-### Settings → Delinquency Rules (`/settings/delinquency-rules`)
+### Delinquency Rules (`/delinquency/rules`)
 
 - Table of rules organized by tier
 - Create/edit: tier, days past due, min balance, action type, notification event type (dropdown), auto-apply toggle
 - Rule chain preview: shows the escalation timeline visually
 
-**Not built, and a real gap: the fee and work-order fields.** The API
-accepts `feeType`, `feeAmount`, `maxFee`, `feeReasonId`, `feeMode`,
-`serviceRequestTypeCode` and `reconnectRequestTypeCode` on both the
-create and update routes, with cross-field validation and a reason
-check, and the sweep acts on all of them. The form at
-`web/app/delinquency/rules/page.tsx` has none of them, so a tier fee is
-configurable only by API call until it does. It needs a FEE-reason
-picker (`GET /api/v1/ar/reasons?appliesToType=FEE`), a fee-type select
-with a conditional cap, a mode toggle, and two service-request type
-pickers — its own slice, not four inputs.
+**The fee and work-order fields (built 2026-10-25).** Two more groups
+in the editor: *Late fee* — what it charges (nothing, a flat amount, or a
+percentage), the amount or rate, an optional cap on a percentage, the
+FEE reason it books to, and whether a higher tier keeps or replaces it —
+and *Field work*, the work order this tier raises and the reconnection
+request raised when the balance clears. The table gains a **Late Fee**
+column so the whole ladder's charges read at a glance.
+
+The editor holds the rate in the operator's units, not the column's.
+`fee_amount` stores a rate — 0.0150 is 1.5% — and the field is labelled
+`Rate (%)`, so the conversion happens once on save and once on load. A
+test pins it, because sending the typed number straight through gives
+the tenant a 0.015% late fee that every constraint accepts and nobody
+notices for months.
+
+The three fee fields are always sent as a group, which is what the API
+requires and which also sidesteps `feeMode` being refused on its own.
+
+**Both pickers depend on other modules** — `ar_adjustments:VIEW` for the
+fee reasons, `service_requests:VIEW` for the type codes — so a role
+holding only delinquency permissions cannot populate them. The field
+says which permission is missing rather than showing an empty dropdown,
+which would read as "this tenant has none".
 
 ## Sidebar
 
