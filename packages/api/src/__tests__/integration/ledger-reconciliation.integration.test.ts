@@ -290,8 +290,34 @@ describe("reconcileBalances", () => {
        * scoped service wrappers below re-enter their own tenant scope,
        * so the calls under test still run as `cis_app`. */
       const { prisma } = prismaImports;
+      /*
+       * The other tenant needs its own billing cycle. This used to reuse
+       * `billingCycleId` from the first tenant, which made the stray
+       * account a cross-tenant row — the very thing the case is about
+       * not leaking. It was writable until the
+       * `tenant_scoped_foreign_keys` migration, and the composite key
+       * refuses it now: a fixture cannot build the invalid shape it was
+       * quietly relying on.
+       */
+      const strayCycle = await prisma.billingCycle.create({
+        data: {
+          utilityId: other,
+          name: "Recon Other",
+          cycleCode: "RO1",
+          readDayOfMonth: 1,
+          billDayOfMonth: 15,
+          frequency: "MONTHLY",
+        },
+      });
       const stray = await prisma.account.create({
-        data: { utilityId: other, accountNumber: "RECON-OTHER", accountType: "RESIDENTIAL", status: "ACTIVE", billingCycleId, balance: "5.00" },
+        data: {
+          utilityId: other,
+          accountNumber: "RECON-OTHER",
+          accountType: "RESIDENTIAL",
+          status: "ACTIVE",
+          billingCycleId: strayCycle.id,
+          balance: "5.00",
+        },
       });
       try {
         await expectReconciles(utilityId);
@@ -299,6 +325,7 @@ describe("reconcileBalances", () => {
         expect(drift.map((d) => d.accountId)).toEqual([stray.id]);
       } finally {
         await prisma.account.delete({ where: { id: stray.id } });
+        await prisma.billingCycle.delete({ where: { id: strayCycle.id } });
       }
   
     }));
