@@ -169,7 +169,12 @@ jobs:
         # which points it at `cis_app` so the row-level security policies
         # actually apply. Nothing here needs a database of its own.
         env:
-          REDIS_URL: redis://localhost:6379
+          # 127.0.0.1, not `localhost`. On GitHub runners `localhost`
+          # resolves to ::1 first while a service container publishes on
+          # IPv4 only, so ioredis spends its retries on a closed port and
+          # then emits unhandled error events — which fail the step even
+          # when every test passed.
+          REDIS_URL: redis://127.0.0.1:6379
         run: >-
           pnpm --filter @utility-cis/api exec vitest run
           --config vitest.integration.config.ts

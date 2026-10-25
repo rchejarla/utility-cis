@@ -71,6 +71,17 @@ afterAll(async () => {
   // ended here. Without it the container stops while connections are
   // live and Postgres reports 57P01 after an otherwise green run.
   await prismaImports?.pool.end().catch(() => {});
+  /*
+   * The BullMQ connection too. `lib/queue-redis.ts` builds it at module
+   * load and nothing here owns it, so stopping the Redis container below
+   * leaves ioredis retrying a socket that is gone — it emits
+   * "Unhandled error event: AggregateError", and vitest exits non-zero
+   * on an unhandled error even when every test passed. That is what
+   * failed CI shard 3 on a green run.
+   */
+  await (await import("../../lib/queue-redis.js")).queueRedisConnection
+    .quit()
+    .catch(() => {});
   await redisContainer?.stop().catch(() => {});
   await pgContainer?.stop().catch(() => {});
 });

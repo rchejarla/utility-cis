@@ -25,6 +25,39 @@ vi.mock("../lib/cache-redis.js", () => ({
   cacheDel: vi.fn().mockResolvedValue(undefined),
 }));
 
+/*
+ * The *other* Redis client, and it has to be mocked too.
+ *
+ * `cache-redis.js` above is the RBAC cache. BullMQ needs its own
+ * connection with different options, so `queue-redis.js` builds a second
+ * one — and `connected-clients.ts` asks that one for `CLIENT LIST` to
+ * answer which api nodes and workers are alive. Nothing mocked it, so
+ * the unit suite quietly depended on a reachable Redis: ioredis queues a
+ * command while disconnected and retries it for as long as it takes, so
+ * the request never completed and the test died on its own 5s timeout
+ * saying only "Test timed out".
+ *
+ * That is why CI had been red on every push while the same suite passed
+ * on any laptop with the dev stack running. Reproduced locally by
+ * pointing `REDIS_URL` at a dead port.
+ *
+ * `client("LIST")` returns an empty string — no nodes — which
+ * `connected-clients.ts` already treats as the answer a managed Redis
+ * gives when it refuses the command.
+ */
+vi.mock("../lib/queue-redis.js", () => ({
+  queueRedisConnection: {
+    client: vi.fn().mockResolvedValue(""),
+    status: "ready",
+    quit: vi.fn().mockResolvedValue("OK"),
+    duplicate: vi.fn(() => ({
+      client: vi.fn().mockResolvedValue(""),
+      status: "ready",
+      quit: vi.fn().mockResolvedValue("OK"),
+    })),
+  },
+}));
+
 // Mock the prisma module before any tests run.
 // IMPORTANT: this must include every model the middleware layer touches
 // (utilityModule, cisUser, role) so authorization middleware can run to
