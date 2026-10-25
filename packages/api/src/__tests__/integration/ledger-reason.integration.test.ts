@@ -244,3 +244,114 @@ describe("seedDefaultReasons", () => {
     expect((await listReasons(utilityId)).map((r) => r.code)).toEqual(["MINE"]);
   });
 });
+
+/**
+ * Which reasons are penalties.
+ *
+ * Task 2 of `docs/superpowers/plans/2026-10-25-collections-wiring.md`.
+ * A percentage late fee has to be charged on principal, or tier 2
+ * charges 1.5% of tier 1's own fee. Nothing already on the entry
+ * answers "is this a penalty": all five seeded fee reasons are `FEE`,
+ * and the code cannot be asked, because reasons are tenant-configurable
+ * and a utility's own "Late charge" would be missed. So the nature of
+ * the reason becomes a property of the reason, set by whoever defines
+ * it.
+ */
+describe("a reason knows whether it is a penalty", () => {
+  async function flagsFor(codes: string[]): Promise<Record<string, boolean>> {
+    return seedAsPlatform(async () => {
+      const rows = await prismaImports.prisma.ledgerReasonDef.findMany({
+        where: { utilityId: freshUtilityId, code: { in: codes } },
+        select: { code: true, isPenalty: true },
+      });
+      return Object.fromEntries(rows.map((r) => [r.code, r.isPenalty]));
+    });
+  }
+
+  it("marks the two default reasons that are penalties, and no others", async () => {
+    await seedDefaultReasons(freshUtilityId, ACTOR, "Tester");
+
+    const marked = await seedAsPlatform(async () =>
+      prismaImports.prisma.ledgerReasonDef.findMany({
+        where: { utilityId: freshUtilityId, isPenalty: true },
+        select: { code: true },
+        orderBy: { code: "asc" },
+      }),
+    );
+    expect(marked.map((r) => r.code)).toEqual(["LATE_FEE", "NSF_FEE"]);
+  });
+
+  /*
+   * The distinction that makes the flag worth having. An unpaid tap fee
+   * is money owed for work done, so a late fee applies to it; a late
+   * fee is not, so a later late fee must not compound on it. Excluding
+   * every `FEE` from the base would lose the first case.
+   */
+  it("leaves a fee charged for work done counting as principal", async () => {
+    await seedDefaultReasons(freshUtilityId, ACTOR, "Tester");
+
+    expect(await flagsFor(["TAP_FEE", "METER_TEST_FEE", "RECONNECT_FEE"])).toEqual({
+      TAP_FEE: false,
+      METER_TEST_FEE: false,
+      RECONNECT_FEE: false,
+    });
+  });
+
+  /*
+   * Default false, so a reason nobody has classified keeps counting as
+   * principal. That direction under-charges rather than over-charges,
+   * which is the right way for this to be wrong.
+   */
+  it("treats a reason nobody classified as principal", async () => {
+    const id = await makeReason("TAMPER_CHARGE", "FEE", true, freshUtilityId);
+
+    const row = await seedAsPlatform(async () =>
+      prismaImports.prisma.ledgerReasonDef.findUniqueOrThrow({
+        where: { id },
+        select: { isPenalty: true },
+      }),
+    );
+    expect(row.isPenalty).toBe(false);
+  });
+
+  /*
+   * The case the seeder's `continue` would have hidden, and the only one
+   * that matters in practice: every tenant already holds these rows, so
+   * a seeder that skips codes it has would never set the flag anywhere
+   * it is needed.
+   */
+  it("sets the flag on a tenant that already has the reason", async () => {
+    await seedDefaultReasons(freshUtilityId, ACTOR, "Tester");
+    await seedAsPlatform(async () =>
+      prismaImports.prisma.ledgerReasonDef.updateMany({
+        where: { utilityId: freshUtilityId, code: "LATE_FEE" },
+        data: { isPenalty: false },
+      }),
+    );
+
+    const again = await seedDefaultReasons(freshUtilityId, ACTOR, "Tester");
+
+    expect(again.created).toBe(0);
+    expect(again.penaltiesMarked).toBe(1);
+    expect(await flagsFor(["LATE_FEE"])).toEqual({ LATE_FEE: true });
+  });
+
+  it("marks nothing on a second pass that has nothing to mark", async () => {
+    await seedDefaultReasons(freshUtilityId, ACTOR, "Tester");
+    const again = await seedDefaultReasons(freshUtilityId, ACTOR, "Tester");
+    expect(again.penaltiesMarked).toBe(0);
+  });
+
+  it("does not reach another tenant's reason of the same code", async () => {
+    await makeReason("LATE_FEE", "FEE", true, utilityId);
+    await seedDefaultReasons(freshUtilityId, ACTOR, "Tester");
+
+    const mine = await seedAsPlatform(async () =>
+      prismaImports.prisma.ledgerReasonDef.findFirstOrThrow({
+        where: { utilityId, code: "LATE_FEE" },
+        select: { isPenalty: true },
+      }),
+    );
+    expect(mine.isPenalty).toBe(false);
+  });
+});

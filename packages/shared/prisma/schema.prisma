@@ -2127,6 +2127,13 @@ model LedgerReasonDef {
   label         String          @map("label") @db.VarChar(255)
   appliesToType LedgerEntryType @map("applies_to_type")
   isActive      Boolean         @default(true) @map("is_active")
+  /// Whether an entry citing this reason is itself a penalty, rather
+  /// than money owed for something. A percentage late fee is charged on
+  /// principal, so it must exclude an earlier late fee from its base but
+  /// not an unpaid tap fee — and nothing else on the entry can tell
+  /// those apart: both are type FEE, and the code cannot be asked,
+  /// because reasons are tenant-configurable.
+  isPenalty     Boolean         @default(false) @map("is_penalty")
   createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz
   updatedAt     DateTime        @updatedAt @map("updated_at") @db.Timestamptz
 

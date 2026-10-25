@@ -57,29 +57,69 @@ export type ReasonedType = "FEE" | "ADJUSTMENT_DEBIT" | "ADJUSTMENT_CREDIT" | "W
  *
  * seed.js carries the same list, because it runs as plain `node seed.js`
  * and cannot import this file.
+ *
+ * `isPenalty` says whether an entry citing the reason is itself a
+ * penalty rather than money owed for something. It is stated on every
+ * entry rather than defaulted, so adding a code forces the author to
+ * decide: a percentage late fee is charged on principal, and getting
+ * this wrong on a new code compounds a penalty on a penalty silently.
+ * Only a charge for being late is one — a tap fee or a meter test fee
+ * is work done, and a late fee applies to it.
  */
 export const DEFAULT_REASON_CODES = [
-  { code: "LATE_FEE", label: "Late payment fee", appliesToType: "FEE" },
-  { code: "NSF_FEE", label: "Returned payment fee", appliesToType: "FEE" },
-  { code: "RECONNECT_FEE", label: "Reconnection fee", appliesToType: "FEE" },
-  { code: "TAP_FEE", label: "Tap fee", appliesToType: "FEE" },
-  { code: "METER_TEST_FEE", label: "Meter test fee", appliesToType: "FEE" },
-  { code: "OPENING_BALANCE", label: "Opening balance", appliesToType: "ADJUSTMENT_DEBIT" },
+  { code: "LATE_FEE", label: "Late payment fee", appliesToType: "FEE", isPenalty: true },
+  { code: "NSF_FEE", label: "Returned payment fee", appliesToType: "FEE", isPenalty: true },
+  { code: "RECONNECT_FEE", label: "Reconnection fee", appliesToType: "FEE", isPenalty: false },
+  { code: "TAP_FEE", label: "Tap fee", appliesToType: "FEE", isPenalty: false },
+  { code: "METER_TEST_FEE", label: "Meter test fee", appliesToType: "FEE", isPenalty: false },
+  {
+    code: "OPENING_BALANCE",
+    label: "Opening balance",
+    appliesToType: "ADJUSTMENT_DEBIT",
+    isPenalty: false,
+  },
   {
     code: "BILLING_CORRECTION_DEBIT",
     label: "Billing correction — charge",
     appliesToType: "ADJUSTMENT_DEBIT",
+    isPenalty: false,
   },
-  { code: "COURTESY_WAIVER", label: "Courtesy waiver", appliesToType: "ADJUSTMENT_CREDIT" },
-  { code: "GOODWILL", label: "Goodwill credit", appliesToType: "ADJUSTMENT_CREDIT" },
+  {
+    code: "COURTESY_WAIVER",
+    label: "Courtesy waiver",
+    appliesToType: "ADJUSTMENT_CREDIT",
+    isPenalty: false,
+  },
+  {
+    code: "GOODWILL",
+    label: "Goodwill credit",
+    appliesToType: "ADJUSTMENT_CREDIT",
+    isPenalty: false,
+  },
   {
     code: "BILLING_CORRECTION_CREDIT",
     label: "Billing correction — credit",
     appliesToType: "ADJUSTMENT_CREDIT",
+    isPenalty: false,
   },
-  { code: "BAD_DEBT", label: "Written off — uncollectable", appliesToType: "WRITE_OFF" },
-  { code: "SMALL_BALANCE", label: "Written off — small balance", appliesToType: "WRITE_OFF" },
-] as const satisfies readonly { code: string; label: string; appliesToType: ReasonedType }[];
+  {
+    code: "BAD_DEBT",
+    label: "Written off — uncollectable",
+    appliesToType: "WRITE_OFF",
+    isPenalty: false,
+  },
+  {
+    code: "SMALL_BALANCE",
+    label: "Written off — small balance",
+    appliesToType: "WRITE_OFF",
+    isPenalty: false,
+  },
+] as const satisfies readonly {
+  code: string;
+  label: string;
+  appliesToType: ReasonedType;
+  isPenalty: boolean;
+}[];
 
 /**
  * Round a rate-engine amount (Decimal(14,4)) to ledger precision
