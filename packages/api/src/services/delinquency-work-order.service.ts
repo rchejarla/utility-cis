@@ -111,3 +111,143 @@ export async function sweepDelinquencyWorkOrders(
 
   return { created };
 }
+
+/**
+ * How the balance came to be clear, in the vocabulary
+ * `resolutionTypes` already uses.
+ *
+ * A balance reaches zero by being paid, written off or credited, and
+ * recording a write-off as a payment received would put a falsehood in
+ * the collections record. The ledger says which it was: the most recent
+ * credit on the account is what cleared it.
+ *
+ * Nothing at all means nothing was ever owed, which the vocabulary has
+ * no word for; PAYMENT_RECEIVED is the least misleading of the four.
+ */
+const CLEARED_BY = {
+  PAYMENT: "PAYMENT_RECEIVED",
+  WRITE_OFF: "WRITE_OFF",
+  ADJUSTMENT_CREDIT: "WAIVED",
+} as const;
+
+async function howItCleared(utilityId: string, accountId: string): Promise<string> {
+  const last = await prisma.ledgerEntry.findFirst({
+    where: {
+      utilityId,
+      accountId,
+      type: { in: ["PAYMENT", "WRITE_OFF", "ADJUSTMENT_CREDIT"] },
+    },
+    orderBy: { postedAt: "desc" },
+    select: { type: true },
+  });
+  return CLEARED_BY[last?.type as keyof typeof CLEARED_BY] ?? "PAYMENT_RECEIVED";
+}
+
+/**
+ * Ask for the service back where an account has cleared its balance,
+ * and close the action that put it off (#199).
+ *
+ * Keyed on state for the same reason as the sweep above, and against a
+ * sharper alternative: the obvious trigger is "a payment brought the
+ * balance to zero", but hanging this off `recordPayment` would put
+ * collections in the money path, so taking a payment could fail because
+ * the service request module refused. Backwards. "Which accounts have a
+ * live shut-off action and nothing owing" needs no event at all.
+ *
+ * A reconnection is only asked for where the disconnection was actually
+ * carried out — the shut-off request exists and is COMPLETED. An account
+ * that paid before a crew went out has nothing to turn back on, and
+ * sending one would be a wasted truck roll. The action is resolved
+ * either way: the debt is settled, which is what the action was about.
+ *
+ * Runs **before** `sweepDelinquencyWorkOrders` in the worker, so an
+ * account that cleared in the same hour it passed the tier is resolved
+ * before anything is dispatched against it.
+ */
+export async function sweepReconnections(
+  utilityId: string,
+): Promise<{ created: number; resolved: number }> {
+  const cleared = await prisma.delinquencyAction.findMany({
+    where: {
+      utilityId,
+      status: { in: [...LIVE] },
+      rule: { reconnectRequestTypeCode: { not: null } },
+      account: { balance: { lte: 0 } },
+    },
+    select: {
+      id: true,
+      accountId: true,
+      rule: {
+        select: { name: true, serviceRequestTypeCode: true, reconnectRequestTypeCode: true },
+      },
+      serviceRequests: { select: { requestType: true, status: true } },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  let created = 0;
+  let resolved = 0;
+
+  for (const action of cleared) {
+    const reconnectCode = action.rule.reconnectRequestTypeCode!;
+    const shutOffCode = action.rule.serviceRequestTypeCode;
+    const wasDisconnected =
+      !!shutOffCode &&
+      action.serviceRequests.some(
+        (r) => r.requestType === shutOffCode && r.status === "COMPLETED",
+      );
+    const alreadyAsked = action.serviceRequests.some((r) => r.requestType === reconnectCode);
+
+    if (wasDisconnected && !alreadyAsked) {
+      try {
+        await createServiceRequest(
+          utilityId,
+          AUTOMATED_ACTOR_ID,
+          AUTOMATED_ACTOR_NAME,
+          {
+            accountId: action.accountId,
+            requestType: reconnectCode,
+            priority: WORK_ORDER_PRIORITY,
+            description: `Balance cleared after ${action.rule.name}. Restore service.`,
+          },
+          {
+            source: "DELINQUENCY_WORKFLOW",
+            delinquencyActionId: action.id,
+            createdBy: null,
+          },
+        );
+        created++;
+      } catch (err) {
+        /*
+         * The action stays live, so the next tick tries again. Resolving
+         * it here would lose the reconnection entirely, and an account
+         * left without supply after paying is the one outcome worth
+         * retrying forever.
+         */
+        logger.error(
+          {
+            err,
+            component: "delinquency-work-order",
+            utilityId,
+            delinquencyActionId: action.id,
+            requestType: reconnectCode,
+          },
+          "Could not raise the reconnection request for a cleared account",
+        );
+        continue;
+      }
+    }
+
+    await prisma.delinquencyAction.update({
+      where: { id: action.id },
+      data: {
+        status: "RESOLVED",
+        resolvedAt: new Date(),
+        resolutionType: await howItCleared(utilityId, action.accountId),
+      },
+    });
+    resolved++;
+  }
+
+  return { created, resolved };
+}

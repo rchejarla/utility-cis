@@ -54,6 +54,9 @@ const evaluateAll = (utilityId: string) =>
 const sweepWorkOrders = (utilityId: string) =>
   runAsTenant(utilityId, async () => wo.sweepDelinquencyWorkOrders(utilityId));
 
+const sweepReconnections = (utilityId: string) =>
+  runAsTenant(utilityId, async () => wo.sweepReconnections(utilityId));
+
 function daysAgo(n: number): Date {
   const d = new Date();
   d.setUTCHours(0, 0, 0, 0);
@@ -246,6 +249,211 @@ describe("dispatching the shut-off work order", () => {
 
     expect(result.created).toBe(1);
     expect((await requests()).map((r) => r.requestType)).toEqual(["RECONNECT"]);
+  });
+});
+
+/**
+ * Task 7: asking for the service back (#199).
+ *
+ * The trigger is state, not an event. The obvious candidate was "a
+ * payment brought the balance to zero", but hanging this off
+ * `recordPayment` would put collections in the money path, so taking a
+ * payment could fail because the service request module refused —
+ * backwards. "Which accounts have a live shut-off action and nothing
+ * owing" needs no event at all.
+ */
+describe("asking for the service back", () => {
+  /** Clear the balance the way a payment does. */
+  async function payInFull(accountId: string) {
+    await seedAsPlatform(async () => {
+      await prismaImports.prisma.ledgerEntry.create({
+        data: {
+          utilityId: TENANT_A,
+          accountId,
+          type: "PAYMENT",
+          amount: "-100.00",
+          openAmount: "0.00",
+          effectiveDate: daysAgo(0),
+          tender: "CASH",
+        },
+      });
+      await prismaImports.prisma.account.update({
+        where: { id: accountId },
+        data: { balance: "0.00", lastDueDate: null },
+      });
+    });
+  }
+
+  /** Mark the shut-off work order done, as a crew in the field would. */
+  async function shutOffCarriedOut() {
+    await seedAsPlatform(async () =>
+      prismaImports.prisma.serviceRequest.updateMany({
+        where: { utilityId: TENANT_A, requestType: "SHUT_OFF" },
+        data: { status: "COMPLETED" },
+      }),
+    );
+  }
+
+  async function reconnectRule() {
+    return seedAsPlatform(async () =>
+      prismaImports.prisma.delinquencyRule.create({
+        data: {
+          utilityId: TENANT_A,
+          name: "Tier 3 — shut-off",
+          tier: 3,
+          daysPastDue: 45,
+          minBalance: "1.00",
+          actionType: "SHUT_OFF_ELIGIBLE",
+          autoApply: true,
+          isActive: true,
+          effectiveDate: daysAgo(365),
+          serviceRequestTypeCode: "SHUT_OFF",
+          reconnectRequestTypeCode: "RECONNECT",
+        },
+      }),
+    );
+  }
+
+  async function liveActions() {
+    return seedAsPlatform(async () =>
+      prismaImports.prisma.delinquencyAction.findMany({
+        where: { utilityId: TENANT_A },
+        select: { status: true, resolutionType: true, resolvedAt: true },
+      }),
+    );
+  }
+
+  it("asks for a reconnection and resolves the action once the balance clears", async () => {
+    await reconnectRule();
+    await pastDue({ accountId: fixA.accountId, days: 50 });
+    await evaluateAll(TENANT_A);
+    await sweepWorkOrders(TENANT_A);
+    await shutOffCarriedOut();
+    await payInFull(fixA.accountId);
+
+    const result = await sweepReconnections(TENANT_A);
+
+    expect(result).toEqual({ created: 1, resolved: 1 });
+    expect((await requests()).map((r) => r.requestType)).toEqual(["SHUT_OFF", "RECONNECT"]);
+    const [action] = await liveActions();
+    expect(action!.status).toBe("RESOLVED");
+    expect(action!.resolutionType).toBe("PAYMENT_RECEIVED");
+    expect(action!.resolvedAt).not.toBeNull();
+  });
+
+  it("asks for nothing while the account still owes", async () => {
+    await reconnectRule();
+    await pastDue({ accountId: fixA.accountId, days: 50 });
+    await evaluateAll(TENANT_A);
+    await sweepWorkOrders(TENANT_A);
+    await shutOffCarriedOut();
+
+    const result = await sweepReconnections(TENANT_A);
+
+    expect(result).toEqual({ created: 0, resolved: 0 });
+    expect((await requests()).map((r) => r.requestType)).toEqual(["SHUT_OFF"]);
+  });
+
+  /*
+   * Nobody is sent anywhere. The account passed the shut-off tier and
+   * paid before a crew went out, so there is nothing to turn off and
+   * nothing to turn back on — which is why reconnections run before
+   * work orders in the worker.
+   */
+  it("sends no crew for an account that cleared before it was disconnected", async () => {
+    await reconnectRule();
+    await pastDue({ accountId: fixA.accountId, days: 50 });
+    await evaluateAll(TENANT_A);
+    await payInFull(fixA.accountId);
+
+    const reconnected = await sweepReconnections(TENANT_A);
+    const dispatched = await sweepWorkOrders(TENANT_A);
+
+    expect(reconnected).toEqual({ created: 0, resolved: 1 });
+    expect(dispatched.created).toBe(0);
+    expect(await requests()).toHaveLength(0);
+  });
+
+  it("resolves without a reconnection when the shut-off was raised but never carried out", async () => {
+    await reconnectRule();
+    await pastDue({ accountId: fixA.accountId, days: 50 });
+    await evaluateAll(TENANT_A);
+    await sweepWorkOrders(TENANT_A);
+    await payInFull(fixA.accountId);
+
+    const result = await sweepReconnections(TENANT_A);
+
+    expect(result).toEqual({ created: 0, resolved: 1 });
+    expect((await requests()).map((r) => r.requestType)).toEqual(["SHUT_OFF"]);
+  });
+
+  it("does not ask twice", async () => {
+    await reconnectRule();
+    await pastDue({ accountId: fixA.accountId, days: 50 });
+    await evaluateAll(TENANT_A);
+    await sweepWorkOrders(TENANT_A);
+    await shutOffCarriedOut();
+    await payInFull(fixA.accountId);
+    await sweepReconnections(TENANT_A);
+
+    const again = await sweepReconnections(TENANT_A);
+
+    expect(again).toEqual({ created: 0, resolved: 0 });
+    expect(await requests()).toHaveLength(2);
+  });
+
+  /*
+   * A balance can reach zero by being written off, and recording that
+   * as a payment received would put a falsehood in the collections
+   * record. The ledger says which it was.
+   */
+  it("records a written-off balance as written off, not as paid", async () => {
+    await reconnectRule();
+    await pastDue({ accountId: fixA.accountId, days: 50 });
+    await evaluateAll(TENANT_A);
+    await seedAsPlatform(async () => {
+      const reason = await prismaImports.prisma.ledgerReasonDef.create({
+        data: {
+          utilityId: TENANT_A,
+          code: "BAD_DEBT",
+          label: "Written off — uncollectable",
+          appliesToType: "WRITE_OFF",
+        },
+      });
+      await prismaImports.prisma.ledgerEntry.create({
+        data: {
+          utilityId: TENANT_A,
+          accountId: fixA.accountId,
+          type: "WRITE_OFF",
+          amount: "-100.00",
+          openAmount: "0.00",
+          effectiveDate: daysAgo(0),
+          reasonId: reason.id,
+        },
+      });
+      await prismaImports.prisma.account.update({
+        where: { id: fixA.accountId },
+        data: { balance: "0.00", lastDueDate: null },
+      });
+    });
+
+    await sweepReconnections(TENANT_A);
+
+    expect((await liveActions())[0]!.resolutionType).toBe("WRITE_OFF");
+  });
+
+  it("does not reach another tenant's cleared accounts", async () => {
+    await reconnectRule();
+    await pastDue({ accountId: fixA.accountId, days: 50 });
+    await evaluateAll(TENANT_A);
+    await sweepWorkOrders(TENANT_A);
+    await shutOffCarriedOut();
+    await payInFull(fixA.accountId);
+
+    const result = await sweepReconnections(TENANT_B);
+
+    expect(result).toEqual({ created: 0, resolved: 0 });
+    expect((await liveActions())[0]!.status).not.toBe("RESOLVED");
   });
 });
 
