@@ -16,6 +16,7 @@ export const resolutionTypes = [
 ] as const;
 
 export const delinquencyFeeTypes = ["FLAT_FEE", "PERCENT_OF_BALANCE"] as const;
+export const delinquencyFeeModes = ["ACCUMULATE", "REPLACE_LOWER_TIERS"] as const;
 
 /**
  * What a tier charges, as strings rather than numbers.
@@ -45,6 +46,7 @@ const feeFields = {
   feeAmount: feeAmountString.nullable().optional(),
   maxFee: feeCapString.nullable().optional(),
   feeReasonId: z.string().uuid().nullable().optional(),
+  feeMode: z.enum(delinquencyFeeModes).optional(),
 };
 
 const FEE_TRIO = ["feeType", "feeAmount", "feeReasonId"] as const;
@@ -86,6 +88,19 @@ function refineFeeGroup(
       code: z.ZodIssueCode.custom,
       path: ["maxFee"],
       message: "maxFee caps a PERCENT_OF_BALANCE fee; a flat amount is its own cap",
+    });
+  }
+
+  // A tier that charges nothing cannot replace what the ladder charged
+  // below it: that would make the mode a way to spell "cancel the
+  // earlier late fees", and forgiving a charge is a waiver someone
+  // decided to grant, not a side effect of a schedule.
+  if (value.feeMode === "REPLACE_LOWER_TIERS"
+      && (value.feeType === undefined || value.feeType === null)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["feeMode"],
+      message: "REPLACE_LOWER_TIERS needs a fee of its own to replace with",
     });
   }
 }

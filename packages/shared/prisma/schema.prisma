@@ -1703,6 +1703,18 @@ enum DelinquencyFeeType {
   @@map("delinquency_fee_type")
 }
 
+/// Whether a tier's fee adds to what the ladder charged below it or
+/// replaces it. $10 at 15 days and $25 at 30 days leaves $35 owing under
+/// ACCUMULATE and $25 under REPLACE_LOWER_TIERS — the second charge
+/// being the penalty for a month, not an addition to the penalty for a
+/// fortnight.
+enum DelinquencyFeeMode {
+  ACCUMULATE
+  REPLACE_LOWER_TIERS
+
+  @@map("delinquency_fee_mode")
+}
+
 model DelinquencyRule {
   id                    String       @id @default(uuid()) @db.Uuid
   utilityId             String       @map("utility_id") @db.Uuid
@@ -1736,6 +1748,12 @@ model DelinquencyRule {
   /// refuses the combination.
   maxFee                Decimal?     @map("max_fee") @db.Decimal(10, 2)
   feeReasonId           String?      @map("fee_reason_id") @db.Uuid
+  /// Defaults to ACCUMULATE, which is what every tier did before the
+  /// mode existed, so configuring a fee changes nobody's bill until
+  /// someone asks for replacement. A CHECK refuses
+  /// REPLACE_LOWER_TIERS on a tier that charges nothing: that would be
+  /// a way to spell forgiveness, and forgiveness is a waiver.
+  feeMode               DelinquencyFeeMode @default(ACCUMULATE) @map("fee_mode")
   createdAt             DateTime     @default(now()) @map("created_at") @db.Timestamptz
   updatedAt             DateTime     @updatedAt @map("updated_at") @db.Timestamptz
 

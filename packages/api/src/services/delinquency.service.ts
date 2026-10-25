@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { sendNotification } from "./notification.service.js";
 import { assessFee } from "./ar/fee.service.js";
+import { reverseEntry } from "./ar/reversal.service.js";
 import { tierFeeAmount } from "./delinquency-fee.js";
 
 /**
@@ -21,6 +22,77 @@ export const AUTOMATED_ACTOR_NAME = "Delinquency (automated)";
  * which walks every account with a positive balance and applies the
  * tenant's delinquency rules tier by tier.
  */
+
+/**
+ * Reverse the fees this ladder raised at lower tiers of the same
+ * ladder, before this tier raises its own.
+ *
+ * The candidates are found by walking `DelinquencyAction.feeEntryId`,
+ * not by asking what reason a fee cites. That is what keeps a
+ * returned-payment fee and a late fee a CSR added by hand out of reach:
+ * neither has a delinquency action, whatever the tenant has named its
+ * reasons. The question is which fees this ladder owns, and ownership is
+ * not a category.
+ *
+ * Reversal rather than deletion, so a statement reads $10 fee, $10
+ * reversal, $25 fee — and because `reverseEntry` gives back what the
+ * entry consumed. Reversing before the new fee is raised is what lets a
+ * freed payment be re-applied to it.
+ *
+ * `accountType` has to match, or a RESIDENTIAL tier would reach into a
+ * COMMERCIAL ladder's fees; those are separate ladders, as
+ * `@@unique([utilityId, accountType, tier])` already says.
+ */
+async function replaceLowerTierFees(
+  tx: Parameters<typeof tierFeeAmount>[0],
+  utilityId: string,
+  accountId: string,
+  rule: { tier: number; accountType: string | null; name: string },
+): Promise<void> {
+  const lower = await tx.delinquencyAction.findMany({
+    where: {
+      utilityId,
+      accountId,
+      status: { in: ["PENDING", "COMPLETED"] },
+      feeEntryId: { not: null },
+      rule: { tier: { lt: rule.tier }, accountType: rule.accountType },
+    },
+    select: { feeEntryId: true },
+  });
+  if (lower.length === 0) return;
+
+  const feeIds = lower.map((a) => a.feeEntryId!);
+
+  /*
+   * A fee already reversed is skipped rather than reversed again, which
+   * `reverseEntry` refuses with a 409. That state is reachable:
+   * `resolveAccount` resolves only the highest live tier and cancels the
+   * PENDING ones, so a lower COMPLETED action can outlive the tier above
+   * it, and when the account falls behind again this tier meets a
+   * candidate whose fee it already reversed. Without this the whole
+   * tenant's sweep would throw over it.
+   */
+  const alreadyReversed = new Set(
+    (
+      await tx.ledgerEntry.findMany({
+        where: { utilityId, reversesId: { in: feeIds } },
+        select: { reversesId: true },
+      })
+    ).map((r) => r.reversesId),
+  );
+
+  for (const feeId of feeIds) {
+    if (alreadyReversed.has(feeId)) continue;
+    await reverseEntry(
+      utilityId,
+      AUTOMATED_ACTOR_ID,
+      AUTOMATED_ACTOR_NAME,
+      feeId,
+      { memo: `Replaced by ${rule.name}` },
+      tx,
+    );
+  }
+}
 
 /**
  * A unique violation on `delinquency_action_one_live_per_rule` — the
@@ -155,6 +227,10 @@ export async function evaluateAll(utilityId: string): Promise<{
           let feeEntryId: string | null = null;
 
           if (rule.feeType && rule.feeAmount && rule.feeReasonId) {
+            if (rule.feeMode === "REPLACE_LOWER_TIERS") {
+              await replaceLowerTierFees(tx, utilityId, account.id, rule);
+            }
+
             const amount = await tierFeeAmount(tx, utilityId, account.id, {
               feeType: rule.feeType,
               feeAmount: rule.feeAmount,
