@@ -73,7 +73,7 @@ function printed(amount: string): string {
 
 export function DefaultBillTemplate({ presentation }: { presentation: BillPresentation }) {
   const s = makeStyles(presentation);
-  const { issuer, recipient, account, bill, groups, totals, settlement, messages, remittance } =
+  const { issuer, recipient, account, bill, groups, totals, settlement, activity, messages, remittance } =
     presentation;
 
   return (
@@ -146,6 +146,35 @@ export function DefaultBillTemplate({ presentation }: { presentation: BillPresen
             </View>
           </View>
         ))}
+
+        {/*
+          Everything else that reached the account since the last bill —
+          a late fee, an adjustment, a reversal. None of it comes from
+          the rate engine, so none of it appears in the groups above, and
+          without this block the customer owes more than the bill says
+          with nothing explaining the difference.
+
+          Itemised and dated, for the same reason the settlement block
+          is: "Late payment fee 2026-02-10 $25.00" answers the question,
+          where a net figure raises it.
+        */}
+        {activity ? (
+          <View style={s.totalsBox} wrap={false}>
+            <Text style={s.label}>Other activity on your account</Text>
+            {activity.entries.map((item, i) => (
+              <View key={i} style={s.totalRow}>
+                <Text style={s.muted}>
+                  {item.label} {fmtDate(item.date)}
+                </Text>
+                <Text>{printed(item.amount)}</Text>
+              </View>
+            ))}
+            <View style={s.grandTotal}>
+              <Text>Total other activity</Text>
+              <Text>{printed(activity.total)}</Text>
+            </View>
+          </View>
+        ) : null}
 
         <View style={s.totalsBox} wrap={false}>
           <View style={s.totalRow}>

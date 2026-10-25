@@ -70,6 +70,31 @@ export interface BillPresentationSettlement {
   amountDue: string;
 }
 
+/**
+ * Everything that happened on the account between this bill and the one
+ * before it, other than the bills themselves.
+ *
+ * A late fee raises the balance and produces no `BillSegmentLine` —
+ * lines come entirely from rating, and each carries a
+ * `sourceScheduleId` and `sourceComponentId` because a line *is* a rated
+ * charge. Without this the customer receives a bill for consumption,
+ * owes more than it says, and has nothing explaining the difference.
+ *
+ * Bounded on both sides, and the upper bound is not optional: it is the
+ * same rule `settlement` follows, for the same reason. A document that
+ * reads the ledger at render time stops being a record of what the
+ * customer was shown, so a reprint of last March must not acquire a fee
+ * raised in April.
+ *
+ * `null` when nothing happened, so an ordinary bill prints exactly as it
+ * did before.
+ */
+export interface BillPresentationActivity {
+  entries: Array<{ date: Date; label: string; amount: string }>;
+  /** Signed: positive is money added to what the account owes. */
+  total: string;
+}
+
 export interface BillPresentation {
   issuer: BillPresentationIssuer;
   recipient: { name: string; addressLines: string[] };
@@ -94,6 +119,7 @@ export interface BillPresentation {
     total: string;
   };
   settlement: BillPresentationSettlement | null;
+  activity: BillPresentationActivity | null;
   messages: Array<{ label: string; body: string }>;
   branding: { logoUrl: string | null; primaryColor: string; fontFamily: string };
   remittance: { payTo: string; addressLines: string[]; amountDue: string; dueDate: Date };
@@ -422,6 +448,74 @@ export async function loadBillPresentation(
     };
   }
 
+  // ─── Account activity ──────────────────────────────────────────────
+  /*
+   * The previous bill on this account, which is where the window opens.
+   * There is no such notion elsewhere in this service, so this
+   * establishes it: the same account's most recent bill dated before
+   * this one. `billNumber` breaks a tie on the date so two bills issued
+   * the same day cannot make the window depend on row order — the same
+   * determinism the billing address ordering above exists for.
+   *
+   * Null on a first bill, and then the window opens at the account's
+   * beginning rather than being empty: a fee raised before the very
+   * first bill still has to be explained on it.
+   */
+  const previousBill = await prisma.bill.findFirst({
+    where: { utilityId, accountId: bill.accountId, billDate: { lt: bill.billDate } },
+    orderBy: [{ billDate: "desc" }, { billNumber: "desc" }],
+    select: { billDate: true },
+  });
+
+  /*
+   * `BILL_CHARGE` is excluded outright rather than only for this bill.
+   * A bill charge *is* a bill, which the customer has already received,
+   * and its effective date is not required to equal the bill date — so
+   * excluding only this one could print the previous bill's charge here
+   * as though it were new.
+   *
+   * Credits already itemised under `settlement` are excluded too, or a
+   * payment would appear twice on the same page.
+   */
+  const settledCreditIds = applications.map((app) => app.creditId);
+  const activityEntries = await prisma.ledgerEntry.findMany({
+    where: {
+      utilityId,
+      accountId: bill.accountId,
+      type: { not: "BILL_CHARGE" },
+      effectiveDate: {
+        lte: bill.billDate,
+        ...(previousBill ? { gt: previousBill.billDate } : {}),
+      },
+      ...(settledCreditIds.length > 0 ? { id: { notIn: settledCreditIds } } : {}),
+    },
+    include: { reason: { select: { label: true } } },
+    orderBy: [{ effectiveDate: "asc" }, { id: "asc" }],
+  });
+
+  let activity: BillPresentationActivity | null = null;
+  if (activityEntries.length > 0) {
+    const activityTotal = activityEntries.reduce(
+      (acc, entry) => acc.plus(new Decimal(money(entry.amount))),
+      new Decimal(0),
+    );
+    activity = {
+      entries: activityEntries.map((entry) => ({
+        date: entry.effectiveDate,
+        /*
+         * The tenant's own wording for the reason, never a code and
+         * never a string from here: a utility that calls its late fee a
+         * "Late charge" should see that on the bill. The entry type is
+         * the fallback for the entries that cite no reason — a payment,
+         * or the reversal a replacing tier writes.
+         */
+        label: entry.reason?.label ?? settlementLabel(entry.type, entry.tender),
+        amount: money(entry.amount),
+      })),
+      total: activityTotal.toFixed(2),
+    };
+  }
+
   return {
     issuer: {
       name: issuer.utilityName as string,
@@ -452,6 +546,7 @@ export async function loadBillPresentation(
     groups,
     totals,
     settlement,
+    activity,
     messages: messages.map((m) => ({ label: m.label, body: m.body })),
     branding,
     remittance: {
