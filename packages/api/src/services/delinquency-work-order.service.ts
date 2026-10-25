@@ -53,7 +53,21 @@ export async function sweepDelinquencyWorkOrders(
       utilityId,
       status: { in: [...LIVE] },
       serviceRequests: { none: {} },
-      rule: { serviceRequestTypeCode: { not: null } },
+      /*
+       * `isActive` matters: DELETE on a rule only sets that flag
+       * (`routes/delinquency.ts`), so without it "deleting" a shut-off
+       * tier would go on dispatching for every live action it had
+       * already raised.
+       */
+      rule: { serviceRequestTypeCode: { not: null }, isActive: true },
+      /*
+       * And the account still has to owe something. These actions
+       * accumulate — nothing resolved them automatically before
+       * `sweepReconnections` — so a tenant switching the feature on
+       * would otherwise back-dispatch months of them at once, against
+       * balances long since settled.
+       */
+      account: { isProtected: false, status: "ACTIVE", balance: { gt: 0 } },
     },
     select: {
       id: true,
@@ -167,11 +181,23 @@ async function howItCleared(utilityId: string, accountId: string): Promise<strin
 export async function sweepReconnections(
   utilityId: string,
 ): Promise<{ created: number; resolved: number }> {
+  /*
+   * Every live action on a cleared account, not only the ones whose
+   * tier names a reconnection type. Filtering on that code was the
+   * original reading of #199 and it left the notice tiers — the ones
+   * that charge the late fees — live forever, because nothing else
+   * resolves an action: `resolveAccount` has one caller, a route. A
+   * tier that has already acted and is never resolved can never act
+   * again, so a customer who pays twenty days late every month would
+   * have been charged one late fee in their lifetime.
+   *
+   * Closing the episode here is what makes the charge gate in
+   * `delinquency.service.ts` safe in the other direction too.
+   */
   const cleared = await prisma.delinquencyAction.findMany({
     where: {
       utilityId,
       status: { in: [...LIVE] },
-      rule: { reconnectRequestTypeCode: { not: null } },
       account: { balance: { lte: 0 } },
     },
     select: {
@@ -189,16 +215,18 @@ export async function sweepReconnections(
   let resolved = 0;
 
   for (const action of cleared) {
-    const reconnectCode = action.rule.reconnectRequestTypeCode!;
+    const reconnectCode = action.rule.reconnectRequestTypeCode;
     const shutOffCode = action.rule.serviceRequestTypeCode;
     const wasDisconnected =
+      !!reconnectCode &&
       !!shutOffCode &&
       action.serviceRequests.some(
         (r) => r.requestType === shutOffCode && r.status === "COMPLETED",
       );
-    const alreadyAsked = action.serviceRequests.some((r) => r.requestType === reconnectCode);
+    const alreadyAsked =
+      !!reconnectCode && action.serviceRequests.some((r) => r.requestType === reconnectCode);
 
-    if (wasDisconnected && !alreadyAsked) {
+    if (reconnectCode && wasDisconnected && !alreadyAsked) {
       try {
         await createServiceRequest(
           utilityId,

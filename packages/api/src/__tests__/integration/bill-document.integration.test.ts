@@ -1924,6 +1924,66 @@ describe("account activity on a bill", () => {
   });
 
   /*
+   * A deposit is money the utility holds, not money the customer owes
+   * — which is exactly why `recomputeAccountCache` keeps it out of
+   * `Account.balance`. Summed into activity it told the customer they
+   * owed $500 less than they did.
+   */
+  it("does not count a deposit as activity", async () => {
+    const billId = await postedBill();
+    const ctx = await context(billId);
+    await db((p) =>
+      p.ledgerEntry.create({
+        data: {
+          utilityId: UTILITY,
+          accountId: ctx.accountId,
+          type: "DEPOSIT",
+          amount: "-500.00",
+          openAmount: "-500.00",
+          effectiveDate: new Date("2026-02-05"),
+        },
+      }),
+    );
+
+    const p = await loadBillPresentation(UTILITY, billId);
+
+    expect(p.activity).toBeNull();
+  });
+
+  /*
+   * `postBill` writes a net-negative bill as an ADJUSTMENT_CREDIT with
+   * its `billId` set, so excluding only BILL_CHARGE let a previous
+   * credit bill's own entry reappear here as "other activity" — the
+   * double-presentation this block excludes BILL_CHARGE outright to
+   * avoid.
+   */
+  it("does not repeat a credit bill's own entry", async () => {
+    const billId = await postedBill();
+    const ctx = await context(billId);
+    const earlier = await laterBill(ctx, {
+      number: "B-CREDIT", billDate: "2026-02-05",
+      periodStart: "2026-01-01", periodEnd: "2026-01-31",
+    });
+    await db((p) =>
+      p.ledgerEntry.create({
+        data: {
+          utilityId: UTILITY,
+          accountId: ctx.accountId,
+          type: "ADJUSTMENT_CREDIT",
+          billId: earlier,
+          amount: "-12.00",
+          openAmount: "-12.00",
+          effectiveDate: new Date("2026-02-06"),
+        },
+      }),
+    );
+
+    const p = await loadBillPresentation(UTILITY, billId);
+
+    expect(p.activity).toBeNull();
+  });
+
+  /*
    * The property the upper bound exists for. A reprint has to produce
    * the document the customer was sent, not a fresher one.
    */

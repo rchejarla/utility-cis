@@ -24,6 +24,50 @@ export const AUTOMATED_ACTOR_NAME = "Delinquency (automated)";
  */
 
 /**
+ * Whether this tier's own fee is still hanging over the account.
+ *
+ * The partial unique index stops a *second live action*, which is what
+ * keeps a duplicate out of one sweep and out of a concurrent one. It
+ * cannot stop a re-charge, because it is deliberately partial: a
+ * cancelled or resolved action leaves the account past due with nothing
+ * live, and the next hourly tick would charge the tier again. A CSR
+ * pressing Cancel does that, and `resolveAccount` — granting a payment
+ * plan — cancels every PENDING action at once, so an account on three
+ * charging tiers would be re-charged all three, and again on every
+ * later resolve.
+ *
+ * So the gate is the money, not the action. Outstanding means **open or
+ * reversed**: an open fee has not been dealt with, and a reversed one
+ * was somebody deciding the customer does not owe it, which an hourly
+ * sweep must not overrule. Only a fee paid in full and not reversed
+ * clears the way, which is also what ending a delinquency episode looks
+ * like — so a customer who clears their balance and falls behind on a
+ * later bill is charged again, rather than paying one late fee per
+ * account per lifetime.
+ */
+async function tierFeeOutstanding(
+  tx: Parameters<typeof tierFeeAmount>[0],
+  utilityId: string,
+  accountId: string,
+  ruleId: string,
+): Promise<boolean> {
+  const priorFees = await tx.delinquencyAction.findMany({
+    where: { utilityId, accountId, ruleId, feeEntryId: { not: null } },
+    select: { feeEntryId: true },
+  });
+  if (priorFees.length === 0) return false;
+
+  const outstanding = await tx.ledgerEntry.count({
+    where: {
+      utilityId,
+      id: { in: priorFees.map((a) => a.feeEntryId!) },
+      OR: [{ openAmount: { not: 0 } }, { reversedBy: { some: {} } }],
+    },
+  });
+  return outstanding > 0;
+}
+
+/**
  * Reverse the fees this ladder raised at lower tiers of the same
  * ladder, before this tier raises its own.
  *
@@ -83,14 +127,25 @@ async function replaceLowerTierFees(
 
   for (const feeId of feeIds) {
     if (alreadyReversed.has(feeId)) continue;
-    await reverseEntry(
-      utilityId,
-      AUTOMATED_ACTOR_ID,
-      AUTOMATED_ACTOR_NAME,
-      feeId,
-      { memo: `Replaced by ${rule.name}` },
-      tx,
-    );
+    try {
+      await reverseEntry(
+        utilityId,
+        AUTOMATED_ACTOR_ID,
+        AUTOMATED_ACTOR_NAME,
+        feeId,
+        { memo: `Replaced by ${rule.name}` },
+        tx,
+      );
+    } catch (e) {
+      /*
+       * The set above is read before `reverseEntry` takes the account
+       * lock, so a second process can reverse the same fee in between
+       * and this one arrives to a 409. Already reversed is the outcome
+       * we wanted; it is not a reason to fail the tenant's sweep. Any
+       * other error still is.
+       */
+      if ((e as { code?: string }).code !== "ENTRY_ALREADY_REVERSED") throw e;
+    }
   }
 }
 
@@ -192,23 +247,7 @@ export async function evaluateAll(utilityId: string): Promise<{
         continue;
       }
 
-      let notificationId: string | null = null;
-      if (rule.notificationEventType) {
-        const channel =
-          rule.actionType === "NOTICE_SMS" ? "SMS" as const : "EMAIL" as const;
-        notificationId = await sendNotification(utilityId, {
-          eventType: rule.notificationEventType,
-          channel,
-          recipientId: account.customerId ?? "",
-          context: {
-            accountId: account.id,
-            delinquencyBalance: `$${balance.toFixed(2)}`,
-            delinquencyDaysPastDue: String(daysPastDue),
-            delinquencyTierName: rule.name,
-            delinquencyActionType: rule.actionType,
-          },
-        });
-      }
+      let actionId: string | null = null;
 
       try {
         /*
@@ -227,20 +266,32 @@ export async function evaluateAll(utilityId: string): Promise<{
           let feeEntryId: string | null = null;
 
           if (rule.feeType && rule.feeAmount && rule.feeReasonId) {
-            if (rule.feeMode === "REPLACE_LOWER_TIERS") {
-              await replaceLowerTierFees(tx, utilityId, account.id, rule);
-            }
+            const amount = (await tierFeeOutstanding(tx, utilityId, account.id, rule.id))
+              ? null
+              : await tierFeeAmount(tx, utilityId, account.id, {
+                  feeType: rule.feeType,
+                  feeAmount: rule.feeAmount,
+                  maxFee: rule.maxFee,
+                });
 
-            const amount = await tierFeeAmount(tx, utilityId, account.id, {
-              feeType: rule.feeType,
-              feeAmount: rule.feeAmount,
-              maxFee: rule.maxFee,
-            });
-
-            // Null means there was nothing to charge — a percentage of
-            // a base that rounds to nothing. The action is still
-            // written: the account passed the tier.
+            /*
+             * Null means there is nothing to charge — this tier's last
+             * fee is still outstanding, or a percentage of a base that
+             * rounds to nothing. The action is still written: the
+             * account passed the tier.
+             *
+             * Replacement is inside this branch, not before it. Running
+             * it first meant a tier could reverse the fee below it and
+             * then charge nothing, which is forgiveness arriving as a
+             * side effect of a schedule — the exact thing the
+             * `delinquency_rule_replace_needs_fee` CHECK was written to
+             * make inexpressible. That CHECK constrains configuration;
+             * only this ordering constrains the outcome.
+             */
             if (amount) {
+              if (rule.feeMode === "REPLACE_LOWER_TIERS") {
+                await replaceLowerTierFees(tx, utilityId, account.id, rule);
+              }
               const fee = await assessFee(
                 utilityId,
                 AUTOMATED_ACTOR_ID,
@@ -257,21 +308,22 @@ export async function evaluateAll(utilityId: string): Promise<{
             }
           }
 
-          await tx.delinquencyAction.create({
+          const action = await tx.delinquencyAction.create({
             data: {
               utilityId,
               accountId: account.id,
               ruleId: rule.id,
               tier: rule.tier,
               actionType: rule.actionType,
-              status: notificationId ? "COMPLETED" : "PENDING",
+              status: "PENDING",
               balanceAtAction: balance,
               daysPastDueAtAction: daysPastDue,
               triggeredBy: "AUTOMATED",
-              notificationId,
               feeEntryId,
             },
+            select: { id: true },
           });
+          actionId = action.id;
         });
       } catch (e) {
         /*
@@ -282,15 +334,46 @@ export async function evaluateAll(utilityId: string): Promise<{
          * and carry on rather than failing the whole tenant's sweep
          * over one account.
          *
-         * The notice above has already gone out by this point, so the
-         * loser of the race still sends a duplicate notice — strictly
-         * better than today, where it also wrote a duplicate action,
-         * and closed when the notification moves after the action's
-         * transaction (plan task 3).
+         * Nothing has been sent to the customer at this point, which is
+         * the reason the notice moved below: a sweep that rolls back —
+         * on a reason retired after the rule cited it, say — used to
+         * leave a notice behind every hour while never writing an
+         * action or a fee.
          */
         if (!isDuplicateAction(e)) throw e;
         actionSet.add(key);
         continue;
+      }
+
+      /*
+       * The notice, after the money and outside its transaction. An
+       * external dispatch inside a transaction holds a database lock
+       * across someone else's network call, and a notice that fails to
+       * send has to leave the action PENDING — which is what that
+       * status is for. The action is the record that the tier fired;
+       * the notification is an attempt to tell someone.
+       */
+      if (rule.notificationEventType && actionId) {
+        const channel =
+          rule.actionType === "NOTICE_SMS" ? "SMS" as const : "EMAIL" as const;
+        const notificationId = await sendNotification(utilityId, {
+          eventType: rule.notificationEventType,
+          channel,
+          recipientId: account.customerId ?? "",
+          context: {
+            accountId: account.id,
+            delinquencyBalance: `$${balance.toFixed(2)}`,
+            delinquencyDaysPastDue: String(daysPastDue),
+            delinquencyTierName: rule.name,
+            delinquencyActionType: rule.actionType,
+          },
+        });
+        if (notificationId) {
+          await prisma.delinquencyAction.update({
+            where: { id: actionId },
+            data: { notificationId, status: "COMPLETED" },
+          });
+        }
       }
 
       actionSet.add(key);

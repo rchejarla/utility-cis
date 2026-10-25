@@ -162,6 +162,60 @@ the transaction: an external dispatch inside one holds a database lock
 across someone else's network call, and a notice that fails to send
 leaves `status` PENDING, which is what that column is for.
 
+**A tier charges once per delinquency episode, and the gate is the
+money rather than the action.** The partial unique index stops a second
+*live* action, which is what keeps duplicates out of one sweep and out
+of a concurrent one. It cannot stop a re-charge, because it is
+deliberately partial: a cancelled or resolved action leaves the account
+past due with nothing live, and the next hourly tick would charge the
+tier again. A CSR pressing Cancel does exactly that, and
+`resolveAccount` — granting a payment plan — cancels every PENDING
+action at once, so an account on three charging tiers would be
+re-charged all three, and again on every later resolve.
+
+So a tier does not charge while its own last fee is **outstanding**,
+meaning open or reversed. An open fee has not been dealt with; a
+reversed one was somebody deciding the customer does not owe it, which
+an hourly sweep must not overrule. Only a fee paid in full and not
+reversed clears the way — which is also what ending an episode looks
+like, so a customer who clears their balance and falls behind on a later
+bill is charged again rather than paying one late fee per account per
+lifetime.
+
+**The episode closes for every tier, not only shut-off ones.**
+`sweepReconnections` resolves every live action on an account whose
+balance has reached zero. Filtering it on `reconnect_request_type_code`
+was the first reading of #199 and it left the notice tiers — the ones
+that charge the late fees — live forever, since nothing else resolves an
+action: `resolveAccount` has one caller, a route. A reconnection request
+is still raised only where the tier names one and the shut-off was
+actually carried out.
+
+**The notice is sent after the money commits, and outside its
+transaction.** An external dispatch inside a transaction holds a
+database lock across someone else's network call, and a notice that
+fails to send must leave the action PENDING, which is what that status
+is for. The ordering also matters on the failure path: a sweep that
+rolls back — on a reason retired after the rule cited it — used to leave
+a notice behind every hour while never writing an action or a fee.
+
+**Replacement happens only once this tier knows it will charge.** The
+reversal used to run first, so a percentage tier whose base rounded to
+nothing reversed the fee below it and raised nothing in its place. That
+is forgiveness arriving as a side effect of a schedule — the thing
+`delinquency_rule_replace_needs_fee` exists to forbid — and the CHECK
+could not see it, because it constrains configuration and this is an
+outcome.
+
+**The work-order sweep asks about the account, not only the action.**
+`evaluateAll`'s protected-account guard keys on `action_type`, while
+dispatch keys on the tier's `service_request_type_code`, so a tier with
+a notice action type and a shut-off work order reached a protected
+account. The sweep now requires `is_protected = false`, an ACTIVE
+account that still owes something, and an active rule — the last
+because `DELETE` on a rule only clears `is_active`, and an account that
+has since paid should not have a crew sent to it.
+
 **Which reason the fee cites is configuration on the tier.** The
 rejected alternative was any code the service could have known: there is
 none, because reason codes are tenant-configurable and a utility that

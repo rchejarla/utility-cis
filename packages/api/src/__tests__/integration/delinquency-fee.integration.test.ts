@@ -191,6 +191,61 @@ async function actions() {
   );
 }
 
+/**
+ * Whether the account is still past due at all.
+ *
+ * Asserted alongside any case that evaluates twice, because
+ * `recomputeAccountCache` moves `lastDueDate` to the oldest open
+ * debit's due date — and a fee's own due date is 30 days out. A second
+ * pass against an account that is no longer past due proves nothing,
+ * which is how three cases in this branch came to pass vacuously.
+ */
+async function stillPastDue(): Promise<boolean> {
+  const account = await seedAsPlatform(async () =>
+    prismaImports.prisma.account.findUniqueOrThrow({
+      where: { id: fix.accountId },
+      select: { lastDueDate: true, balance: true },
+    }),
+  );
+  if (!account.lastDueDate || account.balance.lte(0)) return false;
+  return account.lastDueDate.getTime() < Date.now();
+}
+
+/** Pay the ladder's fee off, which is what clearing an episode means. */
+async function settleLadderFee() {
+  return seedAsPlatform(async () => {
+    const [action] = await prismaImports.prisma.delinquencyAction.findMany({
+      where: { utilityId: TENANT_A, feeEntryId: { not: null } },
+      select: { feeEntryId: true },
+    });
+    await prismaImports.prisma.ledgerEntry.update({
+      where: { id: action!.feeEntryId! },
+      data: { openAmount: "0.00" },
+    });
+  });
+}
+
+/** Reverse it instead — an operator deciding it is not owed. */
+async function waiveLadderFee() {
+  const [action] = await actions();
+  return runAsTenant(TENANT_A, async () => {
+    const { reverseEntry } = await import("../../services/ar/reversal.service.js");
+    return reverseEntry(TENANT_A, ACTOR, "Tester", action!.feeEntryId!, {
+      memo: "Waived at the counter",
+    });
+  });
+}
+
+/** What Cancel on the actions screen, or `resolveAccount`, leaves behind. */
+async function setActionStatus(status: "CANCELLED" | "RESOLVED") {
+  return seedAsPlatform(async () =>
+    prismaImports.prisma.delinquencyAction.updateMany({
+      where: { utilityId: TENANT_A },
+      data: { status, resolvedAt: new Date(), resolutionType: "WAIVED" },
+    }),
+  );
+}
+
 /** A rule body the create route accepts, with the fee fields overridable. */
 function ruleBody(over: Record<string, unknown> = {}) {
   return {
@@ -224,7 +279,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await resetDb();
   await truncateTables(
-    "delinquency_action, delinquency_rule, ledger_application, ledger_entry, ledger_reason_def, user_role, cis_user, role, utility_module",
+    "delinquency_action, delinquency_rule, ledger_application, ledger_entry, ledger_reason_def, service_request, service_request_counter, service_request_type_def, user_role, cis_user, role, utility_module",
   );
   fix = await makeTenantFixture(prismaImports.prisma, TENANT_A);
   await ensurePrincipal(prismaImports.prisma, TENANT_A);
@@ -288,15 +343,104 @@ describe("a delinquency tier that charges a flat fee", () => {
     expect(action!.feeEntryId).toBe(fee!.id);
   });
 
+  /*
+   * The open charge matters. Without a real past-due debit in the
+   * ledger, `recomputeAccountCache` sets `lastDueDate` from the only
+   * open entry there is — the fee it just raised, due in 30 days — and
+   * the second pass then stops at `daysPastDue <= 0` without evaluating
+   * anything. This case passed for weeks on that accident, proving
+   * nothing about the guard it is named after.
+   */
   it("raises it once however many times the tier is evaluated", async () => {
+    await entryOf({ type: "ADJUSTMENT_DEBIT", amount: "100.00", reasonCode: "OPENING_BALANCE" });
     await ruleWithFee({ feeAmount: "25.00" });
     await pastDue({ balance: "100.00", days: 15 });
 
     await evaluateAll(TENANT_A);
     await evaluateAll(TENANT_A);
 
+    expect(await stillPastDue()).toBe(true);
     expect(await feeEntries()).toHaveLength(1);
     expect(await actions()).toHaveLength(1);
+  });
+
+  /*
+   * The index that stops a duplicate is partial on PENDING and
+   * COMPLETED, because a resolved action is history and must not lock an
+   * account out of its own ladder next time. That is right for a notice
+   * and wrong for money: a CSR pressing Cancel leaves the account past
+   * due with no live action, and the next hourly tick charges it again.
+   */
+  it("does not charge the tier again after its action is cancelled", async () => {
+    await entryOf({ type: "ADJUSTMENT_DEBIT", amount: "100.00", reasonCode: "OPENING_BALANCE" });
+    await ruleWithFee({ feeAmount: "25.00" });
+    await pastDue({ balance: "100.00", days: 15 });
+    await evaluateAll(TENANT_A);
+
+    await setActionStatus("CANCELLED");
+    await evaluateAll(TENANT_A);
+
+    expect(await stillPastDue()).toBe(true);
+    expect(await feeEntries()).toHaveLength(1);
+  });
+
+  /*
+   * `resolveAccount` cancels every PENDING action and resolves the
+   * highest, which is what granting a payment plan does. An account 50
+   * days past due against three charging tiers would otherwise be
+   * re-charged all three on the next tick, and again on every later
+   * resolve.
+   */
+  it("does not charge the tier again after the account is resolved", async () => {
+    await entryOf({ type: "ADJUSTMENT_DEBIT", amount: "100.00", reasonCode: "OPENING_BALANCE" });
+    await ruleWithFee({ feeAmount: "25.00" });
+    await pastDue({ balance: "100.00", days: 15 });
+    await evaluateAll(TENANT_A);
+
+    await setActionStatus("RESOLVED");
+    await evaluateAll(TENANT_A);
+
+    expect(await feeEntries()).toHaveLength(1);
+  });
+
+  /*
+   * And the other way: the gate is the current delinquency episode, not
+   * "ever". A customer who clears their balance and falls behind again
+   * on a later bill is charged again, or a utility collects one late fee
+   * per account per lifetime.
+   */
+  it("charges the tier again once the earlier fee has been paid", async () => {
+    await entryOf({ type: "ADJUSTMENT_DEBIT", amount: "100.00", reasonCode: "OPENING_BALANCE" });
+    await ruleWithFee({ feeAmount: "25.00" });
+    await pastDue({ balance: "100.00", days: 60 });
+    await evaluateAll(TENANT_A);
+    await setActionStatus("RESOLVED");
+
+    // What ending an episode actually looks like: the fee was settled.
+    await settleLadderFee();
+    await pastDue({ balance: "100.00", days: 15 });
+    await evaluateAll(TENANT_A);
+
+    expect(await feeEntries()).toHaveLength(2);
+  });
+
+  /*
+   * A waived fee is not a settled one. Reversing it is somebody
+   * deciding the customer does not owe it, and an hourly sweep that
+   * charged it straight back would overrule them.
+   */
+  it("does not charge the tier again after its fee was waived", async () => {
+    await entryOf({ type: "ADJUSTMENT_DEBIT", amount: "100.00", reasonCode: "OPENING_BALANCE" });
+    await ruleWithFee({ feeAmount: "25.00" });
+    await pastDue({ balance: "100.00", days: 60 });
+    await evaluateAll(TENANT_A);
+    await waiveLadderFee();
+
+    await setActionStatus("CANCELLED");
+    await pastDue({ balance: "100.00", days: 15 });
+    await evaluateAll(TENANT_A);
+
+    expect(await feeEntries()).toHaveLength(1);
   });
 
   it("raises no fee for a tier that configures none", async () => {
@@ -522,6 +666,69 @@ describe("configuring the fee", () => {
     });
 
     expect(res.statusCode, res.body).toBe(400);
+  });
+
+  /*
+   * Through the route, not by calling the validator. The sweep that
+   * uses this code skips an action it cannot route rather than failing
+   * the tenant's pass, so an unknown code typed here would otherwise go
+   * unnoticed until somebody asked why no crew had been sent.
+   */
+  it("refuses to save a tier naming a work order type the tenant does not have", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/delinquency-rules",
+      headers: headers(),
+      payload: ruleBody({ serviceRequestTypeCode: "NO_SUCH_TYPE" }),
+    });
+
+    expect(res.statusCode, res.body).toBe(400);
+    expect(JSON.parse(res.body).error.code).toBe("SERVICE_REQUEST_TYPE_UNKNOWN");
+  });
+
+  it("refuses the same on an update", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/delinquency-rules",
+      headers: headers(),
+      payload: ruleBody(),
+    });
+    const id = JSON.parse(created.body).id;
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/delinquency-rules/${id}`,
+      headers: headers(),
+      payload: { reconnectRequestTypeCode: "NO_SUCH_TYPE" },
+    });
+
+    expect(res.statusCode, res.body).toBe(400);
+    expect(JSON.parse(res.body).error.code).toBe("SERVICE_REQUEST_TYPE_UNKNOWN");
+  });
+
+  it("accepts a type the tenant does have, on create and on update", async () => {
+    await seedAsPlatform(async () =>
+      prismaImports.prisma.serviceRequestTypeDef.createMany({
+        data: [{ code: "SHUT_OFF", label: "Shut off for non-payment" }],
+        skipDuplicates: true,
+      }),
+    );
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/delinquency-rules",
+      headers: headers(),
+      payload: ruleBody({ serviceRequestTypeCode: "SHUT_OFF" }),
+    });
+    expect(created.statusCode, created.body).toBe(201);
+
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/delinquency-rules/${JSON.parse(created.body).id}`,
+      headers: headers(),
+      payload: { reconnectRequestTypeCode: "SHUT_OFF" },
+    });
+    expect(patched.statusCode, patched.body).toBe(200);
   });
 
   it("saves a tier that charges nothing, as every tier does today", async () => {

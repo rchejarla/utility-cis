@@ -71,8 +71,47 @@ interface Rung {
   tier: number;
   days: number;
   fee: string;
+  feeType?: "FLAT_FEE" | "PERCENT_OF_BALANCE";
   mode?: "ACCUMULATE" | "REPLACE_LOWER_TIERS";
   reasonCode?: string;
+}
+
+/**
+ * A real past-due debit on the account.
+ *
+ * Every case that sweeps twice needs one. Without it
+ * `recomputeAccountCache` sets `lastDueDate` from the only open entry
+ * there is — the fee just raised, due in 30 days — and the second
+ * sweep stops at `daysPastDue <= 0` without evaluating the account at
+ * all. Two cases in this file passed on that accident.
+ */
+async function principal(amount: string, dueDaysAgo = 40) {
+  const reason = await reasonId("OPENING_BALANCE");
+  return seedAsPlatform(async () =>
+    prismaImports.prisma.ledgerEntry.create({
+      data: {
+        utilityId: TENANT_A,
+        accountId: fix.accountId,
+        type: "ADJUSTMENT_DEBIT",
+        amount,
+        openAmount: amount,
+        effectiveDate: daysAgo(dueDaysAgo + 10),
+        dueDate: daysAgo(dueDaysAgo),
+        reasonId: reason,
+      },
+    }),
+  );
+}
+
+async function stillPastDue(): Promise<boolean> {
+  const account = await seedAsPlatform(async () =>
+    prismaImports.prisma.account.findUniqueOrThrow({
+      where: { id: fix.accountId },
+      select: { lastDueDate: true, balance: true },
+    }),
+  );
+  if (!account.lastDueDate || account.balance.lte(0)) return false;
+  return account.lastDueDate.getTime() < Date.now();
 }
 
 /** The tenant's ladder, one row per rung. */
@@ -91,7 +130,7 @@ async function ladder(rungs: Rung[]) {
           autoApply: true,
           isActive: true,
           effectiveDate: daysAgo(365),
-          feeType: "FLAT_FEE",
+          feeType: r.feeType ?? "FLAT_FEE",
           feeAmount: r.fee,
           feeReasonId: reason,
           feeMode: r.mode ?? "ACCUMULATE",
@@ -231,6 +270,7 @@ describe("REPLACE_LOWER_TIERS", () => {
   });
 
   it("replaces once, not on every sweep", async () => {
+    await principal("100.00");
     await ladder([
       { tier: 1, days: 15, fee: "10.00" },
       { tier: 2, days: 30, fee: "25.00", mode: "REPLACE_LOWER_TIERS" },
@@ -240,8 +280,43 @@ describe("REPLACE_LOWER_TIERS", () => {
     await evaluateAll(TENANT_A);
     await evaluateAll(TENANT_A);
 
+    expect(await stillPastDue()).toBe(true);
     expect(await countOf("FEE")).toBe(2);
     expect(await countOf("REVERSAL")).toBe(1);
+  });
+
+  /*
+   * Critical, and the reason replacement moved inside the `if (amount)`
+   * branch. A percentage tier whose base is nothing — the principal is
+   * paid and only the earlier penalty is left open — would otherwise
+   * reverse the fee below it and raise nothing in its place. That is
+   * forgiveness arriving as a side effect of a schedule, which is what
+   * the `delinquency_rule_replace_needs_fee` CHECK exists to forbid;
+   * the CHECK constrains the configuration and could not see this.
+   */
+  it("does not reverse the lower tier's fee when its own charge rounds to nothing", async () => {
+    await principal("100.00");
+    await ladder([{ tier: 1, days: 15, fee: "10.00" }]);
+    await pastDue({ balance: "100.00", days: 35 });
+    await evaluateAll(TENANT_A);
+
+    // The principal is settled; only tier 1's $10 penalty is open, and
+    // `penaltyBase` excludes penalties, so a percentage of it is zero.
+    await seedAsPlatform(async () =>
+      prismaImports.prisma.ledgerEntry.updateMany({
+        where: { utilityId: TENANT_A, type: "ADJUSTMENT_DEBIT" },
+        data: { openAmount: "0.00" },
+      }),
+    );
+    await ladder([
+      { tier: 2, days: 30, fee: "0.0150", feeType: "PERCENT_OF_BALANCE", mode: "REPLACE_LOWER_TIERS" },
+    ]);
+    await pastDue({ balance: "10.00", days: 35 });
+
+    await evaluateAll(TENANT_A);
+
+    expect(await openFeeTotal()).toBe("10");
+    expect(await countOf("REVERSAL")).toBe(0);
   });
 
   /*
@@ -251,24 +326,40 @@ describe("REPLACE_LOWER_TIERS", () => {
    * candidate whose fee is already reversed — and `reverseEntry` refuses
    * to reverse twice, so without a guard the whole tenant's sweep throws.
    */
-  it("does not try to reverse a fee it has already reversed", async () => {
-    await ladder([
-      { tier: 1, days: 15, fee: "10.00" },
-      { tier: 2, days: 30, fee: "25.00", mode: "REPLACE_LOWER_TIERS" },
-    ]);
-    await pastDue({ balance: "100.00", days: 35 });
+  /*
+   * `reverseEntry` refuses a second reversal with a 409, so a replacing
+   * tier that meets an already-reversed candidate would throw and take
+   * the rest of the tenant's sweep with it. Reachable without any race:
+   * an operator waives tier 1's fee at the counter, and tier 2 arrives
+   * afterwards for the first time.
+   */
+  it("skips a candidate fee somebody has already reversed", async () => {
+    await principal("100.00");
+    await ladder([{ tier: 1, days: 15, fee: "10.00" }]);
+    await pastDue({ balance: "100.00", days: 20 });
     await evaluateAll(TENANT_A);
 
-    // Only the upper tier is resolved; tier 1's action stays live.
-    await seedAsPlatform(async () =>
-      prismaImports.prisma.delinquencyAction.updateMany({
-        where: { utilityId: TENANT_A, tier: 2 },
-        data: { status: "RESOLVED", resolvedAt: new Date(), resolutionType: "PAID" },
+    const [tierOne] = await seedAsPlatform(async () =>
+      prismaImports.prisma.delinquencyAction.findMany({
+        where: { utilityId: TENANT_A },
+        select: { feeEntryId: true },
       }),
     );
+    await runAsTenant(TENANT_A, async () => {
+      const { reverseEntry } = await import("../../services/ar/reversal.service.js");
+      return reverseEntry(TENANT_A, ACTOR, "Tester", tierOne!.feeEntryId!, {
+        memo: "Waived at the counter",
+      });
+    });
+
+    await ladder([{ tier: 2, days: 30, fee: "25.00", mode: "REPLACE_LOWER_TIERS" }]);
+    await pastDue({ balance: "100.00", days: 35 });
 
     await expect(evaluateAll(TENANT_A)).resolves.toBeDefined();
+    // One reversal — the operator's. The sweep added none, and tier 2
+    // still charged.
     expect(await countOf("REVERSAL")).toBe(1);
+    expect(await openFeeTotal()).toBe("25");
   });
 
   /*

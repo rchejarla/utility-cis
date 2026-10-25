@@ -216,6 +216,88 @@ describe("dispatching the shut-off work order", () => {
     expect(await requests()).toHaveLength(0);
   });
 
+  /*
+   * The dispatch keys on the tier's `serviceRequestTypeCode`, while
+   * `evaluateAll`'s protected-account guard keys on `actionType`. A
+   * tier with a notice action type and a shut-off work order therefore
+   * reached a life-support account: the guard did not fire, the action
+   * was created, and the sweep raised a HIGH-priority disconnection
+   * against it. The sweep has to ask about the account itself.
+   */
+  it("never dispatches against a protected account", async () => {
+    await seedAsPlatform(async () =>
+      prismaImports.prisma.delinquencyRule.create({
+        data: {
+          utilityId: TENANT_A,
+          name: "Tier 3 — final notice",
+          tier: 3,
+          daysPastDue: 45,
+          minBalance: "1.00",
+          actionType: "NOTICE_SMS",
+          autoApply: true,
+          isActive: true,
+          effectiveDate: daysAgo(365),
+          serviceRequestTypeCode: "SHUT_OFF",
+        },
+      }),
+    );
+    await seedAsPlatform(async () =>
+      prismaImports.prisma.account.update({
+        where: { id: fixA.accountId },
+        data: { isProtected: true },
+      }),
+    );
+    await pastDue({ accountId: fixA.accountId, days: 50 });
+    await evaluateAll(TENANT_A);
+
+    const result = await sweepWorkOrders(TENANT_A);
+
+    expect(result.created).toBe(0);
+    expect(await requests()).toHaveLength(0);
+  });
+
+  /*
+   * `DELETE` on a rule only clears `isActive`, so without this an
+   * operator who removes a shut-off tier would watch it go on
+   * dispatching for the actions it had already raised.
+   */
+  it("stops dispatching for a tier that has been deactivated", async () => {
+    await shutOffRule({});
+    await pastDue({ accountId: fixA.accountId, days: 50 });
+    await evaluateAll(TENANT_A);
+    await seedAsPlatform(async () =>
+      prismaImports.prisma.delinquencyRule.updateMany({
+        where: { utilityId: TENANT_A },
+        data: { isActive: false },
+      }),
+    );
+
+    const result = await sweepWorkOrders(TENANT_A);
+
+    expect(result.created).toBe(0);
+    expect(await requests()).toHaveLength(0);
+  });
+
+  /*
+   * Actions accumulate, so a tenant turning the feature on must not
+   * back-dispatch months of them against balances since settled.
+   */
+  it("does not dispatch for an account that no longer owes anything", async () => {
+    await shutOffRule({});
+    await pastDue({ accountId: fixA.accountId, days: 50 });
+    await evaluateAll(TENANT_A);
+    await seedAsPlatform(async () =>
+      prismaImports.prisma.account.update({
+        where: { id: fixA.accountId },
+        data: { balance: "0.00", lastDueDate: null },
+      }),
+    );
+
+    const result = await sweepWorkOrders(TENANT_A);
+
+    expect(result.created).toBe(0);
+  });
+
   it("does not reach another tenant's actions", async () => {
     await shutOffRule({ utilityId: TENANT_B });
     await pastDue({ accountId: fixB.accountId, days: 50 });
@@ -440,6 +522,40 @@ describe("asking for the service back", () => {
     await sweepReconnections(TENANT_A);
 
     expect((await liveActions())[0]!.resolutionType).toBe("WRITE_OFF");
+  });
+
+  /*
+   * The episode has to close for every tier, not only the ones naming a
+   * reconnection type. Nothing else resolves an action — `resolveAccount`
+   * has one caller, a route — so a notice tier that charges a late fee
+   * would stay live forever and could never charge again. One late fee
+   * per account per lifetime was the consequence.
+   */
+  it("resolves a notice tier's action too, with no reconnection to ask for", async () => {
+    await seedAsPlatform(async () =>
+      prismaImports.prisma.delinquencyRule.create({
+        data: {
+          utilityId: TENANT_A,
+          name: "Tier 1 — reminder",
+          tier: 1,
+          daysPastDue: 15,
+          minBalance: "1.00",
+          actionType: "NOTICE_EMAIL",
+          autoApply: true,
+          isActive: true,
+          effectiveDate: daysAgo(365),
+        },
+      }),
+    );
+    await pastDue({ accountId: fixA.accountId, days: 50 });
+    await evaluateAll(TENANT_A);
+    await payInFull(fixA.accountId);
+
+    const result = await sweepReconnections(TENANT_A);
+
+    expect(result).toEqual({ created: 0, resolved: 1 });
+    expect(await requests()).toHaveLength(0);
+    expect((await liveActions())[0]!.status).toBe("RESOLVED");
   });
 
   it("does not reach another tenant's cleared accounts", async () => {

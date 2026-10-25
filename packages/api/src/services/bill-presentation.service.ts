@@ -468,11 +468,18 @@ export async function loadBillPresentation(
   });
 
   /*
-   * `BILL_CHARGE` is excluded outright rather than only for this bill.
-   * A bill charge *is* a bill, which the customer has already received,
-   * and its effective date is not required to equal the bill date — so
-   * excluding only this one could print the previous bill's charge here
-   * as though it were new.
+   * Anything carrying a `bill_id` is excluded, not just `BILL_CHARGE`.
+   * A bill's own entry *is* the bill, which the customer has already
+   * received, and its effective date is not required to equal the bill
+   * date — so excluding only this one could print the previous bill's
+   * charge here as though it were new. `postBill` writes a bill that
+   * nets negative as an `ADJUSTMENT_CREDIT` with its `bill_id` set, and
+   * filtering on the type alone let that one through.
+   *
+   * `DEPOSIT` is excluded for the reason `recomputeAccountCache`
+   * excludes it from the balance: a deposit is money the utility holds,
+   * not money the customer owes. Summed in here it told the customer
+   * they owed less than they do.
    *
    * Credits already itemised under `settlement` are excluded too, or a
    * payment would appear twice on the same page.
@@ -482,7 +489,8 @@ export async function loadBillPresentation(
     where: {
       utilityId,
       accountId: bill.accountId,
-      type: { not: "BILL_CHARGE" },
+      billId: null,
+      type: { notIn: ["BILL_CHARGE", "DEPOSIT"] },
       effectiveDate: {
         lte: bill.billDate,
         ...(previousBill ? { gt: previousBill.billDate } : {}),
