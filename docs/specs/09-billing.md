@@ -538,6 +538,16 @@ Gated on `settings`, not `accounts`: the text printed on bills is tenant configu
 
     **Not built:** previous balance and balance forward. The block covers this bill's own charge, not the account's position across bills, so a customer with older open charges sees nothing of them here. That belongs with the statement view in module 23 and with #131's City-defined bill formats.
 
+14. **Other activity on the account (shipped 2026-10-25):** a bill prints an **Other activity on your account** block itemising every ledger entry on the account that did not come from the rate engine — a late fee the delinquency ladder raised, an adjustment, the reversal a replacing tier writes — each with its effective date, the reason's own label, and a signed amount, then a total.
+
+    It exists because a fee produces no `BillSegmentLine`. Lines come entirely from rating and each carries a `source_schedule_id` and `source_component_id`, because a line *is* a rated charge; a fee has neither. Without this block the customer receives a bill for consumption, owes more than it says, and has nothing explaining the difference.
+
+    **Bounded on both sides.** The window opens after the previous bill's `bill_date` — the same account's most recent bill dated earlier, with `bill_number` breaking a tie so the window cannot depend on row order — and closes at this bill's own `bill_date`. The upper bound is the same rule the settlement block follows and for the same reason: a reprint of last March must not acquire a fee raised in April. A test asserts the `sha256` is unchanged after a later fee is raised. On a first bill the window opens at the account's beginning, because a fee raised before the first bill still has to be explained on it.
+
+    **What it excludes.** All `BILL_CHARGE` entries, not merely this bill's: a bill charge *is* a bill, which the customer already received, and its `effective_date` is not required to equal its `bill_date`, so excluding only this one could print the previous bill's charge as though it were new. And any credit already itemised under settlement, or a payment appears twice on the same page.
+
+    **Labels are the tenant's own.** `ledger_reason_def.label`, never a code and never a string from the template, so a utility that calls its late fee a "Late charge" sees that on the bill. The entry type is the fallback for entries citing no reason — a payment, or a ladder reversal.
+
 14. **Billing runs (shipped — slice 5c):** a run selects the accounts a cycle has due, bills each one in **its own transaction**, and records what happened per account.
 
     **Who is in the run:** a query — the account belongs to the cycle, its status bills (`ACTIVE` only; FINAL and CLOSED belong to Req 134), and it has a service agreement overlapping the window. An account that is simply not due is **not in the run at all**; an account that is due and cannot be billed is an item with a reason.

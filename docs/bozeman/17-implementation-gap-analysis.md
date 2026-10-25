@@ -199,8 +199,8 @@ District creation and management, multi-district parcels, activate/deactivate/su
 | 194 | Identify repeat service requests in a timeframe | `repeatRequest|isRepeat`: zero hits |
 | 195 | Dispute handling for request-related charges | no dispute entity |
 | 197 | Report on volumes, SLAs, billing outcomes | no reporting module |
-| 198 | Internal work orders for door hangers / shut-offs at delinquency | `delinquency.service.ts` creates no service requests; `DELINQUENCY_WORKFLOW` is an unused enum literal |
-| 199 | Internal work orders for turn-back-on after payment | same |
+| ~~198~~ | Internal work orders for door hangers / shut-offs at delinquency | **Closed 2026-10-25** — a tier names its `service_request_type_code` and `sweepDelinquencyWorkOrders` raises one per live action that has none (sp/11) |
+| ~~199~~ | Internal work orders for turn-back-on after payment | **Closed 2026-10-25** — `sweepReconnections`, on state rather than on a payment event, and only where the shut-off was actually carried out |
 | 200 | Generate charges or credits on request completion | `ServiceRequestBillingAction` is stored, never posted to the ledger |
 | 202 | Automated customer notifications for service requests | no notify call in `service-request.service.ts` |
 
@@ -223,7 +223,7 @@ Only the missing half is listed.
 Worth knowing before anyone reads the schema as a feature list:
 
 1. **`intervalReadRetentionDays`** (`tenant-settings.ts:52`, default 1095) — a retention policy for data the system never stores. Nothing reads this key.
-2. **`ServiceRequestSource.DELINQUENCY_WORKFLOW`** — an enum value with no producer. The delinquency service creates no service requests.
+2. ~~**`ServiceRequestSource.DELINQUENCY_WORKFLOW`** — an enum value with no producer.~~ **Closed 2026-10-25.** Both delinquency sweeps now create service requests with this source, and `ServiceRequest.delinquencyActionId` — stored but never written since the module shipped — is the link. Provenance reaches `createServiceRequest` through a parameter closed to the HTTP schema, so a CSR cannot claim their request came from the workflow.
 3. **`ServiceRequestExternalSystem`** and **`ServiceRequestBillingAction`** — both stored on the row, neither acted on.
 4. **`ServiceEventBillingAction`** — the service's own doc comment says the hand-off to post charges is "Phase 3".
 5. **The rebill error message** — tells operators to "use the rebill workflow instead" of deleting a billed read. There is no rebill workflow.

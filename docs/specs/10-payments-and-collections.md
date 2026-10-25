@@ -99,24 +99,26 @@ Records the formal decision to write off an uncollectable balance. Requires supe
 
 ---
 
-### PenaltyRule (planned)
+### PenaltyRule — withdrawn 2026-10-25, built on `DelinquencyRule` instead
 
-Tenant-configurable late fee rules applied automatically when payments are overdue.
+This entity was planned here with `rule_name`, `account_type`,
+`days_past_due`, `min_balance`, `is_active` and `effective_date`. Every
+one of those is a column `DelinquencyRule` already has, and the
+escalation an operator actually wants — $10 at 15 days, 1.5% at 30,
+shut-off at 45 — is the tier ladder that already exists and is already
+kept distinct by `@@unique([utility_id, account_type, tier])`. A
+separate entity would have meant one row per rung anyway, two ladders to
+maintain, and nothing keeping the two sets of thresholds in step.
 
-| Field | Type | Notes |
-|-------|------|-------|
-| id | UUID | PK |
-| utility_id | UUID | Tenant scope |
-| rule_name | VARCHAR(255) | |
-| account_type | ENUM | Nullable: applies to all types if null |
-| days_past_due | INTEGER | Days after due date before fee applies |
-| fee_type | ENUM | FLAT_FEE, PERCENT_OF_BALANCE |
-| fee_amount | DECIMAL(10,4) | Dollar amount or percentage (e.g., 0.015 = 1.5%) |
-| max_fee | DECIMAL(10,2) | Nullable: cap on percentage-based fees |
-| min_balance | DECIMAL(10,2) | Minimum balance required before fee applies |
-| is_active | BOOLEAN | |
-| effective_date | DATE | |
-| created_at | TIMESTAMPTZ | |
+So the fee went onto the tier. `fee_type`, `fee_amount`, `max_fee`,
+`fee_reason_id` and `fee_mode` are columns on `delinquency_rule` — see
+`docs/specs/11-delinquency.md`, which also records why the reason is
+configuration rather than something the sweep could know.
+
+**What would bring it back:** late fees on a cadence unrelated to
+notices. The two share a schedule today because the tier that charges is
+the tier that writes, and nothing has asked for a fee that fires where
+no notice does.
 
 ---
 
@@ -187,7 +189,7 @@ All endpoints are planned for Phase 3.
 
 5. **Partial payments:** Allowed by default. Partial payment does not prevent continued late fee accrual on the remaining balance. Account status transitions to SUSPENDED only per delinquency rules (Module 11), not on partial payment alone.
 
-6. **Late fee / penalty application:** A nightly automated job evaluates all overdue accounts against active PenaltyRule definitions. If an account's balance has been past due for `days_past_due` days and meets the `min_balance` threshold, an AdhocCharge of type FEE is created automatically and submitted to SaaSLogic (Bozeman Req 145).
+6. **Late fee / penalty application (built 2026-10-25):** the delinquency sweep raises it, not a job of its own. A tier that configures `fee_type` and `fee_amount` charges through `assessFee` inside the same transaction that writes its `DelinquencyAction`, citing the reason the tier names. It is a `FEE` ledger entry on our own ledger — not an AdhocCharge, and not submitted to SaaSLogic, because CIS is the system of record for what is owed and SaaSLogic is told an amount. A percentage tier charges principal, excluding entries whose reason is itself a penalty. Bozeman Req 145; `docs/specs/11-delinquency.md` has the rules and the reasoning.
 
 7. **Payment plan creation prerequisites:** A payment plan can only be created on an account with a positive balance. The total_balance at creation is the current balance at time of plan negotiation. Current-period bills accrue normally outside the plan unless the plan explicitly covers them.
 
@@ -258,7 +260,6 @@ All pages are planned for Phase 3.
 - **Phase 3 (Planned):**
   - PaymentPlan entity + API + UI
   - AdhocCharge entity + API + UI (individual and bulk)
-  - PenaltyRule entity + automated late fee job
   - WriteOff entity + approval workflow
   - SaaSLogic payment event webhooks
   - Payment allocation rule configuration
@@ -274,7 +275,7 @@ All pages are planned for Phase 3.
 | 20 | Deposit refund on close | Phase 2: deposit refund workflow |
 | 21 | Apply deposit to unpaid charges | Phase 3: deposit application on final bill |
 | 143–144 | Ad hoc fees (individual, all, subset) | Phase 3: AdhocCharge entity + bulk endpoint |
-| 145 | Auto late fees/penalties | Phase 3: PenaltyRule entity + nightly job |
+| 145 | Auto late fees/penalties | **Built 2026-10-25** — on `DelinquencyRule`, raised by the delinquency sweep (sp/11) |
 | 146 | Write-off workflow | Phase 3: WriteOff entity + approval workflow |
 | 147–148 | Payment plans | Phase 3: PaymentPlan entity |
 | 149–150 | Aging dashboard (real-time) | Phase 3: AR aging from SaaSLogic data |

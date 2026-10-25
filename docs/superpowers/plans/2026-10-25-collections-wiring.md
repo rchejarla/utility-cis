@@ -2,6 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status: executed 2026-10-25**, natively, task by task. Every box below is
+ticked. The rulings taken during execution — nineteen of them, including
+three that changed what a task built — are in the commit messages and were
+reported at handoff; the specs named in Task 9 carry the decisions.
+
 **Goal:** Make the delinquency ladder charge what it is owed, dispatch the field work it implies, and show the customer the charge on their next bill.
 
 **Architecture:** Delinquency already decides correctly — it reads `Account.balance` and `Account.lastDueDate`, which `recomputeAccountCache` maintains from `ledger_entry`, and `applicableRules` already selects *every* tier an account has passed, so escalation at 15/30/45 days is existing behaviour. What it writes is a `DelinquencyAction` and a notification and nothing financial: grep `ledgerEntry` in `delinquency.service.ts` returns 0. This plan connects that decision to the ledger, to the service request module, and to the bill. The fee commits inside the action's transaction because a duplicate fee is a wrong bill; the work orders are state-driven sweeps because a late work order costs nothing.
@@ -47,7 +52,7 @@ Independent of fees and worth shipping alone: both defects are live today, and a
 
 `effectiveDate` gates against `lastDueDate`, not against today: the question is whether the rule was in force when the debt became due.
 
-- [ ] **Step 1: Write the failing test** — `delinquency-guards.integration.test.ts`:
+- [x] **Step 1: Write the failing test** — `delinquency-guards.integration.test.ts`:
 
 ```ts
 it("creates one action per rule however many times it is evaluated", async () => {
@@ -103,12 +108,12 @@ it("still charges every tier the account has passed", async () => {
 });
 ```
 
-- [ ] **Step 2: Run it** — `pnpm --filter @utility-cis/api exec vitest run --config vitest.integration.config.ts src/__tests__/integration/delinquency-guards.integration.test.ts`. Expected: FAIL — the direct-insert case with no unique violation, and both `effectiveDate` cases.
-- [ ] **Step 3: Write the migration** — the partial unique index above, nothing else.
-- [ ] **Step 4: Add the `effectiveDate` predicate** to `applicableRules`, and catch Prisma `P2002` on the new index around the action insert, treating it as "another worker got there first" — skip the account, do not fail the sweep.
-- [ ] **Step 5: Run it** — Expected: PASS, 6/6.
-- [ ] **Step 6: Run `worker-delinquency` and `delinquency-aging`** — Expected: pass. These exercise the matching filter, so a wrong predicate shows up here.
-- [ ] **Step 7: Commit** — `fix(delinquency): one action per tier, and no tier reaches backwards`
+- [x] **Step 2: Run it** — `pnpm --filter @utility-cis/api exec vitest run --config vitest.integration.config.ts src/__tests__/integration/delinquency-guards.integration.test.ts`. Expected: FAIL — the direct-insert case with no unique violation, and both `effectiveDate` cases.
+- [x] **Step 3: Write the migration** — the partial unique index above, nothing else.
+- [x] **Step 4: Add the `effectiveDate` predicate** to `applicableRules`, and catch Prisma `P2002` on the new index around the action insert, treating it as "another worker got there first" — skip the account, do not fail the sweep.
+- [x] **Step 5: Run it** — Expected: PASS, 6/6.
+- [x] **Step 6: Run `worker-delinquency` and `delinquency-aging`** — Expected: pass. These exercise the matching filter, so a wrong predicate shows up here.
+- [x] **Step 7: Commit** — `fix(delinquency): one action per tier, and no tier reaches backwards`
 
 ---
 
@@ -126,12 +131,12 @@ it("still charges every tier the account has passed", async () => {
 
 **The decision.** Task 4 needs to know which outstanding money is *principal*. It cannot ask the entry's `type` — all five seeded fee reasons are `FEE` — and it must not ask the code, because reasons are tenant-configurable and a tenant's own "Late charge" would be missed. So the nature of the reason becomes a property of the reason, set by whoever defines it. Default `false`, so existing custom reasons keep counting as principal until someone says otherwise: that direction over-charges nobody.
 
-- [ ] **Step 1: Write the failing test** — `seedDefaultReasons` marks `LATE_FEE` and `NSF_FEE` as penalties and `TAP_FEE`, `METER_TEST_FEE`, `RECONNECT_FEE` as not; a tenant-created reason defaults to `false` and can be set `true` through the API; and **a re-run against a tenant that already has the rows sets the flag**.
-- [ ] **Step 2: Run it** — Expected: FAIL, `isPenalty` not a known field.
-- [ ] **Step 3: Add the column and migration**, then the flag in `DEFAULT_REASON_CODES` and the create/update schemas. The seeder currently skips codes it already has (`if (existing.has(def.code)) continue;`) — that line must update the flag instead of skipping, or it never lands on an existing tenant, which is every tenant.
-- [ ] **Step 4: Run it** — Expected: PASS.
-- [ ] **Step 5: Run `ledger-reason`, `provisioning`, `dev-seed`** — Expected: pass. `provisioning` seeds reasons for a new tenant, `dev-seed` runs the whole seed.
-- [ ] **Step 6: Commit** — `feat(ar): a reason says whether it is a penalty`
+- [x] **Step 1: Write the failing test** — `seedDefaultReasons` marks `LATE_FEE` and `NSF_FEE` as penalties and `TAP_FEE`, `METER_TEST_FEE`, `RECONNECT_FEE` as not; a tenant-created reason defaults to `false` and can be set `true` through the API; and **a re-run against a tenant that already has the rows sets the flag**.
+- [x] **Step 2: Run it** — Expected: FAIL, `isPenalty` not a known field.
+- [x] **Step 3: Add the column and migration**, then the flag in `DEFAULT_REASON_CODES` and the create/update schemas. The seeder currently skips codes it already has (`if (existing.has(def.code)) continue;`) — that line must update the flag instead of skipping, or it never lands on an existing tenant, which is every tenant.
+- [x] **Step 4: Run it** — Expected: PASS.
+- [x] **Step 5: Run `ledger-reason`, `provisioning`, `dev-seed`** — Expected: pass. `provisioning` seeds reasons for a new tenant, `dev-seed` runs the whole seed.
+- [x] **Step 6: Commit** — `feat(ar): a reason says whether it is a penalty`
 
 ---
 
@@ -160,7 +165,7 @@ it("still charges every tier the account has passed", async () => {
 
 *Who the actor is.* `assessFee` requires an `actorId` and writes it to the audit row; delinquency records `triggeredBy: "AUTOMATED"` with a null `triggeredByUserId`. Seed a reserved `cis_user` per tenant rather than widening `assessFee`: `audit_log.source` already distinguishes `scheduler:*` from `user:*`, and a real row keeps every existing join from `audit_log.actor_id` working.
 
-- [ ] **Step 1: Write the failing test** — `delinquency-fee.integration.test.ts`:
+- [x] **Step 1: Write the failing test** — `delinquency-fee.integration.test.ts`:
 
 ```ts
 it("raises the flat fee the tier configures, citing the tier's reason", async () => {
@@ -239,14 +244,14 @@ it("writes neither the action nor the fee if the reason stopped being usable", a
 });
 ```
 
-- [ ] **Step 2: Run it** — Expected: FAIL, `feeType` not a known field.
-- [ ] **Step 3: Write the schema and migration.** `DelinquencyFeeType` enum; the four rule columns with a composite FK for `feeReasonId`; `DelinquencyAction.feeEntryId` with a composite FK to `ledger_entry` and `ON DELETE SET NULL (fee_entry_id)` — the column-list form, because the unqualified one nulls `utility_id` too. CHECKs: `feeType IS NULL` ⇔ `feeAmount IS NULL` ⇔ `feeReasonId IS NULL` (an amount with no reason is a charge nobody can explain; a reason with no amount is dead configuration), `feeAmount > 0`, and `maxFee IS NULL OR feeType = 'PERCENT_OF_BALANCE'` (a cap on a flat fee is meaningless).
-- [ ] **Step 4: Validate the reason at save time** in the rule routes — `appliesToType = 'FEE'` and `isActive`, 400 with code `REASON_NOT_A_FEE`.
-- [ ] **Step 5: Seed the system actor** in `provisionTenant`, exported as `SYSTEM_ACTOR_ID`.
-- [ ] **Step 6: Raise the fee in the action's transaction.** Wrap the per-account-per-rule branch in `prisma.$transaction`; create the action with `tx`; when `rule.feeType` is set call `assessFee(..., tx)` with `rule.feeReasonId` and set `feeEntryId` from its result. The **notification stays outside and after** the transaction: an external dispatch inside one holds a database lock across someone else's network call, and a notice that fails to send leaves `status` PENDING, which is what that column is for.
-- [ ] **Step 7: Run it** — Expected: PASS, 7/7.
-- [ ] **Step 8: Run `worker-delinquency`, `ledger-fee`, `provisioning`, `schema-invariants`** — Expected: pass. `schema-invariants` checks the new FKs are composite.
-- [ ] **Step 9: Commit** — `feat(delinquency): a tier charges a flat fee, once, citing its own reason`
+- [x] **Step 2: Run it** — Expected: FAIL, `feeType` not a known field.
+- [x] **Step 3: Write the schema and migration.** `DelinquencyFeeType` enum; the four rule columns with a composite FK for `feeReasonId`; `DelinquencyAction.feeEntryId` with a composite FK to `ledger_entry` and `ON DELETE SET NULL (fee_entry_id)` — the column-list form, because the unqualified one nulls `utility_id` too. CHECKs: `feeType IS NULL` ⇔ `feeAmount IS NULL` ⇔ `feeReasonId IS NULL` (an amount with no reason is a charge nobody can explain; a reason with no amount is dead configuration), `feeAmount > 0`, and `maxFee IS NULL OR feeType = 'PERCENT_OF_BALANCE'` (a cap on a flat fee is meaningless).
+- [x] **Step 4: Validate the reason at save time** in the rule routes — `appliesToType = 'FEE'` and `isActive`, 400 with code `REASON_NOT_A_FEE`.
+- [x] **Step 5: Seed the system actor** in `provisionTenant`, exported as `SYSTEM_ACTOR_ID`.
+- [x] **Step 6: Raise the fee in the action's transaction.** Wrap the per-account-per-rule branch in `prisma.$transaction`; create the action with `tx`; when `rule.feeType` is set call `assessFee(..., tx)` with `rule.feeReasonId` and set `feeEntryId` from its result. The **notification stays outside and after** the transaction: an external dispatch inside one holds a database lock across someone else's network call, and a notice that fails to send leaves `status` PENDING, which is what that column is for.
+- [x] **Step 7: Run it** — Expected: PASS, 7/7.
+- [x] **Step 8: Run `worker-delinquency`, `ledger-fee`, `provisioning`, `schema-invariants`** — Expected: pass. `schema-invariants` checks the new FKs are composite.
+- [x] **Step 9: Commit** — `feat(delinquency): a tier charges a flat fee, once, citing its own reason`
 
 ---
 
@@ -262,7 +267,7 @@ it("writes neither the action nor the fee if the reason stopped being usable", a
 
 **The decision.** The base excludes entries whose `reason.isPenalty` is true and nothing else. Excluding every `FEE` would stop a late fee applying to an unpaid tap fee — real money for real work — and including penalties charges 1.5% on tier 1's own fee. `isPenalty` is the only thing that distinguishes them, and it cannot be a code list.
 
-- [ ] **Step 1: Write the failing test**:
+- [x] **Step 1: Write the failing test**:
 
 ```ts
 it("charges the rate against the balance", async () => {
@@ -308,12 +313,12 @@ it("raises nothing when the computed fee rounds to zero", async () => {
 });
 ```
 
-- [ ] **Step 2: Run it** — Expected: FAIL on the percentage branch.
-- [ ] **Step 3: Implement `penaltyBase`** — one aggregate over `ledger_entry` left-joined to `ledger_reason_def`, summing `open_amount` where the reason is null or `is_penalty` is false, excluding `DEPOSIT` the way `recomputeAccountCache` does.
-- [ ] **Step 4: Compute the fee** — `FLAT_FEE` takes `feeAmount` as-is; `PERCENT_OF_BALANCE` is `penaltyBase × feeAmount` rounded to 2dp half-up, then `min(maxFee)` if set. A computed zero raises nothing and still creates the action: the tier happened, there was just nothing to charge.
-- [ ] **Step 5: Run it** — Expected: PASS, 12/12 for the file.
-- [ ] **Step 6: Run `ledger-fee`, `ledger-posting`, `delinquency-aging`** — Expected: pass.
-- [ ] **Step 7: Commit** — `feat(delinquency): a percentage tier charges principal, not its own penalties`
+- [x] **Step 2: Run it** — Expected: FAIL on the percentage branch.
+- [x] **Step 3: Implement `penaltyBase`** — one aggregate over `ledger_entry` left-joined to `ledger_reason_def`, summing `open_amount` where the reason is null or `is_penalty` is false, excluding `DEPOSIT` the way `recomputeAccountCache` does.
+- [x] **Step 4: Compute the fee** — `FLAT_FEE` takes `feeAmount` as-is; `PERCENT_OF_BALANCE` is `penaltyBase × feeAmount` rounded to 2dp half-up, then `min(maxFee)` if set. A computed zero raises nothing and still creates the action: the tier happened, there was just nothing to charge.
+- [x] **Step 5: Run it** — Expected: PASS, 12/12 for the file.
+- [x] **Step 6: Run `ledger-fee`, `ledger-posting`, `delinquency-aging`** — Expected: pass.
+- [x] **Step 7: Commit** — `feat(delinquency): a percentage tier charges principal, not its own penalties`
 
 ---
 
@@ -335,7 +340,7 @@ Reversal rather than deletion, so the statement reads $10 fee → $10 reversal �
 
 **A consequence to document, not hide:** if the reversed fee was already paid, the reversal returns that payment to open credit, which re-allocates against the new fee. Net owing is right; the statement shows a reversal and a re-allocation rather than one charge. A replacement smaller than what was already paid leaves the account in credit and possibly refundable.
 
-- [ ] **Step 1: Write the failing test**:
+- [x] **Step 1: Write the failing test**:
 
 ```ts
 it("reverses the lower tier's fee and raises its own", async () => {
@@ -395,12 +400,12 @@ it("returns a paid lower-tier fee to credit when it reverses it", async () => {
 });
 ```
 
-- [ ] **Step 2: Run it** — Expected: FAIL, `feeMode` not a known field.
-- [ ] **Step 3: Add `feeMode` and its migration.**
-- [ ] **Step 4: Implement the replacement** inside the same transaction as the action and the new fee: select live actions for this account whose rule has a lower `tier` and the same `accountType` and whose `feeEntryId` is not null; `reverseEntry(..., tx)` each, with a memo naming the tier that replaced it; then raise this tier's fee.
-- [ ] **Step 5: Run it** — Expected: PASS, 6/6.
-- [ ] **Step 6: Run `ledger-reversal`, `ledger-allocation`, `ledger-payment`, `refund`** — Expected: pass. The paid-fee case touches allocation and reversal together, which is where this goes wrong quietly.
-- [ ] **Step 7: Commit** — `feat(delinquency): a tier can replace what the ladder charged below it`
+- [x] **Step 2: Run it** — Expected: FAIL, `feeMode` not a known field.
+- [x] **Step 3: Add `feeMode` and its migration.**
+- [x] **Step 4: Implement the replacement** inside the same transaction as the action and the new fee: select live actions for this account whose rule has a lower `tier` and the same `accountType` and whose `feeEntryId` is not null; `reverseEntry(..., tx)` each, with a memo naming the tier that replaced it; then raise this tier's fee.
+- [x] **Step 5: Run it** — Expected: PASS, 6/6.
+- [x] **Step 6: Run `ledger-reversal`, `ledger-allocation`, `ledger-payment`, `refund`** — Expected: pass. The paid-fee case touches allocation and reversal together, which is where this goes wrong quietly.
+- [x] **Step 7: Commit** — `feat(delinquency): a tier can replace what the ladder charged below it`
 
 ---
 
@@ -423,15 +428,15 @@ it("returns a paid lower-tier fee to credit when it reverses it", async () => {
 
 Keyed on state — "which live shut-off actions have no service request?" — so it is idempotent by construction and recovers from the service request module being down.
 
-- [ ] **Step 1: Write the failing test** — one work order per shut-off action; nothing on a second pass; **nothing recreated after an operator cancels it** (the query asks whether one was *ever* created, not whether one is open); nothing for a tier configuring no type; nothing for another tenant's actions.
-- [ ] **Step 2: Run it** — Expected: FAIL, not defined.
-- [ ] **Step 3: Widen `createServiceRequestSchema`** with `delinquencyActionId: z.string().uuid().optional().nullable()` and pass it through. `ServiceRequest.delinquencyActionId` and the `DelinquencyAction.serviceRequests` back-relation already exist and have gone unused since the module shipped.
-- [ ] **Step 4: Add `serviceRequestTypeCode`** to `DelinquencyRule`, validated at rule-save time by `assertServiceRequestTypeCode` rather than by a foreign key — the type defs allow global rows with a null `utility_id`, which a composite key cannot reference.
-- [ ] **Step 5: Implement the sweep**, priority from the rule's tier, a failure on one action logged and skipped rather than thrown — one unroutable account must not stop the rest.
-- [ ] **Step 6: Run it** — Expected: PASS, 5/5.
-- [ ] **Step 7: Call it from the worker** after `evaluateAll`, inside the same `scopedJob` scope.
-- [ ] **Step 8: Run `worker-delinquency`, `service-request-lifecycle`, `service-request-reads`** — Expected: pass.
-- [ ] **Step 9: Commit** — `feat(delinquency): a shut-off tier dispatches the field work`
+- [x] **Step 1: Write the failing test** — one work order per shut-off action; nothing on a second pass; **nothing recreated after an operator cancels it** (the query asks whether one was *ever* created, not whether one is open); nothing for a tier configuring no type; nothing for another tenant's actions.
+- [x] **Step 2: Run it** — Expected: FAIL, not defined.
+- [x] **Step 3: Widen `createServiceRequestSchema`** with `delinquencyActionId: z.string().uuid().optional().nullable()` and pass it through. `ServiceRequest.delinquencyActionId` and the `DelinquencyAction.serviceRequests` back-relation already exist and have gone unused since the module shipped.
+- [x] **Step 4: Add `serviceRequestTypeCode`** to `DelinquencyRule`, validated at rule-save time by `assertServiceRequestTypeCode` rather than by a foreign key — the type defs allow global rows with a null `utility_id`, which a composite key cannot reference.
+- [x] **Step 5: Implement the sweep**, priority from the rule's tier, a failure on one action logged and skipped rather than thrown — one unroutable account must not stop the rest.
+- [x] **Step 6: Run it** — Expected: PASS, 5/5.
+- [x] **Step 7: Call it from the worker** after `evaluateAll`, inside the same `scopedJob` scope.
+- [x] **Step 8: Run `worker-delinquency`, `service-request-lifecycle`, `service-request-reads`** — Expected: pass.
+- [x] **Step 9: Commit** — `feat(delinquency): a shut-off tier dispatches the field work`
 
 ---
 
@@ -449,13 +454,13 @@ Keyed on state — "which live shut-off actions have no service request?" — so
 
 **Order in the worker matters:** reconnections run **before** work orders, so an account that paid is resolved before anything dispatches against it.
 
-- [ ] **Step 1: Write the failing test** — a reconnection request and the action `RESOLVED` with `resolutionType: "PAID"` when the balance clears; nothing for an account still owing; and **no disconnect dispatched for an account that cleared in the same hour**, asserting the only request raised is the `RECONNECT`.
-- [ ] **Step 2: Run it** — Expected: FAIL, not defined.
-- [ ] **Step 3: Implement it** — live shut-off actions whose account balance is `<= 0`; per account, in one transaction, create the `RECONNECT` request and set the action `RESOLVED` / `resolutionType: "PAID"` / `resolvedAt`, so an action never reads resolved without its request existing.
-- [ ] **Step 4: Run it** — Expected: PASS, 8/8 for the file.
-- [ ] **Step 5: Call it from the worker** before `sweepDelinquencyWorkOrders`.
-- [ ] **Step 6: Run `worker-delinquency`, `ledger-payment`, `delinquency-aging`** — Expected: pass.
-- [ ] **Step 7: Commit** — `feat(delinquency): a paid account asks to be turned back on`
+- [x] **Step 1: Write the failing test** — a reconnection request and the action `RESOLVED` with `resolutionType: "PAID"` when the balance clears; nothing for an account still owing; and **no disconnect dispatched for an account that cleared in the same hour**, asserting the only request raised is the `RECONNECT`.
+- [x] **Step 2: Run it** — Expected: FAIL, not defined.
+- [x] **Step 3: Implement it** — live shut-off actions whose account balance is `<= 0`; per account, in one transaction, create the `RECONNECT` request and set the action `RESOLVED` / `resolutionType: "PAID"` / `resolvedAt`, so an action never reads resolved without its request existing.
+- [x] **Step 4: Run it** — Expected: PASS, 8/8 for the file.
+- [x] **Step 5: Call it from the worker** before `sweepDelinquencyWorkOrders`.
+- [x] **Step 6: Run `worker-delinquency`, `ledger-payment`, `delinquency-aging`** — Expected: pass.
+- [x] **Step 7: Commit** — `feat(delinquency): a paid account asks to be turned back on`
 
 ---
 
@@ -477,13 +482,13 @@ There is no previous-bill notion in the service today, so this task establishes 
 
 Labels come from the reason's `label` — the tenant's own wording, never a code and never a hardcoded string.
 
-- [ ] **Step 1: Write the failing test** — a fee raised between two bills appears on the later one with the reason's label and amount; it does **not** appear on the earlier one; a reprint after a *later* fee is byte-identical to the first render; a first bill with no predecessor renders without an activity block.
-- [ ] **Step 2: Run it** — Expected: FAIL, no activity on the presentation.
-- [ ] **Step 3: Implement the previous-bill lookup and the activity query**, bounded both sides.
-- [ ] **Step 4: Render it** in the template, between the charges and the totals box.
-- [ ] **Step 5: Run it** — Expected: PASS.
-- [ ] **Step 6: Run `bill-document`, `bill-list`, `billing-run`, `e2e-rating`** — Expected: pass. `bill-document` is where byte-stability is pinned.
-- [ ] **Step 7: Commit** — `feat(bills): a bill shows the account activity behind its balance`
+- [x] **Step 1: Write the failing test** — a fee raised between two bills appears on the later one with the reason's label and amount; it does **not** appear on the earlier one; a reprint after a *later* fee is byte-identical to the first render; a first bill with no predecessor renders without an activity block.
+- [x] **Step 2: Run it** — Expected: FAIL, no activity on the presentation.
+- [x] **Step 3: Implement the previous-bill lookup and the activity query**, bounded both sides.
+- [x] **Step 4: Render it** in the template, between the charges and the totals box.
+- [x] **Step 5: Run it** — Expected: PASS.
+- [x] **Step 6: Run `bill-document`, `bill-list`, `billing-run`, `e2e-rating`** — Expected: pass. `bill-document` is where byte-stability is pinned.
+- [x] **Step 7: Commit** — `feat(bills): a bill shows the account activity behind its balance`
 
 ---
 
@@ -493,11 +498,11 @@ Labels come from the reason's `label` — the tenant's own wording, never a code
 - Modify: `docs/specs/11-delinquency.md`, `docs/specs/10-payments-and-collections.md`, `docs/specs/23-accounts-receivable.md`, `docs/specs/09-billing.md`
 - Modify: `docs/bozeman/17-implementation-gap-analysis.md`
 
-- [ ] **Step 1: Remove `PenaltyRule` from spec 10** and say why: its four identifying fields are `DelinquencyRule`'s, and the escalation an operator wants is the tier ladder that already exists. Record what would bring it back — fees on a cadence unrelated to notices.
-- [ ] **Step 2: Record the decisions** in spec 11: the fee inside the action's transaction (against two statements), the partial unique index (against the in-memory `Set`), `effectiveDate` gating (and that ignoring it was a live bug), the reason as tier configuration validated at save time (against any code the service could have known), the work orders as sweeps (against threading a transaction through the request counter), and replacement by `feeEntryId` (against reason codes, which are tenant-configurable).
-- [ ] **Step 3: Note in spec 23** that `FEE` entries have a second writer and that `isPenalty` exists for the percentage base; and in spec 09 that a bill presents account activity bounded at its own `billDate`.
-- [ ] **Step 4: Correct the gap doc** — #145, #198, #199 out of absent, with the date, the way architecture §7.1 records the RLS work.
-- [ ] **Step 5: Commit** — `docs: delinquency charges, dispatches, and shows up on the bill`
+- [x] **Step 1: Remove `PenaltyRule` from spec 10** and say why: its four identifying fields are `DelinquencyRule`'s, and the escalation an operator wants is the tier ladder that already exists. Record what would bring it back — fees on a cadence unrelated to notices.
+- [x] **Step 2: Record the decisions** in spec 11: the fee inside the action's transaction (against two statements), the partial unique index (against the in-memory `Set`), `effectiveDate` gating (and that ignoring it was a live bug), the reason as tier configuration validated at save time (against any code the service could have known), the work orders as sweeps (against threading a transaction through the request counter), and replacement by `feeEntryId` (against reason codes, which are tenant-configurable).
+- [x] **Step 3: Note in spec 23** that `FEE` entries have a second writer and that `isPenalty` exists for the percentage base; and in spec 09 that a bill presents account activity bounded at its own `billDate`.
+- [x] **Step 4: Correct the gap doc** — #145, #198, #199 out of absent, with the date, the way architecture §7.1 records the RLS work.
+- [x] **Step 5: Commit** — `docs: delinquency charges, dispatches, and shows up on the bill`
 
 ---
 

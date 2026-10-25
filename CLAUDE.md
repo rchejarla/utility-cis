@@ -172,7 +172,12 @@ referential-integrity check is not a row read. Prisma cannot express 17
 of them (it requires every referencing field of a `SetNull` relation to
 be optional, and `utility_id` is not), so all 64 stay in SQL and
 `schema-invariants.integration.test.ts` fails if any regresses to a
-single column. `migrate dev` compares the database against the model, finds
+single column. The 2026-10-25 collections work added two more
+(`delinquency_rule.fee_reason_id`, `delinquency_action.fee_entry_id`),
+declared as bare scalar columns in `schema.prisma` with the key itself
+in the migration, plus a **partial unique index**
+(`delinquency_action_one_live_per_rule`) that Prisma cannot express
+either. `migrate dev` compares the database against the model, finds
 all of it undescribed, and generates a migration *reverting* it. It
 reads as a routine drift fix and would silently drop the ledger's
 invariants and full-text search. Use `migrate deploy`; write schema
