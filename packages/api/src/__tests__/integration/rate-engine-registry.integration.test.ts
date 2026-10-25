@@ -14,6 +14,7 @@ const REPO_ROOT = path.resolve(__dirname, "../../../../..");
 
 let booted: BootedContainer;
 let prisma: PrismaClient;
+let ownPool: pg.Pool;
 
 beforeAll(async () => {
   booted = await bootPostgres();
@@ -26,15 +27,20 @@ beforeAll(async () => {
     env: { ...process.env, DATABASE_URL: booted.dbUrl },
     stdio: "pipe",
   });
-      // Prisma 7 removed `datasources`; a client is created over a driver
-      // adapter instead, which is also how `lib/prisma.ts` builds the
-      // real one. The pool is this test's to close, hence `$disconnect`
-      // in afterAll below.
-  prisma = new PrismaClient({ adapter: new PrismaPg(new pg.Pool({ connectionString: booted.dbUrl })) });
+  // Prisma 7 removed `datasources`; a client is created over a driver
+  // adapter instead, which is also how `lib/prisma.ts` builds the real
+  // one. The pool is held rather than built inline because
+  // `$disconnect` does not dispose a pool the caller owns — that is the
+  // driver-adapter contract — and the container stopping on a live
+  // connection is a 57P01 after an otherwise green run, which fails the
+  // whole vitest process. CI shard 3 failed that way on 180/180 passing.
+  ownPool = new pg.Pool({ connectionString: booted.dbUrl });
+  prisma = new PrismaClient({ adapter: new PrismaPg(ownPool) });
 }, 600_000);
 
 afterAll(async () => {
   await prisma?.$disconnect().catch(() => {});
+  await ownPool?.end().catch(() => {});
   await booted?.container.stop().catch(() => {});
 });
 

@@ -458,14 +458,27 @@ describe("worker-suspension integration", () => {
       // resolves when the job succeeds or rejects when it fails — the
       // canonical way to assert end-to-end pipeline behavior.
       const queueEvents = (await import("bullmq")).QueueEvents;
+      /*
+       * The duplicate is held so it can be quit. BullMQ closes only the
+       * connections it created itself, so a connection passed in
+       * survives `events.close()` — and when this file stops its Redis
+       * container, ioredis keeps retrying a socket that is gone and
+       * emits "Unhandled error event: AggregateError". vitest fails a
+       * run that has an unhandled error in it, so that leak failed CI
+       * shard 3 on 180 passing tests.
+       */
+      const eventsConnection = (
+        await import("../../lib/queue-redis.js")
+      ).queueRedisConnection.duplicate();
       const events = new queueEvents(QUEUE_NAMES.suspensionTransitions, {
-        connection: (await import("../../lib/queue-redis.js")).queueRedisConnection.duplicate(),
+        connection: eventsConnection,
       });
       await events.waitUntilReady();
       try {
         await job.waitUntilFinished(events, 30_000);
       } finally {
         await events.close();
+        await eventsConnection.quit().catch(() => {});
       }
 
       const after = await prisma.serviceSuspension.findUnique({ where: { id: hold.id } });

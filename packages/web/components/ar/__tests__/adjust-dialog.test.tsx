@@ -82,7 +82,22 @@ describe("AdjustDialog reason filtering", () => {
     routeReasons();
     renderDialog({ mode: "waive", target: charge });
     const select = await screen.findByRole("combobox");
-    expect(within(select).getByRole("option", { name: "Courtesy waiver" })).toBeInTheDocument();
+    /*
+     * The option is awaited, not the select. `findByRole("combobox")`
+     * resolves as soon as the element exists, but the options come from
+     * an async reasons fetch — so a synchronous `getByRole("option")`
+     * races it. It won locally and lost in CI, which is where this first
+     * failed.
+     *
+     * The order matters more than the await: with the positive
+     * assertion racing, the negative one below could pass because
+     * *nothing* had loaded yet, which is a test that cannot fail for the
+     * reason it was written. Awaiting the option first makes the absence
+     * it then asserts a real absence.
+     */
+    expect(
+      await within(select).findByRole("option", { name: "Courtesy waiver" }),
+    ).toBeInTheDocument();
     expect(
       within(select).queryByRole("option", { name: /uncollectable/i }),
     ).not.toBeInTheDocument();
@@ -92,7 +107,10 @@ describe("AdjustDialog reason filtering", () => {
     routeReasons();
     renderDialog({ mode: "writeOff", target: charge });
     const select = await screen.findByRole("combobox");
-    expect(within(select).getByRole("option", { name: /uncollectable/i })).toBeInTheDocument();
+    // Same race and the same ordering point as the case above.
+    expect(
+      await within(select).findByRole("option", { name: /uncollectable/i }),
+    ).toBeInTheDocument();
     expect(
       within(select).queryByRole("option", { name: "Courtesy waiver" }),
     ).not.toBeInTheDocument();
