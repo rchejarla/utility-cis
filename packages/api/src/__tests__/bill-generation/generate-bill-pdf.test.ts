@@ -43,6 +43,8 @@ function presentation(
       },
       ...(fees ? [fees] : []),
     ],
+    // The same object as the last group above, which is the contract.
+    feesGroup: fees ?? null,
     totals: {
       subtotal: `${lineCount}.00`,
       taxes: "0.00",

@@ -46,6 +46,23 @@ export interface LedgerRow {
    * this row needs the id; `billNumber` above is what to print.
    */
   billId: string | null;
+  /**
+   * The bill this entry was raised ON, which is a different question
+   * from the one above.
+   *
+   * A late fee carries no `bill_id`: it is its own receivable, posted
+   * when a delinquency tier fires rather than by a billing run, and it
+   * prints on the next bill without belonging to it. `assessed_on_id`
+   * names the overdue debit it punishes, and this resolves that debit's
+   * bill. Null whenever no bill produced it — a tier may charge an
+   * opening-balance adjustment, and a tap fee is assessed on nothing.
+   *
+   * Since the ladder went per-bill one sweep can raise several fees on
+   * one account, so without this the screen shows rows that differ only
+   * in their memo.
+   */
+  assessedOnBillNumber: string | null;
+  assessedOnBillId: string | null;
   tender: string | null;
   memo: string | null;
   /** Set when something reverses THIS entry. */
@@ -124,9 +141,23 @@ export async function listLedger(
       accountId,
       ...(opts.openOnly ? OPEN_RECEIVABLE : {}),
     },
-    // Newest first, with id as a total order so a page boundary is
-    // stable between calls.
-    orderBy: [{ postedAt: "desc" }, { id: "desc" }],
+    /*
+     * Newest first **by the date the screen shows**, which is
+     * `effectiveDate` — when the money happened, not when the row was
+     * written.
+     *
+     * Ordering by `postedAt` made the two disagree whenever anything was
+     * back-dated: a correction, or a delinquency sweep charging a bill
+     * that fell due weeks ago. On an account seeded in one pass every
+     * row shares a `postedAt` and `id` decided, so the table was sorted
+     * by nothing a reader could see — the oldest entry seventh and a
+     * $412.80 opening balance last.
+     *
+     * `postedAt` and `id` stay as tiebreaks, so the order is total and a
+     * page boundary is stable between calls. `effectiveDate` is written
+     * once and never updated, which is what makes it safe to page on.
+     */
+    orderBy: [{ effectiveDate: "desc" }, { postedAt: "desc" }, { id: "desc" }],
     take,
     select: {
       id: true,
@@ -141,6 +172,7 @@ export async function listLedger(
       reversesId: true,
       reason: { select: { code: true, label: true } },
       bill: { select: { id: true, billNumber: true } },
+      assessedOn: { select: { bill: { select: { id: true, billNumber: true } } } },
       // At most one: reverseEntry refuses a second reversal of the same
       // entry, so this is a list only because the relation is one.
       reversedBy: { select: { id: true }, take: 1 },
@@ -170,6 +202,8 @@ export async function listLedger(
       reasonLabel: e.reason?.label ?? null,
       billNumber: e.bill?.billNumber ?? null,
       billId: e.bill?.id ?? null,
+      assessedOnBillNumber: e.assessedOn?.bill?.billNumber ?? null,
+      assessedOnBillId: e.assessedOn?.bill?.id ?? null,
       tender: e.tender ?? null,
       memo: e.memo ?? null,
       reversedByEntryId: e.reversedBy[0]?.id ?? null,
