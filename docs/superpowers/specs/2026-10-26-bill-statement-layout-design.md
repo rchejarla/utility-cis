@@ -154,17 +154,40 @@ $55.37 today because payments landed on 2026-10-19 and 2026-10-23; on the
 bill date it was $110.75. So *previous balance*, *payments received* and
 *past due* cannot be read off the current ledger.
 
-They can be reconstructed — the settlement block already does this shape
-for one debit, filtering applications by the credit's effective date —
-but reconstruction has a flaw that matters more here:
+The effect is already visible without any of this built. Rendering
+`BILL-202608-0001000-00` today asks for **$523.55** while the account
+owes **$503.17**, because the presentation reports the ledger as of
+2026-08-15 and the payments arrived in October. That is correct as-of
+behaviour and it is the whole argument for freezing the figures: a
+document that recomputes is a document whose numbers move.
 
-**`reverseEntry` deletes the `ledger_application` rows it undoes.** Once
-a payment is reversed, there is no record that the allocation ever
-existed, so a reconstruction of a past balance cannot see it. A reprint
-of an old bill would then differ from the document the customer
-received. That exposure exists today in the settlement block; a statement
-layout widens it from one bill's payment list to the whole previous
-balance.
+**Two of the three are easier than they look, and the first draft of this
+section said otherwise.** A balance is `SUM(amount)` over the account's
+non-deposit entries — allocations move value between a debit and a credit
+without changing the sum, so no allocation history is involved. Verified
+against the dev database: the cached balance and that sum agree to the
+cent. So *previous balance* and *payments received* are plain sums
+filtered by effective date, and could be recomputed at render safely.
+
+**`past_due_amount` is the one that cannot be.** "How much of what is
+owed was already due" needs to know which debits are *still open* as of
+the date, and that is allocation state. A debit fully paid is not past
+due, and the simplification — balance less the not-yet-due debits — gets
+it wrong the moment a credit lands on something not yet due. On this
+account as of 2026-10-10 it answers $513.55 against a true $523.55,
+because it treats a reversed fee as merely not-yet-due.
+
+And allocation state is **destroyed**: `reverseEntry` deletes the
+`ledger_application` rows it undoes, so once a payment is reversed there
+is no record the allocation existed and a reconstruction cannot see it. A
+reprint would then differ from the document the customer received, which
+is the one property `sha256` and byte-stable regeneration exist to
+protect.
+
+At posting time, by contrast, allocation state is current, so the figure
+is exact. That is the argument for freezing it there — one figure
+requires it, and splitting the three across two mechanisms would be worse
+than freezing all of them.
 
 **So the figures are snapshotted on the bill when it posts**, not
 recomputed at render:
@@ -205,6 +228,31 @@ no migration and fails the one property the document has to have.
   having made it read the presentation.
 - **Specs:** 09 §16 and the endpoint table; 23 §7.1 (the statement view
   is no longer deferred).
+
+## 7a. The open case: an account with no next bill
+
+Every entry reaches a bill eventually, because the window has no lower
+bound on a first bill and no upper bound on the next one:
+
+| An entry effective… | lands on |
+|---|---|
+| before the first bill | the first bill |
+| between two bills | the later one |
+| after the latest bill | the next bill produced |
+| carrying a `bill_id` | never — it *is* a bill |
+
+Row three assumes another bill is coming. **On a closed account there is
+none**, so a fee raised after the final bill prints nowhere, ever. The
+customer receives a final bill, then owes more than it said, with no
+document accounting for the difference — and the delinquency ladder will
+charge a late fee on a closed account's unpaid final bill without
+anything telling them.
+
+That is the same defect the fees group was built to fix, surviving at the
+end of the account's life. It is **not** in slice 1: the answer is a
+closing statement, which needs a notion of "the account is settled" that
+nothing here has. Recorded so it is a known hole rather than a
+discovery.
 
 ## 8. Left out, deliberately
 

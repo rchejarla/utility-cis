@@ -462,3 +462,193 @@ describe("postBill", () => {
   
     }));
 });
+
+/**
+ * Where the account stood when the bill was issued, frozen at posting.
+ *
+ * The bill prints arrears since the fees group shipped, and its total
+ * became a quantity answering no question — rated charges plus whichever
+ * non-bill entries fell inside a date window, omitting the balance
+ * carried forward entirely. These three figures are what make the total
+ * current charges **plus past due**, which is the standard rule.
+ *
+ * They are frozen rather than recomputed because `past_due_amount` reads
+ * allocation state: a debit fully paid is not past due, and
+ * `reverseEntry` deletes the `ledger_application` rows it undoes, so a
+ * reconstruction after a reversal cannot see the allocation at all.
+ * Posting is where that state is still current.
+ *
+ * Its own account, because the suite above shares one and these
+ * assertions are absolute rather than relative.
+ */
+describe("the statement snapshot", () => {
+  let acct: string;
+
+  /** A bill on `acct` with its own date, posted by the caller. */
+  async function billOn(billDate: string, total: string, dueDate: string): Promise<string> {
+    return seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const bill = await prisma.bill.create({
+        data: {
+          utilityId,
+          accountId: acct,
+          billingCycleId,
+          periodStart: new Date(billDate),
+          periodEnd: new Date(billDate),
+          billDate: new Date(billDate),
+          dueDate: new Date(dueDate),
+          subtotal: total,
+          taxes: "0",
+          credits: "0",
+          total,
+          billNumber: `BILL-SNAP-${Math.random().toString(36).slice(2, 8)}`,
+        },
+      });
+      return bill.id;
+    });
+  }
+
+  async function snapshotOf(billId: string) {
+    return seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const b = await prisma.bill.findUniqueOrThrow({
+        where: { id: billId },
+        select: { previousBalance: true, paymentsSince: true, pastDueAmount: true },
+      });
+      return {
+        previousBalance: b.previousBalance?.toFixed(2) ?? null,
+        paymentsSince: b.paymentsSince?.toFixed(2) ?? null,
+        pastDueAmount: b.pastDueAmount?.toFixed(2) ?? null,
+      };
+    });
+  }
+
+  beforeEach(async () => {
+    acct = await seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const a = await prisma.account.create({
+        data: {
+          utilityId,
+          accountNumber: `SNAP-${Math.random().toString(36).slice(2, 8)}`,
+          accountType: "RESIDENTIAL",
+          status: "ACTIVE",
+          billingCycleId,
+        },
+      });
+      return a.id;
+    });
+  });
+
+  it("carries nothing forward on a first bill", async () => {
+    const first = await billOn("2026-05-15", "100.00", "2026-06-14");
+    await postBill(utilityId, ACTOR, "T", first);
+
+    // No previous bill means nothing was carried, and the bill's own
+    // charge is not past due on the day it is issued.
+    expect(await snapshotOf(first)).toEqual({
+      previousBalance: "0.00",
+      paymentsSince: "0.00",
+      pastDueAmount: "0.00",
+    });
+  });
+
+  it("carries the previous bill's unpaid balance, and counts it past due", async () => {
+    const first = await billOn("2026-05-15", "100.00", "2026-06-14");
+    await postBill(utilityId, ACTOR, "T", first);
+
+    // Second bill issued after the first fell due and went unpaid.
+    const second = await billOn("2026-06-15", "40.00", "2026-07-14");
+    await postBill(utilityId, ACTOR, "T", second);
+
+    expect(await snapshotOf(second)).toEqual({
+      previousBalance: "100.00",
+      paymentsSince: "0.00",
+      // Due 2026-06-14, which is before this bill's date. The $40 it
+      // charges is not: a bill is never past due on its own issue date.
+      pastDueAmount: "100.00",
+    });
+  });
+
+  it("reports a payment between the bills, and drops what it settled from past due", async () => {
+    const first = await billOn("2026-05-15", "100.00", "2026-06-14");
+    await postBill(utilityId, ACTOR, "T", first);
+
+    await runAsTenant(utilityId, async () => {
+      const payment = await import("../../services/ar/payment.service.js");
+      await payment.recordPayment(utilityId, ACTOR, "T", acct, {
+        amount: "60.00",
+        tender: "CHECK",
+        receivedAt: "2026-06-20",
+      });
+    });
+
+    const second = await billOn("2026-06-30", "40.00", "2026-07-29");
+    await postBill(utilityId, ACTOR, "T", second);
+
+    expect(await snapshotOf(second)).toEqual({
+      previousBalance: "100.00",
+      paymentsSince: "60.00",
+      // $100 charged, $60 allocated to it — the remaining $40 is what is
+      // still past due, which is the figure a plain sum cannot give.
+      pastDueAmount: "40.00",
+    });
+  });
+
+  it("drops a fully settled charge out of past due", async () => {
+    const first = await billOn("2026-05-15", "100.00", "2026-06-14");
+    await postBill(utilityId, ACTOR, "T", first);
+
+    await runAsTenant(utilityId, async () => {
+      const payment = await import("../../services/ar/payment.service.js");
+      await payment.recordPayment(utilityId, ACTOR, "T", acct, {
+        amount: "150.00",
+        tender: "CHECK",
+        receivedAt: "2026-06-01",
+      });
+    });
+
+    const second = await billOn("2026-06-15", "40.00", "2026-07-14");
+    await postBill(utilityId, ACTOR, "T", second);
+
+    const snap = await snapshotOf(second);
+    // The $100 was charged before the previous bill's date, so it is
+    // carried; the $150 arrived after it and is reported as paid.
+    expect(snap.previousBalance).toBe("100.00");
+    expect(snap.paymentsSince).toBe("150.00");
+    // Nothing overdue survives it, which only allocation state can say.
+    expect(snap.pastDueAmount).toBe("0.00");
+  });
+
+  /**
+   * An account in credit at the last bill carries that credit forward.
+   *
+   * `previous_balance` is the one figure of the three that may be
+   * negative, and the migration's CHECKs constrain only the other two.
+   * Clamping it at zero would tell a customer who paid ahead that they
+   * owe money they do not.
+   */
+  it("carries a credit balance forward as a negative rather than clamping it", async () => {
+    await runAsTenant(utilityId, async () => {
+      const payment = await import("../../services/ar/payment.service.js");
+      await payment.recordPayment(utilityId, ACTOR, "T", acct, {
+        amount: "150.00",
+        tender: "CHECK",
+        // Before the first bill, so it is inside that bill's balance
+        // rather than reported as a payment after it.
+        receivedAt: "2026-05-01",
+      });
+    });
+
+    const first = await billOn("2026-05-15", "100.00", "2026-06-14");
+    await postBill(utilityId, ACTOR, "T", first);
+
+    const second = await billOn("2026-06-15", "40.00", "2026-07-14");
+    await postBill(utilityId, ACTOR, "T", second);
+
+    const snap = await snapshotOf(second);
+    // $150 in, $100 billed, as of 2026-05-15: $50 in credit.
+    expect(snap.previousBalance).toBe("-50.00");
+    expect(snap.paymentsSince).toBe("0.00");
+    expect(snap.pastDueAmount).toBe("0.00");
+  });
+});
