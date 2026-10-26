@@ -59,6 +59,24 @@ interface BillWithSegments {
   segments: SegmentRow[];
 }
 
+/**
+ * What the bill's document says, as much of it as this dialog needs.
+ *
+ * `GET /bills/:id` returns the stored bill — rated segments and
+ * `bill.total`. A late fee raises no rated line, so it reaches the page
+ * through the presentation's fees group, and the printed total is rated
+ * + fees. Without this, staff read a total lower than the one on the
+ * paper in the customer's hand by exactly the fees.
+ */
+interface BillPresentationView {
+  feesGroup: {
+    heading: string;
+    lines: Array<{ label: string; quantity: string | null; amount: string }>;
+    subtotal: string;
+  } | null;
+  totals: { fees: string | null; total: string };
+}
+
 /** One attempt to deliver this bill. */
 interface Delivery {
   id: string;
@@ -79,6 +97,7 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
   const [bill, setBill] = useState<BillWithSegments | null>(null);
   const [loading, setLoading] = useState(true);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
+  const [presentation, setPresentation] = useState<BillPresentationView | null>(null);
   const [busy, setBusy] = useState(false);
   const [asking, setAsking] = useState(false);
 
@@ -87,6 +106,16 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
       .get<BillWithSegments>(`/api/v1/bills/${billId}`)
       .then(setBill)
       .catch(console.error);
+  }, [billId]);
+
+  const loadPresentation = useCallback(() => {
+    return apiClient
+      .get<BillPresentationView>(`/api/v1/bills/${billId}/presentation`)
+      // Resolving one refuses an incomplete issuer or recipient with a
+      // 422. There is still a bill to show, and rated lines under the
+      // stored total beat a popup that will not open.
+      .then(setPresentation)
+      .catch(() => setPresentation(null));
   }, [billId]);
 
   const loadDeliveries = useCallback(() => {
@@ -99,8 +128,10 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
   }, [billId]);
 
   useEffect(() => {
-    void Promise.all([load(), loadDeliveries()]).finally(() => setLoading(false));
-  }, [load, loadDeliveries]);
+    void Promise.all([load(), loadDeliveries(), loadPresentation()]).finally(() =>
+      setLoading(false),
+    );
+  }, [load, loadDeliveries, loadPresentation]);
 
   /*
    * Hold, release and send all reload the bill rather than patching it
@@ -366,11 +397,74 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
               </div>
             ))}
 
+            {/*
+              Charged beside the rated segments and not by the rate
+              engine: a late fee, an adjustment, or the credit a
+              replacing tier writes. It has no `BillSegmentLine` to live
+              in — a line *is* a rated charge — so it comes from the
+              presentation, which is also what the PDF renders. Each
+              line already names the bill it was raised on.
+            */}
+            {presentation?.feesGroup && (
+              <div
+                style={{
+                  marginBottom: "16px",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius)",
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "10px 14px",
+                    background: "var(--bg-elevated)",
+                    borderBottom: "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+                    {presentation.feesGroup.heading}
+                  </span>
+                  <span style={{ fontFamily: "monospace", fontSize: "13px", fontWeight: 600 }}>
+                    {fmt(presentation.feesGroup.subtotal)}
+                  </span>
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <tbody>
+                    {presentation.feesGroup.lines.map((l) => (
+                      <tr key={l.label}>
+                        <td style={td}>{l.label}</td>
+                        <td style={{ ...td, textAlign: "right", fontFamily: "monospace" }}>
+                          {fmt(l.amount)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
             <div style={{ borderTop: "1px solid var(--border)", paddingTop: "12px", marginTop: "8px" }}>
               <Row label="Subtotal" value={fmt(bill.subtotal)} />
               {parseFloat(bill.taxes) !== 0 && <Row label="Taxes" value={fmt(bill.taxes)} />}
               {parseFloat(bill.credits) !== 0 && <Row label="Credits" value={fmt(bill.credits)} />}
-              <Row label="Total" value={fmt(bill.total)} bold />
+              {presentation?.totals?.fees && (
+                <Row label="Fees and adjustments" value={fmt(presentation.totals.fees)} />
+              )}
+              {/*
+                The printed total when there is one, because that is what
+                the customer is being asked for. `bill.total` is the
+                rated figure the engine computed, and the two differ by
+                exactly the fees — a CSR reading one to a customer
+                holding the other is the failure this replaces.
+              */}
+              <Row
+                label="Total"
+                value={fmt(presentation?.totals?.total ?? bill.total)}
+                bold
+              />
             </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "16px" }}>

@@ -264,3 +264,106 @@ describe("Bill detail — sending", () => {
     expect(screen.getByText(/jane.smith@example.com/)).toBeInTheDocument();
   });
 });
+
+/**
+ * The popup has to say what the bill says.
+ *
+ * `GET /bills/:id` returns the stored bill: rated segments and
+ * `bill.total`. A late fee raises no rated line — it is its own ledger
+ * entry — so it reaches the page through the presentation's fees group,
+ * and the printed total is rated + fees. This dialog read only the
+ * stored bill, so staff saw a total lower than the one on the paper in
+ * the customer's hand by exactly the fees, which is the moment a phone
+ * call goes wrong.
+ */
+describe("Bill detail — fees and adjustments", () => {
+  const FEES = {
+    heading: "Fees and adjustments",
+    lines: [
+      {
+        label: "Late payment fee 2026-09-24 — for bill BILL-202608-0001000-00",
+        quantity: null,
+        amount: "10.00",
+      },
+      {
+        label: "Late payment fee 2026-10-04 — for bill BILL-202608-0001000-00",
+        quantity: null,
+        amount: "25.00",
+      },
+    ],
+    subtotal: "35.00",
+  };
+
+  function presentation(over: Record<string, unknown> = {}) {
+    return {
+      feesGroup: FEES,
+      totals: {
+        subtotal: "37.89",
+        taxes: "0.00",
+        credits: "0.00",
+        rounding: null,
+        fees: "35.00",
+        total: "72.89",
+      },
+      ...over,
+    };
+  }
+
+  /** Bill, deliveries and presentation are three separate calls. */
+  function routeGets(pres: unknown) {
+    get.mockImplementation((path: string) => {
+      if (path.includes("/presentation")) {
+        return pres === "fail" ? Promise.reject(new Error("422")) : Promise.resolve(pres);
+      }
+      if (path.includes("/deliveries")) return Promise.resolve([]);
+      return Promise.resolve(bill([line()]));
+    });
+  }
+
+  it("lists each fee, naming the bill it was raised on", async () => {
+    routeGets(presentation());
+    renderDialog();
+
+    expect(
+      await screen.findByText("Late payment fee 2026-09-24 — for bill BILL-202608-0001000-00"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Late payment fee 2026-10-04 — for bill BILL-202608-0001000-00"),
+    ).toBeInTheDocument();
+  });
+
+  it("totals the way the document does, so the two cannot disagree", async () => {
+    routeGets(presentation());
+    renderDialog();
+
+    // Twice on purpose: the group's own heading, and the row in the
+    // totals box that carries its subtotal into the total. A group
+    // whose subtotal is not in the total is not a charge.
+    expect(await screen.findAllByText("Fees and adjustments")).toHaveLength(2);
+    expect(screen.getAllByText("$35.00")).toHaveLength(2);
+    // Rated 37.89 + fees 35.00. The stored bill.total is 37.8854 and is
+    // not what the customer is being asked for.
+    expect(screen.getByText("$72.89")).toBeInTheDocument();
+  });
+
+  it("shows no fees block on a bill that carries none", async () => {
+    routeGets(presentation({ feesGroup: null, totals: { ...presentation().totals, fees: null, total: "37.89" } }));
+    renderDialog();
+
+    await screen.findByText("4.71 HCF");
+    expect(screen.queryByText("Fees and adjustments")).not.toBeInTheDocument();
+  });
+
+  /*
+   * Resolving a presentation refuses an incomplete issuer or recipient
+   * with a 422. The dialog still has a bill to show, and rated lines
+   * with the stored total beat a popup that will not open.
+   */
+  it("still renders the bill when the presentation cannot be resolved", async () => {
+    routeGets("fail");
+    renderDialog();
+
+    expect(await screen.findByText("4.71 HCF")).toBeInTheDocument();
+    expect(screen.queryByText("Fees and adjustments")).not.toBeInTheDocument();
+  });
+});
