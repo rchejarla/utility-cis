@@ -705,6 +705,7 @@ export function Sidebar({
   brandSubtitle,
 }: SidebarProps) {
   const pathname = usePathname();
+  const { utility } = useAuth();
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const width = collapsed ? 64 : 240;
 
@@ -802,7 +803,11 @@ export function Sidebar({
       >
         {!collapsed && (
           <>
-            <BrandMark subtitle={brandSubtitle} />
+            {/* The tenant takes the caption line inside a tenant. On
+                the platform screens `useAuth` is the default context —
+                they mount no provider — so this is null and
+                `brandSubtitle` ("Platform") stands. */}
+            <BrandMark subtitle={brandSubtitle} tenant={utility?.name ?? null} />
             <div style={{ flex: 1 }} />
           </>
         )}
@@ -813,7 +818,14 @@ export function Sidebar({
             setFlyoutSection(null);
             setCollapsed(!collapsed);
           }}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          /* Collapsed, the brand row is this button alone and the tenant
+             name has nowhere to render, so it rides in the tooltip — the
+             one place left on a 64px rail. */
+          title={
+            collapsed
+              ? [utility?.name, "Expand sidebar"].filter(Boolean).join(" — ")
+              : "Collapse sidebar"
+          }
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           style={{
             width: 36,

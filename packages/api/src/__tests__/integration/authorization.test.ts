@@ -55,6 +55,14 @@ vi.mock("../../lib/prisma.js", async (importOriginal) => {
         findUnique: vi.fn().mockResolvedValue(null),
         upsert: vi.fn().mockResolvedValue({}),
       },
+      // `/auth/me` names the tenant, so the chrome can. Declared here
+      // and not inherited: `importOriginal` returns the real module
+      // rather than vitest.setup's mock of it, so `utility.findUnique`
+      // would be the genuine client method — present, and not a spy.
+      utility: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
     },
     withTenant: vi.fn((_utilityId: string, fn: any) => fn({})),
   };
@@ -197,6 +205,11 @@ describe("Authorization middleware", () => {
       { moduleKey: "premises" },
       { moduleKey: "meters" },
     ]);
+    (prisma.utility.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "test-utility-001",
+      name: "City of Testville",
+      status: "ACTIVE",
+    });
 
     const response = await app.inject({
       method: "GET",
@@ -213,6 +226,20 @@ describe("Authorization middleware", () => {
 
     expect(body.user.email).toBe("test@example.com");
     expect(body.user.roleName).toBe("Admin");
+
+    /*
+     * And which tenant this is. The admin chrome named the product
+     * ("Utility CIS / Admin Portal") and nowhere named the utility, so
+     * an operator with two tabs open had nothing on screen telling them
+     * which one they were about to charge. This is the call every page
+     * already makes, so the answer belongs here rather than in a second
+     * fetch.
+     */
+    expect(body.utility).toEqual({
+      id: "test-utility-001",
+      name: "City of Testville",
+      status: "ACTIVE",
+    });
 
     expect(body.permissions).toMatchObject({
       customers: expect.arrayContaining(["VIEW", "CREATE", "EDIT", "DELETE"]),
