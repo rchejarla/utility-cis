@@ -192,9 +192,45 @@ describe("Billing run detail — the posting gate", () => {
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith("/api/v1/billing-runs/run-1/post", {}),
     );
-    expect(await screen.findByText(/queued/i)).toBeInTheDocument();
+    // The toast specifically. The banner below it also says "queued"
+    // now, so a bare /queued/i matches both.
+    expect(
+      await screen.findByText(/posting queued — the counts update here/i),
+    ).toBeInTheDocument();
     // No count claimed from a response that carries none.
     expect(screen.queryByText(/\d+ posted/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The button goes away the moment posting is queued.
+   *
+   * `posting_started_at` is stamped by the **worker when it picks the
+   * job up**, not by the route when it enqueues — so the reload right
+   * after a successful post still saw it null, `postingInFlight` was
+   * false, no poll timer started, and the button stayed offering to post
+   * a run that was already posting. The only way out was a manual
+   * refresh, by which time the worker had stamped it.
+   *
+   * Harmless at the ledger — `postBillingRun` answers a second pass with
+   * `alreadyPosted` and charges nothing twice — but the screen was
+   * stating the opposite of the truth, and inviting the click that
+   * proves it.
+   */
+  it("stops offering to post as soon as posting is queued, without a refresh", async () => {
+    routeGets({ byStatus: { FAILED: [] } });
+    post.mockResolvedValue({ queued: true, jobId: "job-1" });
+    await renderPage();
+    await loaded();
+
+    await userEvent.click(screen.getByRole("button", { name: "Post this run" }));
+    await userEvent.click(screen.getByRole("button", { name: "Post the run" }));
+
+    // The run still reads unposted and unstarted — every GET returns the
+    // same fixture, which is exactly the worker not having begun.
+    await waitFor(() => expect(post).toHaveBeenCalled());
+
+    expect(screen.queryByRole("button", { name: "Post this run" })).not.toBeInTheDocument();
+    expect(await screen.findByText(/posting is queued/i)).toBeInTheDocument();
   });
 
   /*

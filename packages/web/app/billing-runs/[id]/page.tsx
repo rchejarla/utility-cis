@@ -197,7 +197,27 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
    * cover it, or a run posts in the background and the page says it
    * never started.
    */
-  const postingInFlight = run?.postingStartedAt != null && run?.postedAt == null;
+  /*
+   * And the gap before the worker has picked the job up.
+   *
+   * `postingStartedAt` is stamped by the worker when it starts, not by
+   * the route when it enqueues, so the reload immediately after a
+   * successful post still saw null: `postingInFlight` was false, no
+   * timer started, and the button sat there offering to post a run that
+   * was already posting. Only a manual refresh escaped it, by which time
+   * the worker had stamped it.
+   *
+   * Held locally because nothing persisted says "queued" — the queue
+   * knows and the run row does not. It clears when the run comes back
+   * either stamped or posted, so it covers the gap and nothing more.
+   */
+  const [postQueued, setPostQueued] = useState(false);
+  useEffect(() => {
+    if (run?.postingStartedAt != null || run?.postedAt != null) setPostQueued(false);
+  }, [run?.postingStartedAt, run?.postedAt]);
+
+  const postingInFlight =
+    (run?.postingStartedAt != null || postQueued) && run?.postedAt == null;
   useEffect(() => {
     if (!inFlight && !postingInFlight) return;
     const t = setInterval(() => {
@@ -242,6 +262,9 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
     try {
       await apiClient.post(`/api/v1/billing-runs/${id}/post`, {});
       setConfirmPost(false);
+      // Before the reload, so the button is gone by the time the run
+      // comes back still unstamped.
+      setPostQueued(true);
       toast("Posting queued — the counts update here as it works.", "success");
       await loadRun();
     } catch (err) {
@@ -406,7 +429,22 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
         </div>
       )}
 
-      {postingInFlight && (
+      {postingInFlight && run.postingStartedAt == null && (
+        /*
+         * Queued, and no worker has claimed it. Said separately from
+         * "under way" because the two fail differently: with no worker
+         * attached the job sits in the queue indefinitely, and
+         * "Posting is under way — 0 of 118" would describe that as
+         * progress. `start_dev.bat` starts no worker, so this is the
+         * ordinary state of a dev stack rather than an edge case.
+         */
+        <Banner tone="info">
+          Posting is queued — waiting for a worker to pick it up. This page updates as it
+          works; it keeps going if you leave. If nothing happens, check that a worker is
+          attached under Platform → Cluster → Workers.
+        </Banner>
+      )}
+      {postingInFlight && run.postingStartedAt != null && (
         <Banner tone="info">
           Posting is under way — {run.postedCount.toLocaleString()} of{" "}
           {run.billedCount.toLocaleString()} so far. This page updates as it works; it keeps
