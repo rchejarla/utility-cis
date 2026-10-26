@@ -253,4 +253,53 @@ describe("the rules table", () => {
     // The tier that charges nothing says so rather than showing $0.00.
     expect(screen.getByText("—")).toBeInTheDocument();
   });
+
+  /**
+   * Clicking a second tier shows that tier.
+   *
+   * The editor seeds fifteen `useState` calls from its `rule` prop, and
+   * a `useState` initialiser runs once, at mount. React keeps the same
+   * instance when only the prop changes, so selecting another row left
+   * every field holding the first rule's values — a form captioned
+   * "Edit Tier 2" above tier 1's name, days and fee. Saving it would
+   * have written the wrong tier's settings over the right tier's.
+   *
+   * Closing one row before opening another hid it, because that
+   * unmounts the editor. Going straight from one row to the next is
+   * both the broken path and the obvious thing to do.
+   */
+  it("shows the tier you clicked, not the one you clicked before it", async () => {
+    const user = userEvent.setup();
+    stubLoads([
+      rule({ feeType: "FLAT_FEE", feeAmount: "25.00" }),
+      rule({
+        id: "rule-2",
+        tier: 2,
+        name: "Second notice",
+        daysPastDue: 40,
+        feeType: "FLAT_FEE",
+        feeAmount: "60.00",
+      }),
+    ]);
+    render(
+      <ToastProvider>
+        <DelinquencyRulesPage />
+      </ToastProvider>,
+    );
+
+    await user.click(await screen.findByText("First notice"));
+    expect(await screen.findByText(/Edit Tier 1/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Name")).toHaveValue("First notice");
+
+    // Straight to the next row, without closing the first.
+    await user.click(screen.getByText("Second notice"));
+
+    expect(await screen.findByText(/Edit Tier 2/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Name")).toHaveValue("Second notice");
+    // Numbers, not strings: both are `type="number"` inputs, and
+    // `toHaveValue` reports what the control holds rather than the
+    // string the state keeps.
+    expect(screen.getByLabelText("Days past due")).toHaveValue(40);
+    expect(screen.getByPlaceholderText("e.g. 25.00")).toHaveValue(60);
+  });
 });
