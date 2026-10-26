@@ -2,10 +2,20 @@
 setlocal
 rem Apply pending Prisma migrations to the dev database.
 rem
-rem Run from the repo root regardless of the caller's working directory:
-rem the Prisma CLI reads .env from the current directory, and the root
-rem .env is the one carrying the dev DATABASE_URL.
-cd /d "%~dp0"
+rem Run from packages\shared regardless of the caller's working
+rem directory. Prisma 7 takes the schema path, the migrations path and
+rem the datasource URL from prisma.config.ts, which lives there and is
+rem found by walking up from the CWD — from the repo root there is no
+rem config to find, and the CLI fails with "Could not find Prisma
+rem Schema" before touching the database. That config also does
+rem `import "dotenv/config"`, which loads packages\shared\.env relative
+rem to the CWD, so this is where DATABASE_URL comes from too.
+rem
+rem This script ran from the repo root until 2026-10-26 and so had been
+rem broken since the Prisma 7 upgrade; the manual recipe in CLAUDE.md
+rem (cd packages/shared && npx prisma migrate deploy) is what everyone
+rem had been using instead, which is why nothing caught it.
+cd /d "%~dp0packages\shared"
 
 rem A DATABASE_URL already in the environment takes precedence over .env,
 rem and shells in this workspace sometimes carry one pointing at another
@@ -20,8 +30,7 @@ if defined DATABASE_URL (
   set "DATABASE_URL="
 )
 
-set "PRISMA=.\packages\shared\node_modules\.bin\prisma"
-set "SCHEMA=packages\shared\prisma\schema.prisma"
+set "PRISMA=.\node_modules\.bin\prisma"
 
 if not exist "%PRISMA%.CMD" (
   echo [error] Prisma CLI not found at %PRISMA%
