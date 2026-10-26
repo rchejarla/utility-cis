@@ -218,13 +218,44 @@ it is
 
 ```
 GET /api/v1/auth/me → {
-  user: { id, email, name, roleId, roleName },
+  user: { id, email, name, roleId, roleName, customerId },
+  utility: { id, name, status } | null,
   permissions: { "customers": ["VIEW","CREATE","EDIT"], "premises": ["VIEW"], ... },
   enabledModules: ["customers", "premises", "meters", ...]
 }
 ```
 
 Loaded once on frontend app startup. Refreshed on login or role change.
+
+**`utility` — which tenant this is (2026-10-26).** The admin chrome named
+the product and the tenant nowhere: the sidebar's brand row read "Utility
+CIS" over "Admin Portal", and on a phone, where there is no sidebar, the
+compact header was a hardcoded product name. Every screen below is one
+tenant's data, so an operator with two tabs open had nothing on screen
+saying which one they were about to charge.
+
+It rides on this call rather than behind its own endpoint because every
+page already makes it, and a second fetch for one name is a second thing
+to fail. It is read **outside** `getAuthMe`, whose answer is cached in
+Redis per user: a suspension has to be visible as soon as it happens, and
+a primary-key lookup on one row is not what makes this route cost
+anything. `utility` is `null` when the row cannot be read — not the same
+as a tenant with no name — and the chrome then names the product.
+Answering 500 here would take down every authenticated page over a
+caption.
+
+**Where it shows.** The tenant's name takes the sidebar brand row's
+second line, replacing "Admin Portal" rather than joining it: the row has
+one line for it, and "which utility" is the sharper form of the same
+question that caption was answering. The platform screens mount no
+`AuthPermissionProvider`, so `useAuth` there is the default context and
+their explicit `brandSubtitle="Platform"` stands — the contrast still
+reads, a tenant name meaning you are inside that tenant and "Platform"
+meaning you are above them all. A collapsed 64px rail has nowhere to
+render it, so it rides in the toggle's tooltip; the compact header shows
+it in place of the product name. `Utility.name` is the source, not
+`UtilityConfig.settings.issuer.utilityName` — the latter is the *bill's*
+issuer and may legitimately differ from the tenant row.
 
 ---
 
@@ -235,6 +266,7 @@ Loaded once on frontend app startup. Refreshed on login or role change.
 ```typescript
 interface AuthContext {
   user: { id, email, name, roleId, roleName };
+  utility: { id, name, status } | null;
   permissions: Record<string, string[]>;
   enabledModules: string[];
 }
@@ -375,7 +407,7 @@ V=VIEW, C=CREATE, E=EDIT, D=DELETE, —=no access
 
 | Method | Path | Permission | Description |
 |--------|------|------------|-------------|
-| GET | /api/v1/auth/me | (authenticated) | Get current user permissions + modules |
+| GET | /api/v1/auth/me | (authenticated) | Get current user permissions + modules, and which tenant this is |
 | GET | /api/v1/users | settings:VIEW | List users |
 | POST | /api/v1/users | settings:CREATE | Create user |
 | GET | /api/v1/users/:id | settings:VIEW | Get user detail |

@@ -234,6 +234,31 @@ balance.
 this and nothing had used ("a late fee names the debit that went
 unpaid").
 
+**And since 2026-10-26 that link is readable** — it was stored, used by
+`alreadyChargedBill` and `reverseEntry`, and surfaced to nobody. The bill
+line now reads `Late payment fee 2026-09-24 — for bill BILL-202608-1`
+(spec 09 §16) and the AR tab's detail cell says `for bill
+BILL-202608-1`, from `assessedOnBillNumber` on the ledger row (spec 23).
+Per-bill charging is what turned the omission into a defect: one sweep
+can raise three fees on one account, and labelled by reason and date
+alone they printed as three identical lines and listed as three rows
+differing only by their memo.
+
+**When the customer sees a tier's fee.** The ledger moves the moment the
+sweep runs — `Account.balance` rises that day, and the portal dashboard's
+`amountDue` sums it — but nothing *itemises* the fee until the next bill,
+because a fee prints on the first bill whose `bill_date` falls on or
+after its `effective_date` and after the previous bill's. So a tier that
+fires six days before the cycle's bill day is explained within the week,
+and one that fires the day after it waits a month while the balance
+already shows the money. The tier's notice, if it has a
+`notification_event_type`, goes out at the moment the action is created
+and carries the balance and the days past due — not the fee itself. That
+gap between "the balance moved" and "a line explains it" is the honest
+state of the feature, and the portal is where it is widest: a customer
+looking at the portal between a sweep and a bill sees a larger figure
+with nothing naming the charge.
+
 **The episode close still matters, for the action.**
 `sweepReconnections` resolves every live action on an account whose
 balance has reached zero. Filtering it on `reconnect_request_type_code`
@@ -448,7 +473,14 @@ New `delinquency` module added to MODULES constant. Permissions:
 
 ## Seed Data
 
-- 5 sample delinquency rules (tier 1–5 as described in the example chain)
+- 5 sample delinquency rules (tier 1–5 as described in the example chain). **Three of them charge (2026-10-26):** tier 1 a flat $10, tier 2 a flat $25, tier 3 1.5% of what is left of the bill capped at $50 — so both fee types exist in a fresh database. All `ACCUMULATE`, which is the default and what every tier did before the mode existed: tier 2 charges *in addition to* tier 1. Tiers 4 and 5 charge nothing, because being eligible for shut-off is not a billable event. The rules are now created **after** the reason codes, since a charging tier must name the reason its fee books to and only `LATE_FEE` carries `allows_delinquency_fee`.
+- **The ladder is seeded as having already run** (`seed/delinquency-ladder.js`), on the oldest open overdue `BILL_CHARGE` of the account that owns SA-0001 — the one agreement with twelve months of reads, so a billing run can actually produce its next bill. It writes what the sweep writes: the FEE entry with `assessed_on_id`, the `delinquency_action` for the tier, and the `delinquency_action_fee` link. All three, because omitting the link would leave `alreadyChargedBill` finding nothing and the next real sweep charging tier 1 again.
+
+  **Back-dated, and that is the point.** `evaluateAll` dates a fee the day it runs, and a fee prints on the first bill issued *after* its effective date — so a sweep today puts its fee on next month's bill and today's billing run shows an unchanged page. The seeder places each fee where the tier would have charged it (the bill's due date plus the tier's `days_past_due`) and clamps it into the window that prints on the next run's bill, recomputing that bill date the way `createBillingRun` does. The clamp is the one thing it does that the ladder would not; it only fires in the first days of a month, and the seeder logs the bill date the fees will appear on. It handles `FLAT_FEE` only and says so rather than duplicating the percentage arithmetic — tier 3 is left for a real sweep to charge.
+
+  So the demo is: `seed_db.bat`, then a billing run for cycle **R01**, and the new bill carries a `Fees and adjustments` group with the two fees, each naming the bill it punishes. Running `POST /api/v1/delinquency/evaluate` afterwards charges tier 3 live, which is the other half of the picture — that fee lands on the ledger immediately and prints a month later.
+
+  **The seed now clears `delinquency_rule` and `delinquency_action_fee`.** The rules used to survive a reseed on purpose (a `findFirst`-then-create), but a charging tier holds `fee_reason_id -> ledger_reason_def` under RESTRICT and the seed deletes the reasons, so a surviving rule would refuse that delete on the second run. "Idempotent" and "clears what it owns" could not both stay true.
 - The seeded payments deliberately land on a billed account rather than on either delinquent one, so the two opening balances this module's demo depends on stay untouched.
 - Two seeded accounts get an opening-balance `ADJUSTMENT_DEBIT` written straight into the ledger, with `balance` and `lastDueDate` written to match on the account row, so the evaluation job has ledger-backed balances and `GET /api/v1/ar/reconciliation` reports no drift on a fresh seed. The seeder deliberately does not go through `generateBillForAccount` or `postBill` — that would drag rate schedules and meter reads into seeding a balance
 - 2–3 sample DelinquencyActions showing different statuses

@@ -459,6 +459,7 @@ Addressed by `Bill`, not `BillingRecord`. Bytes stream through the API; a minted
 
 | Method | Path | Permission | Description |
 |--------|------|------------|-------------|
+| GET | `/api/v1/bills/:id/presentation` | `accounts:VIEW` | The resolved `BillPresentation` — what the bill *says*, as against `GET /bills/:id` which returns the stored bill. A read, so the same gate as the bill. Separate from a wider `GET /bills/:id` because resolving a presentation refuses an incomplete issuer, recipient or charge set with a 422, and a popup that cannot open because the remittance address is unset is a worse screen than one showing rated lines |
 | POST | `/api/v1/bills/:id/document` | `accounts:EDIT` | Generate and store the PDF; idempotent — returns the existing pointer if one is stored. `?force=true` replaces it in place |
 | GET | `/api/v1/bills/:id/document` | `accounts:VIEW` | Stream the stored PDF as `application/pdf` attachment |
 | GET | `/portal/api/bills/:id/document` | `portal_billing:VIEW` | The customer's own copy, scoped through the account's `customer_id` |
@@ -565,6 +566,14 @@ Gated on `settings`, not `accounts`: the text printed on bills is tenant configu
     **What it excludes.** Anything carrying a `bill_id`, not merely `BILL_CHARGE` — a bill's own entry *is* the bill, and `postBill` writes a bill that nets negative as an `ADJUSTMENT_CREDIT` with its `bill_id` set, so filtering on the type alone let a previous credit bill reappear here. `DEPOSIT`, for the reason `recomputeAccountCache` keeps it out of the balance: a deposit is money the utility holds, not money the customer owes, and summed in here it told them they owed less than they did. And any credit already itemised under settlement, or a payment appears twice on one page.
 
     **Labels are the tenant's own.** `ledger_reason_def.label`, never a code and never a string from the template, so a utility that calls its late fee a "Late charge" sees that on the bill. The entry type is the fallback for an entry citing no reason. The date rides in the label because a charge group has no date column.
+
+    **And the label names the bill the fee was raised on (2026-10-26):** `Late payment fee 2026-09-24 — for bill BILL-202608-1`, read from `assessed_on_id` through to that debit's `bill_number`. The ladder charges **per overdue bill**, so one sweep can raise several fees on one account and one statement can carry three of them — labelled by reason and date alone they printed as three identical lines, on a page whose whole claim is that the customer can see what each charge is for. The bill is omitted when none produced the debit: a tier may charge an opening-balance `ADJUSTMENT_DEBIT`, and a fee a CSR raises by hand is assessed on nothing. Then the date stands alone, as every one of these lines read before.
+
+    **`feesGroup` names it, as well as `groups` holding it (2026-10-26).** The group is appended to `groups` after the rated ones so a template prints it like any other, which left a consumer wanting only the fees matching on the heading string or assuming the group is last — contracts nobody wrote down. `feesGroup` is the same object, named, and null when the bill carries none. The staff bill popup is the consumer: it renders the rated segments from the `Bill` itself and needed the fees from here.
+
+    **The staff popup shows them, and totals the way the document does.** `GET /bills/:id` returns the stored bill — rated segments and `bill.total` — and the dialog read only that, so staff saw a total lower than the one on the paper in the customer's hand by exactly the fees. It now also reads `GET /bills/:id/presentation`, renders the fees group beside the segments, adds a `Fees and adjustments` row to its totals, and takes **Total** from `totals.total` rather than `bill.total`. When the presentation cannot be resolved it falls back to the rated figures rather than refusing to open: there is still a bill to show. `BillPresentationError` carries `statusCode = 422` so a route that does not map its codes itself still answers 422 — every presentation code in `bill-documents.ts`'s table is 422, so that agrees with it rather than competing.
+
+    **A reversal borrows the entry it cancelled**, through `reverses_id`: `Late payment fee reversed 2026-10-04 — for bill BILL-202608-1`. "Reversal" names nothing a customer can place, and the credit a `REPLACE_LOWER_TIERS` tier writes only reads as a superseded fee next to the charge that replaced it — which needs both lines naming the same bill. It borrows only when that entry carries a reason, since a reversed bill charge has none and "Reversal reversed" is worse than "Reversal".
 
 ## UI Pages
 
@@ -858,7 +867,7 @@ Not built: CSV export of the item list.
   - AR posting (module 23 slice 1): each issued `Bill` posts one signed `LedgerEntry`; `Account.balance` and `lastDueDate` are recomputed from the ledger in the posting transaction; posting is configurable per tenant (`UtilityConfig.autoPostBills`) and per account
 
 - **Phase 3 — shipped (bill production slice 1):**
-  - `BillPresentation` resolver turning a `Bill` and its neighbours into the content a PDF is generated from
+  - `BillPresentation` resolver turning a `Bill` and its neighbours into the content a PDF is generated from. The resolver was split into `services/bill-presentation/` on 2026-10-26, at 652 lines, following the layout `billing-run/` already uses: `bill-presentation.service.ts` is a re-export and nothing else, and the directory holds `document` (the resolved shape — types only, so a template author reads no machinery), `issuer` and `recipient` (the two sides of the envelope), `charges` (the rated groups), `fees` (the fees-and-adjustments window), `settlement` (what has been paid), `labels` (what a ledger entry is called on a bill) and `format` (how one number, date or address prints). Callers import from the same path as before, which is what makes it a move rather than a redesign — the file's own comment banners were already these seams.
   - Declarative bill template + byte-stable `@react-pdf/renderer` machinery
   - `BillDocument` pointer rows; bytes in the tenant's own object store via apptor-connect's files plane
   - Issuer identity and bill storage as `UtilityConfig.settings` namespaces (`issuer`, `billDocuments`) — no new columns
