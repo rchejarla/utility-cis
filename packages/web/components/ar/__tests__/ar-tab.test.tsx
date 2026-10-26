@@ -30,6 +30,8 @@ function row(over: Partial<LedgerRow> = {}): LedgerRow {
     reasonLabel: null,
     billNumber: "BILL-202605-1",
     billId: null,
+    assessedOnBillNumber: null,
+    assessedOnBillId: null,
     tender: null,
     memo: null,
     reversedByEntryId: null,
@@ -177,6 +179,30 @@ describe("ArTab", () => {
     expect(within(table).getAllByText("($25.00)")).toHaveLength(2);
   });
 
+  /**
+   * The per-entry column says "Open", not "Still owed".
+   *
+   * It holds `openAmount` — what is left of *this* entry — and it sat
+   * two inches under a card labelled "Amount due", which is the whole
+   * account. Two different questions in nearly the same words, and a
+   * reader took the column for the account's balance. "Open" matches
+   * both the card beside it ("Open items") and the ledger's own
+   * vocabulary, so the two visibly refer to one thing at two scales.
+   *
+   * The Bills page keeps "Still owed" for a *bill*, where it sits next
+   * to Total and spec 23 argues for it.
+   */
+  it("names the per-entry column for what it holds, not for the account's balance", async () => {
+    routeGets(page({ balance: "40.00", openCount: 1, data: [row()] }));
+    renderTab();
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("Open")).toBeInTheDocument();
+    expect(within(table).queryByText("Still owed")).not.toBeInTheDocument();
+    // Charged stays: a $40 charge with $15 left is not a $15 charge.
+    expect(within(table).getByText("Charged")).toBeInTheDocument();
+  });
+
   it("prefers the reason's own label over the type name", async () => {
     routeGets(page({
         balance: "25.00",
@@ -196,6 +222,94 @@ describe("ArTab", () => {
 
     expect(await screen.findByText("Late payment fee")).toBeInTheDocument();
     expect(screen.queryByText("Fee")).not.toBeInTheDocument();
+  });
+
+  /**
+   * Which bill a late fee punishes.
+   *
+   * A fee has no bill of its own, so the bill column was blank on the
+   * one row where a customer most wants an answer — and the per-bill
+   * ladder can raise three of them in a single sweep, leaving a CSR
+   * three "Late payment fee" rows that differ only in their memo.
+   */
+  it("says which bill a fee was raised on, where the fee has no bill of its own", async () => {
+    routeGets(page({
+        balance: "20.00",
+        openCount: 2,
+        data: [
+          row({
+            id: "f1",
+            type: "FEE",
+            amount: "10.00",
+            openAmount: "10.00",
+            reasonLabel: "Late payment fee",
+            billNumber: null,
+            billId: null,
+            assessedOnBillNumber: "BILL-202608-1",
+            assessedOnBillId: "b-aug",
+          }),
+          row({
+            id: "f2",
+            type: "FEE",
+            amount: "10.00",
+            openAmount: "10.00",
+            reasonLabel: "Late payment fee",
+            billNumber: null,
+            billId: null,
+            assessedOnBillNumber: "BILL-202609-1",
+            assessedOnBillId: "b-sep",
+          }),
+        ],
+      }),
+    );
+    renderTab();
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("for BILL-202608-1")).toBeInTheDocument();
+    expect(within(table).getByText("for BILL-202609-1")).toBeInTheDocument();
+  });
+
+  /**
+   * The bill a row belongs to, in its own column.
+   *
+   * It lived inside the Detail cell, joined with the tender, the due
+   * date and the memo in 12px muted grey — present, and not findable by
+   * someone scanning for a bill number, which is what a CSR holds on a
+   * call.
+   *
+   * The column carries two different relationships and has to keep them
+   * apart: a BILL_CHARGE **came from** a bill, a FEE was **raised on**
+   * one and belongs to no bill of its own. So the second reads "for
+   * <number>", which under a heading of "Bill" says what it means
+   * without a sentence. A bare number in both places would assert the
+   * first where the truth is the second.
+   */
+  it("gives the bill its own column, keeping 'came from' apart from 'raised on'", async () => {
+    routeGets(page({
+        balance: "40.00",
+        openCount: 2,
+        data: [
+          row({ id: "c1", billNumber: "BILL-202610-1" }),
+          row({
+            id: "f1",
+            type: "FEE",
+            reasonLabel: "Late payment fee",
+            billNumber: null,
+            assessedOnBillNumber: "BILL-202608-1",
+          }),
+          row({ id: "p1", type: "PAYMENT", amount: "-20.00", billNumber: null, tender: "CHECK" }),
+        ],
+      }),
+    );
+    renderTab();
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("Bill")).toBeInTheDocument();
+    expect(within(table).getByText("BILL-202610-1")).toBeInTheDocument();
+    expect(within(table).getByText("for BILL-202608-1")).toBeInTheDocument();
+    // A payment belongs to no bill either way, and says so rather than
+    // leaving a cell that reads as missing data.
+    expect(within(table).getAllByText("—").length).toBeGreaterThan(0);
   });
 
   it("pluralises the open-item count", async () => {

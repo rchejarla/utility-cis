@@ -59,6 +59,13 @@ export interface LedgerRow {
    * bill, not the entry; `billNumber` above is display text.
    */
   billId: string | null;
+  /**
+   * The bill this entry was raised ON — a different question. A late fee
+   * has no bill of its own, and since the ladder charges per overdue
+   * bill one sweep can raise several on one account.
+   */
+  assessedOnBillNumber: string | null;
+  assessedOnBillId: string | null;
   tender: string | null;
   memo: string | null;
   reversedByEntryId: string | null;
@@ -398,8 +405,26 @@ export function ArTab({ accountId }: { accountId: string }) {
             <tr style={{ background: "var(--bg-elevated)" }}>
               <th style={th}>Date</th>
               <th style={th}>Entry</th>
+              {/*
+                Its own column, because a bill number is what a CSR
+                holds on a call and it was previously joined into the
+                Detail cell with the tender, the due date and the memo —
+                present, and not findable by anyone scanning for it.
+              */}
+              <th style={th}>Bill</th>
               <th style={{ ...th, textAlign: "right" }}>Charged</th>
-              <th style={{ ...th, textAlign: "right" }}>Still owed</th>
+              {/*
+                `openAmount` — what is left of THIS entry. Named "Open"
+                rather than "Still owed" because it sat two inches under
+                a card reading "Amount due", which is the whole account:
+                two different questions in nearly the same words, and a
+                reader took the column for the account's balance. "Open"
+                pairs with the "Open items" card beside it and with the
+                ledger's own vocabulary, so the two read as one thing at
+                two scales. The Bills page keeps "Still owed" for a
+                *bill*, where it sits next to Total.
+              */}
+              <th style={{ ...th, textAlign: "right" }}>Open</th>
               <th style={th}>Detail</th>
               {showRowActions && <th style={th} aria-label="Actions" />}
             </tr>
@@ -415,6 +440,27 @@ export function ArTab({ accountId }: { accountId: string }) {
                     {describe(row)}
                     {reversed && <span style={marker}>reversed</span>}
                     {row.reversesEntryId && <span style={marker}>reverses an earlier entry</span>}
+                  </td>
+                  {/*
+                    Two relationships, kept apart. A BILL_CHARGE **came
+                    from** a bill; a FEE was **raised on** one and
+                    belongs to no bill of its own, so it reads "for
+                    <number>" — under a heading of "Bill" that says what
+                    it means without a sentence. A bare number in both
+                    places would assert the first where the truth is the
+                    second, which is the misreading this whole column
+                    exists to serve rather than cause.
+                  */}
+                  <td
+                    style={{
+                      ...td,
+                      fontSize: "12px",
+                      whiteSpace: "nowrap",
+                      color: row.billNumber ? "var(--text-secondary)" : "var(--text-muted)",
+                    }}
+                  >
+                    {row.billNumber ??
+                      (row.assessedOnBillNumber ? `for ${row.assessedOnBillNumber}` : "—")}
                   </td>
                   <td style={{ ...td, textAlign: "right", fontFamily: "monospace" }}>
                     {/* A credit is shown in brackets, the accounting
@@ -447,7 +493,10 @@ export function ArTab({ accountId }: { accountId: string }) {
                   </td>
                   <td style={{ ...td, color: "var(--text-muted)", fontSize: "12px" }}>
                     {[
-                      row.billNumber,
+                      // Both bill references moved to the Bill column.
+                      // Repeating them here would be the same fact
+                      // twice on one row, and this cell is what was
+                      // too crowded to read.
                       row.tender,
                       row.dueDate ? `due ${row.dueDate}` : null,
                       row.memo,

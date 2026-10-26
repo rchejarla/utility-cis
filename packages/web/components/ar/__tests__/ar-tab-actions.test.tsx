@@ -32,6 +32,8 @@ function row(over: Partial<LedgerRow> = {}): LedgerRow {
     reasonLabel: null,
     billNumber: "BILL-202605-1",
     billId: null,
+    assessedOnBillNumber: null,
+    assessedOnBillId: null,
     tender: null,
     memo: null,
     reversedByEntryId: null,
