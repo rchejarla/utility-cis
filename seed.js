@@ -1,8 +1,53 @@
-const { PrismaClient } = require("./packages/shared/src/generated/prisma");
-const { PrismaPg } = require("@prisma/adapter-pg");
-const pg = require("pg");
 const { execSync } = require("node:child_process");
 const path = require("node:path");
+const { createRequire } = require("node:module");
+
+const { PrismaClient } = require("./packages/shared/src/generated/prisma");
+const { seedDelinquencyLadder } = require("./seed/delinquency-ladder.js");
+
+/*
+ * `@prisma/adapter-pg` and `pg` are declared by `packages/shared`, and
+ * pnpm does not hoist a workspace package's dependencies into the root
+ * `node_modules` — which holds only the root's own `turbo` and
+ * `typescript`. A bare `require` from this file therefore walks out of
+ * the repository and fails with MODULE_NOT_FOUND.
+ *
+ * It fails on *line 2*, before `main()` and before a single delete, so
+ * the symptom is a seed that never runs rather than a database left half
+ * written. That is why it went unnoticed from the Prisma 7 upgrade
+ * (which introduced both requires — Prisma 7 has no engine of its own,
+ * so a client is always built over a driver adapter) until someone
+ * wondered why fresh seed data was not appearing.
+ *
+ * Resolved from the package that declares them. The generated client
+ * above needs no such help: it is required by relative path.
+ */
+const sharedRequire = createRequire(
+  path.join(__dirname, "packages", "shared", "package.json"),
+);
+const { PrismaPg } = sharedRequire("@prisma/adapter-pg");
+const pg = sharedRequire("pg");
+
+/*
+ * The same upgrade's other half: under Prisma 6 the client read `.env`
+ * itself, which is what `seed_db.bat` means when it says
+ * "packages/shared/.env is authoritative for this script". Prisma 7
+ * builds the pool here instead, from `process.env.DATABASE_URL`, and
+ * nothing loads that file — so with the stray-override guard having
+ * cleared the variable, the connection string was `undefined` and `pg`
+ * failed on a missing password rather than on a missing URL
+ * ("SASL: client password must be a string").
+ *
+ * Only when it is not already set, which keeps the documented
+ * precedence: `seed_db.bat` clears the variable so this file wins, while
+ * a direct `node seed.js` still honours a DATABASE_URL the caller meant.
+ * That is also the hazard the batch file exists to guard — this seeder
+ * deletes before it inserts, so a shell carrying another project's URL
+ * would wipe that project. Prefer the batch file.
+ */
+if (!process.env.DATABASE_URL) {
+  process.loadEnvFile(path.join(__dirname, "packages", "shared", ".env"));
+}
 // Prisma 7 has no engine of its own, so a client is always built over a
 // driver adapter. There is no no-argument form any more.
 const p = new PrismaClient({
@@ -40,7 +85,21 @@ async function main() {
   // family as bill_document and billing_run below: a RESTRICT parent
   // that the seed itself never creates and therefore never thought to
   // clear.
+  //
+  // The fee links go first: they RESTRICT both the action and the ledger
+  // entry, so a second seed run would fail on the delete below — and now
+  // that the seed itself writes them, it would fail on every run rather
+  // than only after a worker had been left attached.
+  if (p.delinquencyActionFee) await p.delinquencyActionFee.deleteMany({});
   if (p.delinquencyAction) await p.delinquencyAction.deleteMany({});
+  // And the rules, after the actions that RESTRICT them. A charging tier
+  // holds `fee_reason_id -> ledger_reason_def` under RESTRICT, and this
+  // file deletes the reasons further down, so rules left standing from a
+  // previous run would refuse that delete. They used to survive on
+  // purpose — the create below was a findFirst-then-create — but a
+  // surviving rule now pins a reason the seed is about to recreate, and
+  // "idempotent" and "clears what it owns" cannot both be true here.
+  if (p.delinquencyRule) await p.delinquencyRule.deleteMany({});
   if (p.serviceSuspension) await p.serviceSuspension.deleteMany({});
   if (p.serviceEvent) await p.serviceEvent.deleteMany({});
   if (p.meterEvent) await p.meterEvent.deleteMany({});
@@ -1277,27 +1336,25 @@ async function main() {
   }
   console.log("  " + notifTemplates.length + " notification templates");
 
-  // Seed delinquency rules — 5-tier escalation chain
-  const delinqRules = [
-    { name: "Past Due Reminder", tier: 1, daysPastDue: 10, minBalance: 25, actionType: "NOTICE_EMAIL", notificationEventType: "delinquency.tier_1", autoApply: true },
-    { name: "Formal Past Due Notice", tier: 2, daysPastDue: 20, minBalance: 25, actionType: "NOTICE_EMAIL", notificationEventType: "delinquency.tier_2", autoApply: true },
-    { name: "Shut-Off Warning — 48 Hours", tier: 3, daysPastDue: 30, minBalance: 50, actionType: "NOTICE_SMS", notificationEventType: "delinquency.tier_3", autoApply: true },
-    { name: "Shut-Off Eligible", tier: 4, daysPastDue: 35, minBalance: 50, actionType: "SHUT_OFF_ELIGIBLE", notificationEventType: null, autoApply: true },
-    { name: "Disconnect", tier: 5, daysPastDue: 37, minBalance: 50, actionType: "DISCONNECT", notificationEventType: "delinquency.tier_4", autoApply: false },
-  ];
-  for (const r of delinqRules) {
-    const existing = await p.delinquencyRule.findFirst({ where: { utilityId: UID, tier: r.tier, accountType: null } });
-    if (!existing) {
-      await p.delinquencyRule.create({ data: { utilityId: UID, ...r, minBalance: r.minBalance, effectiveDate: new Date("2025-01-01") } });
-    }
-  }
-  console.log("  " + delinqRules.length + " delinquency rules");
-
   // Set balance and lastDueDate on a couple of accounts for delinquency testing
-  const thirtyDaysAgo = new Date();
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-  const fifteenDaysAgo = new Date();
-  fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
+  /*
+   * An opening balance is loaded at conversion, so it predates the
+   * account's first bill — one month before the oldest seeded one.
+   *
+   * It used to be 30 and 15 days ago, chosen when these accounts had no
+   * bills. Dated inside a billing period it lands in the next bill's
+   * fees window and prints under *Fees and adjustments* as though the
+   * utility had just charged it: a demo bill for $41.54 of water asking
+   * for $489.34, with a $412.80 "adjustment" nobody could explain.
+   * Before the first bill it is what it says it is — a balance brought
+   * across — and the arrears are old, which is what a conversion looks
+   * like.
+   */
+  const conversionDate = new Date(Date.UTC(
+    READ_DAY_UTC.getUTCFullYear(),
+    READ_DAY_UTC.getUTCMonth() - 3,
+    15,
+  ));
 
   // AR reason codes (module 23 slice 3). Mirrors DEFAULT_REASON_CODES in
   // packages/shared/src/validators/ledger.ts — seed.js runs as plain
@@ -1333,13 +1390,77 @@ async function main() {
   }
   console.log("  " + reasonCodes.length + " AR reason codes");
 
+  /*
+   * Delinquency rules — a 5-tier escalation chain, the first three of
+   * which charge money.
+   *
+   * After the reason codes, not before, because a tier that charges has
+   * to name the reason its fee books to and there is no code this
+   * codebase could hardcode: reason codes are the tenant's own. Only
+   * LATE_FEE carries `allowsDelinquencyFee`, and the API refuses a tier
+   * pointed at any other — booking late fees under "Returned payment
+   * fee" is a silent accounting error the customer's bill would print.
+   *
+   * **Both fee modes, so a fresh database shows each.** Tier 1 charges a
+   * flat $10 and accumulates. Tier 2 **replaces** it: it reverses what
+   * the ladder charged below it on the same bill and raises $25, so the
+   * account ends at $25 rather than $35 and the next bill prints the
+   * reversal as its own credit line beside the new charge. Tier 3
+   * accumulates a percentage on top of whatever stands.
+   *
+   * ACCUMULATE is the column's default and what every tier did before
+   * the mode existed, so configuring a fee changes nobody's bill until
+   * someone asks for replacement. Seeding one of each is a demo choice,
+   * not a recommendation — a utility whose tariff says fees compound
+   * wants ACCUMULATE throughout.
+   *
+   * Tiers 4 and 5 charge nothing. Being eligible for shut-off is not a
+   * billable event; the reconnection fee that follows one is raised when
+   * service is actually restored.
+   */
+  const delinqRules = [
+    { name: "Past Due Reminder", tier: 1, daysPastDue: 10, minBalance: 25, actionType: "NOTICE_EMAIL", notificationEventType: "delinquency.tier_1", autoApply: true,
+      feeType: "FLAT_FEE", feeAmount: "10.0000", maxFee: null, feeMode: "ACCUMULATE" },
+    { name: "Formal Past Due Notice", tier: 2, daysPastDue: 20, minBalance: 25, actionType: "NOTICE_EMAIL", notificationEventType: "delinquency.tier_2", autoApply: true,
+      feeType: "FLAT_FEE", feeAmount: "25.0000", maxFee: null, feeMode: "REPLACE_LOWER_TIERS" },
+    // The percentage tier, so both fee types exist in a fresh database.
+    // 1.5% of what is left of the bill, capped — a cap is only legal on
+    // a percentage, and a CHECK refuses it on a flat fee.
+    { name: "Shut-Off Warning — 48 Hours", tier: 3, daysPastDue: 30, minBalance: 50, actionType: "NOTICE_SMS", notificationEventType: "delinquency.tier_3", autoApply: true,
+      feeType: "PERCENT_OF_BALANCE", feeAmount: "0.0150", maxFee: "50.00", feeMode: "ACCUMULATE" },
+    { name: "Shut-Off Eligible", tier: 4, daysPastDue: 35, minBalance: 50, actionType: "SHUT_OFF_ELIGIBLE", notificationEventType: null, autoApply: true,
+      feeType: null, feeAmount: null, maxFee: null, feeMode: "ACCUMULATE" },
+    { name: "Disconnect", tier: 5, daysPastDue: 37, minBalance: 50, actionType: "DISCONNECT", notificationEventType: "delinquency.tier_4", autoApply: false,
+      feeType: null, feeAmount: null, maxFee: null, feeMode: "ACCUMULATE" },
+  ];
+  const ruleRows = [];
+  for (const r of delinqRules) {
+    ruleRows.push(
+      await p.delinquencyRule.create({
+        data: {
+          utilityId: UID,
+          ...r,
+          minBalance: r.minBalance,
+          // A tier whose fee has no reason is dead configuration, which
+          // a CHECK refuses — so the two arrive together or not at all.
+          feeReasonId: r.feeType ? reasonByCode["LATE_FEE"] : null,
+          effectiveDate: new Date("2025-01-01"),
+        },
+      }),
+    );
+  }
+  console.log(
+    "  " + delinqRules.length + " delinquency rules (" +
+      delinqRules.filter((r) => r.feeType).length + " charging a late fee)",
+  );
+
   // Opening balances come from real ledger entries, not typed-in numbers.
   // GET /api/v1/ar/reconciliation compares account.balance against
   // SUM(ledger_entry.open_amount), so a balance with nothing behind it
   // shows as drift on every fresh seed.
   for (const [acct, amount, dueDate] of [
-    [aArr[0], "412.80", thirtyDaysAgo],
-    [aArr[1], "85.50", fifteenDaysAgo],
+    [aArr[0], "412.80", conversionDate],
+    [aArr[1], "85.50", conversionDate],
   ]) {
     await p.ledgerEntry.create({
       data: {
@@ -1433,7 +1554,7 @@ async function main() {
   // opening balance, which is older than the fee.
   await p.account.update({
     where: { id: aArr[0].id },
-    data: { balance: "422.80", lastDueDate: thirtyDaysAgo },
+    data: { balance: "422.80", lastDueDate: conversionDate },
   });
   console.log("  1 late fee, partially waived");
 
@@ -1790,6 +1911,39 @@ async function main() {
       },
     });
     console.log("  2 payments (one part-paying a bill, one reversed NSF)");
+  }
+
+  /*
+   * The late-fee ladder, already run on the oldest unpaid bill.
+   *
+   * Last, after the bills and the payments, because it reads the open
+   * overdue charge they leave behind and writes the account's balance
+   * cache from the finished ledger.
+   *
+   * `aArr[0]` because it owns SA-0001, the one agreement with twelve
+   * months of reads — so a billing run can actually produce its next
+   * bill, which is where these fees print.
+   */
+  const ladder = await seedDelinquencyLadder({
+    p,
+    utilityId: UID,
+    accountId: aArr[0].id,
+    rules: ruleRows,
+  });
+  if (ladder.skipped) {
+    console.log("  [skip] late-fee ladder: " + ladder.skipped);
+  } else {
+    console.log(
+      "  " + ladder.raised.length + " late fees on bill " + ladder.billNumber +
+        " (account " + ladder.accountNumber + ", due " +
+        ladder.dueDate.toISOString().slice(0, 10) + "): " +
+        ladder.raised.map((f) => "tier " + f.tier + " $" + f.amount).join(", "),
+    );
+    console.log(
+      "       they print on the next bill for this cycle, dated " +
+        ladder.printsOnBillDated.toISOString().slice(0, 10) +
+        " — run Billing > Billing Runs for cycle R01",
+    );
   }
 
   const testUsers = [
