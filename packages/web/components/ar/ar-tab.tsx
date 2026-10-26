@@ -169,7 +169,9 @@ export function ArTab({ accountId }: { accountId: string }) {
    * bill — and the column has to exist for them.
    */
   const showRowActions =
-    canReverse || canForgive || (page?.data.some((r) => r.billId) ?? false);
+    canReverse ||
+    canForgive ||
+    (page?.data.some((r) => r.billId ?? r.assessedOnBillId) ?? false);
 
   /**
    * What this entry can have done to it, in the order a bill row offers
@@ -511,10 +513,20 @@ export function ArTab({ accountId }: { accountId: string }) {
                             customer phones about one. A ledger entry only
                             exists once its bill is posted, so there is no
                             unposted case to guard here. */}
-                        {row.billId && (
+                        {/*
+                          Falling back to the bill this row was raised
+                          ON. A fee carries no `bill_id`, so the one row
+                          a customer most often phones about had no way
+                          to reach the document that explains it while
+                          the bill charge beside it did. Labelled with
+                          the bill it opens, and the Bill column says
+                          "for <number>" alongside, so neither implies
+                          the fee came from that bill.
+                        */}
+                        {(row.billId ?? row.assessedOnBillId) && (
                           <BillPdfButton
-                            billId={row.billId}
-                            billNumber={row.billNumber ?? "bill"}
+                            billId={(row.billId ?? row.assessedOnBillId)!}
+                            billNumber={row.billNumber ?? row.assessedOnBillNumber ?? "bill"}
                             onChanged={load}
                           />
                         )}

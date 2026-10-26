@@ -18,6 +18,15 @@ import type { LedgerPage, LedgerRow } from "../ar-tab";
 const mockedGet = vi.mocked(apiClient.get);
 const mockedPost = vi.mocked(apiClient.post);
 
+/**
+ * A fee row can open the bill it was raised on.
+ *
+ * The button appeared only where `billId` was set, so the one row a
+ * customer most often phones about — the late fee — had no way to reach
+ * the bill that explains it, while the bill charge beside it did. A fee
+ * carries no `bill_id` of its own; `assessedOnBillId` is the bill it
+ * punishes, and that is the document a CSR needs on the call.
+ */
 function row(over: Partial<LedgerRow> = {}): LedgerRow {
   return {
     id: "e1",
@@ -138,6 +147,34 @@ describe("ArTab actions — permissions", () => {
     renderTab();
     expect(await screen.findByRole("button", { name: /view bill/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /more actions/i })).not.toBeInTheDocument();
+  });
+
+  it("opens the bill a fee was raised on, where the fee has no bill of its own", async () => {
+    grant({ accounts: ["VIEW"] });
+    routeGets({
+      data: [
+        row({
+          id: "f1",
+          type: "FEE",
+          reasonLabel: "Late payment fee",
+          billId: null,
+          billNumber: null,
+          assessedOnBillId: "b-aug",
+          assessedOnBillNumber: "BILL-202608-1",
+        }),
+      ],
+      balance: "10.00",
+      openCount: 1,
+      depositHeld: "0.00",
+    });
+    renderTab();
+
+    // Labelled with the bill it opens, so the button cannot imply the
+    // fee came from that bill — the Bill column says "for BILL-202608-1"
+    // beside it.
+    expect(
+      await screen.findByRole("button", { name: /view bill/i }),
+    ).toBeInTheDocument();
   });
 
   it("offers Reverse in the row menu with payments:EDIT", async () => {
