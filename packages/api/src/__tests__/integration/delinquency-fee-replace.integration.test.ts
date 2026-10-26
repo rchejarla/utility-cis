@@ -32,7 +32,7 @@ vi.mock("../../lib/queues.js", async (importOriginal) => ({
  * addition to the penalty for being a fortnight late.
  *
  * What it must not get wrong is *which* fees it reverses. It walks
- * `DelinquencyAction.feeEntryId`, so the candidates are the fees this
+ * `delinquency_action_fee`, so the candidates are the fees this
  * ladder itself raised at lower tiers. A bounced-payment fee and a late
  * fee a CSR added by hand have no delinquency action, so neither is
  * reachable — whatever the tenant has named its reasons. The question is
@@ -87,7 +87,7 @@ interface Rung {
  */
 async function principal(amount: string, dueDaysAgo = 40) {
   const reason = await reasonId("OPENING_BALANCE");
-  return seedAsPlatform(async () =>
+  await seedAsPlatform(async () =>
     prismaImports.prisma.ledgerEntry.create({
       data: {
         utilityId: TENANT_A,
@@ -101,6 +101,7 @@ async function principal(amount: string, dueDaysAgo = 40) {
       },
     }),
   );
+  await recompute();
 }
 
 async function stillPastDue(): Promise<boolean> {
@@ -140,13 +141,39 @@ async function ladder(rungs: Rung[]) {
   }
 }
 
+/**
+ * The account is past due on a real bill, by `days`.
+ *
+ * First call creates the bill; a later call re-ages the one that is
+ * there rather than adding another, because the ladder now charges per
+ * bill and these cases are about one bill getting older. Setting the
+ * cache alone, as this used to, leaves nothing to charge at all.
+ */
 async function pastDue(opts: { balance: string; days: number }) {
-  return seedAsPlatform(async () =>
-    prismaImports.prisma.account.update({
-      where: { id: fix.accountId },
-      data: { balance: opts.balance, lastDueDate: daysAgo(opts.days) },
+  const existing = await seedAsPlatform(async () =>
+    prismaImports.prisma.ledgerEntry.findMany({
+      where: { utilityId: TENANT_A, type: "ADJUSTMENT_DEBIT" },
+      select: { id: true },
     }),
   );
+  if (existing.length === 0) {
+    await principal(opts.balance, opts.days);
+    return;
+  }
+  await seedAsPlatform(async () =>
+    prismaImports.prisma.ledgerEntry.updateMany({
+      where: { utilityId: TENANT_A, type: "ADJUSTMENT_DEBIT" },
+      data: { dueDate: daysAgo(opts.days) },
+    }),
+  );
+  await recompute();
+}
+
+async function recompute() {
+  return runAsTenant(TENANT_A, async () => {
+    const { recomputeAccountCache } = await import("../../services/ar/posting.service.js");
+    return recomputeAccountCache(prismaImports.prisma, TENANT_A, fix.accountId);
+  });
 }
 
 /** A fee an operator raised, not the ladder — so it has no action. */
@@ -339,15 +366,15 @@ describe("REPLACE_LOWER_TIERS", () => {
     await pastDue({ balance: "100.00", days: 20 });
     await evaluateAll(TENANT_A);
 
-    const [tierOne] = await seedAsPlatform(async () =>
-      prismaImports.prisma.delinquencyAction.findMany({
+    const [tierOneFee] = await seedAsPlatform(async () =>
+      prismaImports.prisma.delinquencyActionFee.findMany({
         where: { utilityId: TENANT_A },
-        select: { feeEntryId: true },
+        select: { entryId: true },
       }),
     );
     await runAsTenant(TENANT_A, async () => {
       const { reverseEntry } = await import("../../services/ar/reversal.service.js");
-      return reverseEntry(TENANT_A, ACTOR, "Tester", tierOne!.feeEntryId!, {
+      return reverseEntry(TENANT_A, ACTOR, "Tester", tierOneFee!.entryId, {
         memo: "Waived at the counter",
       });
     });

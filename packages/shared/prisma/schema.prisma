@@ -1795,15 +1795,18 @@ model DelinquencyAction {
   triggeredBy         String                  @map("triggered_by") @db.VarChar(20)
   triggeredByUserId   String?                 @map("triggered_by_user_id") @db.Uuid
   notificationId      String?                 @map("notification_id") @db.Uuid
-  /// The fee this action raised, when its tier charges one.
+  /// The fees this action raised, through `delinquency_action_fee`.
+  ///
+  /// Not a column, because a tier charges **per overdue bill**: one
+  /// action can own several fees, one for each bill that has passed the
+  /// tier. `fee_entry_id` held exactly one and is dropped.
   ///
   /// A tier that replaces what the ladder charged below it walks these
   /// links to find its candidates, which is what keeps a bounced-payment
   /// fee and an operator's manual late fee out of reach however the
   /// tenant has named its reasons: neither has a delinquency action. The
   /// question is ownership, not category, so it cannot be a filter on
-  /// the reason. Composite foreign key in the migration, as above.
-  feeEntryId          String?                 @map("fee_entry_id") @db.Uuid
+  /// the reason.
   resolvedAt          DateTime?               @map("resolved_at") @db.Timestamptz
   resolutionType      String?                 @map("resolution_type") @db.VarChar(50)
   notes               String?                 @db.Text
@@ -1818,6 +1821,29 @@ model DelinquencyAction {
   @@index([utilityId, status, tier])
   @@index([ruleId])
   @@map("delinquency_action")
+}
+
+/// Which fees a delinquency action raised.
+///
+/// A tier charges per overdue bill, so one action owns one fee per bill
+/// that had passed it — which is why this is a table and not a column.
+/// The bill each fee punishes is on the fee itself, in
+/// `ledger_entry.assessed_on_id`, the field slice 3 reserved for exactly
+/// this ("a late fee names the debit that went unpaid").
+///
+/// Keyed on the entry: a fee belongs to one action and no other. Both
+/// foreign keys are tenant-scoped composites and live in the migration,
+/// because Prisma cannot express a composite relation whose referencing
+/// `utility_id` is not optional.
+model DelinquencyActionFee {
+  utilityId String   @map("utility_id") @db.Uuid
+  actionId  String   @map("action_id") @db.Uuid
+  entryId   String   @map("entry_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@id([utilityId, entryId])
+  @@index([utilityId, actionId])
+  @@map("delinquency_action_fee")
 }
 
 // ─── Service Requests (Module 14) ───────────────────────────────

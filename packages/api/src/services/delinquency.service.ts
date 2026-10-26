@@ -1,8 +1,24 @@
+import { Prisma } from "@utility-cis/shared/src/generated/prisma";
 import { prisma } from "../lib/prisma.js";
 import { sendNotification } from "./notification.service.js";
 import { assessFee } from "./ar/fee.service.js";
 import { reverseEntry } from "./ar/reversal.service.js";
-import { tierFeeAmount } from "./delinquency-fee.js";
+import { chargeableDebits, tierFeeAmount } from "./delinquency-fee.js";
+import type { TxClient } from "./ar/posting.service.js";
+
+/** A tier that charges, with the fee columns proven non-null by the caller. */
+interface ChargingRule {
+  id: string;
+  tier: number;
+  name: string;
+  daysPastDue: number;
+  accountType: string | null;
+  feeType: "FLAT_FEE" | "PERCENT_OF_BALANCE";
+  feeAmount: Prisma.Decimal;
+  maxFee: Prisma.Decimal | null;
+  feeReasonId: string;
+  feeMode: "ACCUMULATE" | "REPLACE_LOWER_TIERS";
+}
 
 /**
  * Who the ledger records as having raised an automated fee.
@@ -24,126 +40,207 @@ export const AUTOMATED_ACTOR_NAME = "Delinquency (automated)";
  */
 
 /**
- * Whether this tier's own fee is still hanging over the account.
+ * Charge every unpaid bill that has passed one of these tiers.
  *
- * The partial unique index stops a *second live action*, which is what
- * keeps a duplicate out of one sweep and out of a concurrent one. It
- * cannot stop a re-charge, because it is deliberately partial: a
- * cancelled or resolved action leaves the account past due with nothing
- * live, and the next hourly tick would charge the tier again. A CSR
- * pressing Cancel does that, and `resolveAccount` — granting a payment
- * plan — cancels every PENDING action at once, so an account on three
- * charging tiers would be re-charged all three, and again on every
- * later resolve.
- *
- * So the gate is the money, not the action. Outstanding means **open or
- * reversed**: an open fee has not been dealt with, and a reversed one
- * was somebody deciding the customer does not owe it, which an hourly
- * sweep must not overrule. Only a fee paid in full and not reversed
- * clears the way, which is also what ending a delinquency episode looks
- * like — so a customer who clears their balance and falls behind on a
- * later bill is charged again, rather than paying one late fee per
- * account per lifetime.
+ * One transaction for the account: `chargeableDebits` locks it and
+ * reads, and the writes follow, so the figures a fee is computed from
+ * are the figures still true when it is written. Tiers run low to high,
+ * so a replacing tier meets the fees below it already in place.
  */
-async function tierFeeOutstanding(
-  tx: Parameters<typeof tierFeeAmount>[0],
+async function chargeOverdueBills(
   utilityId: string,
   accountId: string,
-  ruleId: string,
-): Promise<boolean> {
-  const priorFees = await tx.delinquencyAction.findMany({
-    where: { utilityId, accountId, ruleId, feeEntryId: { not: null } },
-    select: { feeEntryId: true },
-  });
-  if (priorFees.length === 0) return false;
+  chargingRules: ChargingRule[],
+  liveActionByRule: Map<string, string>,
+  now: Date,
+): Promise<number> {
+  return prisma.$transaction(async (tx) => {
+    const debits = await chargeableDebits(tx, utilityId, accountId, now);
+    if (debits.length === 0) return 0;
 
-  const outstanding = await tx.ledgerEntry.count({
-    where: {
-      utilityId,
-      id: { in: priorFees.map((a) => a.feeEntryId!) },
-      OR: [{ openAmount: { not: 0 } }, { reversedBy: { some: {} } }],
-    },
+    let raised = 0;
+    for (const rule of [...chargingRules].sort((a, b) => a.tier - b.tier)) {
+      for (const debit of debits) {
+        // The bill's own clock, not the account's. A bill three days
+        // late is charged nothing however old its neighbours are.
+        if (debit.daysPastDue < rule.daysPastDue) continue;
+        if (await alreadyChargedBill(tx, utilityId, rule.id, debit.id)) continue;
+
+        const amount = tierFeeAmount(
+          { feeType: rule.feeType, feeAmount: rule.feeAmount, maxFee: rule.maxFee },
+          debit,
+        );
+        /*
+         * Nothing to charge, so nothing is reversed either. Replacement
+         * sits behind this check because running it first let a tier
+         * reverse the fee below it and then charge nothing — forgiveness
+         * arriving as a side effect of a schedule, which the
+         * `delinquency_rule_replace_needs_fee` CHECK exists to forbid
+         * and cannot see, since it constrains configuration and this is
+         * an outcome.
+         */
+        if (!amount) continue;
+
+        if (rule.feeMode === "REPLACE_LOWER_TIERS") {
+          await replaceLowerTierFeesOnBill(tx, utilityId, accountId, rule, debit.id);
+        }
+
+        const fee = await assessFee(
+          utilityId,
+          AUTOMATED_ACTOR_ID,
+          AUTOMATED_ACTOR_NAME,
+          accountId,
+          {
+            amount,
+            reasonId: rule.feeReasonId,
+            // The bill this fee punishes. `fee.service.ts` reserved the
+            // field for exactly this and nothing had used it.
+            assessedOnId: debit.id,
+            memo: `${rule.name} — ${debit.daysPastDue} days past due`,
+          },
+          tx,
+        );
+        await tx.delinquencyActionFee.create({
+          data: { utilityId, actionId: liveActionByRule.get(rule.id)!, entryId: fee.feeId },
+        });
+        raised++;
+      }
+    }
+    return raised;
   });
-  return outstanding > 0;
 }
 
 /**
- * Reverse the fees this ladder raised at lower tiers of the same
- * ladder, before this tier raises its own.
+ * Whether this tier has already charged this bill.
  *
- * The candidates are found by walking `DelinquencyAction.feeEntryId`,
- * not by asking what reason a fee cites. That is what keeps a
- * returned-payment fee and a late fee a CSR added by hand out of reach:
- * neither has a delinquency action, whatever the tenant has named its
- * reasons. The question is which fees this ladder owns, and ownership is
- * not a category.
+ * Once, and once only. A bill is a fixed thing: the ladder expresses
+ * escalation over time through *higher tiers* — $10 at 15 days, $25 at
+ * 30 — not by charging the same tier again as the same bill ages. So
+ * the state of the earlier fee does not matter. Paid, still open, or
+ * waived by an operator at the counter, this tier is done with this
+ * bill.
  *
- * Reversal rather than deletion, so a statement reads $10 fee, $10
- * reversal, $25 fee — and because `reverseEntry` gives back what the
- * entry consumed. Reversing before the new fee is raised is what lets a
- * freed payment be re-applied to it.
+ * Going per bill is what let this become so simple. The account-level
+ * version had to ask whether the fee was open or reversed, to tell "the
+ * account cleared and fell behind again" (charge again) from "a CSR
+ * cancelled the action" (do not) — and it got that wrong in both
+ * directions before a reviewer caught it. Per bill there is nothing to
+ * tell apart: next month's unpaid bill is a different bill and is
+ * charged on its own account, and no cancelled action can re-arm a
+ * charge on a bill already charged.
  *
- * `accountType` has to match, or a RESIDENTIAL tier would reach into a
- * COMMERCIAL ladder's fees; those are separate ladders, as
- * `@@unique([utilityId, accountType, tier])` already says.
+ * The partial unique index still does its own job, which is stopping a
+ * duplicate *action* within or across sweeps. This stops a duplicate
+ * charge.
  */
-async function replaceLowerTierFees(
-  tx: Parameters<typeof tierFeeAmount>[0],
+async function alreadyChargedBill(
+  tx: TxClient,
+  utilityId: string,
+  ruleId: string,
+  debitId: string,
+): Promise<boolean> {
+  const fees = await ladderFeesOnBill(tx, utilityId, debitId, { ruleId });
+  return fees.length > 0;
+}
+
+/**
+ * The fees this ladder raised on one bill, narrowed by how the caller
+ * identifies the tier.
+ *
+ * Two hops rather than a relation filter: `delinquency_action_fee`
+ * carries scalar columns only, because its foreign keys are
+ * tenant-scoped composites that Prisma cannot express, so there is no
+ * relation to filter through. Every query here still carries its own
+ * `utility_id`.
+ */
+async function ladderFeesOnBill(
+  tx: TxClient,
+  utilityId: string,
+  debitId: string,
+  by: { ruleId: string } | { accountId: string; belowTier: number; accountType: string | null },
+): Promise<Array<{ id: string; openAmount: Prisma.Decimal }>> {
+  const actions = await tx.delinquencyAction.findMany({
+    where:
+      "ruleId" in by
+        ? { utilityId, ruleId: by.ruleId }
+        : {
+            utilityId,
+            accountId: by.accountId,
+            status: { in: ["PENDING", "COMPLETED"] },
+            rule: { tier: { lt: by.belowTier }, accountType: by.accountType },
+          },
+    select: { id: true },
+  });
+  if (actions.length === 0) return [];
+
+  const links = await tx.delinquencyActionFee.findMany({
+    where: { utilityId, actionId: { in: actions.map((a) => a.id) } },
+    select: { entryId: true },
+  });
+  if (links.length === 0) return [];
+
+  return tx.ledgerEntry.findMany({
+    where: { utilityId, id: { in: links.map((l) => l.entryId) }, assessedOnId: debitId },
+    select: { id: true, openAmount: true },
+  });
+}
+
+/**
+ * Reverse the fees this ladder raised on **this bill** at lower tiers.
+ *
+ * Found by walking `delinquency_action_fee`, not by asking what reason a
+ * fee cites. That is what keeps a returned-payment fee and a late fee a
+ * CSR added by hand out of reach: neither has a delinquency action,
+ * whatever the tenant has named its reasons. The question is which fees
+ * this ladder owns, and ownership is not a category.
+ *
+ * Scoped to the bill as well as the tier, so the $25 that supersedes a
+ * $10 on one bill leaves another bill's $10 standing. `accountType` has
+ * to match or a RESIDENTIAL tier would reach into a COMMERCIAL ladder's
+ * fees; those are separate ladders, as the rule's own unique key says.
+ */
+async function replaceLowerTierFeesOnBill(
+  tx: TxClient,
   utilityId: string,
   accountId: string,
-  rule: { tier: number; accountType: string | null; name: string },
+  rule: ChargingRule,
+  debitId: string,
 ): Promise<void> {
-  const lower = await tx.delinquencyAction.findMany({
-    where: {
-      utilityId,
-      accountId,
-      status: { in: ["PENDING", "COMPLETED"] },
-      feeEntryId: { not: null },
-      rule: { tier: { lt: rule.tier }, accountType: rule.accountType },
-    },
-    select: { feeEntryId: true },
+  const candidates = await ladderFeesOnBill(tx, utilityId, debitId, {
+    accountId,
+    belowTier: rule.tier,
+    accountType: rule.accountType,
   });
-  if (lower.length === 0) return;
+  if (candidates.length === 0) return;
 
-  const feeIds = lower.map((a) => a.feeEntryId!);
-
-  /*
-   * A fee already reversed is skipped rather than reversed again, which
-   * `reverseEntry` refuses with a 409. That state is reachable:
-   * `resolveAccount` resolves only the highest live tier and cancels the
-   * PENDING ones, so a lower COMPLETED action can outlive the tier above
-   * it, and when the account falls behind again this tier meets a
-   * candidate whose fee it already reversed. Without this the whole
-   * tenant's sweep would throw over it.
-   */
   const alreadyReversed = new Set(
     (
       await tx.ledgerEntry.findMany({
-        where: { utilityId, reversesId: { in: feeIds } },
+        where: { utilityId, reversesId: { in: candidates.map((c) => c.id) } },
         select: { reversesId: true },
       })
     ).map((r) => r.reversesId),
   );
 
-  for (const feeId of feeIds) {
-    if (alreadyReversed.has(feeId)) continue;
+  for (const fee of candidates) {
+    /*
+     * Already reversed is skipped rather than reversed again, which
+     * `reverseEntry` refuses with a 409. Reachable without a race: an
+     * operator waives the fee at the counter and a higher tier arrives
+     * afterwards. The catch covers the race itself, where a second
+     * process reverses between this read and the account lock.
+     */
+    if (alreadyReversed.has(fee.id)) continue;
     try {
       await reverseEntry(
         utilityId,
         AUTOMATED_ACTOR_ID,
         AUTOMATED_ACTOR_NAME,
-        feeId,
+        fee.id,
         { memo: `Replaced by ${rule.name}` },
         tx,
       );
     } catch (e) {
-      /*
-       * The set above is read before `reverseEntry` takes the account
-       * lock, so a second process can reverse the same fee in between
-       * and this one arrives to a 409. Already reversed is the outcome
-       * we wanted; it is not a reason to fail the tenant's sweep. Any
-       * other error still is.
-       */
       if ((e as { code?: string }).code !== "ENTRY_ALREADY_REVERSED") throw e;
     }
   }
@@ -165,6 +262,7 @@ function isDuplicateAction(e: unknown): boolean {
 export async function evaluateAll(utilityId: string): Promise<{
   accountsEvaluated: number;
   actionsCreated: number;
+  feesRaised: number;
 }> {
   const accounts = await prisma.account.findMany({
     where: {
@@ -193,7 +291,7 @@ export async function evaluateAll(utilityId: string): Promise<{
       utilityId,
       status: { in: ["PENDING", "COMPLETED"] },
     },
-    select: { accountId: true, ruleId: true },
+    select: { id: true, accountId: true, ruleId: true },
   });
 
   const actionSet = new Set(
@@ -202,6 +300,7 @@ export async function evaluateAll(utilityId: string): Promise<{
 
   const now = new Date();
   let actionsCreated = 0;
+  let feesRaised = 0;
 
   for (const account of accounts) {
     if (!account.lastDueDate) continue;
@@ -236,9 +335,21 @@ export async function evaluateAll(utilityId: string): Promise<{
       return true;
     });
 
+    /*
+     * The action pass: what is *done* to the account. One action per
+     * tier per account, so three unpaid bills do not mean three
+     * tier-one emails.
+     */
+    const liveActionByRule = new Map<string, string>();
     for (const rule of applicableRules) {
       const key = `${account.id}:${rule.id}`;
-      if (actionSet.has(key)) continue;
+      if (actionSet.has(key)) {
+        const existing = existingActions.find(
+          (a) => a.accountId === account.id && a.ruleId === rule.id,
+        );
+        if (existing) liveActionByRule.set(rule.id, existing.id);
+        continue;
+      }
 
       if (
         account.isProtected &&
@@ -250,110 +361,45 @@ export async function evaluateAll(utilityId: string): Promise<{
       let actionId: string | null = null;
 
       try {
-        /*
-         * The fee and the action commit together. An account marked
-         * delinquent with no charge, or charged with no record of which
-         * tier did it, are both worse than a sweep that fails and can be
-         * re-run — and a duplicate fee is a wrong bill, which is why
-         * this is a transaction and not two statements.
-         *
-         * The fee is written first so the action can name it in one
-         * insert rather than an insert and an update. A unique violation
-         * on the action therefore rolls the fee back with it, which is
-         * what makes the race safe to lose.
-         */
-        await prisma.$transaction(async (tx) => {
-          let feeEntryId: string | null = null;
-
-          if (rule.feeType && rule.feeAmount && rule.feeReasonId) {
-            const amount = (await tierFeeOutstanding(tx, utilityId, account.id, rule.id))
-              ? null
-              : await tierFeeAmount(tx, utilityId, account.id, {
-                  feeType: rule.feeType,
-                  feeAmount: rule.feeAmount,
-                  maxFee: rule.maxFee,
-                });
-
-            /*
-             * Null means there is nothing to charge — this tier's last
-             * fee is still outstanding, or a percentage of a base that
-             * rounds to nothing. The action is still written: the
-             * account passed the tier.
-             *
-             * Replacement is inside this branch, not before it. Running
-             * it first meant a tier could reverse the fee below it and
-             * then charge nothing, which is forgiveness arriving as a
-             * side effect of a schedule — the exact thing the
-             * `delinquency_rule_replace_needs_fee` CHECK was written to
-             * make inexpressible. That CHECK constrains configuration;
-             * only this ordering constrains the outcome.
-             */
-            if (amount) {
-              if (rule.feeMode === "REPLACE_LOWER_TIERS") {
-                await replaceLowerTierFees(tx, utilityId, account.id, rule);
-              }
-              const fee = await assessFee(
-                utilityId,
-                AUTOMATED_ACTOR_ID,
-                AUTOMATED_ACTOR_NAME,
-                account.id,
-                {
-                  amount,
-                  reasonId: rule.feeReasonId,
-                  memo: `${rule.name} — ${daysPastDue} days past due`,
-                },
-                tx,
-              );
-              feeEntryId = fee.feeId;
-            }
-          }
-
-          const action = await tx.delinquencyAction.create({
-            data: {
-              utilityId,
-              accountId: account.id,
-              ruleId: rule.id,
-              tier: rule.tier,
-              actionType: rule.actionType,
-              status: "PENDING",
-              balanceAtAction: balance,
-              daysPastDueAtAction: daysPastDue,
-              triggeredBy: "AUTOMATED",
-              feeEntryId,
-            },
-            select: { id: true },
-          });
-          actionId = action.id;
+        const action = await prisma.delinquencyAction.create({
+          data: {
+            utilityId,
+            accountId: account.id,
+            ruleId: rule.id,
+            tier: rule.tier,
+            actionType: rule.actionType,
+            status: "PENDING",
+            balanceAtAction: balance,
+            daysPastDueAtAction: daysPastDue,
+            triggeredBy: "AUTOMATED",
+          },
+          select: { id: true },
         });
+        actionId = action.id;
       } catch (e) {
         /*
          * Another process created this action between our read of the
          * live set and this insert. `actionSet` cannot see across
-         * processes, so the partial unique index is what turns that
-         * into a refusal instead of a duplicate; record it as taken
-         * and carry on rather than failing the whole tenant's sweep
-         * over one account.
-         *
-         * Nothing has been sent to the customer at this point, which is
-         * the reason the notice moved below: a sweep that rolls back —
-         * on a reason retired after the rule cited it, say — used to
-         * leave a notice behind every hour while never writing an
-         * action or a fee.
+         * processes, so the partial unique index is what turns that into
+         * a refusal instead of a duplicate; record it as taken and carry
+         * on rather than failing the whole tenant's sweep over one
+         * account. Nothing has been sent to the customer yet, which is
+         * why the notice comes after.
          */
         if (!isDuplicateAction(e)) throw e;
         actionSet.add(key);
         continue;
       }
 
+      liveActionByRule.set(rule.id, actionId);
+
       /*
-       * The notice, after the money and outside its transaction. An
-       * external dispatch inside a transaction holds a database lock
-       * across someone else's network call, and a notice that fails to
-       * send has to leave the action PENDING — which is what that
-       * status is for. The action is the record that the tier fired;
-       * the notification is an attempt to tell someone.
+       * The notice, after the action and outside any transaction. An
+       * external dispatch inside one holds a database lock across
+       * someone else's network call, and a notice that fails to send has
+       * to leave the action PENDING — which is what that status is for.
        */
-      if (rule.notificationEventType && actionId) {
+      if (rule.notificationEventType) {
         const channel =
           rule.actionType === "NOTICE_SMS" ? "SMS" as const : "EMAIL" as const;
         const notificationId = await sendNotification(utilityId, {
@@ -379,9 +425,49 @@ export async function evaluateAll(utilityId: string): Promise<{
       actionSet.add(key);
       actionsCreated++;
     }
+
+    /*
+     * The charging pass: what is *owed*, one ladder per unpaid bill.
+     *
+     * Separate from the action pass, and not nested inside it, because a
+     * bill can cross a tier's threshold long after that tier's action
+     * was filed. Charging inside the action pass meant the second bill
+     * was never charged at all: the action already existed, so the tier
+     * was skipped entirely.
+     *
+     * Only tiers with a live action charge, so a tier skipped for a
+     * protected account or held back by `autoApply` charges nothing
+     * either.
+     */
+    const chargingRules: ChargingRule[] = [];
+    for (const r of applicableRules) {
+      if (!r.feeType || !r.feeAmount || !r.feeReasonId) continue;
+      if (!liveActionByRule.has(r.id)) continue;
+      chargingRules.push({
+        id: r.id,
+        tier: r.tier,
+        name: r.name,
+        daysPastDue: r.daysPastDue,
+        accountType: r.accountType,
+        feeType: r.feeType,
+        feeAmount: r.feeAmount,
+        maxFee: r.maxFee,
+        feeReasonId: r.feeReasonId,
+        feeMode: r.feeMode,
+      });
+    }
+    if (chargingRules.length === 0) continue;
+
+    feesRaised += await chargeOverdueBills(
+      utilityId,
+      account.id,
+      chargingRules,
+      liveActionByRule,
+      now,
+    );
   }
 
-  return { accountsEvaluated: accounts.length, actionsCreated };
+  return { accountsEvaluated: accounts.length, actionsCreated, feesRaised };
 }
 
 /**
