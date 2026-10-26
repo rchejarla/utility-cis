@@ -41,8 +41,24 @@ Tenant-configured escalation rules. One row per tier per account type. Rules for
 | notification_event_type | VARCHAR(100) | Maps to a NotificationTemplate event type (e.g., `delinquency.tier_1`). Nullable for non-notice action types. |
 | auto_apply | BOOLEAN | If true, nightly job triggers automatically. If false, requires staff action. |
 | is_active | BOOLEAN | |
-| effective_date | DATE | Rule takes effect on this date |
+| effective_date | DATE | Rule takes effect on this date. **Gated since 2026-10-25:** a tier fires only where `effective_date <= account.last_due_date`. |
+| fee_type | ENUM | Nullable — `FLAT_FEE`, `PERCENT_OF_BALANCE`. Null for a tier that charges nothing, which is every tier before 2026-10-25. |
+| fee_amount | DECIMAL(10,4) | Nullable — an amount under FLAT_FEE, a rate under PERCENT_OF_BALANCE (0.0150 = 1.5%) |
+| max_fee | DECIMAL(10,2) | Nullable — caps a percentage fee. CHECK refuses it on a flat one, which is its own cap. |
+| fee_reason_id | UUID FK | Nullable — the `ledger_reason_def` the fee cites. Composite FK `(utility_id, fee_reason_id)`. |
+| fee_mode | ENUM | `ACCUMULATE` (default) or `REPLACE_LOWER_TIERS` |
+| service_request_type_code | VARCHAR(100) | Nullable — the work order this tier dispatches, by type code. No FK: see below. |
+| reconnect_request_type_code | VARCHAR(100) | Nullable — the request raised when the account clears |
 | created_at / updated_at | TIMESTAMPTZ | |
+
+**CHECKs on the fee columns.** `fee_type`, `fee_amount` and
+`fee_reason_id` are all set or all null — an amount with no reason is a
+charge nobody can explain, a reason with no amount is dead configuration
+that reads as if the tier charges something. `fee_amount > 0`. `max_fee`
+only with `PERCENT_OF_BALANCE`. `fee_mode = 'REPLACE_LOWER_TIERS'` only
+on a tier that charges, because otherwise the mode becomes a way to
+spell "cancel the earlier late fees" — and forgiving a charge is a
+waiver someone decided to grant, not a side effect of a schedule.
 
 **Unique:** `(utility_id, account_type, tier)` — one rule per tier per account type per tenant. Null account_type = "default for all types."
 **Index:** `(utility_id, is_active, tier)`
@@ -79,6 +95,40 @@ One row per action taken or scheduled against an account. The audit trail of the
 
 **Indexes:** `(account_id, status)`, `(utility_id, status, tier)`, `(rule_id)`
 
+### DelinquencyActionFee
+
+Which fees an action raised. A table and not a column, because a tier
+charges per overdue bill: one action owns one fee per bill that had
+passed it.
+
+| Field | Type | Notes |
+|---|---|---|
+| utility_id | UUID | Tenant scope. PK with `entry_id`. |
+| action_id | UUID FK | Composite `(utility_id, action_id)` |
+| entry_id | UUID FK | Composite `(utility_id, entry_id)`; the `FEE` entry |
+| created_at | TIMESTAMPTZ | |
+
+**Primary key `(utility_id, entry_id)`** — a fee belongs to one action
+and no other. The bill each fee punishes is on the fee itself, in
+`ledger_entry.assessed_on_id`. RLS enabled and FORCEd with the usual
+`tenant_isolation` policy, on one-argument `current_setting`: an empty
+result from the table that says which fees the ladder owns would read as
+"this tier has charged nothing", and a replacing tier would then reverse
+nothing and charge on top.
+
+**Partial unique index** `delinquency_action_one_live_per_rule` on
+`(utility_id, account_id, rule_id) WHERE status IN ('PENDING','COMPLETED')`.
+SQL only — Prisma cannot express a partial unique index, so `migrate dev`
+would propose dropping it.
+
+It exists because `evaluateAll`'s own guard is an in-memory `Set` built
+before its loop, which cannot see another process: the sweep runs hourly
+with BullMQ retries behind it, so two `delinquency-tenant` jobs for one
+tenant each build that `Set` separately. Partial on the two live
+statuses, because a RESOLVED or CANCELLED action is history and must not
+lock an account out of its own ladder. A losing insert is caught as
+P2002 and the account skipped, not the tenant's sweep failed.
+
 ### Status lifecycle
 
 ```
@@ -110,9 +160,172 @@ Runs hourly inside the BullMQ worker process (`packages/api/src/worker.ts`). The
    - Check if a DelinquencyAction already exists for this (account, rule). If yes, skip (no duplicate actions).
    - If account is protected and action_type is `SHUT_OFF_ELIGIBLE` or `DISCONNECT`, skip.
    - If `rule.autoApply` is false, skip (requires manual escalation).
-   - Create DelinquencyAction with `status = PENDING`, `triggeredBy = AUTOMATED`.
-   - If `rule.notificationEventType` is set, call `sendNotification()` and store the notification ID on the action.
-5. For actions where the linked notification has reached `status = SENT`, update the action to `COMPLETED`.
+   - Skip a rule whose `effective_date` is later than the account's `last_due_date`: it was not in force when the debt came due.
+   - If `rule.notificationEventType` is set, call `sendNotification()`.
+   - Create the DelinquencyAction, then send the notice.
+5. Then, per account and in one transaction, the charging pass: for each open overdue non-penalty debit, and each charging tier whose `days_past_due` that debit has passed and which has not already charged it — if the tier replaces, reverse the ladder's own lower-tier fees **on that debit**; raise the fee through `assessFee` naming the debit in `assessed_on_id`; and link it to the tier's live action in `delinquency_action_fee`.
+6. For actions where the linked notification has reached `status = SENT`, update the action to `COMPLETED`.
+7. `sweepReconnections(utilityId)`, then `sweepDelinquencyWorkOrders(utilityId)` — the field work, in that order.
+
+## What charges, and why it is shaped this way
+
+Built 2026-10-25. Each of these was a decision with a rejected
+alternative, recorded so the next reader does not have to re-derive it.
+
+**One ladder per unpaid bill.** This is the shape everything else here
+follows from, and it replaced an account-level ladder that was wrong in
+two ways: `days_past_due` comes from the *oldest* open debit, so a bill
+posted last week was charged a late fee because an older one had reached
+40 days, and a percentage tier took its rate against the whole balance —
+including money the customer had not yet been asked to pay. Each open,
+overdue, non-penalty debit now passes the tiers on its own clock and
+pays its own penalty. Two bills past the same tier are two charges; a
+bill three days late is charged nothing however old its neighbours are.
+
+**The action pass and the charging pass are separate, and have to be.**
+The action is what is *done* to the account — one per tier per account,
+so three unpaid bills do not mean three tier-one emails. The charges are
+per bill. Nesting the charging inside the action pass meant a bill that
+crossed a tier's threshold *later* was never charged at all: the tier's
+action already existed, so the tier was skipped entirely. Only tiers
+with a live action charge, so a tier held back for a protected account
+or by `auto_apply` charges nothing either.
+
+**The consequence: a fee is no longer in the same transaction as its
+action.** It cannot be — the fee may be raised hours or weeks after the
+action, when a later bill falls behind. What survives is that the
+*money* is atomic: the charging pass commits per account or not at all,
+under a lock taken before the figures are read. And the failure is loud
+— a tier citing a reason retired after it was saved leaves the account
+marked delinquent and uncharged, and every sweep raises until somebody
+fixes it, which beats a silent skip. This reverses a decision made
+earlier in this module's life, when the fee was account-level and the
+two could commit together.
+
+**A tier charges each bill once.** Not once per account, and not once
+per "episode". A bill is a fixed thing: escalation over time is
+expressed through *higher tiers* — $10 at 15 days, $25 at 30 — not by
+charging the same tier again as the same bill ages. So the state of the
+earlier fee does not matter: paid, still open, or waived at the counter,
+that tier is done with that bill.
+
+Going per bill is what let this become so simple. The account-level
+version had to ask whether the previous fee was open or reversed, to
+tell "the account cleared and fell behind again" (charge again) from "a
+CSR cancelled the action" (do not) — and it got that wrong in both
+directions before a review caught it. Per bill there is nothing to tell
+apart: next month's unpaid bill is a different bill, and no cancelled
+action can re-arm a charge on a bill already charged. The partial unique
+index still does its own job, which is stopping a duplicate *action*
+within a sweep and across concurrent ones.
+
+**A percentage is charged against the bill.** Its own `open_amount`, so
+a part-paid bill is charged on what is left of it, and `max_fee` caps
+each bill's fee because the fee is the bill's. `isPenalty` still does
+the work it was added for, now by deciding which debits may be charged
+*on* rather than what an account-wide base sums: an unpaid tap fee is
+money owed for work actually done and a late fee applies to it, while an
+unpaid late fee is not, and charging one on it compounds. `DEPOSIT` is
+excluded for the reason `recomputeAccountCache` excludes it from the
+balance.
+
+**Every fee names the bill it punishes**, in
+`ledger_entry.assessed_on_id` — the field slice 3 reserved for exactly
+this and nothing had used ("a late fee names the debit that went
+unpaid").
+
+**The episode close still matters, for the action.**
+`sweepReconnections` resolves every live action on an account whose
+balance has reached zero. Filtering it on `reconnect_request_type_code`
+was the first reading of #199 and it left the notice tiers live forever,
+since nothing else resolves an action: `resolveAccount` has one caller,
+a route. It no longer gates any *charge* — per-bill made that
+unnecessary — but an action that never resolves is a delinquency record
+that never closes.
+
+**The notice is sent after the action, and outside any transaction.** An
+external dispatch inside one holds a database lock across someone
+else's network call, and a notice that fails to send must leave the
+action PENDING, which is what that status is for.
+
+**Replacement happens only once this tier knows it will charge, and only
+on the same bill.** The reversal used to run first, so a percentage tier
+whose base rounded to nothing reversed the fee below it and raised
+nothing in its place — forgiveness arriving as a side effect of a
+schedule, which `delinquency_rule_replace_needs_fee` exists to forbid
+and cannot see, because it constrains configuration and this is an
+outcome. Scoped to the bill as well as the tier, so the $25 that
+supersedes a $10 on one bill leaves another bill's $10 standing.
+
+**The work-order sweep asks about the account, not only the action.**
+`evaluateAll`'s protected-account guard keys on `action_type`, while
+dispatch keys on the tier's `service_request_type_code`, so a tier with
+a notice action type and a shut-off work order reached a protected
+account. The sweep now requires `is_protected = false`, an ACTIVE
+account that still owes something, and an active rule — the last
+because `DELETE` on a rule only clears `is_active`, and an account that
+has since paid should not have a crew sent to it.
+
+**Which reason the fee cites is configuration on the tier.** The
+rejected alternative was any code the service could have known: there is
+none, because reason codes are tenant-configurable and a utility that
+names its own "Late charge" would be missed by any list this codebase
+could hold. `fee_reason_id` is a composite FK, so a tier cannot cite
+another tenant's reason.
+
+**That reason is validated when the rule is saved**, by the same
+`resolveReason` gate `assessFee` uses — `prisma` satisfies its
+transaction-client type, so it is literally the same gate and the same
+vocabulary (404 `REASON_NOT_FOUND`, 422 `REASON_TYPE_MISMATCH`). Both
+layers stay: the save-time one is for the operator, since otherwise a
+tier saved against an `ADJUSTMENT_DEBIT` reason throws at 03:00 inside a
+worker, possibly after other accounts in the tenant have been noticed.
+The sweep-time one stays because a reason can be retired after a rule
+cites it, and then the sweep must fail rather than charge.
+
+**Replacement walks `delinquency_action_fee`, never a reason.** A
+`REPLACE_LOWER_TIERS` tier reverses the fees *this ladder* raised on
+*this bill* at lower tiers of the same `account_type`. A
+returned-payment fee and a late fee a CSR added by hand have no
+delinquency action, so neither is reachable, whatever the tenant has
+named its reasons — the question is ownership, not category. A fee
+already reversed is skipped: `reverseEntry` refuses a second reversal
+with a 409, and the state is reachable because an operator can waive the
+fee at the counter before a higher tier arrives.
+
+**Reversing a paid fee returns the payment to credit**, which the new
+fee then absorbs: $10 paid, $25 raised, $15 still owed on fees and no
+money missing. Whether a bill nets that into one line or shows the
+reversal and the re-allocation is billing policy; the ledger is
+unambiguous either way.
+
+**The work orders are sweeps, not part of the transaction.** The
+rejected alternative was threading `existingTx` through
+`nextRequestNumber`, which opens a transaction of its own for the
+counter row — a nested call would hold a second pooled connection while
+the first holds the account lock, and under an hourly fan-out across
+tenants that is how a pool runs dry. The deciding asymmetry is simpler
+than that, though: a *late* work order costs nothing, a *duplicate* fee
+is a wrong bill. So the money is atomic and the dispatch is eventually
+correct. Both sweeps are keyed on state, which makes them idempotent by
+construction and lets them recover when the service request module was
+unavailable.
+
+**A reconnection is asked for only where the disconnection happened** —
+the shut-off request exists and is `COMPLETED`. An account that paid
+before a crew went out has nothing to turn back on. The action resolves
+either way, with `resolution_type` read from the ledger's most recent
+credit rather than assumed, because a balance can reach zero by being
+written off and recording that as a payment received would put a
+falsehood in the collections record.
+
+**The type codes have no foreign key.** `service_request_type_def`
+admits global rows with a null `utility_id`, which a tenant-scoped
+composite key cannot reference, and a single-column key to a table whose
+rows may be global would let one tenant's rule point at another's
+private type. `assertServiceRequestTypeCode` validates them when the
+rule is saved, and the sweep skips a code deactivated since rather than
+failing the tenant's whole pass over one account.
 
 **Tick interval:** hourly (same as suspension scheduler). Delinquency evaluation is not time-sensitive to the second — hourly is sufficient.
 
@@ -177,11 +390,35 @@ Runs hourly inside the BullMQ worker process (`packages/api/src/worker.ts`). The
 - Current balance and days past due at the top
 - Protection toggle (admin only)
 
-### Settings → Delinquency Rules (`/settings/delinquency-rules`)
+### Delinquency Rules (`/delinquency/rules`)
 
 - Table of rules organized by tier
 - Create/edit: tier, days past due, min balance, action type, notification event type (dropdown), auto-apply toggle
 - Rule chain preview: shows the escalation timeline visually
+
+**The fee and work-order fields (built 2026-10-25).** Two more groups
+in the editor: *Late fee* — what it charges (nothing, a flat amount, or a
+percentage), the amount or rate, an optional cap on a percentage, the
+FEE reason it books to, and whether a higher tier keeps or replaces it —
+and *Field work*, the work order this tier raises and the reconnection
+request raised when the balance clears. The table gains a **Late Fee**
+column so the whole ladder's charges read at a glance.
+
+The editor holds the rate in the operator's units, not the column's.
+`fee_amount` stores a rate — 0.0150 is 1.5% — and the field is labelled
+`Rate (%)`, so the conversion happens once on save and once on load. A
+test pins it, because sending the typed number straight through gives
+the tenant a 0.015% late fee that every constraint accepts and nobody
+notices for months.
+
+The three fee fields are always sent as a group, which is what the API
+requires and which also sidesteps `feeMode` being refused on its own.
+
+**Both pickers depend on other modules** — `ar_adjustments:VIEW` for the
+fee reasons, `service_requests:VIEW` for the type codes — so a role
+holding only delinquency permissions cannot populate them. The field
+says which permission is missing rather than showing an empty dropdown,
+which would read as "this tenant has none".
 
 ## Sidebar
 
@@ -232,11 +469,15 @@ New `delinquency` module added to MODULES constant. Permissions:
 
 ### Phase 3.2 (After SaaSLogic billing)
 - Payment-driven balance updates: recording a payment recomputes balance and lastDueDate from the ledger (module 23 slice 2), and SaaSLogic payment results feed the same path
-- Auto-resolve delinquency on payment confirmation
-- Reconnection fee as ad-hoc charge on resolution after disconnect
+- ~~Auto-resolve delinquency on payment confirmation~~ — **done 2026-10-25**, but on *state* rather than on a payment event: `sweepReconnections` asks which live actions have a cleared balance. Hanging it off `recordPayment` would have put collections in the money path, so taking a payment could fail because the service request module refused.
+- Reconnection fee as ad-hoc charge on resolution after disconnect — still open. The `RECONNECT_FEE` reason is seeded and `assessFee` would raise it; nothing decides when.
 
-### Phase 3.3 (After Module 14 — Service Requests)
-- DOOR_HANGER action creates a ServiceRequest of type DOOR_HANGER
-- DISCONNECT action creates a ServiceRequest for field crew
-- Reconnection ServiceRequest created on payment after disconnect
-- DelinquencyAction.status updated on SR closure
+### Phase 3.3 (After Module 14 — Service Requests) — **done 2026-10-25**
+- ~~DOOR_HANGER action creates a ServiceRequest of type DOOR_HANGER~~ · ~~DISCONNECT action creates a ServiceRequest for field crew~~ — generalised: any tier that names a `service_request_type_code` dispatches that type, because the codes are the tenant's own and a utility whose crews work off their own system wants the notice tiers and no work orders at all.
+- ~~Reconnection ServiceRequest created on payment after disconnect~~ — and only where the disconnection was actually carried out, so an account that paid before a crew went out has no-one sent in either direction.
+- ~~DelinquencyAction.status updated on SR closure~~ — **inverted, deliberately.** The action resolves when the *balance* clears, not when a work order closes; a closed shut-off request is instead the evidence that there is something to turn back on. Closing a work order says a crew did what it was told, which is not the same as the debt being settled.
+
+### Still open in collections
+- Payment plans (#147, #148) — no entity. This slice is what makes one worth offering: until now the ladder decided and nothing happened.
+- The aging dashboard (#149, #150).
+- The fee and work-order fields on the rules form (see the UI section).

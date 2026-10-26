@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { serviceRequestTypeCode } from "./service-request-type-def";
 
 export const delinquencyActionTypes = [
   "NOTICE_EMAIL",
@@ -15,6 +16,105 @@ export const resolutionTypes = [
   "WAIVED",
 ] as const;
 
+export const delinquencyFeeTypes = ["FLAT_FEE", "PERCENT_OF_BALANCE"] as const;
+export const delinquencyFeeModes = ["ACCUMULATE", "REPLACE_LOWER_TIERS"] as const;
+
+/**
+ * What a tier charges, as strings rather than numbers.
+ *
+ * `minBalance` above is a `z.number()` and this deliberately is not. A
+ * fee amount is handed straight to `assessFee`, whose own schema takes a
+ * decimal string, and a rate of 0.0150 has no exact float. The two
+ * conventions sit side by side in this file because the destination
+ * differs, not because one of them is a leftover.
+ *
+ * Four decimal places, because `feeAmount` is a money amount under
+ * FLAT_FEE and a rate under PERCENT_OF_BALANCE. `maxFee` is only ever
+ * money, so two.
+ */
+const feeAmountString = z
+  .string()
+  .regex(/^\d+(\.\d{1,4})?$/, "must be a positive decimal with at most 4 decimal places")
+  .refine((s) => Number(s) > 0, "must be greater than zero");
+
+const feeCapString = z
+  .string()
+  .regex(/^\d+(\.\d{1,2})?$/, "must be a positive amount with at most 2 decimal places")
+  .refine((s) => Number(s) > 0, "must be greater than zero");
+
+const feeFields = {
+  feeType: z.enum(delinquencyFeeTypes).nullable().optional(),
+  feeAmount: feeAmountString.nullable().optional(),
+  maxFee: feeCapString.nullable().optional(),
+  feeReasonId: z.string().uuid().nullable().optional(),
+  feeMode: z.enum(delinquencyFeeModes).optional(),
+  /*
+   * The field work this tier dispatches. Shaped like a service-request
+   * type code rather than validated against the tenant's own list here,
+   * which needs a query — the route does that with
+   * `assertServiceRequestTypeCode`, the same gate the request itself
+   * goes through.
+   */
+  serviceRequestTypeCode: serviceRequestTypeCode.nullable().optional(),
+  reconnectRequestTypeCode: serviceRequestTypeCode.nullable().optional(),
+};
+
+const FEE_TRIO = ["feeType", "feeAmount", "feeReasonId"] as const;
+
+/**
+ * The fee configuration is set, or cleared, as a unit.
+ *
+ * Checked here as well as by the database's CHECK so the operator gets a
+ * 400 naming the fields instead of a Prisma constraint error. On a PATCH
+ * the key-presence rule is what makes it checkable without reading the
+ * row back: sending one of the three alone would otherwise leave the row
+ * half-configured and fail in the database.
+ */
+function refineFeeGroup(
+  value: Record<string, unknown>,
+  ctx: z.RefinementCtx,
+): void {
+  const present = FEE_TRIO.filter((k) => k in value);
+  if (present.length > 0 && present.length < FEE_TRIO.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [FEE_TRIO.find((k) => !(k in value))!],
+      message: "feeType, feeAmount and feeReasonId are set and cleared together",
+    });
+  }
+
+  const filled = FEE_TRIO.filter((k) => value[k] !== undefined && value[k] !== null);
+  if (filled.length > 0 && filled.length < FEE_TRIO.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [FEE_TRIO.find((k) => value[k] === undefined || value[k] === null)!],
+      message: "a tier charges an amount for a reason, or charges nothing",
+    });
+  }
+
+  if (value.maxFee !== undefined && value.maxFee !== null
+      && value.feeType !== "PERCENT_OF_BALANCE") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["maxFee"],
+      message: "maxFee caps a PERCENT_OF_BALANCE fee; a flat amount is its own cap",
+    });
+  }
+
+  // A tier that charges nothing cannot replace what the ladder charged
+  // below it: that would make the mode a way to spell "cancel the
+  // earlier late fees", and forgiving a charge is a waiver someone
+  // decided to grant, not a side effect of a schedule.
+  if (value.feeMode === "REPLACE_LOWER_TIERS"
+      && (value.feeType === undefined || value.feeType === null)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["feeMode"],
+      message: "REPLACE_LOWER_TIERS needs a fee of its own to replace with",
+    });
+  }
+}
+
 export const createDelinquencyRuleSchema = z.object({
   name: z.string().min(1).max(255),
   accountType: z.enum(["RESIDENTIAL", "COMMERCIAL", "INDUSTRIAL", "MUNICIPAL"]).optional(),
@@ -27,7 +127,8 @@ export const createDelinquencyRuleSchema = z.object({
   autoApply: z.boolean().default(true),
   isActive: z.boolean().default(true),
   effectiveDate: z.string().optional(),
-}).strict();
+  ...feeFields,
+}).strict().superRefine(refineFeeGroup);
 
 export const updateDelinquencyRuleSchema = z.object({
   name: z.string().min(1).max(255).optional(),
@@ -37,7 +138,8 @@ export const updateDelinquencyRuleSchema = z.object({
   notificationEventType: z.string().max(100).optional().nullable(),
   autoApply: z.boolean().optional(),
   isActive: z.boolean().optional(),
-}).strict();
+  ...feeFields,
+}).strict().superRefine(refineFeeGroup);
 
 export const delinquencyRuleQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),

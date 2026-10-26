@@ -552,6 +552,20 @@ Gated on `settings`, not `accounts`: the text printed on bills is tenant configu
 
 15. **Amounts on the bill:** every printed amount carries a currency symbol and thousands separators. The formatting lives in the template, not in `BillPresentation`, which carries plain 2dp strings — the presentation is the bill's content, and how an amount looks on paper is the template's business. Grouping is applied by hand rather than through `toLocaleString`, because a trimmed ICU on the host would otherwise vary the separator and break byte-stability. The quantity column is deliberately bare: a quantity is not money.
 
+16. **Fees and adjustments on the bill (shipped 2026-10-25):** a late fee the delinquency ladder raised, an adjustment, or the reversal a replacing tier writes prints as a **charge group** headed `Fees and adjustments`, alongside the commodity groups — each entry a line with the reason's own label, the date it took effect, and a signed amount, and the group carrying its own subtotal like any other.
+
+    **A line item, not a footnote, which means it is in the total.** The totals box gains a `Fees and adjustments` row, suppressed when zero the way `Rounding` is, and `Total due` is rated charges + taxes + fees. The remittance stub asks for that figure. So the printed total no longer equals `bill.total` whenever a fee is on the page: `bill.total` is what the rating engine computed and what the bill's own `BILL_CHARGE` raised, the rounding line still reconciles the rated charges against it alone, and the two numbers answer different questions. A bill must ask for what the account owes.
+
+    **It is a presentation group, not a `BillSegmentLine`.** It cannot be a stored line: `source_schedule_id` and `source_component_id` are NOT NULL with foreign keys to the rate schedule and component, because a line *is* a rated charge and a fee has no rate component. A `BillPresentationGroup` is built in memory, costs no schema change, and prints identically. The group is appended **after** the totals are computed, so the rounding line is not thrown off by a fee.
+
+    It exists because a fee produces no rated line at all. Without it the customer receives a bill for consumption, owes more than it says, and has nothing explaining the difference.
+
+    **Bounded on both sides.** The window opens after the previous bill's `bill_date` — the same account's most recent bill dated earlier — and closes at this bill's own `bill_date`. The upper bound is the same rule the settlement block follows and for the same reason: a reprint of last March must not acquire a fee raised in April. A test asserts the `sha256` is unchanged after a later fee is raised. On a first bill the window opens at the account's beginning, because a fee raised before the first bill still has to be explained on it.
+
+    **What it excludes.** Anything carrying a `bill_id`, not merely `BILL_CHARGE` — a bill's own entry *is* the bill, and `postBill` writes a bill that nets negative as an `ADJUSTMENT_CREDIT` with its `bill_id` set, so filtering on the type alone let a previous credit bill reappear here. `DEPOSIT`, for the reason `recomputeAccountCache` keeps it out of the balance: a deposit is money the utility holds, not money the customer owes, and summed in here it told them they owed less than they did. And any credit already itemised under settlement, or a payment appears twice on one page.
+
+    **Labels are the tenant's own.** `ledger_reason_def.label`, never a code and never a string from the template, so a utility that calls its late fee a "Late charge" sees that on the bill. The entry type is the fallback for an entry citing no reason. The date rides in the label because a charge group has no date column.
+
 ## UI Pages
 
 Bill document actions, the two settings pages and the billing run views are shipped. The billing dashboard is not built.

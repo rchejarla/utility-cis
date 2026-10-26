@@ -1659,3 +1659,361 @@ describe("a bill list says why a bill cannot be sent", () => {
     expect((await listed(billId)).blockedReason).toBeNull();
   }, 60_000);
 });
+
+/**
+ * What the bill says about money that did not come from the rate engine.
+ *
+ * Task 8 of `docs/superpowers/plans/2026-10-25-collections-wiring.md`.
+ *
+ * A late fee raises the account balance and produces no
+ * `BillSegmentLine` — lines come entirely from rating, and each carries
+ * a `sourceScheduleId` and `sourceComponentId` because a line *is* a
+ * rated charge. So without this the customer receives a bill for
+ * consumption, owes more than it says, and has nothing explaining the
+ * difference.
+ *
+ * Bounded at the bill's own `billDate` on one side and the previous
+ * bill's on the other. The upper bound is not optional: a document that
+ * reads the ledger at render time stops being a record of what the
+ * customer was shown, which is the property `sha256` and byte-stable
+ * regeneration exist to protect — a reprint of last March must not
+ * acquire a fee raised in April.
+ */
+describe("account activity on a bill", () => {
+  /** The account, agreement and rate rows `postedBill` left behind. */
+  async function context(billId: string) {
+    return db(async (p) => {
+      const bill = await p.bill.findUniqueOrThrow({
+        where: { id: billId },
+        select: {
+          accountId: true,
+          billingCycleId: true,
+          segments: { select: { serviceAgreementId: true } },
+        },
+      });
+      const schedule = await p.rateSchedule.findFirstOrThrow({ where: { utilityId: UTILITY } });
+      const kind = await p.rateComponentKind.findFirstOrThrow({ where: { utilityId: UTILITY } });
+      const component = await p.rateComponent.findFirstOrThrow({ where: { utilityId: UTILITY } });
+      return {
+        accountId: bill.accountId,
+        agreementId: bill.segments[0]!.serviceAgreementId,
+        billingCycleId: bill.billingCycleId,
+        scheduleId: schedule.id,
+        kindCode: kind.code,
+        componentId: component.id,
+      };
+    });
+  }
+
+  type Ctx = Awaited<ReturnType<typeof context>>;
+
+  /** A second bill on the same account, later than the first. */
+  async function laterBill(
+    ctx: Ctx,
+    opts: { number: string; billDate: string; periodStart: string; periodEnd: string },
+  ): Promise<string> {
+    return db(async (p) => {
+      const bill = await p.bill.create({
+        data: {
+          utilityId: UTILITY,
+          accountId: ctx.accountId,
+          billingCycleId: ctx.billingCycleId,
+          periodStart: new Date(opts.periodStart),
+          periodEnd: new Date(opts.periodEnd),
+          billDate: new Date(opts.billDate),
+          dueDate: new Date(opts.billDate),
+          subtotal: "50.0000",
+          taxes: "0.0000",
+          credits: "0.0000",
+          total: "50.0000",
+          billNumber: opts.number,
+          postedAt: new Date(opts.billDate),
+        },
+      });
+      const segment = await p.billSegment.create({
+        data: {
+          utilityId: UTILITY,
+          serviceAgreementId: ctx.agreementId,
+          billId: bill.id,
+          periodStart: new Date(opts.periodStart),
+          periodEnd: new Date(opts.periodEnd),
+          subtotal: "50.0000",
+          taxes: "0.0000",
+          credits: "0.0000",
+          total: "50.0000",
+          minimumFloorApplied: false,
+          segmentNumber: `SEG-${opts.number}`,
+        },
+      });
+      await p.billSegmentLine.create({
+        data: {
+          utilityId: UTILITY,
+          billSegmentId: segment.id,
+          label: "Base charge",
+          kindCode: ctx.kindCode,
+          amount: "50.0000",
+          sourceScheduleId: ctx.scheduleId,
+          sourceComponentId: ctx.componentId,
+          sortOrder: 1,
+        },
+      });
+      return bill.id;
+    });
+  }
+
+  /*
+   * `ledger_reason_def` survives the beforeEach: its only foreign key is
+   * to `utility`, which is not truncated, so nothing cascades to it. A
+   * fixed code would collide on (utility_id, code) with the previous
+   * case rather than testing anything, so each one gets its own.
+   */
+  let reasonSeq = 0;
+
+  /** A fee on the account, as the delinquency ladder would raise it. */
+  async function feeOn(
+    ctx: Ctx,
+    opts: { label: string; amount: string; on: string },
+  ) {
+    const code = `ACTIVITY_FEE_${++reasonSeq}`;
+    return db(async (p) => {
+      const reason = await p.ledgerReasonDef.create({
+        data: { utilityId: UTILITY, code, label: opts.label, appliesToType: "FEE" },
+      });
+      return p.ledgerEntry.create({
+        data: {
+          utilityId: UTILITY,
+          accountId: ctx.accountId,
+          type: "FEE",
+          amount: opts.amount,
+          openAmount: opts.amount,
+          effectiveDate: new Date(opts.on),
+          dueDate: new Date(opts.on),
+          reasonId: reason.id,
+        },
+      });
+    });
+  }
+
+  /*
+   * The bill's own BILL_CHARGE, written directly: `postedBill` already
+   * marks the bill posted, so `postBill` refuses it as posted twice.
+   */
+  async function chargeFor(ctx: Ctx, billId: string): Promise<string> {
+    return db(async (p) => {
+      const entry = await p.ledgerEntry.create({
+        data: {
+          utilityId: UTILITY,
+          accountId: ctx.accountId,
+          type: "BILL_CHARGE",
+          billId,
+          amount: "107.50",
+          openAmount: "107.50",
+          effectiveDate: new Date("2026-03-01"),
+          dueDate: new Date("2026-03-31"),
+        },
+      });
+      return entry.id;
+    });
+  }
+
+  /** The fees group, if the bill has one. */
+  function feesOf(p: Awaited<ReturnType<typeof loadBillPresentation>>) {
+    return p.groups.find((g) => g.heading === "Fees and adjustments") ?? null;
+  }
+
+  it("shows a fee raised before the bill date, in the tenant's own words", async () => {
+    const billId = await postedBill();
+    const ctx = await context(billId);
+    await feeOn(ctx, {
+      label: "Late payment fee", amount: "25.00", on: "2026-02-10",
+    });
+
+    const p = await loadBillPresentation(UTILITY, billId);
+
+    const fees = feesOf(p);
+    expect(fees).not.toBeNull();
+    expect(fees!.lines).toHaveLength(1);
+    // The reason's own wording, with the date the customer will ask about.
+    expect(fees!.lines[0]!.label).toBe("Late payment fee 2026-02-10");
+    expect(fees!.lines[0]!.amount).toBe("25.00");
+    expect(fees!.subtotal).toBe("25.00");
+    // A line item has to be in the total, or it is not a line item.
+    expect(p.totals.fees).toBe("25.00");
+    expect(p.totals.total).toBe("132.50");
+    expect(p.remittance.amountDue).toBe("132.50");
+  });
+
+  it("does not show a fee raised after the bill date", async () => {
+    const billId = await postedBill();
+    const ctx = await context(billId);
+    await feeOn(ctx, {
+      label: "Late payment fee", amount: "25.00", on: "2026-03-15",
+    });
+
+    const p = await loadBillPresentation(UTILITY, billId);
+
+    expect(feesOf(p)).toBeNull();
+    expect(p.totals.fees).toBeNull();
+    // And the total is the rated one, untouched.
+    expect(p.totals.total).toBe("107.50");
+  });
+
+  it("shows only what happened since the previous bill", async () => {
+    const firstId = await postedBill();
+    const ctx = await context(firstId);
+    await feeOn(ctx, {
+      label: "Earlier charge", amount: "10.00", on: "2026-02-10",
+    });
+    await feeOn(ctx, {
+      label: "Late payment fee", amount: "25.00", on: "2026-03-20",
+    });
+    const secondId = await laterBill(ctx, {
+      number: "B-SECOND", billDate: "2026-04-01",
+      periodStart: "2026-03-01", periodEnd: "2026-03-31",
+    });
+
+    const first = await loadBillPresentation(UTILITY, firstId);
+    const second = await loadBillPresentation(UTILITY, secondId);
+
+    expect(feesOf(first)!.lines.map((l) => l.label)).toEqual(["Earlier charge 2026-02-10"]);
+    expect(feesOf(second)!.lines.map((l) => l.label)).toEqual(["Late payment fee 2026-03-20"]);
+  });
+
+  it("prints no activity block when nothing happened", async () => {
+    const billId = await postedBill();
+
+    const p = await loadBillPresentation(UTILITY, billId);
+
+    expect(feesOf(p)).toBeNull();
+  });
+
+  /*
+   * The bill's own charge is the bill. Repeating it under activity would
+   * show the customer the same money twice.
+   */
+  it("does not repeat the bill's own charge", async () => {
+    const billId = await postedBill();
+    const ctx = await context(billId);
+    await chargeFor(ctx, billId);
+
+    const p = await loadBillPresentation(UTILITY, billId);
+
+    expect(feesOf(p)).toBeNull();
+  });
+
+  /*
+   * A payment already itemised under "Payments and credits received"
+   * must not appear again under activity.
+   */
+  it("does not repeat a payment already shown as settled", async () => {
+    const billId = await postedBill();
+    const ctx = await context(billId);
+    const chargeId = await chargeFor(ctx, billId);
+    await db(async (p) => {
+      const charge = await p.ledgerEntry.findUniqueOrThrow({ where: { id: chargeId } });
+      const paid = await p.ledgerEntry.create({
+        data: {
+          utilityId: UTILITY,
+          accountId: ctx.accountId,
+          type: "PAYMENT",
+          amount: "-20.00",
+          openAmount: "0.00",
+          effectiveDate: new Date("2026-02-20"),
+          tender: "CASH",
+        },
+      });
+      await p.ledgerApplication.create({
+        data: { utilityId: UTILITY, creditId: paid.id, debitId: charge.id, amount: "20.00" },
+      });
+      await p.ledgerEntry.update({
+        where: { id: charge.id },
+        data: { openAmount: charge.amount.minus(20) },
+      });
+    });
+
+    const p = await loadBillPresentation(UTILITY, billId);
+
+    expect(p.settlement!.applied).toHaveLength(1);
+    expect(feesOf(p)).toBeNull();
+  });
+
+  /*
+   * A deposit is money the utility holds, not money the customer owes
+   * — which is exactly why `recomputeAccountCache` keeps it out of
+   * `Account.balance`. Summed into activity it told the customer they
+   * owed $500 less than they did.
+   */
+  it("does not count a deposit as activity", async () => {
+    const billId = await postedBill();
+    const ctx = await context(billId);
+    await db((p) =>
+      p.ledgerEntry.create({
+        data: {
+          utilityId: UTILITY,
+          accountId: ctx.accountId,
+          type: "DEPOSIT",
+          amount: "-500.00",
+          openAmount: "-500.00",
+          effectiveDate: new Date("2026-02-05"),
+        },
+      }),
+    );
+
+    const p = await loadBillPresentation(UTILITY, billId);
+
+    expect(feesOf(p)).toBeNull();
+  });
+
+  /*
+   * `postBill` writes a net-negative bill as an ADJUSTMENT_CREDIT with
+   * its `billId` set, so excluding only BILL_CHARGE let a previous
+   * credit bill's own entry reappear here as "other activity" — the
+   * double-presentation this block excludes BILL_CHARGE outright to
+   * avoid.
+   */
+  it("does not repeat a credit bill's own entry", async () => {
+    const billId = await postedBill();
+    const ctx = await context(billId);
+    const earlier = await laterBill(ctx, {
+      number: "B-CREDIT", billDate: "2026-02-05",
+      periodStart: "2026-01-01", periodEnd: "2026-01-31",
+    });
+    await db((p) =>
+      p.ledgerEntry.create({
+        data: {
+          utilityId: UTILITY,
+          accountId: ctx.accountId,
+          type: "ADJUSTMENT_CREDIT",
+          billId: earlier,
+          amount: "-12.00",
+          openAmount: "-12.00",
+          effectiveDate: new Date("2026-02-06"),
+        },
+      }),
+    );
+
+    const p = await loadBillPresentation(UTILITY, billId);
+
+    expect(feesOf(p)).toBeNull();
+  });
+
+  /*
+   * The property the upper bound exists for. A reprint has to produce
+   * the document the customer was sent, not a fresher one.
+   */
+  it("reprints byte-identically after a later fee is raised", async () => {
+    const billId = await postedBill();
+    const ctx = await context(billId);
+    const first = await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
+
+    await feeOn(ctx, {
+      label: "Late payment fee", amount: "25.00", on: "2026-04-10",
+    });
+    const reprint = await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME, {
+      force: true,
+    });
+
+    expect(reprint.sha256).toBe(first.sha256);
+    expect(reprint.byteSize).toBe(first.byteSize);
+  }, 60_000);
+});

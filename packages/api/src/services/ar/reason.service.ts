@@ -102,12 +102,18 @@ export async function listReasons(
  * Idempotent so it is safe on every onboarding run, and so that when the
  * default list grows a later call fills in only the new ones rather than
  * failing on the (utilityId, code) unique.
+ *
+ * `penaltiesMarked` counts rows the tenant already had whose `isPenalty`
+ * was wrong. Skipping existing codes is what makes the function
+ * idempotent, and it is also what would have stopped the flag ever
+ * landing: every tenant already holds LATE_FEE and NSF_FEE, so a seeder
+ * that only creates would set it precisely nowhere it is needed.
  */
 export async function seedDefaultReasons(
   utilityId: string,
   actorId: string,
   actorName: string,
-): Promise<{ created: number }> {
+): Promise<{ created: number; penaltiesMarked: number }> {
   return prisma.$transaction(async (tx) => {
     const existing = new Set(
       (await tx.ledgerReasonDef.findMany({ where: { utilityId }, select: { code: true } })).map(
@@ -124,6 +130,7 @@ export async function seedDefaultReasons(
           code: def.code,
           label: def.label,
           appliesToType: def.appliesToType as never,
+          isPenalty: def.isPenalty,
         },
       });
       await writeAuditRow(
@@ -136,6 +143,21 @@ export async function seedDefaultReasons(
       );
       created++;
     }
-    return { created };
+
+    /*
+     * The classification, on rows this tenant already had. Not audited
+     * and no `ledger_reason.updated` event type invented for it: there
+     * is no operator decision to attribute, since which default codes
+     * are penalties is identical for every tenant and arrives with the
+     * migration, and a new event type would imply a reason-update path
+     * that does not exist.
+     */
+    const penaltyCodes = DEFAULT_REASON_CODES.filter((d) => d.isPenalty).map((d) => d.code);
+    const { count: penaltiesMarked } = await tx.ledgerReasonDef.updateMany({
+      where: { utilityId, code: { in: penaltyCodes }, isPenalty: false },
+      data: { isPenalty: true },
+    });
+
+    return { created, penaltiesMarked };
   });
 }

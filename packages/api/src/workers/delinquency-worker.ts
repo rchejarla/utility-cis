@@ -7,6 +7,10 @@ import {
 } from "../lib/queues.js";
 import { scopedJob } from "../lib/queue-scope.js";
 import { evaluateDelinquencyForTenant } from "../services/delinquency.service.js";
+import {
+  sweepDelinquencyWorkOrders,
+  sweepReconnections,
+} from "../services/delinquency-work-order.service.js";
 
 /**
  * Per-tenant consumer for the delinquency-tenant queue.
@@ -34,6 +38,34 @@ export function buildDelinquencyWorker(): Worker<DelinquencyTenantJobData> {
         QUEUE_NAMES.delinquencyTenant,
         () => evaluateDelinquencyForTenant(utilityId, new Date()),
       );
+
+      /*
+       * Accounts that have cleared, before anything is dispatched
+       * against them: an account that paid in the same hour it passed
+       * the shut-off tier should have no crew sent either way.
+       */
+      const reconnections = await sweepReconnections(utilityId);
+      if (reconnections.resolved > 0) {
+        logger.info(
+          { component: "delinquency-worker", utilityId, ...reconnections },
+          "Delinquency closed cleared accounts",
+        );
+      }
+
+      /*
+       * Then the field work the evaluation implies, in the same tenant
+       * scope. A separate pass because it is keyed on state rather than
+       * on the evaluation's own result: an action whose work order could
+       * not be raised last tick is picked up by this one.
+       */
+      const workOrders = await sweepDelinquencyWorkOrders(utilityId);
+      if (workOrders.created > 0) {
+        logger.info(
+          { component: "delinquency-worker", utilityId, ...workOrders },
+          "Delinquency dispatched field work",
+        );
+      }
+
       if (result.actionsCreated > 0) {
         logger.info(
           {

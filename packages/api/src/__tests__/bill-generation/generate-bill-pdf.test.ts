@@ -1,12 +1,17 @@
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
-import { inflateSync } from "node:zlib";
+import { constants, inflateSync } from "node:zlib";
 import { generateBillPdf } from "../../bill-generation/generate-bill-pdf.js";
-import type { BillPresentation } from "../../services/bill-presentation.service.js";
+import { Decimal } from "decimal.js";
+import type {
+  BillPresentation,
+  BillPresentationGroup,
+} from "../../services/bill-presentation.service.js";
 
 function presentation(
   lineCount: number,
   settlement: BillPresentation["settlement"] = null,
+  fees: BillPresentationGroup | null = null,
 ): BillPresentation {
   return {
     issuer: {
@@ -36,13 +41,17 @@ function presentation(
         })),
         subtotal: `${lineCount}.00`,
       },
+      ...(fees ? [fees] : []),
     ],
     totals: {
       subtotal: `${lineCount}.00`,
       taxes: "0.00",
       credits: "0.00",
       rounding: null,
-      total: `${lineCount}.00`,
+      fees: fees ? fees.subtotal : null,
+      total: fees
+        ? new Decimal(lineCount).plus(fees.subtotal).toFixed(2)
+        : `${lineCount}.00`,
     },
     settlement,
     messages: [{ label: "Notice", body: "Water restrictions begin June 1." }],
@@ -75,14 +84,30 @@ function pageCount(pdf: Buffer): number {
  */
 function extractText(pdf: Buffer): string {
   const latin = pdf.toString("latin1");
-  const streams = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
   let inflated = "";
-  let stream: RegExpExecArray | null;
-  while ((stream = streams.exec(latin)) !== null) {
+  /*
+   * From each `stream` keyword to the end of the file, not to the next
+   * `endstream`. Compressed data is binary and may contain those nine
+   * bytes itself, and a boundary regex then cuts the stream short —
+   * inflation fails, the old helper fell back to appending the raw
+   * compressed bytes, and a document whose text was all present
+   * extracted as "". Found by adding a block to the template: the PDF
+   * grew by 300 bytes and the extracted text went from 517 characters
+   * to none.
+   *
+   * Z_SYNC_FLUSH takes the first zlib member and ignores whatever
+   * follows it, so the rest of the file being appended costs nothing.
+   */
+  const streamStarts = /stream\r?\n/g;
+  let start: RegExpExecArray | null;
+  while ((start = streamStarts.exec(latin)) !== null) {
+    const from = start.index + start[0].length;
     try {
-      inflated += inflateSync(Buffer.from(stream[1], "latin1")).toString("latin1");
+      inflated += inflateSync(Buffer.from(latin.slice(from), "latin1"), {
+        finishFlush: constants.Z_SYNC_FLUSH,
+      }).toString("latin1");
     } catch {
-      inflated += stream[1];
+      // Not a Flate stream — an embedded font or image. No text in it.
     }
   }
 
@@ -167,6 +192,41 @@ describe("generateBillPdf", () => {
     // already received.
     expect(text).toContain("AMOUNT DUE$1.00");
   }, 30_000);
+
+  /*
+   * A late fee produces no bill line — lines come from the rate engine
+   * and carry a rate component — so without this block the customer
+   * owes more than the bill says with nothing explaining the
+   * difference. Itemised and dated for the same reason payments are.
+   */
+  it("prints fees as charge lines, and carries them into the total", async () => {
+    const pdf = await generateBillPdf(
+      presentation(3, null, {
+        heading: "Fees and adjustments",
+        lines: [
+          { label: "Late payment fee 2026-02-10", quantity: null, amount: "25.00" },
+          { label: "Credit adjustment 2026-02-18", quantity: null, amount: "-5.00" },
+        ],
+        subtotal: "20.00",
+      }),
+    );
+    const text = extractText(pdf);
+
+    // A group heading like any other, among the commodity charges.
+    expect(text).toContain("Fees and adjustments");
+    expect(text).toContain("Late payment fee 2026-02-10");
+    expect(text).toContain("$25.00");
+    expect(text).toContain("Credit adjustment 2026-02-18");
+    expect(text).toContain("-$5.00");
+    // And the page adds up: the group subtotal reaches the total.
+    expect(text).toContain("Total due$23.00");
+  });
+
+  it("prints no fees row when there are none", async () => {
+    const text = extractText(await generateBillPdf(presentation(3)));
+    expect(text).not.toContain("Fees and adjustments");
+    expect(text).toContain("Total due$3.00");
+  });
 
   it("leaves an unpaid bill exactly as it was, with no zero-credit line", async () => {
     const text = extractText(await generateBillPdf(presentation(3)));

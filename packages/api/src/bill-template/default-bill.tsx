@@ -182,6 +182,19 @@ export function DefaultBillTemplate({ presentation }: { presentation: BillPresen
               <Text>{printed(totals.rounding)}</Text>
             </View>
           ) : null}
+          {/*
+            The fees group's subtotal, carried into the total. The group
+            itself prints above with the commodity charges — a late fee
+            is a charge on this bill and reads as one — and this row is
+            what lets a customer add the page up. Absent when there are
+            none, like Rounding.
+          */}
+          {totals.fees ? (
+            <View style={s.totalRow}>
+              <Text style={s.muted}>Fees and adjustments</Text>
+              <Text>{printed(totals.fees)}</Text>
+            </View>
+          ) : null}
           <View style={s.grandTotal}>
             <Text>{settlement ? "Total billed" : "Total due"}</Text>
             <Text>{printed(totals.total)}</Text>

@@ -10,6 +10,48 @@ import {
 import { prisma } from "../lib/prisma.js";
 import { paginatedTenantList } from "../lib/pagination.js";
 import { evaluateAll, resolveAccount, escalateAccount } from "../services/delinquency.service.js";
+import { resolveReason } from "../services/ar/reason.service.js";
+import { assertServiceRequestTypeCode } from "../services/service-request-type-def.service.js";
+
+/**
+ * The reason a tier's fee will cite has to be usable as a FEE reason —
+ * checked here, where the operator typed it.
+ *
+ * `assessFee` puts it through the same gate at sweep time, and both
+ * layers stay: this one is for the human, since without it a tier saved
+ * against an ADJUSTMENT_DEBIT reason throws at 03:00 inside a worker,
+ * possibly after other accounts in the tenant have already been
+ * noticed. The sweep-time check remains because a reason can be retired
+ * after a rule cites it.
+ *
+ * `resolveReason` takes a transaction client and `prisma` satisfies that
+ * type, so this is literally the same gate rather than a second opinion
+ * about what a fee reason is — vocabulary included: REASON_NOT_FOUND for
+ * missing or retired, REASON_TYPE_MISMATCH for the wrong type.
+ */
+async function assertUsableFeeReason(
+  utilityId: string,
+  feeReasonId: string | null | undefined,
+): Promise<void> {
+  if (!feeReasonId) return;
+  await resolveReason(prisma, utilityId, feeReasonId, "FEE");
+}
+
+/**
+ * Same again for the work-order type codes a tier dispatches, and for
+ * the same reason: the sweep that uses them runs at 03:00 on a worker,
+ * and skips an action it cannot route rather than failing the tenant's
+ * whole pass — so an unknown code typed here would otherwise go
+ * unnoticed until someone asked why no crew had been sent.
+ */
+async function assertUsableRequestTypes(
+  utilityId: string,
+  data: { serviceRequestTypeCode?: string | null; reconnectRequestTypeCode?: string | null },
+): Promise<void> {
+  for (const code of [data.serviceRequestTypeCode, data.reconnectRequestTypeCode]) {
+    if (code) await assertServiceRequestTypeCode(utilityId, code);
+  }
+}
 
 export async function delinquencyRoutes(app: FastifyInstance) {
   // ─── Rules CRUD ────────────────────────────────────────────────
@@ -33,6 +75,8 @@ export async function delinquencyRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { utilityId } = request.user;
       const data = createDelinquencyRuleSchema.parse(request.body);
+      await assertUsableFeeReason(utilityId, data.feeReasonId);
+      await assertUsableRequestTypes(utilityId, data);
       const rule = await prisma.delinquencyRule.create({
         data: {
           utilityId,
@@ -64,6 +108,8 @@ export async function delinquencyRoutes(app: FastifyInstance) {
       const { utilityId } = request.user;
       const { id } = request.params as { id: string };
       const data = updateDelinquencyRuleSchema.parse(request.body);
+      await assertUsableFeeReason(utilityId, data.feeReasonId);
+      await assertUsableRequestTypes(utilityId, data);
       const rule = await prisma.delinquencyRule.update({ where: { id, utilityId }, data });
       return reply.send(rule);
     },

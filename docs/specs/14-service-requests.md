@@ -22,7 +22,7 @@ Slice B ships **CSR-created service requests end-to-end** — intake, assign, pr
 **Deferred (see §9 of the slice design doc):**
 - Portal submission (Module 15, Phase 4.3)
 - External-system routing (RAMS / Work Management / ApptorFlow) — columns reserved
-- Delinquency-source SRs (Module 11 integration) — `delinquency_action_id` FK reserved
+- Delinquency-source SRs (Module 11 integration) — **built 2026-10-25**; `delinquency_action_id` is written by the two delinquency sweeps
 - Attachments upload UI (JSONB column reserved)
 - Billing action on completion (`billing_action` + `adhoc_charge_id` reserved, Module 10)
 - Background SLA breach-sweep + escalation notifications
@@ -171,7 +171,13 @@ Two things the conversion surfaced that apply beyond this module:
 
 3. **SLA escalation:** If `SLA.escalation_hours` is set and the SR is not completed by `created_at + escalation_hours`, a notification is sent to `SLA.escalation_user_id` (and their manager, if configured).
 
-4. **Delinquency-generated SRs:** When Module 11 creates a DOOR_HANGER or DISCONNECT DelinquencyAction, it automatically creates a linked ServiceRequest with `source=DELINQUENCY_WORKFLOW` and sets `delinquency_action_id`. The SR's completion updates the DelinquencyAction status.
+4. **Delinquency-generated SRs (built 2026-10-25):** a delinquency tier that names a `service_request_type_code` gets a linked ServiceRequest with `source = DELINQUENCY_WORKFLOW` and `delinquency_action_id` set. Three things differ from the original sketch:
+
+    - **A sweep raises it, not the action.** `sweepDelinquencyWorkOrders(utilityId)` asks which live actions have no service request and raises one each; `sweepReconnections(utilityId)` asks which have cleared their balance. Keyed on state, so both are idempotent and recover when this module was unavailable. The action's transaction could not have called `createServiceRequest` anyway — `nextRequestNumber` opens one of its own for the counter row. The deciding reason is the asymmetry: a late work order costs nothing, a duplicate fee is a wrong bill.
+    - **The type is configuration, not the `action_type`.** The codes are the tenant's own, and a utility whose crews work off their own system wants the notice tiers and no work orders at all. Validated at rule-save time by `assertServiceRequestTypeCode`.
+    - **Completion does not update the action.** It is the other way round: `sweepReconnections` resolves the action when the *balance* clears, and treats a `COMPLETED` shut-off request as evidence the service was actually cut — so it asks for a reconnection only where there is something to turn back on.
+
+    **`source` and `delinquency_action_id` are not on `createServiceRequestSchema`.** They are claims about where a request came from, and over HTTP a CSR could assert that theirs was raised by the delinquency workflow. They reach `createServiceRequest` through a fifth `provenance` parameter, closed to the API. The same parameter carries `createdBy: null`: `created_by` is a real FK to `cis_user`, so a synthetic actor cannot be recorded there, and a request nothing human raised has no creator. The audit row still names the automated actor.
 
 5. **RAMS routing:** SRs routed to RAMS are submitted via the RAMS API. RAMS returns an `external_request_id`. Status updates flow back via the RAMS webhook, updating `external_status`. CIS maps RAMS statuses to CIS statuses.
 

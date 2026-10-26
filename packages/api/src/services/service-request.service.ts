@@ -12,6 +12,7 @@ import type {
   CancelServiceRequestInput,
   ServiceRequestQuery,
   ServiceRequestStatus,
+  ServiceRequestSource,
 } from "@utility-cis/shared";
 
 const fullInclude = {
@@ -154,11 +155,30 @@ export async function getServiceRequest(id: string, utilityId: string) {
   );
 }
 
+/**
+ * Where a request came from, for callers inside the process.
+ *
+ * Not part of `createServiceRequestSchema`, so none of it can be set
+ * over HTTP: `source` and `delinquencyActionId` are claims about
+ * provenance, and a CSR must not be able to assert that their request
+ * was raised by the delinquency workflow. `createdBy` is nullable
+ * because a request nothing human raised has no creator — and
+ * `ServiceRequest.createdBy` is a real foreign key to `cis_user`, so a
+ * synthetic actor id would not be accepted there even if it were
+ * wanted.
+ */
+export interface ServiceRequestProvenance {
+  source?: ServiceRequestSource;
+  delinquencyActionId?: string;
+  createdBy?: string | null;
+}
+
 export async function createServiceRequest(
   utilityId: string,
   actorId: string,
   actorName: string,
   data: CreateServiceRequestInput,
+  provenance: ServiceRequestProvenance = {},
 ) {
   await assertServiceRequestTypeCode(utilityId, data.requestType);
   const now = new Date();
@@ -180,11 +200,12 @@ export async function createServiceRequest(
           requestSubtype: data.requestSubtype ?? null,
           priority: data.priority,
           status: "NEW",
-          source: "CSR",
+          source: provenance.source ?? "CSR",
           description: data.description,
           slaId: sla?.id ?? null,
           slaDueAt: sla ? computeSlaDueAt(now, sla.resolutionHours) : null,
-          createdBy: actorId,
+          createdBy: provenance.createdBy === undefined ? actorId : provenance.createdBy,
+          delinquencyActionId: provenance.delinquencyActionId ?? null,
         },
         include: fullInclude,
       }),

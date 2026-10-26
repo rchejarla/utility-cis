@@ -1304,24 +1304,28 @@ async function main() {
   // `node seed.js` and cannot import the TypeScript constant, so the list
   // is duplicated here, the way the module list used to be before the
   // seed started delegating to scripts/provision-tenant.ts.
+  // The fourth element is isPenalty: whether an entry citing the reason
+  // is itself a penalty. A percentage late fee is charged on principal,
+  // so it excludes an earlier late fee from its base but not an unpaid
+  // tap fee. Only a charge for being late qualifies.
   const reasonCodes = [
-    ["LATE_FEE", "Late payment fee", "FEE"],
-    ["NSF_FEE", "Returned payment fee", "FEE"],
-    ["RECONNECT_FEE", "Reconnection fee", "FEE"],
-    ["TAP_FEE", "Tap fee", "FEE"],
-    ["METER_TEST_FEE", "Meter test fee", "FEE"],
-    ["OPENING_BALANCE", "Opening balance", "ADJUSTMENT_DEBIT"],
-    ["BILLING_CORRECTION_DEBIT", "Billing correction — charge", "ADJUSTMENT_DEBIT"],
-    ["COURTESY_WAIVER", "Courtesy waiver", "ADJUSTMENT_CREDIT"],
-    ["GOODWILL", "Goodwill credit", "ADJUSTMENT_CREDIT"],
-    ["BILLING_CORRECTION_CREDIT", "Billing correction — credit", "ADJUSTMENT_CREDIT"],
-    ["BAD_DEBT", "Written off — uncollectable", "WRITE_OFF"],
-    ["SMALL_BALANCE", "Written off — small balance", "WRITE_OFF"],
+    ["LATE_FEE", "Late payment fee", "FEE", true],
+    ["NSF_FEE", "Returned payment fee", "FEE", true],
+    ["RECONNECT_FEE", "Reconnection fee", "FEE", false],
+    ["TAP_FEE", "Tap fee", "FEE", false],
+    ["METER_TEST_FEE", "Meter test fee", "FEE", false],
+    ["OPENING_BALANCE", "Opening balance", "ADJUSTMENT_DEBIT", false],
+    ["BILLING_CORRECTION_DEBIT", "Billing correction — charge", "ADJUSTMENT_DEBIT", false],
+    ["COURTESY_WAIVER", "Courtesy waiver", "ADJUSTMENT_CREDIT", false],
+    ["GOODWILL", "Goodwill credit", "ADJUSTMENT_CREDIT", false],
+    ["BILLING_CORRECTION_CREDIT", "Billing correction — credit", "ADJUSTMENT_CREDIT", false],
+    ["BAD_DEBT", "Written off — uncollectable", "WRITE_OFF", false],
+    ["SMALL_BALANCE", "Written off — small balance", "WRITE_OFF", false],
   ];
   const reasonByCode = {};
-  for (const [code, label, appliesToType] of reasonCodes) {
+  for (const [code, label, appliesToType, isPenalty] of reasonCodes) {
     const r = await p.ledgerReasonDef.create({
-      data: { utilityId: UID, code, label, appliesToType },
+      data: { utilityId: UID, code, label, appliesToType, isPenalty },
     });
     reasonByCode[code] = r.id;
   }
