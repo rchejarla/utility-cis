@@ -25,7 +25,20 @@ import DelinquencyRulesPage from "../page";
 const get = apiClient.get as unknown as ReturnType<typeof vi.fn>;
 const patch = apiClient.patch as unknown as ReturnType<typeof vi.fn>;
 
-const REASON = { id: "reason-late", code: "LATE_FEE", label: "Late payment fee" };
+const REASON = {
+  id: "reason-late",
+  code: "LATE_FEE",
+  label: "Late payment fee",
+  allowsDelinquencyFee: true,
+};
+
+/** An active FEE reason the ladder may not charge to. */
+const TAP = {
+  id: "reason-tap",
+  code: "TAP_FEE",
+  label: "Tap fee",
+  allowsDelinquencyFee: false,
+};
 
 function rule(over: Record<string, unknown> = {}) {
   return {
@@ -52,7 +65,7 @@ function rule(over: Record<string, unknown> = {}) {
 function stubLoads(rules: unknown[]) {
   get.mockImplementation((path: string) => {
     if (path === "/api/v1/delinquency-rules") return Promise.resolve({ data: rules });
-    if (path === "/api/v1/ar/reasons") return Promise.resolve({ data: [REASON] });
+    if (path === "/api/v1/ar/reasons") return Promise.resolve({ data: [REASON, TAP] });
     if (path === "/api/v1/service-request-types") {
       return Promise.resolve([{ code: "SHUT_OFF", label: "Shut off for non-payment" }]);
     }
@@ -84,7 +97,7 @@ describe("the late fee on a delinquency tier", () => {
 
     await user.selectOptions(screen.getByLabelText("Charge"), "PERCENT_OF_BALANCE");
     await user.type(await screen.findByPlaceholderText("e.g. 1.5"), "1.5");
-    await user.selectOptions(await screen.findByLabelText("Book it to"), REASON.id);
+    await user.selectOptions(await screen.findByLabelText("Reason shown on the bill"), REASON.id);
     await user.click(screen.getByText("Save"));
 
     await waitFor(() => expect(patch).toHaveBeenCalled());
@@ -103,7 +116,7 @@ describe("the late fee on a delinquency tier", () => {
 
     await user.selectOptions(screen.getByLabelText("Charge"), "FLAT_FEE");
     await user.type(await screen.findByPlaceholderText("e.g. 25.00"), "25");
-    await user.selectOptions(await screen.findByLabelText("Book it to"), REASON.id);
+    await user.selectOptions(await screen.findByLabelText("Reason shown on the bill"), REASON.id);
     await user.click(screen.getByText("Save"));
 
     await waitFor(() => expect(patch).toHaveBeenCalled());
@@ -170,6 +183,39 @@ describe("the late fee on a delinquency tier", () => {
     await user.selectOptions(screen.getByLabelText("Charge"), "FLAT_FEE");
 
     expect(screen.queryByDisplayValue("50")).not.toBeInTheDocument();
+  });
+
+  /*
+   * The API refuses a tier booking its fee to a reason that answers to
+   * its own event — a tap being cut, a payment bouncing — with
+   * REASON_NOT_FOR_DELINQUENCY. Offering those in the dropdown would be
+   * offering a choice that cannot be saved, and four of the five seeded
+   * FEE reasons are in that group.
+   */
+  it("offers only the reasons a tier may charge to", async () => {
+    const user = userEvent.setup();
+    stubLoads([rule()]);
+    await openEditor(user);
+
+    await user.selectOptions(screen.getByLabelText("Charge"), "FLAT_FEE");
+    const picker = await screen.findByLabelText("Reason shown on the bill");
+
+    expect(picker).toContainHTML("Late payment fee");
+    expect(picker).not.toContainHTML("Tap fee");
+  });
+
+  it("says so when the tenant has marked no reason for delinquency", async () => {
+    const user = userEvent.setup();
+    get.mockImplementation((path: string) => {
+      if (path === "/api/v1/delinquency-rules") return Promise.resolve({ data: [rule()] });
+      if (path === "/api/v1/ar/reasons") return Promise.resolve({ data: [TAP] });
+      return Promise.resolve([]);
+    });
+    await openEditor(user);
+
+    await user.selectOptions(screen.getByLabelText("Charge"), "FLAT_FEE");
+
+    expect(await screen.findByText(/No reason is marked for delinquency/)).toBeInTheDocument();
   });
 
   it("says which permission is missing rather than offering an empty list", async () => {

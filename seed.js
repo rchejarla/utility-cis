@@ -1305,27 +1305,29 @@ async function main() {
   // is duplicated here, the way the module list used to be before the
   // seed started delegating to scripts/provision-tenant.ts.
   // The fourth element is isPenalty: whether an entry citing the reason
-  // is itself a penalty. A percentage late fee is charged on principal,
-  // so it excludes an earlier late fee from its base but not an unpaid
-  // tap fee. Only a charge for being late qualifies.
+  // is itself a penalty, which decides whether a percentage late fee may
+  // be charged on that money. The fifth is allowsDelinquencyFee: whether
+  // a delinquency tier may book its fee here at all. Only the late-fee
+  // reason may — the others answer to their own event (a payment
+  // bouncing, a tap being cut) rather than to time passing.
   const reasonCodes = [
-    ["LATE_FEE", "Late payment fee", "FEE", true],
-    ["NSF_FEE", "Returned payment fee", "FEE", true],
-    ["RECONNECT_FEE", "Reconnection fee", "FEE", false],
-    ["TAP_FEE", "Tap fee", "FEE", false],
-    ["METER_TEST_FEE", "Meter test fee", "FEE", false],
-    ["OPENING_BALANCE", "Opening balance", "ADJUSTMENT_DEBIT", false],
-    ["BILLING_CORRECTION_DEBIT", "Billing correction — charge", "ADJUSTMENT_DEBIT", false],
-    ["COURTESY_WAIVER", "Courtesy waiver", "ADJUSTMENT_CREDIT", false],
-    ["GOODWILL", "Goodwill credit", "ADJUSTMENT_CREDIT", false],
-    ["BILLING_CORRECTION_CREDIT", "Billing correction — credit", "ADJUSTMENT_CREDIT", false],
-    ["BAD_DEBT", "Written off — uncollectable", "WRITE_OFF", false],
-    ["SMALL_BALANCE", "Written off — small balance", "WRITE_OFF", false],
+    ["LATE_FEE", "Late payment fee", "FEE", true, true],
+    ["NSF_FEE", "Returned payment fee", "FEE", true, false],
+    ["RECONNECT_FEE", "Reconnection fee", "FEE", false, false],
+    ["TAP_FEE", "Tap fee", "FEE", false, false],
+    ["METER_TEST_FEE", "Meter test fee", "FEE", false, false],
+    ["OPENING_BALANCE", "Opening balance", "ADJUSTMENT_DEBIT", false, false],
+    ["BILLING_CORRECTION_DEBIT", "Billing correction — charge", "ADJUSTMENT_DEBIT", false, false],
+    ["COURTESY_WAIVER", "Courtesy waiver", "ADJUSTMENT_CREDIT", false, false],
+    ["GOODWILL", "Goodwill credit", "ADJUSTMENT_CREDIT", false, false],
+    ["BILLING_CORRECTION_CREDIT", "Billing correction — credit", "ADJUSTMENT_CREDIT", false, false],
+    ["BAD_DEBT", "Written off — uncollectable", "WRITE_OFF", false, false],
+    ["SMALL_BALANCE", "Written off — small balance", "WRITE_OFF", false, false],
   ];
   const reasonByCode = {};
-  for (const [code, label, appliesToType, isPenalty] of reasonCodes) {
+  for (const [code, label, appliesToType, isPenalty, allowsDelinquencyFee] of reasonCodes) {
     const r = await p.ledgerReasonDef.create({
-      data: { utilityId: UID, code, label, appliesToType, isPenalty },
+      data: { utilityId: UID, code, label, appliesToType, isPenalty, allowsDelinquencyFee },
     });
     reasonByCode[code] = r.id;
   }

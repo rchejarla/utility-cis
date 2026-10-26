@@ -65,60 +65,67 @@ export type ReasonedType = "FEE" | "ADJUSTMENT_DEBIT" | "ADJUSTMENT_CREDIT" | "W
  * this wrong on a new code compounds a penalty on a penalty silently.
  * Only a charge for being late is one — a tap fee or a meter test fee
  * is work done, and a late fee applies to it.
+ *
+ * `allowsDelinquencyFee` says whether a delinquency tier may book its
+ * late fee to the reason. Only the late-fee reason may: the other four
+ * answer to their own event — a payment bouncing, a tap being cut, a
+ * meter being tested, service being restored — rather than to time
+ * passing. Stated on every entry for the same reason as above.
  */
 export const DEFAULT_REASON_CODES = [
-  { code: "LATE_FEE", label: "Late payment fee", appliesToType: "FEE", isPenalty: true },
-  { code: "NSF_FEE", label: "Returned payment fee", appliesToType: "FEE", isPenalty: true },
-  { code: "RECONNECT_FEE", label: "Reconnection fee", appliesToType: "FEE", isPenalty: false },
-  { code: "TAP_FEE", label: "Tap fee", appliesToType: "FEE", isPenalty: false },
-  { code: "METER_TEST_FEE", label: "Meter test fee", appliesToType: "FEE", isPenalty: false },
+  { code: "LATE_FEE", label: "Late payment fee", appliesToType: "FEE", isPenalty: true, allowsDelinquencyFee: true },
+  { code: "NSF_FEE", label: "Returned payment fee", appliesToType: "FEE", isPenalty: true, allowsDelinquencyFee: false },
+  { code: "RECONNECT_FEE", label: "Reconnection fee", appliesToType: "FEE", isPenalty: false, allowsDelinquencyFee: false },
+  { code: "TAP_FEE", label: "Tap fee", appliesToType: "FEE", isPenalty: false, allowsDelinquencyFee: false },
+  { code: "METER_TEST_FEE", label: "Meter test fee", appliesToType: "FEE", isPenalty: false, allowsDelinquencyFee: false },
   {
     code: "OPENING_BALANCE",
     label: "Opening balance",
     appliesToType: "ADJUSTMENT_DEBIT",
-    isPenalty: false,
+    isPenalty: false, allowsDelinquencyFee: false,
   },
   {
     code: "BILLING_CORRECTION_DEBIT",
     label: "Billing correction — charge",
     appliesToType: "ADJUSTMENT_DEBIT",
-    isPenalty: false,
+    isPenalty: false, allowsDelinquencyFee: false,
   },
   {
     code: "COURTESY_WAIVER",
     label: "Courtesy waiver",
     appliesToType: "ADJUSTMENT_CREDIT",
-    isPenalty: false,
+    isPenalty: false, allowsDelinquencyFee: false,
   },
   {
     code: "GOODWILL",
     label: "Goodwill credit",
     appliesToType: "ADJUSTMENT_CREDIT",
-    isPenalty: false,
+    isPenalty: false, allowsDelinquencyFee: false,
   },
   {
     code: "BILLING_CORRECTION_CREDIT",
     label: "Billing correction — credit",
     appliesToType: "ADJUSTMENT_CREDIT",
-    isPenalty: false,
+    isPenalty: false, allowsDelinquencyFee: false,
   },
   {
     code: "BAD_DEBT",
     label: "Written off — uncollectable",
     appliesToType: "WRITE_OFF",
-    isPenalty: false,
+    isPenalty: false, allowsDelinquencyFee: false,
   },
   {
     code: "SMALL_BALANCE",
     label: "Written off — small balance",
     appliesToType: "WRITE_OFF",
-    isPenalty: false,
+    isPenalty: false, allowsDelinquencyFee: false,
   },
 ] as const satisfies readonly {
   code: string;
   label: string;
   appliesToType: ReasonedType;
   isPenalty: boolean;
+  allowsDelinquencyFee: boolean;
 }[];
 
 /**

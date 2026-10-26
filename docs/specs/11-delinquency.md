@@ -273,6 +273,17 @@ names its own "Late charge" would be missed by any list this codebase
 could hold. `fee_reason_id` is a composite FK, so a tier cannot cite
 another tenant's reason.
 
+**The reason must be one the ladder may charge to.**
+`LedgerReasonDef.allowsDelinquencyFee`, seeded true for the late-fee
+reason alone. Being an active FEE reason is not enough: a
+returned-payment fee is raised when a payment bounces and a tap fee when
+a tap is cut, each answering to its own event, and booking late fees
+under one of those is a silent accounting error — the bill prints the
+reason's own label, so it would read "Tap fee". The rules form offers
+only the marked reasons, and the route refuses the rest with 422
+`REASON_NOT_FOR_DELINQUENCY`, because the API is reachable without the
+form.
+
 **That reason is validated when the rule is saved**, by the same
 `resolveReason` gate `assessFee` uses — `prisma` satisfies its
 transaction-client type, so it is literally the same gate and the same
@@ -399,7 +410,9 @@ failing the tenant's whole pass over one account.
 **The fee and work-order fields (built 2026-10-25).** Two more groups
 in the editor: *Late fee* — what it charges (nothing, a flat amount, or a
 percentage), the amount or rate, an optional cap on a percentage, the
-FEE reason it books to, and whether a higher tier keeps or replaces it —
+reason shown on the bill, and whether a higher tier keeps or replaces it
+— the reason picker offering only those the tenant has marked as
+available to delinquency —
 and *Field work*, the work order this tier raises and the reconnection
 request raised when the balance clears. The table gains a **Late Fee**
 column so the whole ladder's charges read at a glance.

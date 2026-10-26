@@ -35,6 +35,14 @@ interface FeeReason {
   id: string;
   code: string;
   label: string;
+  /**
+   * Whether a delinquency tier may book its fee here. Only a late-fee
+   * reason may: a returned-payment fee answers to a payment bouncing, a
+   * tap fee to a tap being cut, and neither to time passing. The API
+   * refuses the others with REASON_NOT_FOR_DELINQUENCY, so offering
+   * them would be offering a choice that cannot be saved.
+   */
+  allowsDelinquencyFee: boolean;
 }
 
 interface RequestType {
@@ -238,7 +246,7 @@ function RuleEditor({ rule, onSave, onCancel, nextTier }: { rule?: DelinquencyRu
   useEffect(() => {
     apiClient
       .get<{ data: FeeReason[] }>("/api/v1/ar/reasons", { appliesToType: "FEE" })
-      .then((res) => setReasons(res.data ?? []))
+      .then((res) => setReasons((res.data ?? []).filter((r) => r.allowsDelinquencyFee)))
       .catch(() => setReasons("denied"));
     apiClient
       .get<RequestType[]>("/api/v1/service-request-types")
@@ -351,12 +359,14 @@ function RuleEditor({ rule, onSave, onCancel, nextTier }: { rule?: DelinquencyRu
       {charging && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
           <div>
-            <Label htmlFor={fid("feeReasonId")}>Book it to</Label>
+            <Label htmlFor={fid("feeReasonId")}>Reason shown on the bill</Label>
             {reasons === "denied" ? (
               <Blocked>Needs AR adjustments view permission</Blocked>
+            ) : reasons !== null && reasons.length === 0 ? (
+              <Blocked>No reason is marked for delinquency</Blocked>
             ) : (
               <select id={fid("feeReasonId")} style={{ ...settingInputStyle, width: "100%" }} value={feeReasonId} onChange={(e) => setFeeReasonId(e.target.value)}>
-                <option value="">Choose a fee reason…</option>
+                <option value="">Choose a reason…</option>
                 {(reasons ?? []).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
               </select>
             )}

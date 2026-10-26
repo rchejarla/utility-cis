@@ -747,6 +747,28 @@ describe("configuring the fee", () => {
     )).toBe(0);
   });
 
+  /*
+   * A tap fee is raised when a tap is cut, not because a bill went
+   * unpaid. The ladder must refuse it even though it is an active FEE
+   * reason, and refuse it at the route rather than only hiding it in a
+   * dropdown — the API is reachable without the form.
+   */
+  it("refuses to save a tier booking its fee to a reason the ladder may not use", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/delinquency-rules",
+      headers: headers(),
+      payload: ruleBody({
+        feeType: "FLAT_FEE",
+        feeAmount: "25.00",
+        feeReasonId: await reasonId("TAP_FEE"),
+      }),
+    });
+
+    expect(res.statusCode, res.body).toBe(422);
+    expect(JSON.parse(res.body).error.code).toBe("REASON_NOT_FOR_DELINQUENCY");
+  });
+
   it("refuses a reason that has been retired", async () => {
     const retired = await makeFeeReason("RETIRED_FEE", "Retired charge");
     await seedAsPlatform(async () =>

@@ -34,7 +34,29 @@ async function assertUsableFeeReason(
   feeReasonId: string | null | undefined,
 ): Promise<void> {
   if (!feeReasonId) return;
-  await resolveReason(prisma, utilityId, feeReasonId, "FEE");
+  const reason = await resolveReason(prisma, utilityId, feeReasonId, "FEE");
+
+  /*
+   * And it has to be a reason a tier may charge to. Being an active FEE
+   * reason is not enough: a returned-payment fee is raised when a
+   * payment bounces, a tap fee when a tap is cut, each answering to its
+   * own event rather than to time passing. Booking late fees under one
+   * of those is a silent accounting error — the customer's bill prints
+   * the reason's own label, so it would say "Tap fee".
+   *
+   * Read from the reason rather than from a list of codes here, because
+   * reason codes are tenant-configurable; see
+   * `LedgerReasonDef.allowsDelinquencyFee`.
+   */
+  if (!reason.allowsDelinquencyFee) {
+    throw Object.assign(
+      new Error(
+        `Reason ${reason.code} is not one a delinquency tier may charge to. ` +
+          `Mark it as available to delinquency, or pick a late-fee reason.`,
+      ),
+      { statusCode: 422, code: "REASON_NOT_FOR_DELINQUENCY" },
+    );
+  }
 }
 
 /**

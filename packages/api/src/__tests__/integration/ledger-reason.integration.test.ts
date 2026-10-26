@@ -332,14 +332,78 @@ describe("a reason knows whether it is a penalty", () => {
     const again = await seedDefaultReasons(freshUtilityId, ACTOR, "Tester");
 
     expect(again.created).toBe(0);
-    expect(again.penaltiesMarked).toBe(1);
+    expect(again.flagsCorrected).toBe(1);
     expect(await flagsFor(["LATE_FEE"])).toEqual({ LATE_FEE: true });
   });
 
   it("marks nothing on a second pass that has nothing to mark", async () => {
     await seedDefaultReasons(freshUtilityId, ACTOR, "Tester");
     const again = await seedDefaultReasons(freshUtilityId, ACTOR, "Tester");
-    expect(again.penaltiesMarked).toBe(0);
+    expect(again.flagsCorrected).toBe(0);
+  });
+
+  /*
+   * Which reasons a delinquency tier may book its fee to.
+   *
+   * Only the late-fee reason. A returned-payment fee is raised when a
+   * payment bounces, a tap fee when a tap is cut, a meter test fee when
+   * a meter is tested, a reconnection fee when service is restored —
+   * each answers to its own event, and none of them is "time passed".
+   * Offering all five left a tier's dropdown with one right answer out
+   * of five.
+   *
+   * On the reason rather than in a list of codes inside the delinquency
+   * module, because reason codes are tenant-configurable: a utility that
+   * calls theirs RETURNED_ITEM, or adds a second bounced-payment reason,
+   * would defeat any such list.
+   */
+  it("allows a delinquency fee on the late-fee reason and no other default", async () => {
+    await seedDefaultReasons(freshUtilityId, ACTOR, "Tester");
+
+    const allowed = await seedAsPlatform(async () =>
+      prismaImports.prisma.ledgerReasonDef.findMany({
+        where: { utilityId: freshUtilityId, allowsDelinquencyFee: true },
+        select: { code: true },
+        orderBy: { code: "asc" },
+      }),
+    );
+    expect(allowed.map((r) => r.code)).toEqual(["LATE_FEE"]);
+  });
+
+  it("treats a reason nobody classified as not available to the ladder", async () => {
+    const id = await makeReason("TAMPER_CHARGE", "FEE", true, freshUtilityId);
+
+    const row = await seedAsPlatform(async () =>
+      prismaImports.prisma.ledgerReasonDef.findUniqueOrThrow({
+        where: { id },
+        select: { allowsDelinquencyFee: true },
+      }),
+    );
+    // Default false: a reason the tenant has not opted in is not
+    // something a schedule may charge to.
+    expect(row.allowsDelinquencyFee).toBe(false);
+  });
+
+  it("sets the flag on a tenant that already has the reason", async () => {
+    await seedDefaultReasons(freshUtilityId, ACTOR, "Tester");
+    await seedAsPlatform(async () =>
+      prismaImports.prisma.ledgerReasonDef.updateMany({
+        where: { utilityId: freshUtilityId, code: "LATE_FEE" },
+        data: { allowsDelinquencyFee: false },
+      }),
+    );
+
+    const again = await seedDefaultReasons(freshUtilityId, ACTOR, "Tester");
+
+    expect(again.created).toBe(0);
+    expect(again.flagsCorrected).toBe(1);
+    const row = await seedAsPlatform(async () =>
+      prismaImports.prisma.ledgerReasonDef.findFirstOrThrow({
+        where: { utilityId: freshUtilityId, code: "LATE_FEE" },
+        select: { allowsDelinquencyFee: true },
+      }),
+    );
+    expect(row.allowsDelinquencyFee).toBe(true);
   });
 
   it("does not reach another tenant's reason of the same code", async () => {

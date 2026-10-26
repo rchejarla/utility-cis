@@ -39,6 +39,9 @@ export interface ReasonRow {
   label: string;
   appliesToType: string;
   isActive: boolean;
+  isPenalty: boolean;
+  /** Whether a delinquency tier may book its late fee to this reason. */
+  allowsDelinquencyFee: boolean;
 }
 
 /**
@@ -56,7 +59,15 @@ export async function resolveReason(
 ): Promise<ReasonRow> {
   const row = await tx.ledgerReasonDef.findFirst({
     where: { id: reasonId, utilityId },
-    select: { id: true, code: true, label: true, appliesToType: true, isActive: true },
+    select: {
+      id: true,
+      code: true,
+      label: true,
+      appliesToType: true,
+      isActive: true,
+      isPenalty: true,
+      allowsDelinquencyFee: true,
+    },
   });
   // An inactive code is treated the same as a missing one, on purpose:
   // both mean "you may not cite this on a new entry", and distinguishing
@@ -92,7 +103,15 @@ export async function listReasons(
       ...(opts.includeInactive ? {} : { isActive: true }),
     },
     orderBy: [{ appliesToType: "asc" }, { code: "asc" }],
-    select: { id: true, code: true, label: true, appliesToType: true, isActive: true },
+    select: {
+      id: true,
+      code: true,
+      label: true,
+      appliesToType: true,
+      isActive: true,
+      isPenalty: true,
+      allowsDelinquencyFee: true,
+    },
   });
 }
 
@@ -103,17 +122,18 @@ export async function listReasons(
  * default list grows a later call fills in only the new ones rather than
  * failing on the (utilityId, code) unique.
  *
- * `penaltiesMarked` counts rows the tenant already had whose `isPenalty`
- * was wrong. Skipping existing codes is what makes the function
- * idempotent, and it is also what would have stopped the flag ever
- * landing: every tenant already holds LATE_FEE and NSF_FEE, so a seeder
- * that only creates would set it precisely nowhere it is needed.
+ * `flagsCorrected` counts classification flags fixed on rows the tenant
+ * already had — `isPenalty` and `allowsDelinquencyFee`. Skipping
+ * existing codes is what makes the function idempotent, and it is also
+ * what would have stopped either flag ever landing: every tenant
+ * already holds these codes, so a seeder that only creates would set
+ * them precisely nowhere they are needed.
  */
 export async function seedDefaultReasons(
   utilityId: string,
   actorId: string,
   actorName: string,
-): Promise<{ created: number; penaltiesMarked: number }> {
+): Promise<{ created: number; flagsCorrected: number }> {
   return prisma.$transaction(async (tx) => {
     const existing = new Set(
       (await tx.ledgerReasonDef.findMany({ where: { utilityId }, select: { code: true } })).map(
@@ -131,6 +151,7 @@ export async function seedDefaultReasons(
           label: def.label,
           appliesToType: def.appliesToType as never,
           isPenalty: def.isPenalty,
+          allowsDelinquencyFee: def.allowsDelinquencyFee,
         },
       });
       await writeAuditRow(
@@ -145,19 +166,32 @@ export async function seedDefaultReasons(
     }
 
     /*
-     * The classification, on rows this tenant already had. Not audited
-     * and no `ledger_reason.updated` event type invented for it: there
-     * is no operator decision to attribute, since which default codes
-     * are penalties is identical for every tenant and arrives with the
-     * migration, and a new event type would imply a reason-update path
-     * that does not exist.
+     * The classifications, on rows this tenant already had. Skipping
+     * existing codes is what makes this function idempotent, and it is
+     * also what would stop a flag ever landing: every tenant already
+     * holds these codes, so a seeder that only creates would set them
+     * precisely nowhere.
+     *
+     * Only false -> true, and only for the defaults that should be
+     * true. A tenant that deliberately allows a delinquency fee on a
+     * reason of its own — §3.4 says they add their own — must not have
+     * that undone on the next onboarding run.
+     *
+     * Not audited, and no `ledger_reason.updated` event type invented
+     * for it: there is no operator decision to attribute, since which
+     * default codes carry which flag is identical for every tenant and
+     * arrives with the migration.
      */
-    const penaltyCodes = DEFAULT_REASON_CODES.filter((d) => d.isPenalty).map((d) => d.code);
-    const { count: penaltiesMarked } = await tx.ledgerReasonDef.updateMany({
-      where: { utilityId, code: { in: penaltyCodes }, isPenalty: false },
-      data: { isPenalty: true },
-    });
+    let flagsCorrected = 0;
+    for (const flag of ["isPenalty", "allowsDelinquencyFee"] as const) {
+      const codes = DEFAULT_REASON_CODES.filter((d) => d[flag]).map((d) => d.code);
+      const { count } = await tx.ledgerReasonDef.updateMany({
+        where: { utilityId, code: { in: codes }, [flag]: false },
+        data: { [flag]: true },
+      });
+      flagsCorrected += count;
+    }
 
-    return { created, penaltiesMarked };
+    return { created, flagsCorrected };
   });
 }
