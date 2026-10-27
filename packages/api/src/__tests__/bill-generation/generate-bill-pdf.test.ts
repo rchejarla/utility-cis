@@ -12,6 +12,7 @@ function presentation(
   lineCount: number,
   settlement: BillPresentation["settlement"] = null,
   fees: BillPresentationGroup | null = null,
+  statement: BillPresentation["statement"] = null,
 ): BillPresentation {
   return {
     issuer: {
@@ -45,15 +46,19 @@ function presentation(
     ],
     // The same object as the last group above, which is the contract.
     feesGroup: fees ?? null,
+    // Null by default: a bill issued before the snapshot existed prints
+    // no statement lines and keeps the rated total.
+    statement,
     totals: {
       subtotal: `${lineCount}.00`,
       taxes: "0.00",
       credits: "0.00",
       rounding: null,
       fees: fees ? fees.subtotal : null,
-      total: fees
-        ? new Decimal(lineCount).plus(fees.subtotal).toFixed(2)
-        : `${lineCount}.00`,
+      total: new Decimal(lineCount)
+        .plus(fees ? fees.subtotal : 0)
+        .plus(statement ? statement.balanceForward : 0)
+        .toFixed(2),
     },
     settlement,
     messages: [{ label: "Notice", body: "Water restrictions begin June 1." }],
@@ -222,6 +227,72 @@ describe("generateBillPdf", () => {
     expect(text).toContain("-$5.00");
     // And the page adds up: the group subtotal reaches the total.
     expect(text).toContain("Total due$23.00");
+  });
+
+  /**
+   * The balance-forward layout: where the account stood, then this
+   * period's charges, then one total that is both.
+   *
+   * The bill's total was rated charges plus whichever non-bill entries
+   * fell in a date window — short by the previous bill's unpaid
+   * remainder, because entries holding a `bill_id` are filtered out of
+   * that window and nothing put it back. On a real account it asked
+   * $489.34 where the account owed $554.71.
+   */
+  it("prints the balance carried forward above its own charges, in one total", async () => {
+    const text = extractText(
+      await generateBillPdf(
+        presentation(3, null, null, {
+          previousBalance: "110.75",
+          paymentsSince: "30.00",
+          balanceForward: "80.75",
+          pastDue: "80.75",
+        }),
+      ),
+    );
+
+    expect(text).toContain("Previous balance");
+    expect(text).toContain("$110.75");
+    expect(text).toContain("Payments received");
+    expect(text).toContain("Balance forward");
+    expect(text).toContain("$80.75");
+    // "Subtotal" becomes "Charges this period" once there is a balance
+    // above it to tell it apart from.
+    expect(text).toContain("Charges this period");
+    // 80.75 carried + 3.00 rated.
+    expect(text).toContain("Total due$83.75");
+    // And which part was already due — a part of that total, never an
+    // addition to it. This is the line that stops one due date covering
+    // arrears that had their own.
+    expect(text).toContain("of which past due");
+  });
+
+  it("says nothing about a balance forward on a bill with no snapshot", async () => {
+    const text = extractText(await generateBillPdf(presentation(3)));
+    expect(text).not.toContain("Previous balance");
+    expect(text).not.toContain("Balance forward");
+    expect(text).not.toContain("past due");
+    // The word it used before a statement existed.
+    expect(text).toContain("Subtotal");
+    expect(text).toContain("Total due$3.00");
+  });
+
+  it("omits the past-due line when nothing is overdue", async () => {
+    const text = extractText(
+      await generateBillPdf(
+        presentation(3, null, null, {
+          previousBalance: "40.00",
+          paymentsSince: "40.00",
+          balanceForward: "0.00",
+          pastDue: "0.00",
+        }),
+      ),
+    );
+
+    expect(text).toContain("Previous balance");
+    // Most bills are this one, and a "$0.00 past due" line reads as a
+    // warning about nothing.
+    expect(text).not.toContain("of which past due");
   });
 
   it("prints no fees row when there are none", async () => {

@@ -475,7 +475,19 @@ describe("loadBillPresentation", () => {
 
     const args = vi.mocked(prisma.ledgerEntry.findMany).mock.calls[0][0] as {
       include?: Record<string, unknown>;
+      where?: { type?: { notIn?: string[] } };
     };
+    /*
+     * `PAYMENT` is excluded as well as the two it always excluded.
+     * Payments in this window are reported by the statement block's
+     * `paymentsSince`, which the layout subtracts; itemising them here
+     * too would subtract them twice. The two partition the window's
+     * credits rather than overlapping — everything else with a reason a
+     * customer can read stays here.
+     */
+    expect(args.where?.type?.notIn).toEqual(
+      expect.arrayContaining(["BILL_CHARGE", "DEPOSIT", "PAYMENT"]),
+    );
     expect(args.include).toMatchObject({
       reason: { select: { label: true } },
       assessedOn: { select: { bill: { select: { billNumber: true } } } },
@@ -486,6 +498,55 @@ describe("loadBillPresentation", () => {
         },
       },
     });
+  });
+
+  /**
+   * The bill asks for what the account owes.
+   *
+   * Its total was rated charges plus whichever non-bill entries fell in
+   * a date window — a quantity answering no question, and short by the
+   * balance carried forward, because entries holding a `bill_id` are
+   * filtered out of that window and nothing put the previous bill's
+   * unpaid remainder back. The standard rule is current charges **plus
+   * past due**.
+   */
+  it("adds the balance carried forward into the total", async () => {
+    vi.mocked(prisma.bill.findFirst).mockResolvedValue(
+      billRow({
+        previousBalance: new Decimal("110.75"),
+        paymentsSince: new Decimal("30.00"),
+        pastDueAmount: new Decimal("80.75"),
+      }) as never,
+    );
+    vi.mocked(prisma.ledgerEntry.findMany).mockResolvedValue([
+      activityRow({ amount: new Decimal("25.0000") }),
+    ] as never);
+
+    const p = await loadBillPresentation("util-1", "bill-1");
+
+    expect(p.statement).toEqual({
+      previousBalance: "110.75",
+      paymentsSince: "30.00",
+      balanceForward: "80.75",
+      pastDue: "80.75",
+    });
+    // 110.75 carried − 30.00 paid + 25.00 fees + 107.50 rated = 213.25.
+    expect(p.totals.total).toBe("213.25");
+    expect(p.remittance.amountDue).toBe("213.25");
+  });
+
+  /**
+   * A bill issued before the snapshot existed carries none of it, and
+   * prints exactly as it did — the figures are not recoverable, so
+   * inventing them is the one thing this must not do.
+   */
+  it("omits the statement and keeps the old total on a bill with no snapshot", async () => {
+    vi.mocked(prisma.bill.findFirst).mockResolvedValue(billRow() as never);
+
+    const p = await loadBillPresentation("util-1", "bill-1");
+
+    expect(p.statement).toBeNull();
+    expect(p.totals.total).toBe("107.50");
   });
 
   it("still renders when the account type matches no type definition", async () => {

@@ -70,6 +70,29 @@ export interface BillPresentationSettlement {
   amountDue: string;
 }
 
+/**
+ * Where the account stood when this bill was issued.
+ *
+ * Read from the snapshot frozen onto the bill at posting, never
+ * recomputed — `pastDue` needs allocation state that is current only
+ * then, and `reverseEntry` destroys it afterwards. Null on a bill issued
+ * before the snapshot existed, and then the layout omits these lines
+ * rather than inventing figures that are not recoverable.
+ *
+ * Every amount is a 2dp string. `previousBalance` may be negative: an
+ * account in credit at the last bill carried that credit forward, and
+ * clamping it would overstate what is owed.
+ */
+export interface BillPresentationStatement {
+  previousBalance: string;
+  /** Positive. The layout subtracts it. */
+  paymentsSince: string;
+  /** `previousBalance` less `paymentsSince` — what came into this period. */
+  balanceForward: string;
+  /** Of the total, how much was already due. A part of it, not an addition. */
+  pastDue: string;
+}
+
 export interface BillPresentationTotals {
   subtotal: string;
   taxes: string;
@@ -108,6 +131,8 @@ export interface BillPresentation {
    * down.
    */
   feesGroup: BillPresentationGroup | null;
+  /** Where the account stood when this bill was issued, or null. */
+  statement: BillPresentationStatement | null;
   totals: BillPresentationTotals;
   settlement: BillPresentationSettlement | null;
   messages: Array<{ label: string; body: string }>;

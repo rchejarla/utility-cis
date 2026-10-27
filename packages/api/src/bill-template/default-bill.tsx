@@ -73,7 +73,7 @@ function printed(amount: string): string {
 
 export function DefaultBillTemplate({ presentation }: { presentation: BillPresentation }) {
   const s = makeStyles(presentation);
-  const { issuer, recipient, account, bill, groups, totals, settlement, messages, remittance } =
+  const { issuer, recipient, account, bill, groups, statement, totals, settlement, messages, remittance } =
     presentation;
 
   return (
@@ -148,8 +148,42 @@ export function DefaultBillTemplate({ presentation }: { presentation: BillPresen
         ))}
 
         <View style={s.totalsBox} wrap={false}>
+          {/*
+            Where the account stood when this bill was issued, above its
+            own charges — the balance-forward layout every utility bill
+            uses, and what makes "Total due" current charges plus past
+            due rather than current charges alone.
+
+            Absent on a bill issued before the snapshot existed, and then
+            the box reads exactly as it did: the figures behind these
+            lines are not recoverable, so inventing them is the one thing
+            this must not do.
+
+            "Payments and credits" rather than "Payments": the figure is
+            payments only, and the adjustments that are not payments
+            itemise in the fees group above — so the wording has to not
+            promise that this line covers them.
+          */}
+          {statement ? (
+            <>
+              <View style={s.totalRow}>
+                <Text style={s.muted}>Previous balance</Text>
+                <Text>{printed(statement.previousBalance)}</Text>
+              </View>
+              {Number(statement.paymentsSince) === 0 ? null : (
+                <View style={s.totalRow}>
+                  <Text style={s.muted}>Payments received</Text>
+                  <Text>−{printed(statement.paymentsSince)}</Text>
+                </View>
+              )}
+              <View style={s.totalRow}>
+                <Text style={s.muted}>Balance forward</Text>
+                <Text>{printed(statement.balanceForward)}</Text>
+              </View>
+            </>
+          ) : null}
           <View style={s.totalRow}>
-            <Text style={s.muted}>Subtotal</Text>
+            <Text style={s.muted}>{statement ? "Charges this period" : "Subtotal"}</Text>
             <Text>{printed(totals.subtotal)}</Text>
           </View>
           <View style={s.totalRow}>
@@ -199,6 +233,22 @@ export function DefaultBillTemplate({ presentation }: { presentation: BillPresen
             <Text>{settlement ? "Total billed" : "Total due"}</Text>
             <Text>{printed(totals.total)}</Text>
           </View>
+          {/*
+            How much of that total was already due, as a part of it and
+            never an addition to it.
+
+            This is the line that stops the bill re-dating overdue debt.
+            One due date per bill is the standard and this document keeps
+            it — what it no longer does is let that date silently cover
+            arrears that had their own. Absent when nothing is overdue,
+            which is most bills.
+          */}
+          {statement && Number(statement.pastDue) !== 0 ? (
+            <View style={s.totalRow}>
+              <Text style={s.muted}>of which past due — payable now</Text>
+              <Text>{printed(statement.pastDue)}</Text>
+            </View>
+          ) : null}
           {/*
             Payments and credits already applied to this bill, itemised
             with the date they took effect, then what is actually left to

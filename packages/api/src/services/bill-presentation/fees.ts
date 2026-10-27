@@ -76,7 +76,18 @@ export async function loadFeesGroup(
       utilityId,
       accountId,
       billId: null,
-      type: { notIn: ["BILL_CHARGE", "DEPOSIT"] },
+      /*
+       * `PAYMENT` joins the two it always excluded: the statement block
+       * reports the window's payments as one figure the layout
+       * subtracts, so itemising them here too would subtract them twice.
+       * The two partition the window's credits — payments there,
+       * everything else carrying a reason a customer can read here: a
+       * waiver, a write-off, the reversal a replacing tier writes. That
+       * split is the conventional bill, where *Payments* is its own line
+       * and adjustments itemise separately. A payment made against
+       * *this* bill still itemises, under `settlement`.
+       */
+      type: { notIn: ["BILL_CHARGE", "DEPOSIT", "PAYMENT"] },
       effectiveDate: {
         lte: billDate,
         ...(opensAfter ? { gt: opensAfter } : {}),

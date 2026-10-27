@@ -2,7 +2,12 @@ import { Decimal } from "decimal.js";
 import { prisma } from "../../lib/prisma.js";
 import { selectBillMessages } from "../bill-message.service.js";
 import { chargeGroups } from "./charges.js";
-import { BillPresentationError, type BillPresentation, type BillPresentationTotals } from "./document.js";
+import {
+  BillPresentationError,
+  type BillPresentation,
+  type BillPresentationStatement,
+  type BillPresentationTotals,
+} from "./document.js";
 import { loadFeesGroup } from "./fees.js";
 import { money } from "./format.js";
 import { resolveIssuer } from "./issuer.js";
@@ -103,10 +108,40 @@ async function loadBranding(utilityId: string): Promise<BillPresentation["brandi
  * figures visibly reconcile, rounding included, is worth more than one
  * that silently absorbs the difference.
  */
+/**
+ * Where the account stood when the bill was issued, from the snapshot.
+ *
+ * Null unless all three columns are present — a CHECK requires them
+ * together, so one missing means the bill predates the snapshot.
+ */
+function statementOf(bill: {
+  previousBalance?: Decimal | null;
+  paymentsSince?: Decimal | null;
+  pastDueAmount?: Decimal | null;
+}): BillPresentationStatement | null {
+  // Nullish rather than strictly null: the column is nullable, and a row
+  // that did not select it is absent rather than null. Either way there
+  // is no snapshot, and the one thing this must not do is invent one.
+  if (
+    bill.previousBalance == null ||
+    bill.paymentsSince == null ||
+    bill.pastDueAmount == null
+  ) {
+    return null;
+  }
+  return {
+    previousBalance: money(bill.previousBalance),
+    paymentsSince: money(bill.paymentsSince),
+    balanceForward: money(bill.previousBalance.minus(bill.paymentsSince)),
+    pastDue: money(bill.pastDueAmount),
+  };
+}
+
 function totalsOf(
   bill: { subtotal: Decimal; taxes: Decimal; credits: Decimal; total: Decimal },
   ratedSubtotals: string[],
   feesSubtotal: string | null,
+  statement: BillPresentationStatement | null,
 ): { totals: BillPresentationTotals; total: Decimal } {
   const printedSubtotal = ratedSubtotals.reduce(
     (acc, subtotal) => acc.plus(new Decimal(subtotal)),
@@ -117,7 +152,24 @@ function totalsOf(
   const ratedTotal = new Decimal(money(bill.total));
   const rounding = ratedTotal.minus(printedSubtotal.plus(taxes).minus(credits));
   const fees = new Decimal(feesSubtotal ?? 0);
-  const total = ratedTotal.plus(fees);
+  /*
+   * Current charges **plus past due**, which is the standard rule and
+   * which the balance carried forward is what supplies. Without it the
+   * total was short by the previous bill's unpaid remainder: entries
+   * holding a `bill_id` are filtered out of the fees window — correctly,
+   * a bill's own charge *is* that bill — and nothing put it back.
+   *
+   * `balanceForward` and the fees group do not overlap. One is the
+   * account up to the previous bill's date, the other the activity after
+   * it, and `paymentsSince` is netted into the first while the fees
+   * group excludes `PAYMENT` so the window's credits are partitioned
+   * rather than counted twice.
+   *
+   * A bill with no snapshot keeps the total it printed before, because
+   * the figures behind the new one are not recoverable.
+   */
+  const carried = statement ? new Decimal(statement.balanceForward) : new Decimal(0);
+  const total = carried.plus(ratedTotal).plus(fees);
 
   return {
     total,
@@ -184,10 +236,12 @@ export async function loadBillPresentation(
     applied.map((credit) => credit.creditId),
   );
 
+  const statement = statementOf(bill);
   const { totals, total } = totalsOf(
     bill,
     groups.map((group) => group.subtotal),
     feeGroup?.subtotal ?? null,
+    statement,
   );
   // After the totals, so the rounding line reconciles the rated charges
   // against `bill.total` without a fee in the way.
@@ -222,6 +276,7 @@ export async function loadBillPresentation(
     },
     groups,
     feesGroup: feeGroup,
+    statement,
     totals,
     settlement,
     messages,

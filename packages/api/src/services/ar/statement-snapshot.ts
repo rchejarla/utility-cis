@@ -24,12 +24,18 @@ export interface StatementSnapshot {
    */
   previousBalance: Prisma.Decimal;
   /**
-   * Every credit between the two bill dates, as a positive figure.
+   * Payments received between the two bill dates, as a positive figure.
    *
-   * Payments, waivers, write-offs and credit adjustments alike: the
-   * layout subtracts this from the previous balance, and all of them
-   * reduce what is owed. Hence "payments and credits" on the page rather
-   * than "payments" — a waiver is not a payment and still belongs here.
+   * **`PAYMENT` only**, not every credit. Waivers, write-offs, credit
+   * adjustments and the reversals a replacing tier writes stay in the
+   * fees-and-adjustments group, where they itemise with a reason the
+   * customer can read — and if they were counted here as well the layout
+   * would subtract them twice. The fees group excludes `PAYMENT` for the
+   * same reason, so the two partition the window's credits between them
+   * rather than overlapping.
+   *
+   * That split is also the conventional bill: *Payments* is its own
+   * line, adjustments are itemised separately.
    */
   paymentsSince: Prisma.Decimal;
   /**
@@ -96,8 +102,7 @@ export async function billStatementSnapshot(
         SELECT -SUM(e.amount) FROM ledger_entry e
          WHERE e.utility_id = ${utilityId}::uuid
            AND e.account_id = ${accountId}::uuid
-           AND e.type <> 'DEPOSIT'
-           AND e.amount < 0
+           AND e.type = 'PAYMENT'
            AND e.effective_date <= ${billDate}::date
            AND (
              NOT EXISTS (SELECT 1 FROM prev)
