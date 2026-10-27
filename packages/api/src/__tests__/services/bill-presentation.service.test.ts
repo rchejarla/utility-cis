@@ -549,6 +549,61 @@ describe("loadBillPresentation", () => {
     expect(p.totals.total).toBe("107.50");
   });
 
+  /**
+   * The totals box, resolved once.
+   *
+   * It was built twice — in the PDF template and in the staff popup —
+   * and every change touched one of them. Fees went into the total and
+   * the popup did not show them; the balance carried forward went in and
+   * the popup showed a total $523.55 larger than its own lines. They had
+   * also drifted in ways nobody reported: the PDF prints Taxes
+   * unconditionally and a Rounding row, the popup hid Taxes at zero and
+   * had no Rounding row at all.
+   *
+   * One ordered list, computed here, rendered by both. A figure added to
+   * the total now appears in both surfaces by construction rather than
+   * by remembering.
+   */
+  it("resolves the totals box as one ordered list", async () => {
+    vi.mocked(prisma.bill.findFirst).mockResolvedValue(
+      billRow({
+        previousBalance: new Decimal("110.75"),
+        paymentsSince: new Decimal("30.00"),
+        pastDueAmount: new Decimal("80.75"),
+      }) as never,
+    );
+    vi.mocked(prisma.ledgerEntry.findMany).mockResolvedValue([
+      activityRow({ amount: new Decimal("25.0000") }),
+    ] as never);
+
+    const p = await loadBillPresentation("util-1", "bill-1");
+
+    expect(p.totalRows).toEqual([
+      { label: "Previous balance", amount: "110.75" },
+      { label: "Payments received", amount: "-30.00" },
+      { label: "Balance forward", amount: "80.75" },
+      { label: "Charges this period", amount: "100.00" },
+      { label: "Taxes", amount: "7.50" },
+      { label: "Fees and adjustments", amount: "25.00" },
+      { label: "Total due", amount: "213.25", emphasis: "total" },
+      { label: "of which past due — payable now", amount: "80.75", emphasis: "note" },
+    ]);
+  });
+
+  it("drops the statement rows and renames the first on a bill with no snapshot", async () => {
+    vi.mocked(prisma.bill.findFirst).mockResolvedValue(billRow() as never);
+
+    const p = await loadBillPresentation("util-1", "bill-1");
+
+    // "Subtotal" rather than "Charges this period": there is no balance
+    // above it to tell it apart from.
+    expect(p.totalRows).toEqual([
+      { label: "Subtotal", amount: "100.00" },
+      { label: "Taxes", amount: "7.50" },
+      { label: "Total due", amount: "107.50", emphasis: "total" },
+    ]);
+  });
+
   it("still renders when the account type matches no type definition", async () => {
     vi.mocked(prisma.bill.findFirst).mockResolvedValue(billRow() as never);
     vi.mocked(prisma.accountTypeDef.findFirst).mockResolvedValue(null as never);

@@ -294,17 +294,23 @@ describe("Bill detail — fees and adjustments", () => {
     subtotal: "35.00",
   };
 
+  /*
+   * `totalRows` is spelled out rather than derived, because these tests
+   * prove the dialog **renders the list it is given**. Whether the list
+   * is the right list is the resolver's test
+   * (`bill-presentation.service.test.ts`), and keeping the two apart is
+   * what stops a dialog test passing because the builder and the
+   * renderer share a mistake.
+   */
   function presentation(over: Record<string, unknown> = {}) {
     return {
       feesGroup: FEES,
-      totals: {
-        subtotal: "37.89",
-        taxes: "0.00",
-        credits: "0.00",
-        rounding: null,
-        fees: "35.00",
-        total: "72.89",
-      },
+      totalRows: [
+        { label: "Subtotal", amount: "37.89" },
+        { label: "Taxes", amount: "0.00" },
+        { label: "Fees and adjustments", amount: "35.00" },
+        { label: "Total due", amount: "72.89", emphasis: "total" },
+      ],
       ...over,
     };
   }
@@ -360,20 +366,14 @@ describe("Bill detail — fees and adjustments", () => {
   it("shows the balance carried forward, not just its effect on the total", async () => {
     routeGets(
       presentation({
-        statement: {
-          previousBalance: "523.55",
-          paymentsSince: "0.00",
-          balanceForward: "523.55",
-          pastDue: "523.55",
-        },
-        totals: {
-          subtotal: "41.60",
-          taxes: "0.00",
-          credits: "0.00",
-          rounding: null,
-          fees: "25.00",
-          total: "590.15",
-        },
+        totalRows: [
+          { label: "Previous balance", amount: "523.55" },
+          { label: "Charges this period", amount: "41.60" },
+          { label: "Taxes", amount: "0.00" },
+          { label: "Fees and adjustments", amount: "25.00" },
+          { label: "Total due", amount: "590.15", emphasis: "total" },
+          { label: "of which past due — payable now", amount: "523.55", emphasis: "note" },
+        ],
       }),
     );
     renderDialog();
@@ -403,7 +403,19 @@ describe("Bill detail — fees and adjustments", () => {
   });
 
   it("shows no fees block on a bill that carries none", async () => {
-    routeGets(presentation({ feesGroup: null, totals: { ...presentation().totals, fees: null, total: "37.89" } }));
+    routeGets(
+      presentation({
+        feesGroup: null,
+        // No fees group and no fees row: the resolver omits both
+        // together, so a fixture that dropped only one would describe a
+        // page the resolver cannot produce.
+        totalRows: [
+          { label: "Subtotal", amount: "37.89" },
+          { label: "Taxes", amount: "0.00" },
+          { label: "Total due", amount: "37.89", emphasis: "total" },
+        ],
+      }),
+    );
     renderDialog();
 
     await screen.findByText("4.71 HCF");

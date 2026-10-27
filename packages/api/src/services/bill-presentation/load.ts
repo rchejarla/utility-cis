@@ -6,6 +6,7 @@ import {
   BillPresentationError,
   type BillPresentation,
   type BillPresentationStatement,
+  type BillPresentationTotalRow,
   type BillPresentationTotals,
 } from "./document.js";
 import { loadFeesGroup } from "./fees.js";
@@ -184,6 +185,69 @@ function totalsOf(
   };
 }
 
+/**
+ * The totals box, in print order — the one place it is decided.
+ *
+ * A row is omitted rather than printed at zero wherever a zero would
+ * read as a claim: "Credits $0.00" denies a payment that arrived,
+ * "$0.00 past due" warns about nothing, and "Balance forward" with no
+ * payment subtracted repeats the previous balance to the cent. Taxes
+ * stay at zero, because a bill that shows no tax line invites the
+ * question of whether tax was charged.
+ *
+ * The first row is named for what sits above it: with a balance carried
+ * forward it is this period's charges, and without one it is simply the
+ * subtotal.
+ */
+function totalRowsOf(
+  statement: BillPresentationStatement | null,
+  totals: BillPresentationTotals,
+  isSettled: boolean,
+): BillPresentationTotalRow[] {
+  const rows: BillPresentationTotalRow[] = [];
+
+  if (statement) {
+    rows.push({ label: "Previous balance", amount: statement.previousBalance });
+    if (new Decimal(statement.paymentsSince).isZero() === false) {
+      rows.push({ label: "Payments received", amount: `-${statement.paymentsSince}` });
+      rows.push({ label: "Balance forward", amount: statement.balanceForward });
+    }
+  }
+
+  rows.push({
+    label: statement ? "Charges this period" : "Subtotal",
+    amount: totals.subtotal,
+  });
+  rows.push({ label: "Taxes", amount: totals.taxes });
+  if (!new Decimal(totals.credits).isZero()) {
+    rows.push({ label: "Credits", amount: totals.credits });
+  }
+  if (totals.rounding) {
+    rows.push({ label: "Rounding", amount: totals.rounding });
+  }
+  if (totals.fees) {
+    rows.push({ label: "Fees and adjustments", amount: totals.fees });
+  }
+
+  rows.push({
+    // "Total billed" once something has been applied to it, because the
+    // stub below then asks for the remainder rather than this figure.
+    label: isSettled ? "Total billed" : "Total due",
+    amount: totals.total,
+    emphasis: "total",
+  });
+
+  if (statement && !new Decimal(statement.pastDue).isZero()) {
+    rows.push({
+      label: "of which past due — payable now",
+      amount: statement.pastDue,
+      emphasis: "note",
+    });
+  }
+
+  return rows;
+}
+
 export async function loadBillPresentation(
   utilityId: string,
   billId: string,
@@ -277,6 +341,7 @@ export async function loadBillPresentation(
     groups,
     feesGroup: feeGroup,
     statement,
+    totalRows: totalRowsOf(statement, totals, settlement !== null),
     totals,
     settlement,
     messages,

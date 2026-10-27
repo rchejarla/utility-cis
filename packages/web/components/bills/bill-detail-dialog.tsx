@@ -74,14 +74,21 @@ interface BillPresentationView {
     lines: Array<{ label: string; quantity: string | null; amount: string }>;
     subtotal: string;
   } | null;
-  /** Where the account stood when the bill was issued, or null. */
-  statement: {
-    previousBalance: string;
-    paymentsSince: string;
-    balanceForward: string;
-    pastDue: string;
-  } | null;
-  totals: { fees: string | null; total: string };
+  /**
+   * The totals box as the presentation resolved it, in print order.
+   *
+   * This dialog used to compose the box itself, and so did the PDF
+   * template — so every figure added to the total had to be added twice,
+   * and twice it was not: fees went in and this showed none of them, the
+   * balance carried forward went in and this showed a total $523.55
+   * larger than its own lines. They had drifted where nobody was
+   * looking, too — the PDF printed Taxes unconditionally and a Rounding
+   * row, this hid Taxes at zero and had no Rounding row.
+   *
+   * Rendered verbatim now. Which rows appear, in what order, with which
+   * labels and signs, is the resolver's business and not this file's.
+   */
+  totalRows: Array<{ label: string; amount: string; emphasis?: "total" | "note" }>;
 }
 
 /** One attempt to deliver this bill. */
@@ -455,66 +462,22 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
 
             <div style={{ borderTop: "1px solid var(--border)", paddingTop: "12px", marginTop: "8px" }}>
               {/*
-                Where the account stood when the bill was issued, above
-                its own charges — the same rows the PDF prints, because a
-                total that includes the balance carried forward and does
-                not show it is a total that does not follow from the
-                lines above it. This dialog showed Subtotal, Fees and a
-                Total $523.55 larger than their sum.
-
-                "Balance forward" is printed only when a payment was
-                subtracted to produce it. With none, it repeats Previous
-                balance to the cent, and two identical lines with nothing
-                between them invite adding the figure twice.
+                Rendered from the list the presentation resolved; this
+                decides nothing. The PDF template renders the same list,
+                so the two cannot disagree about what the total is made
+                of — which they did, three times.
               */}
-              {presentation?.statement && (
-                <>
-                  <Row
-                    label="Previous balance"
-                    value={fmt(presentation.statement.previousBalance)}
-                  />
-                  {parseFloat(presentation.statement.paymentsSince) !== 0 && (
-                    <>
-                      <Row
-                        label="Payments received"
-                        value={`-${fmt(presentation.statement.paymentsSince)}`}
-                      />
-                      <Row
-                        label="Balance forward"
-                        value={fmt(presentation.statement.balanceForward)}
-                      />
-                    </>
-                  )}
-                </>
-              )}
-              <Row
-                label={presentation?.statement ? "Charges this period" : "Subtotal"}
-                value={fmt(bill.subtotal)}
-              />
-              {parseFloat(bill.taxes) !== 0 && <Row label="Taxes" value={fmt(bill.taxes)} />}
-              {parseFloat(bill.credits) !== 0 && <Row label="Credits" value={fmt(bill.credits)} />}
-              {presentation?.totals?.fees && (
-                <Row label="Fees and adjustments" value={fmt(presentation.totals.fees)} />
-              )}
-              {/*
-                The printed total when there is one, because that is what
-                the customer is being asked for. `bill.total` is the
-                rated figure the engine computed, and the two differ by
-                exactly the fees — a CSR reading one to a customer
-                holding the other is the failure this replaces.
-              */}
-              <Row
-                label="Total"
-                value={fmt(presentation?.totals?.total ?? bill.total)}
-                bold
-              />
-              {/* A part of that total, never an addition to it. */}
-              {presentation?.statement && parseFloat(presentation.statement.pastDue) !== 0 && (
+              {(presentation?.totalRows ?? []).map((row) => (
                 <Row
-                  label="of which past due — payable now"
-                  value={fmt(presentation.statement.pastDue)}
+                  key={row.label}
+                  label={row.label}
+                  value={fmt(row.amount)}
+                  bold={row.emphasis === "total"}
                 />
-              )}
+              ))}
+              {/* No presentation resolved: the stored bill is all there
+                  is, so show its own total rather than nothing. */}
+              {!presentation && <Row label="Total" value={fmt(bill.total)} bold />}
             </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "16px" }}>

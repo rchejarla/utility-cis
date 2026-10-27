@@ -14,6 +14,52 @@ function presentation(
   fees: BillPresentationGroup | null = null,
   statement: BillPresentation["statement"] = null,
 ): BillPresentation {
+  const total = () =>
+    new Decimal(lineCount)
+      .plus(fees ? fees.subtotal : 0)
+      .plus(statement ? statement.balanceForward : 0)
+      .toFixed(2);
+
+  /*
+   * Spelled out here rather than taken from the resolver, because these
+   * tests prove the template **renders the list it is given** — label,
+   * order, emphasis and the signed amount. Whether the list is the right
+   * list is `bill-presentation.service.test.ts`'s question, and keeping
+   * the two apart is what stops a template test passing because the
+   * builder and the renderer share a mistake.
+   */
+  const totalRows: BillPresentation["totalRows"] = [
+    ...(statement
+      ? [
+          { label: "Previous balance", amount: statement.previousBalance },
+          ...(Number(statement.paymentsSince) === 0
+            ? []
+            : [
+                { label: "Payments received", amount: `-${statement.paymentsSince}` },
+                { label: "Balance forward", amount: statement.balanceForward },
+              ]),
+        ]
+      : []),
+    { label: statement ? "Charges this period" : "Subtotal", amount: `${lineCount}.00` },
+    { label: "Taxes", amount: "0.00" },
+    ...(fees ? [{ label: "Fees and adjustments", amount: fees.subtotal }] : []),
+    {
+      // "Total billed" once something has been applied, because the stub
+      // then asks for the remainder rather than this figure.
+      label: settlement ? "Total billed" : "Total due",
+      amount: total(),
+      emphasis: "total" as const,
+    },
+    ...(statement && Number(statement.pastDue) !== 0
+      ? [
+          {
+            label: "of which past due — payable now",
+            amount: statement.pastDue,
+            emphasis: "note" as const,
+          },
+        ]
+      : []),
+  ];
   return {
     issuer: {
       name: "City of Testville Utilities",
@@ -49,16 +95,14 @@ function presentation(
     // Null by default: a bill issued before the snapshot existed prints
     // no statement lines and keeps the rated total.
     statement,
+    totalRows,
     totals: {
       subtotal: `${lineCount}.00`,
       taxes: "0.00",
       credits: "0.00",
       rounding: null,
       fees: fees ? fees.subtotal : null,
-      total: new Decimal(lineCount)
-        .plus(fees ? fees.subtotal : 0)
-        .plus(statement ? statement.balanceForward : 0)
-        .toFixed(2),
+      total: total(),
     },
     settlement,
     messages: [{ label: "Notice", body: "Water restrictions begin June 1." }],

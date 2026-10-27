@@ -73,7 +73,7 @@ function printed(amount: string): string {
 
 export function DefaultBillTemplate({ presentation }: { presentation: BillPresentation }) {
   const s = makeStyles(presentation);
-  const { issuer, recipient, account, bill, groups, statement, totals, settlement, messages, remittance } =
+  const { issuer, recipient, account, bill, groups, totalRows, totals, settlement, messages, remittance } =
     presentation;
 
   return (
@@ -149,114 +149,31 @@ export function DefaultBillTemplate({ presentation }: { presentation: BillPresen
 
         <View style={s.totalsBox} wrap={false}>
           {/*
-            Where the account stood when this bill was issued, above its
-            own charges — the balance-forward layout every utility bill
-            uses, and what makes "Total due" current charges plus past
-            due rather than current charges alone.
+            The totals box, rendered from the list the presentation
+            resolved. This decides nothing: which rows appear, in what
+            order, with which labels and signs, is decided in
+            `bill-presentation/load.ts`.
 
-            Absent on a bill issued before the snapshot existed, and then
-            the box reads exactly as it did: the figures behind these
-            lines are not recoverable, so inventing them is the one thing
-            this must not do.
-
-            "Payments and credits" rather than "Payments": the figure is
-            payments only, and the adjustments that are not payments
-            itemise in the fees group above — so the wording has to not
-            promise that this line covers them.
+            It used to compose the box itself, and so did the staff
+            popup — so every figure added to the total had to be added
+            twice and twice it was not. They had also drifted where
+            nobody was looking: this one printed Taxes unconditionally
+            and a Rounding row, the popup hid Taxes at zero and had no
+            Rounding row at all.
           */}
-          {statement ? (
-            <>
-              <View style={s.totalRow}>
-                <Text style={s.muted}>Previous balance</Text>
-                <Text>{printed(statement.previousBalance)}</Text>
+          {totalRows.map((row) =>
+            row.emphasis === "total" ? (
+              <View key={row.label} style={s.grandTotal}>
+                <Text>{row.label}</Text>
+                <Text>{printed(row.amount)}</Text>
               </View>
-              {/*
-                Both lines or neither. With no payment to subtract,
-                "Balance forward" repeats "Previous balance" to the cent,
-                and two identical figures with nothing between them
-                invite a reader to add the balance twice.
-              */}
-              {Number(statement.paymentsSince) === 0 ? null : (
-                <>
-                  <View style={s.totalRow}>
-                    <Text style={s.muted}>Payments received</Text>
-                    <Text>−{printed(statement.paymentsSince)}</Text>
-                  </View>
-                  <View style={s.totalRow}>
-                    <Text style={s.muted}>Balance forward</Text>
-                    <Text>{printed(statement.balanceForward)}</Text>
-                  </View>
-                </>
-              )}
-            </>
-          ) : null}
-          <View style={s.totalRow}>
-            <Text style={s.muted}>{statement ? "Charges this period" : "Subtotal"}</Text>
-            <Text>{printed(totals.subtotal)}</Text>
-          </View>
-          <View style={s.totalRow}>
-            <Text style={s.muted}>Taxes</Text>
-            <Text>{printed(totals.taxes)}</Text>
-          </View>
-          {/*
-            Named for what it is. This is the credits the rate engine
-            computed while pricing the period — not the account's credit
-            position, and never a payment. Printed unconditionally as
-            "Credits $0.00" it answered a question nobody asked in the
-            affirmative-negative: a customer who had paid read it as
-            their money being counted at zero. Suppressed when zero, the
-            way Rounding already is.
-          */}
-          {Number(totals.credits) === 0 ? null : (
-            <View style={s.totalRow}>
-              <Text style={s.muted}>Credits this period</Text>
-              <Text>{printed(totals.credits)}</Text>
-            </View>
+            ) : (
+              <View key={row.label} style={s.totalRow}>
+                <Text style={s.muted}>{row.label}</Text>
+                <Text>{printed(row.amount)}</Text>
+              </View>
+            ),
           )}
-          {/*
-            Only when the per-line and whole-bill rounding disagree, so a
-            customer adding up the lines above arrives at Total due
-            exactly. Absent from almost every bill.
-          */}
-          {totals.rounding ? (
-            <View style={s.totalRow}>
-              <Text style={s.muted}>Rounding</Text>
-              <Text>{printed(totals.rounding)}</Text>
-            </View>
-          ) : null}
-          {/*
-            The fees group's subtotal, carried into the total. The group
-            itself prints above with the commodity charges — a late fee
-            is a charge on this bill and reads as one — and this row is
-            what lets a customer add the page up. Absent when there are
-            none, like Rounding.
-          */}
-          {totals.fees ? (
-            <View style={s.totalRow}>
-              <Text style={s.muted}>Fees and adjustments</Text>
-              <Text>{printed(totals.fees)}</Text>
-            </View>
-          ) : null}
-          <View style={s.grandTotal}>
-            <Text>{settlement ? "Total billed" : "Total due"}</Text>
-            <Text>{printed(totals.total)}</Text>
-          </View>
-          {/*
-            How much of that total was already due, as a part of it and
-            never an addition to it.
-
-            This is the line that stops the bill re-dating overdue debt.
-            One due date per bill is the standard and this document keeps
-            it — what it no longer does is let that date silently cover
-            arrears that had their own. Absent when nothing is overdue,
-            which is most bills.
-          */}
-          {statement && Number(statement.pastDue) !== 0 ? (
-            <View style={s.totalRow}>
-              <Text style={s.muted}>of which past due — payable now</Text>
-              <Text>{printed(statement.pastDue)}</Text>
-            </View>
-          ) : null}
           {/*
             Payments and credits already applied to this bill, itemised
             with the date they took effect, then what is actually left to

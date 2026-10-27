@@ -93,6 +93,34 @@ export interface BillPresentationStatement {
   pastDue: string;
 }
 
+/**
+ * One line of the totals box, in the order it prints.
+ *
+ * **The box is resolved here and rendered verbatim**, because it used to
+ * be built twice — in the PDF template and in the staff popup — and
+ * every change touched one of them. Fees went into the total and the
+ * popup did not show them; the balance carried forward went in and the
+ * popup showed a total $523.55 larger than its own lines. They had also
+ * drifted unnoticed: the PDF printed Taxes unconditionally and a
+ * Rounding row, the popup hid Taxes at zero and had no Rounding row.
+ *
+ * So a renderer prints this list and decides nothing. Adding a figure to
+ * the total means adding a row here, once, and both surfaces carry it.
+ *
+ * `amount` is signed and already formatted, so a renderer never does
+ * arithmetic on a bill.
+ */
+export interface BillPresentationTotalRow {
+  label: string;
+  amount: string;
+  /**
+   * `total` is the grand total and is set off from the rows above it.
+   * `note` qualifies the total rather than adding to it — the past-due
+   * part. Absent on an ordinary row.
+   */
+  emphasis?: "total" | "note";
+}
+
 export interface BillPresentationTotals {
   subtotal: string;
   taxes: string;
@@ -133,6 +161,14 @@ export interface BillPresentation {
   feesGroup: BillPresentationGroup | null;
   /** Where the account stood when this bill was issued, or null. */
   statement: BillPresentationStatement | null;
+  /**
+   * The totals box as printed, in order. Renderers iterate this.
+   *
+   * `totals` below keeps the same figures by name, for the remittance
+   * stub and for anything that needs one of them rather than the box.
+   * Both come from one computation, so they cannot disagree.
+   */
+  totalRows: BillPresentationTotalRow[];
   totals: BillPresentationTotals;
   settlement: BillPresentationSettlement | null;
   messages: Array<{ label: string; body: string }>;
