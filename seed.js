@@ -1639,6 +1639,9 @@ async function main() {
     }));
   }
 
+  /** Shared across the seeded bills, since they share a bill date. */
+  let seededBillCounter = 0;
+
   async function seedBill(account, { posted }) {
     const agreements = saCreated.filter((sa) => sa.accountId === account.id);
     if (agreements.length === 0) return null;
@@ -1677,7 +1680,23 @@ async function main() {
         taxes: "0.0000",
         credits: "0.0000",
         total: billTotal,
-        billNumber: `BILL-${billPeriodEnd.getFullYear()}${String(billPeriodEnd.getMonth() + 1).padStart(2, "0")}-${account.accountNumber}`,
+        /*
+         * The format `nextBillNumber` produces: `BILL-YYYYMM-<counter>`
+         * from the bill date, UTC.
+         *
+         * It used to append the account number, which the application
+         * never does — so a fresh database showed two shapes of bill
+         * number and nothing said which was real. Spec 23 records that a
+         * real number carries neither the account nor the customer, and
+         * that bill search was widened past the number because of it;
+         * seeding a richer format papered over the very limitation the
+         * spec documents.
+         *
+         * Counted rather than derived, like the real one, so the
+         * sequence a reader sees in a seeded database behaves the way a
+         * run's would.
+         */
+        billNumber: `BILL-${billPeriodEnd.getUTCFullYear()}${String(billPeriodEnd.getUTCMonth() + 1).padStart(2, "0")}-${++seededBillCounter}`,
         postedAt: posted ? new Date() : null,
       },
     });
