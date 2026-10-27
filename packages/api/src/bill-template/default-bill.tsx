@@ -170,16 +170,24 @@ export function DefaultBillTemplate({ presentation }: { presentation: BillPresen
                 <Text style={s.muted}>Previous balance</Text>
                 <Text>{printed(statement.previousBalance)}</Text>
               </View>
+              {/*
+                Both lines or neither. With no payment to subtract,
+                "Balance forward" repeats "Previous balance" to the cent,
+                and two identical figures with nothing between them
+                invite a reader to add the balance twice.
+              */}
               {Number(statement.paymentsSince) === 0 ? null : (
-                <View style={s.totalRow}>
-                  <Text style={s.muted}>Payments received</Text>
-                  <Text>−{printed(statement.paymentsSince)}</Text>
-                </View>
+                <>
+                  <View style={s.totalRow}>
+                    <Text style={s.muted}>Payments received</Text>
+                    <Text>−{printed(statement.paymentsSince)}</Text>
+                  </View>
+                  <View style={s.totalRow}>
+                    <Text style={s.muted}>Balance forward</Text>
+                    <Text>{printed(statement.balanceForward)}</Text>
+                  </View>
+                </>
               )}
-              <View style={s.totalRow}>
-                <Text style={s.muted}>Balance forward</Text>
-                <Text>{printed(statement.balanceForward)}</Text>
-              </View>
             </>
           ) : null}
           <View style={s.totalRow}>

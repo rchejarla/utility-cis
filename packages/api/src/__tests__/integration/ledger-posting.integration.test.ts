@@ -594,6 +594,51 @@ describe("the statement snapshot", () => {
     });
   });
 
+  /**
+   * Past due is as at the **bill date**, not as at posting.
+   *
+   * It read the current `open_amount`, while previous balance and
+   * payments were both filtered to the bill date — so a payment arriving
+   * between the two instants reduced past due on a bill that reported
+   * receiving no payments. On the dev database: `BILL-202610-2` dated
+   * 2026-10-10, posted on the 27th, with payments on the 20th and 24th,
+   * came out as $468.17 against a true $523.55 — understated by exactly
+   * the payment it did not mention.
+   *
+   * The allocations are filtered by the paying credit's effective date,
+   * which is the same rule the settlement block follows. That it is
+   * computable here and not later is still the argument for freezing it:
+   * `reverseEntry` deletes the rows this reads.
+   */
+  it("measures past due at the bill date, not at the moment of posting", async () => {
+    const first = await billOn("2026-05-15", "100.00", "2026-06-14");
+    await postBill(utilityId, ACTOR, "T", first);
+
+    // Dated after the second bill's date but recorded before it posts —
+    // a bill run late, which is the ordinary case for a monthly cycle
+    // reviewed before posting.
+    await runAsTenant(utilityId, async () => {
+      const payment = await import("../../services/ar/payment.service.js");
+      await payment.recordPayment(utilityId, ACTOR, "T", acct, {
+        amount: "70.00",
+        tender: "CHECK",
+        receivedAt: "2026-06-25",
+      });
+    });
+
+    const second = await billOn("2026-06-20", "40.00", "2026-07-19");
+    await postBill(utilityId, ACTOR, "T", second);
+
+    expect(await snapshotOf(second)).toEqual({
+      previousBalance: "100.00",
+      // The payment is dated after this bill, so it belongs to the next.
+      paymentsSince: "0.00",
+      // And it must not have quietly reduced this figure either: on
+      // 2026-06-20 the whole $100 was outstanding and overdue.
+      pastDueAmount: "100.00",
+    });
+  });
+
   it("drops a fully settled charge out of past due", async () => {
     const first = await billOn("2026-05-15", "100.00", "2026-06-14");
     await postBill(utilityId, ACTOR, "T", first);

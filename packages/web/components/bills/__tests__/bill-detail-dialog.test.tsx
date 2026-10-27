@@ -346,6 +346,62 @@ describe("Bill detail — fees and adjustments", () => {
     expect(screen.getByText("$72.89")).toBeInTheDocument();
   });
 
+  /**
+   * A total has to follow from the lines above it.
+   *
+   * The statement rows went into the PDF template and not into this
+   * dialog, so the popup took the new total — which includes the balance
+   * carried forward — and showed Subtotal, Fees and Total with nothing
+   * accounting for the difference. On a real bill that was $590.15 over
+   * $41.60 of water and $25.00 of fees, with $523.55 unexplained. It is
+   * the same failure the fees group exists to prevent, reintroduced on
+   * the other screen.
+   */
+  it("shows the balance carried forward, not just its effect on the total", async () => {
+    routeGets(
+      presentation({
+        statement: {
+          previousBalance: "523.55",
+          paymentsSince: "0.00",
+          balanceForward: "523.55",
+          pastDue: "523.55",
+        },
+        totals: {
+          subtotal: "41.60",
+          taxes: "0.00",
+          credits: "0.00",
+          rounding: null,
+          fees: "25.00",
+          total: "590.15",
+        },
+      }),
+    );
+    renderDialog();
+
+    expect(await screen.findByText("Previous balance")).toBeInTheDocument();
+    // Twice: the balance carried in, and the part of the total that was
+    // already due. Both are $523.55 on this bill and mean different
+    // things.
+    expect(screen.getAllByText("$523.55")).toHaveLength(2);
+    expect(screen.getByText(/of which past due/)).toBeInTheDocument();
+    // "Subtotal" becomes "Charges this period" once a balance sits above
+    // it to tell it apart from.
+    expect(screen.getByText("Charges this period")).toBeInTheDocument();
+    // 523.55 carried + 41.60 this period + 25.00 fees.
+    expect(screen.getByText("$590.15")).toBeInTheDocument();
+    // No payments were subtracted, so the line that would say so is
+    // absent rather than repeating the previous balance to the cent.
+    expect(screen.queryByText("Balance forward")).not.toBeInTheDocument();
+  });
+
+  it("says nothing about a previous balance on a bill with no snapshot", async () => {
+    routeGets(presentation());
+    renderDialog();
+
+    await screen.findByText("4.71 HCF");
+    expect(screen.queryByText("Previous balance")).not.toBeInTheDocument();
+  });
+
   it("shows no fees block on a bill that carries none", async () => {
     routeGets(presentation({ feesGroup: null, totals: { ...presentation().totals, fees: null, total: "37.89" } }));
     renderDialog();

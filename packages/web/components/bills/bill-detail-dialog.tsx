@@ -74,6 +74,13 @@ interface BillPresentationView {
     lines: Array<{ label: string; quantity: string | null; amount: string }>;
     subtotal: string;
   } | null;
+  /** Where the account stood when the bill was issued, or null. */
+  statement: {
+    previousBalance: string;
+    paymentsSince: string;
+    balanceForward: string;
+    pastDue: string;
+  } | null;
   totals: { fees: string | null; total: string };
 }
 
@@ -447,7 +454,43 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
             )}
 
             <div style={{ borderTop: "1px solid var(--border)", paddingTop: "12px", marginTop: "8px" }}>
-              <Row label="Subtotal" value={fmt(bill.subtotal)} />
+              {/*
+                Where the account stood when the bill was issued, above
+                its own charges — the same rows the PDF prints, because a
+                total that includes the balance carried forward and does
+                not show it is a total that does not follow from the
+                lines above it. This dialog showed Subtotal, Fees and a
+                Total $523.55 larger than their sum.
+
+                "Balance forward" is printed only when a payment was
+                subtracted to produce it. With none, it repeats Previous
+                balance to the cent, and two identical lines with nothing
+                between them invite adding the figure twice.
+              */}
+              {presentation?.statement && (
+                <>
+                  <Row
+                    label="Previous balance"
+                    value={fmt(presentation.statement.previousBalance)}
+                  />
+                  {parseFloat(presentation.statement.paymentsSince) !== 0 && (
+                    <>
+                      <Row
+                        label="Payments received"
+                        value={`-${fmt(presentation.statement.paymentsSince)}`}
+                      />
+                      <Row
+                        label="Balance forward"
+                        value={fmt(presentation.statement.balanceForward)}
+                      />
+                    </>
+                  )}
+                </>
+              )}
+              <Row
+                label={presentation?.statement ? "Charges this period" : "Subtotal"}
+                value={fmt(bill.subtotal)}
+              />
               {parseFloat(bill.taxes) !== 0 && <Row label="Taxes" value={fmt(bill.taxes)} />}
               {parseFloat(bill.credits) !== 0 && <Row label="Credits" value={fmt(bill.credits)} />}
               {presentation?.totals?.fees && (
@@ -465,6 +508,13 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
                 value={fmt(presentation?.totals?.total ?? bill.total)}
                 bold
               />
+              {/* A part of that total, never an addition to it. */}
+              {presentation?.statement && parseFloat(presentation.statement.pastDue) !== 0 && (
+                <Row
+                  label="of which past due — payable now"
+                  value={fmt(presentation.statement.pastDue)}
+                />
+              )}
             </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "16px" }}>

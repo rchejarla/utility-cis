@@ -41,16 +41,24 @@ export interface StatementSnapshot {
   /**
    * Of what is owed, how much was already due on the bill date.
    *
-   * **The figure that forces the snapshot.** It reads `open_amount`,
-   * which is allocation state: a debit fully paid is not past due. The
-   * allocation-free shortcut — balance less the not-yet-due debits —
-   * is wrong as soon as a credit lands on something not yet due, and
-   * `reverseEntry` deletes the `ledger_application` rows it undoes, so a
-   * reconstruction after a reversal cannot see the allocation at all.
+   * **The figure that forces the snapshot.** It is allocation state: a
+   * debit fully paid is not past due, and the allocation-free shortcut
+   * — balance less the not-yet-due debits — is wrong as soon as a credit
+   * lands on something not yet due.
    *
-   * Exact here because posting happens while that state is current. It
-   * is therefore "as at posting", which for a bill posted promptly is
-   * also as at the bill date.
+   * **As at the bill date, like the other two.** It read `open_amount`
+   * once, which is *now*, and that made a bill disagree with itself: a
+   * payment arriving between the bill date and the moment of posting
+   * reduced past due on a bill reporting no payments received. On the
+   * dev database a bill dated 2026-10-10 and posted on the 27th, with
+   * payments on the 20th and 24th, came out $468.17 against a true
+   * $523.55 — understated by exactly the payment it did not mention. So
+   * the allocations are filtered by the paying credit's effective date,
+   * which is the rule the settlement block already follows.
+   *
+   * Computable here and not later, which is the argument for freezing
+   * it: `reverseEntry` deletes the very `ledger_application` rows this
+   * reads.
    */
   pastDueAmount: Prisma.Decimal;
 }
@@ -110,11 +118,23 @@ export async function billStatementSnapshot(
            )
       ), 0) AS payments_since,
       COALESCE((
-        SELECT SUM(e.open_amount) FROM ledger_entry e
+        SELECT SUM(
+                 e.amount - COALESCE((
+                   SELECT SUM(la.amount)
+                     FROM ledger_application la
+                     JOIN ledger_entry c
+                       ON c.id = la.credit_id AND c.utility_id = la.utility_id
+                    WHERE la.utility_id = e.utility_id
+                      AND la.debit_id = e.id
+                      AND c.effective_date <= ${billDate}::date
+                 ), 0)
+               )
+          FROM ledger_entry e
          WHERE e.utility_id = ${utilityId}::uuid
            AND e.account_id = ${accountId}::uuid
            AND e.type <> 'DEPOSIT'
            AND e.amount > 0
+           AND e.effective_date <= ${billDate}::date
            AND e.due_date IS NOT NULL
            AND e.due_date <= ${billDate}::date
       ), 0) AS past_due_amount`;
