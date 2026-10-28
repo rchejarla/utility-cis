@@ -46,7 +46,23 @@ Five things the design implies that no task's tests exercise by default. Each ha
 
 - [ ] **Step 1: Write the migration**
 
-`payment_plan`: `id`, `utility_id`, `account_id`, `status`, `total_balance NUMERIC(14,2)`, `down_payment NUMERIC(14,2) NULL`, `installment_amount NUMERIC(14,2)`, `installment_frequency`, `installment_count INTEGER`, `start_date DATE`, `missed_before_default INTEGER`, `approved_by UUID`, `notes TEXT`, `created_at`, `updated_at`.
+`payment_plan`: `id`, `utility_id`, `account_id`, `status`, `total_balance NUMERIC(14,2)`, `down_payment NUMERIC(14,2) NULL`, `down_payment_due_date DATE NULL`, `installment_amount NUMERIC(14,2)`, `installment_frequency`, `installment_count INTEGER`, `start_date DATE`, `approved_by UUID`, `notes TEXT`, `created_at`, `updated_at`.
+
+**Plus the six terms this plan is judged by, frozen at agreement:**
+`grace_days INTEGER`, `missed_before_default INTEGER`,
+`partial_installment_counts BOOLEAN`, `current_bill_counts BOOLEAN`,
+`suppress_fees_while_kept BOOLEAN`, `assess_suppressed_fees_on_default BOOLEAN`.
+
+A customer agreed to *these* terms. A tenant lowering grace from five
+days to two must not thereby break every plan already running, and the
+alternative — reading them live — makes a live agreement's fate depend
+on a settings screen nobody connected to it. Typed columns rather than a
+JSON snapshot because the sweep reads them per plan, which is the
+codebase's own rule for when a value earns a column.
+
+The creation-time terms (`downPaymentPercent`, `minInstallments`,
+`maxInstallments`, `frequency`) are **not** frozen separately: they
+shaped this plan and are already embodied in its own columns.
 
 `payment_plan_debit`: `utility_id`, `plan_id`, `entry_id`, `created_at`, `PRIMARY KEY (utility_id, entry_id)` — a debit belongs to at most one plan — and an index on `(utility_id, plan_id)`.
 
@@ -91,7 +107,9 @@ git commit -m "feat(plans): payment_plan and payment_plan_debit"
 **Interfaces:**
 - Produces: `PaymentPlanTermsSchema` (Zod, `.strict()`), `DEFAULT_PLAN_TERMS`, and `resolvePlanTerms(utilityId): Promise<PaymentPlanTerms>` reading `UtilityConfig.settings.paymentPlans`.
 
-Keys and defaults, from the design §4a: `downPaymentPercent` 25, `minInstallments` 3, `maxInstallments` 12, `frequency` `MONTHLY`, `graceDays` 5, `missedInstallmentsBeforeDefault` 1, `partialInstallmentCounts` false, `currentBillCountsTowardDefault` true, `suppressFeesWhileKept` true, `assessSuppressedFeesOnDefault` false, `allowSecondPlanAfterDefault` true.
+Keys and defaults, from the design §4a: `downPaymentPercent` 25, `downPaymentDueDays` 3, `minInstallments` 3, `maxInstallments` 12, `frequency` `MONTHLY`, `graceDays` 5, `missedInstallmentsBeforeDefault` 1, `partialInstallmentCounts` false, `currentBillCountsTowardDefault` true, `suppressFeesWhileKept` true, `assessSuppressedFeesOnDefault` false, `allowSecondPlanAfterDefault` true.
+
+`downPaymentDueDays` is 3 because Arkansas requires the down payment by the close of the third business day after the agreement is arranged — which is also the rule that makes PENDING a real state rather than a formality (Task 8).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -155,9 +173,17 @@ Under Collections beside the rules, **not** in Settings (design §4a): where a v
 
 **Interfaces:**
 - Consumes: `resolvePlanTerms` (Task 2).
-- Produces: `createPaymentPlan(utilityId, actorId, actorName, accountId, input): Promise<PaymentPlanResult>` where `input` is `{ entryIds: string[]; downPayment?: string; installmentCount: number; startDate: string; notes?: string }`.
+- Produces: `createPaymentPlan(utilityId, actorId, actorName, accountId, input): Promise<PaymentPlanResult>` where
+  - `input` is `{ entryIds: string[]; downPayment?: string; installmentCount: number; startDate: string; notes?: string }`
+  - `PaymentPlanResult` is `{ planId: string; status: "PENDING" | "ACTIVE"; totalBalance: string; installmentAmount: string; downPaymentDueDate: string | null; coveredEntryIds: string[]; actionsResolved: number }`
 
-`total_balance` is the sum of the covered debits' **`open_amount`**, not `amount` (design §4aa). One transaction; lock the account first, as every other ledger writer does.
+`total_balance` is the sum of the covered debits' **`open_amount`**, not `amount` (design §4aa). `installment_amount` is `(total_balance − down_payment) / installment_count`, rounded to cents with the remainder on the **first** instalment, so the schedule sums to the balance exactly and the customer never finds a stray cent on the last payment.
+
+The six judgement terms are copied from `resolvePlanTerms` onto the row (Task 1). Status is `PENDING` when a down payment is required and `ACTIVE` when it is not.
+
+**Agreeing a plan resolves the account's live delinquency actions**, with `resolutionType: "PAYMENT_PLAN"` — which is what that enum value has always meant and still means. What changes is that the word now records a real agreement instead of standing in for one. Without this the account keeps sitting in the shut-off queue with a plan in force.
+
+One transaction; lock the account first, as every other ledger writer does.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -177,6 +203,19 @@ it("refuses a debit that already belongs to a plan", async () => {
 
 it("refuses a plan over no open debits", async () => {
   await expect(create({ entryIds: [] })).rejects.toMatchObject({ code: "NOTHING_TO_COVER" });
+});
+
+it("refuses a plan whose debits are all already settled", async () => {
+  // Review Focus 3's second half. A plan with nothing to collect is not
+  // a plan, and it would otherwise be created and complete on the very
+  // next sweep.
+  await expect(create({ entryIds: [settledId] })).rejects.toMatchObject({ code: "NOTHING_TO_COVER" });
+});
+
+it("resolves the account's live delinquency actions", async () => {
+  // Otherwise the account stays in the shut-off queue with a plan on it.
+  const result = await create({ entryIds: [overdueId], installmentCount: 3 });
+  expect(result.actionsResolved).toBeGreaterThan(0);
 });
 
 it("refuses a second active plan on one account", async () => {
@@ -202,8 +241,10 @@ it("covers debits of every kind, not only bill charges", async () => {
 - Test: `packages/api/src/__tests__/integration/delinquency-fee.integration.test.ts`
 
 **Interfaces:**
-- Consumes: `payment_plan_debit`, `payment_plan.status`.
-- Produces: `chargeableDebits` excludes a debit covered by a plan in `PENDING` or `ACTIVE`, gated on the tenant's `suppressFeesWhileKept`.
+- Consumes: `payment_plan_debit`, `payment_plan.status`, `payment_plan.suppress_fees_while_kept`.
+- Produces: `chargeableDebits` excludes a debit covered by a plan in `PENDING` or `ACTIVE` **whose own `suppress_fees_while_kept` is true**.
+
+Read from the plan row, not from `resolvePlanTerms`: the terms were frozen when the plan was agreed (Task 1), so this needs no tenant lookup and cannot disagree with what the customer was told.
 
 - [ ] **Step 1: Write the failing test** — a covered overdue debit is charged no fee; an uncovered one beside it still is.
 - [ ] **Step 2: Run — expect FAIL (the fee is raised).**
@@ -235,7 +276,9 @@ it("covers debits of every kind, not only bill charges", async () => {
 - Test: `packages/api/src/__tests__/integration/ledger-allocation.integration.test.ts`
 
 **Interfaces:**
-- Produces: `applyCreditsToDebit` and the payment path take an optional `{ paymentPlanId?: string }`. Without it, uncovered debits are candidates first and covered ones only once those are clear. With it, only that plan's covered debits are candidates.
+- Produces: **`applyCreditToDebits`** (line ~98 — the one that allocates a credit *across* debits, ordered by due date) and the payment path take an optional `{ paymentPlanId?: string }`. Without it, uncovered debits are candidates first and covered ones only once those are clear. With it, only that plan's covered debits are candidates.
+
+**Three functions in that file have nearly the same name.** `applyCreditToDebits` routes a payment across debits and is the one to change. `applyCreditsToDebit` (line ~202) absorbs existing open credits *into a new debit* and is **not** changed: a new debit is never covered by a plan, because a plan names debits that existed when it was agreed. `applyCreditToOneDebit` is neither.
 
 The design's §4aa flaw: a customer pays their current bill, the allocator puts it on the oldest arrears, the current bill stays open, and the plan defaults on §7's test. **Both modes are the existing allocator with the candidate set filtered** — the oldest-due rule, the type-class ranking and the determinism are unchanged.
 
@@ -263,13 +306,31 @@ it("reaches covered debits once nothing uncovered is left", async () => {});
 - Test: `packages/api/src/__tests__/integration/payment-plan-lifecycle.integration.test.ts`
 
 **Interfaces:**
-- Produces: `cancelPaymentPlan(utilityId, actorId, actorName, planId, notes)`; `sweepPaymentPlans(utilityId)` closing plans whose covered debits are all at `open_amount = 0`.
+- Produces: `cancelPaymentPlan(utilityId, actorId, actorName, planId, notes)`; `sweepPaymentPlans(utilityId)` which **activates** PENDING plans, closes COMPLETED ones, and (Task 9) defaults broken ones.
 
 COMPLETED is derived, not counted (design §8): every covered debit at zero. Both acts are idempotent because both read state.
+
+**PENDING is a real state, and this is what leaves it.** A plan is agreed on the phone and the down payment arrives afterwards — Arkansas gives until the close of the third business day, which is where `down_payment_due_date` comes from. So:
+
+- **PENDING → ACTIVE** once allocations to the covered debits since the plan was created reach `down_payment`. A plan needing no down payment is created ACTIVE and never sees PENDING.
+- **PENDING → DEFAULTED** when `down_payment_due_date` passes and it has not. Not a sixth state: the consequence is identical — suppression lifts, the debts return at their real ages — and a customer who agreed and did not pay has defaulted. The notes record that it never started, which is what the panel shows.
+- **Suppression holds throughout PENDING** (design §5), which is the point of the window: the utility agreed to wait, so it waits.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
+it("activates a pending plan once the down payment lands", async () => {});
+
+it("defaults a pending plan whose down payment never arrives", async () => {
+  // And the debts come back at their real ages, like any default.
+});
+
+it("suppresses the ladder while a plan is pending", async () => {
+  // The window exists because the utility agreed to wait for it.
+});
+
+it("creates no pending state when no down payment is required", async () => {});
+
 it("completes a plan once every covered debit is settled", async () => {});
 
 it("completes a plan whose debts were waived rather than paid", async () => {
@@ -297,7 +358,9 @@ it("cancelling stops suppression without touching the ledger", async () => {
 **Interfaces:**
 - Produces: `sweepPaymentPlans` reports each plan's **late** instalments, raises the late notice for any that became late since the last pass, and defaults on either test — instalments **missed** (date + `graceDays` passed) by `missedInstallmentsBeforeDefault`, or (when `currentBillCountsTowardDefault`) an uncovered debit past due.
 
-Instalment *n* is due `start_date + (n - 1) * frequency`; there is no instalment table (design §4). **Late is not missed** (design §7): an instalment inside `graceDays` leaves the plan ACTIVE and suppression intact.
+Instalment *n* is due `start_date + (n - 1) * frequency`; there is no instalment table (design §4). **Late is not missed** (design §7): an instalment inside `grace_days` leaves the plan ACTIVE and suppression intact.
+
+Every term this reads — `grace_days`, `missed_before_default`, `partial_installment_counts`, `current_bill_counts`, `assess_suppressed_fees_on_default` — comes from **the plan row**, frozen at agreement (Task 1). No `resolvePlanTerms` call: a plan is judged by what the customer agreed to, not by what the settings screen says today.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -396,11 +459,21 @@ it("says the customer is behind, which the status alone does not", async () => {
 it("warns when an unpaid new bill puts the plan at risk", async () => {});
 ```
 
-- [ ] **Step 2: Run — expect FAIL. Step 3: Implement.**
-- [ ] **Step 4:** Mark a covered debit in the AR tab, reading `in a payment plan`, so a CSR on the ledger can see it is not to be chased.
-- [ ] **Step 5: Run — expect PASS.**
-- [ ] **Step 6: Update specs** — `10-payments-and-collections.md` (the entity, superseding its sketch), `11-delinquency.md` (suppression, and the default-notices consequence from Task 9), `19-rbac.md` if a permission is added.
-- [ ] **Step 7: Commit.**
+- [ ] **Step 2: Run — expect FAIL.**
+- [ ] **Step 3: Implement both components**, including the AR tab's covered-debit marker reading `in a payment plan`, so a CSR on the ledger can see a charge is not to be chased.
+- [ ] **Step 4: Run — expect PASS.**
+- [ ] **Step 5: Seed a plan**
+
+Create: `seed/payment-plan.js`, called from `seed.js` after the delinquency ladder, in the shape `seed/delinquency-ladder.js` already uses.
+
+One ACTIVE plan on the demo account covering two of its open debits — the opening balance and the oldest bill charge, which is what a real arrangement looks like — with the down payment already allocated so it is ACTIVE rather than PENDING.
+
+Without it these two screens cannot be opened on a fresh database without hand-building a plan in SQL, and the screens are half this slice. Every other feature here seeds its demo; the ladder got a module of its own last week for the same reason.
+
+- [ ] **Step 6: Run `seed_db.bat` and open both screens.**
+Expected: the panel reads `ACTIVE — on track`, the AR tab marks the two covered debits, and the next delinquency sweep charges them no fee.
+- [ ] **Step 7: Update specs** — `10-payments-and-collections.md` (the entity, superseding its sketch), `11-delinquency.md` (suppression, and the default-notices consequence from Task 9), `19-rbac.md` if a permission is added.
+- [ ] **Step 8: Commit.**
 
 ---
 
@@ -410,6 +483,31 @@ it("warns when an unpaid new bill puts the plan at risk", async () => {});
 
 **Not in this slice, deliberately:** the portal view of a plan (slice 2), SaaSLogic (slice 3), `assessSuppressedFeesOnDefault: true` — Task 9 tests the default only; the true path needs deferred fees recorded when skipped, which is slice 2's work and should not be half-built here.
 
-**Type consistency.** `resolvePlanTerms` (Task 2) is consumed by Tasks 3, 4, 5, 9 under that name. `createPaymentPlan` and `sweepPaymentPlans` keep their signatures from Tasks 4 and 8 through Tasks 9 and 10.
+**Type consistency.** `resolvePlanTerms` (Task 2) is consumed by Tasks 3 and 4 only — Tasks 5 and 9 read the frozen columns on the plan row instead, which is what freezing is for. `createPaymentPlan` returns `PaymentPlanResult` as defined in Task 4 and consumed by Tasks 10 and 11. `sweepPaymentPlans` is created in Task 8, extended in Task 9, and called from the delinquency worker in Task 9 Step 4 — not an orphan.
+
+**Review-pass corrections (2026-10-28).** This plan was reviewed after
+drafting and nine things were wrong. Recorded because the reasons
+outlive the fixes:
+
+- Task 7 named `applyCreditsToDebit`, which absorbs credits into a new
+  debit. The payment allocator is `applyCreditToDebits`. Three functions
+  in one file differ by two letters.
+- Nothing moved a plan out of PENDING. The lifecycle had a state with no
+  exit, and the design's own open question — whether a down payment is a
+  separate payment or the first instalment — was inherited rather than
+  answered. It is a separate payment, with a deadline, because Arkansas
+  gives three business days for it.
+- Terms were frozen for one field and read live for five, so a settings
+  change would have retroactively broken running plans. All six
+  judgement terms are now columns on the plan.
+- No seed data, for a slice that is half screens.
+- `PaymentPlanResult` was named and never defined.
+- Task 5 needed terms it did not list; freezing removed the need.
+- Review Focus 3 said "or already settled" and no test covered it.
+- `resolutionTypes.PAYMENT_PLAN` looked orphaned and is not: agreeing a
+  plan still resolves the live actions with it, which surfaced that
+  **nothing was resolving them at all** — the account would have stayed
+  in the shut-off queue with a plan in force.
+- Task 11 interleaved implement and run steps.
 
 **Proportion.** Eleven tasks, each a migration, a service, a screen or a suppression point, each with its own test cycle and a reviewer's gate.
