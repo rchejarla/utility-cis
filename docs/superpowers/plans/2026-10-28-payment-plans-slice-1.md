@@ -91,7 +91,7 @@ git commit -m "feat(plans): payment_plan and payment_plan_debit"
 **Interfaces:**
 - Produces: `PaymentPlanTermsSchema` (Zod, `.strict()`), `DEFAULT_PLAN_TERMS`, and `resolvePlanTerms(utilityId): Promise<PaymentPlanTerms>` reading `UtilityConfig.settings.paymentPlans`.
 
-Keys and defaults, from the design §4a: `downPaymentPercent` 25, `minInstallments` 3, `maxInstallments` 12, `frequency` `MONTHLY`, `missedInstallmentsBeforeDefault` 1, `currentBillCountsTowardDefault` true, `suppressFeesWhileKept` true, `assessSuppressedFeesOnDefault` false, `allowSecondPlanAfterDefault` true.
+Keys and defaults, from the design §4a: `downPaymentPercent` 25, `minInstallments` 3, `maxInstallments` 12, `frequency` `MONTHLY`, `graceDays` 5, `missedInstallmentsBeforeDefault` 1, `partialInstallmentCounts` false, `currentBillCountsTowardDefault` true, `suppressFeesWhileKept` true, `assessSuppressedFeesOnDefault` false, `allowSecondPlanAfterDefault` true.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -295,14 +295,31 @@ it("cancelling stops suppression without touching the ledger", async () => {
 - Test: `packages/api/src/__tests__/integration/payment-plan-default.integration.test.ts`
 
 **Interfaces:**
-- Produces: `sweepPaymentPlans` also defaults a plan on either test — instalments short by `missedInstallmentsBeforeDefault`, or (when `currentBillCountsTowardDefault`) an uncovered debit past due.
+- Produces: `sweepPaymentPlans` reports each plan's **late** instalments, raises the late notice for any that became late since the last pass, and defaults on either test — instalments **missed** (date + `graceDays` passed) by `missedInstallmentsBeforeDefault`, or (when `currentBillCountsTowardDefault`) an uncovered debit past due.
 
-Instalment *n* is due `start_date + (n - 1) * frequency`; there is no instalment table (design §4).
+Instalment *n* is due `start_date + (n - 1) * frequency`; there is no instalment table (design §4). **Late is not missed** (design §7): an instalment inside `graceDays` leaves the plan ACTIVE and suppression intact.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-it("defaults a plan whose instalments are short", async () => {});
+it("leaves a plan active while an instalment is late but inside grace", async () => {
+  // Late by one day with graceDays 5. The plan is ACTIVE, suppression
+  // holds, and no fee is charged on a covered debt. Defaulting here was
+  // the first draft's behaviour and it contradicted the CSR panel,
+  // which shows "1 payment behind" as a state.
+});
+
+it("reports how many instalments are late, which the status cannot", async () => {});
+
+it("notifies once when an instalment goes late, not on every sweep", async () => {
+  // Nobody is defaulted silently, and nobody is told five times.
+});
+
+it("misses an instalment once grace expires, and defaults at the threshold", async () => {});
+
+it("treats a part payment as a miss unless the tenant says otherwise", async () => {
+  // $30 against a $65.44 instalment. partialInstallmentCounts is false.
+});
 
 it("defaults a plan when a bill outside it goes unpaid past its due date", async () => {
   // The hole the first draft had: paying every instalment while never

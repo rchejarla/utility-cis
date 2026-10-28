@@ -249,8 +249,10 @@ percentage.
 | `minInstallments` | `3` | Arkansas' floor |
 | `maxInstallments` | `12` | A year. Beyond it the arrears outlive the service period that produced them |
 | `frequency` | `MONTHLY` | The billing cycle's own rhythm; a plan that bills off-cycle asks for a payment with no bill beside it |
-| `missedInstallmentsBeforeDefault` | `1` | What the agreements found actually say. A tenant wanting grace raises it |
-| `currentBillCountsTowardDefault` | `true` | Illinois' test. False for a tenant whose rules look only at the installment |
+| `graceDays` | `5` | Days after an instalment's date before it counts as missed. Illinois' test allows until the second day after the due date, which is the shortest found; 5 is the customer-safe side of it, and a tenant under a stricter tariff lowers it |
+| `missedInstallmentsBeforeDefault` | `1` | What the agreements found actually say — "default on any instalment". Grace, not a second chance, is what softens it |
+| `partialInstallmentCounts` | `false` | Paying $30 of a $65 instalment is not paying the instalment. True for a tenant that credits part payment pro rata |
+| `currentBillCountsTowardDefault` | `true` | Illinois' test. False for a tenant whose rules look only at the instalment |
 | `suppressFeesWhileKept` | `true` | Charging a late fee on a debt the utility agreed to wait for is the thing a plan is for |
 | `assessSuppressedFeesOnDefault` | `false` | See §7 — it reopens "a tier charges each bill once". True is the "deferred, then assessed on termination" pattern some utilities use |
 | `allowSecondPlanAfterDefault` | `true` | Montana leaves it to the utility; Iowa *requires* offering one after two consecutive payments under the first. Neither permits a flat refusal in code |
@@ -477,15 +479,56 @@ a deliberate act, the other is about the future and is policy.
 
 ## 7. Breaking a plan
 
+### Late is not broken
+
+**An instalment passes through three states, and an earlier draft of
+this section had only the first and the last.** It defaulted a plan the
+moment an instalment's date passed unpaid — late by one day was broken —
+which contradicted §4b's own panel, where a plan reads `ACTIVE — 1
+payment behind`. That is a state the sweep as written could never
+produce.
+
+| | |
+|---|---|
+| **Due** | The instalment's date has arrived. Nothing has happened yet. |
+| **Late** | The date has passed and `graceDays` has not. The plan is **still ACTIVE**, the panel says the customer is behind, and a notice goes out saying the plan is at risk. No suppression lifts; no fee is charged on a covered debt. |
+| **Missed** | Grace has expired. It now counts against `missedInstallmentsBeforeDefault`. |
+
+So with the defaults — grace 5, threshold 1 — a customer has five days
+to put it right, is told within that window, and the plan breaks on the
+sixth. A tenant wanting a second chance rather than a longer one raises
+the threshold instead, and then "behind" persists past grace.
+
+**Nobody is defaulted silently.** The late notice is the point of the
+state existing: a plan agreed in good faith and broken without warning
+is the thing a complaint is made of, and the ladder already has the
+machinery — a `notification_event_type` per rung — so this is one more
+event, not a new mechanism.
+
+**A part payment is not a payment**, by default. $30 against a $65.44
+instalment leaves it missed, because a plan is an agreement to pay an
+amount on a date. `partialInstallmentCounts` lets a tenant credit it pro
+rata instead, which is the lenient reading and is some utilities'
+practice.
+
+### The sweep
+
 A sweep, state-keyed, like the delinquency sweeps. For each ACTIVE plan
 it asks **two** questions, and either can break the plan:
 
-1. **Are the installments short?** Count those due by today against what
-   has been allocated to the covered debits since `start_date`; a
-   shortfall of `missedInstallmentsBeforeDefault` or more defaults it.
+1. **Are the instalments missed?** Count those whose date plus
+   `graceDays` has passed, against what has been allocated to the
+   covered debits since `start_date`. A shortfall of
+   `missedInstallmentsBeforeDefault` or more defaults the plan.
+   Instalments that are merely **late** — past their date, inside grace
+   — are counted separately and reported, not acted on.
 2. **Is a bill outside the plan unpaid past its due date?** When
    `currentBillCountsTowardDefault`, an open uncovered debit past due
    defaults the plan too.
+
+The same pass raises the **late notice** for any instalment that became
+late since it last ran, which is what keeps the second state from being
+decorative.
 
 **The second question is the one the first draft was missing**, and its
 absence was a hole rather than a simplification: a customer could pay
