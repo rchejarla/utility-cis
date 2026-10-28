@@ -198,9 +198,9 @@ rest stands.
 | utility_id | UUID | Tenant scope, FK to `utility` |
 | account_id | UUID FK | Composite `(utility_id, account_id)` |
 | plan_type | ENUM | **INSTALLMENT, DEFERRED only.** LEVELIZED struck — see anti-goals |
-| status | ENUM | PENDING, ACTIVE, COMPLETED, DEFAULTED, CANCELLED |
+| status | ENUM | ACTIVE, COMPLETED, DEFAULTED, CANCELLED. **No PENDING** — see §8 |
 | total_balance | DECIMAL(10,2) | Sum of the covered debits' **`open_amount`** at creation, frozen. Not `amount`: a bill charge of $110.75 with $55.37 left owes $55.37, and a plan covering its face value would collect money the customer does not owe |
-| down_payment | DECIMAL(10,2) | Nullable |
+| down_payment | DECIMAL(10,2) | Nullable. The **first payment**, due on `start_date`, not a separate obligation with its own clock. Kept as its own amount because the instalments after it must be equal (Arkansas), so `installment_amount = (total_balance − down_payment) / installment_count` |
 | installment_amount | DECIMAL(10,2) | |
 | installment_frequency | ENUM | WEEKLY, BIWEEKLY, MONTHLY |
 | installment_count | INTEGER | |
@@ -436,8 +436,18 @@ from two screens.
 Two places, because the ladder has two clocks.
 
 **The charging pass** (`chargeOverdueBills`) already selects chargeable
-debits. A debit covered by a plan in `PENDING` or `ACTIVE` is not
+debits. A debit covered by a plan whose **`status = ACTIVE`** is not
 chargeable. One predicate in `chargeableDebits`.
+
+**Through the plan, not through the join row.** `payment_plan_debit`
+rows persist after a plan ends — they are history, and the key is
+`RESTRICT` so they cannot be deleted. A predicate asking only "is this
+debit in a plan" would suppress it forever, including after default,
+and would pass every test written while the plan is still running. The
+check joins to `payment_plan` and reads its status. `ACTIVE` is the
+only status that suppresses: a `DEFAULTED` plan must expose its debts,
+which is the whole of what defaulting does, and a `COMPLETED` one has
+no open debits left to suppress.
 
 **The account-level clock** is the harder half. `evaluateAll` derives
 `daysPastDue` from `Account.lastDueDate`, which `recomputeAccountCache`
@@ -594,11 +604,32 @@ is the pressure that matters.
 ## 8. Lifecycle
 
 ```
-PENDING  --down payment received, or none required--> ACTIVE
-ACTIVE   --covered debits all closed---------------> COMPLETED
-ACTIVE   --default_threshold installments short----> DEFAULTED
-PENDING|ACTIVE --staff--------------------------> CANCELLED
+(agreed)  ------------------------------------> ACTIVE
+ACTIVE    --covered debits all closed---------> COMPLETED
+ACTIVE    --missed instalments at threshold---> DEFAULTED
+ACTIVE    --an uncovered bill goes unpaid-----> DEFAULTED
+ACTIVE    --staff-----------------------------> CANCELLED
 ```
+
+**There is no PENDING, and an earlier draft was wrong to have one.** It
+existed to model "agreed, down payment not yet received" — but
+suppression began at agreement either way, so the state changed nothing
+the system did. It was a label plus two transitions plus their tests.
+
+The down payment is simply **the first payment, due on `start_date`**,
+which the CSR sets to today if the customer pays on the call and to
+whatever date was agreed otherwise. It is then judged by the same
+grace-then-missed machinery as every other payment, so the design has
+**one** window where it had two: an obligation, a grace period, a
+consequence. Arkansas's "three business days" survives as what it
+actually is — a bound on how far out `start_date` may be set — rather
+than as a second clock.
+
+This is the same rule this document already applies to
+`installments_paid`, `next_due_date` and `end_date`: do not store what
+can be derived. "Agreed and never paid" is "the first payment is unpaid
+and nothing has ever been allocated", which the panel can say in words
+without the status machine knowing about it.
 
 COMPLETED is derivable too: every covered debit at `open_amount = 0`.
 The same sweep that detects a default can close a completed plan, and
@@ -646,8 +677,11 @@ schedule, once spec 21's vendor questions are answered.
   arrears and sits on that account, where a CSR already is when the
   customer phones. What was left open was really one question treated as
   two.
-- Whether `down_payment` is a separate recorded payment or simply the
-  first installment. Spec 10 implies separate (PENDING → ACTIVE on it).
+- ~~Whether `down_payment` is a separate recorded payment or simply the
+  first installment~~ — decided in §8. It is the first payment, due on
+  `start_date`. Spec 10's sketch implies a separate obligation with a
+  PENDING state waiting on it; that state turned out to change nothing
+  the system does, so it is struck along with the question.
 - The exact wording on the bill, if anything. A covered debt is not
   chased but is still owed, and the bill already prints what is owed.
   Saying "on a payment plan" next to it is a presentation question for
