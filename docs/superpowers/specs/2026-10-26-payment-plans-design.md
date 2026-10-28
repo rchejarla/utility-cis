@@ -199,7 +199,7 @@ rest stands.
 | account_id | UUID FK | Composite `(utility_id, account_id)` |
 | plan_type | ENUM | **INSTALLMENT, DEFERRED only.** LEVELIZED struck — see anti-goals |
 | status | ENUM | PENDING, ACTIVE, COMPLETED, DEFAULTED, CANCELLED |
-| total_balance | DECIMAL(10,2) | Sum of the covered debits at creation, frozen |
+| total_balance | DECIMAL(10,2) | Sum of the covered debits' **`open_amount`** at creation, frozen. Not `amount`: a bill charge of $110.75 with $55.37 left owes $55.37, and a plan covering its face value would collect money the customer does not owe |
 | down_payment | DECIMAL(10,2) | Nullable |
 | installment_amount | DECIMAL(10,2) | |
 | installment_frequency | ENUM | WEEKLY, BIWEEKLY, MONTHLY |
@@ -306,6 +306,73 @@ bitten by: `autoPostBills` shipped readable and settable with no control
 drawn, so manual posting was reachable only by SQL. This screen is part
 of slice 1, not a follow-up, and the drift guard that derives editable
 keys from the schema should cover this namespace too.
+
+## 4aa. A plan covers debts, of several kinds — and where the money goes
+
+**A covered set is heterogeneous, and the join row is keyed on
+`entry_id` for exactly that reason.** From the dev database, one
+account's open debits on 2026-10-28:
+
+| Due | Type | What | Open |
+|---|---|---|---|
+| 2026-07-15 | `ADJUSTMENT_DEBIT` | Opening balance, no bill | 412.80 |
+| 2026-09-14 | `BILL_CHARGE` | `BILL-202608-1`, part paid | 55.37 |
+| 2026-11-03 | `FEE` | Late fee, for `BILL-202608-1` | 25.00 |
+| 2026-11-06 | `FEE` | Late fee, part waived, no bill | 10.00 |
+| 2026-11-09 | `BILL_CHARGE` | `BILL-202610-2` | 37.87 |
+
+Several bills, several fees, an adjustment that came from no bill at
+all, and one charge already part paid. A plan keyed on bills could not
+express this, and a plan summing `amount` rather than `open_amount`
+would collect $110.75 for a debt of $55.37.
+
+So the CSR's list of covered debts (§4b) cannot assume a bill number —
+two of those five have none. It wants the fallback the AR tab's Bill
+column already uses: the bill when there is one, `for <bill>` when the
+entry was raised on one, and a dash when neither.
+
+### The allocation problem, which breaks the two-bucket model
+
+**Decision needed.** `applyCreditsToDebit` allocates a credit
+oldest-due-first across *every* open debit on the account
+(`orderBy: dueDate asc, postedAt asc, id asc`, with a type-class
+ranking). It knows nothing about plans.
+
+So: a customer on a plan pays their current bill, $37.87 due
+2026-11-09. The allocator applies it to the opening balance due
+2026-07-15. The arrears shrink, the current bill stays open, and §7's
+"current bill unpaid" test defaults the plan — **of a customer who paid
+exactly what they were asked to pay.**
+
+The two-bucket story ("the plan handles the arrears, you stay current")
+only holds if money lands in the bucket the payer aimed at. Nothing aims
+it today.
+
+My position, to overturn:
+
+- **An ordinary payment settles uncovered debits first**, oldest-due
+  among them, and only reaches covered debits once those are clear.
+  That makes "stay current" work without the payer declaring anything,
+  which matters because most payments arrive through a lockbox or a
+  portal and declare nothing.
+- **A payment may be marked against the plan**, and then it allocates to
+  the covered debits only. This is the CSR taking an instalment over the
+  phone, and the portal's "pay my instalment" button.
+- **Neither is a new allocator.** Both are the existing one with the
+  candidate set filtered, so the oldest-due rule, the type-class
+  ranking and the determinism are unchanged.
+
+The rejected alternative is to leave allocation alone and teach §7 to
+notice that a current bill was settled indirectly. That is a rule
+reasoning about where money *would* have gone, which is the kind of
+thing nobody can debug from a ledger.
+
+**This is also where a known gap lands.** Allocation order is tenant
+policy in the trade — a city ordinance found on 2026-10-26 applies
+receipts to penalty first and principal second — and
+`applyCreditsToDebit` has no setting for it. A plan makes a second
+demand on the same mechanism, so if it is ever made configurable, the
+covered/uncovered split belongs in the same place rather than beside it.
 
 ## 4b. What a CSR sees
 
