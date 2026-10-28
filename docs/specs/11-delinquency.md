@@ -523,6 +523,30 @@ New `delinquency` module added to MODULES constant. Permissions:
 - ~~DelinquencyAction.status updated on SR closure~~ — **inverted, deliberately.** The action resolves when the *balance* clears, not when a work order closes; a closed shut-off request is instead the evidence that there is something to turn back on. Closing a work order says a crew did what it was told, which is not the same as the debt being settled.
 
 ### Still open in collections
-- Payment plans (#147, #148) — no entity. This slice is what makes one worth offering: until now the ladder decided and nothing happened.
+
+**The ladder has no seasonal or time-of-day gate, and in some
+jurisdictions that is a compliance gap rather than a missing feature
+(found 2026-10-28).** Montana bars termination of residential gas or
+electric service between **November 1 and April 1** without specific
+prior Commission approval (ARM 38.5.1410), restricts shut-offs to
+**8am–noon**, and forbids them on a day — or the day before — when the
+utility cannot reconnect. Our `SHUT_OFF_ELIGIBLE` and `DISCONNECT` tiers
+fire on `days_past_due` alone.
+
+Two things keep this from being an emergency. Those rules bind
+**PSC-regulated** utilities, and a municipal water and sewer utility is
+normally outside that jurisdiction; and `DISCONNECT` ships with
+`autoApply: false` in the seed, so a human is between the tier and the
+valve. Neither is a defence for a regulated tenant, and neither is
+visible in the rule model: a tenant cannot express "not in winter"
+today.
+
+It is a rule-level concern rather than a plan-level one — the natural
+shape is a seasonal window and an hours window on `DelinquencyRule`,
+beside `days_past_due` — so it is recorded here rather than in the
+payment-plans design that surfaced it.
+[Montana PSC deposit and shutoff rules](https://www.psc.mt.gov/_docs/Consumers/energy/pdf/Deposit-and-Shutoff-Rules.pdf)
+
+- Payment plans (#147, #148) — no entity. This slice is what makes one worth offering: until now the ladder decided and nothing happened. The design is `docs/superpowers/specs/2026-10-26-payment-plans-design.md`; its terms are tenant policy, because down payments and minimum installment counts are prescribed by jurisdiction and differ (Illinois 25%, New York 15%, Arkansas a quarter).
 - The aging dashboard (#149, #150).
 - The fee and work-order fields on the rules form (see the UI section).
