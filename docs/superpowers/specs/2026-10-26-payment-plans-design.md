@@ -513,8 +513,30 @@ practice.
 
 ### The sweep
 
-A sweep, state-keyed, like the delinquency sweeps. For each ACTIVE plan
-it asks **two** questions, and either can break the plan:
+State-keyed, like the delinquency sweeps — and it **runs as the first
+pass of the delinquency worker's tenant job**, not as a cron of its own.
+
+The ladder reads plan state to decide what to suppress, so the plan
+state has to be settled before it decides anything: a plan that defaults
+on a tick must be chaseable on that tick, and one that completes must
+stop suppressing before a fee is charged. A separate schedule would
+leave the two racing over the same account with the order depending on
+when each happened to fire — a defect that surfaces once a month at
+03:00. The worker already sequences its passes for this kind of reason,
+and `sweepReconnections` carries the comment explaining its own
+position.
+
+**The delinquency sweep itself never looks at payments**, of this kind
+or any other. It reads `balance > 0`, `open_amount > 0` and
+`due_date < now`; a payment reaches it only through its effect on an
+open amount. What it newly reads is plan *membership* — is this debit
+covered — and nothing about instalments. Instalments are this sweep's
+business alone, and it measures them by what has been allocated to the
+covered debits, which is why §4aa's allocation change and this have to
+agree.
+
+For each ACTIVE plan it asks **two** questions, and either can break the
+plan:
 
 1. **Are the instalments missed?** Count those whose date plus
    `graceDays` has passed, against what has been allocated to the

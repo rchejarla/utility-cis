@@ -340,7 +340,19 @@ it("leaves already-charged fees alone on default by default", async () => {
 
 **Decision to record in the plan ledger, not to invent in code:** on DEFAULTED the covered debits return at their *real* ages, so the next sweep files every tier they qualify for — a customer can receive the tier-1 email, the tier-2 email and the tier-3 SMS in one night, then shut-off eligibility. That is correct by the rules and unpleasant in the inbox. Implement it as described; if the tenant wants fewer notices that is the notification configuration's problem, not the plan's. Note it in the spec.
 
-- [ ] **Step 4: Run — expect PASS. Step 5: Commit.**
+- [ ] **Step 4: Wire it into the delinquency worker, as the first pass**
+
+Modify: `packages/api/src/workers/delinquency-worker.ts`. `sweepPaymentPlans(utilityId)` runs **before** `evaluateDelinquencyForTenant`, inside the same tenant scope, alongside the two passes already there.
+
+First, because the ladder's suppression reads plan state: a plan that defaults this tick must be chaseable this tick, and a plan that completes must stop suppressing before anything is charged. Second cron, and the two race over the same account and the order depends on scheduling — which is the kind of bug that appears once a month at 03:00. The worker already orders its passes for exactly this sort of reason; `sweepReconnections` carries the comment saying so.
+
+The job's log line gains the plan counts, the way the other two passes report theirs.
+
+- [ ] **Step 5: Write the failing test** for the ordering: a plan that defaults on this tick has its debits charged by the same tick's charging pass.
+
+Test: `packages/api/src/__tests__/integration/worker-delinquency.test.ts`
+
+- [ ] **Step 6: Run — expect PASS. Step 7: Commit.**
 
 ---
 
