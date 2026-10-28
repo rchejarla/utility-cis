@@ -261,16 +261,106 @@ that does nothing is not accidentally stricter than its regulator
 allows — the opposite mistake, being more lenient than allowed, is one a
 utility notices.
 
-**A setting nobody can edit is an orphan**, which this codebase has
-been bitten by before: `autoPostBills` shipped readable and settable
-with no control drawn, so manual posting was reachable only by SQL. The
-Configuration screen for this namespace is part of slice 1, not a
-follow-up, and the drift guard that derives editable keys from the
-schema should cover it.
-
 **What is *not* configurable**: what a plan covers (§3). That decides
 the shape of `payment_plan_debit` and therefore what suppression means,
 and two answers would mean two suppression models.
+
+### Where it is set: with the rest of collections, not in Settings
+
+**The storage shape must not pick the screen.** A namespace is how these
+values are stored; it says nothing about where an operator goes to
+change them, and an earlier draft of this section let the one decide the
+other. That is an arbitrary split: delinquency rules live under
+**Collections** at `/delinquency/rules`, payment-plan terms are the same
+kind of thing — how this utility chases money — and an operator
+configuring collections should not have to know that one is a table and
+the other is JSON.
+
+So: **`/delinquency/plan-terms`**, in the Collections section beside the
+rules, sharing their chrome and their permission (`delinquency:EDIT`).
+One place answers "how do we chase, and what do we offer instead".
+
+**It reads as four questions, not nine fields.** The settings table
+above is the storage; the screen is prose with controls in it, the way
+the delinquency rules form reads:
+
+> **What we ask for** — a down payment of `[25]`% of the balance, repaid
+> in between `[3]` and `[12]` `[monthly ▾]` instalments.
+>
+> **When a plan is broken** — after `[1]` missed instalment.
+> `[✓]` A customer must also keep paying new bills while the plan runs.
+>
+> **Late fees** — `[✓]` Do not charge late fees on debts covered by a
+> plan. `[ ]` Charge the skipped fees if the plan is broken.
+>
+> **Afterwards** — `[✓]` A customer may agree a second plan after
+> breaking one.
+
+Each checkbox is a sentence an operator can agree or disagree with, not
+a flag whose meaning has to be inferred from its name. The two fee
+lines are deliberately adjacent and deliberately distinct: one is about
+the future, one about what happens to that future if the plan fails.
+
+**A setting nobody can edit is an orphan**, which this codebase has been
+bitten by: `autoPostBills` shipped readable and settable with no control
+drawn, so manual posting was reachable only by SQL. This screen is part
+of slice 1, not a follow-up, and the drift guard that derives editable
+keys from the schema should cover this namespace too.
+
+## 4b. What a CSR sees
+
+The terms screen above is set once. These two are used on a phone call,
+and the test for both is that nobody has to do arithmetic or hold a
+policy in their head.
+
+### Agreeing one
+
+The screen proposes the plan and the operator adjusts it; it does not
+present nine empty fields and validate afterwards. Policy becomes a
+sentence and a pre-filled schedule:
+
+> **Arrears covered:** 4 debts, **$523.55** — listed, each with the bill
+> it came from and the date it fell due, each with a checkbox. Unticking
+> one removes it from the plan and from the total.
+>
+> **Down payment** `$130.89` *(25% — your policy. Lower it if the
+> customer cannot manage it.)*
+> **Then** `[6 ▾]` monthly payments of **$65.44**, first due
+> **2026-11-15**, last **2027-04-15**.
+
+Refusals explain themselves at the control rather than on save: asking
+for two instalments says *"your policy is at least 3"*, not "invalid".
+The instalment count is a dropdown of the allowed range, so the
+unreachable values are never offered.
+
+**The last line is what the customer is actually agreeing to**, so it is
+rendered as the schedule, not as a count and a frequency the operator
+multiplies out.
+
+### Reading one
+
+On the account, a plan answers four questions in the order they are
+asked on a call:
+
+1. **Is there a plan, and is it being kept?** `ACTIVE — on track`, or
+   `ACTIVE — 1 payment behind`, or `DEFAULTED 2026-12-20`. The status
+   enum alone does not say whether the customer is behind; that is the
+   first thing asked and it is derived, not stored.
+2. **What is left?** `$327.22 of $523.55`, with the next payment and its
+   date.
+3. **The schedule** — every instalment with its due date and whether it
+   was met, derived from `start_date`, the frequency and what has been
+   allocated to the covered debits. Not an `installment` table (§4).
+4. **What is covered** — the debts themselves, so a CSR looking at a
+   charge on the ledger can see it is in a plan and not chase it. The AR
+   tab's Bill column already names what a fee was raised on; a covered
+   debit wants the same treatment, reading `in a payment plan`.
+
+**And a warning where it will be read**, not where it is logically tidy:
+if the plan is at risk because a *new* bill is unpaid — the §7 test a
+customer most easily trips while paying every instalment faithfully —
+that belongs on this panel, in those words, rather than being inferable
+from two screens.
 
 ## 5. Suppression — the part that touches live code
 
@@ -417,9 +507,13 @@ schedule, once spec 21's vendor questions are answered.
 
 ## 11. Left to the builder
 
-- Where the staff screen lives: a tab on the account, or a Collections
-  section page. The account tab is my instinct, since a plan is about
-  one account's arrears, but the Collections sidebar section exists.
+- ~~Where the staff screen lives~~ — decided in §4a and §4b, and the two
+  answers are different because the two screens answer different
+  questions. The **terms** are collections policy and sit under
+  Collections beside the delinquency rules; a **plan** is one account's
+  arrears and sits on that account, where a CSR already is when the
+  customer phones. What was left open was really one question treated as
+  two.
 - Whether `down_payment` is a separate recorded payment or simply the
   first installment. Spec 10 implies separate (PENDING → ACTIVE on it).
 - The exact wording on the bill, if anything. A covered debt is not
