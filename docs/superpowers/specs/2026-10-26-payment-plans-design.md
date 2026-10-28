@@ -386,16 +386,47 @@ policy in their head.
 
 The screen proposes the plan and the operator adjusts it; it does not
 present nine empty fields and validate afterwards. Policy becomes a
-sentence and a pre-filled schedule:
+sentence and a pre-filled schedule. Over the five open debits of §4aa,
+on 2026-10-28:
 
-> **Arrears covered:** 4 debts, **$523.55** — listed, each with the bill
-> it came from and the date it fell due, each with a checkbox. Unticking
-> one removes it from the plan and from the total.
+> **Arrears covered** — **$503.17** of $541.04 open
 >
-> **Down payment** `$130.89` *(25% — your policy. Lower it if the
-> customer cannot manage it.)*
-> **Then** `[6 ▾]` monthly payments of **$65.44**, first due
-> **2026-11-15**, last **2027-04-15**.
+> - `[✓]` **$412.80** · Opening balance · due 2026-07-15
+> - `[✓]` **$55.37** · `BILL-202608-1`, part paid · due 2026-09-14
+> - `[✓]` **$25.00** · Late fee, for `BILL-202608-1` · due 2026-11-03
+> - `[✓]` **$10.00** · Late fee · due 2026-11-06
+> - `[ ]` **$37.87** · `BILL-202610-2` · due 2026-11-09 — *not yet due*
+>
+> **Down payment** `$125.79`, due **2026-10-28** *(25% — your policy.
+> Lower it if the customer cannot manage it.)*
+> **Then** `[6 ▾]` monthly payments, first due **2026-11-28** — `$62.93`
+> then five of `$62.89`, last **2027-04-28**.
+
+The down payment carries a date because it *is* the first payment, due
+on `start_date` (§8). Each later instalment falls one frequency after
+it, so the whole schedule is `start_date` plus arithmetic — which is
+what makes an `installment` table unnecessary rather than merely
+redundant.
+
+**What opens ticked: every open debit that is already overdue.** One
+whose due date has not arrived opens unticked, which on 2026-10-28 is
+`BILL-202610-2`, so the proposed total is the account's **past-due
+balance** — the figure the CSR is already looking at on the delinquency
+queue, and the one the customer is phoning about. §1's Illinois rule,
+that an agreement includes the current bill, is then a tick away rather
+than a default: offered, not assumed.
+
+**That rule is about the bill, not about every future date.** The two
+late fees above fall due in November and still open ticked. A fee raised
+on a covered bill is part of the same arrears, and leaving it out would
+suppress the bill while its own fee climbed the ladder on its own clock
+three days later — a trap that passes every test written against a plan
+that covers whole bills. Only a `BILL_CHARGE` not yet due opens
+unticked.
+
+**Ticking recomputes everything below it** — the total, the down payment
+that is a percentage of it, the instalment and every date. The operator
+never multiplies anything out.
 
 Refusals explain themselves at the control rather than on save: asking
 for two instalments says *"your policy is at least 3"*, not "invalid".

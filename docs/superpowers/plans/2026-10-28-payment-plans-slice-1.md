@@ -463,6 +463,10 @@ The shut-off queue's `PAYMENT_PLAN` button currently calls `resolveAccount(..., 
 it("proposes the down payment and the schedule from the tenant's terms", async () => {});
 it("offers only instalment counts the terms allow", async () => {});
 it("shows a covered debt with no bill, which an opening balance is", async () => {});
+it("opens a not-yet-due bill charge unticked, and its own late fee ticked", async () => {
+  // Design §4b. The proposed total is the past-due balance. A fee left
+  // out would climb the ladder while its parent bill was suppressed.
+});
 it("says the customer is behind, which the status alone does not", async () => {});
 it("warns when an unpaid new bill puts the plan at risk", async () => {});
 ```
