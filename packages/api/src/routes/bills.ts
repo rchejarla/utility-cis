@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { idParamSchema } from "../lib/route-schemas.js";
 import { billQuerySchema } from "@utility-cis/shared";
 import { getBill, listBills } from "../services/bill.service.js";
+import { loadBillPresentation } from "../services/bill-presentation.service.js";
 import { deliverBill, listBillDeliveries } from "../services/bill-delivery.service.js";
 import {
   holdBill,
@@ -40,6 +41,34 @@ export async function billRoutes(app: FastifyInstance) {
       const { id } = idParamSchema.parse(request.params);
       const bill = await getBill(utilityId, id);
       return reply.send(bill);
+    },
+  );
+
+  /**
+   * What the bill *says* — the resolved content its document renders.
+   *
+   * `GET /bills/:id` returns the stored `Bill`: rated segments and
+   * `bill.total`. That is not what the customer receives. A late fee
+   * raises no rated line, so it reaches the page through the
+   * presentation's fees group, and the printed total is rated + fees.
+   * Staff reading the bill popup therefore saw a different number from
+   * the one on the paper in the customer's hand, by exactly the fees —
+   * which is the moment a phone call goes wrong.
+   *
+   * A read, so `accounts:VIEW` like the bill itself. It is a separate
+   * endpoint rather than a wider `GET /bills/:id` because resolving a
+   * presentation refuses an incomplete issuer, recipient or charge set
+   * with a 422, and a popup that cannot open because the remittance
+   * address is unset would be a worse screen than one showing rated
+   * lines.
+   */
+  app.get(
+    "/api/v1/bills/:id/presentation",
+    { config: { module: "accounts", permission: "VIEW" } },
+    async (request, reply) => {
+      const { utilityId } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      return reply.send(await loadBillPresentation(utilityId, id));
     },
   );
 

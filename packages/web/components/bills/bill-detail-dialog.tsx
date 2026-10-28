@@ -59,6 +59,38 @@ interface BillWithSegments {
   segments: SegmentRow[];
 }
 
+/**
+ * What the bill's document says, as much of it as this dialog needs.
+ *
+ * `GET /bills/:id` returns the stored bill — rated segments and
+ * `bill.total`. A late fee raises no rated line, so it reaches the page
+ * through the presentation's fees group, and the printed total is rated
+ * + fees. Without this, staff read a total lower than the one on the
+ * paper in the customer's hand by exactly the fees.
+ */
+interface BillPresentationView {
+  feesGroup: {
+    heading: string;
+    lines: Array<{ label: string; quantity: string | null; amount: string }>;
+    subtotal: string;
+  } | null;
+  /**
+   * The totals box as the presentation resolved it, in print order.
+   *
+   * This dialog used to compose the box itself, and so did the PDF
+   * template — so every figure added to the total had to be added twice,
+   * and twice it was not: fees went in and this showed none of them, the
+   * balance carried forward went in and this showed a total $523.55
+   * larger than its own lines. They had drifted where nobody was
+   * looking, too — the PDF printed Taxes unconditionally and a Rounding
+   * row, this hid Taxes at zero and had no Rounding row.
+   *
+   * Rendered verbatim now. Which rows appear, in what order, with which
+   * labels and signs, is the resolver's business and not this file's.
+   */
+  totalRows: Array<{ label: string; amount: string; emphasis?: "total" | "note" }>;
+}
+
 /** One attempt to deliver this bill. */
 interface Delivery {
   id: string;
@@ -79,6 +111,7 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
   const [bill, setBill] = useState<BillWithSegments | null>(null);
   const [loading, setLoading] = useState(true);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
+  const [presentation, setPresentation] = useState<BillPresentationView | null>(null);
   const [busy, setBusy] = useState(false);
   const [asking, setAsking] = useState(false);
 
@@ -87,6 +120,16 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
       .get<BillWithSegments>(`/api/v1/bills/${billId}`)
       .then(setBill)
       .catch(console.error);
+  }, [billId]);
+
+  const loadPresentation = useCallback(() => {
+    return apiClient
+      .get<BillPresentationView>(`/api/v1/bills/${billId}/presentation`)
+      // Resolving one refuses an incomplete issuer or recipient with a
+      // 422. There is still a bill to show, and rated lines under the
+      // stored total beat a popup that will not open.
+      .then(setPresentation)
+      .catch(() => setPresentation(null));
   }, [billId]);
 
   const loadDeliveries = useCallback(() => {
@@ -99,8 +142,10 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
   }, [billId]);
 
   useEffect(() => {
-    void Promise.all([load(), loadDeliveries()]).finally(() => setLoading(false));
-  }, [load, loadDeliveries]);
+    void Promise.all([load(), loadDeliveries(), loadPresentation()]).finally(() =>
+      setLoading(false),
+    );
+  }, [load, loadDeliveries, loadPresentation]);
 
   /*
    * Hold, release and send all reload the bill rather than patching it
@@ -366,11 +411,73 @@ export function BillDetailDialog({ billId, onClose }: { billId: string; onClose:
               </div>
             ))}
 
+            {/*
+              Charged beside the rated segments and not by the rate
+              engine: a late fee, an adjustment, or the credit a
+              replacing tier writes. It has no `BillSegmentLine` to live
+              in — a line *is* a rated charge — so it comes from the
+              presentation, which is also what the PDF renders. Each
+              line already names the bill it was raised on.
+            */}
+            {presentation?.feesGroup && (
+              <div
+                style={{
+                  marginBottom: "16px",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--radius)",
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "10px 14px",
+                    background: "var(--bg-elevated)",
+                    borderBottom: "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+                    {presentation.feesGroup.heading}
+                  </span>
+                  <span style={{ fontFamily: "monospace", fontSize: "13px", fontWeight: 600 }}>
+                    {fmt(presentation.feesGroup.subtotal)}
+                  </span>
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <tbody>
+                    {presentation.feesGroup.lines.map((l) => (
+                      <tr key={l.label}>
+                        <td style={td}>{l.label}</td>
+                        <td style={{ ...td, textAlign: "right", fontFamily: "monospace" }}>
+                          {fmt(l.amount)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
             <div style={{ borderTop: "1px solid var(--border)", paddingTop: "12px", marginTop: "8px" }}>
-              <Row label="Subtotal" value={fmt(bill.subtotal)} />
-              {parseFloat(bill.taxes) !== 0 && <Row label="Taxes" value={fmt(bill.taxes)} />}
-              {parseFloat(bill.credits) !== 0 && <Row label="Credits" value={fmt(bill.credits)} />}
-              <Row label="Total" value={fmt(bill.total)} bold />
+              {/*
+                Rendered from the list the presentation resolved; this
+                decides nothing. The PDF template renders the same list,
+                so the two cannot disagree about what the total is made
+                of — which they did, three times.
+              */}
+              {(presentation?.totalRows ?? []).map((row) => (
+                <Row
+                  key={row.label}
+                  label={row.label}
+                  value={fmt(row.amount)}
+                  bold={row.emphasis === "total"}
+                />
+              ))}
+              {/* No presentation resolved: the stored bill is all there
+                  is, so show its own total rather than nothing. */}
+              {!presentation && <Row label="Total" value={fmt(bill.total)} bold />}
             </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "16px" }}>

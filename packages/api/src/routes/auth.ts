@@ -13,9 +13,30 @@ const switchRoleSchema = z.object({
 });
 
 export async function authRoutes(app: FastifyInstance) {
+  /**
+   * Who the caller is, what they may do — and **which tenant this is**.
+   *
+   * The tenant is here rather than behind its own endpoint because every
+   * page already makes this call to resolve permissions, and a second
+   * fetch for one name would be a second thing to fail. It is read
+   * outside `getAuthMe`, whose answer is cached in Redis per user: a
+   * suspension has to be visible as soon as it happens, and a primary-key
+   * lookup on one row is not what makes this route cost anything.
+   *
+   * `null` when the row cannot be read, which is not the same as a
+   * tenant with no name — the chrome falls back to naming the product.
+   * Returning a 500 here would take down every authenticated page over a
+   * caption.
+   */
   app.get("/api/v1/auth/me", async (request) => {
     const { id: userId, utilityId, email, name, customerId } = request.user;
-    const authData = await getAuthMe(userId, utilityId);
+    const [authData, utility] = await Promise.all([
+      getAuthMe(userId, utilityId),
+      prisma.utility.findUnique({
+        where: { id: utilityId },
+        select: { id: true, name: true, status: true },
+      }),
+    ]);
 
     return {
       user: {
@@ -26,6 +47,7 @@ export async function authRoutes(app: FastifyInstance) {
         roleName: authData.user?.roleName ?? "unknown",
         customerId: customerId ?? authData.user?.customerId ?? null,
       },
+      utility,
       permissions: authData.permissions,
       enabledModules: authData.enabledModules,
     };

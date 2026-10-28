@@ -372,6 +372,7 @@ function SidebarNavItem({
   isActive,
   enforcePermission,
   onNavigate,
+  inSection = false,
 }: {
   item: NavItem;
   collapsed: boolean;
@@ -379,6 +380,15 @@ function SidebarNavItem({
   enforcePermission: boolean;
   /** Closes the collapsed-rail flyout once a destination is chosen. */
   onNavigate?: () => void;
+  /**
+   * Sitting under an open section header in the expanded sidebar, where
+   * the group's own inset and guide rule supply the indentation — so the
+   * item gives up its left margin rather than adding to them.
+   *
+   * False in the collapsed rail's flyout, which is a popover list with no
+   * header above it to be indented from.
+   */
+  inSection?: boolean;
 }) {
   // Called unconditionally — hooks must be — and only its answer is
   // conditional.
@@ -400,8 +410,8 @@ function SidebarNavItem({
         display: "flex",
         alignItems: "center",
         gap: 10,
-        padding: collapsed ? "10px 0" : "8px 13px",
-        margin: collapsed ? "2px 8px" : "1px 8px",
+        padding: collapsed ? "10px 0" : inSection ? "8px 13px 8px 8px" : "8px 13px",
+        margin: collapsed ? "2px 8px" : inSection ? "1px 8px 1px 0" : "1px 8px",
         borderRadius: "var(--radius)",
         background: isActive ? "var(--accent-primary)" : "transparent",
         color: isActive ? "#ffffff" : "var(--text-secondary)",
@@ -507,7 +517,10 @@ function CollapsibleSection({
   if (items.length === 0) return null;
 
   return (
-    <div style={{ marginBottom: 4 }}>
+    /* 10, not 4: seven sections stacked four pixels apart read as one
+       list of labels rather than seven groups. The gap belongs between
+       groups, so it sits here and not on the items. */
+    <div style={{ marginBottom: 10 }}>
       {!sidebarCollapsed && (
         <button
           onClick={toggleSection}
@@ -516,7 +529,7 @@ function CollapsibleSection({
             alignItems: "center",
             justifyContent: "space-between",
             width: "100%",
-            padding: "8px 20px 4px",
+            padding: "8px 20px 5px",
             background: "none",
             border: "none",
             cursor: "pointer",
@@ -539,9 +552,19 @@ function CollapsibleSection({
                */
               color: sectionOpen ? "var(--text-primary)" : "var(--text-secondary)",
               fontSize: 11,
-              fontWeight: 600,
+              /*
+               * 700, against an item's 400 (600 when active). The
+               * colour cannot do this
+               * work: `--text-muted` is the obvious lighter choice and
+               * is ruled out above for failing AA in light mode, and a
+               * closed header shares `--text-secondary` with every
+               * inactive item. Weight and letter-spacing separate a
+               * label from a link without touching contrast — which, on
+               * the smallest text in the app, is the thing not to spend.
+               */
+              fontWeight: 700,
               textTransform: "uppercase",
-              letterSpacing: "0.07em",
+              letterSpacing: "0.09em",
               whiteSpace: "nowrap",
             }}
           >
@@ -663,17 +686,46 @@ function CollapsibleSection({
         </>
       )}
 
-      {!sidebarCollapsed &&
-        sectionOpen &&
-        items.map((item) => (
-          <SidebarNavItem
-            enforcePermission={filterByPermissions}
-            key={item.href}
-            item={item}
-            collapsed={false}
-            isActive={isItemActive(item)}
-          />
-        ))}
+      {/*
+        The section's items, as a group that belongs to the header above
+        it.
+
+        They used to start at x=21 against the header's x=20 — one pixel
+        of hierarchy, so a closed section header and an inactive item
+        read as the same kind of thing, the more so because both are
+        `--text-secondary`. The inset puts the items at x=37, and the
+        rule at x=20 runs under the header's own text so the eye can see
+        where a group begins and ends without reading the labels.
+
+        37 leaves a 17px step, which is what it takes for the step to be
+        unmistakable rather than merely present at this type size. The
+        label still has room: the widest is "Notification Delivery", about
+        150px at 13px, against 178px of space.
+
+        The rule carries the indentation rather than a larger padding on
+        each item, so an item's active pill keeps its shape and its right
+        edge stays aligned with everything else in the sidebar.
+      */}
+      {!sidebarCollapsed && sectionOpen && (
+        <div
+          style={{
+            marginLeft: 20,
+            paddingLeft: 8,
+            borderLeft: "1px solid var(--border-subtle)",
+          }}
+        >
+          {items.map((item) => (
+            <SidebarNavItem
+              enforcePermission={filterByPermissions}
+              key={item.href}
+              item={item}
+              collapsed={false}
+              isActive={isItemActive(item)}
+              inSection
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -705,6 +757,7 @@ export function Sidebar({
   brandSubtitle,
 }: SidebarProps) {
   const pathname = usePathname();
+  const { utility } = useAuth();
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const width = collapsed ? 64 : 240;
 
@@ -802,7 +855,11 @@ export function Sidebar({
       >
         {!collapsed && (
           <>
-            <BrandMark subtitle={brandSubtitle} />
+            {/* The tenant takes the caption line inside a tenant. On
+                the platform screens `useAuth` is the default context —
+                they mount no provider — so this is null and
+                `brandSubtitle` ("Platform") stands. */}
+            <BrandMark subtitle={brandSubtitle} tenant={utility?.name ?? null} />
             <div style={{ flex: 1 }} />
           </>
         )}
@@ -813,7 +870,14 @@ export function Sidebar({
             setFlyoutSection(null);
             setCollapsed(!collapsed);
           }}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          /* Collapsed, the brand row is this button alone and the tenant
+             name has nowhere to render, so it rides in the tooltip — the
+             one place left on a 64px rail. */
+          title={
+            collapsed
+              ? [utility?.name, "Expand sidebar"].filter(Boolean).join(" — ")
+              : "Collapse sidebar"
+          }
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           style={{
             width: 36,

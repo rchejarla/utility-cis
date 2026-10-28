@@ -110,6 +110,28 @@ Naming the debits is auditable — the customer agreed to a schedule for
 *these* bills — and lets `total_balance` be checked against the sum of
 what it covers.
 
+**The second rejected alternative is Oracle's, and worth recording
+because it is a real system's answer rather than one I invented.** In
+CC&B a payment arrangement is **its own service agreement**: the overdue
+debt is *moved* onto it, the installment amount becomes that agreement's
+recurring charge, it is billed on the regular cycle with the customer's
+other services, and missing an installment breaks the arrangement and
+sends it for credit review. So the plan does not tag the debts — it
+takes them.
+
+It is coherent there and wrong here, for a reason specific to this
+ledger. CC&B's model is built for transfers between service agreements,
+so moving debt is a first-class operation. Ours has no such operation:
+the equivalent is reversing the original debits and raising new ones,
+which destroys the per-bill history the ladder keys on — "a tier charges
+each bill once" has nothing left to key on once a bill's debit is gone —
+and makes the plan's balance authoritative over the ledger's, which §2
+rules out. Naming the debits gets the same installment behaviour without
+relocating the debt.
+
+(Sources: CC&B URM 4.3.2.4a on payment arrangements; C2M 4.2.2.12 on
+billing their charges.)
+
 ## 4. The entity
 
 Spec 10's sketch, amended. Fields struck or added are called out; the

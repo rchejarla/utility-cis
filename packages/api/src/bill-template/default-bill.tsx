@@ -73,7 +73,7 @@ function printed(amount: string): string {
 
 export function DefaultBillTemplate({ presentation }: { presentation: BillPresentation }) {
   const s = makeStyles(presentation);
-  const { issuer, recipient, account, bill, groups, totals, settlement, messages, remittance } =
+  const { issuer, recipient, account, bill, groups, totalRows, totals, settlement, messages, remittance } =
     presentation;
 
   return (
@@ -148,57 +148,32 @@ export function DefaultBillTemplate({ presentation }: { presentation: BillPresen
         ))}
 
         <View style={s.totalsBox} wrap={false}>
-          <View style={s.totalRow}>
-            <Text style={s.muted}>Subtotal</Text>
-            <Text>{printed(totals.subtotal)}</Text>
-          </View>
-          <View style={s.totalRow}>
-            <Text style={s.muted}>Taxes</Text>
-            <Text>{printed(totals.taxes)}</Text>
-          </View>
           {/*
-            Named for what it is. This is the credits the rate engine
-            computed while pricing the period — not the account's credit
-            position, and never a payment. Printed unconditionally as
-            "Credits $0.00" it answered a question nobody asked in the
-            affirmative-negative: a customer who had paid read it as
-            their money being counted at zero. Suppressed when zero, the
-            way Rounding already is.
+            The totals box, rendered from the list the presentation
+            resolved. This decides nothing: which rows appear, in what
+            order, with which labels and signs, is decided in
+            `bill-presentation/load.ts`.
+
+            It used to compose the box itself, and so did the staff
+            popup — so every figure added to the total had to be added
+            twice and twice it was not. They had also drifted where
+            nobody was looking: this one printed Taxes unconditionally
+            and a Rounding row, the popup hid Taxes at zero and had no
+            Rounding row at all.
           */}
-          {Number(totals.credits) === 0 ? null : (
-            <View style={s.totalRow}>
-              <Text style={s.muted}>Credits this period</Text>
-              <Text>{printed(totals.credits)}</Text>
-            </View>
+          {totalRows.map((row) =>
+            row.emphasis === "total" ? (
+              <View key={row.label} style={s.grandTotal}>
+                <Text>{row.label}</Text>
+                <Text>{printed(row.amount)}</Text>
+              </View>
+            ) : (
+              <View key={row.label} style={s.totalRow}>
+                <Text style={s.muted}>{row.label}</Text>
+                <Text>{printed(row.amount)}</Text>
+              </View>
+            ),
           )}
-          {/*
-            Only when the per-line and whole-bill rounding disagree, so a
-            customer adding up the lines above arrives at Total due
-            exactly. Absent from almost every bill.
-          */}
-          {totals.rounding ? (
-            <View style={s.totalRow}>
-              <Text style={s.muted}>Rounding</Text>
-              <Text>{printed(totals.rounding)}</Text>
-            </View>
-          ) : null}
-          {/*
-            The fees group's subtotal, carried into the total. The group
-            itself prints above with the commodity charges — a late fee
-            is a charge on this bill and reads as one — and this row is
-            what lets a customer add the page up. Absent when there are
-            none, like Rounding.
-          */}
-          {totals.fees ? (
-            <View style={s.totalRow}>
-              <Text style={s.muted}>Fees and adjustments</Text>
-              <Text>{printed(totals.fees)}</Text>
-            </View>
-          ) : null}
-          <View style={s.grandTotal}>
-            <Text>{settlement ? "Total billed" : "Total due"}</Text>
-            <Text>{printed(totals.total)}</Text>
-          </View>
           {/*
             Payments and credits already applied to this bill, itemised
             with the date they took effect, then what is actually left to

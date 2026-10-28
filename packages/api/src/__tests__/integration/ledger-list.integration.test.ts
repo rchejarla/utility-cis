@@ -248,6 +248,36 @@ describe("listLedger", () => {
     expect(page.openCount).toBe(1);
   });
 
+  /**
+   * Ordered by the date the screen shows.
+   *
+   * The page displays `effective_date` and was ordered by `posted_at`,
+   * so the two disagreed whenever anything was back-dated — a
+   * correction, or a delinquency sweep charging a bill that fell due
+   * weeks ago. On a freshly seeded account every row shares one
+   * `posted_at`, which left `id` deciding: a table sorted by nothing
+   * the reader can see, with the oldest entry seventh and a
+   * four-hundred-dollar opening balance last.
+   *
+   * `posted_at` and `id` stay as tiebreaks, so the order is still total
+   * and a page boundary is still stable between calls.
+   */
+  it("orders by the date it shows, not by when the row was written", async () => {
+    const mid = await debit("10.00", "2026-05-20");
+    const newest = await debit("20.00", "2026-06-20");
+    const oldest = await debit("30.00", "2026-04-20");
+
+    const page = await listLedger(utilityId, accountId);
+    const mine = page.data.filter((r) => [mid, newest, oldest].includes(r.id));
+
+    expect(mine.map((r) => r.id)).toEqual([newest, mid, oldest]);
+    expect(mine.map((r) => r.effectiveDate)).toEqual([
+      "2026-06-20",
+      "2026-05-20",
+      "2026-04-20",
+    ]);
+  });
+
   it("names the bill an entry came from", async () => {
     const billId = await makeBill("50.0000");
     await postBill(utilityId, ACTOR, "T", billId);
@@ -256,6 +286,45 @@ describe("listLedger", () => {
     expect(page.data[0]!.billNumber).toMatch(/^BILL-LIST-/);
     // A bill-derived charge cites no reason; it names its bill instead.
     expect(page.data[0]!.reasonCode).toBeNull();
+  });
+
+  /**
+   * And the bill a fee was raised ON, which is a different question.
+   *
+   * A late fee carries no `bill_id` — it is its own receivable, posted
+   * when the tier fires rather than by a billing run — so the screen had
+   * a FEE row with an empty bill column and no way to say which unpaid
+   * bill it punished. Since the ladder went per-bill one sweep can raise
+   * several, and `Late payment fee` against three rows differing only in
+   * their memo is not an answer a CSR can give a customer on the phone.
+   */
+  it("names the bill a fee was raised on, which is not the fee's own bill", async () => {
+    const billId = await makeBill("50.0000");
+    const posted = await postBill(utilityId, ACTOR, "T", billId);
+    const raised = await assessFee(utilityId, ACTOR, "T", accountId, {
+      amount: "10.00",
+      reasonId: lateFeeId,
+      assessedOnId: posted.entryId!,
+    });
+
+    const page = await listLedger(utilityId, accountId);
+    const row = page.data.find((r) => r.id === raised.feeId)!;
+
+    expect(row.billNumber).toBeNull();
+    expect(row.assessedOnBillNumber).toMatch(/^BILL-LIST-/);
+    expect(row.assessedOnBillId).toBe(billId);
+  });
+
+  it("leaves the assessed-on bill null for a fee raised on nothing", async () => {
+    // A tap fee answers to a tap being cut, not to a bill being late.
+    const raised = await assessFee(utilityId, ACTOR, "T", accountId, {
+      amount: "10.00",
+      reasonId: lateFeeId,
+    });
+    const page = await listLedger(utilityId, accountId);
+    const row = page.data.find((r) => r.id === raised.feeId)!;
+    expect(row.assessedOnBillNumber).toBeNull();
+    expect(row.assessedOnBillId).toBeNull();
   });
 
   // Review Focus: two rows that cancel each other.

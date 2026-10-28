@@ -3,6 +3,7 @@ import { prisma } from "../../lib/prisma.js";
 import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { EVENT_TYPES, roundToCents } from "@utility-cis/shared";
 import { applyCreditsToDebit, type Application } from "./allocation.service.js";
+import { billStatementSnapshot } from "./statement-snapshot.js";
 
 /*
  * Mirrors Prisma's own `TransactionClient`, which in Prisma 7 no longer
@@ -228,6 +229,36 @@ export async function postBill(
     if (claimed.count === 0) {
       throw err("BILL_ALREADY_POSTED", `Bill ${billId} was already posted`, 409);
     }
+
+    /*
+     * Where the account stood as this bill was issued, frozen onto the
+     * bill.
+     *
+     * **Before** its own charge is written, or "previous balance" and
+     * "past due" would include the thing the customer is being billed
+     * for. And before the zero-amount return below, because a bill that
+     * rates to nothing is still a bill that gets printed — and an
+     * account with arrears and no consumption this period is exactly
+     * when the statement lines are the whole page.
+     *
+     * `past_due_amount` reads allocation state, which is current here
+     * and unrecoverable later. See `statement-snapshot.ts`.
+     */
+    const snapshot = await billStatementSnapshot(
+      tx,
+      utilityId,
+      bill.accountId,
+      bill.id,
+      bill.billDate,
+    );
+    await tx.bill.update({
+      where: { id: bill.id },
+      data: {
+        previousBalance: snapshot.previousBalance,
+        paymentsSince: snapshot.paymentsSince,
+        pastDueAmount: snapshot.pastDueAmount,
+      },
+    });
 
     const amount = roundToCents(bill.total.toString());
     const effectiveDate = new Date(input.effectiveDate ?? bill.billDate.toISOString().slice(0, 10));

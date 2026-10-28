@@ -264,3 +264,174 @@ describe("Bill detail — sending", () => {
     expect(screen.getByText(/jane.smith@example.com/)).toBeInTheDocument();
   });
 });
+
+/**
+ * The popup has to say what the bill says.
+ *
+ * `GET /bills/:id` returns the stored bill: rated segments and
+ * `bill.total`. A late fee raises no rated line — it is its own ledger
+ * entry — so it reaches the page through the presentation's fees group,
+ * and the printed total is rated + fees. This dialog read only the
+ * stored bill, so staff saw a total lower than the one on the paper in
+ * the customer's hand by exactly the fees, which is the moment a phone
+ * call goes wrong.
+ */
+describe("Bill detail — fees and adjustments", () => {
+  const FEES = {
+    heading: "Fees and adjustments",
+    lines: [
+      {
+        label: "Late payment fee 2026-09-24 — for bill BILL-202608-0001000-00",
+        quantity: null,
+        amount: "10.00",
+      },
+      {
+        label: "Late payment fee 2026-10-04 — for bill BILL-202608-0001000-00",
+        quantity: null,
+        amount: "25.00",
+      },
+    ],
+    subtotal: "35.00",
+  };
+
+  /*
+   * `totalRows` is spelled out rather than derived, because these tests
+   * prove the dialog **renders the list it is given**. Whether the list
+   * is the right list is the resolver's test
+   * (`bill-presentation.service.test.ts`), and keeping the two apart is
+   * what stops a dialog test passing because the builder and the
+   * renderer share a mistake.
+   */
+  function presentation(over: Record<string, unknown> = {}) {
+    return {
+      feesGroup: FEES,
+      totalRows: [
+        { label: "Subtotal", amount: "37.89" },
+        { label: "Taxes", amount: "0.00" },
+        { label: "Fees and adjustments", amount: "35.00" },
+        { label: "Total due", amount: "72.89", emphasis: "total" },
+      ],
+      ...over,
+    };
+  }
+
+  /** Bill, deliveries and presentation are three separate calls. */
+  function routeGets(pres: unknown) {
+    get.mockImplementation((path: string) => {
+      if (path.includes("/presentation")) {
+        return pres === "fail" ? Promise.reject(new Error("422")) : Promise.resolve(pres);
+      }
+      if (path.includes("/deliveries")) return Promise.resolve([]);
+      return Promise.resolve(bill([line()]));
+    });
+  }
+
+  it("lists each fee, naming the bill it was raised on", async () => {
+    routeGets(presentation());
+    renderDialog();
+
+    expect(
+      await screen.findByText("Late payment fee 2026-09-24 — for bill BILL-202608-0001000-00"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Late payment fee 2026-10-04 — for bill BILL-202608-0001000-00"),
+    ).toBeInTheDocument();
+  });
+
+  it("totals the way the document does, so the two cannot disagree", async () => {
+    routeGets(presentation());
+    renderDialog();
+
+    // Twice on purpose: the group's own heading, and the row in the
+    // totals box that carries its subtotal into the total. A group
+    // whose subtotal is not in the total is not a charge.
+    expect(await screen.findAllByText("Fees and adjustments")).toHaveLength(2);
+    expect(screen.getAllByText("$35.00")).toHaveLength(2);
+    // Rated 37.89 + fees 35.00. The stored bill.total is 37.8854 and is
+    // not what the customer is being asked for.
+    expect(screen.getByText("$72.89")).toBeInTheDocument();
+  });
+
+  /**
+   * A total has to follow from the lines above it.
+   *
+   * The statement rows went into the PDF template and not into this
+   * dialog, so the popup took the new total — which includes the balance
+   * carried forward — and showed Subtotal, Fees and Total with nothing
+   * accounting for the difference. On a real bill that was $590.15 over
+   * $41.60 of water and $25.00 of fees, with $523.55 unexplained. It is
+   * the same failure the fees group exists to prevent, reintroduced on
+   * the other screen.
+   */
+  it("shows the balance carried forward, not just its effect on the total", async () => {
+    routeGets(
+      presentation({
+        totalRows: [
+          { label: "Previous balance", amount: "523.55" },
+          { label: "Charges this period", amount: "41.60" },
+          { label: "Taxes", amount: "0.00" },
+          { label: "Fees and adjustments", amount: "25.00" },
+          { label: "Total due", amount: "590.15", emphasis: "total" },
+          { label: "of which past due — payable now", amount: "523.55", emphasis: "note" },
+        ],
+      }),
+    );
+    renderDialog();
+
+    expect(await screen.findByText("Previous balance")).toBeInTheDocument();
+    // Twice: the balance carried in, and the part of the total that was
+    // already due. Both are $523.55 on this bill and mean different
+    // things.
+    expect(screen.getAllByText("$523.55")).toHaveLength(2);
+    expect(screen.getByText(/of which past due/)).toBeInTheDocument();
+    // "Subtotal" becomes "Charges this period" once a balance sits above
+    // it to tell it apart from.
+    expect(screen.getByText("Charges this period")).toBeInTheDocument();
+    // 523.55 carried + 41.60 this period + 25.00 fees.
+    expect(screen.getByText("$590.15")).toBeInTheDocument();
+    // No payments were subtracted, so the line that would say so is
+    // absent rather than repeating the previous balance to the cent.
+    expect(screen.queryByText("Balance forward")).not.toBeInTheDocument();
+  });
+
+  it("says nothing about a previous balance on a bill with no snapshot", async () => {
+    routeGets(presentation());
+    renderDialog();
+
+    await screen.findByText("4.71 HCF");
+    expect(screen.queryByText("Previous balance")).not.toBeInTheDocument();
+  });
+
+  it("shows no fees block on a bill that carries none", async () => {
+    routeGets(
+      presentation({
+        feesGroup: null,
+        // No fees group and no fees row: the resolver omits both
+        // together, so a fixture that dropped only one would describe a
+        // page the resolver cannot produce.
+        totalRows: [
+          { label: "Subtotal", amount: "37.89" },
+          { label: "Taxes", amount: "0.00" },
+          { label: "Total due", amount: "37.89", emphasis: "total" },
+        ],
+      }),
+    );
+    renderDialog();
+
+    await screen.findByText("4.71 HCF");
+    expect(screen.queryByText("Fees and adjustments")).not.toBeInTheDocument();
+  });
+
+  /*
+   * Resolving a presentation refuses an incomplete issuer or recipient
+   * with a 422. The dialog still has a bill to show, and rated lines
+   * with the stored total beat a popup that will not open.
+   */
+  it("still renders the bill when the presentation cannot be resolved", async () => {
+    routeGets("fail");
+    renderDialog();
+
+    expect(await screen.findByText("4.71 HCF")).toBeInTheDocument();
+    expect(screen.queryByText("Fees and adjustments")).not.toBeInTheDocument();
+  });
+});

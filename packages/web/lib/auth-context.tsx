@@ -13,8 +13,22 @@ interface AuthUser {
   customerId: string | null;
 }
 
+/**
+ * Which tenant this session is inside.
+ *
+ * Null above the tenants (the platform screens mount no provider) and
+ * null when the fetch failed — the chrome names the product in both
+ * cases rather than guessing.
+ */
+interface AuthUtility {
+  id: string;
+  name: string;
+  status: string;
+}
+
 interface AuthContextValue {
   user: AuthUser | null;
+  utility: AuthUtility | null;
   permissions: Record<string, string[]>;
   enabledModules: string[];
   loading: boolean;
@@ -23,6 +37,7 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue>({
   user: null,
+  utility: null,
   permissions: {},
   enabledModules: [],
   loading: true,
@@ -35,6 +50,7 @@ export function useAuth() {
 
 export function AuthPermissionProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [utility, setUtility] = useState<AuthUtility | null>(null);
   const [permissions, setPermissions] = useState<Record<string, string[]>>({});
   const [enabledModules, setEnabledModules] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,10 +59,12 @@ export function AuthPermissionProvider({ children }: { children: React.ReactNode
     try {
       const data = await apiClient.get<{
         user: AuthUser;
+        utility: AuthUtility | null;
         permissions: Record<string, string[]>;
         enabledModules: string[];
       }>("/api/v1/auth/me");
       setUser(data.user);
+      setUtility(data.utility ?? null);
       setPermissions(data.permissions);
       setEnabledModules(data.enabledModules);
     } catch (err) {
@@ -71,7 +89,9 @@ export function AuthPermissionProvider({ children }: { children: React.ReactNode
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, permissions, enabledModules, loading, refresh: fetchAuth }}>
+    <AuthContext.Provider
+      value={{ user, utility, permissions, enabledModules, loading, refresh: fetchAuth }}
+    >
       {children}
     </AuthContext.Provider>
   );

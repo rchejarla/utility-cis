@@ -101,9 +101,17 @@ export interface BillWithSegments extends BillSummary {
   segments: BillSegmentRow[];
 }
 
+/**
+ * `BILL-YYYYMM-`, from the **bill date** — the month the bill is for.
+ *
+ * UTC accessors, because every other date in this file is UTC
+ * (`billDate` is a `@db.Date`, `dueDate` is set with `setUTCDate`).
+ * Read locally, a bill generated late on the 31st anywhere west of
+ * Greenwich took the next month's prefix.
+ */
 function billNumberPrefix(d: Date): string {
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
   return `BILL-${yyyy}${mm}-`;
 }
 
@@ -301,7 +309,14 @@ export async function generateBillForAccount(
       const billDate = period.periodEnd;
       const dueDate = new Date(billDate);
       dueDate.setUTCDate(dueDate.getUTCDate() + DEFAULT_DUE_DAYS);
-      const billNumber = await nextBillNumber(tx, utilityId, now);
+      /*
+       * From the bill date, not `now`. The prefix was the month the run
+       * happened in, so a cycle run late — or a window set forward,
+       * which the start dialog allows — issued numbers contradicting
+       * their own bill date: a November bill numbered BILL-202610-4.
+       * The number is immutable once issued.
+       */
+      const billNumber = await nextBillNumber(tx, utilityId, billDate);
 
       const bill = await tx.bill.create({
         data: {

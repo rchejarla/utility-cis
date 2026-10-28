@@ -270,3 +270,30 @@ describe("generateBillForAccount — auto-post wiring", () => {
   
     }), 60_000);
 });
+
+/**
+ * The number describes the bill, not the moment it was made.
+ *
+ * `nextBillNumber` took `new Date()`, so the prefix was the month the
+ * run happened in rather than the month the bill is for. A cycle run
+ * late — or a window deliberately set forward, which the start dialog
+ * allows — produced numbers contradicting their own bill date: a
+ * November bill numbered `BILL-202610-4`. The number is immutable once
+ * issued, and `billDate` sits one line above the call.
+ *
+ * The prefix also read local-time accessors in a file where every other
+ * date is UTC, so west of Greenwich a bill generated late on the 31st
+ * took the next month's prefix.
+ */
+describe("the bill number", () => {
+  it("takes its month from the bill date, not from today", async () => {
+    // Its own segment: the suite's fixture is consumed by the tests
+    // above, and a bill needs something unbilled to assemble from.
+    await makeSegment("25.00");
+    const bill = await generate();
+
+    // The bill is for 2026-05; this test runs whenever it runs.
+    expect(bill.billDate.toISOString().slice(0, 7)).toBe("2026-05");
+    expect(bill.billNumber).toMatch(/^BILL-202605-\d+$/);
+  });
+});

@@ -844,6 +844,28 @@ model Bill {
   taxes                Decimal  @map("taxes") @db.Decimal(14, 4)
   credits              Decimal  @map("credits") @db.Decimal(14, 4)
   total                Decimal  @map("total") @db.Decimal(14, 4)
+  /// Where the account stood when this bill was issued, frozen at
+  /// posting. `Decimal(14,2)` and not the 4dp above, because these are
+  /// sums of `ledger_entry.amount`: rating works in 4dp and the ledger
+  /// does not.
+  ///
+  /// Null together on a bill issued before 2026-10-26 — a CHECK requires
+  /// all three or none — and then the presentation omits the statement
+  /// lines rather than inventing them. There is no backfill because the
+  /// figures are not recoverable: `reverseEntry` deletes the
+  /// `ledger_application` rows it undoes, so a past balance cannot be
+  /// reconstructed once a payment has been reversed. That is the same
+  /// fact that makes freezing them necessary rather than recomputing at
+  /// render.
+  ///
+  /// `previousBalance` may be negative — an account in credit at the last
+  /// bill carried that credit forward. The other two may not, and
+  /// CHECKs say so.
+  previousBalance      Decimal? @map("previous_balance") @db.Decimal(14, 2)
+  /// Positive, and subtracted in the layout, the way every bill in the
+  /// trade prints payments.
+  paymentsSince        Decimal? @map("payments_since") @db.Decimal(14, 2)
+  pastDueAmount        Decimal? @map("past_due_amount") @db.Decimal(14, 2)
   billNumber           String   @map("bill_number") @db.VarChar(50)
   createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz
   postedAt             DateTime? @map("posted_at") @db.Timestamptz

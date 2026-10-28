@@ -8,6 +8,7 @@ import { NotificationBell } from "./notifications/notification-bell";
 import { logout } from "@/lib/api-client";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { Breadcrumbs } from "@/components/ui/breadcrumbs";
+import { useAuth } from "@/lib/auth-context";
 
 interface TopbarProps {
   compact?: boolean;
@@ -52,6 +53,9 @@ const PINNED: React.CSSProperties = {
 
 export function Topbar({ compact = false, variant = "tenant", identity }: TopbarProps) {
   const isPlatform = variant === "platform";
+  // On a phone there is no sidebar, so this bar is the only chrome and
+  // the only place that can say which tenant this is.
+  const { utility } = useAuth();
 
 
   if (compact) {
@@ -69,8 +73,11 @@ export function Topbar({ compact = false, variant = "tenant", identity }: Topbar
           flexShrink: 0,
         }}
       >
-        {/* App title on mobile */}
-        <div style={{ flex: 1, display: "flex", alignItems: "center", gap: "10px" }}>
+        {/* The tenant on mobile, falling back to the product name above
+            the tenants and when auth/me could not be read. */}
+        <div
+          style={{ flex: 1, display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}
+        >
           <div
             style={{
               width: 28,
@@ -93,9 +100,13 @@ export function Topbar({ compact = false, variant = "tenant", identity }: Topbar
               color: "var(--text-primary)",
               fontWeight: 600,
               fontSize: 15,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
             }}
+            title={utility?.name ?? "Utility CIS"}
           >
-            Utility CIS
+            {utility?.name?.trim() || "Utility CIS"}
           </span>
         </div>
 

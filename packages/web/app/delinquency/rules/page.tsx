@@ -186,6 +186,24 @@ export default function DelinquencyRulesPage() {
       {editingId && (
         <div style={{ marginTop: 16 }}>
           <RuleEditor
+            /*
+             * Keyed on the rule, so selecting another tier remounts the
+             * editor instead of re-rendering it.
+             *
+             * Every field below seeds its `useState` from this prop, and
+             * a `useState` initialiser runs once, at mount — React keeps
+             * the same instance when only the prop changes. Without the
+             * key, clicking a second row relabelled the heading "Edit
+             * Tier 2" over tier 1's name, days and fee, and saving wrote
+             * the wrong tier's settings to the right tier's id. Closing
+             * one row before opening the next hid it, because that
+             * unmounts the editor.
+             *
+             * The alternative is an effect syncing fifteen setters from
+             * the prop, which is the same remount written by hand and
+             * silently incomplete the moment a sixteenth field is added.
+             */
+            key={editingId}
             rule={rules.find((r) => r.id === editingId)!}
             onSave={async (data) => {
               await apiClient.patch(`/api/v1/delinquency-rules/${editingId}`, data);
