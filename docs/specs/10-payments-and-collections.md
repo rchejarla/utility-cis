@@ -1,8 +1,8 @@
 # Payments and Collections
 
 **Module:** 10 — Payments and Collections
-**Status:** Phase 3 — the ledger, posting, payment recording, allocation, reversal, fees, waivers and write-offs all shipped in module 23 (slices 1–3); payment plans, the collections workflow and write-off *approval* are still outstanding here.
-**Entities:** PaymentPlan (planned), AdhocCharge (planned), WriteOff (planned). The ledger itself — `LedgerEntry`, `LedgerApplication`, `LedgerReasonDef` — lives in module 23.
+**Status:** Phase 3 — the ledger, posting, payment recording, allocation, reversal, fees, waivers and write-offs all shipped in module 23 (slices 1–3). **Payment plans: slice 1 shipped 2026-10-29** — the agreement, both suppression points, allocation, the lifecycle, the API and the two screens. Still outstanding here: the portal view of a customer's own plan and the SaaSLogic payment schedule (plan slices 2–3), the collections workflow, and write-off *approval*.
+**Entities:** PaymentPlan, PaymentPlanDebit (both shipped), AdhocCharge (planned), WriteOff (planned). The ledger itself — `LedgerEntry`, `LedgerApplication`, `LedgerReasonDef` — lives in module 23.
 
 ## Overview
 
@@ -22,30 +22,88 @@ Primary users: billing clerks, collections staff, finance managers, CSRs (for ac
 
 ## Planned Entities
 
-### PaymentPlan (planned)
+### PaymentPlan (slice 1 shipped 2026-10-29)
 
-Installment arrangement for accounts that cannot pay their balance in full. Negotiated by collections staff and tracked in CIS; payment execution is handled by SaaSLogic.
+A deferred payment agreement: an account may pay a **named set of overdue
+debts** by instalments, and the delinquency ladder leaves those debts
+alone while it is kept. Design:
+`docs/superpowers/specs/2026-10-26-payment-plans-design.md`.
+
+**Nothing about a plan changes the balance.** Agreeing one posts no
+ledger entry, moves no debt and leaves `Account.balance` alone; it
+changes *when* money is chased, not *what* is owed. That is what lets
+every balance query in the codebase stay ignorant of plans, and it is
+the deliberate departure from Oracle CC&B, where a payment arrangement
+is its own service agreement and the overdue debt is transferred onto
+it.
 
 | Field | Type | Notes |
 |-------|------|-------|
 | id | UUID | PK |
-| utility_id | UUID | Tenant scope |
-| account_id | UUID | FK → Account |
-| plan_type | ENUM | INSTALLMENT, DEFERRED, LEVELIZED |
-| status | ENUM | PENDING, ACTIVE, COMPLETED, DEFAULTED, CANCELLED |
-| total_balance | DECIMAL(10,2) | Total amount included in plan at creation |
-| down_payment | DECIMAL(10,2) | Nullable: required upfront payment |
-| installment_amount | DECIMAL(10,2) | Amount per installment |
+| utility_id | UUID | Tenant scope, FK → Utility |
+| account_id | UUID | Composite FK → Account (utility_id, id) |
+| status | ENUM | ACTIVE, COMPLETED, DEFAULTED, CANCELLED |
+| total_balance | DECIMAL(14,2) | Sum of the covered debits' **`open_amount`** at creation, frozen. Not `amount`: a $110.75 charge with $55.37 left owes $55.37 |
+| down_payment | DECIMAL(14,2) | Nullable. The **first payment**, due on `start_date` |
+| installment_amount | DECIMAL(14,2) | The base instalment; the first carries any rounding remainder |
 | installment_frequency | ENUM | WEEKLY, BIWEEKLY, MONTHLY |
-| installment_count | INTEGER | Total number of installments |
-| installments_paid | INTEGER | Default 0 |
-| next_due_date | DATE | |
-| start_date | DATE | |
-| end_date | DATE | Calculated at creation |
-| default_threshold | INTEGER | Number of missed installments before DEFAULTED |
-| saaslogic_plan_id | UUID | Nullable: SaaSLogic payment schedule reference |
-| approved_by | UUID | FK → User |
+| installment_count | INTEGER | Instalments after the down payment |
+| start_date | DATE | The down payment's due date. Instalment *n* falls on `start_date + (n-1) × frequency`, month-end clamped |
+| grace_days | INTEGER | Frozen at agreement |
+| missed_before_default | INTEGER | Frozen at agreement |
+| partial_installment_counts | BOOLEAN | Frozen at agreement |
+| current_bill_counts | BOOLEAN | Frozen at agreement |
+| suppress_fees_while_kept | BOOLEAN | Frozen at agreement |
+| assess_suppressed_fees_on_default | BOOLEAN | Frozen at agreement |
+| late_notice_installment | INTEGER | Nullable. Highest instalment already noticed as late, so a nightly sweep tells the customer once rather than every night |
+| status_changed_at | TIMESTAMPTZ | When the status last moved. `updated_at` cannot answer "defaulted when?" |
+| approved_by | UUID | FK → CisUser, RESTRICT. NOT NULL — a plan with no record of who agreed it is what the audit discipline forbids |
 | notes | TEXT | |
+| created_at / updated_at | TIMESTAMPTZ | |
+
+**Six ways this differs from the sketch it replaces**, each for a reason:
+
+- **No `plan_type`.** INSTALLMENT, DEFERRED and LEVELIZED were three
+  names for one mechanism; levelised billing is a *rating* feature, not
+  a collections one.
+- **No PENDING status.** An earlier draft had one for "agreed, down
+  payment not yet received", with two transitions to leave it, and they
+  changed nothing the system did — suppression began at agreement either
+  way. The down payment is simply the first payment.
+- **No `installments_paid`, `next_due_date` or `end_date`.** All three
+  are derivable from `start_date`, the frequency, the count and the
+  ledger, and a stored copy of a derivable figure is a copy that can
+  disagree. `planProgress` computes them; there is no instalment table
+  for the same reason.
+- **The six judgement terms are columns on the row**, copied from the
+  tenant's `paymentPlans` settings at agreement. A tenant lowering grace
+  from five days to two must not break every plan already running.
+- **`default_threshold` became `missed_before_default`**, and is joined
+  by `grace_days`: late is not missed.
+- **No `saaslogic_plan_id`.** Slice 3's business, once spec 21's vendor
+  questions are answered.
+
+### PaymentPlanDebit (slice 1)
+
+Which debts a plan covers. Named explicitly rather than implied by a
+`covers_debts_as_of` date, so a back-dated bill issued later cannot be
+swept into an agreement nobody made about it, and `total_balance` can be
+checked against the sum of what it covers.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| utility_id | UUID | PK part, FK → Utility |
+| plan_id | UUID | PK part is `entry_id`; composite FK → PaymentPlan (utility_id, id) |
+| entry_id | UUID | Composite FK → LedgerEntry (utility_id, id) |
+| created_at | TIMESTAMPTZ | |
+
+`PRIMARY KEY (utility_id, entry_id)` — a debit belongs to **at most one
+plan**. The rows **persist after the plan ends**: they are history, and
+every key is RESTRICT. Everything that asks "is this debt covered"
+therefore joins through to `PaymentPlan.status` and reads `ACTIVE`;
+testing membership of this table alone would suppress a debt forever,
+including after default, *and would pass every test written while the
+plan is still running*.
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
@@ -128,14 +186,29 @@ All endpoints are planned for Phase 3.
 
 ### Payment Plans
 
+Shipped in slice 1. Module `delinquency` — a plan is what a utility
+offers instead of chasing, so it answers to the authority that
+configures the ladder. `VIEW` to read, `CREATE` to agree, `EDIT` to
+cancel: a CSR who may agree a plan at the counter is not thereby someone
+who may tear one up.
+
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/payment-plans` | List plans (filterable by account, status) |
-| POST | `/api/v1/payment-plans` | Create payment plan |
-| GET | `/api/v1/payment-plans/:id` | Get plan detail with installment schedule |
-| PATCH | `/api/v1/payment-plans/:id` | Update plan terms (pre-active) |
-| POST | `/api/v1/payment-plans/:id/cancel` | Cancel an active plan |
-| GET | `/api/v1/accounts/:id/payment-plans` | All plans for an account |
+| GET | `/api/v1/accounts/:id/payment-plans` | Plans for an account, newest first, each with derived `remaining`, `onTrack` and `installmentsBehind` |
+| POST | `/api/v1/accounts/:id/payment-plans` | Agree a plan. Body names `entryIds`; answers with the derived schedule |
+| GET | `/api/v1/payment-plans/:id` | Detail: derived progress, derived schedule, and each covered debt with its bill provenance |
+| POST | `/api/v1/payment-plans/:id/cancel` | Cancel a live plan. Idempotent on one already ended |
+| GET | `/api/v1/delinquency/plan-terms` | The tenant's terms |
+| PUT | `/api/v1/delinquency/plan-terms` | Replace the terms namespace |
+
+**There is no `PATCH`.** "Update plan terms (pre-active)" needed a
+pre-active state, and there is none — a plan is ACTIVE from agreement.
+Changing what was agreed means cancelling and agreeing another, which is
+also what leaves an honest record.
+
+**No top-level `GET /api/v1/payment-plans`.** A plan is one account's
+arrears; nothing yet asks for every plan in the tenant, and the sweep
+reads the table directly. It arrives when a Collections work-list does.
 
 ### Ad Hoc Charges
 
@@ -181,7 +254,25 @@ All endpoints are planned for Phase 3.
 
 1. **CIS owns the ledger; SaaSLogic owns the card rail.** CIS never stores card or bank account numbers — card entry and settlement stay on SaaSLogic's hosted page. But CIS records every `Payment` regardless of tender, because cash, check and lockbox payments never pass through SaaSLogic. Posting is CIS's.
 
-2. **Payment posting:** when a payment is recorded — whether from a settled SaaSLogic transaction or entered at the counter — CIS: (a) reduces what the account owes, (b) clears Account.status from SUSPENDED if the balance is resolved, (c) increments PaymentPlan.installments_paid and advances next_due_date if the account is on a plan, (d) writes an AuditLog entry, (e) triggers a notification event (Module 13). All in one transaction, per the project's atomicity preference.
+2. **Payment posting:** when a payment is recorded — whether from a settled SaaSLogic transaction or entered at the counter — CIS: (a) reduces what the account owes, (b) clears Account.status from SUSPENDED if the balance is resolved, (c) writes an AuditLog entry, (d) triggers a notification event (Module 13). All in one transaction, per the project's atomicity preference.
+
+   **Nothing increments a counter on the plan.** The old (c) advanced
+   `PaymentPlan.installments_paid` and `next_due_date`; neither column
+   exists, because both are derivable and a counter would disagree with
+   the ledger the moment money reached a covered debt by another route —
+   a waiver, a write-off, or a customer paying more than the schedule
+   asked. How far a plan has got is computed from what is still open on
+   the debts it covers.
+
+   What allocation *does* do differently on a plan: a payment settles
+   **uncovered** debts first, and covered ones only once those are
+   clear. Without that, a customer on a plan pays their current bill,
+   the oldest-due rule puts it on the oldest arrears, the current bill
+   stays open, and rule 7a below then defaults the plan — of a customer
+   who paid exactly what they were asked to pay, on time. A payment
+   marked against a plan goes to that plan's debits only, and any excess
+   stays as a credit rather than spilling onto a debt the customer did
+   not nominate.
 
 3. **Payment allocation priority:** CIS allocates to charges in this priority order (configurable per tenant): (1) reconnection fees, (2) late fees and penalties, (3) oldest unpaid bills (FIFO by billing period). This is CIS logic now — previously it was described as rules communicated to SaaSLogic at integration setup.
 
@@ -191,7 +282,44 @@ All endpoints are planned for Phase 3.
 
 6. **Late fee / penalty application (built 2026-10-25):** the delinquency sweep raises it, not a job of its own. A tier that configures `fee_type` and `fee_amount` charges through `assessFee` inside the same transaction that writes its `DelinquencyAction`, citing the reason the tier names. It is a `FEE` ledger entry on our own ledger — not an AdhocCharge, and not submitted to SaaSLogic, because CIS is the system of record for what is owed and SaaSLogic is told an amount. A percentage tier charges principal, excluding entries whose reason is itself a penalty. Bozeman Req 145; `docs/specs/11-delinquency.md` has the rules and the reasoning.
 
-7. **Payment plan creation prerequisites:** A payment plan can only be created on an account with a positive balance. The total_balance at creation is the current balance at time of plan negotiation. Current-period bills accrue normally outside the plan unless the plan explicitly covers them.
+7. **Payment plan creation prerequisites:** A plan covers **named open
+   debits**, not "the balance": at least one, each still open, none
+   already in another plan, all on this account, and only one ACTIVE
+   plan per account. `total_balance` is the sum of those debits'
+   `open_amount`, frozen. Current-period bills accrue normally outside
+   the plan unless the operator ticks them in — a bill charge that is
+   not yet due opens **unticked**, so the proposed total is the
+   account's past-due balance and Illinois' rule that an agreement
+   includes the current bill is offered rather than assumed. A fee
+   raised on a covered bill opens ticked, because leaving it out would
+   suppress the bill while its own fee climbed the ladder days later.
+
+7a. **What breaks a plan.** Either test: instalments *missed* (date plus
+   `grace_days` passed) reaching `missed_before_default`, or — when
+   `current_bill_counts` — an uncovered debit going past due. **Late is
+   not missed:** an instalment inside grace leaves the plan ACTIVE with
+   suppression intact, which is the state a CSR screen shows as "1
+   payment behind". "Nothing uncovered" is not "an unpaid current bill":
+   an account with no uncovered debt has nothing for the second test to
+   look at and must not default because the question found no rows.
+
+7b. **Completion is derived, never counted.** A plan is COMPLETED when
+   every debit it covers is at `open_amount = 0`, whether that happened
+   by payment, waiver or write-off. Counting instalments received would
+   hold a plan open over debts that no longer exist — suppressing a
+   ladder with nothing to suppress and waiting for money that will never
+   arrive. Completion is settled before defaulting in the same pass,
+   because a plan cannot be both and the answer must not depend on
+   which question was asked first.
+
+7c. **Ending a plan touches no money.** Cancelling and defaulting write
+   no ledger entry, reverse none and move no debt: the covered debts
+   return to the ladder exactly as they were, **at their real ages**. A
+   consequence worth knowing: the next sweep then files every tier they
+   qualify for, so a customer can receive the tier-1 email, the tier-2
+   email and the tier-3 SMS in one night and then shut-off eligibility.
+   That is correct by the rules and unpleasant in the inbox; fewer
+   notices is the notification configuration's problem, not the plan's.
 
 8. **Payment plan default:** If an account misses `default_threshold` consecutive installments, the plan status transitions to DEFAULTED. CIS fires a domain event that ApptorFlow can use to trigger escalation (e.g., collections referral, shut-off workflow).
 

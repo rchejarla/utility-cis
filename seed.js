@@ -4,6 +4,7 @@ const { createRequire } = require("node:module");
 
 const { PrismaClient } = require("./packages/shared/src/generated/prisma");
 const { seedDelinquencyLadder } = require("./seed/delinquency-ladder.js");
+const { seedPaymentPlan } = require("./seed/payment-plan.js");
 
 /*
  * `@prisma/adapter-pg` and `pg` are declared by `packages/shared`, and
@@ -72,6 +73,15 @@ async function main() {
   // That is the half-provisioned tenant the one-transaction rule exists
   // to prevent, arrived at through the seed instead of a crash.
   if (p.userRole) await p.userRole.deleteMany({ where: { utilityId: UID } });
+  /*
+   * Plans before users. `payment_plan.approved_by` is a RESTRICT key to
+   * `cis_user`, so a plan left by the previous run blocks the user
+   * delete — and Prisma reports that with the same constraint name it
+   * would use on an insert, which reads as if the new plan could not be
+   * written. Child first within the pair, too.
+   */
+  if (p.paymentPlanDebit) await p.paymentPlanDebit.deleteMany({});
+  if (p.paymentPlan) await p.paymentPlan.deleteMany({});
   await p.cisUser.deleteMany({ where: { utilityId: UID } });
   await p.role.deleteMany({ where: { utilityId: UID } });
   await p.utilityModule.deleteMany({ where: { utilityId: UID } });
@@ -1981,6 +1991,32 @@ async function main() {
     });
   }
   console.log("  " + testUsers.length + " test users (admin)");
+
+  /*
+   * A payment plan the demo account is keeping to, so slice 1's two
+   * screens can be opened on a fresh database. After the test users,
+   * because `payment_plan.approved_by` is a real key to `cis_user` —
+   * a plan with no record of who agreed it is what the audit
+   * discipline here exists to prevent. Attributed to the CSR, who is
+   * who agrees one at the counter.
+   */
+  const plan = await seedPaymentPlan({
+    p,
+    utilityId: UID,
+    accountId: aArr[0].id,
+    approvedBy: testUsers[2].id,
+  });
+  if (plan.skipped) {
+    console.log("  [skip] payment plan: " + plan.skipped);
+  } else {
+    console.log(
+      "  payment plan on account " + aArr[0].accountNumber + ": $" +
+        plan.totalBalance + " over " + plan.installmentCount +
+        " monthly payments of $" + plan.installmentAmount +
+        ", $" + plan.downPayment + " down (paid)",
+    );
+    console.log("       covering " + plan.covered.join(", "));
+  }
 
   const portalUsers = [
     { id: "00000000-0000-4000-8000-0000000000a1", email: "jane.smith@example.com", name: "Jane Smith", customerIdx: 0 },

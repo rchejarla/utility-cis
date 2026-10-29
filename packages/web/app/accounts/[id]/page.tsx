@@ -13,6 +13,7 @@ import { ContactsTab } from "@/components/accounts/contacts-tab";
 import { BillingAddressesTab } from "@/components/accounts/billing-addresses-tab";
 import { BillsTab } from "@/components/bills/bills-tab";
 import { ArTab } from "@/components/ar/ar-tab";
+import { PlanPanel } from "@/components/payment-plans/plan-panel";
 import { AttachmentsTab } from "@/components/ui/attachments-tab";
 import { CustomFieldsSection } from "@/components/ui/custom-fields-section";
 import { ServiceRequestList } from "@/components/service-requests/request-list";
@@ -812,7 +813,19 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
         )}
 
         {activeTab === "bills" && <BillsTab accountId={id} canEdit={canEdit} />}
-        {activeTab === "ar" && <ArTab accountId={id} />}
+        {activeTab === "ar" && (
+          <>
+            {/*
+              * Above the ledger, because a plan is the answer to "why is
+              * nobody chasing this" that the rows below raise. A plan is
+              * one account's arrears, so it lives here rather than on a
+              * Collections screen — the CSR is already on the account
+              * when the customer phones.
+              */}
+            <PlanPanel accountId={id} />
+            <ArTab accountId={id} />
+          </>
+        )}
 
         {activeTab === "contacts" && (
           <ContactsTab

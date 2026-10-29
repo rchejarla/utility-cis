@@ -154,18 +154,91 @@ Runs hourly inside the BullMQ worker process (`packages/api/src/worker.ts`). The
 **Algorithm:**
 
 1. Query all accounts where `balance > 0` and `lastDueDate IS NOT NULL`.
-2. For each account, compute `daysPastDue = floor((today - lastDueDate) / 1 day)`. Since AR slice 1, `lastDueDate` is the oldest open debit's due date, so this is age of the oldest unpaid charge — not age of the latest bill. Covered by `delinquency-aging.integration.test.ts`.
+2. For each account, compute `daysPastDue` from **the oldest open debit no live payment plan covers** — not from `Account.lastDueDate`. Since AR slice 1 that column is the oldest open debit's due date full stop, which is AR's meaning and what the reconciliation proves; the ladder needs the oldest debt it is still allowed to chase. An account whose every open debit is covered appears in no bucket and files nothing. Payment plans slice 1, covered by `delinquency-aging.integration.test.ts`.
+
+   Two consequences. **`Account.lastDueDate` is never rewritten** by any of this — a ladder that moved it would make a plan silently change what the ledger says is owed since when. And this is **where the two-bucket behaviour comes from**: the plan holds the arrears while a bill issued next month is still chased on its own clock.
 3. Load active rules for this account's type, ordered by tier ascending.
 4. For each rule where `daysPastDue >= rule.daysPastDue` and `balance >= rule.minBalance`:
    - Check if a DelinquencyAction already exists for this (account, rule). If yes, skip (no duplicate actions).
    - If account is protected and action_type is `SHUT_OFF_ELIGIBLE` or `DISCONNECT`, skip.
    - If `rule.autoApply` is false, skip (requires manual escalation).
-   - Skip a rule whose `effective_date` is later than the account's `last_due_date`: it was not in force when the debt came due.
+   - Skip a rule whose `effective_date` is later than the date the account fell behind — the same **uncovered** clock step 2 used, not `last_due_date`. Judged against the column, a tier created 50 days ago would be held not-yet-in-force against a bill 40 days overdue, because a plan-covered debt from 100 days ago predated it.
    - If `rule.notificationEventType` is set, call `sendNotification()`.
    - Create the DelinquencyAction, then send the notice.
-5. Then, per account and in one transaction, the charging pass: for each open overdue non-penalty debit, and each charging tier whose `days_past_due` that debit has passed and which has not already charged it — if the tier replaces, reverse the ladder's own lower-tier fees **on that debit**; raise the fee through `assessFee` naming the debit in `assessed_on_id`; and link it to the tier's live action in `delinquency_action_fee`.
+5. Then, per account and in one transaction, the charging pass: for each open overdue non-penalty debit **that no live plan covers**, and each charging tier whose `days_past_due` that debit has passed and which has not already charged it — if the tier replaces, reverse the ladder's own lower-tier fees **on that debit**; raise the fee through `assessFee` naming the debit in `assessed_on_id`; and link it to the tier's live action in `delinquency_action_fee`.
 6. For actions where the linked notification has reached `status = SENT`, update the action to `COMPLETED`.
 7. `sweepReconnections(utilityId)`, then `sweepDelinquencyWorkOrders(utilityId)` — the field work, in that order.
+
+**The passes run in a fixed order, and the order has consequences.**
+`runDelinquencyPasses(utilityId, now)` (`services/delinquency-passes.ts`)
+owns it, called once by the worker:
+
+1. `sweepPaymentPlans` — **first**, because everything below reads plan
+   state. A plan that defaults tonight must be chaseable tonight, and a
+   plan that completes must stop suppressing before anything is charged.
+   Run it after the ladder and a broken plan's debts sit untouched for a
+   further day.
+2. The ladder (steps 1–6 above).
+3. `sweepReconnections`.
+4. `sweepDelinquencyWorkOrders`.
+
+Four passes in one job rather than four crons: separate schedules would
+race over the same account and the answer would depend on scheduling,
+which is the kind of bug that appears once a month at 03:00. The order
+lives in a function rather than inline in the job handler so it can be
+tested without standing up BullMQ and Redis —
+`payment-plan-default.integration.test.ts` asserts the consequence
+directly: reverse the first two and the fee count is zero.
+
+## Payment plans, and the two clocks they suppress
+
+Built 2026-10-29 with payment plans slice 1. Full account:
+`docs/superpowers/specs/2026-10-26-payment-plans-design.md`; the entity
+is spec 10.
+
+Suppression happens at **two** points, because the ladder has two
+clocks, and at no others:
+
+- **The charging pass** (step 5) excludes a debit covered by a plan
+  whose `status = 'ACTIVE'` and whose own `suppress_fees_while_kept` is
+  true. Charging a late fee on a debt the utility agreed to wait for is
+  the thing a plan exists to stop.
+- **The account clock** (step 2) ages from the oldest *uncovered* debit.
+
+**Both join through to `payment_plan.status`. Neither tests membership
+of `payment_plan_debit`.** Those rows persist after a plan ends — they
+are history and every key is RESTRICT — so a `NOT EXISTS` over the join
+table alone would suppress a debt **forever, including after default**,
+and would pass every test written while the plan is still running. Only
+`ACTIVE` suppresses: a DEFAULTED plan must expose its debts, which is
+the whole of what defaulting does, and a COMPLETED one has no open
+debits left to suppress.
+
+`suppress_fees_while_kept` is read **from the plan row**, frozen at
+agreement, not from the tenant's current settings. A tenant turning
+suppression off next month must not thereby start charging fees on plans
+agreed under the old policy.
+
+One thing worth knowing before reading that term as "charge fees on
+covered debts": it only has teeth while something **uncovered** keeps
+the account on the ladder. The account clock skips a fully covered
+account unconditionally, because suppressing the ladder is the plan's
+promise and this term is only about fees.
+
+**Agreeing a plan resolves the account's live actions** with
+`resolution_type = 'PAYMENT_PLAN'`, inside the same transaction that
+writes the plan. That is what the enum value has always meant; what
+changed is that the word now records a real agreement instead of
+standing in for one. Before slice 1 the queue's button wrote it and
+nothing else, so the account left the queue, nothing was suppressed, and
+the next sweep charged the same fees and raised the ladder again.
+
+**On default the covered debits return at their real ages**, so the next
+sweep files every tier they qualify for. A customer can receive the
+tier-1 email, the tier-2 email and the tier-3 SMS in one night and then
+shut-off eligibility. That is correct by the rules and unpleasant in the
+inbox; if a tenant wants fewer notices that is the notification
+configuration's problem, not the plan's.
 
 ## What charges, and why it is shaped this way
 
@@ -414,7 +487,7 @@ failing the tenant's whole pass over one account.
 
 - Table of accounts at SHUT_OFF_ELIGIBLE tier
 - Per row: account number, customer, balance, days past due, last notice date, protection status
-- Actions per row: Authorize Disconnect (creates DISCONNECT action), Waive (with reason), Mark Payment Plan
+- Actions per row: Authorize Disconnect (creates DISCONNECT action) and Waive, both on `delinquency:EDIT`; **Payment Plan** on `delinquency:CREATE`, which opens the agreement dialog. Until slice 1 that button posted `resolution_type = 'PAYMENT_PLAN'` and stopped nothing — no plan existed and the account came straight back. The resolve now happens server-side inside the transaction that writes the plan, so the two cannot half-happen.
 - Bulk authorize selected accounts
 - Protected accounts shown but with a shield indicator and disabled disconnect button
 

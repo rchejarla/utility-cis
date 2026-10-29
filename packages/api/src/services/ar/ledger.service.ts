@@ -63,6 +63,17 @@ export interface LedgerRow {
    */
   assessedOnBillNumber: string | null;
   assessedOnBillId: string | null;
+  /**
+   * This debt is covered by a plan the customer is still keeping to, so
+   * it is not being chased.
+   *
+   * Without it the ledger shows two overdue debts and gives no hint why
+   * nobody is pursuing them, and a CSR scanning the account has to open
+   * another screen to find out. Only an ACTIVE plan counts: the join
+   * rows survive a default, and a marker keyed on membership would say
+   * "in a payment plan" about a debt the ladder is chasing hardest.
+   */
+  inPaymentPlan: boolean;
   tender: string | null;
   memo: string | null;
   /** Set when something reverses THIS entry. */
@@ -185,6 +196,22 @@ export async function listLedger(
     where: { utilityId, accountId, ...OPEN_RECEIVABLE },
   });
 
+  // Which of these rows a live plan covers. One query for the page
+  // rather than a join on the row query, because the answer is about
+  // the plan's status rather than about the entry.
+  const covered = new Set(
+    (
+      await prisma.$queryRaw<Array<{ entry_id: string }>>`
+        SELECT pd.entry_id
+          FROM payment_plan_debit pd
+          JOIN payment_plan p
+            ON p.utility_id = pd.utility_id AND p.id = pd.plan_id
+         WHERE pd.utility_id = ${utilityId}::uuid
+           AND p.account_id = ${accountId}::uuid
+           AND p.status = 'ACTIVE'`
+    ).map((r) => r.entry_id),
+  );
+
   return {
     balance: account.balance.toFixed(2),
     depositHeld: account.depositAmount.toFixed(2),
@@ -208,6 +235,7 @@ export async function listLedger(
       memo: e.memo ?? null,
       reversedByEntryId: e.reversedBy[0]?.id ?? null,
       reversesEntryId: e.reversesId ?? null,
+      inPaymentPlan: covered.has(e.id),
     })),
   };
 }

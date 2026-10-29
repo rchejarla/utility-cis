@@ -75,6 +75,16 @@ export const PRESET_ROLES: readonly PresetRole[] = [
       containers: ["VIEW", "CREATE", "EDIT"],
       service_suspensions: ["VIEW", "CREATE", "EDIT"],
       service_requests: ["VIEW", "CREATE", "EDIT"],
+      // The counter is where a payment plan is agreed — the customer
+      // phones because they cannot pay, and the CSR is already on the
+      // account. VIEW reaches the shut-off queue and the account's plan
+      // panel, CREATE agrees one.
+      //
+      // Deliberately not EDIT: waiving a delinquency action, authorising
+      // a disconnect and tearing up a live plan are a supervisor's, and
+      // all three are gated on that verb. Someone who may offer an
+      // arrangement is not thereby someone who may cancel one.
+      delinquency: ["VIEW", "CREATE"],
       workflows: ["VIEW", "CREATE"],
       search: ["VIEW"],
       // Reading the history of the record in front of you is counter

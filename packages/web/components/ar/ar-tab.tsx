@@ -44,6 +44,8 @@ import { AdjustDialog, type AdjustMode } from "./adjust-dialog";
 
 export interface LedgerRow {
   id: string;
+  /** Covered by a plan the customer is keeping to — not to be chased. */
+  inPaymentPlan?: boolean;
   type: string;
   amount: string;
   openAmount: string;
@@ -463,6 +465,25 @@ export function ArTab({ accountId }: { accountId: string }) {
                   >
                     {row.billNumber ??
                       (row.assessedOnBillNumber ? `for ${row.assessedOnBillNumber}` : "—")}
+                    {/*
+                        Without this the ledger shows two overdue debts
+                        and no hint why nobody is chasing them. The
+                        server decides it, and only an ACTIVE plan
+                        counts — the join rows survive a default, and a
+                        marker keyed on membership would say this about
+                        the debt the ladder is chasing hardest.
+                      */}
+                    {row.inPaymentPlan && (
+                      <div
+                        style={{
+                          fontSize: "11px",
+                          fontStyle: "italic",
+                          color: "var(--accent-secondary)",
+                        }}
+                      >
+                        in a payment plan
+                      </div>
+                    )}
                   </td>
                   <td style={{ ...td, textAlign: "right", fontFamily: "monospace" }}>
                     {/* A credit is shown in brackets, the accounting

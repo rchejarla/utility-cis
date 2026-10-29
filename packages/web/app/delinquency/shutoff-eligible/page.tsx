@@ -7,6 +7,7 @@ import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { useToast } from "@/components/ui/toast";
 import { AccessDenied } from "@/components/ui/access-denied";
+import { AgreePlanDialog } from "@/components/payment-plans/agree-plan-dialog";
 
 interface ShutoffAction {
   id: string;
@@ -29,10 +30,12 @@ interface ShutoffAction {
 }
 
 export default function ShutoffEligiblePage() {
-  const { canView, canEdit } = usePermission("delinquency");
+  const { canView, canEdit, canCreate } = usePermission("delinquency");
   const { toast } = useToast();
   const [actions, setActions] = useState<ShutoffAction[]>([]);
   const [loading, setLoading] = useState(true);
+  /** The account a plan is being agreed for, or null. */
+  const [agreeingFor, setAgreeingFor] = useState<string | null>(null);
 
   const loadData = () => {
     apiClient
@@ -95,7 +98,7 @@ export default function ShutoffEligiblePage() {
                 <Th>Days Past Due</Th>
                 <Th>Protected</Th>
                 <Th>Since</Th>
-                {canEdit && <Th>Actions</Th>}
+                {(canEdit || canCreate) && <Th>Actions</Th>}
               </tr>
             </thead>
             <tbody>
@@ -117,20 +120,34 @@ export default function ShutoffEligiblePage() {
                     )}
                   </Td>
                   <Td><span style={{ fontSize: 12, color: "var(--text-muted)" }}>{new Date(a.createdAt).toLocaleDateString()}</span></Td>
-                  {canEdit && (
+                  {(canEdit || canCreate) && (
                     <Td>
                       <div style={{ display: "flex", gap: 6 }}>
-                        {!a.account.isProtected && (
+                        {canEdit && !a.account.isProtected && (
                           <SmallBtn color="var(--danger)" onClick={() => handleEscalate(a.account.id)}>
                             Authorize Disconnect
                           </SmallBtn>
                         )}
-                        <SmallBtn color="var(--warning)" onClick={() => handleResolve(a.account.id, "WAIVED")}>
-                          Waive
-                        </SmallBtn>
-                        <SmallBtn color="var(--info)" onClick={() => handleResolve(a.account.id, "PAYMENT_PLAN")}>
-                          Payment Plan
-                        </SmallBtn>
+                        {canEdit && (
+                          <SmallBtn color="var(--warning)" onClick={() => handleResolve(a.account.id, "WAIVED")}>
+                            Waive
+                          </SmallBtn>
+                        )}
+                        {/*
+                          * This button used to post `resolutionType:
+                          * PAYMENT_PLAN`, which wrote a word on the action
+                          * row and stopped nothing: no plan existed, nothing
+                          * was suppressed, and the next sweep charged the
+                          * same fees and re-raised the ladder. It opens the
+                          * agreement screen instead, and the resolve now
+                          * happens server-side inside the transaction that
+                          * writes the plan.
+                          */}
+                        {canCreate && (
+                          <SmallBtn color="var(--info)" onClick={() => setAgreeingFor(a.account.id)}>
+                            Payment Plan
+                          </SmallBtn>
+                        )}
                       </div>
                     </Td>
                   )}
@@ -139,6 +156,19 @@ export default function ShutoffEligiblePage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {agreeingFor && (
+        <AgreePlanDialog
+          accountId={agreeingFor}
+          onClose={() => setAgreeingFor(null)}
+          onAgreed={() => {
+            setAgreeingFor(null);
+            // The account leaves the queue because a plan exists, not
+            // because a word was written on a row.
+            loadData();
+          }}
+        />
       )}
     </div>
   );

@@ -391,15 +391,35 @@ Meters               ✓        □        □        □
 
 Seeded on tenant creation (`is_system: true`):
 
-| Role | customers | premises | meters | accounts | agreements | commodities | rate_schedules | billing_cycles | audit_log | attachments | theme | settings |
-|------|-----------|----------|--------|----------|------------|-------------|----------------|----------------|-----------|-------------|-------|----------|
-| **System Admin** | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | V | VCED | VCED | VCED |
-| **Utility Admin** | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | V | VCED | VCED | V |
-| **CSR** | VCE | VCE | V | VCE | VCE | V | V | V | V | VCE | — | — |
-| **Field Technician** | V | VE | VE | V | V | V | — | — | V | VCE | — | — |
-| **Read-Only** | V | V | V | V | V | V | V | V | V | V | — | — |
+| Role | customers | premises | meters | accounts | agreements | commodities | rate_schedules | billing_cycles | delinquency | audit_log | attachments | theme | settings |
+|------|-----------|----------|--------|----------|------------|-------------|----------------|----------------|-------------|-----------|-------------|-------|----------|
+| **System Admin** | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | V | VCED | VCED | VCED |
+| **Utility Admin** | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | V | VCED | VCED | V |
+| **CSR** | VCE | VCE | V | VCE | VCE | V | V | V | **VC** | V | VCE | — | — |
+| **Field Technician** | V | VE | VE | V | V | V | — | — | — | V | VCE | — | — |
+| **Read-Only** | V | V | V | V | V | V | V | V | V | V | V | — | — |
 
 V=VIEW, C=CREATE, E=EDIT, D=DELETE, —=no access
+
+The table is not the whole matrix — `everyModule()` gives both admin
+roles every module, and Read-Only gets VIEW on all but `settings`,
+`theme` and the portal. The columns shown are the ones where the roles
+differ meaningfully.
+
+**The CSR's `delinquency: VC` was added 2026-10-29**, with payment plans
+slice 1. It had **no `delinquency` key at all** — not VIEW — so the role
+the whole collections design is written for could not open
+`/delinquency/shutoff-eligible`, which refuses on `canView`. CREATE
+agrees a payment plan; EDIT is withheld, because waiving an action,
+authorising a disconnect and cancelling a live plan are a supervisor's
+and all three are gated on that verb.
+
+Two things follow from how presets work (see `presetDrift`): each
+utility owns its copies, so this reaches **newly provisioned tenants
+only** — an existing tenant's CSR role is unchanged until an operator
+edits it or the tenant is reseeded. And a tenant that wants plans to be
+supervisor-only removes the verb in the role editor; it is not a
+migration.
 
 ---
 
