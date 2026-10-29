@@ -259,6 +259,52 @@ function isDuplicateAction(e: unknown): boolean {
   );
 }
 
+/**
+ * The oldest open debit on each account that **no live plan covers**,
+ * by account id.
+ *
+ * This is the ladder's clock, and it is deliberately not
+ * `Account.lastDueDate`. That column is AR's: it means "the oldest open
+ * debit" full stop, the reconciliation proves it against the ledger, and
+ * the aging query reads it. Moving it to mean "the oldest uncovered
+ * debit" would make a plan silently change what the ledger says is owed
+ * since when, and break the proof.
+ *
+ * What falls out of reading it this way is the two-bucket behaviour the
+ * plan promises: the arrears are held, and a bill issued next month is
+ * still chased on its own clock. An account whose every open debit is
+ * covered appears in no bucket and is absent from this map.
+ *
+ * Joins through to `payment_plan.status` rather than testing membership
+ * of `payment_plan_debit` — those rows survive the plan, so a membership
+ * test would hold a debt off the ladder forever, including after
+ * default, while passing every test written against a running plan.
+ *
+ * The filters otherwise mirror `recomputeAccountCache`'s own
+ * `lastDueDate` query exactly (`open_amount > 0`, `due_date NOT NULL`),
+ * so the only difference between the two clocks is the plan.
+ */
+async function uncoveredOldestDueDates(utilityId: string): Promise<Map<string, Date>> {
+  const rows = await prisma.$queryRaw<Array<{ account_id: string; oldest: Date }>>`
+    SELECT e.account_id, MIN(e.due_date) AS oldest
+      FROM ledger_entry e
+     WHERE e.utility_id = ${utilityId}::uuid
+       AND e.open_amount > 0
+       AND e.due_date IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1
+           FROM payment_plan_debit pd
+           JOIN payment_plan p
+             ON p.utility_id = pd.utility_id AND p.id = pd.plan_id
+          WHERE pd.utility_id = e.utility_id
+            AND pd.entry_id = e.id
+            AND p.status = 'ACTIVE'
+       )
+     GROUP BY e.account_id`;
+
+  return new Map(rows.map((r) => [r.account_id, new Date(r.oldest)]));
+}
+
 export async function evaluateAll(utilityId: string): Promise<{
   accountsEvaluated: number;
   actionsCreated: number;
@@ -298,6 +344,8 @@ export async function evaluateAll(utilityId: string): Promise<{
     existingActions.map((a) => `${a.accountId}:${a.ruleId}`),
   );
 
+  const uncoveredOldest = await uncoveredOldestDueDates(utilityId);
+
   const now = new Date();
   let actionsCreated = 0;
   let feesRaised = 0;
@@ -305,8 +353,17 @@ export async function evaluateAll(utilityId: string): Promise<{
   for (const account of accounts) {
     if (!account.lastDueDate) continue;
 
+    /*
+     * The ladder ages from the oldest debt no live plan covers, not from
+     * `Account.lastDueDate`. An account with nothing uncovered is absent
+     * from the map: every debt it owes is one the utility agreed to wait
+     * for, so there is nothing to chase and no tier to file.
+     */
+    const agesFrom = uncoveredOldest.get(account.id);
+    if (!agesFrom) continue;
+
     const daysPastDue = Math.floor(
-      (now.getTime() - new Date(account.lastDueDate).getTime()) / (1000 * 60 * 60 * 24),
+      (now.getTime() - agesFrom.getTime()) / (1000 * 60 * 60 * 24),
     );
 
     if (daysPastDue <= 0) continue;
@@ -315,16 +372,23 @@ export async function evaluateAll(utilityId: string): Promise<{
 
     /*
      * A rule reaches only debt that came due while it was in force.
-     * Gated against `lastDueDate` and not against today, because the
-     * question is whether the tier existed when the account fell
-     * behind — otherwise configuring a tier this afternoon fires it at
-     * every account that has ever been past due, retroactively.
+     * Gated against the date the account fell behind and not against
+     * today, because the question is whether the tier existed then —
+     * otherwise configuring a tier this afternoon fires it at every
+     * account that has ever been past due, retroactively.
+     *
+     * That date is the uncovered clock, the same one the age came from.
+     * Reading `lastDueDate` here instead would judge a tier against a
+     * debt the plan has taken off the ladder: a tier created 50 days
+     * ago would be held not-yet-in-force against a bill that came due
+     * 40 days ago, because a covered debt from 100 days ago predated
+     * it.
      *
      * Both columns are DATE, so Prisma hands back UTC midnight on each
      * side and this is a day-level comparison. Equal dates pass: a tier
      * that came into force on the day the debt came due was in force.
      */
-    const dueMs = new Date(account.lastDueDate).getTime();
+    const dueMs = agesFrom.getTime();
 
     const applicableRules = rules.filter((r) => {
       if (r.accountType && r.accountType !== account.accountType) return false;

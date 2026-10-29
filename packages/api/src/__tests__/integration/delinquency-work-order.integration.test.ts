@@ -92,13 +92,38 @@ async function shutOffRule(opts: {
   );
 }
 
+/**
+ * An account made past due by a real debit, not by a written-in cache.
+ *
+ * The ladder ages from the oldest open debit no live plan covers, read
+ * from `ledger_entry`, so `balance` and `lastDueDate` written by hand
+ * with nothing behind them leave the account invisible to the sweep.
+ * `recomputeAccountCache` is the production path that maintains both.
+ */
 async function pastDue(opts: { utilityId?: string; accountId: string; days: number }) {
-  return seedAsPlatform(async () =>
-    prismaImports.prisma.account.update({
-      where: { id: opts.accountId },
-      data: { balance: "100.00", lastDueDate: daysAgo(opts.days) },
-    }),
-  );
+  const utilityId = opts.utilityId ?? TENANT_A;
+  await seedAsPlatform(async () => {
+    const reason = await prismaImports.prisma.ledgerReasonDef.findFirstOrThrow({
+      where: { utilityId, code: "OPENING_BALANCE" },
+      select: { id: true },
+    });
+    await prismaImports.prisma.ledgerEntry.create({
+      data: {
+        utilityId,
+        accountId: opts.accountId,
+        type: "ADJUSTMENT_DEBIT",
+        amount: "100.00",
+        openAmount: "100.00",
+        effectiveDate: daysAgo(opts.days + 30),
+        dueDate: daysAgo(opts.days),
+        reasonId: reason.id,
+      },
+    });
+  });
+  return runAsTenant(utilityId, async () => {
+    const { recomputeAccountCache } = await import("../../services/ar/posting.service.js");
+    return recomputeAccountCache(prismaImports.prisma, utilityId, opts.accountId);
+  });
 }
 
 async function requests(utilityId = TENANT_A) {
@@ -128,10 +153,17 @@ afterAll(async () => {
 beforeEach(async () => {
   await resetDb();
   await truncateTables(
-    "service_request, service_request_counter, service_request_type_def, sla, delinquency_action, delinquency_rule",
+    "payment_plan_debit, payment_plan, service_request, service_request_counter, service_request_type_def, sla, delinquency_action, delinquency_rule, ledger_application, ledger_entry, ledger_reason_def",
   );
   fixA = await makeTenantFixture(prismaImports.prisma, TENANT_A);
   fixB = await makeTenantFixture(prismaImports.prisma, TENANT_B);
+  // `pastDue` writes a real debit now, and an ADJUSTMENT_DEBIT needs a
+  // reason (`ledger_entry_reason_required`). Both tenants.
+  await seedAsPlatform(async () => {
+    const { seedDefaultReasons } = await import("../../services/ar/reason.service.js");
+    await seedDefaultReasons(TENANT_A, ACTOR, "Tester");
+    await seedDefaultReasons(TENANT_B, ACTOR, "Tester");
+  });
   await seedAsPlatform(async () =>
     prismaImports.prisma.serviceRequestTypeDef.createMany({
       data: [
@@ -300,7 +332,7 @@ describe("dispatching the shut-off work order", () => {
 
   it("does not reach another tenant's actions", async () => {
     await shutOffRule({ utilityId: TENANT_B });
-    await pastDue({ accountId: fixB.accountId, days: 50 });
+    await pastDue({ utilityId: TENANT_B, accountId: fixB.accountId, days: 50 });
     await evaluateAll(TENANT_B);
 
     const result = await sweepWorkOrders(TENANT_A);
@@ -494,13 +526,11 @@ describe("asking for the service back", () => {
     await pastDue({ accountId: fixA.accountId, days: 50 });
     await evaluateAll(TENANT_A);
     await seedAsPlatform(async () => {
-      const reason = await prismaImports.prisma.ledgerReasonDef.create({
-        data: {
-          utilityId: TENANT_A,
-          code: "BAD_DEBT",
-          label: "Written off — uncollectable",
-          appliesToType: "WRITE_OFF",
-        },
+      // BAD_DEBT is one of the seeded defaults, so take the seeded one
+      // rather than creating a second row on the same unique key.
+      const reason = await prismaImports.prisma.ledgerReasonDef.findFirstOrThrow({
+        where: { utilityId: TENANT_A, code: "BAD_DEBT" },
+        select: { id: true },
       });
       await prismaImports.prisma.ledgerEntry.create({
         data: {

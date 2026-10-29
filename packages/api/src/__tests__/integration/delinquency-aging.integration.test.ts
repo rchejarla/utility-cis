@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import { bootPostgres, seedAsPlatform, ensurePrincipal } from "./_effective-dating-fixtures.js";
 
 import { runAsTenant } from "../../lib/tenant-context.js";
 import type { Prisma } from "@utility-cis/shared/src/generated/prisma";
@@ -119,6 +119,11 @@ beforeAll(() =>
     },
   });
   debitReasonId = reason.id;
+
+  // `payment_plan.approved_by` is a real key to cis_user: a plan with no
+  // record of who agreed it is what the audit discipline forbids. This
+  // suite had no users at all, and beforeEach does not clear them.
+  await ensurePrincipal(prisma, utilityId, ACTOR);
 }), 180_000);
 
 afterAll(async () => {
@@ -135,6 +140,9 @@ beforeEach(() =>
   seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   await prisma.delinquencyAction.deleteMany({});
+  // Child first: payment_plan_debit -> ledger_entry is RESTRICT.
+  await prisma.paymentPlanDebit.deleteMany({});
+  await prisma.paymentPlan.deleteMany({});
   await prisma.ledgerEntry.deleteMany({});
   await prisma.account.update({
     where: { id: accountId },
@@ -233,5 +241,135 @@ describe("delinquency days-past-due, against the AR cache", () => {
       const result = await evaluateAll(utilityId);
       expect(result.actionsCreated).toBe(0);
   
+    }));
+});
+
+/** A plan covering the given debits, in the given state. */
+async function planOver(
+  entryIds: string[],
+  status: "ACTIVE" | "DEFAULTED" | "COMPLETED" | "CANCELLED" = "ACTIVE",
+) {
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    const plan = await prisma.paymentPlan.create({
+      data: {
+        utilityId,
+        accountId,
+        status,
+        totalBalance: "120.00",
+        downPayment: "30.00",
+        installmentAmount: "30.00",
+        installmentFrequency: "MONTHLY",
+        installmentCount: 3,
+        startDate: daysAgo(0),
+        approvedBy: ACTOR,
+        graceDays: 5,
+        missedBeforeDefault: 1,
+        partialInstallmentCounts: false,
+        currentBillCounts: true,
+        suppressFeesWhileKept: true,
+        assessSuppressedFeesOnDefault: false,
+      },
+      select: { id: true },
+    });
+    await prisma.paymentPlanDebit.createMany({
+      data: entryIds.map((entryId) => ({ utilityId, planId: plan.id, entryId })),
+    });
+    return plan;
+  });
+}
+
+/** Every open debit on the account, oldest first. */
+async function openDebitIds(): Promise<string[]> {
+  return seedAsPlatform(async () => {
+    const rows = await prismaImports.prisma.ledgerEntry.findMany({
+      where: { accountId, openAmount: { gt: 0 } },
+      orderBy: { dueDate: "asc" },
+      select: { id: true },
+    });
+    return rows.map((r) => r.id);
+  });
+}
+
+/**
+ * The account-level clock, which is the harder half of suppression.
+ *
+ * `Account.lastDueDate` is AR's and means "the oldest open debit" full
+ * stop — reconciliation and the aging query read it, so it is not
+ * redefined here. The ladder instead ages from the oldest open debit
+ * *not covered by a live plan*, which is what gives the two-bucket
+ * behaviour the plan promises: the arrears are held, the new bill is
+ * still chased on its own clock.
+ */
+describe("the account clock, against a payment plan", () => {
+  it("files no action when the only overdue debt is covered", () =>
+    seedAsPlatform(async () => {
+      await openDebit("120.00", 100);
+      await asTenantTx((tx) => posting.recomputeAccountCache(tx, utilityId, accountId));
+      await planOver(await openDebitIds());
+
+      const result = await evaluateAll(utilityId);
+
+      expect(result.actionsCreated).toBe(0);
+    }));
+
+  it("leaves Account.lastDueDate alone, which AR owns", () =>
+    seedAsPlatform(async () => {
+      // Suppression must not be implemented by moving this column: the
+      // AR reconciliation proves it against the ledger, and a ladder
+      // that rewrote it would make that proof fail.
+      await openDebit("120.00", 100);
+      await asTenantTx((tx) => posting.recomputeAccountCache(tx, utilityId, accountId));
+      await planOver(await openDebitIds());
+
+      await evaluateAll(utilityId);
+
+      const account = await prismaImports.prisma.account.findUniqueOrThrow({
+        where: { id: accountId },
+      });
+      expect(account.lastDueDate?.toISOString().slice(0, 10)).toBe(
+        daysAgo(100).toISOString().slice(0, 10),
+      );
+    }));
+
+  it("ages from the uncovered debt when there is one", () =>
+    seedAsPlatform(async () => {
+      // The two-bucket model: the plan holds the arrears, the new bill
+      // is chased on its own clock. 100 days covered, 40 days not — the
+      // action must read 40, not 100.
+      await openDebit("120.00", 100);
+      await openDebit("40.00", 40);
+      await asTenantTx((tx) => posting.recomputeAccountCache(tx, utilityId, accountId));
+      const ids = await openDebitIds();
+      await planOver([ids[0]!]);
+
+      const result = await evaluateAll(utilityId);
+
+      expect(result.actionsCreated).toBe(1);
+      const action = await prismaImports.prisma.delinquencyAction.findFirstOrThrow({
+        where: { accountId },
+      });
+      expect(action.daysPastDueAtAction).toBe(40);
+    }));
+
+  it("sees a defaulted plan's debits again, at their real ages", () =>
+    seedAsPlatform(async () => {
+      /*
+       * The join rows survive the default, so a membership test would
+       * hide these forever — and would look correct in both tests
+       * above, where the plan is still running. 100 days, not 0 and not
+       * "no action".
+       */
+      await openDebit("120.00", 100);
+      await asTenantTx((tx) => posting.recomputeAccountCache(tx, utilityId, accountId));
+      await planOver(await openDebitIds(), "DEFAULTED");
+
+      const result = await evaluateAll(utilityId);
+
+      expect(result.actionsCreated).toBe(1);
+      const action = await prismaImports.prisma.delinquencyAction.findFirstOrThrow({
+        where: { accountId },
+      });
+      expect(action.daysPastDueAtAction).toBe(100);
     }));
 });

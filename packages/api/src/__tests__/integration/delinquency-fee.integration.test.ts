@@ -998,16 +998,35 @@ describe("a debt covered by a payment plan", () => {
   });
 
   it("is charged when the plan itself says not to suppress fees", async () => {
-    // Read from the plan row, not from today's settings: the term was
-    // frozen when the customer agreed it.
+    /*
+     * Read from the plan row, not from today's settings: the term was
+     * frozen when the customer agreed it.
+     *
+     * The uncovered bill is load-bearing. `suppressFeesWhileKept: false`
+     * only has teeth while something keeps the account on the ladder at
+     * all: the account clock skips an account whose every open debt is
+     * covered by a live plan, and it does that unconditionally, because
+     * suppressing the *ladder* is the plan's promise and this term is
+     * only about fees. So a plan covering everything charges nothing
+     * whatever this term says — there is no pass to charge on.
+     */
     await ruleWithFee({ feeAmount: "25.00" });
-    await pastDue({ balance: "100.00", days: 40 });
+    await pastDueBills([
+      { amount: "100.00", days: 40 },
+      { amount: "60.00", days: 35 },
+    ]);
     const debits = await chargeableDebits();
+    expect(debits).toHaveLength(2);
     await planOver([debits[0]!.id], { suppress: false });
 
     await evaluateAll(TENANT_A);
 
-    expect(await feeEntries()).toHaveLength(1);
+    // Both: the covered one because its plan declines to suppress, the
+    // uncovered one as normal.
+    const fees = await feeEntries();
+    expect(fees.map((f) => f.assessedOnId).sort()).toEqual(
+      [debits[0]!.id, debits[1]!.id].sort(),
+    );
   });
 
   it("is not charged when a cancelled plan has been replaced by a live one", async () => {

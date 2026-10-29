@@ -7,6 +7,7 @@ import {
   seedAsPlatform,
   endAdminPool,
   truncateTables,
+  ACTOR,
   TENANT_A,
   type TenantFixture,
 } from "./_effective-dating-fixtures.js";
@@ -82,14 +83,41 @@ async function rule(opts: { tier: number; daysPastDue: number; effectiveDate?: D
   );
 }
 
-/** The fixture account, made past due by `days` with `balance` owing. */
+/**
+ * The fixture account, made past due by `days` with `balance` owing.
+ *
+ * A real open debit, and the cache recomputed from it by the production
+ * path. The ladder ages from the oldest open debit no live plan covers,
+ * read from `ledger_entry` — so an account whose `balance` and
+ * `lastDueDate` were written by hand with nothing behind them is now
+ * invisible to the sweep, exactly as an account with no debts should
+ * be. `recomputeAccountCache` doing the arithmetic is also what keeps
+ * the fixture honest: the cache and the ledger cannot drift apart here
+ * in a way the real system never would.
+ */
 async function pastDue(opts: { balance: string; days: number }) {
-  return seedAsPlatform(async () =>
-    prismaImports.prisma.account.update({
-      where: { id: fix.accountId },
-      data: { balance: opts.balance, lastDueDate: daysAgo(opts.days) },
-    }),
-  );
+  await seedAsPlatform(async () => {
+    const reason = await prismaImports.prisma.ledgerReasonDef.findFirstOrThrow({
+      where: { utilityId: TENANT_A, code: "OPENING_BALANCE" },
+      select: { id: true },
+    });
+    await prismaImports.prisma.ledgerEntry.create({
+      data: {
+        utilityId: TENANT_A,
+        accountId: fix.accountId,
+        type: "ADJUSTMENT_DEBIT",
+        amount: opts.balance,
+        openAmount: opts.balance,
+        effectiveDate: daysAgo(opts.days + 30),
+        dueDate: daysAgo(opts.days),
+        reasonId: reason.id,
+      },
+    });
+  });
+  return runAsTenant(TENANT_A, async () => {
+    const { recomputeAccountCache } = await import("../../services/ar/posting.service.js");
+    return recomputeAccountCache(prismaImports.prisma, TENANT_A, fix.accountId);
+  });
 }
 
 async function countActions(): Promise<number> {
@@ -147,8 +175,17 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetDb();
-  await truncateTables("delinquency_action, delinquency_rule");
+  // payment_plan_debit before ledger_entry: the key is RESTRICT.
+  await truncateTables(
+    "payment_plan_debit, payment_plan, delinquency_action, delinquency_rule, ledger_application, ledger_entry, ledger_reason_def",
+  );
   fix = await makeTenantFixture(prismaImports.prisma, TENANT_A);
+  // `pastDue` writes a real debit now, and an ADJUSTMENT_DEBIT needs a
+  // reason (`ledger_entry_reason_required`).
+  await seedAsPlatform(async () => {
+    const { seedDefaultReasons } = await import("../../services/ar/reason.service.js");
+    await seedDefaultReasons(TENANT_A, ACTOR, "Tester");
+  });
 });
 
 describe("one live action per tier", () => {
