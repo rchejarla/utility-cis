@@ -42,6 +42,24 @@ export interface ChargeableDebit {
  * `recomputeAccountCache` excludes it from the balance: a deposit is
  * money the utility holds, not money the customer owes.
  *
+ * **A debt covered by a live payment plan is excluded.** Charging a late
+ * fee on a debt the utility agreed to wait for is the thing a plan
+ * exists to stop.
+ *
+ * The predicate joins through to `payment_plan` and reads its status; it
+ * does **not** test membership of `payment_plan_debit`. Those rows
+ * survive the plan — they are history, and the key is RESTRICT — so a
+ * `NOT EXISTS` over the join table alone would suppress a debt forever,
+ * including after default, *and would pass every test written while the
+ * plan is still running*. Only `ACTIVE` suppresses: a DEFAULTED plan
+ * must expose its debts, which is the whole of what defaulting does,
+ * and a COMPLETED one has no open debits left to suppress.
+ *
+ * `suppress_fees_while_kept` is read from the plan row rather than from
+ * `resolvePlanTerms`, because the term was frozen when the customer
+ * agreed it. A tenant turning suppression off next month must not
+ * thereby start charging fees on plans agreed under the old policy.
+ *
  * **Locks the account** first, so the figures a fee is computed from are
  * the figures that are still true when it is written. Re-locking inside
  * `assessFee` afterwards costs nothing.
@@ -71,6 +89,16 @@ export async function chargeableDebits(
        AND e.due_date < ${now}::timestamptz
        AND e.type <> 'DEPOSIT'
        AND COALESCE(r.is_penalty, false) = false
+       AND NOT EXISTS (
+         SELECT 1
+           FROM payment_plan_debit pd
+           JOIN payment_plan p
+             ON p.utility_id = pd.utility_id AND p.id = pd.plan_id
+          WHERE pd.utility_id = e.utility_id
+            AND pd.entry_id = e.id
+            AND p.status = 'ACTIVE'
+            AND p.suppress_fees_while_kept
+       )
      ORDER BY e.due_date ASC, e.id ASC`;
 
   return rows.map((row) => ({

@@ -342,7 +342,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await resetDb();
   await truncateTables(
-    "delinquency_action, delinquency_rule, ledger_application, ledger_entry, ledger_reason_def, service_request, service_request_counter, service_request_type_def, user_role, cis_user, role, utility_module",
+    "payment_plan_debit, payment_plan, delinquency_action, delinquency_rule, ledger_application, ledger_entry, ledger_reason_def, service_request, service_request_counter, service_request_type_def, user_role, cis_user, role, utility_module",
   );
   fix = await makeTenantFixture(prismaImports.prisma, TENANT_A);
   await ensurePrincipal(prismaImports.prisma, TENANT_A);
@@ -910,6 +910,118 @@ describe("configuring the fee", () => {
 
     expect(res.statusCode, res.body).toBe(201);
     expect(JSON.parse(res.body).feeType).toBeNull();
+  });
+});
+
+/**
+ * A plan over the given debits, in the given state.
+ *
+ * Written directly rather than through `createPaymentPlan`, so a
+ * DEFAULTED plan can exist without having to drive a sweep to get
+ * there — and so the suppression predicate is tested against the row
+ * shape rather than against the creation path.
+ */
+async function planOver(
+  entryIds: string[],
+  opts: { status?: "ACTIVE" | "DEFAULTED" | "COMPLETED" | "CANCELLED"; suppress?: boolean } = {},
+) {
+  return seedAsPlatform(async () => {
+    const plan = await prismaImports.prisma.paymentPlan.create({
+      data: {
+        utilityId: TENANT_A,
+        accountId: fix.accountId,
+        status: opts.status ?? "ACTIVE",
+        totalBalance: "100.00",
+        downPayment: "25.00",
+        installmentAmount: "25.00",
+        installmentFrequency: "MONTHLY",
+        installmentCount: 3,
+        startDate: daysAgo(0),
+        approvedBy: ACTOR,
+        graceDays: 5,
+        missedBeforeDefault: 1,
+        partialInstallmentCounts: false,
+        currentBillCounts: true,
+        suppressFeesWhileKept: opts.suppress ?? true,
+        assessSuppressedFeesOnDefault: false,
+      },
+      select: { id: true },
+    });
+    await prismaImports.prisma.paymentPlanDebit.createMany({
+      data: entryIds.map((entryId) => ({ utilityId: TENANT_A, planId: plan.id, entryId })),
+    });
+    return plan;
+  });
+}
+
+describe("a debt covered by a payment plan", () => {
+  /*
+   * The point of a plan. Charging a late fee on a debt the utility
+   * agreed to wait for is what suppression exists to stop.
+   */
+  it("is charged no fee, while an uncovered debt beside it still is", async () => {
+    await ruleWithFee({ feeAmount: "25.00" });
+    await pastDueBills([
+      { amount: "100.00", days: 40 },
+      { amount: "60.00", days: 20 },
+    ]);
+    const debits = await chargeableDebits();
+    expect(debits).toHaveLength(2);
+    await planOver([debits[0]!.id]);
+
+    await evaluateAll(TENANT_A);
+
+    // One fee, for the uncovered bill only.
+    const fees = await feeEntries();
+    expect(fees).toHaveLength(1);
+    expect(fees[0]!.assessedOnId).toBe(debits[1]!.id);
+  });
+
+  it("is charged again once the plan has defaulted", async () => {
+    /*
+     * The trap this task exists to avoid. `payment_plan_debit` rows
+     * survive the plan — they are history and the key is RESTRICT — so
+     * a `NOT EXISTS` over the join table alone would suppress this
+     * debt forever, and would pass the test above and every other test
+     * written while a plan is still running.
+     */
+    await ruleWithFee({ feeAmount: "25.00" });
+    await pastDue({ balance: "100.00", days: 40 });
+    const debits = await chargeableDebits();
+    await planOver([debits[0]!.id], { status: "DEFAULTED" });
+
+    await evaluateAll(TENANT_A);
+
+    const fees = await feeEntries();
+    expect(fees).toHaveLength(1);
+    expect(fees[0]!.assessedOnId).toBe(debits[0]!.id);
+  });
+
+  it("is charged when the plan itself says not to suppress fees", async () => {
+    // Read from the plan row, not from today's settings: the term was
+    // frozen when the customer agreed it.
+    await ruleWithFee({ feeAmount: "25.00" });
+    await pastDue({ balance: "100.00", days: 40 });
+    const debits = await chargeableDebits();
+    await planOver([debits[0]!.id], { suppress: false });
+
+    await evaluateAll(TENANT_A);
+
+    expect(await feeEntries()).toHaveLength(1);
+  });
+
+  it("is not charged when a cancelled plan has been replaced by a live one", async () => {
+    // Two plans in the history, one ACTIVE. The predicate has to look
+    // for any live cover, not at the newest row or at a single join.
+    await ruleWithFee({ feeAmount: "25.00" });
+    await pastDue({ balance: "100.00", days: 40 });
+    const debits = await chargeableDebits();
+    await planOver([], { status: "CANCELLED" });
+    await planOver([debits[0]!.id]);
+
+    await evaluateAll(TENANT_A);
+
+    expect(await feeEntries()).toHaveLength(0);
   });
 });
 
