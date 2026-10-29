@@ -36,10 +36,17 @@ export async function resolvePlanTerms(utilityId: string): Promise<PaymentPlanTe
 }
 
 /**
- * The pure half, so the fallback behaviour is testable without a
- * database and reusable by the route that saves the namespace.
+ * The defensive read, separated from the query so the three fallback
+ * cases are one block rather than being tangled with fetching.
+ *
+ * Not exported. It was, on the argument that it made the fallbacks
+ * "testable without a database and reusable by the route that saves the
+ * namespace" — and neither held: the terms route never called it, and
+ * the tests reach these branches through `resolvePlanTerms` with Prisma
+ * mocked. An export with no caller is a claim about who needs this that
+ * nothing backs up.
  */
-export function planTermsOf(settings: unknown): PaymentPlanTerms {
+function planTermsOf(settings: unknown): PaymentPlanTerms {
   if (!settings || typeof settings !== "object" || !("paymentPlans" in settings)) {
     return DEFAULT_PLAN_TERMS;
   }

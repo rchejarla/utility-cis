@@ -69,10 +69,16 @@ function compareDebits(a: DebitRow, b: DebitRow): number {
 /**
  * The debits a credit may reach, in the order it should reach them.
  *
- * Covered-ness is a **leading** sort key, applied before §6.3 rather
- * than instead of it: each partition is sorted by the ordinary
- * comparator, so a fee still outranks an adjustment among the uncovered
- * debts.
+ * Covered-ness **partitions** the candidates, and §6.3 then orders
+ * within each partition rather than being replaced by it: the uncovered
+ * debts come first and the covered ones last, each group sorted by the
+ * ordinary comparator, so a fee still outranks an adjustment among the
+ * uncovered debts.
+ *
+ * Said as a partition rather than as a "leading sort key", because that
+ * phrase reads as though covered debts sort to the front. They take
+ * precedence in the decision and go to the *back* of the queue, and the
+ * two senses pull opposite ways.
  *
  * Joins through to `payment_plan.status` rather than testing membership
  * of `payment_plan_debit`, for the reason the suppression predicates do:

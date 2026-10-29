@@ -64,14 +64,20 @@ export interface LedgerRow {
   assessedOnBillNumber: string | null;
   assessedOnBillId: string | null;
   /**
-   * This debt is covered by a plan the customer is still keeping to, so
-   * it is not being chased.
+   * This debt is covered by a plan the customer is still keeping to.
    *
    * Without it the ledger shows two overdue debts and gives no hint why
-   * nobody is pursuing them, and a CSR scanning the account has to open
-   * another screen to find out. Only an ACTIVE plan counts: the join
-   * rows survive a default, and a marker keyed on membership would say
-   * "in a payment plan" about a debt the ladder is chasing hardest.
+   * they are being treated differently from the rest, and a CSR scanning
+   * the account has to open another screen to find out. Only an ACTIVE
+   * plan counts: the join rows survive a default, and a marker keyed on
+   * membership would say "in a payment plan" about a debt the ladder is
+   * chasing hardest.
+   *
+   * **It does not mean no fee will be charged.** Fee suppression is a
+   * separate term, `suppress_fees_while_kept`, frozen per plan — true by
+   * default, but a tenant may agree plans that keep charging. So this
+   * answers "is this debt in a plan", which is a fact about the debt,
+   * and not "is anyone chasing it", which depends on that term.
    */
   inPaymentPlan: boolean;
   tender: string | null;

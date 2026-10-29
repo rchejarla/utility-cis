@@ -467,11 +467,18 @@ export function ArTab({ accountId }: { accountId: string }) {
                       (row.assessedOnBillNumber ? `for ${row.assessedOnBillNumber}` : "—")}
                     {/*
                         Without this the ledger shows two overdue debts
-                        and no hint why nobody is chasing them. The
-                        server decides it, and only an ACTIVE plan
-                        counts — the join rows survive a default, and a
-                        marker keyed on membership would say this about
-                        the debt the ladder is chasing hardest.
+                        and no hint why they are treated differently
+                        from the rest. The server decides it, and only
+                        an ACTIVE plan counts — the join rows survive a
+                        default, and a marker keyed on membership would
+                        say this about the debt the ladder is chasing
+                        hardest.
+
+                        The wording stops at "in a payment plan" on
+                        purpose. Whether fees are suppressed is a
+                        separate per-plan term, so a badge claiming the
+                        debt is not being chased would be wrong for a
+                        tenant that agrees plans which keep charging.
                       */}
                     {row.inPaymentPlan && (
                       <div
