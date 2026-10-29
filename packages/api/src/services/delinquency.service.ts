@@ -493,27 +493,40 @@ export async function evaluateDelinquencyForTenant(
   return result;
 }
 
+/**
+ * Take the account off the ladder.
+ *
+ * `client` exists so agreeing a payment plan can resolve the account's
+ * actions inside the same transaction that writes the plan. The two
+ * must not be able to half-happen: a plan with the account still in the
+ * shut-off queue is what the `PAYMENT_PLAN` button produced before
+ * plans existed, and an account resolved with no plan is worse — the
+ * ladder forgets it and nothing suppresses anything.
+ *
+ * Defaults to `prisma`, so the route caller is unchanged.
+ */
 export async function resolveAccount(
   utilityId: string,
   accountId: string,
   resolutionType: string,
   notes?: string,
   userId?: string,
+  client: TxClient = prisma,
 ): Promise<number> {
   const now = new Date();
 
-  const pendingActions = await prisma.delinquencyAction.updateMany({
+  const pendingActions = await client.delinquencyAction.updateMany({
     where: { utilityId, accountId, status: "PENDING" },
     data: { status: "CANCELLED", resolvedAt: now, resolutionType, notes },
   });
 
-  const latestActive = await prisma.delinquencyAction.findFirst({
+  const latestActive = await client.delinquencyAction.findFirst({
     where: { utilityId, accountId, status: { in: ["COMPLETED", "PENDING"] } },
     orderBy: { tier: "desc" },
   });
 
   if (latestActive) {
-    await prisma.delinquencyAction.update({
+    await client.delinquencyAction.update({
       where: { id: latestActive.id },
       data: { status: "RESOLVED", resolvedAt: now, resolutionType, notes },
     });

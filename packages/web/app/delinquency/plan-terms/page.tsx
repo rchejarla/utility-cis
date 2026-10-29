@@ -166,6 +166,19 @@ export default function PlanTermsPage() {
           </span>{" "}
           instalments.
         </Sentence>
+        <Sentence>
+          The first payment may be set up to{" "}
+          <Num
+            termKey="maxStartDateDays"
+            label="Days ahead the first payment may be set"
+            value={terms.maxStartDateDays}
+            min={0}
+            max={365}
+            onChange={(v) => set("maxStartDateDays", v)}
+            disabled={!canEdit}
+          />{" "}
+          days ahead.
+        </Sentence>
       </Group>
 
       <Group title="When a plan is broken">

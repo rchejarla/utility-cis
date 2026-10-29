@@ -73,6 +73,16 @@ export const EVENT_TYPES = {
   LEDGER_REASON_CREATED: "ledger_reason.created",
   LEDGER_DEPOSIT_RECORDED: "ledger_deposit.recorded",
   LEDGER_REFUND_ISSUED: "ledger_refund.issued",
+  /**
+   * A deferred payment agreement. Not a ledger event: agreeing one
+   * posts no entry and moves no money — it changes when the arrears
+   * are chased, which is why the audit row is the only record that an
+   * agreement happened at all.
+   */
+  PAYMENT_PLAN_AGREED: "payment_plan.agreed",
+  PAYMENT_PLAN_CANCELLED: "payment_plan.cancelled",
+  PAYMENT_PLAN_COMPLETED: "payment_plan.completed",
+  PAYMENT_PLAN_DEFAULTED: "payment_plan.defaulted",
   CUSTOMER_CREATED: "customer.created",
   CUSTOMER_UPDATED: "customer.updated",
   CONTACT_CREATED: "contact.created",

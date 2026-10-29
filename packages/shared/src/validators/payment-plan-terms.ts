@@ -54,6 +54,21 @@ export const PaymentPlanTermsSchema = z
     frequency: PaymentPlanFrequencySchema.default("MONTHLY"),
 
     /**
+     * How far ahead the first payment may be set.
+     *
+     * Arkansas requires the down payment by the close of the third
+     * business day, which is a bound on `start_date` rather than a
+     * second clock — the down payment is the first instalment and is
+     * judged by `graceDays` like any other.
+     *
+     * Three days is the strictest rule the design found, so a tenant
+     * with more latitude raises it and none is silently over the line.
+     * A refused start date says so at the control, which is visible;
+     * the alternative default would be silently non-compliant.
+     */
+    maxStartDateDays: z.number().int().min(0).max(365).default(3),
+
+    /**
      * Days after an instalment's date before it counts as missed.
      * Illinois' test allows until the second day after the due date,
      * the shortest the design found; 5 is the customer-safe side of it,

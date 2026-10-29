@@ -85,6 +85,11 @@ function toJsonInput(value: unknown): Prisma.InputJsonValue | typeof Prisma.Json
 
 function mapEventTypeToAction(eventType: string): "CREATE" | "UPDATE" | "DELETE" {
   if (eventType.endsWith(".created")) return "CREATE";
+  // Agreeing a payment plan brings one into existence. The domain word
+  // is "agreed" because that is what happened between two people, and
+  // renaming the event to `.created` to satisfy this mapper would put
+  // the vocabulary the wrong way round.
+  if (eventType.endsWith(".agreed")) return "CREATE";
   if (eventType.endsWith(".revised")) return "UPDATE";
   if (eventType.endsWith(".deleted")) return "DELETE";
   return "UPDATE";
