@@ -76,6 +76,9 @@ beforeEach(() =>
   seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   await prisma.ledgerApplication.deleteMany({});
+  // Child first: payment_plan_debit -> ledger_entry is RESTRICT.
+  await prisma.paymentPlanDebit.deleteMany({});
+  await prisma.paymentPlan.deleteMany({});
   await prisma.ledgerEntry.deleteMany({});
   await prisma.account.update({
     where: { id: accountId },
@@ -445,4 +448,191 @@ describe("applyCreditsToDebit", () => {
       expect(made).toEqual([]);
   
     }));
+});
+
+/** A live plan covering the given debits. Returns its id. */
+async function planOver(entryIds: string[], status: "ACTIVE" | "DEFAULTED" = "ACTIVE") {
+  return seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    await prisma.cisUser.upsert({
+      where: { id: ACTOR },
+      update: {},
+      create: {
+        id: ACTOR,
+        utility: { connect: { id: utilityId } },
+        email: "alloc-fixture@example.test",
+        name: "Allocation fixture",
+      },
+    });
+    const plan = await prisma.paymentPlan.create({
+      data: {
+        utilityId,
+        accountId,
+        status,
+        totalBalance: "100.00",
+        downPayment: "25.00",
+        installmentAmount: "25.00",
+        installmentFrequency: "MONTHLY",
+        installmentCount: 3,
+        startDate: new Date("2026-06-01"),
+        approvedBy: ACTOR,
+        graceDays: 5,
+        missedBeforeDefault: 1,
+        partialInstallmentCounts: false,
+        currentBillCounts: true,
+        suppressFeesWhileKept: true,
+        assessSuppressedFeesOnDefault: false,
+      },
+      select: { id: true },
+    });
+    await prisma.paymentPlanDebit.createMany({
+      data: entryIds.map((entryId) => ({ utilityId, planId: plan.id, entryId })),
+    });
+    return plan.id;
+  });
+}
+
+/**
+ * Where a payment goes when a plan covers some of the arrears.
+ *
+ * The flaw this exists for: a customer on a plan pays their current
+ * bill, the allocator puts it on the oldest arrears because that is the
+ * §6.3 order, the current bill stays open, and the plan then defaults on
+ * the "current bill unpaid" test — of a customer who paid everything
+ * they were asked to pay, on time.
+ *
+ * Both modes are the existing allocator with the candidate set
+ * filtered. The oldest-due rule, the type-class ranking and the
+ * determinism are unchanged within each set.
+ */
+describe("applyCreditToDebits, against a payment plan", () => {
+  it("settles the current bill before the arrears a plan covers", async () => {
+    // The arrears are older, so the unmodified §6.3 order would take
+    // them first.
+    const arrears = await debit("ADJUSTMENT_DEBIT", "100.00", "2026-01-15");
+    const current = await debit("ADJUSTMENT_DEBIT", "40.00", "2026-06-14");
+    await planOver([arrears]);
+    const c = await credit("40.00");
+
+    await asTenantTx((tx) => allocation.applyCreditToDebits(tx, utilityId, accountId, c));
+
+    expect(await openOf(current)).toBe("0.00");
+    expect(await openOf(arrears)).toBe("100.00");
+  });
+
+  it("reaches covered debits once nothing uncovered is left", async () => {
+    // Covered debts are not untouchable — they are last. A payment
+    // bigger than the current bill still pays the arrears down, which
+    // is what an overpayment should do.
+    const arrears = await debit("ADJUSTMENT_DEBIT", "100.00", "2026-01-15");
+    const current = await debit("ADJUSTMENT_DEBIT", "40.00", "2026-06-14");
+    await planOver([arrears]);
+    const c = await credit("60.00");
+
+    await asTenantTx((tx) => allocation.applyCreditToDebits(tx, utilityId, accountId, c));
+
+    expect(await openOf(current)).toBe("0.00");
+    expect(await openOf(arrears)).toBe("80.00");
+  });
+
+  it("sends a payment marked against a plan to that plan's debits only", async () => {
+    /*
+     * An instalment is money for the arrears. It must not be absorbed
+     * by the current bill, or the plan would never progress.
+     *
+     * The covered debt is deliberately the *newer* of the two. With the
+     * covered one oldest this test passes without the filter at all —
+     * the default §6.3 order would reach it first anyway — which is
+     * what it did when first written.
+     */
+    const current = await debit("ADJUSTMENT_DEBIT", "40.00", "2026-01-15");
+    const arrears = await debit("ADJUSTMENT_DEBIT", "100.00", "2026-06-14");
+    const planId = await planOver([arrears]);
+    const c = await credit("25.00");
+
+    await asTenantTx((tx) =>
+      allocation.applyCreditToDebits(tx, utilityId, accountId, c, { paymentPlanId: planId }),
+    );
+
+    expect(await openOf(arrears)).toBe("75.00");
+    expect(await openOf(current)).toBe("40.00");
+  });
+
+  it("leaves an instalment overpayment open rather than spilling onto the current bill", async () => {
+    // $150 against $100 of covered arrears. The plan is satisfied and
+    // $50 stays as a credit balance, which the next ordinary payment
+    // path will allocate. Spilling would make an instalment pay a debt
+    // the customer did not nominate.
+    const current = await debit("ADJUSTMENT_DEBIT", "40.00", "2026-01-15");
+    const arrears = await debit("ADJUSTMENT_DEBIT", "100.00", "2026-06-14");
+    const planId = await planOver([arrears]);
+    const c = await credit("150.00");
+
+    await asTenantTx((tx) =>
+      allocation.applyCreditToDebits(tx, utilityId, accountId, c, { paymentPlanId: planId }),
+    );
+
+    expect(await openOf(arrears)).toBe("0.00");
+    expect(await openOf(current)).toBe("40.00");
+    expect(await openOf(c)).toBe("-50.00");
+  });
+
+  it("treats a defaulted plan's debits as ordinary arrears again", async () => {
+    // Default exposes the debts. The §6.3 order applies to all of them,
+    // so the older one is taken first as it always was.
+    const arrears = await debit("ADJUSTMENT_DEBIT", "100.00", "2026-01-15");
+    const current = await debit("ADJUSTMENT_DEBIT", "40.00", "2026-06-14");
+    await planOver([arrears], "DEFAULTED");
+    const c = await credit("40.00");
+
+    await asTenantTx((tx) => allocation.applyCreditToDebits(tx, utilityId, accountId, c));
+
+    expect(await openOf(arrears)).toBe("60.00");
+    expect(await openOf(current)).toBe("40.00");
+  });
+
+  it("honours the scope through recordPayment, not only the allocator", async () => {
+    /*
+     * The parameter exists so slice 2's instalment screen needs no
+     * service change. A test on the allocator alone would let someone
+     * add the parameter to `recordPayment` and forget to pass it on,
+     * and every allocator test would still be green.
+     */
+    const payment = await import("../../services/ar/payment.service.js");
+    const current = await debit("ADJUSTMENT_DEBIT", "40.00", "2026-01-15");
+    const arrears = await debit("ADJUSTMENT_DEBIT", "100.00", "2026-06-14");
+    const planId = await planOver([arrears]);
+
+    await runAsTenant(utilityId, async () =>
+      payment.recordPayment(
+        utilityId,
+        ACTOR,
+        "Tester",
+        accountId,
+        { amount: "25.00", tender: "CHECK" },
+        undefined,
+        { paymentPlanId: planId },
+      ),
+    );
+
+    expect(await openOf(arrears)).toBe("75.00");
+    expect(await openOf(current)).toBe("40.00");
+  });
+
+  it("keeps the type-class order within the uncovered set", async () => {
+    // The partition is a leading key, not a replacement for §6.3: a fee
+    // still outranks an adjustment among the uncovered debts.
+    const covered = await debit("ADJUSTMENT_DEBIT", "100.00", "2026-01-15");
+    const adjustment = await debit("ADJUSTMENT_DEBIT", "30.00", "2026-05-01");
+    const fee = await debit("FEE", "20.00", "2026-06-20");
+    await planOver([covered]);
+    const c = await credit("20.00");
+
+    await asTenantTx((tx) => allocation.applyCreditToDebits(tx, utilityId, accountId, c));
+
+    // The fee, though it is the newest of the three.
+    expect(await openOf(fee)).toBe("0.00");
+    expect(await openOf(adjustment)).toBe("30.00");
+    expect(await openOf(covered)).toBe("100.00");
+  });
 });

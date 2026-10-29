@@ -66,6 +66,54 @@ function compareDebits(a: DebitRow, b: DebitRow): number {
   return a.id.localeCompare(b.id);
 }
 
+/**
+ * The debits a credit may reach, in the order it should reach them.
+ *
+ * Covered-ness is a **leading** sort key, applied before §6.3 rather
+ * than instead of it: each partition is sorted by the ordinary
+ * comparator, so a fee still outranks an adjustment among the uncovered
+ * debts.
+ *
+ * Joins through to `payment_plan.status` rather than testing membership
+ * of `payment_plan_debit`, for the reason the suppression predicates do:
+ * those rows survive the plan, so a membership test would keep a
+ * defaulted plan's debts at the back of the queue forever.
+ */
+async function orderByPlanCover(
+  tx: TxClient,
+  utilityId: string,
+  accountId: string,
+  debits: DebitRow[],
+  scope: AllocationScope,
+): Promise<DebitRow[]> {
+  if (debits.length === 0) return debits;
+
+  if (scope.paymentPlanId) {
+    const mine = await tx.paymentPlanDebit.findMany({
+      where: { utilityId, planId: scope.paymentPlanId },
+      select: { entryId: true },
+    });
+    const ids = new Set(mine.map((r) => r.entryId));
+    return debits.filter((d) => ids.has(d.id)).sort(compareDebits);
+  }
+
+  const covered = await tx.$queryRaw<Array<{ entry_id: string }>>`
+    SELECT pd.entry_id
+      FROM payment_plan_debit pd
+      JOIN payment_plan p
+        ON p.utility_id = pd.utility_id AND p.id = pd.plan_id
+     WHERE pd.utility_id = ${utilityId}::uuid
+       AND p.account_id = ${accountId}::uuid
+       AND p.status = 'ACTIVE'`;
+
+  if (covered.length === 0) return [...debits].sort(compareDebits);
+
+  const held = new Set(covered.map((r) => r.entry_id));
+  const uncovered = debits.filter((d) => !held.has(d.id)).sort(compareDebits);
+  const deferred = debits.filter((d) => held.has(d.id)).sort(compareDebits);
+  return [...uncovered, ...deferred];
+}
+
 async function apply(
   tx: TxClient,
   utilityId: string,
@@ -90,16 +138,49 @@ async function apply(
   return { applicationId: row.id, creditId, debitId, amount: amount.toFixed(2) };
 }
 
+/** How a payment is steered when a payment plan covers some arrears. */
+export interface AllocationScope {
+  /**
+   * Set when the money is an instalment under this plan. Only that
+   * plan's covered debits are then candidates.
+   */
+  paymentPlanId?: string;
+}
+
 /**
  * Consume one open credit against this account's open debits, in the
  * §6.3 order. Leftover stays open on the credit — which is what a
  * customer credit balance is.
+ *
+ * **A payment plan reorders the candidates, and that is the whole of
+ * what it does here.** The oldest-due rule, the type-class ranking and
+ * the determinism are unchanged *within* each candidate set.
+ *
+ * Without `scope.paymentPlanId` — an ordinary payment — debits no live
+ * plan covers come first, and covered ones only once those are clear.
+ * The flaw this fixes: a customer on a plan pays their current bill, the
+ * §6.3 order puts it on the oldest arrears because that is what oldest
+ * means, the current bill stays open, and the plan then defaults on the
+ * "current bill unpaid" test — of a customer who paid exactly what they
+ * were asked to pay, on time. Covered debts are last rather than
+ * untouchable, so an overpayment still pays the arrears down.
+ *
+ * With `scope.paymentPlanId` — an instalment — only that plan's debits
+ * are candidates, and anything left over **stays open on the credit**
+ * rather than spilling onto the current bill. Money the customer
+ * nominated for the plan is not quietly moved to a debt they did not
+ * nominate; the credit balance is then allocated by the next ordinary
+ * payment path.
+ *
+ * Only an `ACTIVE` plan covers anything. A defaulted plan's debits are
+ * ordinary arrears again, which is the whole of what defaulting does.
  */
 export async function applyCreditToDebits(
   tx: TxClient,
   utilityId: string,
   accountId: string,
   creditId: string,
+  scope: AllocationScope = {},
 ): Promise<Application[]> {
   await lockAccount(tx, utilityId, accountId);
 
@@ -110,7 +191,7 @@ export async function applyCreditToDebits(
   let remaining = credit.openAmount.negated();
   if (remaining.lte(0)) return [];
 
-  const debits = await tx.ledgerEntry.findMany({
+  const allDebits = await tx.ledgerEntry.findMany({
     where: { utilityId, accountId, openAmount: { gt: 0 } },
     // Fetch in a TOTAL order. This, not the comparator, is what makes
     // allocation deterministic: `Array.prototype.sort` is stable, so any
@@ -121,7 +202,8 @@ export async function applyCreditToDebits(
     orderBy: [{ dueDate: "asc" }, { postedAt: "asc" }, { id: "asc" }],
     select: { id: true, type: true, openAmount: true, dueDate: true, postedAt: true },
   });
-  debits.sort(compareDebits);
+
+  const debits = await orderByPlanCover(tx, utilityId, accountId, allDebits, scope);
 
   const made: Application[] = [];
   for (const d of debits) {

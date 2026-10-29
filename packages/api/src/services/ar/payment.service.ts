@@ -9,7 +9,11 @@ import {
 import { prisma } from "../../lib/prisma.js";
 import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { lockAccount, recomputeAccountCache, type TxClient } from "./posting.service.js";
-import { applyCreditToDebits, type Application } from "./allocation.service.js";
+import {
+  applyCreditToDebits,
+  type Application,
+  type AllocationScope,
+} from "./allocation.service.js";
 import { displayCustomerName } from "./customer-name.js";
 
 /**
@@ -44,6 +48,14 @@ export async function recordPayment(
   accountId: string,
   input: RecordPaymentInput,
   existingTx?: TxClient,
+  /**
+   * Set when this money is an instalment under a payment plan, which
+   * sends it to that plan's covered debits only (§6.3 as reordered by
+   * `applyCreditToDebits`). Not on `RecordPaymentInput`, because no
+   * route accepts it yet: the counter and lockbox paths take ordinary
+   * payments, and the screen that takes an instalment is slice 2's.
+   */
+  scope?: AllocationScope,
 ): Promise<RecordPaymentResult> {
   const run = async (tx: TxClient): Promise<RecordPaymentResult> => {
     // Lock before anything is read or written. Allocation reads open
@@ -73,7 +85,7 @@ export async function recordPayment(
       },
     });
 
-    const applied = await applyCreditToDebits(tx, utilityId, accountId, entry.id);
+    const applied = await applyCreditToDebits(tx, utilityId, accountId, entry.id, scope);
     const cache = await recomputeAccountCache(tx, utilityId, accountId);
 
     // Re-read rather than computing it: whatever allocation consumed is
