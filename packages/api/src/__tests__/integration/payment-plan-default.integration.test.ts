@@ -271,6 +271,25 @@ describe("planProgress", () => {
     expect(lenient.missed).toBe(0);
   });
 
+  it("does not call a payment late on the day it falls due", async () => {
+    /*
+     * Design §7's table: **Due** is "the date has arrived, nothing has
+     * happened yet"; **Late** is "the date has passed". A plan starting
+     * on the customer's payday was being reported as a payment behind
+     * at 03:00 that same morning, and the notice fired before the money
+     * could arrive.
+     */
+    const p = svc.planProgress({ ...terms, startDate: daysOut(0) }, "0.00", daysOut(0));
+    expect(p.due).toBe(1);
+    expect(p.late).toBe(0);
+    expect(p.onTrack).toBe(true);
+  });
+
+  it("calls it late the day after", async () => {
+    const p = svc.planProgress({ ...terms, startDate: daysOut(-1) }, "0.00", daysOut(0));
+    expect(p.late).toBe(1);
+  });
+
   it("reports what is left, which is the figure a CSR reads out", async () => {
     const p = svc.planProgress({ ...terms, startDate: daysOut(-40) }, "150.00", daysOut(0));
     expect(p.remaining).toBe("150.00");
@@ -383,6 +402,34 @@ describe("sweepPaymentPlans — defaulting", () => {
     expect(await statusOf(planId)).toBe("DEFAULTED");
   });
 
+  it("does not default on an uncovered bill due today", async () => {
+    /*
+     * The sweep runs at 03:00. A customer whose bill falls due today
+     * and who posts a cheque that afternoon was being defaulted that
+     * morning — and because the plan sweep runs before the ladder, the
+     * same tick then charged every tier the released arrears qualified
+     * for. The design says "unpaid **past** its due date", and the
+     * Illinois rule it cites allows until the second day after.
+     */
+    const covered = await debit({ amount: "300.00" });
+    await debit({ amount: "40.00", dueDaysAgo: 0 });
+    const planId = await plan({ entryIds: [covered.id], startedDaysAgo: 1 });
+    await settle(covered.id, "225.00");
+
+    expect((await sweep()).defaulted).toBe(0);
+    expect(await statusOf(planId)).toBe("ACTIVE");
+  });
+
+  it("defaults on an uncovered bill once a day has passed", async () => {
+    const covered = await debit({ amount: "300.00" });
+    await debit({ amount: "40.00", dueDaysAgo: 1 });
+    const planId = await plan({ entryIds: [covered.id], startedDaysAgo: 1 });
+    await settle(covered.id, "225.00");
+
+    expect((await sweep()).defaulted).toBe(1);
+    expect(await statusOf(planId)).toBe("DEFAULTED");
+  });
+
   it("does not default on an uncovered bill that is not yet due", async () => {
     const covered = await debit({ amount: "300.00" });
     await debit({ amount: "40.00", dueDaysAgo: -7 });
@@ -443,6 +490,45 @@ describe("sweepPaymentPlans — defaulting", () => {
 
     expect(result).toMatchObject({ completed: 1, defaulted: 0 });
     expect(await statusOf(planId)).toBe("COMPLETED");
+  });
+
+  it("does not record a notice the tenant has no template for", async () => {
+    /*
+     * `sendNotification` answers null when no template exists, and the
+     * watermark used to advance anyway — recording that the customer
+     * had been told when nothing was sent, then defaulting them days
+     * later. "Nobody is defaulted silently" is why the Late state and
+     * the watermark exist at all.
+     */
+    sendNotification.mockResolvedValueOnce(null as never);
+    const d = await debit({ amount: "300.00" });
+    const planId = await plan({ entryIds: [d.id], startedDaysAgo: 31, graceDays: 20 });
+    await settle(d.id, "225.00");
+
+    expect((await sweep()).notified).toBe(0);
+    const row = await seedAsPlatform(async () =>
+      prismaImports.prisma.paymentPlan.findUniqueOrThrow({
+        where: { id: planId },
+        select: { lateNoticeInstallment: true },
+      }),
+    );
+    // Still unasked, so the next sweep asks again.
+    expect(row.lateNoticeInstallment).toBeNull();
+  });
+
+  it("records a completion in the audit log, as it does a default", async () => {
+    const d = await debit({ amount: "300.00" });
+    const planId = await plan({ entryIds: [d.id], startedDaysAgo: 40 });
+    await settle(d.id, "0.00");
+
+    expect((await sweep()).completed).toBe(1);
+
+    const rows = await seedAsPlatform(async () =>
+      prismaImports.prisma.auditLog.findMany({
+        where: { utilityId: TENANT_A, entityType: "PaymentPlan", entityId: planId },
+      }),
+    );
+    expect(rows).toHaveLength(1);
   });
 
   it("records the default in the audit log", async () => {

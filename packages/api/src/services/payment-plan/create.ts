@@ -194,19 +194,59 @@ export async function createPaymentPlan(
     }
 
     /*
-     * Already-in-plan is checked rather than left to the primary key.
-     * A P2002 names a constraint, which tells a CSR nothing about which
-     * debt is the problem or why.
+     * Covered by a **live** plan, which is the invariant that matters.
+     *
+     * `payment_plan_debit` rows persist after a plan ends — they are
+     * history — so asking only "is this debit in the join table" locked
+     * every covered debt out of every future plan. That contradicted
+     * the refusal above, which tells the CSR to cancel the live plan
+     * and agree another, and made a mistyped instalment count
+     * unrecoverable short of a database edit.
+     *
+     * Checked here rather than left to a constraint either way: a
+     * P2002 names a constraint, which tells a CSR nothing about which
+     * debt is the problem. Under the one-ACTIVE-plan-per-account rule
+     * above this is belt and braces, since a debit must be on the
+     * plan's own account.
      */
-    const taken = await tx.paymentPlanDebit.findMany({
-      where: { utilityId, entryId: { in: input.entryIds } },
-      select: { entryId: true },
-    });
+    const taken = await tx.$queryRaw<Array<{ entry_id: string }>>`
+      SELECT pd.entry_id
+        FROM payment_plan_debit pd
+        JOIN payment_plan p
+          ON p.utility_id = pd.utility_id AND p.id = pd.plan_id
+       WHERE pd.utility_id = ${utilityId}::uuid
+         AND pd.entry_id = ANY(${input.entryIds}::uuid[])
+         AND p.status = 'ACTIVE'`;
     if (taken.length > 0) {
       throw err(
         "DEBIT_ALREADY_IN_PLAN",
-        `Already covered by a plan: ${taken.map((t) => t.entryId).join(", ")}`,
+        `${taken.length} of these debts ${taken.length === 1 ? "is" : "are"} already covered by a live payment plan.`,
       );
+    }
+
+    /*
+     * Whether a customer who broke a plan may have another.
+     *
+     * Montana leaves it to the utility and Iowa *requires* offering one
+     * after two consecutive payments under the first, so the default is
+     * to allow it — but a tenant that turns it off needs the switch to
+     * do something. It had a control on the terms screen and no reader.
+     *
+     * Only DEFAULTED counts. The term is about *breaking* a plan, not
+     * about having had one: a customer who completed a plan and fell
+     * behind again is not someone who broke an agreement.
+     */
+    if (!terms.allowSecondPlanAfterDefault) {
+      const broken = await tx.paymentPlan.findFirst({
+        where: { utilityId, accountId, status: "DEFAULTED" },
+        select: { id: true },
+      });
+      if (broken) {
+        throw err(
+          "SECOND_PLAN_NOT_ALLOWED",
+          "This utility does not agree a second plan with a customer who has broken one.",
+        );
+      }
     }
 
     /*
@@ -248,6 +288,21 @@ export async function createPaymentPlan(
     }
 
     const { base, first } = splitInstallments(remainder, input.installmentCount);
+
+    /*
+     * `base` rounds down, so a remainder smaller than a cent per
+     * instalment leaves it at zero — a $1.00 balance with $0.98 down
+     * over three payments. The column has an `installment_amount > 0`
+     * CHECK, so without this the CSR gets a 500 carrying a Postgres
+     * 23514 instead of the named refusal its sibling guard exists to
+     * give.
+     */
+    if (base.lessThanOrEqualTo(0)) {
+      throw err(
+        "INSTALLMENTS_BELOW_A_CENT",
+        `$${remainder.toFixed(2)} over ${input.installmentCount} payments is less than a cent each — take fewer instalments or a smaller down payment.`,
+      );
+    }
 
     const plan = await tx.paymentPlan.create({
       data: {

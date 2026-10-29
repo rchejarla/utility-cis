@@ -398,17 +398,86 @@ describe("createPaymentPlan", () => {
     });
   });
 
-  it("refuses a debit that already belongs to a plan", async () => {
-    // The PK enforces it; the service should say so rather than
-    // surfacing a P2002.
+  it("refuses a debit that already belongs to a LIVE plan", async () => {
+    // Named rather than left to a constraint: a P2002 tells a CSR
+    // nothing about which debt is the problem.
     const d = await debit({ amount: "300.00" });
     const second = await debit({ amount: "100.00" });
-    const first = await create({ entryIds: [d.id], installmentCount: 3 });
-    await cancel(first.planId);
+    await create({ entryIds: [d.id], installmentCount: 3 });
 
     await expect(
       create({ entryIds: [d.id, second.id], installmentCount: 3 }),
-    ).rejects.toMatchObject({ code: "DEBIT_ALREADY_IN_PLAN" });
+    ).rejects.toMatchObject({ code: "PLAN_ALREADY_ACTIVE" });
+  });
+
+  it("lets a cancelled plan's debts into a new plan", async () => {
+    /*
+     * The dead end this test exists for. The join rows persist as
+     * history, so a check that asked only "is this debit in the join
+     * table" locked every covered debt out of every future plan — while
+     * the service's own refusal told the CSR to "cancel it before
+     * agreeing another", which was the one action that made agreeing
+     * another impossible. A mistyped instalment count was unrecoverable
+     * short of a database edit.
+     */
+    const d = await debit({ amount: "300.00" });
+    const first = await create({ entryIds: [d.id], installmentCount: 3 });
+    await cancel(first.planId);
+
+    const second = await create({ entryIds: [d.id], installmentCount: 6 });
+
+    expect(second.planId).not.toBe(first.planId);
+    expect(second.coveredEntryIds).toEqual([d.id]);
+  });
+
+  it("lets a defaulted plan's debts into a second plan, which the terms allow", async () => {
+    // Montana leaves it to the utility; Iowa *requires* offering one
+    // after two consecutive payments under the first. Neither permits a
+    // flat refusal in code.
+    const d = await debit({ amount: "300.00" });
+    const first = await create({ entryIds: [d.id], installmentCount: 3 });
+    await markDefaulted(first.planId);
+
+    const second = await create({ entryIds: [d.id], installmentCount: 6 });
+
+    expect(second.planId).not.toBe(first.planId);
+  });
+
+  it("refuses a second plan after a default when the tenant forbids it", async () => {
+    // `allowSecondPlanAfterDefault` had a control on the terms screen
+    // and no reader: an operator could untick it and nothing changed.
+    await setTerms({ allowSecondPlanAfterDefault: false });
+    const d = await debit({ amount: "300.00" });
+    const first = await create({ entryIds: [d.id], installmentCount: 3 });
+    await markDefaulted(first.planId);
+
+    await expect(create({ entryIds: [d.id], installmentCount: 6 })).rejects.toMatchObject({
+      code: "SECOND_PLAN_NOT_ALLOWED",
+    });
+  });
+
+  it("allows a plan after a COMPLETED one even when a second-after-default is forbidden", async () => {
+    // The term is about breaking a plan, not about having had one.
+    await setTerms({ allowSecondPlanAfterDefault: false });
+    const d = await debit({ amount: "300.00" });
+    const first = await create({ entryIds: [d.id], installmentCount: 3 });
+    await markCompleted(first.planId);
+
+    const second = await create({ entryIds: [d.id], installmentCount: 6 });
+
+    expect(second.planId).not.toBe(first.planId);
+  });
+
+  it("refuses a plan over a debit covered by a live plan on the same account", async () => {
+    // Belt and braces under the one-live-plan-per-account rule: with
+    // uniqueness relaxed to live plans only, the service is what keeps
+    // a debit out of two at once.
+    const d = await debit({ amount: "300.00" });
+    const result = await create({ entryIds: [d.id], installmentCount: 3 });
+    expect(result.planId).toBeTruthy();
+    await expect(create({ entryIds: [d.id], installmentCount: 3 })).rejects.toMatchObject({
+      code: "PLAN_ALREADY_ACTIVE",
+    });
   });
 
   it("refuses a plan over no open debits", async () => {
@@ -529,12 +598,15 @@ describe("createPaymentPlan", () => {
   });
 });
 
-/** Cancel, so a debit can be released for the already-in-plan case. */
-async function cancel(planId: string) {
+async function setStatus(planId: string, status: "CANCELLED" | "DEFAULTED" | "COMPLETED") {
   await seedAsPlatform(async () =>
     prismaImports.prisma.paymentPlan.update({
       where: { id: planId },
-      data: { status: "CANCELLED", statusChangedAt: new Date() },
+      data: { status, statusChangedAt: new Date() },
     }),
   );
 }
+
+const cancel = (planId: string) => setStatus(planId, "CANCELLED");
+const markDefaulted = (planId: string) => setStatus(planId, "DEFAULTED");
+const markCompleted = (planId: string) => setStatus(planId, "COMPLETED");

@@ -153,9 +153,26 @@ So:
 payment_plan_debit (utility_id, plan_id, entry_id)
 ```
 
-Primary key `(utility_id, entry_id)` — a debit belongs to at most one
-plan. Both foreign keys tenant-scoped composites, in the migration, as
-every key between two tenant-scoped tables here is.
+Primary key `(utility_id, plan_id, entry_id)`. Both foreign keys
+tenant-scoped composites, in the migration, as every key between two
+tenant-scoped tables here is.
+
+**Revised 2026-10-29, after review.** The key was `(utility_id,
+entry_id)` — "a debit belongs to at most one plan, full stop" — and that
+is wrong, because these rows persist after a plan ends. The first plan
+therefore consumed its debits *permanently*: a CSR who mistyped an
+instalment count had no recovery short of a database edit, the service's
+own refusal told them to cancel and agree another (the one act that made
+agreeing another impossible), and §4a's `allowSecondPlanAfterDefault`
+could never do anything — though Iowa *requires* offering a second plan
+after two consecutive payments under the first.
+
+What has to hold is **not in two *live* plans at once**, and no index can
+express it: the predicate lives on `payment_plan.status`, in another
+table. `createPaymentPlan` enforces it, and the one-ACTIVE-plan-per-
+account rule makes it structural rather than merely checked — a debit
+must be on the plan's own account, and an account may have one live
+plan, so two live plans cannot reach the same debit.
 
 The rejected alternative was a `covers_debts_as_of` date on the plan,
 with the charging pass skipping debits due on or before it. It needs no
@@ -479,6 +496,16 @@ check joins to `payment_plan` and reads its status. `ACTIVE` is the
 only status that suppresses: a `DEFAULTED` plan must expose its debts,
 which is the whole of what defaulting does, and a `COMPLETED` one has
 no open debits left to suppress.
+
+**Boundaries are calendar days, and "late" means the date has passed.**
+Both clocks compare whole days, because every date here is a `DATE` and
+the sweep runs at 03:00. Read as instants, a payment was late the moment
+its date arrived — a plan starting on the customer's payday reported
+them a payment behind that same morning — and an uncovered bill was
+"past due" from midnight on its own due date, defaulting a customer who
+posted a cheque that afternoon. The §7 table already says it: **due** is
+"the date has arrived, nothing has happened yet"; **late** is "the date
+has passed". (Found in review, 2026-10-29.)
 
 **The account-level clock** is the harder half. `evaluateAll` derives
 `daysPastDue` from `Account.lastDueDate`, which `recomputeAccountCache`

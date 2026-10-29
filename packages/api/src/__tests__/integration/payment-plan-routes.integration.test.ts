@@ -262,9 +262,20 @@ describe("GET /api/v1/payment-plans/:id", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.status).toBe("ACTIVE");
-    // Nothing paid yet, and the down payment is due today.
-    expect(body.progress).toMatchObject({ onTrack: false, remaining: "300.00" });
-    expect(body.progress.installmentsBehind).toBe(1);
+    /*
+     * The down payment is due **today** and unpaid, which is `due` but
+     * not yet `late` — design §7 distinguishes "the date has arrived"
+     * from "the date has passed". This assertion originally demanded
+     * `onTrack: false`, which pinned the off-by-one the review found:
+     * a plan starting on the customer's payday reported them a payment
+     * behind at 03:00 that morning.
+     */
+    expect(body.progress).toMatchObject({
+      onTrack: true,
+      installmentsBehind: 0,
+      due: 1,
+      remaining: "300.00",
+    });
   });
 
   it("returns the derived schedule, with no instalment table behind it", async () => {

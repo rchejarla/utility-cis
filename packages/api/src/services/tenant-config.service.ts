@@ -89,19 +89,34 @@ export async function patchSettingsNamespace(
   value: unknown,
 ): Promise<void> {
   const json = JSON.stringify(value);
+  /*
+   * `updated_at` is written explicitly, and this is not optional.
+   *
+   * The column is `TIMESTAMPTZ NOT NULL` with **no database default** —
+   * Prisma's `@updatedAt` is client-side, so it does nothing for raw
+   * SQL. Omitting it made every call fail with 23502, including on a
+   * row that already existed: `INSERT … ON CONFLICT` evaluates the
+   * insert first, so the NOT NULL violation fires before the conflict
+   * is ever detected. The screen could not save for any tenant.
+   *
+   * Bumped on the update arm too, or the column goes stale on every
+   * namespace save while the row keeps changing.
+   */
   await prisma.$executeRaw`
-    INSERT INTO utility_config (id, utility_id, settings)
+    INSERT INTO utility_config (id, utility_id, settings, updated_at)
     VALUES (
       gen_random_uuid(),
       ${utilityId}::uuid,
-      jsonb_build_object(${namespace}::text, ${json}::jsonb)
+      jsonb_build_object(${namespace}::text, ${json}::jsonb),
+      now()
     )
     ON CONFLICT (utility_id) DO UPDATE
       SET settings = jsonb_set(
-        COALESCE(utility_config.settings, '{}'::jsonb),
-        ARRAY[${namespace}::text],
-        ${json}::jsonb,
-        true
-      )
+            COALESCE(utility_config.settings, '{}'::jsonb),
+            ARRAY[${namespace}::text],
+            ${json}::jsonb,
+            true
+          ),
+          updated_at = now()
   `;
 }

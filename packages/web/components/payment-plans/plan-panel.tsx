@@ -60,11 +60,18 @@ interface PlanDetail {
   };
   schedule: Array<{ dueDate: string; amount: string }>;
   covers: CoveredDebt[];
+  /** The uncovered past-due debt that would break this plan, if any. */
+  atRisk: { entryId: string; billNumber: string | null; amount: string } | null;
 }
 
 interface Props {
   accountId: string;
-  /** An unpaid, past-due debt no plan covers — what puts a plan at risk. */
+  /**
+   * Overrides what the API reports as putting the plan at risk. Only
+   * tests pass it; the server answers the question, because it is the
+   * same predicate the default sweep uses and two implementations
+   * could disagree about whether a customer is about to lose a plan.
+   */
   uncoveredPastDue?: { billNumber: string | null; amount: string } | null;
 }
 
@@ -142,7 +149,8 @@ export function PlanPanel({ accountId, uncoveredPastDue }: Props) {
   }
 
   const live = plan.status === "ACTIVE";
-  const atRisk = live && !!uncoveredPastDue;
+  const risk = uncoveredPastDue ?? plan.atRisk ?? null;
+  const atRisk = live && !!risk;
   const behind = plan.progress.installmentsBehind;
 
   /* The status line, which is the whole first question. */
@@ -154,7 +162,19 @@ export function PlanPanel({ accountId, uncoveredPastDue }: Props) {
         ? "ACTIVE — on track"
         : `ACTIVE — ${behind} payment${behind === 1 ? "" : "s"} behind`;
 
-  const next = plan.schedule.find((r) => r.dueDate >= new Date().toISOString().slice(0, 10));
+  /*
+   * The next payment still owed, not merely the next by date. Taking
+   * the first future row told a customer who paid this morning that
+   * their next payment was due today. What has been paid is known
+   * (`paidToDate`), so walk the schedule's cumulative total and stop at
+   * the first row that money has not yet reached.
+   */
+  const paid = Number(plan.paidToDate);
+  let cumulative = 0;
+  const next = plan.schedule.find((r) => {
+    cumulative += Number(r.amount);
+    return cumulative > paid;
+  });
 
   return (
     <section style={card}>
@@ -175,7 +195,7 @@ export function PlanPanel({ accountId, uncoveredPastDue }: Props) {
       {atRisk && (
         <div role="alert" style={warnStyle}>
           <strong>
-            {uncoveredPastDue!.billNumber ?? "A charge"} ({money(uncoveredPastDue!.amount)})
+            {risk!.billNumber ?? "A charge"} ({money(risk!.amount)})
           </strong>{" "}
           is unpaid and past due. The plan breaks if it is not paid — keeping to the
           instalments is not enough.
@@ -231,10 +251,35 @@ export function PlanPanel({ accountId, uncoveredPastDue }: Props) {
         ))}
       </div>
 
-      {live && canEdit && (
-        <button onClick={cancel} style={secondaryBtn}>
-          Cancel plan
-        </button>
+      <div style={{ display: "flex", gap: 8 }}>
+        {live && canEdit && (
+          <button onClick={cancel} style={secondaryBtn}>
+            Cancel plan
+          </button>
+        )}
+        {/*
+          * A plan that ended is still shown — it is the account's
+          * history — but it must not be the reason no new one can be
+          * agreed. Without this the panel showed last month's defaulted
+          * plan and offered only "Cancel", and the shut-off queue was
+          * the one remaining way in.
+          */}
+        {!live && canCreate && (
+          <button onClick={() => setAgreeing(true)} style={primaryBtn}>
+            Agree a plan
+          </button>
+        )}
+      </div>
+
+      {agreeing && (
+        <AgreePlanDialog
+          accountId={accountId}
+          onClose={() => setAgreeing(false)}
+          onAgreed={async () => {
+            setAgreeing(false);
+            await load();
+          }}
+        />
       )}
     </section>
   );

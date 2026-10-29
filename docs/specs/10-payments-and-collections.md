@@ -97,17 +97,27 @@ checked against the sum of what it covers.
 | entry_id | UUID | Composite FK → LedgerEntry (utility_id, id) |
 | created_at | TIMESTAMPTZ | |
 
-`PRIMARY KEY (utility_id, entry_id)` — a debit belongs to **at most one
-plan**. The rows **persist after the plan ends**: they are history, and
-every key is RESTRICT. Everything that asks "is this debt covered"
-therefore joins through to `PaymentPlan.status` and reads `ACTIVE`;
-testing membership of this table alone would suppress a debt forever,
-including after default, *and would pass every test written while the
-plan is still running*.
-| created_at | TIMESTAMPTZ | |
-| updated_at | TIMESTAMPTZ | |
+`PRIMARY KEY (utility_id, plan_id, entry_id)`. The rows **persist after
+the plan ends**: they are history, and every key is RESTRICT. Everything
+that asks "is this debt covered" therefore joins through to
+`PaymentPlan.status` and reads `ACTIVE`; testing membership of this
+table alone would suppress a debt forever, including after default,
+*and would pass every test written while the plan is still running*.
 
-**Status transitions:** PENDING → ACTIVE (on down payment received) → COMPLETED | DEFAULTED | CANCELLED
+**A debit may appear in several plans over time - just not in two live
+ones.** The key was originally `(utility_id, entry_id)`, which combined
+with the rows persisting meant the first plan consumed its debits
+permanently: a CSR who mistyped an instalment count had no recovery, and
+a defaulted account could be offered a plan the save then refused. No
+index can express "not in two *live* plans", because the predicate lives
+on `payment_plan.status` in another table, so `createPaymentPlan`
+enforces it - and the one-ACTIVE-plan-per-account rule makes it
+structural rather than merely checked, since a debit must be on the
+plan's own account.
+
+**Status transitions:** ACTIVE (from agreement), then COMPLETED,
+DEFAULTED or CANCELLED. There is no PENDING and no activation step - see
+the entity above.
 
 ---
 
@@ -321,7 +331,16 @@ reads the table directly. It arrives when a Collections work-list does.
    That is correct by the rules and unpleasant in the inbox; fewer
    notices is the notification configuration's problem, not the plan's.
 
-8. **Payment plan default:** If an account misses `default_threshold` consecutive installments, the plan status transitions to DEFAULTED. CIS fires a domain event that ApptorFlow can use to trigger escalation (e.g., collections referral, shut-off workflow).
+8. **Payment plan default:** see 7a above, which supersedes this rule.
+   The column is `missed_before_default`, the misses need not be
+   consecutive (they are counted against the schedule, not in a run),
+   and an uncovered bill past its due date breaks the plan on its own
+   when `current_bill_counts`. **No domain event is fired** - the
+   earlier text promised one "ApptorFlow can use" and none exists. What
+   is written is an audit row (`payment_plan.defaulted`) in the same
+   transaction as the status, and the escalation happens because the
+   released debits return to the ladder at their real ages, not because
+   anything was published.
 
 9. **Ad hoc charges require authorization:** Fee and ADJUSTMENT type charges above a configurable dollar threshold require supervisor-level role to create. CREDIT type charges always require supervisor authorization. Enforced via RBAC at API layer.
 

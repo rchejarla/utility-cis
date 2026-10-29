@@ -232,13 +232,24 @@ export default function PlanTermsPage() {
         >
           Do not charge late fees on debts covered by a plan.
         </Check>
+        {/*
+          * Stored and frozen onto every plan agreed, but nothing reads
+          * it yet: charging the skipped fees needs them recorded when
+          * they were skipped, which is not built. The control says so
+          * rather than presenting itself as live policy - a setting
+          * that looks settable and does nothing is the `autoPostBills`
+          * trap in reverse.
+          */}
         <Check
           termKey="assessSuppressedFeesOnDefault"
           checked={terms.assessSuppressedFeesOnDefault}
           onChange={(v) => set("assessSuppressedFeesOnDefault", v)}
           disabled={!canEdit}
         >
-          Charge the skipped fees if the plan is broken.
+          Charge the skipped fees if the plan is broken.{" "}
+          <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
+            Recorded on each plan, not yet enforced.
+          </span>
         </Check>
       </Group>
 

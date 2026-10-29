@@ -148,12 +148,25 @@ export function planProgress(
   let late = 0;
   let missed = 0;
 
+  /*
+   * Day boundaries, because every date here is a calendar day.
+   *
+   * `start_date` is a DATE, so `addPeriods` returns UTC midnight, while
+   * `asOf` is an instant. Comparing them directly makes a payment late
+   * the moment its date arrives — the sweep runs at 03:00, so a plan
+   * starting on the customer's payday was reported as a payment behind
+   * that same morning and the notice fired before the money could
+   * arrive. Design §7: **due** is "the date has arrived, nothing has
+   * happened yet"; **late** is "the date has **passed**".
+   */
+  const todayUtc = Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate());
+
   for (let i = 0; i < amounts.length; i++) {
     const before = cumulative;
     cumulative = cumulative.plus(amounts[i]!);
 
     const dueDate = addPeriods(plan.startDate, i, plan.installmentFrequency);
-    if (dueDate > asOf) break;
+    if (dueDate.getTime() > todayUtc) break;
     due++;
 
     const met = plan.partialInstallmentCounts
@@ -161,9 +174,13 @@ export function planProgress(
       : paid.greaterThanOrEqualTo(cumulative);
     if (met) continue;
 
+    // Due today and unpaid is not yet late.
+    if (dueDate.getTime() === todayUtc) continue;
+
     late++;
-    const missedOn = new Date(dueDate.getTime() + plan.graceDays * 86_400_000);
-    if (missedOn <= asOf) missed++;
+    // Missed once grace has also run out, counted in whole days.
+    const missedOn = dueDate.getTime() + plan.graceDays * 86_400_000;
+    if (missedOn < todayUtc) missed++;
   }
 
   return {
@@ -228,14 +245,40 @@ export async function sweepPaymentPlans(
   const satisfied = new Set(await satisfiedPlanIds(prisma, utilityId));
 
   let completed = 0;
-  if (satisfied.size > 0) {
-    const closed = await prisma.paymentPlan.updateMany({
-      // `status: "ACTIVE"` again here, not only in the query above: two
-      // sweeps racing must not both close the same plan.
-      where: { utilityId, id: { in: [...satisfied] }, status: "ACTIVE" },
-      data: { status: "COMPLETED", statusChangedAt: asOf },
+  for (const planId of satisfied) {
+    /*
+     * One transaction per plan, status and audit row together, for the
+     * reason the default below does it: a closed plan with no record of
+     * when is a plan nobody can account for later. Per plan rather than
+     * one `updateMany`, so a single audit failure cannot roll back
+     * every other closure in the tenant.
+     *
+     * `status: "ACTIVE"` again in the filter, not only in the query
+     * that selected the ids: two sweeps racing must not both close the
+     * same plan, and only the one whose update takes effect counts it.
+     */
+    const count = await prisma.$transaction(async (tx) => {
+      const closed = await tx.paymentPlan.updateMany({
+        where: { utilityId, id: planId, status: "ACTIVE" },
+        data: { status: "COMPLETED", statusChangedAt: asOf },
+      });
+      if (closed.count === 0) return 0;
+      await writeAuditRow(
+        tx,
+        {
+          utilityId,
+          actorId: null,
+          actorName: "Payment plan sweep",
+          entityType: "PaymentPlan",
+        },
+        EVENT_TYPES.PAYMENT_PLAN_COMPLETED,
+        planId,
+        { status: "ACTIVE" },
+        { status: "COMPLETED" },
+      );
+      return closed.count;
     });
-    completed = closed.count;
+    completed += count;
   }
 
   /*
@@ -288,32 +331,39 @@ export async function sweepPaymentPlans(
       (await hasUncoveredPastDue(utilityId, plan.accountId, asOf));
 
     if (progress.broken || brokenByBill) {
-      const updated = await prisma.paymentPlan.updateMany({
-        where: { id: plan.id, utilityId, status: "ACTIVE" },
-        data: { status: "DEFAULTED", statusChangedAt: asOf },
-      });
-      if (updated.count > 0) {
-        defaulted += updated.count;
-        await prisma.$transaction(async (tx) =>
-          writeAuditRow(
-            tx,
-            {
-              utilityId,
-              actorId: null,
-              actorName: "Payment plan sweep",
-              entityType: "PaymentPlan",
-            },
-            EVENT_TYPES.PAYMENT_PLAN_DEFAULTED,
-            plan.id,
-            { status: "ACTIVE" },
-            {
-              status: "DEFAULTED",
-              missedInstallments: progress.missed,
-              uncoveredBillPastDue: brokenByBill,
-            },
-          ),
+      /*
+       * The status and its audit row in **one** transaction. Written
+       * separately, a crash or a pool error between them left a
+       * DEFAULTED plan with no record of why or when it broke — and
+       * the record is the only thing a customer disputing the default
+       * has to go on.
+       */
+      const count = await prisma.$transaction(async (tx) => {
+        const updated = await tx.paymentPlan.updateMany({
+          where: { id: plan.id, utilityId, status: "ACTIVE" },
+          data: { status: "DEFAULTED", statusChangedAt: asOf },
+        });
+        if (updated.count === 0) return 0;
+        await writeAuditRow(
+          tx,
+          {
+            utilityId,
+            actorId: null,
+            actorName: "Payment plan sweep",
+            entityType: "PaymentPlan",
+          },
+          EVENT_TYPES.PAYMENT_PLAN_DEFAULTED,
+          plan.id,
+          { status: "ACTIVE" },
+          {
+            status: "DEFAULTED",
+            missedInstallments: progress.missed,
+            uncoveredBillPastDue: brokenByBill,
+          },
         );
-      }
+        return updated.count;
+      });
+      defaulted += count;
       continue;
     }
 
@@ -334,7 +384,7 @@ export async function sweepPaymentPlans(
       continue;
     }
 
-    await sendNotification(utilityId, {
+    const notificationId = await sendNotification(utilityId, {
       eventType: "payment_plan.installment_late",
       channel: "EMAIL",
       recipientId: await customerOf(utilityId, plan.accountId),
@@ -345,6 +395,23 @@ export async function sweepPaymentPlans(
         paymentPlanLateInstallments: String(progress.late),
       },
     });
+
+    /*
+     * The watermark moves only when a notice actually went out.
+     *
+     * `sendNotification` answers null when the tenant has no template
+     * for the event, and advancing anyway recorded that the customer
+     * had been told when nothing had been sent — then defaulted them
+     * days later. "Nobody is defaulted silently" is the stated reason
+     * the Late state and this column exist, so a tenant that has not
+     * configured the template should keep being asked rather than have
+     * the question quietly marked answered.
+     *
+     * Notify first, then mark: a crash between the two re-notifies,
+     * which is the right way round to fail.
+     */
+    if (!notificationId) continue;
+
     await prisma.paymentPlan.update({
       where: { id: plan.id },
       data: { lateNoticeInstallment: watermark },
@@ -386,11 +453,61 @@ async function paidTowardPlan(
  * for the reason every other predicate here does: those rows survive
  * the plan.
  */
+export async function uncoveredPastDue(
+  utilityId: string,
+  accountId: string,
+  asOf: Date = new Date(),
+): Promise<{ entryId: string; billNumber: string | null; amount: string } | null> {
+  const [row] = await prisma.$queryRaw<
+    Array<{ id: string; bill_number: string | null; open_amount: Prisma.Decimal }>
+  >`
+    SELECT e.id, b.bill_number, e.open_amount
+      FROM ledger_entry e
+      LEFT JOIN bill b ON b.id = e.bill_id AND b.utility_id = e.utility_id
+     WHERE e.utility_id = ${utilityId}::uuid
+       AND e.account_id = ${accountId}::uuid
+       AND e.open_amount > 0
+       AND e.due_date IS NOT NULL
+       AND e.due_date < ${asOf}::date
+       AND e.type <> 'DEPOSIT'
+       AND NOT EXISTS (
+         SELECT 1
+           FROM payment_plan_debit pd
+           JOIN payment_plan p
+             ON p.utility_id = pd.utility_id AND p.id = pd.plan_id
+          WHERE pd.utility_id = e.utility_id
+            AND pd.entry_id = e.id
+            AND p.status = 'ACTIVE'
+       )
+     ORDER BY e.due_date ASC, e.id ASC
+     LIMIT 1`;
+
+  if (!row) return null;
+  return {
+    entryId: row.id,
+    billNumber: row.bill_number,
+    amount: new Prisma.Decimal(row.open_amount).toFixed(2),
+  };
+}
+
 async function hasUncoveredPastDue(
   utilityId: string,
   accountId: string,
   asOf: Date,
 ): Promise<boolean> {
+  /*
+   * Strictly **before** today, not before this instant.
+   *
+   * `due_date` is a DATE, so `due_date < now()` is true from 00:00 on
+   * the due date itself — and this sweep runs at 03:00. A customer on a
+   * kept plan whose bill fell due that day and who posted a cheque that
+   * afternoon was defaulted before the post arrived; and because plans
+   * are swept before the ladder, the same tick then charged every tier
+   * the released arrears qualified for. The design says "unpaid **past**
+   * its due date", and the Illinois rule it cites allows until the
+   * second day after. This is also the boundary the ladder beside it
+   * uses, where `daysPastDue <= 0` skips the account.
+   */
   const rows = await prisma.$queryRaw<Array<{ one: number }>>`
     SELECT 1 AS one
       FROM ledger_entry e
@@ -398,7 +515,7 @@ async function hasUncoveredPastDue(
        AND e.account_id = ${accountId}::uuid
        AND e.open_amount > 0
        AND e.due_date IS NOT NULL
-       AND e.due_date < ${asOf}::timestamptz
+       AND e.due_date < ${asOf}::date
        AND e.type <> 'DEPOSIT'
        AND NOT EXISTS (
          SELECT 1

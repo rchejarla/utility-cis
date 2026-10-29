@@ -1,6 +1,6 @@
 import { Prisma } from "@utility-cis/shared/src/generated/prisma";
 import { prisma } from "../../lib/prisma.js";
-import { planProgress, type PlanProgress } from "./lifecycle.js";
+import { planProgress, uncoveredPastDue, type PlanProgress } from "./lifecycle.js";
 
 /**
  * What a CSR reads about a plan.
@@ -56,6 +56,18 @@ export interface PaymentPlanDetail {
   };
   schedule: Array<{ dueDate: string; amount: string }>;
   covers: CoveredDebtRow[];
+  /**
+   * The debt that puts this plan at risk: unpaid, past due, and covered
+   * by no live plan.
+   *
+   * Answered here rather than left to the caller because it is the
+   * failure a customer most easily trips while paying every instalment
+   * faithfully, and it is only knowable by reading two screens unless
+   * the plan carries it. Null when `currentBillCounts` is false, since
+   * then no such debt can break this plan and a warning would be a
+   * lie.
+   */
+  atRisk: { entryId: string; billNumber: string | null; amount: string } | null;
 }
 
 export interface PaymentPlanSummary {
@@ -205,6 +217,10 @@ export async function getPaymentPlan(
     createdAt: plan.createdAt.toISOString(),
     paidToDate: paid.toFixed(2),
     progress: { ...progress, installmentsBehind: progress.late },
+    atRisk:
+      plan.status === "ACTIVE" && plan.currentBillCounts
+        ? await uncoveredPastDue(utilityId, plan.accountId)
+        : null,
     schedule: scheduleOf(plan),
     covers: entries.map((e) => ({
       entryId: e.id,

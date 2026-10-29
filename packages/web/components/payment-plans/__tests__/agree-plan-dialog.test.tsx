@@ -167,6 +167,51 @@ describe("agree plan dialog", () => {
     expect(screen.getByText(/at least one debt/i)).toBeInTheDocument();
   });
 
+  it("quotes the same cents the server will store", async () => {
+    /*
+     * Arrears of $50.64 over three instalments. Floating point gave
+     * "$12.68 then two of $12.65" while the server stored $12.66 — the
+     * figure a CSR reads out has to be the one the system of record
+     * holds. One of 16,334 totals between $50 and $10,000 where the
+     * two disagreed.
+     */
+    get.mockImplementation((url: string) =>
+      url.includes("plan-terms")
+        ? Promise.resolve({ terms: { ...DEFAULT_PLAN_TERMS, downPaymentPercent: 25 } })
+        : Promise.resolve({
+            data: [ledgerRow({ id: "e-x", openAmount: "50.64", dueDate: daysOut(-30) })],
+            meta: { total: 1 },
+          }),
+    );
+    renderDialog();
+
+    // 50.64 × 25% = 12.66 exactly; remainder 37.98 over 3 = 12.66 each.
+    await waitFor(() => expect(screen.getByLabelText(/down payment/i)).toHaveValue(12.66));
+    expect(screen.getAllByText("$12.66")).toHaveLength(4);
+  });
+
+  it("bounds the first payment date by the tenant's rule, at the control", async () => {
+    renderDialog();
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/first payment date/i)).toBeInTheDocument(),
+    );
+    const input = screen.getByLabelText(/first payment date/i);
+    expect(input).toHaveAttribute("min", today);
+    expect(input).toHaveAttribute("max", daysOut(DEFAULT_PLAN_TERMS.maxStartDateDays));
+  });
+
+  it("lets the down payment field be cleared and retyped", async () => {
+    renderDialog();
+    await waitFor(() => expect(screen.getByLabelText(/down payment/i)).toBeInTheDocument());
+
+    const input = screen.getByLabelText(/down payment/i);
+    await userEvent.clear(input);
+    await userEvent.type(input, "40");
+
+    expect(input).toHaveValue(40);
+  });
+
   it("sends the ticked debts and the chosen terms", async () => {
     renderDialog();
     await waitFor(() => expect(screen.getByLabelText(/debt-e-1/i)).toBeChecked());

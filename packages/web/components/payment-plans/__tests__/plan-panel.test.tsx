@@ -45,6 +45,7 @@ function plan(over: Record<string, unknown> = {}) {
       { dueDate: "2026-11-28", amount: "58.53" },
       { dueDate: "2026-12-28", amount: "58.52" },
     ],
+    atRisk: null,
     covers: [
       {
         entryId: "e-1",
@@ -169,6 +170,65 @@ describe("plan panel", () => {
       expect(screen.getByText(/plan breaks if it is not paid/i)).toBeInTheDocument(),
     );
     expect(screen.getByText(/BILL-202610-2/)).toBeInTheDocument();
+  });
+
+  it("warns from what the API reports, with no prop to pass", async () => {
+    /*
+     * The warning was built, tested and unreachable: the only caller
+     * that supplied `uncoveredPastDue` was this test file, and the
+     * account page mounted the panel without it. The server answers it
+     * now, using the same predicate the default sweep asks.
+     */
+    get.mockImplementation((url: string) =>
+      url.includes("/payment-plans/")
+        ? Promise.resolve(
+            plan({ atRisk: { entryId: "e-9", billNumber: "BILL-202610-2", amount: "37.87" } }),
+          )
+        : Promise.resolve({ data: [{ id: "plan-1", status: "ACTIVE" }] }),
+    );
+
+    renderPanel();
+
+    await waitFor(() =>
+      expect(screen.getByText(/plan breaks if it is not paid/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/BILL-202610-2/)).toBeInTheDocument();
+  });
+
+  it("offers to agree a new plan when the last one has ended", async () => {
+    // A defaulted plan is history, not a reason the account can never
+    // have another. Without this the panel showed the dead plan and
+    // offered only "Cancel".
+    get.mockImplementation((url: string) =>
+      url.includes("/payment-plans/")
+        ? Promise.resolve({ ...plan({ status: "DEFAULTED" }) })
+        : Promise.resolve({ data: [{ id: "plan-1", status: "DEFAULTED" }] }),
+    );
+
+    renderPanel();
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /agree a plan/i })).toBeInTheDocument(),
+    );
+  });
+
+  it("names the next payment still owed, not the next by date", async () => {
+    // A customer who paid this morning was told their next payment was
+    // due today.
+    get.mockImplementation((url: string) =>
+      url.includes("/payment-plans/")
+        ? Promise.resolve(plan({ paidToDate: "175.57" }))
+        : Promise.resolve({ data: [{ id: "plan-1", status: "ACTIVE" }] }),
+    );
+
+    renderPanel();
+
+    // 117.04 + 58.53 = 175.57 covers the first two rows, so the next
+    // owed is the 2026-12-28 one. Scoped to the Next payment line,
+    // because every date also appears in the schedule below it.
+    await waitFor(() => expect(screen.getByText(/Next payment/i)).toBeInTheDocument());
+    const value = screen.getByText(/Next payment/i).nextElementSibling;
+    expect(value?.textContent).toBe("$58.52 on 2026-12-28");
   });
 
   it("offers to agree one when the account has no live plan", async () => {

@@ -35,7 +35,22 @@ interface Props {
   onAgreed: (planId: string) => void;
 }
 
-const money = (n: number) => `$${n.toFixed(2)}`;
+/**
+ * Money is counted in whole cents here, and only ever formatted for
+ * display.
+ *
+ * Floating point disagreed with the server on 1.7% of plausible
+ * balances: arrears of $50.64 over three instalments read out as
+ * "$12.68 then two of $12.65" while the stored instalment was $12.66.
+ * The figure a CSR says aloud has to be the figure the system of
+ * record holds, and `Math.round(total * pct) / 100` is not it.
+ *
+ * The arithmetic below mirrors `createPaymentPlan` exactly: round the
+ * down payment half-up, floor the base instalment, and put the whole
+ * remainder on the first.
+ */
+const cents = (s: string) => Math.round(Number(s) * 100);
+const money = (c: number) => `$${(c / 100).toFixed(2)}`;
 
 /** Today at UTC midnight, the same day boundary the API validates on. */
 function todayIso(): string {
@@ -116,8 +131,9 @@ export function AgreePlanDialog({ accountId, onClose, onAgreed }: Props) {
       .catch(() => setError("Could not load this account's debts."));
   }, [accountId, today]);
 
-  const total = useMemo(
-    () => debts.filter((d) => ticked.has(d.id)).reduce((s, d) => s + Number(d.openAmount), 0),
+  /** Total in cents, so no sum of decimals can drift. */
+  const totalCents = useMemo(
+    () => debts.filter((d) => ticked.has(d.id)).reduce((s, d) => s + cents(d.openAmount), 0),
     [debts, ticked],
   );
 
@@ -127,34 +143,37 @@ export function AgreePlanDialog({ accountId, onClose, onAgreed }: Props) {
    * a proposal, and once they have overridden it, unticking a debt must
    * not silently undo their decision.
    */
-  const downPayment =
-    downPaymentEdited !== null
-      ? Number(downPaymentEdited)
-      : Math.round(total * terms.downPaymentPercent) / 100;
+  const downCents =
+    downPaymentEdited !== null && downPaymentEdited !== ""
+      ? cents(downPaymentEdited)
+      : // Half-up on the exact cent product, as the server does.
+        Math.round((totalCents * terms.downPaymentPercent) / 100);
 
   const count = installmentCount ?? terms.minInstallments;
 
   const schedule = useMemo(() => {
-    const remainder = total - downPayment;
-    if (!(remainder > 0) || count < 1) return [];
-    const base = Math.floor((remainder / count) * 100) / 100;
-    const first = Math.round((remainder - base * (count - 1)) * 100) / 100;
+    const remainder = totalCents - downCents;
+    if (remainder <= 0 || count < 1) return [];
+    // Floor, then the whole remainder on the first instalment — the
+    // customer's last payment is the round one.
+    const base = Math.floor(remainder / count);
+    const first = remainder - base * (count - 1);
     return [
-      { dueDate: startDate, amount: downPayment, label: "down payment" },
+      { dueDate: startDate, amount: downCents, label: "down payment" },
       ...Array.from({ length: count }, (_, i) => ({
         dueDate: nextDate(startDate, i + 1, terms.frequency),
         amount: i === 0 ? first : base,
         label: "",
       })),
     ];
-  }, [total, downPayment, count, startDate, terms.frequency]);
+  }, [totalCents, downCents, count, startDate, terms.frequency]);
 
   const agree = async () => {
     if (ticked.size === 0) {
       setError("Pick at least one debt for the plan to cover.");
       return;
     }
-    if (!(total - downPayment > 0)) {
+    if (totalCents - downCents <= 0) {
       setError("The down payment covers the whole balance — take it as a payment instead.");
       return;
     }
@@ -164,7 +183,7 @@ export function AgreePlanDialog({ accountId, onClose, onAgreed }: Props) {
         entryIds: [...ticked],
         installmentCount: count,
         startDate,
-        downPayment: downPayment.toFixed(2),
+        downPayment: (downCents / 100).toFixed(2),
         ...(notes ? { notes } : {}),
       };
       const res = await apiClient.post<{ planId: string }>(
@@ -209,7 +228,7 @@ export function AgreePlanDialog({ accountId, onClose, onAgreed }: Props) {
         )}
 
         <h3 style={groupTitle}>
-          Arrears covered — <strong>{money(total)}</strong>
+          Arrears covered — <strong>{money(totalCents)}</strong>
         </h3>
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 20 }}>
           {debts.map((row) => (
@@ -230,7 +249,7 @@ export function AgreePlanDialog({ accountId, onClose, onAgreed }: Props) {
                 style={{ accentColor: "var(--accent-primary)" }}
               />
               <span style={{ width: 86, textAlign: "right", fontWeight: 600 }}>
-                {money(Number(row.openAmount))}
+                {money(cents(row.openAmount))}
               </span>
               <span style={{ flex: 1 }}>
                 {describe(row) ?? row.reasonLabel ?? row.type}
@@ -253,10 +272,17 @@ export function AgreePlanDialog({ accountId, onClose, onAgreed }: Props) {
         <h3 style={groupTitle}>What we ask for</h3>
         <p style={{ margin: "0 0 14px", fontSize: 14, lineHeight: 2.2 }}>
           A down payment of{" "}
+          {/*
+              A draft string, not a number: binding a number means the
+              empty string has to be coerced, so backspacing the last
+              digit snaps the field to 0 and the operator cannot type a
+              replacement. The same defect was found and fixed on the
+              terms screen and not carried across.
+            */}
           <input
             type="number"
             aria-label="Down payment"
-            value={downPayment}
+            value={downPaymentEdited ?? (downCents / 100).toFixed(2)}
             step="0.01"
             min={0}
             onChange={(e) => {
@@ -287,10 +313,17 @@ export function AgreePlanDialog({ accountId, onClose, onAgreed }: Props) {
             ))}
           </select>{" "}
           payments, the first due{" "}
+          {/*
+              Bounded at the control. The API refuses a date beyond the
+              tenant's `maxStartDateDays`, and an operator should not
+              have to press Save to be told.
+            */}
           <input
             type="date"
             aria-label="First payment date"
             value={startDate}
+            min={today}
+            max={addDays(today, terms.maxStartDateDays)}
             onChange={(e) => setStartDate(e.target.value)}
             style={{ ...inlineControl, width: 150 }}
           />

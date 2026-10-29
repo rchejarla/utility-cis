@@ -1958,20 +1958,27 @@ model PaymentPlan {
 
 /// Which debts a plan covers.
 ///
-/// Keyed on the entry, so a debit belongs to at most one plan. These
-/// rows persist after the plan ends — they are history, and the key is
-/// RESTRICT — which is why suppression must join through to
+/// These rows persist after the plan ends — they are history, and every
+/// key is RESTRICT — which is why suppression must join through to
 /// `PaymentPlan.status` and never test membership here: a membership
 /// test would suppress a debit forever, including after default, and
 /// would pass every test written while the plan was still running.
+///
+/// Keyed per plan, so a debit may appear in more than one plan over
+/// time. "Not in two **live** plans at once" is the invariant that
+/// actually matters, and no index can express it — the predicate lives
+/// on `PaymentPlan.status`, in another table. `createPaymentPlan`
+/// enforces it, and the one-ACTIVE-plan-per-account rule makes it
+/// structural: a debit must be on the plan's own account, and an account
+/// may have one live plan.
 model PaymentPlanDebit {
   utilityId String   @map("utility_id") @db.Uuid
   planId    String   @map("plan_id") @db.Uuid
   entryId   String   @map("entry_id") @db.Uuid
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  @@id([utilityId, entryId])
-  @@index([utilityId, planId])
+  @@id([utilityId, planId, entryId])
+  @@index([utilityId, entryId])
   @@map("payment_plan_debit")
 }
 

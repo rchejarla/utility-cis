@@ -14,6 +14,13 @@ export const NOTIFICATION_EVENT_TYPES = [
   { key: "delinquency.tier_2", label: "Formal Past Due Notice (Tier 2)", category: "Delinquency" },
   { key: "delinquency.tier_3", label: "Shut-Off Warning (Tier 3)", category: "Delinquency" },
   { key: "delinquency.tier_4", label: "Service Disconnection (Tier 4)", category: "Delinquency" },
+  /*
+   * Sent once per instalment that goes late, by the nightly plan sweep.
+   * The design's reason for the Late state existing at all is that
+   * nobody is defaulted silently — which needs a template a tenant can
+   * actually have, so this entry is not optional decoration.
+   */
+  { key: "payment_plan.installment_late", label: "Payment Plan Instalment Late", category: "Delinquency" },
   { key: "portal.welcome", label: "Portal Welcome", category: "Portal" },
   { key: "portal.password_reset", label: "Password Reset", category: "Portal" },
   { key: "meter.high_usage", label: "High Usage Alert", category: "Meter Events" },

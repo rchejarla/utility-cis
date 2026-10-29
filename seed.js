@@ -80,8 +80,8 @@ async function main() {
    * would use on an insert, which reads as if the new plan could not be
    * written. Child first within the pair, too.
    */
-  if (p.paymentPlanDebit) await p.paymentPlanDebit.deleteMany({});
-  if (p.paymentPlan) await p.paymentPlan.deleteMany({});
+  if (p.paymentPlanDebit) await p.paymentPlanDebit.deleteMany({ where: { utilityId: UID } });
+  if (p.paymentPlan) await p.paymentPlan.deleteMany({ where: { utilityId: UID } });
   await p.cisUser.deleteMany({ where: { utilityId: UID } });
   await p.role.deleteMany({ where: { utilityId: UID } });
   await p.utilityModule.deleteMany({ where: { utilityId: UID } });

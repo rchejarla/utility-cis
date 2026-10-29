@@ -176,6 +176,16 @@ async function resolveVariables(
   if (context.delinquencyDueDate) vars["delinquency.dueDate"] = context.delinquencyDueDate;
   if (context.delinquencyActionType) vars["delinquency.actionType"] = context.delinquencyActionType;
 
+  // Payment plan context — likewise passed as strings by the sweep,
+  // which has already derived them from the ledger.
+  if (context.paymentPlanRemaining) vars["paymentPlan.remaining"] = context.paymentPlanRemaining;
+  if (context.paymentPlanLateInstallments)
+    vars["paymentPlan.lateInstallments"] = context.paymentPlanLateInstallments;
+  if (context.paymentPlanNextDueDate)
+    vars["paymentPlan.nextDueDate"] = context.paymentPlanNextDueDate;
+  if (context.paymentPlanNextAmount)
+    vars["paymentPlan.nextAmount"] = context.paymentPlanNextAmount;
+
   // Portal URLs
   const baseUrl = config.WEB_URL;
   vars["portal.loginUrl"] = `${baseUrl}/portal/login`;
