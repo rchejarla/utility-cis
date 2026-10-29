@@ -148,7 +148,56 @@ export interface NavSection {
  * API change, not a nav change.
  */
 
-const navSections: NavSection[] = [
+/**
+ * The one item that reads as "you are here", or null if no item claims
+ * the path.
+ *
+ * **Decided across every section, not within one.** The longest href
+ * that the path matches wins, so `/delinquency/plan-terms` beats
+ * `/delinquency`. This used to be settled inside each section, which
+ * held only while the competing items shared one: when the delinquency
+ * config pages moved to Configuration, `/delinquency` in Collections
+ * had nothing longer beside it to lose to, so opening Payment Plan
+ * Terms lit up Collections → Delinquency too and swapped the open
+ * section out from under the page.
+ *
+ * Every declared item is considered, not only the ones this operator
+ * may see. A page hidden from someone's menu should light up nothing
+ * rather than hand the highlight to a shorter prefix they do hold.
+ */
+export function activeHrefFor(pathname: string, sections: NavSection[]): string | null {
+  let best: string | null = null;
+  for (const section of sections) {
+    for (const item of section.items) {
+      const matches =
+        pathname === item.href ||
+        (item.href !== "/" && pathname.startsWith(item.href + "/"));
+      if (!matches) continue;
+      if (best === null || item.href.length > best.length) best = item.href;
+    }
+  }
+  return best;
+}
+
+/**
+ * The section to open for a route: the one owning the active item.
+ *
+ * Built on `activeHrefFor` rather than matching again, so the highlight
+ * and the open section cannot disagree. They did: this used to take the
+ * first section holding any prefix match, and Collections precedes
+ * Configuration, so arriving at Payment Plan Terms shut Configuration
+ * and opened Collections.
+ *
+ * Null when no item claims the path, which leaves the caller's stored
+ * choice standing rather than forcing a section open.
+ */
+export function sectionTitleFor(pathname: string, sections: NavSection[]): string | null {
+  const href = activeHrefFor(pathname, sections);
+  if (href === null) return null;
+  return sections.find((s) => s.items.some((i) => i.href === href))?.title ?? null;
+}
+
+export const navSections: NavSection[] = [
   {
     title: "Operations",
     icon: faBriefcase,
@@ -458,6 +507,7 @@ function CollapsibleSection({
   section,
   filterByPermissions,
   pathname,
+  activeHref,
   sidebarCollapsed,
   sectionOpen,
   onToggle,
@@ -468,6 +518,12 @@ function CollapsibleSection({
   section: NavSection;
   filterByPermissions: boolean;
   pathname: string;
+  /**
+   * The one href that is "here", decided over the whole nav. Passed in
+   * rather than recomputed per section, because a section cannot see
+   * the items that should outrank its own.
+   */
+  activeHref: string | null;
   sidebarCollapsed: boolean;
   sectionOpen: boolean;
   onToggle: () => void;
@@ -501,24 +557,13 @@ function CollapsibleSection({
     : section.items;
 
   /**
-   * Longest-prefix wins, so `/delinquency/rules` does not also light up
-   * `/delinquency`. Shared by the expanded list and the collapsed
+   * One href is "here", chosen once over the whole nav by
+   * `activeHrefFor`. Shared by the expanded list and the collapsed
    * flyout rather than duplicated — they must agree on what "here"
-   * means.
+   * means, and so must every section.
    */
   function isItemActive(item: NavItem): boolean {
-    const exactMatch = pathname === item.href;
-    const prefixMatch = item.href !== "/" && pathname.startsWith(item.href + "/");
-    const hasBetterMatch =
-      !exactMatch &&
-      prefixMatch &&
-      items.some(
-        (other) =>
-          other.href !== item.href &&
-          other.href.length > item.href.length &&
-          (pathname === other.href || pathname.startsWith(other.href + "/")),
-      );
-    return exactMatch || (prefixMatch && !hasBetterMatch);
+    return item.href === activeHref;
   }
 
   // On the collapsed rail the section icon is the only thing shown, so
@@ -772,6 +817,10 @@ export function Sidebar({
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const width = collapsed ? 64 : 240;
 
+  // Settled here, over the sections this sidebar was actually given, so
+  // no section can light up an item another section outranks.
+  const activeHref = activeHrefFor(pathname, sections);
+
   /**
    * Which collapsed-rail flyout is showing, if any. Held here rather
    * than per section so clicking a second icon switches straight to it
@@ -790,13 +839,7 @@ export function Sidebar({
   // the right one immediately.
   const [openSection, setOpenSection] = useState<string | null>(null);
   useEffect(() => {
-    const sectionForActive = sections.find((s) =>
-      s.items.some(
-        (item) =>
-          pathname === item.href ||
-          (item.href !== "/" && pathname.startsWith(item.href + "/")),
-      ),
-    );
+    const sectionForActive = sectionTitleFor(pathname, sections);
     let stored: string | null = null;
     try {
       stored = window.localStorage.getItem(OPEN_SECTION_KEY);
@@ -808,7 +851,7 @@ export function Sidebar({
     // route matches a section, fall back to the persisted choice, then
     // to the first non-default-collapsed section.
     if (sectionForActive) {
-      setOpenSection(sectionForActive.title);
+      setOpenSection(sectionForActive);
     } else if (stored && sections.some((s) => s.title === stored)) {
       setOpenSection(stored);
     } else {
@@ -925,6 +968,7 @@ export function Sidebar({
             section={section}
             filterByPermissions={filterByPermissions}
             pathname={pathname}
+            activeHref={activeHref}
             sidebarCollapsed={collapsed}
             sectionOpen={openSection === section.title}
             onToggle={() => toggleOpenSection(section.title)}
