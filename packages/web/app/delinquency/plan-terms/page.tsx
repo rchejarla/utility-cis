@@ -310,6 +310,23 @@ export default function PlanTermsPage() {
 const inlineControl = {
   padding: "4px 8px",
   fontSize: 13,
+  /*
+   * Height stated, not left to each control to work out.
+   *
+   * These sit inside `Sentence`, whose paragraph runs at
+   * `line-height: 2.1` so prose with boxes in it stays readable. An
+   * <input> inherits that (13 × 2.1 = 27.3px) and a <select> does not,
+   * because the UA stylesheet pins selects to `normal` — 37px text
+   * boxes beside a 29px dropdown on the same line.
+   *
+   * Setting `line-height` alone does not finish the job: Chrome ignores
+   * it on a <select> altogether, which still left a pixel in it. 29px
+   * is the height the select arrives at by itself, so the inputs match
+   * the control that cannot be told otherwise rather than the reverse.
+   */
+  height: 29,
+  lineHeight: 1.4,
+  boxSizing: "border-box",
   background: "var(--bg-deep)",
   border: "1px solid var(--border)",
   borderRadius: "var(--radius)",
