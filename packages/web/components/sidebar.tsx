@@ -59,6 +59,7 @@ import {
   faRecycle,
   faMoneyCheckDollar,
   faHandHoldingDollar,
+  faHandshake,
   faSliders,
   faGears,
   faShieldHalved,
@@ -270,6 +271,16 @@ const navSections: NavSection[] = [
         icon: faGear,
         module: "delinquency",
         tooltip: "Tiers, thresholds and the notice each one sends",
+      },
+      {
+        href: "/delinquency/plan-terms",
+        // Beside the rules, because one place should answer "how do we
+        // chase money, and what do we offer instead". Carries its
+        // subject for the same reason the line above does.
+        label: "Payment Plan Terms",
+        icon: faHandshake,
+        module: "delinquency",
+        tooltip: "What we offer a customer who cannot pay at once, and what breaks it",
       },
     ],
   },

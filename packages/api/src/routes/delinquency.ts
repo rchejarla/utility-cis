@@ -6,10 +6,13 @@ import {
   delinquencyActionQuerySchema,
   resolveDelinquencySchema,
   escalateDelinquencySchema,
+  PaymentPlanTermsSchema,
 } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
 import { paginatedTenantList } from "../lib/pagination.js";
 import { evaluateAll, resolveAccount, escalateAccount } from "../services/delinquency.service.js";
+import { resolvePlanTerms } from "../services/payment-plan/terms.js";
+import { patchSettingsNamespace } from "../services/tenant-config.service.js";
 import { resolveReason } from "../services/ar/reason.service.js";
 import { assertServiceRequestTypeCode } from "../services/service-request-type-def.service.js";
 
@@ -145,6 +148,45 @@ export async function delinquencyRoutes(app: FastifyInstance) {
       const { id } = request.params as { id: string };
       await prisma.delinquencyRule.update({ where: { id, utilityId }, data: { isActive: false } });
       return reply.status(204).send();
+    },
+  );
+
+  // ─── Payment plan terms ────────────────────────────────────────
+
+  /*
+   * The tenant's terms for deferred payment agreements, beside the rules
+   * rather than in Settings: delinquency rules and plan terms are the
+   * same kind of thing — how this utility chases money — and an operator
+   * configuring collections should not have to know that one is a table
+   * and the other is JSON. Design §4a.
+   */
+  app.get(
+    "/api/v1/delinquency/plan-terms",
+    { config: { module: "delinquency", permission: "VIEW" } },
+    async (request, reply) => {
+      const { utilityId } = request.user;
+      return reply.send({ terms: await resolvePlanTerms(utilityId) });
+    },
+  );
+
+  app.put(
+    "/api/v1/delinquency/plan-terms",
+    { config: { module: "delinquency", permission: "EDIT" } },
+    async (request, reply) => {
+      const { utilityId } = request.user;
+
+      /*
+       * The whole namespace, validated as a whole: `.strict()` refuses a
+       * misspelled key rather than storing it to be ignored, and the
+       * min/max refinement refuses a range that would offer no valid
+       * plan at all. Parsing also fills any key the client omitted with
+       * its default, so what lands in the column is always complete —
+       * a partial namespace is then only ever something written before
+       * this route existed.
+       */
+      const terms = PaymentPlanTermsSchema.parse(request.body);
+      await patchSettingsNamespace(utilityId, "paymentPlans", terms);
+      return reply.send({ terms });
     },
   );
 
