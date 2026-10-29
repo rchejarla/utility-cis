@@ -48,8 +48,17 @@ export interface PaymentPlanDetail {
   approvedBy: string;
   statusChangedAt: string;
   createdAt: string;
-  /** What the customer has actually paid toward the covered debts. */
-  paidToDate: string;
+  /**
+   * How much of the covered debt is gone: the balance frozen at
+   * agreement less what is still open on those debits.
+   *
+   * Deliberately not `paidToDate`. Money is only one of the ways a debt
+   * reaches zero — a waiver or a write-off clears it with no payment at
+   * all — and the ledger is the only thing that knows which happened.
+   * Naming it "paid" invited a CSR to read it as the customer's payment
+   * record, which it is not.
+   */
+  clearedToDate: string;
   progress: PlanProgress & {
     /** `late`, under the name the panel reads out. */
     installmentsBehind: number;
@@ -124,37 +133,89 @@ function scheduleOf(plan: {
   ];
 }
 
-/** What has reached the covered debits: the frozen balance less what is open. */
-async function paidTowardPlan(
+/**
+ * What is still open on each plan's covered debits, keyed by plan.
+ *
+ * One query for however many plans are asked about. The list read used
+ * to call a single-plan version of this inside its loop, so an account
+ * with thirty plans cost thirty round trips to render one panel; a plan
+ * absent from the result has no covered debits left and is treated as
+ * nothing open, exactly as the single-plan version's `COALESCE` did.
+ */
+async function openAmountByPlan(
   utilityId: string,
-  planId: string,
-  totalBalance: Prisma.Decimal,
-): Promise<Prisma.Decimal> {
-  const [row] = await prisma.$queryRaw<Array<{ still_open: Prisma.Decimal }>>`
-    SELECT COALESCE(SUM(GREATEST(e.open_amount, 0)), 0) AS still_open
+  planIds: string[],
+): Promise<Map<string, Prisma.Decimal>> {
+  // `IN ()` is a syntax error, and an empty list has no answer to give.
+  if (planIds.length === 0) return new Map();
+
+  const rows = await prisma.$queryRaw<Array<{ plan_id: string; still_open: Prisma.Decimal }>>`
+    SELECT pd.plan_id, COALESCE(SUM(GREATEST(e.open_amount, 0)), 0) AS still_open
       FROM payment_plan_debit pd
       JOIN ledger_entry e
         ON e.utility_id = pd.utility_id AND e.id = pd.entry_id
      WHERE pd.utility_id = ${utilityId}::uuid
-       AND pd.plan_id = ${planId}::uuid`;
-  const open = new Prisma.Decimal(row?.still_open ?? 0);
+       AND pd.plan_id IN (${Prisma.join(planIds.map((id) => Prisma.sql`${id}::uuid`))})
+     GROUP BY pd.plan_id`;
+
+  return new Map(rows.map((r) => [r.plan_id, new Prisma.Decimal(r.still_open)]));
+}
+
+/** The frozen balance less what is still open, floored at zero. */
+function clearedOf(totalBalance: Prisma.Decimal, open: Prisma.Decimal): Prisma.Decimal {
   return Prisma.Decimal.max(totalBalance.minus(open), new Prisma.Decimal(0));
+}
+
+/**
+ * Capped, because an account that has re-agreed a plan every month for
+ * years would otherwise return all of them to a browser. The same shape
+ * the ledger list beside it uses.
+ */
+const DEFAULT_PLAN_LIMIT = 50;
+const MAX_PLAN_LIMIT = 200;
+
+export interface PaymentPlanListPage {
+  data: PaymentPlanSummary[];
+  /** `total` is how many exist, which tells a caller the page is partial. */
+  meta: { total: number; limit: number };
 }
 
 export async function listAccountPaymentPlans(
   utilityId: string,
   accountId: string,
-): Promise<PaymentPlanSummary[]> {
-  const plans = await prisma.paymentPlan.findMany({
-    where: { utilityId, accountId },
-    orderBy: { createdAt: "desc" },
-  });
+  opts: { limit?: number } = {},
+): Promise<PaymentPlanListPage> {
+  /*
+   * A non-numeric `?limit=` arrives as NaN, and `take: NaN` reaches
+   * Prisma as a 500 rather than a refusal. Falling back to the default
+   * is the same answer as omitting the parameter, which is what the
+   * caller meant if they sent nonsense.
+   */
+  const requested = Number.isFinite(opts.limit) ? Math.trunc(opts.limit!) : DEFAULT_PLAN_LIMIT;
+  const take = Math.min(Math.max(requested, 1), MAX_PLAN_LIMIT);
 
-  const out: PaymentPlanSummary[] = [];
-  for (const plan of plans) {
-    const paid = await paidTowardPlan(utilityId, plan.id, plan.totalBalance);
-    const progress = planProgress(plan, paid);
-    out.push({
+  const where = { utilityId, accountId };
+  const [plans, total] = await Promise.all([
+    /*
+     * Newest first, which also keeps the live plan on the first page:
+     * a plan can only be agreed once the previous one has ended, so an
+     * ACTIVE plan is always the most recent row. The panel picks the
+     * ACTIVE one out of this list, and a cap that could push it off
+     * page one would show "no plan" on an account that has one.
+     */
+    prisma.paymentPlan.findMany({ where, orderBy: { createdAt: "desc" }, take }),
+    prisma.paymentPlan.count({ where }),
+  ]);
+
+  const openByPlan = await openAmountByPlan(
+    utilityId,
+    plans.map((p) => p.id),
+  );
+
+  const data = plans.map((plan) => {
+    const open = openByPlan.get(plan.id) ?? new Prisma.Decimal(0);
+    const progress = planProgress(plan, clearedOf(plan.totalBalance, open));
+    return {
       id: plan.id,
       status: plan.status,
       totalBalance: money(plan.totalBalance)!,
@@ -166,9 +227,10 @@ export async function listAccountPaymentPlans(
       onTrack: progress.onTrack,
       installmentsBehind: progress.late,
       createdAt: plan.createdAt.toISOString(),
-    });
-  }
-  return out;
+    };
+  });
+
+  return { data, meta: { total, limit: take } };
 }
 
 export async function getPaymentPlan(
@@ -198,8 +260,12 @@ export async function getPaymentPlan(
     },
   });
 
-  const paid = await paidTowardPlan(utilityId, plan.id, plan.totalBalance);
-  const progress = planProgress(plan, paid);
+  const openByPlan = await openAmountByPlan(utilityId, [plan.id]);
+  const cleared = clearedOf(
+    plan.totalBalance,
+    openByPlan.get(plan.id) ?? new Prisma.Decimal(0),
+  );
+  const progress = planProgress(plan, cleared);
 
   return {
     id: plan.id,
@@ -215,7 +281,7 @@ export async function getPaymentPlan(
     approvedBy: plan.approvedBy,
     statusChangedAt: plan.statusChangedAt.toISOString(),
     createdAt: plan.createdAt.toISOString(),
-    paidToDate: paid.toFixed(2),
+    clearedToDate: cleared.toFixed(2),
     progress: { ...progress, installmentsBehind: progress.late },
     atRisk:
       plan.status === "ACTIVE" && plan.currentBillCounts

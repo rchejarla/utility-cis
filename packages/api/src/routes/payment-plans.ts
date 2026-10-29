@@ -26,7 +26,12 @@ export async function paymentPlanRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = request.params as { id: string };
-      return reply.send({ data: await listAccountPaymentPlans(utilityId, id) });
+      const q = request.query as { limit?: string };
+      return reply.send(
+        await listAccountPaymentPlans(utilityId, id, {
+          limit: q.limit ? Number(q.limit) : undefined,
+        }),
+      );
     },
   );
 

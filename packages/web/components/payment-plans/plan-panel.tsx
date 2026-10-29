@@ -52,7 +52,7 @@ interface PlanDetail {
   installmentFrequency: string;
   startDate: string;
   statusChangedAt: string;
-  paidToDate: string;
+  clearedToDate: string;
   progress: {
     onTrack: boolean;
     installmentsBehind: number;
@@ -165,15 +165,15 @@ export function PlanPanel({ accountId, uncoveredPastDue }: Props) {
   /*
    * The next payment still owed, not merely the next by date. Taking
    * the first future row told a customer who paid this morning that
-   * their next payment was due today. What has been paid is known
-   * (`paidToDate`), so walk the schedule's cumulative total and stop at
-   * the first row that money has not yet reached.
+   * their next payment was due today. How much of the debt is gone is
+   * known (`clearedToDate`), so walk the schedule's cumulative total
+   * and stop at the first row that money has not yet reached.
    */
-  const paid = Number(plan.paidToDate);
+  const cleared = Number(plan.clearedToDate);
   let cumulative = 0;
   const next = plan.schedule.find((r) => {
     cumulative += Number(r.amount);
-    return cumulative > paid;
+    return cumulative > cleared;
   });
 
   return (

@@ -30,7 +30,7 @@ function plan(over: Record<string, unknown> = {}) {
     approvedBy: "user-1",
     statusChangedAt: "2026-10-28T00:00:00.000Z",
     createdAt: "2026-10-28T00:00:00.000Z",
-    paidToDate: "117.04",
+    clearedToDate: "117.04",
     progress: {
       due: 1,
       late: 0,
@@ -217,7 +217,7 @@ describe("plan panel", () => {
     // due today.
     get.mockImplementation((url: string) =>
       url.includes("/payment-plans/")
-        ? Promise.resolve(plan({ paidToDate: "175.57" }))
+        ? Promise.resolve(plan({ clearedToDate: "175.57" }))
         : Promise.resolve({ data: [{ id: "plan-1", status: "ACTIVE" }] }),
     );
 

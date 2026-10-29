@@ -118,11 +118,12 @@ function scheduleAmounts(plan: PlanTermsSnapshot): Prisma.Decimal[] {
  * customer is current or three payments behind, and "are they keeping
  * to it" is the first thing anyone asks on a call.
  *
- * `paidToDate` is what has reached the covered debits — the frozen
- * balance less what is still open on them — not a count of payments
- * received. Money arrives by cash, cheque and lockbox, and a waiver
+ * `clearedToDate` is how much of the covered debt is gone — the frozen
+ * balance less what is still open on those debits — not a count of
+ * payments received, which is why it is not called "paid". Money
+ * arrives by cash, cheque and lockbox, and a waiver or a write-off
  * takes a debt to zero with no payment at all; the ledger is the only
- * thing that knows.
+ * thing that knows which happened.
  *
  * **Late is not missed.** A payment is late once its date has passed
  * and what has been paid does not cover it; it is missed only once its
@@ -137,10 +138,10 @@ function scheduleAmounts(plan: PlanTermsSnapshot): Prisma.Decimal[] {
  */
 export function planProgress(
   plan: PlanTermsSnapshot,
-  paidToDate: Prisma.Decimal | string,
+  clearedToDate: Prisma.Decimal | string,
   asOf: Date = new Date(),
 ): PlanProgress {
-  const paid = new Prisma.Decimal(paidToDate);
+  const paid = new Prisma.Decimal(clearedToDate);
   const amounts = scheduleAmounts(plan);
 
   let cumulative = new Prisma.Decimal(0);

@@ -126,6 +126,45 @@ const post = (url: string, body: Record<string, unknown>) =>
 const get = (url: string) =>
   app.inject({ method: "GET", url, headers: headers() });
 
+/** Move a covered debit's open amount, as a payment would. */
+async function settle(entryId: string, to: string) {
+  await seedAsPlatform(async () =>
+    prismaImports.prisma.ledgerEntry.update({
+      where: { id: entryId },
+      data: { openAmount: to },
+    }),
+  );
+}
+
+/**
+ * Two plans on one account: a cancelled one that has been partly paid,
+ * and a live one over a different debt.
+ *
+ * Two plans need the first one ended, since an account may hold only one
+ * live plan — which is also why the live plan is always the newest row.
+ */
+async function twoPlans(): Promise<{ oldPlanId: string }> {
+  const d1 = await debit({ amount: "300.00" });
+  const first = await post(`/api/v1/accounts/${fix.accountId}/payment-plans`, {
+    entryIds: [d1.id],
+    installmentCount: 3,
+    startDate: iso(daysOut(0)),
+  });
+  const oldPlanId = first.json().planId as string;
+  await post(`/api/v1/payment-plans/${oldPlanId}/cancel`, {});
+  // $200 of the $300 reached it, so its remaining is $100.
+  await settle(d1.id, "100.00");
+
+  const d2 = await debit({ amount: "150.00" });
+  await post(`/api/v1/accounts/${fix.accountId}/payment-plans`, {
+    entryIds: [d2.id],
+    installmentCount: 3,
+    startDate: iso(daysOut(0)),
+  });
+
+  return { oldPlanId };
+}
+
 beforeAll(async () => {
   const booted = await bootPostgres({ utilities: [TENANT_A] });
   pgContainer = booted.container;
@@ -244,6 +283,67 @@ describe("GET /api/v1/accounts/:id/payment-plans", () => {
     const res = await get(`/api/v1/accounts/${fix.accountId}/payment-plans`);
     expect(res.statusCode).toBe(200);
     expect(res.json().data).toEqual([]);
+  });
+
+  it("reports each plan's remaining from its own covered debts", async () => {
+    /*
+     * One aggregate query serves every plan in the list, so a grouping
+     * that mixed them would show here: summing every covered debit
+     * across both plans gives $50.00 and $0.00 where the right answers
+     * are $100.00 and $150.00.
+     */
+    const { oldPlanId } = await twoPlans();
+
+    const res = await get(`/api/v1/accounts/${fix.accountId}/payment-plans`);
+    const rows = res.json().data;
+
+    expect(rows).toHaveLength(2);
+    // Newest first, and the older one is the cancelled plan.
+    expect(rows[0].remaining).toBe("150.00");
+    expect(rows[1].id).toBe(oldPlanId);
+    expect(rows[1].remaining).toBe("100.00");
+  });
+
+  it("caps how many plans it returns and still reports the true total", async () => {
+    /*
+     * An account that has re-agreed a plan every month for three years
+     * has 36 of them, and the panel reads this list only to pick one.
+     * The cap is the same shape the ledger list beside it uses; `total`
+     * is what tells a caller the page is not everything.
+     */
+    await twoPlans();
+
+    const res = await get(`/api/v1/accounts/${fix.accountId}/payment-plans?limit=1`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toHaveLength(1);
+    expect(res.json().meta).toMatchObject({ total: 2, limit: 1 });
+  });
+
+  it("falls back to the default limit rather than 500ing on a limit that is not a number", async () => {
+    // `Number("abc")` is NaN, and `take: NaN` reaches Prisma as a 500.
+    // Nonsense means the same as omitting the parameter.
+    await twoPlans();
+
+    const res = await get(`/api/v1/accounts/${fix.accountId}/payment-plans?limit=abc`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toHaveLength(2);
+  });
+
+  it("keeps the live plan on the first page, which is the one the panel picks", async () => {
+    /*
+     * The panel takes the ACTIVE plan from this list, so a cap that
+     * could push it off page one would silently show "no plan" on an
+     * account that has one. Newest-first is enough: a plan can only be
+     * agreed once the previous one has ended, so an ACTIVE plan is
+     * always the most recent row.
+     */
+    await twoPlans();
+
+    const res = await get(`/api/v1/accounts/${fix.accountId}/payment-plans?limit=1`);
+
+    expect(res.json().data[0].status).toBe("ACTIVE");
   });
 });
 
