@@ -176,15 +176,15 @@ describe("sweepPaymentPlans — completion", () => {
     const b = await debit({ amount: "40.00" });
     const planId = await planOver([a.id, b.id]);
 
-    expect(await sweep()).toEqual({ completed: 0 });
+    expect(await sweep()).toMatchObject({ completed: 0 });
     expect(await statusOf(planId)).toBe("ACTIVE");
 
     await settle(a.id);
     // One of two settled is not satisfied.
-    expect(await sweep()).toEqual({ completed: 0 });
+    expect(await sweep()).toMatchObject({ completed: 0 });
 
     await settle(b.id);
-    expect(await sweep()).toEqual({ completed: 1 });
+    expect(await sweep()).toMatchObject({ completed: 1 });
     expect(await statusOf(planId)).toBe("COMPLETED");
   });
 
@@ -198,7 +198,7 @@ describe("sweepPaymentPlans — completion", () => {
 
     await settle(a.id);
 
-    expect(await sweep()).toEqual({ completed: 1 });
+    expect(await sweep()).toMatchObject({ completed: 1 });
     expect(await statusOf(planId)).toBe("COMPLETED");
   });
 
@@ -207,8 +207,8 @@ describe("sweepPaymentPlans — completion", () => {
     const planId = await planOver([a.id]);
     await settle(a.id);
 
-    expect(await sweep()).toEqual({ completed: 1 });
-    expect(await sweep()).toEqual({ completed: 0 });
+    expect(await sweep()).toMatchObject({ completed: 1 });
+    expect(await sweep()).toMatchObject({ completed: 0 });
     expect(await statusOf(planId)).toBe("COMPLETED");
   });
 
@@ -217,7 +217,7 @@ describe("sweepPaymentPlans — completion", () => {
     const planId = await planOver([a.id]);
     await settle(a.id, "0.01");
 
-    expect(await sweep()).toEqual({ completed: 0 });
+    expect(await sweep()).toMatchObject({ completed: 0 });
     expect(await statusOf(planId)).toBe("ACTIVE");
   });
 
@@ -231,7 +231,7 @@ describe("sweepPaymentPlans — completion", () => {
     await settle(a.id);
     await settle(b.id);
 
-    expect(await sweep()).toEqual({ completed: 0 });
+    expect(await sweep()).toMatchObject({ completed: 0 });
     expect(await statusOf(cancelled)).toBe("CANCELLED");
     expect(await statusOf(defaulted)).toBe("DEFAULTED");
   });
@@ -262,7 +262,7 @@ describe("sweepPaymentPlans — completion", () => {
     });
     await settle(theirs.id);
 
-    expect(await sweep(TENANT_A)).toEqual({ completed: 0 });
+    expect(await sweep(TENANT_A)).toMatchObject({ completed: 0 });
     expect(await statusOf(theirPlan)).toBe("ACTIVE");
   });
 });

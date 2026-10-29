@@ -1939,6 +1939,11 @@ model PaymentPlan {
   suppressFeesWhileKept         Boolean @map("suppress_fees_while_kept")
   assessSuppressedFeesOnDefault Boolean @map("assess_suppressed_fees_on_default")
 
+  /// The highest instalment already noticed as late — 0 for the down
+  /// payment, n for instalment n. The sweep runs nightly, so a notice
+  /// keyed on "is late" alone would mail the customer every night.
+  lateNoticeInstallment Int? @map("late_notice_installment")
+
   /// When the status last moved. `updatedAt` cannot answer "defaulted
   /// when?" — editing a note in March would relabel a December default.
   statusChangedAt DateTime @default(now()) @map("status_changed_at") @db.Timestamptz

@@ -7,10 +7,7 @@ import {
 } from "../lib/queues.js";
 import { scopedJob } from "../lib/queue-scope.js";
 import { evaluateDelinquencyForTenant } from "../services/delinquency.service.js";
-import {
-  sweepDelinquencyWorkOrders,
-  sweepReconnections,
-} from "../services/delinquency-work-order.service.js";
+import { runDelinquencyPasses } from "../services/delinquency-passes.js";
 
 /**
  * Per-tenant consumer for the delinquency-tenant queue.
@@ -18,6 +15,11 @@ import {
  * Concurrency 5 (per spec §3.3): five tenants in parallel per worker
  * replica. Each evaluation does multiple DB queries; with the default
  * Prisma connection pool this stays comfortably below saturation.
+ *
+ * The four passes and their order live in `runDelinquencyPasses`, not
+ * here: the order is the part with consequences, and a sequence inlined
+ * in a job handler is a sequence nothing can test. This file is the
+ * queue binding and the log lines.
  *
  * The handler updates utility_config.delinquencyLastRunAt on success
  * (inside evaluateDelinquencyForTenant) so the dispatcher's
@@ -34,17 +36,30 @@ export function buildDelinquencyWorker(): Worker<DelinquencyTenantJobData> {
     QUEUE_NAMES.delinquencyTenant,
     scopedJob(QUEUE_NAMES.delinquencyTenant, async (job: Job<DelinquencyTenantJobData>) => {
       const { utilityId, reason } = job.data;
-      const result = await withTelemetry(
-        QUEUE_NAMES.delinquencyTenant,
-        () => evaluateDelinquencyForTenant(utilityId, new Date()),
+
+      const { plans, evaluation, reconnections, workOrders } = await runDelinquencyPasses(
+        utilityId,
+        new Date(),
+        (id, now) =>
+          withTelemetry(QUEUE_NAMES.delinquencyTenant, () =>
+            evaluateDelinquencyForTenant(id, now),
+          ),
       );
 
-      /*
-       * Accounts that have cleared, before anything is dispatched
-       * against them: an account that paid in the same hour it passed
-       * the shut-off tier should have no crew sent either way.
-       */
-      const reconnections = await sweepReconnections(utilityId);
+      if (plans.completed > 0 || plans.defaulted > 0 || plans.notified > 0) {
+        logger.info(
+          {
+            component: "delinquency-worker",
+            utilityId,
+            completed: plans.completed,
+            defaulted: plans.defaulted,
+            notified: plans.notified,
+            behind: plans.late.length,
+          },
+          "Payment plans swept",
+        );
+      }
+
       if (reconnections.resolved > 0) {
         logger.info(
           { component: "delinquency-worker", utilityId, ...reconnections },
@@ -52,13 +67,6 @@ export function buildDelinquencyWorker(): Worker<DelinquencyTenantJobData> {
         );
       }
 
-      /*
-       * Then the field work the evaluation implies, in the same tenant
-       * scope. A separate pass because it is keyed on state rather than
-       * on the evaluation's own result: an action whose work order could
-       * not be raised last tick is picked up by this one.
-       */
-      const workOrders = await sweepDelinquencyWorkOrders(utilityId);
       if (workOrders.created > 0) {
         logger.info(
           { component: "delinquency-worker", utilityId, ...workOrders },
@@ -66,18 +74,18 @@ export function buildDelinquencyWorker(): Worker<DelinquencyTenantJobData> {
         );
       }
 
-      if (result.actionsCreated > 0) {
+      if (evaluation.actionsCreated > 0) {
         logger.info(
           {
             component: "delinquency-worker",
             utilityId,
             reason: reason ?? "unknown",
-            ...result,
+            ...evaluation,
           },
           "Delinquency evaluation produced actions",
         );
       }
-      return result;
+      return evaluation;
     }),
     {
       ...workerOptions(QUEUE_NAMES.delinquencyTenant),
