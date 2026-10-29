@@ -328,7 +328,7 @@ export async function sweepPaymentPlans(
      */
     const brokenByBill =
       plan.currentBillCounts &&
-      (await hasUncoveredPastDue(utilityId, plan.accountId, asOf));
+      (await hasUncoveredPastDue(utilityId, plan.accountId, asOf, plan.graceDays));
 
     if (progress.broken || brokenByBill) {
       /*
@@ -494,9 +494,11 @@ async function hasUncoveredPastDue(
   utilityId: string,
   accountId: string,
   asOf: Date,
+  graceDays: number,
 ): Promise<boolean> {
   /*
-   * Strictly **before** today, not before this instant.
+   * Strictly **before** today, not before this instant, and then only
+   * once the plan's own grace days have run out.
    *
    * `due_date` is a DATE, so `due_date < now()` is true from 00:00 on
    * the due date itself — and this sweep runs at 03:00. A customer on a
@@ -507,6 +509,18 @@ async function hasUncoveredPastDue(
    * its due date", and the Illinois rule it cites allows until the
    * second day after. This is also the boundary the ladder beside it
    * uses, where `daysPastDue <= 0` skips the account.
+   *
+   * **The same `grace_days` as an instalment, not a second window.**
+   * `planProgress` will not call an instalment *missed* until grace has
+   * passed, so judging the uncovered bill without it gave the customer
+   * who skipped an instalment outright five days and the customer who
+   * paid every instalment faithfully but was slow on one new bill a
+   * single day — the harsher test applied to the obligation the plan is
+   * less about. `uncoveredPastDue`, which feeds the CSR panel's at-risk
+   * warning, keeps no grace on purpose: the warning appears the day
+   * after the bill goes past due, so grace becomes a window somebody
+   * can act inside instead of a warning and a default arriving on the
+   * same morning.
    */
   const rows = await prisma.$queryRaw<Array<{ one: number }>>`
     SELECT 1 AS one
@@ -515,7 +529,7 @@ async function hasUncoveredPastDue(
        AND e.account_id = ${accountId}::uuid
        AND e.open_amount > 0
        AND e.due_date IS NOT NULL
-       AND e.due_date < ${asOf}::date
+       AND e.due_date < (${asOf}::date - ${graceDays}::int)
        AND e.type <> 'DEPOSIT'
        AND NOT EXISTS (
          SELECT 1

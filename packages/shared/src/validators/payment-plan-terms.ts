@@ -61,12 +61,18 @@ export const PaymentPlanTermsSchema = z
      * second clock — the down payment is the first instalment and is
      * judged by `graceDays` like any other.
      *
-     * Three days is the strictest rule the design found, so a tenant
-     * with more latitude raises it and none is silently over the line.
-     * A refused start date says so at the control, which is visible;
-     * the alternative default would be silently non-compliant.
+     * **Counted in calendar days, which is why the default is not 3.**
+     * The rule counts business days; three calendar days from a Friday
+     * agreement is one business day, so a default of 3 would be
+     * *stricter* than the rule it was drawn from — and the refusal falls
+     * on a customer, from this screen, with no regulator asking for it.
+     * Seven is the smallest figure that leaves the three business days
+     * the rule asks for from any day of the week with one public holiday
+     * inside the window; counting exactly would need a per-tenant
+     * holiday calendar, which nothing in this system has and no other
+     * due date here wants. A tenant under a tighter tariff lowers it.
      */
-    maxStartDateDays: z.number().int().min(0).max(365).default(3),
+    maxStartDateDays: z.number().int().min(0).max(365).default(7),
 
     /**
      * Days after an instalment's date before it counts as missed.

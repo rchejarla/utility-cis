@@ -394,8 +394,43 @@ describe("sweepPaymentPlans — defaulting", () => {
      * plan here is perfectly kept.
      */
     const covered = await debit({ amount: "300.00" });
-    await debit({ amount: "40.00", dueDaysAgo: 3 });
+    await debit({ amount: "40.00", dueDaysAgo: 10 });
     const planId = await plan({ entryIds: [covered.id], startedDaysAgo: 1 });
+    await settle(covered.id, "225.00");
+
+    expect((await sweep()).defaulted).toBe(1);
+    expect(await statusOf(planId)).toBe("DEFAULTED");
+  });
+
+  it("gives an uncovered bill the same grace days as an instalment", async () => {
+    /*
+     * The asymmetry this closes: `planProgress` will not call an
+     * instalment *missed* until `graceDays` have passed, while this test
+     * used to break the plan the day after a bill's due date. So the
+     * customer who skipped an instalment outright got five days and the
+     * customer who paid every instalment faithfully but was slow on one
+     * new bill got one — the harsher judgement falling on the less
+     * central obligation, which is not a position anybody would defend
+     * if asked.
+     *
+     * The panel's at-risk warning deliberately keeps no grace: it
+     * appears the day after the bill goes past due, which makes the
+     * grace period a window a CSR can act inside rather than a warning
+     * and a default landing on the same morning.
+     */
+    const covered = await debit({ amount: "300.00" });
+    await debit({ amount: "40.00", dueDaysAgo: 3 });
+    const planId = await plan({ entryIds: [covered.id], startedDaysAgo: 1, graceDays: 5 });
+    await settle(covered.id, "225.00");
+
+    expect((await sweep()).defaulted).toBe(0);
+    expect(await statusOf(planId)).toBe("ACTIVE");
+  });
+
+  it("defaults on an uncovered bill once those grace days have passed", async () => {
+    const covered = await debit({ amount: "300.00" });
+    await debit({ amount: "40.00", dueDaysAgo: 7 });
+    const planId = await plan({ entryIds: [covered.id], startedDaysAgo: 1, graceDays: 5 });
     await settle(covered.id, "225.00");
 
     expect((await sweep()).defaulted).toBe(1);
@@ -410,20 +445,24 @@ describe("sweepPaymentPlans — defaulting", () => {
      * same tick then charged every tier the released arrears qualified
      * for. The design says "unpaid **past** its due date", and the
      * Illinois rule it cites allows until the second day after.
+     *
+     * `graceDays: 0` on purpose. With any grace at all this passes
+     * whether the comparison casts to a date or not, which would leave
+     * the regression it was written for unguarded.
      */
     const covered = await debit({ amount: "300.00" });
     await debit({ amount: "40.00", dueDaysAgo: 0 });
-    const planId = await plan({ entryIds: [covered.id], startedDaysAgo: 1 });
+    const planId = await plan({ entryIds: [covered.id], startedDaysAgo: 1, graceDays: 0 });
     await settle(covered.id, "225.00");
 
     expect((await sweep()).defaulted).toBe(0);
     expect(await statusOf(planId)).toBe("ACTIVE");
   });
 
-  it("defaults on an uncovered bill once a day has passed", async () => {
+  it("defaults on an uncovered bill a day later when the tenant allows no grace", async () => {
     const covered = await debit({ amount: "300.00" });
     await debit({ amount: "40.00", dueDaysAgo: 1 });
-    const planId = await plan({ entryIds: [covered.id], startedDaysAgo: 1 });
+    const planId = await plan({ entryIds: [covered.id], startedDaysAgo: 1, graceDays: 0 });
     await settle(covered.id, "225.00");
 
     expect((await sweep()).defaulted).toBe(1);
@@ -452,8 +491,10 @@ describe("sweepPaymentPlans — defaulting", () => {
   });
 
   it("ignores an uncovered bill when the tenant's rule does not look at it", async () => {
+    // Well past grace, so what this proves is `currentBillCounts` and
+    // not the grace window.
     const covered = await debit({ amount: "300.00" });
-    await debit({ amount: "40.00", dueDaysAgo: 3 });
+    await debit({ amount: "40.00", dueDaysAgo: 10 });
     const planId = await plan({
       entryIds: [covered.id],
       startedDaysAgo: 1,

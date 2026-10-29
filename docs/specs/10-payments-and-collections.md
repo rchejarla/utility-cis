@@ -306,12 +306,23 @@ reads the table directly. It arrives when a Collections work-list does.
 
 7a. **What breaks a plan.** Either test: instalments *missed* (date plus
    `grace_days` passed) reaching `missed_before_default`, or — when
-   `current_bill_counts` — an uncovered debit going past due. **Late is
-   not missed:** an instalment inside grace leaves the plan ACTIVE with
-   suppression intact, which is the state a CSR screen shows as "1
-   payment behind". "Nothing uncovered" is not "an unpaid current bill":
-   an account with no uncovered debt has nothing for the second test to
-   look at and must not default because the question found no rows.
+   `current_bill_counts` — an uncovered debit going past due **by more
+   than `grace_days`**. **Late is not missed:** an instalment inside
+   grace leaves the plan ACTIVE with suppression intact, which is the
+   state a CSR screen shows as "1 payment behind". "Nothing uncovered"
+   is not "an unpaid current bill": an account with no uncovered debt
+   has nothing for the second test to look at and must not default
+   because the question found no rows.
+
+   **One grace window, not two.** Both tests read the same
+   `grace_days`. Judging the uncovered bill without it gave the customer
+   who skipped an instalment outright five days and the customer who
+   paid every instalment but was slow on one new bill a single day —
+   the harsher judgement on the less central obligation. The CSR
+   panel's at-risk warning keeps no grace deliberately: it appears the
+   day after the bill goes past due, so the grace window is a period
+   somebody can act inside rather than a warning and a default landing
+   together.
 
 7b. **Completion is derived, never counted.** A plan is COMPLETED when
    every debit it covers is at `open_amount = 0`, whether that happened

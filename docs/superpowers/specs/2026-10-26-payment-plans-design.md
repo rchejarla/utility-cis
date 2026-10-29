@@ -683,6 +683,17 @@ consequence. Arkansas's "three business days" survives as what it
 actually is — a bound on how far out `start_date` may be set — rather
 than as a second clock.
 
+That bound (`maxStartDateDays`) counts **calendar** days, so its default
+is 7 and not 3. Three calendar days from a Friday agreement is one
+business day: the default would then be stricter than the rule it was
+drawn from, and the refusal would fall on a customer, from this screen,
+with no regulator having asked for it. Seven is the smallest figure
+leaving three business days from any day of the week with one public
+holiday inside the window. Counting business days exactly would need a
+per-tenant holiday calendar, which this system does not have and which
+no other due date in it wants; a tenant under a tighter tariff lowers
+the number.
+
 This is the same rule this document already applies to
 `installments_paid`, `next_due_date` and `end_date`: do not store what
 can be derived. "Agreed and never paid" is "the first payment is unpaid
