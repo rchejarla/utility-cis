@@ -1868,6 +1868,108 @@ model DelinquencyActionFee {
   @@map("delinquency_action_fee")
 }
 
+// ─── Payment Plans (Module 10 — collections) ────────────────────
+
+/// What a deferred payment agreement is doing now.
+///
+/// There is no PENDING. An earlier draft had one for "agreed, down
+/// payment not yet received", and the two transitions out of it changed
+/// nothing the system did — suppression began at agreement either way.
+/// The down payment is the first payment, due on `startDate`.
+enum PaymentPlanStatus {
+  ACTIVE
+  COMPLETED
+  DEFAULTED
+  CANCELLED
+
+  @@map("payment_plan_status")
+}
+
+enum PaymentPlanFrequency {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+
+  @@map("payment_plan_frequency")
+}
+
+/// An account may pay a named set of overdue debts by instalments, and
+/// the delinquency ladder leaves those debts alone while it is kept.
+///
+/// Nothing here changes a balance. A plan governs *when* money is
+/// chased, not *what* is owed: agreeing one posts no ledger entry and
+/// moves no debt, which is why every balance query can stay ignorant of
+/// plans.
+///
+/// Both foreign keys to tenant-scoped tables are composite
+/// `(utility_id, fk) -> parent (utility_id, id)` and live in
+/// `20261028120000_payment_plan/migration.sql`, with the CHECK
+/// constraints and the RLS policy — none of which this file can express.
+/// `approvedBy` is a single-column key to `cis_user`, whose `utility_id`
+/// is nullable. Declaring any of them here would make `migrate diff`
+/// propose replacing a composite with a single column; see CLAUDE.md.
+model PaymentPlan {
+  id        String            @id @default(uuid()) @db.Uuid
+  utilityId String            @map("utility_id") @db.Uuid
+  accountId String            @map("account_id") @db.Uuid
+  status    PaymentPlanStatus
+
+  /// Sum of the covered debits' `openAmount` at creation, frozen. Not
+  /// `amount`: a $110.75 charge with $55.37 left owes $55.37.
+  totalBalance         Decimal              @map("total_balance") @db.Decimal(14, 2)
+  downPayment          Decimal?             @map("down_payment") @db.Decimal(14, 2)
+  installmentAmount    Decimal              @map("installment_amount") @db.Decimal(14, 2)
+  installmentFrequency PaymentPlanFrequency @map("installment_frequency")
+  installmentCount     Int                  @map("installment_count")
+
+  /// The down payment falls due here and instalment *n* on
+  /// `startDate + (n - 1) * frequency`. There is no instalment table —
+  /// a stored copy of a derivable figure can disagree with the ledger.
+  startDate  DateTime @map("start_date") @db.Date
+  approvedBy String   @map("approved_by") @db.Uuid
+  notes      String?
+
+  /// The six terms this plan is judged by, copied from the tenant's
+  /// `paymentPlans` settings when it was agreed. A tenant lowering
+  /// grace next month must not break every plan already running.
+  graceDays                     Int     @map("grace_days")
+  missedBeforeDefault           Int     @map("missed_before_default")
+  partialInstallmentCounts      Boolean @map("partial_installment_counts")
+  currentBillCounts             Boolean @map("current_bill_counts")
+  suppressFeesWhileKept         Boolean @map("suppress_fees_while_kept")
+  assessSuppressedFeesOnDefault Boolean @map("assess_suppressed_fees_on_default")
+
+  /// When the status last moved. `updatedAt` cannot answer "defaulted
+  /// when?" — editing a note in March would relabel a December default.
+  statusChangedAt DateTime @default(now()) @map("status_changed_at") @db.Timestamptz
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([utilityId, id])
+  @@index([utilityId, accountId])
+  @@index([utilityId, status])
+  @@map("payment_plan")
+}
+
+/// Which debts a plan covers.
+///
+/// Keyed on the entry, so a debit belongs to at most one plan. These
+/// rows persist after the plan ends — they are history, and the key is
+/// RESTRICT — which is why suppression must join through to
+/// `PaymentPlan.status` and never test membership here: a membership
+/// test would suppress a debit forever, including after default, and
+/// would pass every test written while the plan was still running.
+model PaymentPlanDebit {
+  utilityId String   @map("utility_id") @db.Uuid
+  planId    String   @map("plan_id") @db.Uuid
+  entryId   String   @map("entry_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@id([utilityId, entryId])
+  @@index([utilityId, planId])
+  @@map("payment_plan_debit")
+}
+
 // ─── Service Requests (Module 14) ───────────────────────────────
 
 enum ServiceRequestStatus {
