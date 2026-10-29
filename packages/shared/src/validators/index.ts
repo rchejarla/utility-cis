@@ -33,6 +33,7 @@ export * from "./sla";
 export * from "./service-request";
 export * from "./automation-config";
 export * from "./payment-plan-terms";
+export * from "./payment-plan";
 export * from "./rate-component-kind";
 export * from "./rate-assignment-role";
 export * from "./rate-service-class";
