@@ -32,6 +32,7 @@ export * from "./service-request-type-def";
 export * from "./sla";
 export * from "./service-request";
 export * from "./automation-config";
+export * from "./payment-plan-terms";
 export * from "./rate-component-kind";
 export * from "./rate-assignment-role";
 export * from "./rate-service-class";
