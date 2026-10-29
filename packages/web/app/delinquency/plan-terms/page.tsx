@@ -7,6 +7,7 @@ import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
+import { SettingsCard } from "@/components/settings/settings-shell";
 import { DEFAULT_PLAN_TERMS, type PaymentPlanTerms } from "@utility-cis/shared";
 
 /**
@@ -116,6 +117,20 @@ export default function PlanTermsPage() {
         </div>
       )}
 
+      {/*
+        The same card every other configuration screen puts its content
+        in. Without it this page's groups sat straight on the page
+        background while the rules screen beside it — the one an
+        operator reaches this from — showed a bordered card, and the
+        two read as parts of different applications.
+
+        Spacing lives on this container rather than on each Group, so
+        the last group does not leave a 26px gap inside the card.
+      */}
+      <SettingsCard>
+        <div
+          style={{ display: "flex", flexDirection: "column", gap: 26, padding: "16px 0" }}
+        >
       <Group title="What we ask for">
         <Sentence>
           A down payment of{" "}
@@ -263,13 +278,15 @@ export default function PlanTermsPage() {
           A customer may agree a second plan after breaking one.
         </Check>
       </Group>
+        </div>
+      </SettingsCard>
 
       {canEdit && (
         <button
           onClick={save}
           disabled={saving}
           style={{
-            marginTop: 8,
+            marginTop: 16,
             padding: "9px 18px",
             fontSize: 13,
             fontWeight: 600,
@@ -303,7 +320,7 @@ const inlineControl = {
 
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section style={{ marginBottom: 26 }}>
+    <section>
       <h2
         style={{
           margin: "0 0 10px",
