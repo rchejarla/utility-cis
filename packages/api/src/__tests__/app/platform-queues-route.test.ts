@@ -53,6 +53,18 @@ vi.mock("../../lib/queue-limits.js", () => ({
   setClusterLimit: (...args: unknown[]) => setClusterLimit(...(args as [])),
 }));
 
+const pauseQueue = vi.fn(async () => ({
+  by: "Ops",
+  byId: "test-platform-001",
+  at: "2026-10-30T09:00:00.000Z",
+  reason: "vendor API is down",
+}));
+const resumeQueue = vi.fn(async () => undefined);
+vi.mock("../../lib/queue-pause.js", () => ({
+  pauseQueue: (...args: unknown[]) => pauseQueue(...(args as [])),
+  resumeQueue: (...args: unknown[]) => resumeQueue(...(args as [])),
+}));
+
 let app: import("fastify").FastifyInstance;
 
 beforeEach(async () => {
@@ -68,6 +80,101 @@ beforeEach(async () => {
   } as never);
   app = await (await import("../../app.js")).buildApp();
   await app.ready();
+});
+
+/**
+ * The incident lever.
+ *
+ * A pause is a key in Redis that every worker already honours, so this
+ * needs no part of spec 24's command path — the same fact that ruled it
+ * out of *worker* control, read the other way.
+ */
+describe("POST /api/v1/platform/queues/:name/pause", () => {
+  const url = (q = "billing-runs") => `/api/v1/platform/queues/${q}/pause`;
+
+  it("pauses the queue for the platform operator, with their reason", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: url(),
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+      payload: { reason: "vendor API is down" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(pauseQueue).toHaveBeenCalledWith(
+      "billing-runs",
+      expect.objectContaining({ id: "test-platform-001" }),
+      "vendor API is down",
+    );
+  });
+
+  it("refuses a pause with no reason", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: url(),
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(pauseQueue).not.toHaveBeenCalled();
+  });
+
+  it("refuses a queue that is not one", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: url("not-a-queue"),
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+      payload: { reason: "because" },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(pauseQueue).not.toHaveBeenCalled();
+  });
+
+  it("refuses a tenant admin, whatever they hold", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: url(),
+      headers: { authorization: `Bearer ${createTestToken()}` },
+      payload: { reason: "vendor API is down" },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(pauseQueue).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/v1/platform/queues/:name/resume", () => {
+  it("resumes without asking for a reason", async () => {
+    // Stopping work needs explaining; starting it again is the queue
+    // doing its job. A required field here would sit between an operator
+    // and the end of an incident.
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/platform/queues/billing-runs/resume",
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(resumeQueue).toHaveBeenCalledWith(
+      "billing-runs",
+      expect.objectContaining({ id: "test-platform-001" }),
+    );
+  });
+
+  it("refuses a tenant admin", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/platform/queues/billing-runs/resume",
+      headers: { authorization: `Bearer ${createTestToken()}` },
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(resumeQueue).not.toHaveBeenCalled();
+  });
 });
 
 describe("GET /api/v1/platform/queues", () => {

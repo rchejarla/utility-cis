@@ -16,6 +16,7 @@ import { getUtilityReadiness } from "../services/utility-readiness.service.js";
 import { getQueueHealth } from "../services/queue-health.service.js";
 import { ALL_QUEUE_NAMES, type QueueName } from "../lib/queues.js";
 import { setPerNodeLimit, setClusterLimit } from "../lib/queue-limits.js";
+import { pauseQueue, resumeQueue } from "../lib/queue-pause.js";
 import { logger } from "../lib/logger.js";
 import { getQueueJobs, QUEUE_JOB_STATES } from "../services/queue-jobs.service.js";
 import { actOnQueueJob, QUEUE_ACTIONS } from "../services/queue-actions.service.js";
@@ -215,6 +216,49 @@ export async function platformRoutes(app: FastifyInstance) {
         .parse(request.params);
 
       return reply.send(await stopWorkerProcess(id, actorOf(request)));
+    },
+  );
+
+  /*
+   * Stop a queue taking work, and let it take work again.
+   *
+   * This needs no part of spec 24's command path: a pause is a key in
+   * Redis that every worker on every node already checks before taking a
+   * job, not a message to a process. The same fact §D7 used to rule
+   * queue pause out of *worker* control, read the other way round.
+   *
+   * The reason is required on the way in and not on the way out. A queue
+   * found paused on a Monday with no record of why costs the next
+   * operator the whole investigation; resuming is the queue doing its
+   * job, and a required field there would sit between an operator and
+   * the end of an incident.
+   */
+  app.post(
+    "/api/v1/platform/queues/:name/pause",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const { name } = z
+        .object({ name: z.enum(ALL_QUEUE_NAMES as unknown as [QueueName, ...QueueName[]]) })
+        .parse(request.params);
+      const { reason } = z
+        .object({ reason: z.string().trim().min(1).max(200) })
+        .strict()
+        .parse(request.body ?? {});
+
+      return reply.send({ queue: name, paused: true, record: await pauseQueue(name, actorOf(request), reason) });
+    },
+  );
+
+  app.post(
+    "/api/v1/platform/queues/:name/resume",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const { name } = z
+        .object({ name: z.enum(ALL_QUEUE_NAMES as unknown as [QueueName, ...QueueName[]]) })
+        .parse(request.params);
+
+      await resumeQueue(name, actorOf(request));
+      return reply.send({ queue: name, paused: false });
     },
   );
 

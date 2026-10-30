@@ -37,6 +37,8 @@ let workerListFails = false;
 const clusterLimits: Record<string, number | null> = {};
 /** What `platform:queue-concurrency` holds, by queue. */
 const perNodeLimits: Record<string, string> = {};
+/** What `platform:queue-pauses` holds, by queue. */
+const pauseRecords: Record<string, string> = {};
 
 const queueFor = (name: string) => ({
   getJobCounts: vi.fn(async () => {
@@ -71,7 +73,9 @@ vi.mock("../../lib/queues.js", () => ({
  */
 vi.mock("../../lib/queue-redis.js", () => ({
   queueRedisConnection: {
-    hget: vi.fn(async (_key: string, field: string) => perNodeLimits[field] ?? null),
+    hget: vi.fn(async (key: string, field: string) =>
+      (key === "platform:queue-pauses" ? pauseRecords : perNodeLimits)[field] ?? null,
+    ),
   },
 }));
 
@@ -92,6 +96,7 @@ beforeEach(async () => {
   pausedQueues.clear();
   for (const key of Object.keys(clusterLimits)) delete clusterLimits[key];
   for (const key of Object.keys(perNodeLimits)) delete perNodeLimits[key];
+  for (const key of Object.keys(pauseRecords)) delete pauseRecords[key];
   hangingQueue = null;
   workerListFails = false;
   svc = await import("../../services/queue-health.service.js");
@@ -110,6 +115,39 @@ function job(over: Record<string, unknown> = {}) {
     ...over,
   };
 }
+
+describe("a paused queue", () => {
+  it("names who paused it and why, so the next operator need not guess", async () => {
+    pausedQueues.add("imports");
+    pauseRecords["imports"] = JSON.stringify({
+      by: "Ops",
+      byId: "op-1",
+      at: "2026-10-30T09:00:00.000Z",
+      reason: "vendor API is down",
+    });
+
+    const report = await svc.getQueueHealth();
+    const queue = report.queues.find((q) => q.name === "imports");
+
+    expect(queue?.paused).toBe(true);
+    expect(queue?.pauseRecord).toMatchObject({ by: "Ops", reason: "vendor API is down" });
+  });
+
+  it("withholds a record for a queue that is not paused", async () => {
+    // A queue resumed straight in Redis leaves the record behind.
+    // Printing it beside a running queue would report a stop that ended.
+    pauseRecords["imports"] = JSON.stringify({
+      by: "Ops",
+      byId: "op-1",
+      at: "2026-10-30T09:00:00.000Z",
+      reason: "vendor API is down",
+    });
+
+    const report = await svc.getQueueHealth();
+
+    expect(report.queues.find((q) => q.name === "imports")?.pauseRecord).toBeNull();
+  });
+});
 
 describe("how much of a queue runs at once", () => {
   it("reports what will actually run, not only what was configured", async () => {

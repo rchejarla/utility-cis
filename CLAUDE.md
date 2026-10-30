@@ -226,7 +226,11 @@ Lives at `/platform/*` in the web app, behind the **platform actor** (see Multi-
 Two nav sections, because they answer two different questions:
 
 - **Platform** — tenant lifecycle: `/platform/utilities`, `/platform/utilities/new` (provision, with a dry-run Preview), `/platform/utilities/:id` (modules, roles, staff, readiness, from-outside history), `/platform/users` (the operators themselves).
-- **Cluster** — the deployment: `/platform/cluster` (is anything wrong), `/platform/cluster/workers` (nodes and worker processes), `/platform/cluster/queues` (counts for the eight queues), `/platform/cluster/jobs` (the jobs behind a count, with retry/promote/replay).
+- **Cluster** — the deployment: `/platform/cluster` (is anything wrong), `/platform/cluster/workers` (nodes and worker processes), `/platform/cluster/queues` (counts for the eight queues, each one's pause and its two concurrency limits), `/platform/cluster/jobs` (the jobs behind a count, with retry/promote/replay).
+
+  **Two limits per queue, not one** (`lib/queue-limits.ts`): *per node* bounds one worker process and *cluster-wide* bounds the shared database, so what runs is `min(cluster, workers × perNode)`. Neither is derived from the other or from the node count — a cluster limit of 4 with per node 1 on three nodes runs 3, which the page prints rather than rejecting, because it binds the day a fourth node joins. The cluster limit is BullMQ's own `meta` field, honoured by every node on its next fetch; per node reaches a built `Worker` through its `concurrency` setter and so takes effect at next worker start. Pausing lives in the same hash (`paused` beside `concurrency`) and needs no command path for the same reason. **A pause requires a reason**, kept in `platform:queue-pauses`.
+
+  **What stops two passes overlapping over one billing run is the database, not a concurrency number** (`services/billing-run/claim.ts`): one conditional `UPDATE` claims the run, judged on whether a pass is still reporting progress rather than on whether one is marked. That is what makes the limits safe to expose at all — `concurrency: 1` only ever guaranteed it with a single replica.
 
 Chrome is `components/platform-shell.tsx`. These screens mount **no `AuthPermissionProvider`** on purpose: `/auth/me` answers 403 for a platform token and the provider then falls back to granting every permission, so any gating it appeared to do here would be fabricated. The real gate is `{ config: { platform: true } }`, server-side.
 

@@ -176,6 +176,98 @@ const limitInput: React.CSSProperties = {
 };
 
 /**
+ * Stop a queue, or start it again.
+ *
+ * Pause asks for a reason first, in the row rather than in a dialog: it
+ * is one short field, and the record it writes is the only thing that
+ * will tell the next operator why a queue is stopped. Resume is a single
+ * click — stopping work needs explaining, starting it again is the queue
+ * doing its job, and a required field there would sit between an
+ * operator and the end of an incident.
+ */
+function PauseCell({ queue: q, onDone }: { queue: QueueHealth; onDone: () => void }) {
+  const [reason, setReason] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  async function send(action: "pause" | "resume", body: Record<string, string>) {
+    setBusy(true);
+    setFailed(null);
+    try {
+      await apiClient.post(
+        `/api/v1/platform/queues/${encodeURIComponent(q.name)}/${action}`,
+        body,
+      );
+      setReason(null);
+      onDone();
+    } catch (err) {
+      // The typed reason stays: re-reading the report would drop it, and
+      // an operator mid-incident should not have to type it twice.
+      setFailed(err instanceof Error ? err.message : `Could not ${action} the queue`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (q.paused) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+        <Verb
+          label="Resume"
+          ariaLabel={`Resume ${q.name}`}
+          busy={busy}
+          onClick={() => void send("resume", {})}
+        />
+        {failed && <span style={{ color: "var(--danger)" }}>{failed}</span>}
+      </div>
+    );
+  }
+
+  if (reason === null) {
+    return (
+      <Verb
+        label="Pause"
+        ariaLabel={`Pause ${q.name}`}
+        busy={false}
+        onClick={() => setReason("")}
+        loud
+      />
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+      <input
+        aria-label={`Reason for pausing ${q.name}`}
+        placeholder="Why?"
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        style={{ ...limitInput, width: 160, fontFamily: "inherit" }}
+      />
+      <div style={{ display: "flex", gap: 6 }}>
+        <Verb
+          label="Cancel"
+          ariaLabel={`Leave ${q.name} running`}
+          busy={false}
+          onClick={() => {
+            setReason(null);
+            setFailed(null);
+          }}
+        />
+        <Verb
+          label="Pause"
+          ariaLabel={`Confirm pause of ${q.name}`}
+          busy={busy}
+          loud
+          onClick={() => void send("pause", { reason })}
+        />
+      </div>
+      {failed && <span style={{ color: "var(--danger)" }}>{failed}</span>}
+    </div>
+  );
+}
+
+/**
  * One queue's two limits, in the row the queue already has.
  *
  * A column rather than a second card, because this page is deliberately
@@ -333,6 +425,10 @@ export default function ClusterQueuesPage() {
                 <Th>Queue</Th>
                 <Th>Workers</Th>
                 <Th className={HIDE_SM}>Runs at once</Th>
+                {/* Not hidden on a phone: this is the lever somebody
+                    reaches for during an incident, which is exactly when
+                    they are not at a desk. */}
+                <Th align="right">Taking work</Th>
                 {COUNT_COLUMNS.map((c) => (
                   <Th
                     key={c.state}
@@ -354,6 +450,15 @@ export default function ClusterQueuesPage() {
                     {q.paused && (
                       <span style={{ color: "var(--danger)", marginLeft: 8 }}>paused</span>
                     )}
+                    {q.pauseRecord && (
+                      /* Who and why, on the row rather than in a log.
+                         A queue found paused with no record of why costs
+                         the next operator the whole investigation. */
+                      <div style={{ color: "var(--text-muted)", marginTop: 2, whiteSpace: "normal" }}>
+                        {q.pauseRecord.reason} — {q.pauseRecord.by},{" "}
+                        {new Date(q.pauseRecord.at).toLocaleString()}
+                      </div>
+                    )}
                     {cappedBelowCapacity(q) && (
                       /* A throttled queue and a slow queue look identical
                          from a count, which is the only reason this is
@@ -371,6 +476,9 @@ export default function ClusterQueuesPage() {
                   </td>
                   <td className={HIDE_SM} style={cellStyle}>
                     <LimitsCell queue={q} onSaved={reload} />
+                  </td>
+                  <td style={{ ...cellStyle, textAlign: "right" }}>
+                    <PauseCell queue={q} onDone={reload} />
                   </td>
                   {COUNT_COLUMNS.map((c) => (
                     <td
@@ -415,6 +523,20 @@ export default function ClusterQueuesPage() {
           Per node takes effect when a worker next starts, since that one has to reach the process
           itself. Leave the cluster limit empty for no ceiling — zero is refused, because a queue
           that must stop is one to pause.
+          <div style={{ marginTop: 6 }}>
+            {/*
+             * Said plainly because "pause" reads as "nothing will
+             * happen", and the truth is "everything will happen later,
+             * at once" — which an operator should know before reaching
+             * for it rather than afterwards.
+             */}
+            <strong style={{ color: "var(--text-primary)" }}>Pausing</strong> stops workers taking
+            new jobs. Jobs already running finish, and the schedules keep firing — so those jobs{" "}
+            <strong style={{ color: "var(--text-primary)" }}>
+              pile up as waiting and run when it resumes
+            </strong>
+            , all of them. It is not a way to skip work.
+          </div>
         </div>
       )}
 

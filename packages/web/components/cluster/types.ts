@@ -35,6 +35,13 @@ export interface QueueHealth {
   workers: number | null;
   workerAgeSeconds: number | null;
   paused: boolean;
+  /**
+   * Who paused it, when and why — null when it is running.
+   *
+   * A queue found paused with no record of why costs the next operator
+   * the whole investigation, which is the only reason it is kept.
+   */
+  pauseRecord: { by: string; byId: string; at: string; reason: string } | null;
   /** Max in-flight jobs on one worker process. */
   perNodeLimit: number;
   /** The cluster-wide ceiling, or null when none is set. */

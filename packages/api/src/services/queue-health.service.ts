@@ -8,6 +8,7 @@ import {
 } from "../lib/queues.js";
 import { utilityIdOf, utilityNames, withQueueTimeout } from "../lib/queue-inspect.js";
 import { effectiveLimit, readQueueLimits } from "../lib/queue-limits.js";
+import { readPauseRecord, type PauseRecord } from "../lib/queue-pause.js";
 
 /**
  * Reports what is in each queue, who is attached to work it, and what
@@ -75,6 +76,14 @@ export interface QueueHealth {
   workerAgeSeconds: number | null;
   /** A paused queue processes nothing, however many workers are attached. */
   paused: boolean;
+  /**
+   * Who paused it, when and why — null when it is running.
+   *
+   * Withheld rather than printed for a running queue: resuming straight
+   * in Redis leaves the record behind, and showing it beside a working
+   * queue would report a stop that has ended.
+   */
+  pauseRecord: PauseRecord | null;
   /** Max in-flight jobs on one worker process. */
   perNodeLimit: number;
   /** The cluster-wide ceiling, or null when none is set. */
@@ -184,7 +193,7 @@ async function readQueue(name: QueueName): Promise<QueueHealth> {
   const queue = getQueue(name);
   const dlq = getDlqQueue(name);
 
-  const [counts, dlqCounts, failedJobs, attachment, limits] = await Promise.all([
+  const [counts, dlqCounts, failedJobs, attachment, limits, pauseRecord] = await Promise.all([
     queue.getJobCounts(),
     dlq.getJobCounts(),
     /*
@@ -196,6 +205,7 @@ async function readQueue(name: QueueName): Promise<QueueHealth> {
     queue.getFailed(0, 19) as Promise<RawJob[]>,
     attachmentOf(name),
     readQueueLimits(name),
+    readPauseRecord(name),
   ]);
 
   const ordered = [...failedJobs]
@@ -213,6 +223,7 @@ async function readQueue(name: QueueName): Promise<QueueHealth> {
     },
     dlqDepth: depthOf(dlqCounts as Record<string, number>),
     ...attachment,
+    pauseRecord: attachment.paused ? pauseRecord : null,
     perNodeLimit: limits.perNode,
     clusterLimit: limits.cluster,
     effectiveLimit: effectiveLimit(limits, attachment.workers),

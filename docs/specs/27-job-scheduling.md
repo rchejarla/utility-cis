@@ -137,25 +137,39 @@ sold as complete.
 
 ## 2. Pausing and resuming
 
-- **SCH-PAUSE-1 (Must).** `POST /api/v1/platform/queues/:name/pause` and
-  `.../resume`, platform actor only, calling BullMQ's `Queue.pause()` /
-  `Queue.resume()`.
-- **SCH-PAUSE-2 (Must).** This needs no part of spec 24's command path.
+- **SCH-PAUSE-1 (Must, built 2026-10-30).** `POST /api/v1/platform/queues/:name/pause`
+  and `.../resume`, platform actor only, calling BullMQ's
+  `Queue.pause()` / `Queue.resume()`. The queue name is validated
+  against `ALL_QUEUE_NAMES` rather than passed through, as the jobs
+  route's state is.
+- **SCH-PAUSE-2 (Must, confirmed by building it).** This needs no part of spec 24's command path.
   A pause is a key in Redis that every worker on every node already
   honours; it is not a message to a process. That is the same fact §D7
   used to rule it out of *worker* control, read the other way: it is
   buildable now, and worker control is not its prerequisite.
-- **SCH-PAUSE-3 (Must).** Pausing stops new jobs being taken. In-flight
+- **SCH-PAUSE-3 (Must, built 2026-10-30).** Pausing stops new jobs being taken. In-flight
   jobs finish, and the cron keeps firing — the jobs pile up as *waiting*
   and run when the queue resumes. The UI says this in those words,
   because "pause" reads as "nothing will happen" and what actually
   happens is "everything will happen later, at once".
-- **SCH-PAUSE-4 (Must).** A paused queue is visible wherever its counts
-  are, not only on the page that paused it. `getQueueHealth` already
-  carries `paused`.
-- **SCH-PAUSE-5 (Should).** A pause records who paused it, when and why
-  (a required short reason). A queue found paused on a Monday with no
-  record of why is worse than one nobody could pause.
+- **SCH-PAUSE-4 (Must, built 2026-10-30).** A paused queue is visible
+  wherever its counts are, not only on the page that paused it.
+  `getQueueHealth` already carried `paused`; it now carries the record
+  with it, withheld for a queue that is *not* paused — resuming straight
+  in Redis leaves the record behind, and printing it beside a working
+  queue would report a stop that has ended.
+- **SCH-PAUSE-5 (Should, built 2026-10-30).** A pause records who paused
+  it, when and why (a required short reason). A queue found paused on a
+  Monday with no record of why is worse than one nobody could pause.
+  Held in `platform:queue-pauses` beside the concurrency hash, since this
+  cannot be an `audit_log` row (SCH-X-3). **A second pause does not
+  overwrite the first record** — the operator who stopped it is the one
+  worth naming, and a second press would move the timestamp forward and
+  lose why it was stopped. **Resume never requires a record to exist:**
+  a queue paused directly in Redis is still one an operator must
+  restart, and a precondition there would make the record a lock on the
+  one action that matters during an incident. The reason is required on
+  the way in and not on the way out, for the same reason.
 - **SCH-PAUSE-6 (Should).** `notification-send` paused for longer than
   its quiet-hours window is surfaced on `/platform/cluster`, since
   nothing else reports mail that is queued rather than late.
@@ -443,13 +457,21 @@ every node checks before taking a job.
 | Slice | Delivers | Unblocks |
 |---|---|---|
 | 1 | Scheduler view (SCH-VIEW-*) | Seeing what is armed and what is orphaned — read-only, no new writes |
-| 2 | Pause, resume and the two limits (SCH-PAUSE-*, SCH-CONC-*) | The incident levers, without waiting on spec 24 |
+| 2 | Pause, resume and the two limits (SCH-PAUSE-*, SCH-CONC-*) | **Shipped 2026-10-30**, except SCH-PAUSE-6 (the alert) |
 | 3 | Billing dispatcher (SCH-BILL-*) | Billing that happens on its own day |
 | 4 | Editable cadence for the two preferences (SCH-FIX-1, 2) | After spec 24 steps 2–3 only |
 
-Pause and the limits are one slice because they are one Redis hash, one
-route shape and one card: `paused` and `concurrency` sit side by side in
-`bull:<queue>:meta`.
+Pause and the limits were one slice because they are one route shape and
+one table: `paused` and `concurrency` sit side by side in
+`bull:<queue>:meta`, and both are set from the queue's own row on
+`/platform/cluster/queues`. Shipped together, with SCH-CONC-8's database
+claim first — it is what makes a settable limit safe at all.
+
+**SCH-PAUSE-6 is the one thing left in this slice**, and it is an
+alerting concern rather than a control: nothing yet notices that
+`notification-send` has been paused past its quiet-hours window. It
+belongs with SCH-NODE-4, which is the same shape — a condition nobody is
+looking at a page to see.
 
 SCH-NODE-1 belongs to whichever slice ships first — it is a property of
 the cluster rather than of any capability here, and it is wrong today.

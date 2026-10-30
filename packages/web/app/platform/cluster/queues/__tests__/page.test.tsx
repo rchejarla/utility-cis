@@ -62,6 +62,7 @@ function queue(over: Record<string, unknown> = {}) {
     perNodeLimit: 1,
     clusterLimit: null,
     effectiveLimit: 1,
+    pauseRecord: null,
     recentFailures: [],
     ...over,
   };
@@ -108,6 +109,93 @@ beforeEach(() => {
   get.mockReset();
   post.mockReset();
   put.mockReset();
+});
+
+/**
+ * The incident lever.
+ *
+ * "Pause" reads as "nothing will happen", and that is not what happens:
+ * workers stop taking jobs, the crons keep firing, and all of it runs
+ * when the queue resumes. The page has to say so, or the operator who
+ * reaches for it during an incident learns what it meant afterwards.
+ */
+describe("pausing a queue", () => {
+  const one = (over: Record<string, unknown> = {}) => report({ queues: [queue(over)] });
+
+  const pausedQueue = (over: Record<string, unknown> = {}) =>
+    one({
+      paused: true,
+      pauseRecord: {
+        by: "Ops",
+        byId: "op-1",
+        at: "2026-10-30T09:00:00.000Z",
+        reason: "vendor API is down",
+      },
+      ...over,
+    });
+
+  it("says what a pause actually does to the work", async () => {
+    get.mockResolvedValue(one());
+
+    render(<ClusterQueuesPage />);
+
+    expect(await screen.findByText(/pile up as waiting and run when it resumes/i)).toBeInTheDocument();
+  });
+
+  it("names who paused it and why", async () => {
+    get.mockResolvedValue(pausedQueue());
+
+    render(<ClusterQueuesPage />);
+
+    expect(await screen.findByText(/vendor API is down/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ops/)).toBeInTheDocument();
+  });
+
+  it("asks for a reason before it will pause", async () => {
+    // The reason is the whole value of the record, so the control cannot
+    // be a single click that leaves it blank.
+    get.mockResolvedValue(one());
+    post.mockResolvedValue({ queue: "billing-runs", paused: true });
+
+    render(<ClusterQueuesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^pause billing-runs$/i }));
+
+    expect(post).not.toHaveBeenCalled();
+
+    await userEvent.type(
+      screen.getByLabelText(/reason for pausing billing-runs/i),
+      "vendor API is down",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /confirm pause of billing-runs/i }));
+
+    expect(post).toHaveBeenCalledWith("/api/v1/platform/queues/billing-runs/pause", {
+      reason: "vendor API is down",
+    });
+  });
+
+  it("resumes in one click, with nothing to fill in", async () => {
+    get.mockResolvedValue(pausedQueue());
+    post.mockResolvedValue({ queue: "billing-runs", paused: false });
+
+    render(<ClusterQueuesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /resume billing-runs/i }));
+
+    expect(post).toHaveBeenCalledWith("/api/v1/platform/queues/billing-runs/resume", {});
+  });
+
+  it("keeps the reason on screen when the pause cannot be saved", async () => {
+    get.mockResolvedValue(one());
+    post.mockRejectedValue(new Error("Redis did not answer"));
+
+    render(<ClusterQueuesPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^pause billing-runs$/i }));
+    const reason = screen.getByLabelText(/reason for pausing billing-runs/i);
+    await userEvent.type(reason, "vendor API is down");
+    await userEvent.click(screen.getByRole("button", { name: /confirm pause of billing-runs/i }));
+
+    expect(await screen.findByText(/Redis did not answer/i)).toBeInTheDocument();
+    expect(reason).toHaveValue("vendor API is down");
+  });
 });
 
 /**
