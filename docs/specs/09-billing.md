@@ -776,15 +776,30 @@ one customer or one bill, and the next may well be fine.
 `postedAt` is stamped after the loop, so it cannot describe the middle of a
 pass; this is posting's equivalent of generation's `status = RUNNING`. A
 zombie is `postingStartedAt IS NOT NULL AND posted_at IS NULL` — a pass that
-began and never reached the end — and `reclaimZombieBillingRuns` re-enqueues
-on exactly that pair, alongside the runs it already reclaims. A partial
-index covers it, since the steady state is none at all. Resuming is safe for
+began and never reached the end — **and has not reported progress for five
+minutes**, and `reclaimZombieBillingRuns` re-enqueues on exactly that,
+alongside the runs it already reclaims. A partial index covers it, since the
+steady state is none at all. Resuming is safe for
 the same reason resuming generation is: the loop re-reads each bill and
 `postBill` claims atomically with `UPDATE … WHERE posted_at IS NULL`, so a
 bill the dead pass posted comes back as `alreadyPosted` rather than charged
 twice. **A pass that finished with failures is not a zombie** — `postedAt`
 is set — and that run is not stuck: it has work left, and the Post button
 is what finishes it.
+
+**The sweep judges progress, not status** (2026-10-30). It selected every
+run with `status = RUNNING`, and every marked-but-unposted pass, with no age
+test and no job id — correct on one node, where a booting process can be
+sure nothing else is working, and wrong the moment there are two: a node
+coming up during a rolling deploy re-enqueued the run another node was
+halfway through, around the `attempts: 1` that exists to stop exactly that.
+Both halves now require `last_progress_at` older than five minutes, which is
+stamped after every account generated and every bill posted, and both
+enqueue under `billing-run:<kind>:<runId>:<UTC hour>` so two nodes booting
+together produce one job rather than two workers on one run. The import
+sweep beside it had always used that cutoff; this one had not. Recorded as
+`SCH-NODE-3` in [27 — Job Scheduling](27-job-scheduling.md), with the rule
+for any future sweep.
 
 There is deliberately no guard against a pass already being in flight. It
 would refuse the reclaim, which arrives in precisely that state, and it

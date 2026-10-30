@@ -10,6 +10,7 @@ import { scopedJob } from "../lib/queue-scope.js";
 import { processBillingRun, postBillingRun } from "../services/billing-run.service.js";
 import { prisma } from "../lib/prisma.js";
 import { runAsPlatform } from "../lib/tenant-context.js";
+import { formatInTimeZone } from "../lib/iana-tz.js";
 
 /**
  * BullMQ worker for the `billing-runs` queue.
@@ -129,9 +130,56 @@ export async function reclaimZombieBillingRuns(): Promise<number> {
   return runAsPlatform(() => reclaimZombieBillingRunsUnscoped());
 }
 
+/**
+ * How quiet a run has to be before another process may take it.
+ *
+ * `last_progress_at` is stamped after every account generated and every
+ * bill posted, so a live run is never five minutes silent — the same
+ * cutoff, and the same reasoning, as the import sweep next door.
+ *
+ * Judging on `status = RUNNING` alone was right on one node and wrong
+ * in a cluster: if *this* process is booting, a RUNNING row can only be
+ * a corpse, but a second node booting during a deploy would re-enqueue
+ * the run the first is halfway through — around the `attempts: 1` that
+ * exists to stop anything restarting a run behind its own back.
+ */
+const STALE_AFTER_MS = 5 * 60 * 1000;
+
+/**
+ * Quiet for longer than the cutoff, or never having spoken at all.
+ *
+ * The null half is not a loophole in the rule, it is the rule at its
+ * limit: both entry points stamp `last_progress_at` as they begin —
+ * generation with `status = RUNNING`, posting with `posting_started_at`
+ * — so a row holding neither has been advanced by no process that is
+ * still running. Excluding it would strand a run as RUNNING forever,
+ * which is the same silence this sweep exists to break.
+ */
+function unattended(quietSince: Date) {
+  return {
+    OR: [{ lastProgressAt: { lt: quietSince } }, { lastProgressAt: null }],
+  };
+}
+
+/**
+ * One job per corpse per hour, however many nodes boot.
+ *
+ * BullMQ refuses a duplicate id, so two nodes coming up together
+ * enqueue one job between them rather than two workers on one run. The
+ * hour bucket is what keeps that from becoming permanent: a run that
+ * genuinely zombies again later is still reclaimable, where a bare
+ * `runId` would be refused for as long as the completed job is retained.
+ */
+function reclaimJobId(kind: "resume" | "post", runId: string, now: Date): string {
+  return `billing-run:${kind}:${runId}:${formatInTimeZone(now, "UTC", "yyyyMMddHH")}`;
+}
+
 async function reclaimZombieBillingRunsUnscoped(): Promise<number> {
+  const now = new Date();
+  const quietSince = new Date(now.getTime() - STALE_AFTER_MS);
+
   const stuck = await prisma.billingRun.findMany({
-    where: { status: "RUNNING" },
+    where: { status: "RUNNING", ...unattended(quietSince) },
     select: { id: true, utilityId: true, createdBy: true },
   });
   /*
@@ -149,18 +197,27 @@ async function reclaimZombieBillingRunsUnscoped(): Promise<number> {
    * and the Post button on the run page is what finishes it.
    */
   const stuckPosting = await prisma.billingRun.findMany({
-    where: { postingStartedAt: { not: null }, postedAt: null },
+    where: {
+      postingStartedAt: { not: null },
+      postedAt: null,
+      ...unattended(quietSince),
+    },
     select: { id: true, utilityId: true, createdBy: true },
   });
 
   let requeued = 0;
   for (const run of stuck) {
-    const jobId = await enqueueSafely(QUEUE_NAMES.billingRuns, BILLING_RUN_JOB_NAME, {
-      runId: run.id,
-      utilityId: run.utilityId,
-      actorId: run.createdBy,
-      actorName: "billing run (resumed)",
-    });
+    const jobId = await enqueueSafely(
+      QUEUE_NAMES.billingRuns,
+      BILLING_RUN_JOB_NAME,
+      {
+        runId: run.id,
+        utilityId: run.utilityId,
+        actorId: run.createdBy,
+        actorName: "billing run (resumed)",
+      },
+      { jobId: reclaimJobId("resume", run.id, now) },
+    );
     if (jobId) {
       requeued += 1;
       logger.warn(
@@ -170,12 +227,17 @@ async function reclaimZombieBillingRunsUnscoped(): Promise<number> {
     }
   }
   for (const run of stuckPosting) {
-    const jobId = await enqueueSafely(QUEUE_NAMES.billingRuns, BILLING_RUN_POST_JOB_NAME, {
-      runId: run.id,
-      utilityId: run.utilityId,
-      actorId: run.createdBy,
-      actorName: "billing run posting (resumed)",
-    });
+    const jobId = await enqueueSafely(
+      QUEUE_NAMES.billingRuns,
+      BILLING_RUN_POST_JOB_NAME,
+      {
+        runId: run.id,
+        utilityId: run.utilityId,
+        actorId: run.createdBy,
+        actorName: "billing run posting (resumed)",
+      },
+      { jobId: reclaimJobId("post", run.id, now) },
+    );
     if (jobId) {
       requeued += 1;
       logger.warn(

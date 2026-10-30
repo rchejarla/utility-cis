@@ -735,21 +735,103 @@ describe("posting a run", () => {
         "billing-runs",
         "post-billing-run",
         expect.anything(),
+        expect.anything(),
       );
 
-      // One that died mid-pass is: marked, and never stamped posted.
+      // One that died mid-pass is: marked, never stamped posted, and
+      // silent since before the staleness cutoff — a pass still
+      // reporting progress belongs to a node that is alive.
       await prisma.billingRun.update({
         where: { id: run.id },
-        data: { postedAt: null, postedBy: null },
+        data: {
+          postedAt: null,
+          postedBy: null,
+          lastProgressAt: new Date(Date.now() - 20 * 60_000),
+        },
       });
       await worker.reclaimZombieBillingRuns();
       expect(queues.enqueueSafely).toHaveBeenCalledWith(
         "billing-runs",
         "post-billing-run",
         expect.objectContaining({ runId: run.id }),
+        expect.objectContaining({ jobId: expect.stringContaining(run.id) }),
       );
-  
+
     }), 300_000);
+
+/**
+ * Whose run is it?
+ *
+ * On a single node a `RUNNING` row is necessarily a corpse: if this
+ * process is booting, nothing else is working. In a cluster that stops
+ * being true — node B booting during a deploy or a scale-up would
+ * re-enqueue the run node A is halfway through, and `billing-runs` sets
+ * `attempts: 1` precisely so that nothing restarts a run behind its own
+ * back.
+ *
+ * `last_progress_at` is stamped after every account, so a live run is
+ * never quiet for five minutes. The imports sweep beside this one has
+ * always judged on that; this one judged on status alone.
+ */
+describe("reclaiming a run from a dead node", () => {
+  async function runningRun(lastProgressAt: Date) {
+    const run = JSON.parse((await startRun()).body);
+    await prismaImports.prisma.billingRun.update({
+      where: { id: run.id },
+      data: { status: "RUNNING", lastProgressAt },
+    });
+    return run.id as string;
+  }
+
+  async function reclaim() {
+    const worker = await import("../../workers/billing-run-worker.js");
+    const queues = await import("../../lib/queues.js");
+    vi.mocked(queues.enqueueSafely).mockClear();
+    const count = await worker.reclaimZombieBillingRuns();
+    return { count, enqueue: vi.mocked(queues.enqueueSafely) };
+  }
+
+  it("leaves alone a run another node is still working on", () =>
+    seedAsPlatform(async () => {
+      await runningRun(new Date());
+
+      const { count, enqueue } = await reclaim();
+
+      expect(count).toBe(0);
+      expect(enqueue).not.toHaveBeenCalled();
+    }), 300_000);
+
+  it("reclaims a run whose progress stopped", () =>
+    seedAsPlatform(async () => {
+      const runId = await runningRun(new Date(Date.now() - 20 * 60_000));
+
+      const { count, enqueue } = await reclaim();
+
+      expect(count).toBe(1);
+      expect(enqueue).toHaveBeenCalledWith(
+        "billing-runs",
+        "process-billing-run",
+        expect.objectContaining({ runId }),
+        expect.objectContaining({ jobId: expect.stringContaining(runId) }),
+      );
+    }), 300_000);
+
+  it("names the same job when two nodes boot together, so the corpse is enqueued once", () =>
+    seedAsPlatform(async () => {
+      // Two boots inside the same hour are one deploy. BullMQ refuses a
+      // duplicate id, so the second node's sweep is a no-op rather than
+      // a second worker on the same run.
+      const runId = await runningRun(new Date(Date.now() - 20 * 60_000));
+
+      const first = await reclaim();
+      const second = await reclaim();
+
+      const idOf = (e: { mock: { calls: unknown[][] } }) =>
+        (e.mock.calls.at(-1)?.[3] as { jobId?: string } | undefined)?.jobId;
+      expect(idOf(first.enqueue)).toBeDefined();
+      expect(idOf(second.enqueue)).toBe(idOf(first.enqueue));
+    }), 300_000);
+});
 
   /*
    * Every bill a posting pass leaves posted gets a document, including

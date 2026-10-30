@@ -86,9 +86,20 @@ export async function postBillingRun(
    * `alreadyPosted`, which is the same tolerance this loop already
    * extends to a bill somebody posted by hand.
    */
+  /*
+   * `lastProgressAt` with it, and again after every bill below.
+   *
+   * The reclaim judges a pass on whether it is still *moving*, not on
+   * whether it is marked — on one node a marked pass is necessarily a
+   * corpse, in a cluster it is just as likely to be another node's
+   * live work. A pass that stamped only its start would be
+   * indistinguishable from an abandoned one the moment it ran longer
+   * than the cutoff, which at twelve thousand bills it will.
+   */
+  const startedAt = new Date();
   await prisma.billingRun.update({
     where: { id: runId },
-    data: { postingStartedAt: new Date() },
+    data: { postingStartedAt: startedAt, lastProgressAt: startedAt },
   });
 
   const items = await prisma.billingRunItem.findMany({
@@ -206,6 +217,13 @@ export async function postBillingRun(
         }
       }
     }
+
+    // The heartbeat the reclaim reads. Per bill, as generation does it
+    // per account: one UPDATE beside a transaction and an HTTP call.
+    await prisma.billingRun.update({
+      where: { id: runId },
+      data: { lastProgressAt: new Date() },
+    });
   }
 
   await prisma.billingRun.update({
