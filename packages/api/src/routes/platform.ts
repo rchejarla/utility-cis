@@ -14,6 +14,9 @@ import {
 } from "../services/provisioning.service.js";
 import { getUtilityReadiness } from "../services/utility-readiness.service.js";
 import { getQueueHealth } from "../services/queue-health.service.js";
+import { ALL_QUEUE_NAMES, type QueueName } from "../lib/queues.js";
+import { setPerNodeLimit, setClusterLimit } from "../lib/queue-limits.js";
+import { logger } from "../lib/logger.js";
 import { getQueueJobs, QUEUE_JOB_STATES } from "../services/queue-jobs.service.js";
 import { actOnQueueJob, QUEUE_ACTIONS } from "../services/queue-actions.service.js";
 import {
@@ -212,6 +215,67 @@ export async function platformRoutes(app: FastifyInstance) {
         .parse(request.params);
 
       return reply.send(await stopWorkerProcess(id, actorOf(request)));
+    },
+  );
+
+  /*
+   * How much of a queue runs at once.
+   *
+   * Two numbers, because `concurrency` is two limits wearing one word:
+   * **per node** bounds one worker process (heap, CPU, its own pool) and
+   * **cluster** bounds the shared database. Neither is derived from the
+   * other or from the node count, and what runs is the smaller of the
+   * cluster limit and `workers × perNode` — reported on the queue
+   * summary as `effectiveLimit`, because a cluster limit of 4 against
+   * three single-job nodes runs 3 and a page showing only the 4 would be
+   * showing a number that does nothing.
+   *
+   * A value above what the fleet can reach is accepted rather than
+   * refused: it binds the day a node is added, and a validator strict
+   * enough to reject it would also reject it halfway through every
+   * rolling deploy. The arithmetic is shown; the number is the
+   * operator's.
+   *
+   * `null` clears a limit, and is deliberately not the same as omitting
+   * the field — omitted means "leave it alone", so a form that posts
+   * only what changed cannot reset what it left out. Zero is refused
+   * outright: it would stop the queue, which is what pause is for.
+   */
+  app.put(
+    "/api/v1/platform/queues/:name/concurrency",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const { name } = z
+        .object({ name: z.enum(ALL_QUEUE_NAMES as unknown as [QueueName, ...QueueName[]]) })
+        .parse(request.params);
+
+      const limit = z.number().int().positive().max(1000).nullable();
+      const body = z
+        .object({ perNode: limit.optional(), cluster: limit.optional() })
+        .strict()
+        .parse(request.body ?? {});
+
+      if (body.perNode !== undefined) await setPerNodeLimit(name, body.perNode);
+      if (body.cluster !== undefined) await setClusterLimit(name, body.cluster);
+
+      /*
+       * Logged with both values, per SCH-X-3: a queue found throttled on
+       * a Monday with no record of who set it is worse than one nobody
+       * could throttle. Not an `audit_log` row — that table wants a
+       * `utility_id` and a uuid `entity_id`, and a queue is neither.
+       */
+      logger.info(
+        {
+          component: "scheduler-control",
+          queue: name,
+          perNode: body.perNode,
+          cluster: body.cluster,
+          actor: actorOf(request),
+        },
+        "Queue concurrency limits changed",
+      );
+
+      return reply.send({ queue: name, ...body });
     },
   );
 

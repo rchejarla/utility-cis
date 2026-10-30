@@ -11,6 +11,7 @@ import {
   workerId,
   type QueueName,
 } from "./lib/queues.js";
+import { applyPerNodeLimits } from "./lib/queue-limits.js";
 import { startDlqMonitor, stopDlqMonitor } from "./workers/dlq-monitor.js";
 import {
   buildSuspensionWorker,
@@ -76,6 +77,16 @@ import "./imports/handlers/index.js";
  */
 
 interface WorkerLike {
+  /**
+   * The queue this worker is attached to — BullMQ's first constructor
+   * argument, not the connection name in `opts.name`.
+   */
+  readonly name: string;
+  /**
+   * Max in-flight jobs on this process. Settable, which is how a stored
+   * per-node limit reaches a worker that is already built.
+   */
+  concurrency: number;
   close(): Promise<void>;
 }
 
@@ -264,6 +275,21 @@ async function main(): Promise<void> {
       logger.warn({ component: "worker", requeued }, "Re-enqueued interrupted billing runs");
     }
   }
+
+  /*
+   * Apply the stored per-node limits, now that every worker exists.
+   *
+   * After construction rather than inside `workerOptions`, which is
+   * synchronous and would have to become async for every caller to read
+   * one Redis hash. BullMQ's `concurrency` setter is a plain assignment
+   * the fetch loop reads, so this is the same thing a constructor option
+   * would have done.
+   *
+   * Boot is when a per-node change takes effect — the cluster limit is
+   * the one honoured passively, since its gate lives in Redis. See
+   * `docs/specs/27-job-scheduling.md` §6 SCH-CONC-4.
+   */
+  await applyPerNodeLimits(activeWorkers);
 
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));

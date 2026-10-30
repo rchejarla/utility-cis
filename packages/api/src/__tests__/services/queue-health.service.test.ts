@@ -33,6 +33,11 @@ let hangingQueue: string | null = null;
 /** Set to make the worker listing throw, as a Redis without the command does. */
 let workerListFails = false;
 
+/** The cluster-wide ceiling each queue carries in its `meta` hash. */
+const clusterLimits: Record<string, number | null> = {};
+/** What `platform:queue-concurrency` holds, by queue. */
+const perNodeLimits: Record<string, string> = {};
+
 const queueFor = (name: string) => ({
   getJobCounts: vi.fn(async () => {
     if (hangingQueue === name) return new Promise<never>(() => {});
@@ -44,13 +49,30 @@ const queueFor = (name: string) => ({
     return workers[name] ?? [];
   }),
   isPaused: vi.fn(async () => pausedQueues.has(name)),
+  getGlobalConcurrency: vi.fn(async () => clusterLimits[name] ?? null),
 });
 
 vi.mock("../../lib/queues.js", () => ({
   ALL_QUEUE_NAMES: ["billing-runs", "imports"],
+  QUEUE_DEFAULTS: {
+    "billing-runs": { concurrency: 1, defaultJobOptions: {} },
+    imports: { concurrency: 4, defaultJobOptions: {} },
+  },
   dlqNameFor: (n: string) => `dlq-${n}`,
   getQueue: vi.fn((n: string) => queueFor(n)),
   getDlqQueue: vi.fn((n: string) => queueFor(`dlq-${n}`)),
+}));
+
+/*
+ * The real `queue-limits` runs here — only its Redis is mocked. The
+ * arithmetic has its own unit test; what this file is for is the
+ * composition, and a hand-written `effectiveLimit` in a module mock
+ * would assert against the mock instead of the code.
+ */
+vi.mock("../../lib/queue-redis.js", () => ({
+  queueRedisConnection: {
+    hget: vi.fn(async (_key: string, field: string) => perNodeLimits[field] ?? null),
+  },
 }));
 
 vi.mock("../../lib/logger.js", () => ({
@@ -68,6 +90,8 @@ beforeEach(async () => {
   for (const key of Object.keys(failed)) delete failed[key];
   for (const key of Object.keys(workers)) delete workers[key];
   pausedQueues.clear();
+  for (const key of Object.keys(clusterLimits)) delete clusterLimits[key];
+  for (const key of Object.keys(perNodeLimits)) delete perNodeLimits[key];
   hangingQueue = null;
   workerListFails = false;
   svc = await import("../../services/queue-health.service.js");
@@ -86,6 +110,59 @@ function job(over: Record<string, unknown> = {}) {
     ...over,
   };
 }
+
+describe("how much of a queue runs at once", () => {
+  it("reports what will actually run, not only what was configured", async () => {
+    /*
+     * The case an operator gets wrong: a cluster limit above what the
+     * attached nodes will hold. Three workers willing to take one job
+     * each cannot reach four, so 4 is not binding and the honest answer
+     * is 3 — it starts binding the day a fourth node joins, which is why
+     * the number is reported rather than rejected.
+     */
+    workers["billing-runs"] = [
+      { addr: "10.0.0.1:6379", age: "300" },
+      { addr: "10.0.0.2:6379", age: "200" },
+      { addr: "10.0.0.3:6379", age: "100" },
+    ];
+    clusterLimits["billing-runs"] = 4;
+
+    const report = await svc.getQueueHealth();
+    const queue = report.queues.find((q) => q.name === "billing-runs");
+
+    expect(queue?.perNodeLimit).toBe(1);
+    expect(queue?.clusterLimit).toBe(4);
+    expect(queue?.effectiveLimit).toBe(3);
+  });
+
+  it("reaches the cluster limit once the stored per-node limit allows it", async () => {
+    workers["billing-runs"] = [
+      { addr: "10.0.0.1:6379", age: "300" },
+      { addr: "10.0.0.2:6379", age: "200" },
+      { addr: "10.0.0.3:6379", age: "100" },
+    ];
+    clusterLimits["billing-runs"] = 4;
+    perNodeLimits["billing-runs"] = "2";
+
+    const report = await svc.getQueueHealth();
+
+    expect(report.queues.find((q) => q.name === "billing-runs")?.effectiveLimit).toBe(4);
+  });
+
+  it("says nothing about the cap when the worker count is unknown", async () => {
+    // A managed Redis that refuses CLIENT LIST. A cap printed as a
+    // figure here would be invented.
+    workerListFails = true;
+    clusterLimits["imports"] = 8;
+
+    const report = await svc.getQueueHealth();
+    const queue = report.queues.find((q) => q.name === "imports");
+
+    expect(queue?.workers).toBeNull();
+    expect(queue?.clusterLimit).toBe(8);
+    expect(queue?.effectiveLimit).toBeNull();
+  });
+});
 
 describe("getQueueHealth", () => {
   it("reports every registered queue, quiet ones included", async () => {

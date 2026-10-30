@@ -123,7 +123,8 @@ applied to the identity that sits above them.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/v1/platform/queues` | One call, the whole cluster: per-queue counts, DLQ depth, recent failures with tenant names, worker attachment, `paused`, the connected API nodes, the worker registry, and whether this node may start or stop a worker |
+| GET | `/api/v1/platform/queues` | One call, the whole cluster: per-queue counts, DLQ depth, recent failures with tenant names, worker attachment, `paused`, the two concurrency limits with the `effectiveLimit` they resolve to, the connected API nodes, the worker registry, and whether this node may start or stop a worker |
+| PUT | `/api/v1/platform/queues/:name/concurrency` | Set `perNode` and/or `cluster`. An omitted field is left alone, `null` clears a limit, 0 is refused — and a cluster limit above what the attached fleet can reach is accepted, since it binds when a node is added. See [27 — Job Scheduling](27-job-scheduling.md) §6 |
 | GET | `/api/v1/platform/queues/:name/jobs` | The jobs in one queue and one state. `?state=` (required), `?limit=` (≤100), `?offset=` (≤1000). `name` may be the sentinel `all` |
 | POST | `/api/v1/platform/queues/:name/jobs/:id/:action` | `retry`, `promote` or `replay` on one job |
 | POST | `/api/v1/platform/workers/start` | `{ queues?: string[] }` — spawn a worker process on **this** node; empty means all eight queues |

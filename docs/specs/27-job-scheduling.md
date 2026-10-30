@@ -317,11 +317,11 @@ never binds and the queue tops out at 3; raise per node to 2 and the same
 node count**, because it is not shared out between nodes — it is one gate
 every node checks before taking a job.
 
-- **SCH-CONC-1 (Must).** Both numbers are configurable per queue by the
+- **SCH-CONC-1 (Must, built 2026-10-30).** Both numbers are configurable per queue by the
   platform actor, and **neither is derived from the other or from the
   node count.** `QUEUE_DEFAULTS` stays in code as the fallback for a
   queue nobody has configured.
-- **SCH-CONC-2 (Must).** The cluster limit is
+- **SCH-CONC-2 (Must, built 2026-10-30).** The cluster limit is
   `Queue.setGlobalConcurrency(n)` — an `HSET` of `concurrency` into
   `bull:<queue>:meta`, the field beside `paused`. The gate is in
   `moveToActive`'s Lua (`LLEN active >= concurrency`), evaluated in
@@ -330,14 +330,14 @@ every node checks before taking a job.
   **Unset means no limit** (`removeGlobalConcurrency`), which is today's
   behaviour and therefore the default: nothing changes until an operator
   chooses a number.
-- **SCH-CONC-3 (Must).** Per node is applied through the `Worker`
+- **SCH-CONC-3 (Must, built 2026-10-30).** Per node is applied through the `Worker`
   `concurrency` setter (present in bullmq 5.76.2, `worker.js:213`),
   which assigns `_concurrency` and nothing else — so lowering it stops
   that worker fetching while jobs already running finish, cancellation
   being a separate `cancelAllJobs`. Each worker reads **one stored
   number for itself**, never a share computed from how many nodes it can
   see.
-- **SCH-CONC-4 (Must).** The two differ in how a change reaches a node,
+- **SCH-CONC-4 (Must, built 2026-10-30).** The two differ in how a change reaches a node,
   and the spec should not pretend otherwise. The cluster limit is
   honoured passively: the gate is in Redis and no process has to be
   told. Per node has to reach a live `Worker` object. Until there is a
@@ -364,20 +364,25 @@ every node checks before taking a job.
     division. `min()` was doing the clamping all along, so the division
     never had to be exact, which leaves the constraint buying nothing
     and invalidating stored config on every scaling event.
-- **SCH-CONC-6 (Must).** The UI prints the effective cap under the two
-  fields, from the attached-worker count `connected-clients.ts` already
-  reads out of `CLIENT LIST` — *"3 workers attached → 3 in flight at
-  most"*. A cluster limit above `attached × per node` is **not
-  rejected**: it binds the moment a node is added, and validating it
-  would refuse a legitimate value, then refuse it again halfway through
-  every rolling deploy. The arithmetic is shown; the number is the
-  operator's.
-- **SCH-CONC-7 (Must).** `billing-runs` keeps **per node 1**, and its
-  cluster limit must not be settable above 1 until SCH-CONC-8 lands. The
-  only thing stopping generation and posting of one run from overlapping
-  today is that a single replica can hold one job (SCH-NODE-2). The
-  moment an operator can type 2, that guarantee is theirs to delete by
-  accident.
+- **SCH-CONC-6 (Must, API built 2026-10-30).** The UI prints the
+  effective cap under the two fields, from the attached-worker count
+  `connected-clients.ts` already reads out of `CLIENT LIST` — *"3 workers
+  attached → 3 in flight at most"*. A cluster limit above
+  `attached × per node` is **not rejected**: it binds the moment a node
+  is added, and validating it would refuse a legitimate value, then
+  refuse it again halfway through every rolling deploy. The arithmetic is
+  shown; the number is the operator's. `GET /platform/queues` carries
+  `perNodeLimit`, `clusterLimit` and the resolved `effectiveLimit` per
+  queue, and the route accepts an unreachable cluster limit; the card on
+  `/platform/cluster/queues` is the half still to build.
+- **SCH-CONC-7 (Must, satisfied 2026-10-30).** `billing-runs` keeps
+  **per node 1** as its default, and its cluster limit was not to be
+  settable above 1 until SCH-CONC-8 landed: the only thing stopping
+  generation and posting of one run from overlapping was that a single
+  replica can hold one job (SCH-NODE-2), so the moment an operator could
+  type 2, that guarantee was theirs to delete by accident. SCH-CONC-8
+  landed first, which is what makes both limits ordinary capacity
+  settings here — the exclusion no longer depends on either number.
 - **SCH-CONC-8 (Must).** Per-run exclusion belongs in the **database**,
   not in a concurrency number. The invariant is one job per *run*, not
   N per cluster: two runs at once are fine and two tenants at once are
@@ -393,7 +398,7 @@ every node checks before taking a job.
   `RUN_POSTING_IN_FLIGHT` (409), which the route answers and the worker
   tolerates. Full account in
   [09 — Billing](09-billing.md) §"One pass at a time over a run".
-- **SCH-CONC-9 (Should).** The cluster limit needs no store of ours:
+- **SCH-CONC-9 (Should, built 2026-10-30).** The cluster limit needs no store of ours:
   BullMQ's `meta` hash is the single copy and the thing that enforces
   it. Per node does, and a `platform:queue-concurrency` Redis hash
   beside `platform:workers` is the cheap answer, with `QUEUE_DEFAULTS`

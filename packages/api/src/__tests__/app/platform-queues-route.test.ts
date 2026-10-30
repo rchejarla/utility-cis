@@ -46,6 +46,13 @@ vi.mock("../../services/queue-jobs.service.js", () => ({
   getQueueJobs: (...args: unknown[]) => getQueueJobs(...(args as [])),
 }));
 
+const setPerNodeLimit = vi.fn(async () => undefined);
+const setClusterLimit = vi.fn(async () => undefined);
+vi.mock("../../lib/queue-limits.js", () => ({
+  setPerNodeLimit: (...args: unknown[]) => setPerNodeLimit(...(args as [])),
+  setClusterLimit: (...args: unknown[]) => setClusterLimit(...(args as [])),
+}));
+
 let app: import("fastify").FastifyInstance;
 
 beforeEach(async () => {
@@ -111,6 +118,88 @@ describe("GET /api/v1/platform/queues", () => {
 
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body).reachable).toBe(false);
+  });
+});
+
+/**
+ * Setting how much of a queue runs at once.
+ *
+ * Two numbers, neither derived from the other: per node bounds one
+ * process, the cluster limit bounds the database. The route takes
+ * whichever the operator sent and leaves the other alone, because
+ * sending one field must not silently reset the one not mentioned.
+ */
+describe("PUT /api/v1/platform/queues/:name/concurrency", () => {
+  const url = (q = "billing-runs") => `/api/v1/platform/queues/${q}/concurrency`;
+
+  const put = (payload: Record<string, number | null>, token = createPlatformToken()) =>
+    app.inject({
+      method: "PUT",
+      url: url(),
+      headers: { authorization: `Bearer ${token}` },
+      payload,
+    });
+
+  it("sets both limits for the platform operator", async () => {
+    const res = await put({ perNode: 2, cluster: 4 });
+
+    expect(res.statusCode).toBe(200);
+    expect(setPerNodeLimit).toHaveBeenCalledWith("billing-runs", 2);
+    expect(setClusterLimit).toHaveBeenCalledWith("billing-runs", 4);
+  });
+
+  it("leaves a limit alone when the body does not mention it", async () => {
+    const res = await put({ cluster: 6 });
+
+    expect(res.statusCode).toBe(200);
+    expect(setClusterLimit).toHaveBeenCalledWith("billing-runs", 6);
+    expect(setPerNodeLimit).not.toHaveBeenCalled();
+  });
+
+  it("clears a limit on an explicit null, which is not the same as omitting it", async () => {
+    // Null removes the ceiling; omitted means "don't touch". Collapsing
+    // the two would make a form that posts only what changed reset
+    // everything it left out.
+    const res = await put({ cluster: null });
+
+    expect(res.statusCode).toBe(200);
+    expect(setClusterLimit).toHaveBeenCalledWith("billing-runs", null);
+  });
+
+  it("accepts a cluster limit above what the fleet can reach", async () => {
+    // 4 against three single-job nodes runs 3. Not an error: it binds the
+    // day a fourth node joins, and refusing it would also refuse it
+    // halfway through every rolling deploy.
+    const res = await put({ perNode: 1, cluster: 4 });
+
+    expect(res.statusCode).toBe(200);
+    expect(setClusterLimit).toHaveBeenCalledWith("billing-runs", 4);
+  });
+
+  it("refuses zero, which would stop the queue rather than uncap it", async () => {
+    const res = await put({ perNode: 0 });
+
+    expect(res.statusCode).toBe(400);
+    expect(setPerNodeLimit).not.toHaveBeenCalled();
+  });
+
+  it("refuses a queue that is not one", async () => {
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/v1/platform/queues/not-a-queue/concurrency",
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+      payload: { cluster: 2 },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(setClusterLimit).not.toHaveBeenCalled();
+  });
+
+  it("refuses a tenant admin, whatever they hold", async () => {
+    const res = await put({ cluster: 2 }, createTestToken());
+
+    expect(res.statusCode).toBe(403);
+    expect(setClusterLimit).not.toHaveBeenCalled();
   });
 });
 

@@ -7,6 +7,7 @@ import {
   type QueueName,
 } from "../lib/queues.js";
 import { utilityIdOf, utilityNames, withQueueTimeout } from "../lib/queue-inspect.js";
+import { effectiveLimit, readQueueLimits } from "../lib/queue-limits.js";
 
 /**
  * Reports what is in each queue, who is attached to work it, and what
@@ -74,6 +75,20 @@ export interface QueueHealth {
   workerAgeSeconds: number | null;
   /** A paused queue processes nothing, however many workers are attached. */
   paused: boolean;
+  /** Max in-flight jobs on one worker process. */
+  perNodeLimit: number;
+  /** The cluster-wide ceiling, or null when none is set. */
+  clusterLimit: number | null;
+  /**
+   * What will actually run: the smaller of the cluster limit and
+   * `workers × perNodeLimit`. Null when the worker count is unknown.
+   *
+   * Reported with the two settings because neither one answers the
+   * question on its own: a cluster limit of 4 against three nodes that
+   * each take one job runs 3, so a page showing only the 4 would be
+   * showing a number that does nothing.
+   */
+  effectiveLimit: number | null;
   recentFailures: QueueFailure[];
 }
 
@@ -169,7 +184,7 @@ async function readQueue(name: QueueName): Promise<QueueHealth> {
   const queue = getQueue(name);
   const dlq = getDlqQueue(name);
 
-  const [counts, dlqCounts, failedJobs, attachment] = await Promise.all([
+  const [counts, dlqCounts, failedJobs, attachment, limits] = await Promise.all([
     queue.getJobCounts(),
     dlq.getJobCounts(),
     /*
@@ -180,6 +195,7 @@ async function readQueue(name: QueueName): Promise<QueueHealth> {
      */
     queue.getFailed(0, 19) as Promise<RawJob[]>,
     attachmentOf(name),
+    readQueueLimits(name),
   ]);
 
   const ordered = [...failedJobs]
@@ -197,6 +213,9 @@ async function readQueue(name: QueueName): Promise<QueueHealth> {
     },
     dlqDepth: depthOf(dlqCounts as Record<string, number>),
     ...attachment,
+    perNodeLimit: limits.perNode,
+    clusterLimit: limits.cluster,
+    effectiveLimit: effectiveLimit(limits, attachment.workers),
     recentFailures: ordered.map((job) => ({
       jobId: job.id ?? null,
       jobName: job.name ?? dlqNameFor(name),

@@ -45,9 +45,21 @@ vi.mock("../lib/cache-redis.js", () => ({
  * `connected-clients.ts` already treats as the answer a managed Redis
  * gives when it refuses the command.
  */
+/*
+ * The hash commands are here for the same reason `client` is: nothing
+ * else answers them. `queue-limits.ts` keeps each queue's per-node
+ * concurrency in `platform:queue-concurrency`, and it is read on the way
+ * to the queue report — so without `hget` any test that reaches the real
+ * `queue-health.service` dies on "hget is not a function" rather than on
+ * anything to do with what it was testing. Null is the right answer: no
+ * stored limit, so the code default stands.
+ */
 vi.mock("../lib/queue-redis.js", () => ({
   queueRedisConnection: {
     client: vi.fn().mockResolvedValue(""),
+    hget: vi.fn().mockResolvedValue(null),
+    hset: vi.fn().mockResolvedValue(1),
+    hdel: vi.fn().mockResolvedValue(1),
     status: "ready",
     quit: vi.fn().mockResolvedValue("OK"),
     duplicate: vi.fn(() => ({

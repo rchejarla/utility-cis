@@ -70,7 +70,15 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("/admin/queues", () => {
+/*
+ * Each case builds a whole Fastify app with Bull Board mounted, which on
+ * a loaded machine runs 4–5s against vitest's 5s default — so these
+ * passed alone and timed out inside the full suite, reporting "Test
+ * timed out" and nothing about authorization. 20s is headroom, not a
+ * long-running test: if one of these ever genuinely hangs it still
+ * fails, just slower.
+ */
+describe("/admin/queues", { timeout: 20_000 }, () => {
   it("refuses a tenant admin holding tenant_profile:EDIT", async () => {
     // The exact grant that used to be sufficient.
     const app = await appWithBullBoard({ tenant_profile: ["VIEW", "EDIT"] });
