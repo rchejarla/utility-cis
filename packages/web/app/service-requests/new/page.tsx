@@ -68,6 +68,38 @@ const cardStyle = {
   marginBottom: 14,
 };
 
+/** The form's footer: on the card, separated from the last field. */
+const actionRow = {
+  display: "flex",
+  gap: 8,
+  justifyContent: "flex-end",
+  marginTop: 16,
+  paddingTop: 14,
+  borderTop: "1px solid var(--border)",
+};
+
+const cancelButton = {
+  padding: "8px 16px",
+  fontSize: 13,
+  background: "transparent",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius)",
+  color: "var(--text-secondary)",
+  cursor: "pointer",
+  fontFamily: "inherit",
+};
+
+const submitButton = {
+  padding: "8px 20px",
+  fontSize: 13,
+  background: "var(--accent-primary)",
+  color: "#fff",
+  border: "none",
+  borderRadius: "var(--radius)",
+  fontWeight: 600,
+  fontFamily: "inherit",
+};
+
 const cardHeaderStyle = {
   margin: "0 0 12px",
   fontSize: 13,
@@ -363,6 +395,41 @@ function NewServiceRequestForm() {
               placeholder="Describe the issue or work to be done"
               style={{ ...inputStyle, resize: "vertical", minHeight: 90 }}
             />
+
+            {/*
+              On the card, which is where every other create page puts
+              its actions (EntityFormPage renders them as the last child
+              of the form card). They sat below the grid on the page
+              background instead, and both surface tokens they use are
+              drawn to be read against `--bg-card`: on light mode the
+              Cancel outline is `--border` #c7d2fe on #eef2ff and the
+              disabled fill is `--bg-elevated` #dbe4ff on #eef2ff, about
+              1.15:1 each. Neither button had a visible edge -- the
+              operator saw two pieces of floating text.
+            */}
+            <div style={actionRow}>
+              <button type="button" onClick={() => router.back()} style={cancelButton}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={submitDisabled}
+                style={{
+                  ...submitButton,
+                  /*
+                    A disabled button still has to look like a button.
+                    Dimming the accent says "this is the control, and it
+                    is not ready yet"; repainting it in a surface colour
+                    said "there is nothing here". The shared shell dims
+                    the same way.
+                  */
+                  opacity: submitDisabled ? 0.45 : 1,
+                  cursor: submitDisabled ? "not-allowed" : "pointer",
+                }}
+              >
+                {submitting ? "Creating…" : "Create Request"}
+              </button>
+            </div>
           </section>
         </div>
 
@@ -404,49 +471,6 @@ function NewServiceRequestForm() {
         </aside>
       </div>
 
-      <div
-        style={{
-          marginTop: 18,
-          display: "flex",
-          gap: 8,
-          justifyContent: "flex-end",
-        }}
-      >
-        <button
-          type="button"
-          onClick={() => router.back()}
-          style={{
-            padding: "8px 16px",
-            fontSize: 13,
-            background: "transparent",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius)",
-            color: "var(--text-secondary)",
-            cursor: "pointer",
-            fontFamily: "inherit",
-          }}
-        >
-          Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={submitDisabled}
-          style={{
-            padding: "8px 20px",
-            fontSize: 13,
-            background: submitDisabled ? "var(--bg-elevated)" : "var(--accent-primary)",
-            color: submitDisabled ? "var(--text-muted)" : "#fff",
-            border: "none",
-            borderRadius: "var(--radius)",
-            fontWeight: 600,
-            cursor: submitDisabled ? "not-allowed" : "pointer",
-            fontFamily: "inherit",
-            opacity: submitting ? 0.7 : 1,
-          }}
-        >
-          {submitting ? "Creating…" : "Create Request"}
-        </button>
-      </div>
     </form>
   );
 }
