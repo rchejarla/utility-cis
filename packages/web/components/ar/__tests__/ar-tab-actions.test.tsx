@@ -220,6 +220,34 @@ describe("ArTab actions — permissions", () => {
 });
 
 /**
+ * The two ways to add money owed, and telling them apart.
+ *
+ * They are different ledger types collected in a different order
+ * (`DEBIT_ALLOCATION_ORDER` is `FEE → ADJUSTMENT_DEBIT → BILL_CHARGE`),
+ * and the buttons read "Raise Fee" and "Raise Charge" — a distinction
+ * the words do not carry, with the explanation visible only inside the
+ * dialog, which is after the choice has been made. The first operator
+ * to meet them said they did not understand which was which.
+ */
+describe("ArTab — the two ways to add money owed", () => {
+  it("says which to pick before either is clicked", async () => {
+    grant({ accounts: ["VIEW"], ar_adjustments: ["VIEW", "CREATE"] });
+    routeGets();
+    renderTab();
+
+    const fee = await screen.findByRole("button", { name: /raise a fee/i });
+    const correction = screen.getByRole("button", { name: /add a correction/i });
+
+    // What each is for, and the order it is collected in — the fact that
+    // makes them two buttons rather than one.
+    expect(fee.getAttribute("title")).toMatch(/late fee/i);
+    expect(fee.getAttribute("title")).toMatch(/before bills/i);
+    expect(correction.getAttribute("title")).toMatch(/under-billing/i);
+    expect(correction.getAttribute("title")).toMatch(/after fees/i);
+  });
+});
+
+/**
  * What a ledger row looks like, as distinct from what it can do.
  *
  * It carried every act loose in the cell: an underlined "View bill" from

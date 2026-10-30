@@ -84,12 +84,16 @@ const MODES: Record<
    * sits between fees and bill charges. Folding them into one button
    * would make the operator's wording decide an allocation order they
    * cannot see.
+   *
+   * Called a correction rather than a charge, which is what it is: "Raise
+   * a charge" beside "Raise a fee" named two ledger types and told an
+   * operator nothing about which one their situation needed.
    */
   charge: {
-    title: "Raise a charge",
+    title: "Add a correction",
     message:
       "A correction to what this account was billed — an under-billing, a transferred balance, a charge that belongs here. It is not a fee: a fee ages on its own and is collected first, while a correction is paid after fees and before bills.",
-    confirm: "Raise charge",
+    confirm: "Add correction",
     path: (a) => `/api/v1/accounts/${a}/adjustments`,
     appliesToType: "ADJUSTMENT_DEBIT",
     needsTarget: false,

@@ -293,24 +293,34 @@ export function ArTab({ accountId }: { accountId: string }) {
           {canRaiseFee && (
             <button
               onClick={() => setAdjust({ mode: "fee", target: null })}
+              title="A late fee, a reconnection, a meter test. Ages on its own due date and is collected before bills."
               style={secondaryButton}
             >
-              Raise Fee
+              Raise a fee
             </button>
           )}
           {/*
-            Separate from Raise Fee because the ledger separates them: a
+            Separate from the fee because the ledger separates them: a
             FEE is collected before bills in the §6.3 order, a correction
             after fees and before bills. One button would let the
             operator's choice of words set an allocation order they
             cannot see.
+
+            Which leaves the operator to pick, so each button says what
+            it is for. They read "Raise Fee" and "Raise Charge", which
+            name two ledger types and distinguish nothing a CSR knows —
+            and the dialog explained the difference only once the choice
+            had been made. "Correction" is what an ADJUSTMENT_DEBIT is,
+            and it does not read as an act on a charge already on the
+            table, which Waive and Write off are.
           */}
           {canRaiseFee && (
             <button
               onClick={() => setAdjust({ mode: "charge", target: null })}
+              title="An under-billing, a transferred balance, a charge that belongs here. Not a fee: collected after fees and before bills."
               style={secondaryButton}
             >
-              Raise Charge
+              Add a correction
             </button>
           )}
           {/*

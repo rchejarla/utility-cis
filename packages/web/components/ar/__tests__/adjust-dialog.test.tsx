@@ -304,7 +304,7 @@ describe("AdjustDialog — raising a charge that is not a fee", () => {
     renderDialog({ mode: "charge" });
 
     await userEvent.type(await screen.findByLabelText(/amount/i), "20.00");
-    await userEvent.click(screen.getByRole("button", { name: /raise charge/i }));
+    await userEvent.click(screen.getByRole("button", { name: /add correction/i }));
 
     await waitFor(() =>
       expect(mockedPost).toHaveBeenCalledWith(
