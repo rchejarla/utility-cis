@@ -248,11 +248,24 @@ cross-tenant read, one per-tenant job with a deterministic id.
   exists for that window or the window closes, mirroring
   `delinquency-dispatch`'s missed-tick recovery. A window that closes
   with no run is an exception, not silence.
-- **SCH-BILL-8 (Must).** `AutomationConfig` gains `billingEnabled`
-  (default **false**) and `billingRunHourLocal`, beside the delinquency
-  pair, and both appear in the Schedulers card on
-  `/settings/automation`. Default off: a tenant that has been billing by
-  hand must not discover automation by finding bills it did not ask for.
+- **SCH-BILL-8 (Must, decided per tenant 2026-10-30).**
+  `AutomationConfig` gains `billingEnabled` (default **false**) and
+  `billingRunHourLocal`, beside the delinquency pair, and both appear in
+  the Schedulers card on `/settings/automation`. Default off: a tenant
+  that has been billing by hand must not discover automation by finding
+  bills it did not ask for.
+
+  **Per tenant, not per cycle** — the choice open question 5 held, now
+  settled. One switch for a utility's automated billing, matching every
+  other toggle on that page and needing no schema change to
+  `billing_cycle`. What it gives up: a utility that wants its monthly
+  residential cycle automated and its quarterly irrigation cycle by hand
+  cannot say so, and turning automation on turns it on for every active
+  cycle. If that case turns up, the per-cycle switch is an additive
+  column that narrows this one rather than replacing it — this decision
+  does not foreclose it, which is the reason it is safe to make now.
+  **`active` on a cycle remains the way to stop one being billed at
+  all**, automated or not, so the gap is narrower than it reads.
 - **SCH-BILL-9 (Must).** `billing_run.created_by` is non-nullable and a
   scheduled run has no user principal. It becomes **nullable**, with the
   audit convention the sweeps already use — `actorId: null`, a named
@@ -562,11 +575,11 @@ hand-written migration.
 4. **Who is told about an orphaned scheduler?** SCH-VIEW-3 shows it. It
    only appears after a deploy removes a cron, which is rare enough that
    a page may be enough and an alert may be noise.
-5. **Does `billingEnabled` belong per cycle rather than per tenant?** A
-   utility running a monthly residential cycle and a quarterly
-   irrigation one may want one automated and the other not. Per tenant
-   is the smaller change and matches every other toggle; per cycle is
-   where the bill day already lives.
-**Closed:** *how does a per-node limit reach a running worker?* It does
-not — next worker start, decided 2026-10-30 and recorded at SCH-CONC-4
-with what would change it.
+**Closed:**
+
+- *How does a per-node limit reach a running worker?* It does not — next
+  worker start, decided 2026-10-30 and recorded at SCH-CONC-4 with what
+  would change it.
+- *Does `billingEnabled` belong per cycle rather than per tenant?* **Per
+  tenant**, decided 2026-10-30 and recorded at SCH-BILL-8 with what it
+  gives up and why a per-cycle switch stays available.
