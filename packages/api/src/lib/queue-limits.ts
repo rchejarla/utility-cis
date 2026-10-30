@@ -148,10 +148,12 @@ function isQueueName(name: string): name is QueueName {
  * finish).
  *
  * Boot is therefore when a change takes effect, which the console says
- * in those words. A poll of the hash would buy live edits for an
- * interval of staleness; it is not built, because the cluster limit is
- * the lever that has to act immediately during an incident and it
- * already does. See `docs/specs/27-job-scheduling.md` open question 6.
+ * in those words. Decided, not pending: a poll of the hash would buy
+ * live edits for one `HGETALL` and an interval of staleness, and it is
+ * not built because per node is a capacity setting rather than an
+ * incident lever — the lever that must act immediately is the cluster
+ * limit, and that one needs no delivery at all.
+ * `docs/specs/27-job-scheduling.md` §6 SCH-CONC-4.
  */
 export async function applyPerNodeLimits(workers: readonly Limitable[]): Promise<void> {
   for (const worker of workers) {

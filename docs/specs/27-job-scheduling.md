@@ -354,12 +354,19 @@ every node checks before taking a job.
 - **SCH-CONC-4 (Must, built 2026-10-30).** The two differ in how a change reaches a node,
   and the spec should not pretend otherwise. The cluster limit is
   honoured passively: the gate is in Redis and no process has to be
-  told. Per node has to reach a live `Worker` object. Until there is a
-  delivery mechanism, **per node takes effect at next worker start**,
-  which the console can already do. The cheap mechanism is a poll of the
-  config hash — one `HGETALL`, where up to one interval of staleness is
-  harmless because the number is a ceiling and not a correctness
-  property; the alternative is spec 24's command path.
+  told. Per node has to reach a live `Worker` object, so **per node takes
+  effect at next worker start** — which the console can already do from
+  its Workers page.
+
+  **Decided 2026-10-30: it stays that way.** A poll of the config hash
+  would buy live edits for one `HGETALL` and an interval of staleness,
+  and spec 24's command path would buy them properly; neither is worth
+  it, because per node is a capacity setting rather than an incident
+  lever. The lever that must act immediately is the cluster limit, and
+  it already does. Recorded so the absence is not later read as an
+  oversight — if an operator asks twice, the poll is the cheap half, and
+  staleness costs nothing there because the number is a ceiling and not
+  a correctness property.
 - **SCH-CONC-5 (Must).** The rejected design, recorded so it is not
   re-proposed: *one field `G`, constrained to multiples of `n`, with per
   node derived as `G/n`.* Two costs, either disqualifying.
@@ -418,7 +425,7 @@ every node checks before taking a job.
   BullMQ's `meta` hash is the single copy and the thing that enforces
   it. Per node does, and a `platform:queue-concurrency` Redis hash
   beside `platform:workers` is the cheap answer, with `QUEUE_DEFAULTS`
-  as the fallback. See open question 6.
+  as the fallback, read at `Worker` construction (SCH-CONC-4).
 - **SCH-CONC-10 (Should, built 2026-10-30).** A queue whose cluster
   limit sits below its attached capacity is called out wherever its
   counts appear, as SCH-PAUSE-4 treats `paused` — *capped at 2* beside
@@ -504,11 +511,6 @@ question this spec exists for, and it depends on nothing in 1 or 2.
    irrigation one may want one automated and the other not. Per tenant
    is the smaller change and matches every other toggle; per cycle is
    where the bill day already lives.
-6. **How does a per-node limit reach a running worker?** SCH-CONC-4
-   takes effect at next worker start, which is honest and may be
-   sufficient — the console can restart a worker, and this is a capacity
-   knob rather than an incident lever, the cluster limit being the one
-   that acts immediately. A poll of `platform:queue-concurrency` buys
-   live edits for an interval of staleness; spec 24's command path buys
-   them properly and is not due yet. My inclination is to ship
-   next-start and add the poll only if an operator asks twice.
+**Closed:** *how does a per-node limit reach a running worker?* It does
+not — next worker start, decided 2026-10-30 and recorded at SCH-CONC-4
+with what would change it.
