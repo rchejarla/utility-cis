@@ -17,6 +17,7 @@ import { getQueueHealth } from "../services/queue-health.service.js";
 import { ALL_QUEUE_NAMES, type QueueName } from "../lib/queues.js";
 import { setPerNodeLimit, setClusterLimit } from "../lib/queue-limits.js";
 import { pauseQueue, resumeQueue } from "../lib/queue-pause.js";
+import { removeScheduler, SCHEDULER_REGISTRY } from "../lib/schedulers.js";
 import { logger } from "../lib/logger.js";
 import { getQueueJobs, QUEUE_JOB_STATES } from "../services/queue-jobs.service.js";
 import { actOnQueueJob, QUEUE_ACTIONS } from "../services/queue-actions.service.js";
@@ -216,6 +217,39 @@ export async function platformRoutes(app: FastifyInstance) {
         .parse(request.params);
 
       return reply.send(await stopWorkerProcess(id, actorOf(request)));
+    },
+  );
+
+  /*
+   * Take out a cron no build knows about.
+   *
+   * Boot reports orphans and no longer deletes them (SCH-NODE-1): a node
+   * coming up during a rolling deploy was deleting the cron the newer
+   * node had just armed, and since registration happens only at boot it
+   * stayed gone. Removal being deliberate means there has to be
+   * somewhere to do it, and this is it until the scheduler view ships.
+   *
+   * `removeScheduler` refuses an id this build registers. That guard is
+   * the point of passing the registry: boot can no longer stop a live
+   * cron by accident, and this route is the only path left that could.
+   */
+  app.delete(
+    "/api/v1/platform/queues/:name/schedulers/:id",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const { name, id } = z
+        .object({
+          name: z.enum(ALL_QUEUE_NAMES as unknown as [QueueName, ...QueueName[]]),
+          id: z.string().min(1).max(200),
+        })
+        .parse(request.params);
+
+      await removeScheduler(name, id, SCHEDULER_REGISTRY);
+      logger.warn(
+        { component: "scheduler-control", queue: name, schedulerId: id, actor: actorOf(request) },
+        "Orphaned scheduler removed",
+      );
+      return reply.send({ queue: name, schedulerId: id, removed: true });
     },
   );
 

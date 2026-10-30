@@ -6,38 +6,33 @@ import { startHealthServer } from "./lib/health-server.js";
 import {
   ALL_QUEUE_NAMES,
   closeAllQueues,
-  getQueue,
   QUEUE_NAMES,
   workerId,
   type QueueName,
 } from "./lib/queues.js";
 import { applyPerNodeLimits } from "./lib/queue-limits.js";
+import { findOrphanedSchedulers, SCHEDULER_REGISTRY } from "./lib/schedulers.js";
 import { startDlqMonitor, stopDlqMonitor } from "./workers/dlq-monitor.js";
 import {
   buildSuspensionWorker,
   registerSuspensionScheduler,
-  SUSPENSION_SCHEDULER_ID,
 } from "./workers/suspension-worker.js";
 import {
   buildNotificationWorker,
   registerNotificationScheduler,
-  NOTIFICATION_SCHEDULER_ID,
 } from "./workers/notification-worker.js";
 import {
   buildDelinquencyDispatcher,
   registerDelinquencyDispatchScheduler,
-  DELINQUENCY_DISPATCH_SCHEDULER_ID,
 } from "./workers/delinquency-dispatcher.js";
 import { buildDelinquencyWorker } from "./workers/delinquency-worker.js";
 import {
   buildSlaBreachWorker,
   registerSlaBreachScheduler,
-  SLA_BREACH_SCHEDULER_ID,
 } from "./workers/sla-breach-worker.js";
 import {
   buildAuditRetentionWorker,
   registerAuditRetentionScheduler,
-  AUDIT_RETENTION_SCHEDULER_ID,
 } from "./workers/audit-retention-worker.js";
 import {
   buildBillingRunWorker,
@@ -93,50 +88,21 @@ interface WorkerLike {
 const activeWorkers: WorkerLike[] = [];
 
 /**
- * Centralized scheduler registry. Each cron a worker registers MUST
- * appear here; `reconcileSchedulers` deletes anything in Redis whose
- * id isn't in this set so removed crons don't keep firing.
+ * Report the crons this build does not know about.
  *
- * Tasks 2-8 add entries: suspension-cron, notification-send-cron,
- * sla-breach-cron, delinquency-dispatch-cron, audit-retention-cron.
+ * It used to delete them, which is wrong with more than one build in
+ * flight — see `lib/schedulers.ts` for the whole account. The registry
+ * itself moved there too, because a *route* needs it to refuse removing
+ * a live cron, and nothing may import this file: it is the worker entry
+ * point and running it starts a worker.
  */
-export const SCHEDULER_REGISTRY: ReadonlySet<string> = new Set<string>([
-  SUSPENSION_SCHEDULER_ID,
-  NOTIFICATION_SCHEDULER_ID,
-  DELINQUENCY_DISPATCH_SCHEDULER_ID,
-  SLA_BREACH_SCHEDULER_ID,
-  AUDIT_RETENTION_SCHEDULER_ID,
-]);
-
-async function reconcileSchedulers(activeQueues: readonly QueueName[]): Promise<void> {
-  for (const name of activeQueues) {
-    const queue = getQueue(name);
-    let schedulers: Awaited<ReturnType<typeof queue.getJobSchedulers>>;
-    try {
-      schedulers = await queue.getJobSchedulers();
-    } catch (err) {
-      logger.warn(
-        { err, component: "scheduler-reconcile", queue: name },
-        "Could not list schedulers — skipping reconcile for this queue",
-      );
-      continue;
-    }
-    for (const sched of schedulers) {
-      if (!sched.key) continue;
-      if (SCHEDULER_REGISTRY.has(sched.key)) continue;
-      try {
-        await queue.removeJobScheduler(sched.key);
-        logger.info(
-          { component: "scheduler-reconcile", queue: name, schedulerId: sched.key },
-          "Removed orphaned scheduler",
-        );
-      } catch (err) {
-        logger.warn(
-          { err, component: "scheduler-reconcile", queue: name, schedulerId: sched.key },
-          "Failed to remove orphaned scheduler",
-        );
-      }
-    }
+async function reportOrphanedSchedulers(activeQueues: readonly QueueName[]): Promise<void> {
+  const orphans = await findOrphanedSchedulers(activeQueues, SCHEDULER_REGISTRY);
+  if (orphans.length > 0) {
+    logger.warn(
+      { component: "worker", orphans: orphans.map((o) => o.schedulerId) },
+      "Armed schedulers this build does not know; they keep firing until removed",
+    );
   }
 }
 
@@ -230,7 +196,7 @@ async function main(): Promise<void> {
   startHealthServer(config.WORKER_HTTP_PORT, {
     onShutdown: () => void shutdown("http"),
   });
-  await reconcileSchedulers(activeQueues);
+  await reportOrphanedSchedulers(activeQueues);
   await startDlqMonitor(activeQueues);
 
   if (activeQueues.includes(QUEUE_NAMES.suspensionTransitions)) {

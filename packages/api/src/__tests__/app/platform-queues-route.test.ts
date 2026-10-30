@@ -65,6 +65,12 @@ vi.mock("../../lib/queue-pause.js", () => ({
   resumeQueue: (...args: unknown[]) => resumeQueue(...(args as [])),
 }));
 
+const removeScheduler = vi.fn(async () => undefined);
+vi.mock("../../lib/schedulers.js", () => ({
+  SCHEDULER_REGISTRY: new Set(["suspension-cron"]),
+  removeScheduler: (...args: unknown[]) => removeScheduler(...(args as [])),
+}));
+
 let app: import("fastify").FastifyInstance;
 
 beforeEach(async () => {
@@ -80,6 +86,56 @@ beforeEach(async () => {
   } as never);
   app = await (await import("../../app.js")).buildApp();
   await app.ready();
+});
+
+/**
+ * Taking out a cron no build knows about.
+ *
+ * Boot stopped deleting these on 2026-10-30, because a node booting
+ * during a rolling deploy deleted the cron the newer node had just
+ * armed. Removal is a deliberate act now, which means there has to be
+ * somewhere to do it.
+ */
+describe("DELETE /api/v1/platform/queues/:name/schedulers/:id", () => {
+  const url = (id: string, q = "billing-runs") =>
+    `/api/v1/platform/queues/${q}/schedulers/${encodeURIComponent(id)}`;
+
+  it("removes an orphan for the platform operator", async () => {
+    const res = await app.inject({
+      method: "DELETE",
+      url: url("billing-dispatch-cron"),
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(removeScheduler).toHaveBeenCalledWith(
+      "billing-runs",
+      "billing-dispatch-cron",
+      expect.anything(),
+    );
+  });
+
+  it("refuses a tenant admin", async () => {
+    const res = await app.inject({
+      method: "DELETE",
+      url: url("billing-dispatch-cron"),
+      headers: { authorization: `Bearer ${createTestToken()}` },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(removeScheduler).not.toHaveBeenCalled();
+  });
+
+  it("refuses a queue that is not one", async () => {
+    const res = await app.inject({
+      method: "DELETE",
+      url: url("billing-dispatch-cron", "not-a-queue"),
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(removeScheduler).not.toHaveBeenCalled();
+  });
 });
 
 /**

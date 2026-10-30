@@ -127,6 +127,7 @@ applied to the identity that sits above them.
 | PUT | `/api/v1/platform/queues/:name/concurrency` | Set `perNode` and/or `cluster`. An omitted field is left alone, `null` clears a limit, 0 is refused — and a cluster limit above what the attached fleet can reach is accepted, since it binds when a node is added. See [27 — Job Scheduling](27-job-scheduling.md) §6 |
 | POST | `/api/v1/platform/queues/:name/pause` | Stop the queue taking work. `{ reason }` is required and recorded with the operator and the time; a second pause keeps the first record |
 | POST | `/api/v1/platform/queues/:name/resume` | Let it take work again. No body — and it never refuses for want of a pause record |
+| DELETE | `/api/v1/platform/queues/:name/schedulers/:id` | Remove a cron no build knows about. Refuses an id the running build registers (409 `SCHEDULER_IS_REGISTERED`): worker boot no longer deletes orphans, so this is the only path that could stop a live cron |
 | GET | `/api/v1/platform/queues/:name/jobs` | The jobs in one queue and one state. `?state=` (required), `?limit=` (≤100), `?offset=` (≤1000). `name` may be the sentinel `all` |
 | POST | `/api/v1/platform/queues/:name/jobs/:id/:action` | `retry`, `promote` or `replay` on one job |
 | POST | `/api/v1/platform/workers/start` | `{ queues?: string[] }` — spawn a worker process on **this** node; empty means all eight queues |

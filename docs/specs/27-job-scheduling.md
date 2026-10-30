@@ -39,8 +39,9 @@ every requirement below assumes this mechanism:
    into Redis and arms the next occurrence as a delayed job.
 2. A worker attached to that queue promotes the delayed job when it
    comes due, runs it, and the next occurrence is armed from it.
-3. `reconcileSchedulers` deletes any scheduler whose id is not in
-   `SCHEDULER_REGISTRY`, so a cron removed in code stops firing.
+3. `findOrphanedSchedulers` **reports** any scheduler whose id is not in
+   `SCHEDULER_REGISTRY`. It used to delete them; see SCH-NODE-1 for why
+   it no longer does, and for the deliberate way one is removed.
 
 Three consequences, each load-bearing somewhere in this spec:
 
@@ -112,8 +113,8 @@ sold as complete.
   only (`{ config: { platform: true } }`), like every other route under
   `/platform`.
 - **SCH-VIEW-2 (Must).** It reads `queue.getJobSchedulers()` rather than
-  a second copy of the patterns. `reconcileSchedulers` already calls it
-  on every worker boot, so the registry in Redis is the one that decides
+  a second copy of the patterns. `findOrphanedSchedulers` already calls
+  it on every worker boot, so the registry in Redis is the one that decides
   what fires — a view built from the source literals would describe a
   deploy rather than a running cluster, and would agree with it only
   until someone changed a pattern and did not restart every node.
@@ -262,9 +263,10 @@ tenant-local hour from it.
   quiet for your region") and `sla-breach-sweep` (a slower sweep only
   lags the breach flag) — may become editable, after spec 24 steps 2–3.
   They need the signed command path because changing a pattern means
-  removing and re-upserting the scheduler on whichever node holds it,
-  while `reconcileSchedulers` deletes any id not in the registry: two
-  nodes disagreeing about a pattern is two nodes fighting over it.
+  removing and re-upserting the scheduler on whichever node holds it:
+  two nodes disagreeing about a pattern is two nodes fighting over it.
+  Boot no longer deletes an unrecognised id (SCH-NODE-1), which removes
+  one half of that fight but not the re-upsert race.
 - **SCH-FIX-2 (Should).** If a pattern ever becomes editable it is a
   validated choice, not a free-text cron. `0 4 * * *` and `4 * * * *`
   differ by one character and by a factor of 24.
@@ -278,15 +280,34 @@ tenant-local hour from it.
 The scheduler half holds up in a cluster without a leader (above). Three
 things around it do not, and they are cheaper to fix than to discover.
 
-- **SCH-NODE-1 (Must).** `reconcileSchedulers` runs on **every** worker
-  boot and deletes any scheduler id its own build does not know. During
-  a rolling deploy that is two builds disagreeing: the new node arms
-  `billing-dispatch-cron`, the old node boots and deletes it as an
-  orphan, and since registration only happens at boot the cron stays
-  gone until something restarts. Reconcile must therefore either be
-  confined to ids the booting build owns, or stop being a boot
-  side-effect and become a deliberate operation — the console being the
-  obvious place, now that SCH-VIEW-3 shows orphans.
+- **SCH-NODE-1 (Must, fixed 2026-10-30).** `reconcileSchedulers` ran on
+  **every** worker boot and deleted any scheduler id its own build did
+  not know. During a rolling deploy that is two builds disagreeing: the
+  new node arms `billing-dispatch-cron`, the old node boots and deletes
+  it as an orphan, and since registration only happens at boot the cron
+  stays gone until something restarts. It logged the deletion at *info*,
+  which reads like housekeeping succeeding.
+
+  **Boot now reports and does not delete** (`lib/schedulers.ts`): one
+  WARN per orphan, naming it and saying it keeps firing until removed.
+  Removal is a deliberate act —
+  `DELETE /api/v1/platform/queues/:name/schedulers/:id`, which refuses
+  an id the build *does* register. That guard is why removal takes the
+  registry at all: boot can no longer stop a live cron by accident, and
+  the route is the only path left that could. The registry moved from
+  `worker.ts` to `lib/schedulers.ts` so the route can consult it —
+  nothing may import `worker.ts`, which starts a worker when it loads.
+
+  The alternative considered and rejected: keep deleting, but skip
+  records younger than a grace period, on the theory that a genuinely
+  removed cron's record is old and a racing node's is new. It holds for
+  a short deploy, fails silently for a long one, and leaves a
+  destructive act automatic. A heuristic guarding a deletion nobody
+  watches is worth less than a report somebody reads.
+
+  What remains is the opposite failure and far cheaper: a cron removed
+  in code keeps firing until an operator takes it out, which enqueues a
+  job no handler claims — against a month that does not bill.
 - **SCH-NODE-2 (Must).** `billing-runs` declares `concurrency: 1` and
   the worker module explains it in terms of the database — "two in
   parallel would halve neither's wall clock", and "the two must not run
@@ -480,8 +501,8 @@ alerting concern rather than a control: nothing yet notices that
 belongs with SCH-NODE-4, which is the same shape — a condition nobody is
 looking at a page to see.
 
-SCH-NODE-1 belongs to whichever slice ships first — it is a property of
-the cluster rather than of any capability here, and it is wrong today.
+SCH-NODE-1 was fixed on 2026-10-30, ahead of the slices, because it was
+wrong on `main` and the first scheduler slice 3 adds would have met it.
 SCH-NODE-3 is already fixed. SCH-NODE-2 is resolved by §6, and within
 slice 2 the database claim (SCH-CONC-8) lands before `billing-runs`
 accepts a cluster limit above 1 (SCH-CONC-7).
