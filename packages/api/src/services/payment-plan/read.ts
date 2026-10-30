@@ -177,7 +177,22 @@ const MAX_PLAN_LIMIT = 200;
 export interface PaymentPlanListPage {
   data: PaymentPlanSummary[];
   /** `total` is how many exist, which tells a caller the page is partial. */
-  meta: { total: number; limit: number };
+  meta: {
+    total: number;
+    limit: number;
+    /**
+     * How many of this account's debts a new plan could cover.
+     *
+     * Answered here because this is the one request the panel already
+     * makes, and the question it needs before offering "Agree a plan":
+     * with nothing to cover, the dialog opened on "Arrears covered —
+     * $0.00", built no schedule, and answered its own button with "Pick
+     * at least one debt for the plan to cover". The alternative was a
+     * second ledger fetch beside the one the AR tab makes a moment
+     * later.
+     */
+    coverableDebts: number;
+  };
 }
 
 export async function listAccountPaymentPlans(
@@ -195,7 +210,7 @@ export async function listAccountPaymentPlans(
   const take = Math.min(Math.max(requested, 1), MAX_PLAN_LIMIT);
 
   const where = { utilityId, accountId };
-  const [plans, total] = await Promise.all([
+  const [plans, total, coverableDebts] = await Promise.all([
     /*
      * Newest first, which also keeps the live plan on the first page:
      * a plan can only be agreed once the previous one has ended, so an
@@ -205,6 +220,17 @@ export async function listAccountPaymentPlans(
      */
     prisma.paymentPlan.findMany({ where, orderBy: { createdAt: "desc" }, take }),
     prisma.paymentPlan.count({ where }),
+    /*
+     * The debts the agree dialog would list: open, and owed rather than
+     * held. A positive `open_amount` is the whole test — a credit's is
+     * negative and so is a deposit's, since both are money the customer
+     * has already handed over — so no type filter is needed and adding
+     * one would only invite the question of which types belong in it.
+     *
+     * Counted across the account, never this page: it is a fact about
+     * what could be covered, not about the plans returned.
+     */
+    prisma.ledgerEntry.count({ where: { utilityId, accountId, openAmount: { gt: 0 } } }),
   ]);
 
   const openByPlan = await openAmountByPlan(
@@ -230,7 +256,7 @@ export async function listAccountPaymentPlans(
     };
   });
 
-  return { data, meta: { total, limit: take } };
+  return { data, meta: { total, limit: take, coverableDebts } };
 }
 
 export async function getPaymentPlan(

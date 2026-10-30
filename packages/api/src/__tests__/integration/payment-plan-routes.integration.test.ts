@@ -331,6 +331,77 @@ describe("GET /api/v1/accounts/:id/payment-plans", () => {
     expect(res.json().data).toHaveLength(2);
   });
 
+  /**
+   * What the panel needs to know before it offers "Agree a plan".
+   *
+   * Answered by this endpoint because it is the one request the panel
+   * already makes, and the alternative was a second ledger fetch beside
+   * the one the AR tab makes a moment later. The figure is the count of
+   * rows the agree dialog would list, so the button appears exactly when
+   * that dialog has something to tick — without it the button opened a
+   * dialog reading "Arrears covered — $0.00" whose only outcome was a
+   * refusal.
+   */
+  it("counts the debts a new plan could cover", async () => {
+    await debit({ amount: "300.00" });
+
+    const res = await get(`/api/v1/accounts/${fix.accountId}/payment-plans`);
+
+    expect(res.json().meta.coverableDebts).toBe(1);
+  });
+
+  it("counts nothing on an account whose debts are all settled", async () => {
+    const d = await debit({ amount: "300.00" });
+    await settle(d.id, "0.00");
+
+    const res = await get(`/api/v1/accounts/${fix.accountId}/payment-plans`);
+
+    expect(res.json().meta.coverableDebts).toBe(0);
+  });
+
+  it("does not count a credit balance, which a plan cannot collect", async () => {
+    // A customer who paid with nothing owed. The payment stays open as a
+    // credit until the next charge absorbs it, so counting open rows by
+    // sign alone would offer a plan over money the utility holds.
+    await seedAsPlatform(async () =>
+      prismaImports.prisma.ledgerEntry.create({
+        data: {
+          utilityId: TENANT_A,
+          accountId: fix.accountId,
+          type: "PAYMENT",
+          amount: "-50.00",
+          openAmount: "-50.00",
+          effectiveDate: daysOut(-1),
+          tender: "CASH",
+        },
+      }),
+    );
+
+    const res = await get(`/api/v1/accounts/${fix.accountId}/payment-plans`);
+
+    expect(res.json().meta.coverableDebts).toBe(0);
+  });
+
+  it("does not count a deposit, which is money held rather than owed", async () => {
+    await seedAsPlatform(async () =>
+      prismaImports.prisma.ledgerEntry.create({
+        data: {
+          utilityId: TENANT_A,
+          accountId: fix.accountId,
+          type: "DEPOSIT",
+          amount: "-120.00",
+          openAmount: "-120.00",
+          effectiveDate: daysOut(-1),
+          tender: "CHECK",
+        },
+      }),
+    );
+
+    const res = await get(`/api/v1/accounts/${fix.accountId}/payment-plans`);
+
+    expect(res.json().meta.coverableDebts).toBe(0);
+  });
+
   it("keeps the live plan on the first page, which is the one the panel picks", async () => {
     /*
      * The panel takes the ACTIVE plan from this list, so a cap that

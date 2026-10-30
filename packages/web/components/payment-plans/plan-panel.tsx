@@ -83,11 +83,25 @@ export function PlanPanel({ accountId, uncoveredPastDue }: Props) {
   const [plan, setPlan] = useState<PlanDetail | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [agreeing, setAgreeing] = useState(false);
+  /**
+   * How many of this account's debts a new plan could cover, or null
+   * when the server did not say.
+   *
+   * Null keeps the offer. An older API, or a response this panel cannot
+   * read, leaves the question unanswered — and hiding the only way to
+   * agree a plan is worse than the dead end the gate exists to prevent,
+   * because it blocks work with a customer on the line.
+   */
+  const [coverableDebts, setCoverableDebts] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const list = await apiClient.get<{ data: Summary[] }>(
-        `/api/v1/accounts/${accountId}/payment-plans`,
+      const list = await apiClient.get<{
+        data: Summary[];
+        meta?: { coverableDebts?: number };
+      }>(`/api/v1/accounts/${accountId}/payment-plans`);
+      setCoverableDebts(
+        typeof list.meta?.coverableDebts === "number" ? list.meta.coverableDebts : null,
       );
       // The live one if there is one; otherwise the most recent, so a
       // defaulted plan is still visible rather than vanishing.
@@ -122,6 +136,18 @@ export function PlanPanel({ accountId, uncoveredPastDue }: Props) {
 
   if (!loaded) return null;
 
+  /**
+   * Whether a plan can be agreed at all, not merely whether this
+   * operator may agree one.
+   *
+   * The dialog lists the account's open debts and totals them; with none
+   * it opened on "Arrears covered — $0.00", built no schedule, and
+   * answered the one button it offered with "Pick at least one debt for
+   * the plan to cover." Nothing was discoverable there except the
+   * refusal, so the button goes instead.
+   */
+  const canAgree = canCreate && coverableDebts !== 0;
+
   if (!plan) {
     return (
       <section style={card}>
@@ -129,7 +155,7 @@ export function PlanPanel({ accountId, uncoveredPastDue }: Props) {
           <h3 style={title}>Payment plan</h3>
           <span style={{ fontSize: 13, color: "var(--text-muted)" }}>None</span>
         </div>
-        {canCreate && (
+        {canAgree && (
           <button onClick={() => setAgreeing(true)} style={primaryBtn}>
             Agree a plan
           </button>
@@ -264,7 +290,7 @@ export function PlanPanel({ accountId, uncoveredPastDue }: Props) {
           * plan and offered only "Cancel", and the shut-off queue was
           * the one remaining way in.
           */}
-        {!live && canCreate && (
+        {!live && canAgree && (
           <button onClick={() => setAgreeing(true)} style={primaryBtn}>
             Agree a plan
           </button>

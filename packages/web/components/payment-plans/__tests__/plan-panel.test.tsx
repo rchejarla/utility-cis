@@ -202,7 +202,10 @@ describe("plan panel", () => {
     get.mockImplementation((url: string) =>
       url.includes("/payment-plans/")
         ? Promise.resolve({ ...plan({ status: "DEFAULTED" }) })
-        : Promise.resolve({ data: [{ id: "plan-1", status: "DEFAULTED" }] }),
+        : Promise.resolve({
+            data: [{ id: "plan-1", status: "DEFAULTED" }],
+            meta: { coverableDebts: 2 },
+          }),
     );
 
     renderPanel();
@@ -232,6 +235,59 @@ describe("plan panel", () => {
   });
 
   it("offers to agree one when the account has no live plan", async () => {
+    get.mockResolvedValue({ data: [], meta: { coverableDebts: 2 } });
+
+    renderPanel();
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /agree a plan/i })).toBeInTheDocument(),
+    );
+  });
+
+  /**
+   * An offer the account cannot take.
+   *
+   * On an account owing nothing the button opened a dialog reading
+   * "Arrears covered — $0.00" with no debts to tick, no schedule, and
+   * one possible outcome: "Pick at least one debt for the plan to
+   * cover." A dead end discoverable only by clicking, so the server
+   * reports how many debts a plan could cover and the button follows it.
+   */
+  it("does not offer a plan when the account has nothing a plan could cover", async () => {
+    get.mockResolvedValue({ data: [], meta: { coverableDebts: 0 } });
+
+    renderPanel();
+
+    await waitFor(() => expect(screen.getByText(/payment plan/i)).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /agree a plan/i })).toBeNull();
+  });
+
+  it("does not offer a new plan beside an ended one when there is nothing left to cover", async () => {
+    // The second place the button renders. Fixing only the first would
+    // leave the dead end reachable from every account that has ever had
+    // a plan.
+    get.mockImplementation((url: string) =>
+      url.includes("/payment-plans/")
+        ? Promise.resolve(plan({ status: "COMPLETED" }))
+        : Promise.resolve({
+            data: [{ id: "plan-1", status: "COMPLETED" }],
+            meta: { coverableDebts: 0 },
+          }),
+    );
+
+    renderPanel();
+
+    await waitFor(() => expect(screen.getByText(/COMPLETED/i)).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /agree a plan/i })).toBeNull();
+  });
+
+  it("still offers a plan when the list does not say what is coverable", async () => {
+    /*
+     * Fails open on purpose. An older API, or a response this panel
+     * cannot read, leaves the question unanswered — and hiding the only
+     * way to agree a plan is worse than the dead end it protects
+     * against, because it blocks work a CSR has a customer waiting on.
+     */
     get.mockResolvedValue({ data: [] });
 
     renderPanel();

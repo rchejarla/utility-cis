@@ -479,6 +479,23 @@ customer most easily trips while paying every instalment faithfully —
 that belongs on this panel, in those words, rather than being inferable
 from two screens.
 
+**Offering one is conditional on there being something to cover.**
+"Agree a plan" appeared on every account, and on one owing nothing it
+opened a dialog reading `Arrears covered — $0.00` with no debts to tick,
+no schedule, and one possible outcome — *Pick at least one debt for the
+plan to cover*. A dead end discoverable only by clicking, the same shape
+the Refund button beside it already avoids. `GET
+/api/v1/accounts/:id/payment-plans` therefore answers
+`meta.coverableDebts`: the count of open debits owed rather than held
+(`open_amount > 0`, which excludes a credit and a deposit by sign, so no
+type filter is needed). The panel is already making that request, which
+is why the figure lives there rather than in a second ledger fetch
+beside the one the AR tab makes a moment later. The button appears
+exactly when the dialog would have a row to tick — and still appears
+when the field is absent, because hiding the only route to a plan is
+worse than the dead end it guards against. (Found by an operator,
+2026-10-30.)
+
 ## 5. Suppression — the part that touches live code
 
 Two places, because the ladder has two clocks.

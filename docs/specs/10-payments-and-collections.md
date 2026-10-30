@@ -204,7 +204,7 @@ who may tear one up.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/accounts/:id/payment-plans` | Plans for an account, newest first, each with derived `remaining`, `onTrack` and `installmentsBehind`. `?limit=` caps the page (default 50, max 200) and `meta.total` reports how many exist |
+| GET | `/api/v1/accounts/:id/payment-plans` | Plans for an account, newest first, each with derived `remaining`, `onTrack` and `installmentsBehind`. `?limit=` caps the page (default 50, max 200), `meta.total` reports how many exist, and `meta.coverableDebts` how many debts a *new* plan could cover |
 | POST | `/api/v1/accounts/:id/payment-plans` | Agree a plan. Body names `entryIds`; answers with the derived schedule |
 | GET | `/api/v1/payment-plans/:id` | Detail: derived progress, derived schedule, `clearedToDate`, and each covered debt with its bill provenance |
 | POST | `/api/v1/payment-plans/:id/cancel` | Cancel a live plan. Idempotent on one already ended |
@@ -229,6 +229,18 @@ from one grouped query rather than one per plan, and the cap keeps an
 account with years of re-agreed plans from returning all of them —
 newest-first also puts the live plan on the first page, since a plan can
 only be agreed once the previous one has ended.
+
+**`meta.coverableDebts`** is how the panel knows whether to offer "Agree
+a plan" at all: the count of this account's open debits that are owed
+rather than held (`open_amount > 0`, so a credit and a deposit are both
+excluded by sign). The button used to appear on every account, and on
+one owing nothing it opened a dialog reading *Arrears covered — $0.00*
+with no debts to tick and one possible outcome, a refusal. It now
+appears exactly when that dialog would have a row to tick, and still
+appears if the field is missing — hiding the only route to a plan is
+worse than the dead end. The figure rides on this endpoint because the
+panel already calls it; the alternative was a second ledger fetch beside
+the one the AR tab makes a moment later.
 
 ### Ad Hoc Charges
 
