@@ -421,7 +421,7 @@ act repeated rather than a new kind of power.
 | GET | `/api/v1/billing-runs/preview` | `accounts:VIEW` | What starting a run would do — resolved window, dates, and how many accounts are due — without writing anything. Same fields as the create body, as a query |
 | GET | `/api/v1/billing-runs/:id` | `accounts:VIEW` | One run's counts and status, plus `billedTotal` — what posting would raise — and `postedCount` / `awaitingPostCount`, which is what the Post button is gated on rather than `postedAt` |
 | GET | `/api/v1/billing-runs/:id/items` | `accounts:VIEW` | The item list. `?status=FAILED` is the work queue; `limit` (≤500) / `offset` |
-| POST | `/api/v1/billing-runs/:id/post` | `accounts:EDIT` | Queue a posting pass over every bill the run produced. **202** with `{ queued, jobId }` — the counts land on the run, not in this response. Refusals (`RUN_NOT_FOUND`, `RUN_NOT_FINISHED`) are answered synchronously, before the enqueue |
+| POST | `/api/v1/billing-runs/:id/post` | `accounts:EDIT` | Queue a posting pass over every bill the run produced. **202** with `{ queued, jobId }` — the counts land on the run, not in this response. Refusals (`RUN_NOT_FOUND`, `RUN_NOT_FINISHED`, `RUN_POSTING_IN_FLIGHT`) are answered synchronously, before the enqueue |
 | POST | `/api/v1/billing-runs/:id/cancel` | `accounts:EDIT` | Ask a run to stop; it finishes the account it is on |
 
 The body is `{ billingCycleId }` and, optionally, `windowEnd`, `billDate`,
@@ -438,6 +438,7 @@ ordinary call is a cycle id and nothing else.
 | `CYCLE_INACTIVE` — an inactive cycle has nothing due | 409 |
 | `RUN_ALREADY_EXISTS_FOR_WINDOW` — body names the existing run; resume or cancel it | 409 |
 | `RUN_NOT_FINISHED` — posting a run that is still PENDING or RUNNING | 409 |
+| `RUN_POSTING_IN_FLIGHT` — a posting pass is live on this run. A pass that has *stopped* is not a refusal: it is claimable, and the reclaim takes it | 409 |
 
 A failed enqueue is logged and swallowed by `enqueueSafely`: the run stays
 PENDING and the boot sweep takes it, which is better than a 500 on a run
@@ -724,9 +725,11 @@ leaves what has billed billed.
 **Posting runs on the worker, like generating.** `POST /billing-runs/:id/post`
 enqueues `post-billing-run` on the existing `billing-runs` queue and answers
 202; the worker calls `postBillingRun`. The same queue, because the two
-passes must not run concurrently over one run and its concurrency of 1
-already guarantees that — a second queue would reintroduce the overlap it
-was set to prevent.
+passes must not run concurrently over one run — though what guarantees that
+is **the claim below, not the queue's concurrency**. Concurrency of 1 is per
+`Worker` instance, so it never guaranteed it with more than one replica; a
+second queue would still be worse, since it would put the two kinds of pass
+beyond the reach of any single limit.
 
 It used to loop in the request: a `findFirst` and a transaction per bill
 with the HTTP connection held open for all of them. At twelve thousand
@@ -801,11 +804,52 @@ sweep beside it had always used that cutoff; this one had not. Recorded as
 `SCH-NODE-3` in [27 — Job Scheduling](27-job-scheduling.md), with the rule
 for any future sweep.
 
-There is deliberately no guard against a pass already being in flight. It
-would refuse the reclaim, which arrives in precisely that state, and it
-would be guarding nothing the atomic claim does not already cover. The
-*screen* hides Post while a pass runs, because a second one tells the
-operator nothing and reads as though the first did not take.
+**One pass at a time over a run, claimed in the database** (2026-10-30,
+`services/billing-run/claim.ts`). Both entry points take the run with a
+single conditional `UPDATE` before doing any work — generation stamping
+`status = RUNNING`, posting stamping `posting_started_at` — and a pass that
+cannot take it does not proceed. Two processes racing both block on the row,
+and PostgreSQL re-evaluates the predicate against the committed version
+before the second proceeds, so it matches nothing: the same shape `postBill`
+uses to claim one bill.
+
+**Held means live, not marked.** The claim refuses only a pass still
+reporting progress; one quiet past the same five-minute cutoff is a corpse
+whose work another node may finish, and a `last_progress_at` of NULL counts
+as unheld — both entry points stamp it as they begin, so a row holding none
+is held by nothing. The condition is written positively for that reason: as
+`NOT (last_progress_at >= cutoff)` a NULL yields NULL, the row stops
+matching, and the run becomes one nothing can ever claim — the single
+failure here that would raise no error.
+
+This replaces an earlier decision that there be *no* guard, on the grounds
+that one would refuse the reclaim (which arrives marked-but-unfinished) and
+would guard nothing `postBill`'s atomic claim does not already cover. The
+first half stops applying once the test is liveness rather than existence.
+The second was never the whole cost: a duplicate pass also re-renders every
+document, one HTTP call per bill to apptor-connect, and reports counts for
+work another process did. On the generation side the cost is worse than
+duplication — two passes read the same PENDING items, the first marks one
+BILLED with its `bill_id`, and the second gets
+`BILL_ALREADY_EXISTS_FOR_PERIOD`, which classifies as SKIPPED and overwrites
+it. Posting selects items that are BILLED, so that bill — a real charge
+against a customer — is one no pass will ever post. An operator pressing
+Resume while a reclaim job for the same run is still waiting is enough to
+reach it.
+
+**A refused generation returns the run as it stands; a refused posting
+raises.** Generation must not fall through to `finalise`, which would write
+a terminal status over the live pass's unfinished work, and raising there
+would fail the job and log an error for the correct outcome. Posting raises
+because the route calls the same code, and an operator pressing Post
+deserves the 409 — the worker catches that one code and logs it as the race
+it is. The *screen* also hides Post while a pass runs, because a second one
+tells the operator nothing and reads as though the first did not take.
+
+Written here rather than left to the queue because a per-run guarantee is
+not a per-cluster count, which is what makes the limit safe to expose as a
+setting: `SCH-CONC-7` and `SCH-CONC-8` in
+[27 — Job Scheduling](27-job-scheduling.md).
 
 Single-bill posting (`routes/ar.ts`) stays synchronous. A CSR posting one
 bill wants the answer in the response, and one bill is one transaction.

@@ -11,6 +11,13 @@ import { processBillingRun, postBillingRun } from "../services/billing-run.servi
 import { prisma } from "../lib/prisma.js";
 import { runAsPlatform } from "../lib/tenant-context.js";
 import { formatInTimeZone } from "../lib/iana-tz.js";
+/*
+ * The sweep and the claim must agree on what "quiet" means, or they
+ * disagree about who holds a run: this decides what to enqueue, the
+ * claim decides what the job may then do, and a cutoff defined twice is
+ * two cutoffs the next edit can part.
+ */
+import { STALE_AFTER_MS, unattended } from "../services/billing-run/claim.js";
 
 /**
  * BullMQ worker for the `billing-runs` queue.
@@ -61,14 +68,34 @@ export function buildBillingRunWorker(): Worker<BillingRunJobData> {
       const { runId, utilityId, actorId, actorName } = job.data;
 
       if (job.name === BILLING_RUN_POST_JOB_NAME) {
-        const result = await withTelemetry(QUEUE_NAMES.billingRuns, () =>
-          postBillingRun(utilityId, actorId, actorName, runId),
-        );
-        logger.info(
-          { component: "billing-run-worker", runId, ...result },
-          "Billing run posting finished",
-        );
-        return result;
+        try {
+          const result = await withTelemetry(QUEUE_NAMES.billingRuns, () =>
+            postBillingRun(utilityId, actorId, actorName, runId),
+          );
+          logger.info(
+            { component: "billing-run-worker", runId, ...result },
+            "Billing run posting finished",
+          );
+          return result;
+        } catch (err) {
+          /*
+           * Another process holds the pass, which is a race and not a
+           * fault: two Post presses, or a press racing the reclaim.
+           * Failing the job would log an error and — with `attempts: 1`
+           * — bury it, for the outcome we wanted. Generation reports the
+           * same situation by returning the run as it stands; posting
+           * has to raise, because the route calls the same function and
+           * an operator pressing Post deserves the 409.
+           */
+          if ((err as { code?: string }).code === "RUN_POSTING_IN_FLIGHT") {
+            logger.warn(
+              { component: "billing-run-worker", runId },
+              "A live pass already holds this run's posting; leaving it to that process",
+            );
+            return { skipped: "posting already in flight" };
+          }
+          throw err;
+        }
       }
 
       const result = await withTelemetry(QUEUE_NAMES.billingRuns, () =>
@@ -128,37 +155,6 @@ export function buildBillingRunWorker(): Worker<BillingRunJobData> {
    */
 export async function reclaimZombieBillingRuns(): Promise<number> {
   return runAsPlatform(() => reclaimZombieBillingRunsUnscoped());
-}
-
-/**
- * How quiet a run has to be before another process may take it.
- *
- * `last_progress_at` is stamped after every account generated and every
- * bill posted, so a live run is never five minutes silent — the same
- * cutoff, and the same reasoning, as the import sweep next door.
- *
- * Judging on `status = RUNNING` alone was right on one node and wrong
- * in a cluster: if *this* process is booting, a RUNNING row can only be
- * a corpse, but a second node booting during a deploy would re-enqueue
- * the run the first is halfway through — around the `attempts: 1` that
- * exists to stop anything restarting a run behind its own back.
- */
-const STALE_AFTER_MS = 5 * 60 * 1000;
-
-/**
- * Quiet for longer than the cutoff, or never having spoken at all.
- *
- * The null half is not a loophole in the rule, it is the rule at its
- * limit: both entry points stamp `last_progress_at` as they begin —
- * generation with `status = RUNNING`, posting with `posting_started_at`
- * — so a row holding neither has been advanced by no process that is
- * still running. Excluding it would strand a run as RUNNING forever,
- * which is the same silence this sweep exists to break.
- */
-function unattended(quietSince: Date) {
-  return {
-    OR: [{ lastProgressAt: { lt: quietSince } }, { lastProgressAt: null }],
-  };
 }
 
 /**

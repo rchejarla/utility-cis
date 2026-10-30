@@ -992,6 +992,147 @@ describe("reclaiming a run from a dead node", () => {
 });
 
 /**
+ * One pass at a time over a run.
+ *
+ * Judged on liveness rather than existence: a pass still reporting
+ * progress holds the run, and one that has gone quiet is a corpse whose
+ * remaining work another node may take over. The same rule as the
+ * reclaim sweep above, moved to where it can be enforced — the sweep
+ * decides what to enqueue, this decides what a job may do once it gets
+ * there, and only the second is atomic.
+ *
+ * What a second live pass costs is concrete, and reachable today with no
+ * concurrency setting changed: an operator pressing Resume while a
+ * reclaim job for the same run is still waiting. Both passes read the
+ * same PENDING items; the first bills an account and marks the item
+ * BILLED with its `bill_id`; the second gets
+ * BILL_ALREADY_EXISTS_FOR_PERIOD, which `classify` maps to SKIPPED — so
+ * the item is overwritten SKIPPED while keeping its `bill_id`. Posting
+ * selects items that are BILLED, so that bill, a real charge against a
+ * customer, is one no pass will ever post.
+ */
+describe("one pass at a time over a run", () => {
+  /** How long ago counts as abandoned, well past the five-minute cutoff. */
+  const quiet = () => new Date(Date.now() - 20 * 60_000);
+
+  const generate = (runId: string) =>
+    processBillingRun({ runId, utilityId, actorId: ACTOR_ID, actorName: "Tester" });
+
+  /** A run left mid-generation, reporting progress as given. */
+  async function generating(lastProgressAt: Date | null) {
+    const run = JSON.parse((await startRun()).body);
+    await prismaImports.prisma.billingRun.update({
+      where: { id: run.id },
+      data: { status: "RUNNING", lastProgressAt },
+    });
+    return run.id as string;
+  }
+
+  /** A finished run with a posting pass marked, reporting as given. */
+  async function postingInFlight(lastProgressAt: Date | null) {
+    const run = JSON.parse((await startRun()).body);
+    await generate(run.id);
+    await prismaImports.prisma.billingRun.update({
+      where: { id: run.id },
+      data: { postingStartedAt: new Date(), postedAt: null, lastProgressAt },
+    });
+    return run.id as string;
+  }
+
+  it("refuses a generation pass while another is reporting progress", () =>
+    seedAsPlatform(async () => {
+      const runId = await generating(new Date());
+
+      const result = await generate(runId);
+
+      const { prisma } = prismaImports;
+      // Still RUNNING proves `finalise` never ran: a refused pass must not
+      // write a terminal status over a live one's unfinished work.
+      expect(result.status).toBe("RUNNING");
+      expect(await prisma.bill.count({ where: { utilityId } })).toBe(0);
+      expect(
+        await prisma.billingRunItem.count({ where: { billingRunId: runId, status: "PENDING" } }),
+      ).toBe(result.accountCount);
+    }), 300_000);
+
+  it("takes over a generation pass that went quiet", () =>
+    seedAsPlatform(async () => {
+      const runId = await generating(quiet());
+
+      const result = await generate(runId);
+
+      expect(result.billedCount).toBeGreaterThan(0);
+    }), 300_000);
+
+  it("takes over a generation pass that never reported progress at all", () =>
+    seedAsPlatform(async () => {
+      /*
+       * A null `last_progress_at` is the rule at its limit, not a hole in
+       * it: both entry points stamp it as they begin, so a row holding
+       * none is held by no live process. Its own case because a NULL in a
+       * three-valued predicate is exactly where a liveness test goes
+       * wrong, and goes wrong by stranding the run forever.
+       */
+      const runId = await generating(null);
+
+      const result = await generate(runId);
+
+      expect(result.billedCount).toBeGreaterThan(0);
+    }), 300_000);
+
+  it("refuses a posting pass while another is reporting progress", () =>
+    seedAsPlatform(async () => {
+      const runId = await postingInFlight(new Date());
+
+      await expect(postBillingRun(utilityId, ACTOR_ID, "Tester", runId)).rejects.toMatchObject({
+        code: "RUN_POSTING_IN_FLIGHT",
+      });
+
+      const { prisma } = prismaImports;
+      expect(await prisma.ledgerEntry.count({ where: { utilityId, type: "BILL_CHARGE" } })).toBe(0);
+    }), 300_000);
+
+  it("takes over a posting pass that went quiet", () =>
+    seedAsPlatform(async () => {
+      const runId = await postingInFlight(quiet());
+
+      const result = await postBillingRun(utilityId, ACTOR_ID, "Tester", runId);
+
+      expect(result.posted).toBeGreaterThan(0);
+    }), 300_000);
+
+  it("refuses to generate a run whose posting pass is live", () =>
+    seedAsPlatform(async () => {
+      /*
+       * Live, but not this instant: `finalise` recomputes the same
+       * terminal status a second pass would land on, so asserting the
+       * status is unchanged would pass whether or not the pass ran. The
+       * heartbeat is the observable that can actually fail — a claim
+       * stamps it `now`, and a minute ago is still well inside the
+       * five-minute cutoff.
+       */
+      const heldAt = new Date(Date.now() - 60_000);
+      const runId = await postingInFlight(heldAt);
+      const { prisma } = prismaImports;
+
+      await generate(runId);
+
+      /*
+       * The two kinds of pass must not overlap over one run: generation
+       * rewriting the items a posting pass is reading is the overlap the
+       * single-replica limit used to prevent by accident, and the thing a
+       * settable cluster limit would otherwise hand to an operator to
+       * delete.
+       */
+      const after = await prisma.billingRun.findUniqueOrThrow({
+        where: { id: runId },
+        select: { lastProgressAt: true },
+      });
+      expect(after.lastProgressAt?.getTime()).toBe(heldAt.getTime());
+    }), 300_000);
+});
+
+/**
  * A failed run is not a dead end.
  *
  * `FAILED` is not a different state from `PARTIAL` — the status rule

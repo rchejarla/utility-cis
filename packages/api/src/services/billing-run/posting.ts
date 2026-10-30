@@ -9,6 +9,7 @@ import { postBill } from "./../ar/posting.service.js";
 import { generateBillDocument, BillDocumentError } from "./../bill-document.service.js";
 import { BillPresentationError } from "./../bill-presentation.service.js";
 import { logger } from "../../lib/logger.js";
+import { STALE_AFTER_MS, claimForPosting, postingInFlight } from "./claim.js";
 
 /**
  * Whether this run may be posted at all, as distinct from what posting
@@ -33,6 +34,23 @@ export async function assertRunPostable(utilityId: string, runId: string): Promi
       new Error(`Billing run ${runId} is still ${run.status}; wait for it to finish before posting`),
       { statusCode: 409, code: "RUN_NOT_FINISHED" },
     );
+  }
+  /*
+   * A pass already under way, so the route answers instead of enqueueing
+   * a job that would only refuse the claim and fail.
+   *
+   * A read, where `claimForPosting` is the atomic one — this is for the
+   * operator's benefit, not for correctness, and the two cannot be
+   * merged: this runs in the request, and the claim has to run in the
+   * job that does the work.
+   */
+  const live =
+    run.postingStartedAt !== null &&
+    run.postedAt === null &&
+    run.lastProgressAt !== null &&
+    run.lastProgressAt.getTime() >= Date.now() - STALE_AFTER_MS;
+  if (live) {
+    throw postingInFlight(runId);
   }
 }
 
@@ -72,35 +90,32 @@ export async function postBillingRun(
   await assertRunPostable(utilityId, runId);
 
   /*
-   * Mark the pass before doing any of it, so a replica that dies
-   * holding this run leaves evidence. `postedAt` is stamped after the
-   * loop and so cannot say "a pass is under way"; this is posting's
-   * equivalent of generation's `status = RUNNING`, and
-   * `reclaimZombieBillingRuns` re-enqueues on exactly this pair.
+   * Claim the pass, which is also what marks it.
    *
-   * There is deliberately no guard against a pass already being in
-   * flight. It would refuse the reclaim, which arrives in precisely
-   * that state — and it would be guarding nothing: `postBill` claims
-   * atomically with UPDATE ... WHERE posted_at IS NULL, so a duplicated
-   * or concurrent pass cannot double-charge. It reports the bills as
-   * `alreadyPosted`, which is the same tolerance this loop already
-   * extends to a bill somebody posted by hand.
-   */
-  /*
-   * `lastProgressAt` with it, and again after every bill below.
+   * `postedAt` is stamped after the loop and so cannot say "a pass is
+   * under way"; `postingStartedAt` with `postedAt` still null is that
+   * statement, and it is what a replica dying mid-pass leaves behind for
+   * the reclaim to find.
    *
-   * The reclaim judges a pass on whether it is still *moving*, not on
-   * whether it is marked — on one node a marked pass is necessarily a
-   * corpse, in a cluster it is just as likely to be another node's
-   * live work. A pass that stamped only its start would be
-   * indistinguishable from an abandoned one the moment it ran longer
-   * than the cutoff, which at twelve thousand bills it will.
+   * This used to be an unconditional mark, on the argument that a guard
+   * would refuse the reclaim — which arrives in exactly the
+   * started-but-not-finished state — and would be guarding nothing,
+   * since `postBill` claims each bill with UPDATE ... WHERE posted_at IS
+   * NULL and so cannot double-charge. The first half stops applying once
+   * the guard judges *liveness* rather than existence: a stale pass is
+   * claimable, so the reclaim still gets in. The second half was never
+   * the whole cost — a duplicate pass also re-renders every document,
+   * one HTTP call per bill to apptor-connect's files plane, and reports
+   * counts for work another process did.
+   *
+   * `lastProgressAt` is stamped here and again after every bill below,
+   * because a pass that marked only its start is indistinguishable from
+   * an abandoned one the moment it runs longer than the cutoff — which
+   * at twelve thousand bills it will.
    */
-  const startedAt = new Date();
-  await prisma.billingRun.update({
-    where: { id: runId },
-    data: { postingStartedAt: startedAt, lastProgressAt: startedAt },
-  });
+  if (!(await claimForPosting(runId, utilityId))) {
+    throw postingInFlight(runId);
+  }
 
   const items = await prisma.billingRunItem.findMany({
     where: { billingRunId: runId, status: "BILLED", billId: { not: null } },

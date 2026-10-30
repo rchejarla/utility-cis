@@ -13,6 +13,7 @@ import {
   resolveServicePeriod,
 } from "./../bill-segment.service.js";
 import { logger } from "../../lib/logger.js";
+import { claimForGeneration } from "./claim.js";
 
 /** What a failed or skipped account looks like to the item list. */
 function classify(err: unknown): { status: "SKIPPED" | "FAILED"; code: string; message: string } {
@@ -56,12 +57,29 @@ export async function processBillingRun(args: {
   const { runId, utilityId, actorId, actorName } = args;
   const run = await prisma.billingRun.findFirstOrThrow({
     where: { id: runId, utilityId },
+    include: { cycle: RUN_CYCLE_SELECT },
   });
 
-  await prisma.billingRun.update({
-    where: { id: runId },
-    data: { status: "RUNNING", lastProgressAt: new Date() },
-  });
+  /*
+   * Claim it, or leave it to whoever has it.
+   *
+   * Returning the run as it stands rather than raising: a second job for
+   * a run already in hand is a race, not a fault — an operator pressing
+   * Resume while a reclaim job for the same run is still waiting is
+   * enough to produce one. Raising would fail the job and log an error
+   * for the correct outcome.
+   *
+   * It must not fall through to `finalise`, which would write a terminal
+   * status over the live pass's unfinished work and report its counts as
+   * final.
+   */
+  if (!(await claimForGeneration(runId, utilityId))) {
+    logger.warn(
+      { component: "billing-run", runId },
+      "A live pass already holds this run; leaving it to that process",
+    );
+    return toSummary(run);
+  }
 
   const items = await prisma.billingRunItem.findMany({
     where: { billingRunId: runId, status: "PENDING" },

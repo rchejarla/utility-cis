@@ -381,12 +381,18 @@ every node checks before taking a job.
 - **SCH-CONC-8 (Must).** Per-run exclusion belongs in the **database**,
   not in a concurrency number. The invariant is one job per *run*, not
   N per cluster: two runs at once are fine and two tenants at once are
-  the point, while generation and posting of one run are not. A
-  conditional claim — the shape `postBill` already uses, `UPDATE … WHERE
-  posted_at IS NULL`, against the `status`, `posting_started_at` and
-  `last_progress_at` columns SCH-NODE-3 made the sweep read — makes the
-  overlap impossible at any concurrency. Only then is the cluster limit
-  a free capacity knob.
+  the point, while generation and posting of one run are not. **Built
+  2026-10-30** in `services/billing-run/claim.ts`: a conditional
+  `UPDATE` claims the run before either pass does any work, judged on
+  liveness — a pass quiet past the same five-minute cutoff is claimable,
+  so the reclaim still recovers a dead node's run, and a NULL
+  `last_progress_at` counts as unheld. The sweep and the claim import
+  one cutoff, because a cutoff defined twice is two cutoffs the next
+  edit can part. A refused generation returns the run as it stands
+  rather than falling through to `finalise`; a refused posting raises
+  `RUN_POSTING_IN_FLIGHT` (409), which the route answers and the worker
+  tolerates. Full account in
+  [09 — Billing](09-billing.md) §"One pass at a time over a run".
 - **SCH-CONC-9 (Should).** The cluster limit needs no store of ours:
   BullMQ's `meta` hash is the single copy and the thing that enforces
   it. Per node does, and a `platform:queue-concurrency` Redis hash
