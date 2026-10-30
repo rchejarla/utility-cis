@@ -1,10 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { API_URL } from "@/lib/api-client";
+import { useState } from "react";
+import { API_URL, apiClient } from "@/lib/api-client";
 import { PageHeader } from "@/components/ui/page-header";
 import { useCluster } from "@/components/cluster/use-cluster";
-import { card, cellStyle, shortAge, Th, troubledFirst } from "@/components/cluster/ui";
+import {
+  card,
+  CardHead,
+  cellStyle,
+  plural,
+  shortAge,
+  Th,
+  troubledFirst,
+  Verb,
+} from "@/components/cluster/ui";
 import type { JobState, QueueHealth } from "@/components/cluster/types";
 
 /**
@@ -133,8 +143,156 @@ function WorkerCell({ queue }: { queue: QueueHealth }) {
   );
 }
 
+/**
+ * Whether the cluster limit is what is holding this queue back.
+ *
+ * Only worth saying when it actually binds. A ceiling of 4 over three
+ * nodes that each take one job is not holding anything back — it binds
+ * the day a fourth node joins — and marking it would be a false alarm on
+ * a page whose whole job is telling alarms from quiet.
+ */
+function cappedBelowCapacity(q: QueueHealth): boolean {
+  if (q.clusterLimit === null || q.workers === null) return false;
+  return q.clusterLimit < q.workers * q.perNodeLimit;
+}
+
+/** `""` means no limit, which the API spells `null`. */
+function parseLimit(value: string): number | null {
+  const trimmed = value.trim();
+  if (trimmed === "") return null;
+  const n = Number(trimmed);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+const limitInput: React.CSSProperties = {
+  width: 64,
+  padding: "4px 8px",
+  borderRadius: "var(--radius)",
+  border: "1px solid var(--border)",
+  background: "var(--bg-deep)",
+  color: "var(--text-primary)",
+  fontFamily: "monospace",
+  fontSize: 12,
+};
+
+/**
+ * One queue's two limits, in the row the queue already has.
+ *
+ * A column rather than a second card, because this page is deliberately
+ * *one* table — a second per-queue list puts the same queue name in two
+ * places and the reader has to work out whether they are the same thing.
+ * It costs a wide cell, which is why the column drops on a phone: tuning
+ * capacity is not what anybody opens this page on a phone to do.
+ *
+ * The sentence is computed here rather than taken from `effectiveLimit`,
+ * so it follows what is being typed instead of what the server last
+ * said. On load the two agree, which is what makes the duplicated
+ * arithmetic safe to keep: a disagreement would show up immediately, in
+ * the one place anybody reads both.
+ */
+function LimitsCell({ queue: q, onSaved }: { queue: QueueHealth; onSaved: () => void }) {
+  const saved = {
+    perNode: String(q.perNodeLimit),
+    cluster: q.clusterLimit === null ? "" : String(q.clusterLimit),
+  };
+  const [draft, setDraft] = useState<{ perNode: string; cluster: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  const value = draft ?? saved;
+  const dirty = draft !== null && (draft.perNode !== saved.perNode || draft.cluster !== saved.cluster);
+
+  const perNode = parseLimit(value.perNode) ?? q.perNodeLimit;
+  const cluster = parseLimit(value.cluster);
+  const capacity = q.workers === null ? null : q.workers * perNode;
+  const cap = capacity === null ? null : cluster === null ? capacity : Math.min(cluster, capacity);
+
+  async function save() {
+    setBusy(true);
+    setFailed(null);
+    try {
+      await apiClient.put(`/api/v1/platform/queues/${encodeURIComponent(q.name)}/concurrency`, {
+        perNode,
+        cluster,
+      });
+      /*
+       * Drop the draft and re-read, so the row shows what the cluster now
+       * holds. Only on success: re-reading after a failure would replace
+       * what they typed with what the server still has, which reads as
+       * the form having worked.
+       */
+      setDraft(null);
+      onSaved();
+    } catch (err) {
+      setFailed(err instanceof Error ? err.message : "Could not save the limits");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 260 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <input
+          type="number"
+          min={1}
+          aria-label={`Per node for ${q.name}`}
+          value={value.perNode}
+          onChange={(e) => setDraft({ ...value, perNode: e.target.value })}
+          style={limitInput}
+        />
+        <span style={{ color: "var(--text-muted)" }}>per node, ≤</span>
+        <input
+          type="number"
+          min={1}
+          aria-label={`Cluster limit for ${q.name}`}
+          placeholder="none"
+          value={value.cluster}
+          onChange={(e) => setDraft({ ...value, cluster: e.target.value })}
+          style={limitInput}
+        />
+        <span style={{ color: "var(--text-muted)" }}>cluster-wide</span>
+        {/* Shown only when there is something to save — this page's own
+            rule: controls that mostly do nothing train the eye past
+            them. */}
+        {dirty && (
+          <Verb
+            label="Save"
+            ariaLabel={`Save limits for ${q.name}`}
+            busy={busy}
+            onClick={() => void save()}
+          />
+        )}
+      </div>
+      <div style={{ color: "var(--text-secondary)" }}>
+        {q.workers === null ? (
+          /* A managed Redis refuses CLIENT LIST. A cap printed as a
+             figure here would be invented. */
+          <span style={{ color: "var(--text-muted)" }}>worker count unknown, so the cap is too</span>
+        ) : q.workers === 0 ? (
+          <span style={{ color: "var(--warning)" }}>no workers attached → nothing will run</span>
+        ) : (
+          <>
+            {q.workers} {plural(q.workers, "worker", "workers")} attached → {cap} in flight at most
+            {cluster !== null && capacity !== null && cluster > capacity && (
+              /* Not an error. It binds the day a node is added, and
+                 refusing it would also refuse it halfway through every
+                 rolling deploy. */
+              <span style={{ color: "var(--text-muted)" }}>
+                {" "}
+                — {cluster} not reached yet
+              </span>
+            )}
+          </>
+        )}
+      </div>
+      {failed && <div style={{ color: "var(--danger)" }}>{failed}</div>}
+    </div>
+  );
+}
+
 export default function ClusterQueuesPage() {
-  const { report, error } = useCluster();
+  const { report, error, reload } = useCluster();
 
   return (
     <div>
@@ -174,6 +332,7 @@ export default function ClusterQueuesPage() {
               <tr style={{ background: "var(--bg-elevated)" }}>
                 <Th>Queue</Th>
                 <Th>Workers</Th>
+                <Th className={HIDE_SM}>Runs at once</Th>
                 {COUNT_COLUMNS.map((c) => (
                   <Th
                     key={c.state}
@@ -195,9 +354,23 @@ export default function ClusterQueuesPage() {
                     {q.paused && (
                       <span style={{ color: "var(--danger)", marginLeft: 8 }}>paused</span>
                     )}
+                    {cappedBelowCapacity(q) && (
+                      /* A throttled queue and a slow queue look identical
+                         from a count, which is the only reason this is
+                         here rather than only on the card below. */
+                      <span
+                        style={{ color: "var(--warning)", marginLeft: 8 }}
+                        title="The cluster limit is below what the attached workers would hold"
+                      >
+                        capped at {q.clusterLimit}
+                      </span>
+                    )}
                   </td>
                   <td style={{ ...cellStyle, whiteSpace: "nowrap" }}>
                     <WorkerCell queue={q} />
+                  </td>
+                  <td className={HIDE_SM} style={cellStyle}>
+                    <LimitsCell queue={q} onSaved={reload} />
                   </td>
                   {COUNT_COLUMNS.map((c) => (
                     <td
@@ -222,6 +395,26 @@ export default function ClusterQueuesPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {report?.reachable && (
+        <div
+          style={{
+            ...card,
+            padding: "10px 14px",
+            marginBottom: 20,
+            fontSize: 12,
+            color: "var(--text-secondary)",
+          }}
+        >
+          <strong style={{ color: "var(--text-primary)" }}>Per node</strong> bounds one worker
+          process — its heap, its CPU, its own connection pool.{" "}
+          <strong style={{ color: "var(--text-primary)" }}>Cluster-wide</strong> bounds the shared
+          database, and takes effect at once: it is a key every node checks before taking a job.
+          Per node takes effect when a worker next starts, since that one has to reach the process
+          itself. Leave the cluster limit empty for no ceiling — zero is refused, because a queue
+          that must stop is one to pause.
         </div>
       )}
 

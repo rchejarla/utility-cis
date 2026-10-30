@@ -35,6 +35,19 @@ export interface QueueHealth {
   workers: number | null;
   workerAgeSeconds: number | null;
   paused: boolean;
+  /** Max in-flight jobs on one worker process. */
+  perNodeLimit: number;
+  /** The cluster-wide ceiling, or null when none is set. */
+  clusterLimit: number | null;
+  /**
+   * What will actually run: the smaller of the cluster limit and
+   * `workers × perNodeLimit`; null when the worker count is unknown.
+   *
+   * Carried rather than computed here because the two settings do not
+   * answer the question between them — a cluster limit of 4 against
+   * three nodes that each take one job runs 3.
+   */
+  effectiveLimit: number | null;
   recentFailures: QueueFailure[];
 }
 

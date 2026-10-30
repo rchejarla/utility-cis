@@ -364,7 +364,7 @@ every node checks before taking a job.
     division. `min()` was doing the clamping all along, so the division
     never had to be exact, which leaves the constraint buying nothing
     and invalidating stored config on every scaling event.
-- **SCH-CONC-6 (Must, API built 2026-10-30).** The UI prints the
+- **SCH-CONC-6 (Must, built 2026-10-30).** The UI prints the
   effective cap under the two fields, from the attached-worker count
   `connected-clients.ts` already reads out of `CLIENT LIST` — *"3 workers
   attached → 3 in flight at most"*. A cluster limit above
@@ -373,8 +373,10 @@ every node checks before taking a job.
   refuse it again halfway through every rolling deploy. The arithmetic is
   shown; the number is the operator's. `GET /platform/queues` carries
   `perNodeLimit`, `clusterLimit` and the resolved `effectiveLimit` per
-  queue, and the route accepts an unreachable cluster limit; the card on
-  `/platform/cluster/queues` is the half still to build.
+  queue, the route accepts an unreachable cluster limit, and the *Runs
+  at once* column on `/platform/cluster/queues` prints the sentence. It
+  is a column in the one table rather than a second card: a per-queue
+  list beside the existing one puts the same queue name in two places.
 - **SCH-CONC-7 (Must, satisfied 2026-10-30).** `billing-runs` keeps
   **per node 1** as its default, and its cluster limit was not to be
   settable above 1 until SCH-CONC-8 landed: the only thing stopping
@@ -403,10 +405,13 @@ every node checks before taking a job.
   it. Per node does, and a `platform:queue-concurrency` Redis hash
   beside `platform:workers` is the cheap answer, with `QUEUE_DEFAULTS`
   as the fallback. See open question 6.
-- **SCH-CONC-10 (Should).** A queue whose cluster limit sits below its
-  attached capacity is called out wherever its counts appear, as
-  SCH-PAUSE-4 treats `paused`. A throttled queue and a slow queue look
-  identical from a count.
+- **SCH-CONC-10 (Should, built 2026-10-30).** A queue whose cluster
+  limit sits below its attached capacity is called out wherever its
+  counts appear, as SCH-PAUSE-4 treats `paused` — *capped at 2* beside
+  the queue name. A throttled queue and a slow queue look identical from
+  a count. A ceiling *above* capacity is deliberately not marked: it
+  holds nothing back, and saying so would be a false alarm on the page
+  whose job is telling alarms from quiet.
 
 ## 7. Cross-cutting
 

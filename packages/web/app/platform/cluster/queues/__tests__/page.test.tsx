@@ -19,6 +19,7 @@ import ClusterQueuesPage from "../page";
 
 const get = apiClient.get as unknown as ReturnType<typeof vi.fn>;
 const post = apiClient.post as unknown as ReturnType<typeof vi.fn>;
+const put = apiClient.put as unknown as ReturnType<typeof vi.fn>;
 
 /** One job in the given state, as the drill-down endpoint returns it. */
 function jobsResult(state: string, over: Record<string, unknown> = {}) {
@@ -56,6 +57,11 @@ function queue(over: Record<string, unknown> = {}) {
     workers: 1,
     workerAgeSeconds: 900,
     paused: false,
+    // One node holding one job, no ceiling: the shipped default, so a
+    // test saying nothing about limits is not testing a throttled queue.
+    perNodeLimit: 1,
+    clusterLimit: null,
+    effectiveLimit: 1,
     recentFailures: [],
     ...over,
   };
@@ -101,6 +107,109 @@ beforeEach(() => {
    */
   get.mockReset();
   post.mockReset();
+  put.mockReset();
+});
+
+/**
+ * How much of a queue runs at once.
+ *
+ * Two numbers that bound different things — one process, and the shared
+ * database — so the page has to show what they resolve to. A cluster
+ * limit of 4 against three nodes that each take one job runs 3, and a
+ * card showing only the 4 would be showing a number that does nothing.
+ */
+describe("the concurrency limits", () => {
+  const limited = (over: Record<string, unknown>) =>
+    report({ queues: [queue(over)] });
+
+  it("says what will actually run, not only what was set", async () => {
+    get.mockResolvedValue(
+      limited({ workers: 3, perNodeLimit: 1, clusterLimit: 4, effectiveLimit: 3 }),
+    );
+
+    render(<ClusterQueuesPage />);
+
+    // The arithmetic, in words, so the 4 that does nothing cannot be
+    // mistaken for the 4 that would.
+    expect(await screen.findByText(/3 workers attached → 3 in flight at most/i)).toBeInTheDocument();
+  });
+
+  it("marks a queue the cluster limit is holding back", async () => {
+    // Capacity 6, ceiling 2. A throttled queue and a slow queue look
+    // identical from a count, which is the whole reason for the marker.
+    get.mockResolvedValue(
+      limited({ workers: 3, perNodeLimit: 2, clusterLimit: 2, effectiveLimit: 2 }),
+    );
+
+    render(<ClusterQueuesPage />);
+
+    expect(await screen.findByText(/capped at 2/i)).toBeInTheDocument();
+  });
+
+  it("does not mark a queue whose ceiling is above its capacity", async () => {
+    // 4 against three single-job nodes is not binding, so nothing is
+    // being held back and saying so would be a false alarm.
+    get.mockResolvedValue(
+      limited({ workers: 3, perNodeLimit: 1, clusterLimit: 4, effectiveLimit: 3 }),
+    );
+
+    render(<ClusterQueuesPage />);
+    await screen.findByText("billing-runs");
+
+    expect(screen.queryByText(/capped at/i)).not.toBeInTheDocument();
+  });
+
+  it("saves both limits for one queue", async () => {
+    get.mockResolvedValue(limited({ workers: 3 }));
+    put.mockResolvedValue({ queue: "billing-runs", perNode: 2, cluster: 4 });
+
+    render(<ClusterQueuesPage />);
+    const perNode = await screen.findByLabelText(/per node for billing-runs/i);
+    const cluster = screen.getByLabelText(/cluster limit for billing-runs/i);
+
+    await userEvent.clear(perNode);
+    await userEvent.type(perNode, "2");
+    await userEvent.type(cluster, "4");
+    await userEvent.click(screen.getByRole("button", { name: /save limits for billing-runs/i }));
+
+    expect(put).toHaveBeenCalledWith("/api/v1/platform/queues/billing-runs/concurrency", {
+      perNode: 2,
+      cluster: 4,
+    });
+  });
+
+  it("sends null for a cleared cluster limit rather than omitting it", async () => {
+    // Emptying the box means "no ceiling", which the API spells null.
+    // Omitting the field would mean "leave it as it was" — the opposite.
+    get.mockResolvedValue(limited({ workers: 3, clusterLimit: 4, effectiveLimit: 3 }));
+    put.mockResolvedValue({ queue: "billing-runs", perNode: 1, cluster: null });
+
+    render(<ClusterQueuesPage />);
+    const cluster = await screen.findByLabelText(/cluster limit for billing-runs/i);
+
+    await userEvent.clear(cluster);
+    await userEvent.click(screen.getByRole("button", { name: /save limits for billing-runs/i }));
+
+    expect(put).toHaveBeenCalledWith("/api/v1/platform/queues/billing-runs/concurrency", {
+      perNode: 1,
+      cluster: null,
+    });
+  });
+
+  it("keeps the operator's number when it cannot be saved", async () => {
+    // Re-reading the report would replace what they typed with what the
+    // server still holds, which reads as the form having worked.
+    get.mockResolvedValue(limited({ workers: 3 }));
+    put.mockRejectedValue(new Error("Redis did not answer"));
+
+    render(<ClusterQueuesPage />);
+    const cluster = await screen.findByLabelText(/cluster limit for billing-runs/i);
+    await userEvent.type(cluster, "4");
+    await userEvent.click(screen.getByRole("button", { name: /save limits for billing-runs/i }));
+
+    expect(await screen.findByText(/Redis did not answer/i)).toBeInTheDocument();
+    expect(cluster).toHaveValue(4);
+  });
 });
 
 describe("the cluster queues page", () => {
@@ -290,7 +399,9 @@ describe("the cluster queues page", () => {
     expect(hiddenAt(cells)).toEqual(hiddenAt(headers));
 
     const names = hiddenAt(headers).map((i) => headers[i].textContent);
-    expect(names).toEqual(["Active", "Delayed", "Completed"]);
+    // "Runs at once" holds two number boxes and a sentence, and tuning
+    // capacity is not what anyone opens this page on a phone to do.
+    expect(names).toEqual(["Runs at once", "Active", "Delayed", "Completed"]);
     // What a phone must keep: whose queue, who is working it, what broke.
     expect(names).not.toContain("Queue");
     expect(names).not.toContain("Failed");
