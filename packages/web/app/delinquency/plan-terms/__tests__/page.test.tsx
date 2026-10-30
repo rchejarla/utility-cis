@@ -90,10 +90,22 @@ describe("plan terms screen", () => {
     const max = screen.getByLabelText(/at most/i);
     await userEvent.clear(max);
     await userEvent.type(max, "2");
+
+    /*
+     * Gate the click on the typed value having landed.
+     *
+     * The input is controlled, so its DOM value comes from state —
+     * seeing 2 here is what says the draft holds 2. Without this the
+     * test was a race it lost under a loaded suite run while passing
+     * alone: the click arrived before the state settled, the draft was
+     * still the saved 12, and Save legitimately called the API.
+     */
+    await waitFor(() => expect(max).toHaveValue(2));
+
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
 
-    // Refused at the control, not on save: the API would reject it too,
-    // but an operator should not have to press Save to be told.
+    // Refused client-side: the API would reject it too, but an operator
+    // should not need a round trip to be told.
     expect(put).not.toHaveBeenCalled();
     expect(screen.getByText(/at least the minimum/i)).toBeInTheDocument();
   });

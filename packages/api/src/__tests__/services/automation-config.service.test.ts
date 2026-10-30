@@ -30,6 +30,11 @@ function fixture(overrides: Partial<AutomationConfig> = {}): AutomationConfig {
     delinquencyEnabled: true,
     delinquencyRunHourLocal: 3,
     delinquencyLastRunAt: null,
+    // Off by default, and the only scheduler flag that is: automation
+    // a tenant did not ask for would charge their customers.
+    billingEnabled: false,
+    billingRunHourLocal: 3,
+    billingLastRunAt: null,
     notificationQuietStart: "22:00",
     notificationQuietEnd: "07:00",
     schedulerAuditRetentionDays: 365,

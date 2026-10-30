@@ -50,8 +50,20 @@ const TIME_INPUT: React.CSSProperties = {
 interface SchedulerToggleSpec {
   key: keyof Pick<
     AutomationConfig,
-    "suspensionEnabled" | "notificationSendEnabled" | "slaBreachSweepEnabled" | "delinquencyEnabled"
+    | "suspensionEnabled"
+    | "notificationSendEnabled"
+    | "slaBreachSweepEnabled"
+    | "delinquencyEnabled"
+    | "billingEnabled"
   >;
+  /**
+   * Shown when the toggle is off, where off is the default and the
+   * consequence is that nothing happens. Every other scheduler here
+   * defaults on, so "disabled" reads as somebody's decision; billing
+   * defaults off, and silence about it reads as a feature that is
+   * broken rather than one not yet switched on.
+   */
+  offNote?: string;
   label: string;
   description: string;
 }
@@ -80,6 +92,14 @@ const SCHEDULER_TOGGLES: SchedulerToggleSpec[] = [
     label: "Delinquency evaluation · daily",
     description:
       "Runs your tenant's delinquency rules at the configured local hour. Sends notices, creates delinquency actions.",
+  },
+  {
+    key: "billingEnabled",
+    label: "Billing runs · on each cycle's bill day",
+    description:
+      "Starts a billing run for every active cycle on its own bill day, at the configured local hour. It generates bills; it does not post them — posting stays with the Post button and the auto-post setting.",
+    offNote:
+      "Off: nothing starts a billing run. Somebody has to open each cycle on its bill day and press Start.",
   },
 ];
 
@@ -150,6 +170,7 @@ export default function AutomationSettingsPage() {
     const out: AutomationConfigPatch = {};
     (Object.keys(draft) as (keyof AutomationConfig)[]).forEach((k) => {
       if (k === "delinquencyLastRunAt") return; // worker-only
+      if (k === "billingLastRunAt") return; // worker-only, same reason
       if (draft[k] !== original[k]) {
         // Type-safe assignment via index signature.
         (out as Record<string, unknown>)[k] = draft[k];
@@ -226,7 +247,15 @@ export default function AutomationSettingsPage() {
             <SettingRow
               key={spec.key}
               label={spec.label}
-              description={spec.description}
+              description={
+                // Concatenated rather than marked up: `SettingRow` takes
+                // a string, and widening a prop every settings page uses
+                // to colour one sentence is the wrong trade. The words
+                // carry it.
+                spec.offNote && !draft[spec.key]
+                  ? `${spec.description} ${spec.offNote}`
+                  : spec.description
+              }
               control={
                 <ToggleSwitch
                   checked={draft[spec.key]}
@@ -294,7 +323,7 @@ export default function AutomationSettingsPage() {
 
       <SettingsSection
         title="Daily runs"
-        description="Time-of-day for the daily delinquency evaluation in your tenant's local time."
+        description="Time-of-day for the daily delinquency evaluation and the billing dispatcher, in your tenant's local time."
       >
         <SettingsCard>
           <SettingRow
@@ -321,6 +350,49 @@ export default function AutomationSettingsPage() {
                   {String(draft.delinquencyRunHourLocal).padStart(2, "0")}:00 local
                 </span>
               </div>
+            }
+          />
+          <SettingRow
+            label="Billing run hour"
+            description="0–23, local time. On a cycle's bill day, the dispatcher starts its run when the tenant-local hour matches. A month shorter than the cycle's bill day bills on its last day."
+            control={
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <input
+                  type="number"
+                  min={0}
+                  max={23}
+                  step={1}
+                  value={draft.billingRunHourLocal}
+                  disabled={!canEdit || !draft.billingEnabled}
+                  onChange={(e) =>
+                    setField(
+                      "billingRunHourLocal",
+                      Math.max(0, Math.min(23, Number(e.target.value) || 0)),
+                    )
+                  }
+                  style={NUMBER_INPUT}
+                />
+                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                  {String(draft.billingRunHourLocal).padStart(2, "0")}:00 local
+                  {!draft.billingEnabled && " · billing automation is off"}
+                </span>
+              </div>
+            }
+          />
+          {/*
+            * The dispatcher writes this; the page shows it and never
+            * patches it, like `delinquencyLastRunAt`. It is the only way
+            * to tell a tick that was missed from one not yet due.
+            */}
+          <SettingRow
+            label="Last billing dispatch"
+            description="When the dispatcher last acted for your utility. Written by the scheduler, not editable here."
+            control={
+              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                {draft.billingLastRunAt
+                  ? new Date(draft.billingLastRunAt).toLocaleString()
+                  : "never"}
+              </span>
             }
           />
         </SettingsCard>

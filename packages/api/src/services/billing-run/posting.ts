@@ -64,7 +64,7 @@ export async function assertRunPostable(utilityId: string, runId: string): Promi
  */
 export async function postBillingRun(
   utilityId: string,
-  actorId: string,
+  actorId: string | null,
   actorName: string,
   runId: string,
 ): Promise<{

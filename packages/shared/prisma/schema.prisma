@@ -1386,6 +1386,21 @@ model UtilityConfig {
   delinquencyEnabled          Boolean   @default(true) @map("delinquency_enabled")
   delinquencyRunHourLocal     Int       @default(3) @map("delinquency_run_hour_local") @db.SmallInt
   delinquencyLastRunAt        DateTime? @map("delinquency_last_run_at") @db.Timestamptz
+  /// Whether the billing dispatcher may start runs for this tenant.
+  ///
+  /// Default **false**, unlike every other flag here. A tenant that has
+  /// been billing by hand must not discover automation by finding bills
+  /// it did not ask for — the one default on this table that would
+  /// charge somebody's customers.
+  ///
+  /// Per tenant rather than per cycle (27-job-scheduling SCH-BILL-8):
+  /// one switch for a utility's automated billing. `BillingCycle.active`
+  /// remains the way to stop one cycle being billed at all.
+  billingEnabled              Boolean   @default(false) @map("billing_enabled")
+  billingRunHourLocal         Int       @default(3) @map("billing_run_hour_local") @db.SmallInt
+  /// When the dispatcher last acted for this tenant. Distinguishes a
+  /// tick that was missed from one that never came due.
+  billingLastRunAt            DateTime? @map("billing_last_run_at") @db.Timestamptz
   notificationQuietStart      String    @default("22:00") @map("notification_quiet_start") @db.VarChar(5)
   notificationQuietEnd        String    @default("07:00") @map("notification_quiet_end") @db.VarChar(5)
   schedulerAuditRetentionDays Int       @default(365) @map("scheduler_audit_retention_days")
@@ -2506,7 +2521,19 @@ model BillingRun {
   postingStartedAt DateTime?      @map("posting_started_at") @db.Timestamptz
   cancelRequested Boolean         @default(false) @map("cancel_requested")
   lastProgressAt DateTime?        @map("last_progress_at") @db.Timestamptz
-  createdBy      String           @map("created_by") @db.Uuid
+  /// Null means the schedule started this run, not a person.
+  ///
+  /// A scheduled run has no user principal. The audit trail carries the
+  /// sentence instead — `actorName` of "Billing dispatcher" and a
+  /// `source` of `scheduler:billing-dispatch` — which is the convention
+  /// the suspension sweep already writes. The alternative, a reserved
+  /// system uuid, would need a `cis_user` row that is not a user and
+  /// belongs to no tenant.
+  ///
+  /// The boot sweep resumes a run as `createdBy`, so it reads this too:
+  /// a reclaimed scheduled run stays scheduled rather than acquiring an
+  /// author.
+  createdBy      String?          @map("created_by") @db.Uuid
   createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
 
   cycle BillingCycle     @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)

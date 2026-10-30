@@ -27,16 +27,16 @@ import { AutomationConfigSchema } from "@utility-cis/shared";
 const PAGE = path.resolve(__dirname, "../page.tsx");
 
 /**
- * `delinquencyLastRunAt` is written by the delinquency worker and omitted
- * from the patch schema, so it is deliberately not editable. The page is
- * expected to display it, not offer a control.
+ * Written by a dispatcher and omitted from the patch schema, so
+ * deliberately not editable. The page is expected to display each, not
+ * offer a control.
  */
-const WORKER_OWNED = "delinquencyLastRunAt";
+const WORKER_OWNED = ["delinquencyLastRunAt", "billingLastRunAt"];
 
 describe("Automation settings page covers the whole config", () => {
   const source = readFileSync(PAGE, "utf8");
   const editableKeys = Object.keys(AutomationConfigSchema.shape).filter(
-    (k) => k !== WORKER_OWNED,
+    (k) => !WORKER_OWNED.includes(k),
   );
 
   it("derives a non-trivial key list from the schema", () => {
@@ -47,14 +47,16 @@ describe("Automation settings page covers the whole config", () => {
   });
 
   it.each(
-    Object.keys(AutomationConfigSchema.shape).filter((k) => k !== WORKER_OWNED),
+    Object.keys(AutomationConfigSchema.shape).filter((k) => !WORKER_OWNED.includes(k)),
   )("renders a control for %s", (key) => {
     expect(source).toContain(key);
   });
 
-  it("does not offer an editable control for the worker-owned field", () => {
+  it.each(WORKER_OWNED)("does not offer an editable control for %s", (key) => {
     // The page may show the timestamp; it must not patch it. The save
-    // path skips it explicitly, and that skip is the thing worth pinning.
-    expect(source).toMatch(/delinquencyLastRunAt"?\s*\)?\s*return/);
+    // path skips each explicitly, and that skip is the thing worth
+    // pinning — a dispatcher reads these to tell a missed tick from one
+    // not yet due, so a tenant rewriting one would break recovery.
+    expect(source).toMatch(new RegExp(`${key}"?\\s*\\)?\\s*return`));
   });
 });

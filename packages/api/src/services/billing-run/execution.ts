@@ -51,7 +51,15 @@ function classify(err: unknown): { status: "SKIPPED" | "FAILED"; code: string; m
 export async function processBillingRun(args: {
   runId: string;
   utilityId: string;
-  actorId: string;
+  /**
+   * Null when the schedule started this run rather than a person.
+   *
+   * It travels unchanged to the audit context, which has always taken
+   * `string | null` — the sweeps' convention. The services between here
+   * and there were typed `string` only because nothing had ever handed
+   * them a system-initiated run.
+   */
+  actorId: string | null;
   actorName: string;
 }): Promise<BillingRunSummary> {
   const { runId, utilityId, actorId, actorName } = args;
@@ -160,7 +168,7 @@ export async function processBillingRun(args: {
  */
 async function billOneAccount(args: {
   utilityId: string;
-  actorId: string;
+  actorId: string | null;
   actorName: string;
   accountId: string;
   windowEnd: Date;

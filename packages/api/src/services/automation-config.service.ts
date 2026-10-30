@@ -30,11 +30,39 @@ interface AutomationConfigRow {
   delinquencyEnabled: boolean;
   delinquencyRunHourLocal: number;
   delinquencyLastRunAt: Date | null;
+  billingEnabled: boolean;
+  billingRunHourLocal: number;
+  billingLastRunAt: Date | null;
   notificationQuietStart: string;
   notificationQuietEnd: string;
   schedulerAuditRetentionDays: number;
   autoPostBills: boolean;
 }
+
+/**
+ * The columns this module reads, in one place.
+ *
+ * It was the same eleven-field list written out three times, and the
+ * third copy is where a field added to the other two goes missing.
+ * `satisfies` keeps it a literal Prisma select rather than widening to
+ * `Record<string, boolean>`.
+ */
+const AUTOMATION_SELECT = {
+  timezone: true,
+  suspensionEnabled: true,
+  notificationSendEnabled: true,
+  slaBreachSweepEnabled: true,
+  delinquencyEnabled: true,
+  delinquencyRunHourLocal: true,
+  delinquencyLastRunAt: true,
+  billingEnabled: true,
+  billingRunHourLocal: true,
+  billingLastRunAt: true,
+  notificationQuietStart: true,
+  notificationQuietEnd: true,
+  schedulerAuditRetentionDays: true,
+  autoPostBills: true,
+} as const;
 
 function toDto(row: AutomationConfigRow): AutomationConfig {
   return {
@@ -47,6 +75,9 @@ function toDto(row: AutomationConfigRow): AutomationConfig {
     delinquencyLastRunAt: row.delinquencyLastRunAt
       ? row.delinquencyLastRunAt.toISOString()
       : null,
+    billingEnabled: row.billingEnabled,
+    billingRunHourLocal: row.billingRunHourLocal,
+    billingLastRunAt: row.billingLastRunAt ? row.billingLastRunAt.toISOString() : null,
     notificationQuietStart: row.notificationQuietStart,
     notificationQuietEnd: row.notificationQuietEnd,
     schedulerAuditRetentionDays: row.schedulerAuditRetentionDays,
@@ -63,19 +94,7 @@ function toDto(row: AutomationConfigRow): AutomationConfig {
 export async function getAutomationConfig(utilityId: string): Promise<AutomationConfig> {
   const row = await prisma.utilityConfig.findUnique({
     where: { utilityId },
-    select: {
-      timezone: true,
-      suspensionEnabled: true,
-      notificationSendEnabled: true,
-      slaBreachSweepEnabled: true,
-      delinquencyEnabled: true,
-      delinquencyRunHourLocal: true,
-      delinquencyLastRunAt: true,
-      notificationQuietStart: true,
-      notificationQuietEnd: true,
-      schedulerAuditRetentionDays: true,
-      autoPostBills: true,
-    },
+    select: AUTOMATION_SELECT,
   });
   if (row) return toDto(row);
 
@@ -86,19 +105,7 @@ export async function getAutomationConfig(utilityId: string): Promise<Automation
     where: { utilityId },
     create: { utilityId },
     update: {},
-    select: {
-      timezone: true,
-      suspensionEnabled: true,
-      notificationSendEnabled: true,
-      slaBreachSweepEnabled: true,
-      delinquencyEnabled: true,
-      delinquencyRunHourLocal: true,
-      delinquencyLastRunAt: true,
-      notificationQuietStart: true,
-      notificationQuietEnd: true,
-      schedulerAuditRetentionDays: true,
-      autoPostBills: true,
-    },
+    select: AUTOMATION_SELECT,
   });
   return toDto(created);
 }
@@ -124,19 +131,7 @@ export async function patchAutomationConfig(
     where: { utilityId },
     create: { utilityId, ...patch },
     update: patch,
-    select: {
-      timezone: true,
-      suspensionEnabled: true,
-      notificationSendEnabled: true,
-      slaBreachSweepEnabled: true,
-      delinquencyEnabled: true,
-      delinquencyRunHourLocal: true,
-      delinquencyLastRunAt: true,
-      notificationQuietStart: true,
-      notificationQuietEnd: true,
-      schedulerAuditRetentionDays: true,
-      autoPostBills: true,
-    },
+    select: AUTOMATION_SELECT,
   });
   logger.info(
     { component: "automation-config", utilityId, patchedKeys: Object.keys(patch) },
@@ -163,6 +158,8 @@ export function isSchedulerEnabled(
       return config.slaBreachSweepEnabled;
     case "delinquency":
       return config.delinquencyEnabled;
+    case "billing":
+      return config.billingEnabled;
   }
 }
 

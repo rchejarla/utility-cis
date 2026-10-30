@@ -25,6 +25,9 @@ export const AutomationConfigSchema = z.object({
   delinquencyEnabled: z.boolean(),
   delinquencyRunHourLocal: z.number().int().min(0).max(23),
   delinquencyLastRunAt: z.string().datetime().nullable(),
+  billingEnabled: z.boolean(),
+  billingRunHourLocal: z.number().int().min(0).max(23),
+  billingLastRunAt: z.string().datetime().nullable(),
   notificationQuietStart: z.string().regex(HHMM, "must be HH:mm 24-hour"),
   notificationQuietEnd: z.string().regex(HHMM, "must be HH:mm 24-hour"),
   schedulerAuditRetentionDays: z.number().int().min(30).max(2555),
@@ -33,12 +36,13 @@ export const AutomationConfigSchema = z.object({
 
 /**
  * Patch shape for `PATCH /api/v1/settings/automation`. All fields
- * optional; only the supplied keys get updated. `delinquencyLastRunAt`
- * is intentionally omitted — it's set internally by the worker, never
- * by the user.
+ * optional; only the supplied keys get updated. The two `lastRunAt`
+ * fields are intentionally omitted — a dispatcher sets them, never the
+ * user, and accepting one would let a tenant rewrite the record that
+ * missed-tick recovery reads.
  */
 export const AutomationConfigPatchSchema = AutomationConfigSchema
-  .omit({ delinquencyLastRunAt: true })
+  .omit({ delinquencyLastRunAt: true, billingLastRunAt: true })
   .partial()
   .refine(
     (data) => Object.keys(data).length > 0,
@@ -53,5 +57,6 @@ export const SCHEDULER_KEYS = [
   "notificationSend",
   "slaBreachSweep",
   "delinquency",
+  "billing",
 ] as const;
 export type SchedulerKey = (typeof SCHEDULER_KEYS)[number];
