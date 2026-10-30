@@ -71,11 +71,14 @@ Three gaps follow from that, and they are not equally urgent:
    as the console gets. Bull Board would answer it, but it is off by
    default (`BULL_BOARD_ENABLED`) and is a third-party UI behind the
    platform gate.
-2. **Nothing can pause a sweep.** The levers are killing the worker or
-   restarting it with `WORKER_QUEUES` set to a subset. Spec 24 §D7 rules
-   queue pause out of *worker* control — "a decision about a queue, not
-   a worker" — while noting `getQueueHealth` already reports `paused`.
-   The reporting half exists and nothing can set it.
+2. **Nothing can pause a sweep, or change how much of it runs at once.**
+   The levers are killing the worker or restarting it with
+   `WORKER_QUEUES` set to a subset. Spec 24 §D7 rules queue pause out of
+   *worker* control — "a decision about a queue, not a worker" — while
+   noting `getQueueHealth` already reports `paused`. The reporting half
+   exists and nothing can set it. `paused` and `concurrency` are adjacent
+   fields of the same `bull:<queue>:meta` hash, and neither is writable
+   from anywhere in the product.
 3. **Billing has no scheduler at all.** `billing-runs` jobs are enqueued
    from three HTTP routes: start, post, resume. `BillingCycle` carries
    `billDayOfMonth`, `readDayOfMonth`, `frequency` and `active` — every
@@ -85,8 +88,9 @@ Three gaps follow from that, and they are not equally urgent:
 ## Scope
 
 **In:** a scheduler view on the platform console; pause and resume per
-queue; a billing dispatcher that starts runs on each cycle's own bill
-day; the tenant settings and the one schema change those need.
+queue; the two concurrency limits per queue; a billing dispatcher that
+starts runs on each cycle's own bill day; the tenant settings and the one
+schema change those need.
 
 **Out, each its own spec or already decided:** editing cron patterns
 (§4 — deferred, with the two candidates named); automatic *posting* and
@@ -270,13 +274,15 @@ things around it do not, and they are cheaper to fix than to discover.
   side-effect and become a deliberate operation — the console being the
   obvious place, now that SCH-VIEW-3 shows orphans.
 - **SCH-NODE-2 (Must).** `billing-runs` declares `concurrency: 1` and
-  explains it in terms of the database — "two in parallel would halve
-  neither's wall clock". That limit is per `Worker` instance, so three
-  nodes run three billing runs at once and the stated intent quietly
-  stops holding. Either the limit is expressed across the cluster, or
-  the comment is corrected to say what it actually guarantees. Deciding
-  which is the requirement; the current state asserts one and delivers
-  the other.
+  the worker module explains it in terms of the database — "two in
+  parallel would halve neither's wall clock", and "the two must not run
+  concurrently over one run, and concurrency 1 already guarantees that".
+  That limit is per `Worker` instance, so three nodes run three billing
+  runs at once and the second sentence stops being true. `queues.ts` is
+  already the honest one ("One run at a time **per replica**"); the
+  worker module is not. **Resolved in §6:** the limit becomes two
+  numbers, and the per-run guarantee moves to the database, where no
+  concurrency setting can delete it.
 - **SCH-NODE-3 (Must).** A boot sweep that reclaims work must judge on
   **progress, not status**. `reclaimZombieBillingRuns` selected every
   run with `status = RUNNING`, with no age test and no job id, and ran
@@ -293,7 +299,105 @@ things around it do not, and they are cheaper to fix than to discover.
   silent, and "nobody opened the console" and "the month did not bill"
   must not be the same event.
 
-## 6. Cross-cutting
+## 6. How much runs at once
+
+`concurrency` is two different limits wearing one word, and the console
+needs both. They bound different resources, and neither can be computed
+from the other.
+
+| | Bounds | Stays true when the fleet changes |
+|---|---|---|
+| **Per node** | one process: heap, CPU, its own `pg.Pool` — 10 connections, the library default, since no `max` is set | yes |
+| **Cluster limit** | the shared resource: total concurrent load on one database | yes |
+
+What runs is `min(cluster limit, attached workers × per node)`. Three
+nodes at per-node 1 hold three between them, so a cluster limit of 4
+never binds and the queue tops out at 3; raise per node to 2 and the same
+4 is reached exactly. **The cluster limit does not have to divide by the
+node count**, because it is not shared out between nodes — it is one gate
+every node checks before taking a job.
+
+- **SCH-CONC-1 (Must).** Both numbers are configurable per queue by the
+  platform actor, and **neither is derived from the other or from the
+  node count.** `QUEUE_DEFAULTS` stays in code as the fallback for a
+  queue nobody has configured.
+- **SCH-CONC-2 (Must).** The cluster limit is
+  `Queue.setGlobalConcurrency(n)` — an `HSET` of `concurrency` into
+  `bull:<queue>:meta`, the field beside `paused`. The gate is in
+  `moveToActive`'s Lua (`LLEN active >= concurrency`), evaluated in
+  Redis, so every node honours a change on its next fetch. It needs no
+  part of spec 24's command path, for the reason SCH-PAUSE-2 gives.
+  **Unset means no limit** (`removeGlobalConcurrency`), which is today's
+  behaviour and therefore the default: nothing changes until an operator
+  chooses a number.
+- **SCH-CONC-3 (Must).** Per node is applied through the `Worker`
+  `concurrency` setter (present in bullmq 5.76.2, `worker.js:213`),
+  which assigns `_concurrency` and nothing else — so lowering it stops
+  that worker fetching while jobs already running finish, cancellation
+  being a separate `cancelAllJobs`. Each worker reads **one stored
+  number for itself**, never a share computed from how many nodes it can
+  see.
+- **SCH-CONC-4 (Must).** The two differ in how a change reaches a node,
+  and the spec should not pretend otherwise. The cluster limit is
+  honoured passively: the gate is in Redis and no process has to be
+  told. Per node has to reach a live `Worker` object. Until there is a
+  delivery mechanism, **per node takes effect at next worker start**,
+  which the console can already do. The cheap mechanism is a poll of the
+  config hash — one `HGETALL`, where up to one interval of staleness is
+  harmless because the number is a ceiling and not a correctness
+  property; the alternative is spec 24's command path.
+- **SCH-CONC-5 (Must).** The rejected design, recorded so it is not
+  re-proposed: *one field `G`, constrained to multiples of `n`, with per
+  node derived as `G/n`.* Two costs, either disqualifying.
+  - **It raises per-node load when the fleet shrinks.** A node dies,
+    `n` goes 3→2, and every survivor recomputes its own limit *upward*,
+    from `G/3` to `G/2`. If the first node died of load — the realistic
+    way it dies, partway through a twelve-thousand-account run — the
+    response to that death is to hand more concurrent work to the
+    machines next in line. Fixed per-node limits shed load instead:
+    total capacity drops, queue depth grows, and depth is the signal
+    worth seeing.
+  - **The multiple goes stale with nobody editing it.** 6 is valid
+    against three nodes; scale to four and `6/4` is not an integer.
+    Rounding down turns the operator's 6 into 4 silently; rounding up
+    gives 2+2+2+0 — capped at 6 by the cluster limit, not by the
+    division. `min()` was doing the clamping all along, so the division
+    never had to be exact, which leaves the constraint buying nothing
+    and invalidating stored config on every scaling event.
+- **SCH-CONC-6 (Must).** The UI prints the effective cap under the two
+  fields, from the attached-worker count `connected-clients.ts` already
+  reads out of `CLIENT LIST` — *"3 workers attached → 3 in flight at
+  most"*. A cluster limit above `attached × per node` is **not
+  rejected**: it binds the moment a node is added, and validating it
+  would refuse a legitimate value, then refuse it again halfway through
+  every rolling deploy. The arithmetic is shown; the number is the
+  operator's.
+- **SCH-CONC-7 (Must).** `billing-runs` keeps **per node 1**, and its
+  cluster limit must not be settable above 1 until SCH-CONC-8 lands. The
+  only thing stopping generation and posting of one run from overlapping
+  today is that a single replica can hold one job (SCH-NODE-2). The
+  moment an operator can type 2, that guarantee is theirs to delete by
+  accident.
+- **SCH-CONC-8 (Must).** Per-run exclusion belongs in the **database**,
+  not in a concurrency number. The invariant is one job per *run*, not
+  N per cluster: two runs at once are fine and two tenants at once are
+  the point, while generation and posting of one run are not. A
+  conditional claim — the shape `postBill` already uses, `UPDATE … WHERE
+  posted_at IS NULL`, against the `status`, `posting_started_at` and
+  `last_progress_at` columns SCH-NODE-3 made the sweep read — makes the
+  overlap impossible at any concurrency. Only then is the cluster limit
+  a free capacity knob.
+- **SCH-CONC-9 (Should).** The cluster limit needs no store of ours:
+  BullMQ's `meta` hash is the single copy and the thing that enforces
+  it. Per node does, and a `platform:queue-concurrency` Redis hash
+  beside `platform:workers` is the cheap answer, with `QUEUE_DEFAULTS`
+  as the fallback. See open question 6.
+- **SCH-CONC-10 (Should).** A queue whose cluster limit sits below its
+  attached capacity is called out wherever its counts appear, as
+  SCH-PAUSE-4 treats `paused`. A throttled queue and a slow queue look
+  identical from a count.
+
+## 7. Cross-cutting
 
 - **SCH-X-1 (Must).** Every new route is platform-actor gated, except
   the two tenant settings in SCH-BILL-8, which are `tenant_profile:EDIT`
@@ -302,8 +406,9 @@ things around it do not, and they are cheaper to fix than to discover.
   `cis_platform`; the per-tenant work it enqueues runs under
   `runAsTenant` via `scopedJob`, like every other fan-out. A sweep on a
   confined connection finds nothing and reports success.
-- **SCH-X-3 (Must).** Pause, resume and dispatch outcomes are logged
-  with actor and node (`component: "scheduler-control"`). They are not
+- **SCH-X-3 (Must).** Pause, resume, concurrency changes and dispatch
+  outcomes are logged with actor and node, the old value beside the new
+  (`component: "scheduler-control"`). They are not
   `audit_log` rows: that table needs a `utility_id` and a uuid
   `entity_id`, and these acts are about a queue. Spec 24 hit the same
   wall and named the migration that would close both.
@@ -322,13 +427,19 @@ things around it do not, and they are cheaper to fix than to discover.
 | Slice | Delivers | Unblocks |
 |---|---|---|
 | 1 | Scheduler view (SCH-VIEW-*) | Seeing what is armed and what is orphaned — read-only, no new writes |
-| 2 | Pause and resume (SCH-PAUSE-*) | The incident lever, without waiting on spec 24 |
+| 2 | Pause, resume and the two limits (SCH-PAUSE-*, SCH-CONC-*) | The incident levers, without waiting on spec 24 |
 | 3 | Billing dispatcher (SCH-BILL-*) | Billing that happens on its own day |
 | 4 | Editable cadence for the two preferences (SCH-FIX-1, 2) | After spec 24 steps 2–3 only |
 
-SCH-NODE-1 and SCH-NODE-2 belong to whichever slice ships first — they
-are properties of the cluster, not of any capability here, and both are
-wrong today. SCH-NODE-3 is already fixed.
+Pause and the limits are one slice because they are one Redis hash, one
+route shape and one card: `paused` and `concurrency` sit side by side in
+`bull:<queue>:meta`.
+
+SCH-NODE-1 belongs to whichever slice ships first — it is a property of
+the cluster rather than of any capability here, and it is wrong today.
+SCH-NODE-3 is already fixed. SCH-NODE-2 is resolved by §6, and within
+slice 2 the database claim (SCH-CONC-8) lands before `billing-runs`
+accepts a cluster limit above 1 (SCH-CONC-7).
 
 Slice 1 is worth shipping alone. Slice 3 is the one that answers the
 question this spec exists for, and it depends on nothing in 1 or 2.
@@ -355,3 +466,11 @@ question this spec exists for, and it depends on nothing in 1 or 2.
    irrigation one may want one automated and the other not. Per tenant
    is the smaller change and matches every other toggle; per cycle is
    where the bill day already lives.
+6. **How does a per-node limit reach a running worker?** SCH-CONC-4
+   takes effect at next worker start, which is honest and may be
+   sufficient — the console can restart a worker, and this is a capacity
+   knob rather than an incident lever, the cluster limit being the one
+   that acts immediately. A poll of `platform:queue-concurrency` buys
+   live edits for an interval of staleness; spec 24's command path buys
+   them properly and is not due yet. My inclination is to ship
+   next-start and add the poll only if an operator asks twice.

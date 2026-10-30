@@ -63,7 +63,7 @@ docs/specs/
 ├── 24-platform-worker-control.md    — Worker lifecycle across nodes (step 1 built)
 ├── 25-platform-console.md           — Platform actor's console: tenants + cluster (shipped)
 ├── 26-time-of-use-rates.md          — TOU calendars, seasons, interval data (proposed; nothing built)
-└── 27-job-scheduling.md             — Scheduler visibility, queue pause, the billing dispatcher (proposed; nothing built)
+└── 27-job-scheduling.md             — Scheduler visibility, queue pause and concurrency, the billing dispatcher (proposed; nothing built)
 ```
 
 ### Master Design Document
