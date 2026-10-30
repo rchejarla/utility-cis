@@ -142,6 +142,37 @@ interface BillPeriod {
  * Mid-period accounts: periodStart is clamped to account.createdAt so
  * Bills don't claim a period that pre-dates the account.
  */
+/**
+ * The bill day as it actually falls in one month: the last day of a
+ * month too short to hold it.
+ *
+ * A cycle set to the 31st has no 31st in February, and `Date.UTC(y, 1,
+ * 31)` does not refuse — it rolls into 3 March. So a 31st cycle's
+ * February window used to end in March, and on 28 February the window
+ * resolved to *January's*, which a run had already closed. February
+ * went unbilled, in the manual path as much as any other.
+ *
+ * SCH-BILL-3 in `docs/specs/27-job-scheduling.md`: a month shorter than
+ * the configured day bills on its last day. The alternative — skipping
+ * the month — silently drops four months a year for a 31st cycle.
+ *
+ * `month` may be out of range; `Date.UTC` normalises, so month -1 is
+ * December of the previous year.
+ */
+function billDayIn(year: number, month: number, billDayOfMonth: number): number {
+  // Day 0 of the next month is the last day of this one.
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return Math.min(billDayOfMonth, lastDay);
+}
+
+/** That day, as a date. */
+function billDayDate(year: number, month: number, billDayOfMonth: number): Date {
+  const normalised = new Date(Date.UTC(year, month, 1));
+  const y = normalised.getUTCFullYear();
+  const m = normalised.getUTCMonth();
+  return new Date(Date.UTC(y, m, billDayIn(y, m, billDayOfMonth)));
+}
+
 export function computeBillPeriod(
   account: {
     createdAt: Date;
@@ -161,17 +192,24 @@ export function computeBillPeriod(
   const y = asOfDate.getUTCFullYear();
   const m = asOfDate.getUTCMonth();
   const d = asOfDate.getUTCDate();
-  let periodEnd: Date;
-  if (d >= billDayOfMonth) {
-    periodEnd = new Date(Date.UTC(y, m, billDayOfMonth));
-  } else {
-    periodEnd = new Date(Date.UTC(y, m - 1, billDayOfMonth));
-  }
-  // periodStart: one month prior to periodEnd, plus 1 day.
-  const psYear = periodEnd.getUTCFullYear();
-  const psMonth = periodEnd.getUTCMonth() - 1;
-  const psDay = periodEnd.getUTCDate() + 1;
-  let periodStart = new Date(Date.UTC(psYear, psMonth, psDay));
+
+  const thisMonth = billDayIn(y, m, billDayOfMonth);
+  const periodEnd =
+    d >= thisMonth ? new Date(Date.UTC(y, m, thisMonth)) : billDayDate(y, m - 1, billDayOfMonth);
+
+  /*
+   * periodStart: the day after the *previous* period ended.
+   *
+   * Not "periodEnd's day + 1, a month earlier", which is what this
+   * computed until 2026-10-30. For a 31st cycle that produced
+   * `Date.UTC(y, 1, 32)` — 4 March — so a March window began three days
+   * into March and the three days before it were billed by nobody.
+   * Deriving it from the previous clamped bill day cannot overflow,
+   * because every date it builds is one that exists.
+   */
+  const pe = { y: periodEnd.getUTCFullYear(), m: periodEnd.getUTCMonth() };
+  const previousEnd = billDayDate(pe.y, pe.m - 1, billDayOfMonth);
+  let periodStart = new Date(previousEnd.getTime() + 86_400_000);
 
   // Clamp to account creation date for partial-period accounts.
   const acctCreated = new Date(Date.UTC(
