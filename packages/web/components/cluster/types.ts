@@ -58,6 +58,45 @@ export interface QueueHealth {
   recentFailures: QueueFailure[];
 }
 
+/**
+ * One armed cron, as Redis holds it.
+ *
+ * Read from BullMQ's own scheduler records rather than from the patterns
+ * in the worker modules: the record is what fires, so a view built from
+ * the source would describe a deploy rather than a running cluster.
+ */
+export interface SchedulerView {
+  queue: string;
+  schedulerId: string;
+  jobName: string;
+  /** The cron expression, or null where the scheduler uses an interval. */
+  pattern: string | null;
+  everyMs: number | null;
+  timezone: string | null;
+  nextRunAt: string | null;
+  /** Its next run is in the past, so nothing promoted it. */
+  overdue: boolean;
+  /** Null means "nothing of its own in the retained 24h", not "never". */
+  lastRunAt: string | null;
+  iterations: number | null;
+  /** Armed in Redis, absent from the running build's registry. */
+  orphan: boolean;
+  workers: number | null;
+  paused: boolean;
+}
+
+export interface SchedulerReport {
+  /** False when no queue could be read — not "nothing is scheduled". */
+  reachable: boolean;
+  checkedAt: string;
+  schedulers: SchedulerView[];
+  /**
+   * Registered crons no queue has armed — the mirror of an orphan, and
+   * what a worker that never started leaves behind.
+   */
+  unarmed: string[];
+}
+
 /** One worker process, wherever in the deployment it runs. */
 export interface WorkerView {
   id: string;

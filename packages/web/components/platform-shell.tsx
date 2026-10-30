@@ -10,6 +10,7 @@ import {
   faGaugeHigh,
   faMicrochip,
   faRectangleList,
+  faClock,
 } from "@fortawesome/pro-solid-svg-icons";
 import { apiClient } from "@/lib/api-client";
 import { useBreakpoint } from "@/lib/use-media-query";
@@ -100,6 +101,20 @@ const PLATFORM_SECTIONS: NavSection[] = [
         icon: faListCheck,
         module: "platform",
         tooltip: "What is waiting, running, scheduled, failed and done",
+      },
+      {
+        /*
+         * Before Queues in the reading order would be truer — this
+         * answers "will anything fire" and Queues answers "what is
+         * waiting" — but Queues is where an operator goes first by
+         * habit, and reordering a menu to make a point costs more than
+         * it teaches.
+         */
+        href: "/platform/cluster/schedulers",
+        label: "Schedulers",
+        icon: faClock,
+        module: "platform",
+        tooltip: "Every armed cron: its cadence, next run, and whether anything will run it",
       },
       {
         /*

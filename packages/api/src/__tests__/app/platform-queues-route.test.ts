@@ -71,6 +71,32 @@ vi.mock("../../lib/schedulers.js", () => ({
   removeScheduler: (...args: unknown[]) => removeScheduler(...(args as [])),
 }));
 
+const getSchedulerReport = vi.fn(async () => ({
+  reachable: true,
+  checkedAt: "2026-10-30T10:00:00.000Z",
+  schedulers: [
+    {
+      queue: "suspension-transitions",
+      schedulerId: "suspension-cron",
+      jobName: "transition-suspensions",
+      pattern: "0 * * * *",
+      everyMs: null,
+      timezone: "UTC",
+      nextRunAt: "2026-10-30T11:00:00.000Z",
+      overdue: false,
+      lastRunAt: "2026-10-30T10:00:00.000Z",
+      iterations: 412,
+      orphan: false,
+      workers: 1,
+      paused: false,
+    },
+  ],
+  unarmed: ["audit-retention-cron"],
+}));
+vi.mock("../../services/scheduler-view.service.js", () => ({
+  getSchedulerReport: (...args: unknown[]) => getSchedulerReport(...(args as [])),
+}));
+
 let app: import("fastify").FastifyInstance;
 
 beforeEach(async () => {
@@ -86,6 +112,62 @@ beforeEach(async () => {
   } as never);
   app = await (await import("../../app.js")).buildApp();
   await app.ready();
+});
+
+/**
+ * What is meant to run, and when.
+ *
+ * Same authority as every other `/platform` route, and no verbs: the one
+ * write this page needs is removing an orphan, which is its own call
+ * below.
+ */
+describe("GET /api/v1/platform/schedulers", () => {
+  it("serves the schedulers to the platform operator", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/platform/schedulers",
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.schedulers[0]).toMatchObject({ schedulerId: "suspension-cron", pattern: "0 * * * *" });
+    // The crons nobody armed travel with the ones that are: a worker
+    // that never started is the failure this page exists for.
+    expect(body.unarmed).toEqual(["audit-retention-cron"]);
+  });
+
+  it("refuses a tenant admin, whatever they hold", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/platform/schedulers",
+      headers: { authorization: `Bearer ${createTestToken()}` },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(getSchedulerReport).not.toHaveBeenCalled();
+  });
+
+  it("answers 200 with reachable false when Redis is down", async () => {
+    // Not a 503, for the reason the queue summary is not: an error and
+    // "nothing is scheduled" must not look the same, and only one of
+    // them is reassuring.
+    getSchedulerReport.mockResolvedValueOnce({
+      reachable: false,
+      checkedAt: "2026-10-30T10:00:00.000Z",
+      schedulers: [],
+      unarmed: [],
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/platform/schedulers",
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).reachable).toBe(false);
+  });
 });
 
 /**

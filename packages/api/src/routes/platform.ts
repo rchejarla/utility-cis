@@ -18,6 +18,7 @@ import { ALL_QUEUE_NAMES, type QueueName } from "../lib/queues.js";
 import { setPerNodeLimit, setClusterLimit } from "../lib/queue-limits.js";
 import { pauseQueue, resumeQueue } from "../lib/queue-pause.js";
 import { removeScheduler, SCHEDULER_REGISTRY } from "../lib/schedulers.js";
+import { getSchedulerReport } from "../services/scheduler-view.service.js";
 import { logger } from "../lib/logger.js";
 import { getQueueJobs, QUEUE_JOB_STATES } from "../services/queue-jobs.service.js";
 import { actOnQueueJob, QUEUE_ACTIONS } from "../services/queue-actions.service.js";
@@ -219,6 +220,24 @@ export async function platformRoutes(app: FastifyInstance) {
       return reply.send(await stopWorkerProcess(id, actorOf(request)));
     },
   );
+
+  /*
+   * What is meant to run, and when.
+   *
+   * The queue summary answers "what is waiting"; this answers the
+   * question before it, which nothing in the product could: *is anything
+   * going to fire at all.* Read from `getJobSchedulers()` rather than
+   * from the patterns in the worker modules, because the record in Redis
+   * is what fires — a view built from the source literals would describe
+   * a deploy rather than a running cluster.
+   *
+   * 200 with `reachable: false` when Redis did not answer, never a 503.
+   * An error and "nothing is scheduled" must not look the same on
+   * screen, and only one of them is reassuring.
+   */
+  app.get("/api/v1/platform/schedulers", { config: { platform: true } }, async (_request, reply) => {
+    return reply.send(await getSchedulerReport());
+  });
 
   /*
    * Take out a cron no build knows about.

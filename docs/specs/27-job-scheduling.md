@@ -107,34 +107,62 @@ sold as complete.
 
 ## 1. Seeing the schedulers
 
-- **SCH-VIEW-1 (Must).** `GET /api/v1/platform/schedulers` returns every
+- **SCH-VIEW-1 (Must, built 2026-10-30).** `GET /api/v1/platform/schedulers` returns every
   registered scheduler: queue, scheduler id, cron pattern, timezone,
   next run, last run and whether the queue is paused. Platform actor
   only (`{ config: { platform: true } }`), like every other route under
   `/platform`.
-- **SCH-VIEW-2 (Must).** It reads `queue.getJobSchedulers()` rather than
+- **SCH-VIEW-2 (Must, built 2026-10-30).** It reads `queue.getJobSchedulers()` rather than
   a second copy of the patterns. `findOrphanedSchedulers` already calls
   it on every worker boot, so the registry in Redis is the one that decides
   what fires — a view built from the source literals would describe a
   deploy rather than a running cluster, and would agree with it only
   until someone changed a pattern and did not restart every node.
-- **SCH-VIEW-3 (Must).** A scheduler registered in Redis whose id is not
-  in `SCHEDULER_REGISTRY` is shown as an **orphan**, with the note that the
-  next worker boot will delete it. That is the one state where Redis and
-  the code disagree, and it is worth seeing rather than inferring from a
-  log line.
-- **SCH-VIEW-4 (Must).** A scheduler whose queue has **no worker
+- **SCH-VIEW-3 (Must, built 2026-10-30).** A scheduler registered in
+  Redis whose id is not in `SCHEDULER_REGISTRY` is shown as an
+  **orphan**, with the note that it keeps firing until removed and a
+  Remove on the row. That is the one state where Redis and the code
+  disagree, and since SCH-NODE-1 stopped worker boot deleting them, the
+  row is the only place anybody sees one outside a log line. *(This
+  requirement used to say the next worker boot would delete it. That was
+  true until 2026-10-30 and was the bug SCH-NODE-1 describes.)*
+  **Remove is offered only on an orphan**, because the route refuses a
+  registered id and a button whose only outcome is a 409 teaches the
+  reader to ignore buttons.
+- **SCH-VIEW-4 (Must, built 2026-10-30).** A scheduler whose queue has **no worker
   attached** is called out. The ordinary state of a dev stack is eight
   queues filling up with nothing attached, and the page that reports a
   healthy set of counts beside zero workers is the one that taught us
   the distinction matters.
-- **SCH-VIEW-5 (Should).** The page at `/platform/cluster/schedulers`,
-  in the Cluster section beside Queues, Workers and Jobs. It answers
-  "what is meant to run, and when", where Queues answers "what is
-  waiting".
-- **SCH-VIEW-6 (Should).** Each row links to that queue's jobs,
+- **SCH-VIEW-5 (Should, built 2026-10-30).** The page at
+  `/platform/cluster/schedulers`, in the Cluster section beside Queues,
+  Workers and Jobs. It answers "what is meant to run, and when", where
+  Queues answers "what is waiting". It sits *after* Queues in the menu
+  although it answers the earlier question: Queues is where an operator
+  goes by habit, and reordering a menu to make a point costs more than
+  it teaches.
+- **SCH-VIEW-6 (Should, built 2026-10-30).** Each row links to that queue's jobs,
   pre-filtered, so "the sweep is due in four minutes" and "here is what
-  it did last time" are one click apart.
+  it did last time" are one click apart. To `state=delayed`, which is
+  where an armed occurrence waits until it comes due.
+- **SCH-VIEW-7 (Must, built 2026-10-30).** A cron in `SCHEDULER_REGISTRY`
+  that **no queue has armed** is named, in its own panel rather than as a
+  column — an unarmed cron has no row to appear in.
+
+  This is the failure named in "What fires a cron" above and the one
+  nothing could report: registration happens only at worker boot, so a
+  deployment where no worker started has crons that were never armed,
+  and `WORKER_QUEUES` naming a subset does the same to the rest. The
+  queue then looks idle, which is exactly what an idle queue looks like.
+  It is the mirror of an orphan — recognised and armed nowhere, where an
+  orphan is armed and unrecognised.
+- **SCH-VIEW-8 (Should, built 2026-10-30).** A **last run** per
+  scheduler, from the newest completed job it produced
+  (`repeatJobKey`, falling back to the job name). Completed jobs are
+  retained 24h / 1000, so this is a window and not a history: the page
+  says "not in the last 24h" rather than "never", because absence here
+  is not evidence. `iterationCount` rides along as the lifetime count,
+  which survives the retention window when the timestamp does not.
 
 ## 2. Pausing and resuming
 
@@ -484,7 +512,7 @@ every node checks before taking a job.
 
 | Slice | Delivers | Unblocks |
 |---|---|---|
-| 1 | Scheduler view (SCH-VIEW-*) | Seeing what is armed and what is orphaned — read-only, no new writes |
+| 1 | Scheduler view (SCH-VIEW-*) | **Shipped 2026-10-30.** Seeing what is armed, what is orphaned and what nothing armed |
 | 2 | Pause, resume and the two limits (SCH-PAUSE-*, SCH-CONC-*) | **Shipped 2026-10-30**, except SCH-PAUSE-6 (the alert) |
 | 3 | Billing dispatcher (SCH-BILL-*) | Billing that happens on its own day |
 | 4 | Editable cadence for the two preferences (SCH-FIX-1, 2) | After spec 24 steps 2–3 only |
@@ -507,8 +535,15 @@ SCH-NODE-3 is already fixed. SCH-NODE-2 is resolved by §6, and within
 slice 2 the database claim (SCH-CONC-8) lands before `billing-runs`
 accepts a cluster limit above 1 (SCH-CONC-7).
 
-Slice 1 is worth shipping alone. Slice 3 is the one that answers the
-question this spec exists for, and it depends on nothing in 1 or 2.
+Slice 1 was worth shipping alone, and it was: the orphan report
+SCH-NODE-1 moved into a log line now has a screen, and SCH-VIEW-7 says
+what nothing else could — which crons are armed nowhere at all.
+
+**Slice 3 is what remains, and it is the one that answers the question
+this spec exists for.** It depends on nothing in 1 or 2, and on two
+decisions: open question 5 (`billingEnabled` per tenant or per cycle)
+changes what gets built, and SCH-BILL-9's nullable `created_by` is a
+hand-written migration.
 
 ## Open questions
 

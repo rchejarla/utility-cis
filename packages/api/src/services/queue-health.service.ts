@@ -137,7 +137,7 @@ function depthOf(counts: Record<string, number>): number {
 /** One row of Redis's `CLIENT LIST`, as BullMQ hands it over. */
 type RawWorker = { addr?: string; age?: string };
 
-type Attachment = Pick<QueueHealth, "workers" | "workerAgeSeconds" | "paused">;
+export type Attachment = Pick<QueueHealth, "workers" | "workerAgeSeconds" | "paused">;
 
 const UNKNOWN_ATTACHMENT: Attachment = {
   workers: null,
@@ -162,7 +162,7 @@ const UNKNOWN_ATTACHMENT: Attachment = {
  * that array would report a phantom worker, so an entry without an
  * `addr` means "not known".
  */
-async function attachmentOf(name: QueueName): Promise<Attachment> {
+export async function readQueueAttachment(name: QueueName): Promise<Attachment> {
   try {
     const queue = getQueue(name);
     const [clients, paused] = await Promise.all([
@@ -203,7 +203,7 @@ async function readQueue(name: QueueName): Promise<QueueHealth> {
      * first.
      */
     queue.getFailed(0, 19) as Promise<RawJob[]>,
-    attachmentOf(name),
+    readQueueAttachment(name),
     readQueueLimits(name),
     readPauseRecord(name),
   ]);
