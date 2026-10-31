@@ -3,6 +3,7 @@ import { assertRlsEnforced } from "./lib/prisma.js";
 import { logger } from "./lib/logger.js";
 import { queueRedisConnection } from "./lib/queue-redis.js";
 import { startHealthServer } from "./lib/health-server.js";
+import { startSchedulingMetrics } from "./services/scheduling-metrics.js";
 import {
   ALL_QUEUE_NAMES,
   closeAllQueues,
@@ -111,11 +112,20 @@ async function reportOrphanedSchedulers(activeQueues: readonly QueueName[]): Pro
 }
 
 let shuttingDown = false;
+/** Set once the metrics interval is running; see `main`. */
+let stopSchedulingMetrics: (() => void) | null = null;
 
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   logger.info({ component: "worker", signal }, "Shutdown initiated");
+
+  /*
+   * First, before the queues close. A tick that began against a
+   * half-closed queue would log a warning on the way out that reads like
+   * a fault rather than a shutdown.
+   */
+  stopSchedulingMetrics?.();
 
   // 60s drain timeout per worker — long enough for in-flight jobs to
   // finish, short enough that a stuck handler doesn't hold a deploy.
@@ -200,6 +210,19 @@ async function main(): Promise<void> {
   startHealthServer(config.WORKER_HTTP_PORT, {
     onShutdown: () => void shutdown("http"),
   });
+
+  /*
+   * The two scheduling alert conditions, published to the registry this
+   * health server exposes at `/metrics` (SCH-NODE-4, SCH-PAUSE-6).
+   *
+   * Here rather than in the API because this is the process with a
+   * `/metrics` route, and on a plain interval rather than as a queued
+   * job because the conditions include "nothing is draining the
+   * queues" — an evaluator that was itself a job would be subject to the
+   * failure it reports.
+   */
+  stopSchedulingMetrics = startSchedulingMetrics();
+
   await reportOrphanedSchedulers(activeQueues);
   await startDlqMonitor(activeQueues);
 

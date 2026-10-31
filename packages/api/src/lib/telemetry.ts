@@ -68,6 +68,41 @@ export const tenantAutomationGauge = new Gauge({
   registers: [registry],
 });
 
+/**
+ * The scheduling conditions worth paging on (SCH-NODE-4, SCH-PAUSE-6).
+ *
+ * 1 while a condition holds, and the series disappears when it clears —
+ * see `publishSchedulingAlerts`, which resets before each write. A gauge
+ * left at 1 keeps a resolved alert firing, which teaches an operator to
+ * ignore it.
+ *
+ * **The verdict, not the raw facts.** A rule rebuilt from a next-run
+ * timestamp, a worker count and a cron interval would re-derive in PromQL
+ * what `scheduling-alerts` already computes and tests, and would then be
+ * free to drift from it. The thresholds are derived rather than
+ * preferences — a scheduler's own interval, a tenant's own quiet window —
+ * so there is nothing here for an operator to tune.
+ *
+ * Set by a plain interval in the worker, deliberately **not** by a queued
+ * job: the conditions include "nothing is draining the queues", and an
+ * evaluator that was itself a job would be subject to the failure it
+ * reports.
+ */
+export const schedulingAlertGauge = new Gauge({
+  name: "scheduling_alert",
+  help: "1 while a scheduling alert condition holds (kind: unpromotedScheduler | mailHeldPaused).",
+  labelNames: ["kind", "queue", "scheduler_id"],
+  registers: [registry],
+});
+
+/** How long the condition has held. Absent where the age is unknowable. */
+export const schedulingAlertSecondsGauge = new Gauge({
+  name: "scheduling_alert_seconds",
+  help: "Seconds a scheduling alert condition has held, where that is known.",
+  labelNames: ["kind", "queue", "scheduler_id"],
+  registers: [registry],
+});
+
 export const tracer = trace.getTracer("utility-cis-worker", "1.0.0");
 
 /**

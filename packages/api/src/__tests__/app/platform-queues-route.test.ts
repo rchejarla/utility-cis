@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createTestToken, createPlatformToken } from "../setup.js";
+// Type-only: the module itself is mocked below, and the annotation is
+// erased, so importing it here pulls in nothing at runtime.
+import type { SchedulerReport } from "../../services/scheduler-view.service.js";
 
 /**
  * Who may read the queue summary, and that it is a read.
@@ -71,7 +74,14 @@ vi.mock("../../lib/schedulers.js", () => ({
   removeScheduler: (...args: unknown[]) => removeScheduler(...(args as [])),
 }));
 
-const getSchedulerReport = vi.fn(async () => ({
+/*
+ * Typed against the real contract rather than inferred from this
+ * default. Inference pinned `lastRunAt` to `string` and `iterations` to
+ * `number`, so a test overriding either with the null the type allows
+ * did not compile — and the annotation now also fails here if
+ * `SchedulerReport` itself drifts.
+ */
+const getSchedulerReport = vi.fn(async (): Promise<SchedulerReport> => ({
   reachable: true,
   checkedAt: "2026-10-30T10:00:00.000Z",
   schedulers: [

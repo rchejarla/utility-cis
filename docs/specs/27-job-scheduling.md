@@ -761,14 +761,65 @@ channel beyond a screen and an email a tenant opts into.
 
 ## Open questions
 
-1. **Where does an alert actually go?** The live question, now that
-   SCH-PAUSE-6, SCH-NODE-4 and SCH-BILL-11 all have detections. A tenant
-   can be emailed through the existing templates, which is what
-   SCH-BILL-11 does; the **platform** operator cannot be, because every
-   notification template is keyed `(utility_id, event_type)` and
-   addressed to a tenant's customer. Until that exists, both cluster
-   alerts are a line on a page somebody has to open — which is half of
-   what "not only a row on a page" asks for.
+1. ~~**Where does an alert actually go?**~~ **Answered 2026-10-31: a
+   metric.** `scheduling_alert{kind,queue,scheduler_id}` is 1 while a
+   condition holds, with `scheduling_alert_seconds` beside it, published
+   to the registry the worker already exposes at `/metrics`. A gauge is
+   the one carrier that works whatever this deployment's on-call surface
+   turns out to be — Prometheus, PagerDuty, a webhook — since all of them
+   consume a metric.
+
+   **The verdict is exported, not the raw facts.** A rule rebuilt from a
+   next-run timestamp, a worker count and a cron interval would
+   re-derive, in PromQL, what `scheduling-alerts` already computes and
+   tests — including reading a six-field cron — and would then be free to
+   drift from it. Nothing here is tunable because nothing here is a
+   preference: the thresholds are a scheduler's own interval and a
+   tenant's own quiet window.
+
+   **Published by a plain interval in the worker, not a queued job.** The
+   conditions include "nothing is draining the queues", so an evaluator
+   that was itself a job would be subject to the failure it reports. The
+   worker is also the process with a `/metrics` route — the API has none,
+   despite a comment in `lib/telemetry.ts` anticipating one.
+
+   That leaves a deployment with **no worker at all** publishing nothing,
+   which is the right division of labour: a dead process cannot report
+   its own death, and `up` / `absent()` on the worker target answers it.
+   What a *running* worker adds is the case staleness alerting cannot
+   see — `WORKER_QUEUES` naming a subset, so the process is healthy while
+   one queue has nothing attached.
+
+   **What would change this:** a deployment with no scrape at all — a
+   small utility running on-prem — where a gauge reaches nobody and email
+   is the only channel. See the rejected alternative below.
+
+   **Rejected: mail through the notification outbox.** It would need
+   `utility_id` nullable on `notification` and `notification_template`,
+   and that part is cheaper than it first looks — the policy is the
+   strict `utility_id = current_setting(...)` form, so a NULL row matches
+   nothing and tenant isolation survives untouched with no policy change;
+   nothing reads either column as a value, so there is no type ripple;
+   and tenant-less rows in an otherwise tenant-scoped table are an
+   established pattern here (seven reference tables, plus `cis_user`,
+   whose platform actor is the same shape). The real cost is a partial
+   unique index on `(event_type) WHERE utility_id IS NULL` — Prisma
+   cannot express it, so it joins the list `migrate dev` would propose
+   dropping — plus a second path through `sendNotification`, whose
+   template lookup is a composite `findUnique` that a NULL cannot match.
+
+   None of that is what killed it. **The delivery is circular:**
+   SCH-PAUSE-6's condition *is* a paused `notification-send`, and
+   SCH-NODE-4's includes having no worker — and a worker is what drains
+   the outbox. An alert about a stopped mail queue, queued in that
+   stopped mail queue, arrives once somebody has already fixed it. An
+   alerting channel must not depend on the subsystem it reports on.
+
+   Nullable `utility_id` stays the decided shape for the job next
+   door — platform-originated mail *to a tenant's people* that is not
+   about the mail path: trial expiry, a maintenance window, our own
+   invoice to them. Deferred until the first such message exists, because
+   today it has none; see [13 — Notifications](13-notifications.md).
 2. **Does a scheduled run notify anyone on success?** SCH-BILL-11 covers
    failure. A monthly "12,384 bills generated" is either reassurance or
    noise, and which it is depends on whether anyone is accountable for
