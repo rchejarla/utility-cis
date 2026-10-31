@@ -1133,6 +1133,154 @@ describe("one pass at a time over a run", () => {
 });
 
 /**
+ * The dispatcher, end to end.
+ *
+ * `billingDueAt` has twelve unit cases for the *decision*; nothing until
+ * now seeded a tenant, a due cycle and reads in the window and asserted
+ * that a run appears. That is the gap worth closing before a dispatcher
+ * starts runs unattended, because every part of it the unit tests do not
+ * reach is a part that talks to the database: the window the run covers,
+ * the reads gate, the unique constraint that makes a second dispatch a
+ * no-op, and `created_by` being null.
+ *
+ * The seed's R01 cycle bills on the 10th and this suite's reads sit in
+ * the window ending 2026-10-10, so a dispatch at that instant lines up
+ * with data that already exists rather than needing its own fixture.
+ */
+describe("dispatching a billing run", () => {
+  /** 10:00 UTC on R01's bill day; the tenant is UTC and its hour is 3. */
+  const ON_BILL_DAY = new Date("2026-10-10T10:00:00.000Z");
+
+  const dispatch = async (now: Date) => {
+    const dispatcher = await import("../../workers/billing-dispatcher.js");
+    const queues = await import("../../lib/queues.js");
+    vi.mocked(queues.enqueueSafely).mockClear();
+    const result = await dispatcher.dispatchBilling(now);
+    return { result, enqueue: vi.mocked(queues.enqueueSafely) };
+  };
+
+  /** Turn billing automation on for the seeded tenant. */
+  async function enableBilling(enabled = true) {
+    const { prisma } = prismaImports;
+    await prisma.schedulerConfig.upsert({
+      where: { utilityId_schedulerKey: { utilityId, schedulerKey: "billing" } },
+      create: { utilityId, schedulerKey: "billing", enabled, runHourLocal: 3 },
+      update: { enabled, runHourLocal: 3, lastRunAt: null },
+    });
+  }
+
+  it("does nothing for a tenant that has not switched billing on", () =>
+    seedAsPlatform(async () => {
+      // Billing is the one scheduler defaulting to off: a tenant that
+      // has been billing by hand must not discover automation by
+      // finding bills it did not ask for.
+      await enableBilling(false);
+
+      const { result } = await dispatch(ON_BILL_DAY);
+
+      expect(result.started).toBe(0);
+      const { prisma } = prismaImports;
+      expect(await prisma.billingRun.count({ where: { utilityId } })).toBe(0);
+    }), 300_000);
+
+  it("starts a run on the cycle's bill day with nobody behind it", () =>
+    seedAsPlatform(async () => {
+      await enableBilling();
+
+      const { result, enqueue } = await dispatch(ON_BILL_DAY);
+
+      expect(result.started).toBe(1);
+      expect(result.reasons.onSchedule).toBe(1);
+
+      const { prisma } = prismaImports;
+      const run = await prisma.billingRun.findFirstOrThrow({
+        where: { utilityId, billingCycleId: cycleId },
+      });
+      // The window is the cycle's own calendar, not "today".
+      expect(run.windowEnd.toISOString().slice(0, 10)).toBe(WINDOW_END);
+      // Null is the whole point of the nullable column: the schedule did
+      // this, and there is no user principal to name.
+      expect(run.createdBy).toBeNull();
+      expect(run.accountCount).toBeGreaterThan(0);
+
+      expect(enqueue).toHaveBeenCalledWith(
+        "billing-runs",
+        "process-billing-run",
+        expect.objectContaining({ runId: run.id, actorId: null }),
+        expect.objectContaining({ jobId: expect.stringContaining(run.id) }),
+      );
+    }), 300_000);
+
+  it("stamps the dispatch on the scheduler row, so a missed tick is tellable", () =>
+    seedAsPlatform(async () => {
+      await enableBilling();
+
+      await dispatch(ON_BILL_DAY);
+
+      const { prisma } = prismaImports;
+      const row = await prisma.schedulerConfig.findFirstOrThrow({
+        where: { utilityId, schedulerKey: "billing" },
+      });
+      expect(row.lastRunAt).not.toBeNull();
+    }), 300_000);
+
+  it("does not start a second run for a window already covered", () =>
+    seedAsPlatform(async () => {
+      /*
+       * Idempotency is the database's: `@@unique([utilityId,
+       * billingCycleId, windowEnd])` already means one run per window,
+       * so a second dispatch is *already done* rather than a conflict.
+       * Nothing about double-firing, a restart or two nodes can produce
+       * two sets of bills.
+       */
+      await enableBilling();
+
+      const first = await dispatch(ON_BILL_DAY);
+      const second = await dispatch(ON_BILL_DAY);
+
+      expect(first.result.started).toBe(1);
+      expect(second.result.started).toBe(0);
+
+      const { prisma } = prismaImports;
+      expect(await prisma.billingRun.count({ where: { utilityId } })).toBe(1);
+    }), 300_000);
+
+  it("refuses a cycle whose reads have not landed, and names the reason", () =>
+    seedAsPlatform(async () => {
+      /*
+       * SCH-BILL-5. Billing before the reads land produces a bill for
+       * zero usage and then a double one next period, so a scheduled run
+       * must refuse where a human would have noticed — and say so, since
+       * a window closing unbilled is the most expensive silence here.
+       *
+       * A far-future dispatch rather than deleting reads, which every
+       * other test in this file depends on. The seed's reads are
+       * relative to the clock — the last day of last month — so the only
+       * window assertable as empty *by construction* is one years ahead
+       * of whenever this runs.
+       *
+       * This test is also what found the dispatcher half-honouring its
+       * own clock: it failed at December *and* at 2031, because
+       * `resolveRunPlan` defaulted its as-of to `new Date()`, so moving
+       * the dispatch clock moved only the due-ness verdict and never the
+       * window. The gate kept reading the real October window, where the
+       * seeded reads are. The dispatcher now passes `now` down.
+       */
+      await enableBilling();
+
+      const { result } = await dispatch(new Date("2031-01-10T10:00:00.000Z"));
+
+      expect(result.started).toBe(0);
+      expect(result.skipped).toEqual([
+        expect.objectContaining({ reason: "readsIncomplete", cycleCode: "R01" }),
+      ]);
+
+      const { prisma } = prismaImports;
+      expect(await prisma.billingRun.count({ where: { utilityId } })).toBe(0);
+    }), 300_000);
+});
+
+/**
  * A failed run is not a dead end.
  *
  * `FAILED` is not a different state from `PARTIAL` — the status rule

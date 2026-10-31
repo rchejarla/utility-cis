@@ -222,7 +222,7 @@ export async function dispatchBilling(now: Date = new Date()): Promise<BillingDi
     }
 
     try {
-      await startOneCycle(cycle, verdict, result);
+      await startOneCycle(cycle, verdict, result, now);
     } catch (err) {
       /*
        * One tenant's failure must not end the sweep. The next cycle may
@@ -259,11 +259,29 @@ async function startOneCycle(
   cycle: { id: string; utilityId: string; cycleCode: string },
   verdict: DueVerdict,
   result: BillingDispatchResult,
+  /**
+   * The sweep's instant, passed down rather than re-read.
+   *
+   * `resolveRunPlan` takes this as its as-of and derives the window from
+   * it, defaulting to `new Date()`. Letting it default would mean `now`
+   * decided *whether* to bill while the real clock decided *which
+   * period* — the same value in production, but only by coincidence, and
+   * a parameter that governs half of what it looks like it governs is
+   * one a test can be fooled by. It also pins every cycle in one sweep
+   * to one instant instead of each to its own.
+   *
+   * Preview and create both get it, because they must agree: preview is
+   * what decides the reads gate, create is what writes the row.
+   */
+  now: Date,
 ): Promise<void> {
   const { utilityId } = cycle;
 
   await runAsTenant(utilityId, async () => {
-    const plan = await previewBillingRun(utilityId, { billingCycleId: cycle.id });
+    const plan = await previewBillingRun(utilityId, {
+      billingCycleId: cycle.id,
+      windowEnd: now,
+    });
 
     /*
      * Idempotency is the database's, not the dispatcher's.
@@ -310,6 +328,7 @@ async function startOneCycle(
      */
     const run = await createBillingRun(utilityId, null, DISPATCHER_ACTOR_NAME, {
       billingCycleId: cycle.id,
+      windowEnd: now,
     });
 
     await enqueueSafely(
