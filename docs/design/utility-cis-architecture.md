@@ -131,7 +131,67 @@ Why it went unfixed for so long: a local `Utility` row largely mirrors provider-
 
 Note the distinction that keeps this from blocking work. The provider owns a tenant's *existence and id*; it has no opinion on a tenant's *operational facts* — remittance address, billing phone, bill messages. Those are CIS-owned and live in `UtilityConfig.settings` namespaces (see `docs/superpowers/specs/2026-10-11-bill-production-design.md`). With the `Utility` root now in place, moving identity onto it stayed the contained change this predicted: one model, one foreign key per table, and no migration of scattered columns.
 
-### 3.4 Integration Contract: CIS ↔ SaaSLogic
+### 3.4 Caching
+
+Three things are cached today, on one Redis client, and the pattern is
+worth stating because a fourth will arrive and should not invent a
+fourth convention.
+
+`lib/cache-redis.ts` is the cache-only client — separate from
+`queue-redis.ts`, which BullMQ needs with different settings. Its
+`cacheGet` / `cacheSet` / `cacheDel` helpers **swallow per-command
+errors**, so a Redis outage degrades to a DB-only path rather than
+failing requests. Anything cached must therefore be reconstructible from
+the database; nothing may live only in the cache.
+
+**The house convention is short TTL *and* explicit invalidation**, not
+one or the other. RBAC caches permissions for 300s and modules for 600s,
+and calls `cacheDel` when a role or a utility's status changes. The TTL
+is not the mechanism — it is the backstop for an invalidation somebody
+forgets to write, which is how every cache eventually breaks.
+
+#### Two tiers, and they solve different problems
+
+| Tier | Where | Lifetime | Invalidation | What it is for |
+|---|---|---|---|---|
+| **Scoped** | the `runAsTenant` AsyncLocalStorage store | one request or job | none needed | collapsing N reads of a constant to 1, and giving one consistent view within a unit of work |
+| **Cross-request** | Redis, 300s + `cacheDel` | minutes | explicit, on every writer | avoiding a database read on a value that rarely changes |
+
+The scoped tier is the one that is usually missing and usually wanted.
+A 12,000-bill run reads the tenant's issuer identity and bill message
+once per bill — the same value, 12,000 times — and **its value is as
+much correctness as speed**: with no cache, or with a TTL cache that
+expires mid-run, an operator editing the remittance address at bill 400
+produces a run whose first 400 bills disagree with its last 11,600. A
+scoped read gives the run one answer. That is a property no
+cross-request cache can offer, so the two are not alternatives.
+
+#### Three rules
+
+1. **Cache by write frequency, not by table.** Two columns in one row can
+   belong in different tiers. `scheduler_config.enabled` changes almost
+   never; `scheduler_config.last_run_at` is written by every dispatch
+   tick, hourly per tenant per scheduler. Caching that row as a unit
+   means the hourly write busts an entry that exists for a read happening
+   thousands of times. Cache the stable fields; read the volatile ones.
+2. **Never cross-request-cache a value that is read by date.** Once a
+   value is effective-dated, a cache key without the date is a *wrong*
+   answer rather than a stale one. Effective-dated reads bypass the Redis
+   tier entirely.
+3. **One accessor owns both tiers.** A consumer asks for the value, never
+   for a cache. Where a value has many direct readers — tenant config has
+   eight — add the accessor before either tier, or there are eight places
+   to cache it and eight chances to do it differently.
+
+#### A caution about the scoped tier
+
+The scope is per tenant (`runAsTenant`), so a scoped map cannot leak
+across tenants — but a **process**-level map keyed by `utilityId` could,
+if anything ever read it outside a scope. Redis with the id in the key is
+safe on that count; a module-level `Map` is not, and should not be added
+without the same scrutiny §3.3 gives any cross-tenant read.
+
+### 3.5 Integration Contract: CIS ↔ SaaSLogic
 
 **Amount due (CIS → SaaSLogic):** when a `Bill` is issued, CIS registers its total with SaaSLogic so the customer has something payable, keyed on the Bill for idempotency. No usage, no rate configuration and no line detail is sent for pricing — CIS has already priced it.
 
@@ -141,13 +201,13 @@ This replaces the earlier "structured billing instruction per service agreement"
 
 **Both directions ride apptor-connect** (§3.6, decided 2026-10-21): the amount goes out over the `proxy` plane, the result comes back over the `events` plane. CIS holds no SaaSLogic credential.
 
-### 3.5 Event Bus: CIS ↔ ApptorFlow
+### 3.6 Event Bus: CIS ↔ ApptorFlow
 
 Every significant CIS state change emits a domain event. ApptorFlow subscribes and triggers workflows. Phase 1 uses internal EventEmitter.
 
 **Two caveats on this section, both unresolved.** The original "Phase 3+ will use Kafka or RabbitMQ" now sits against §3.6, which already has a `kafka` connector and an `events` plane — so the transport question is whether ApptorFlow is reached over the rail like every other external consumer, and no one has decided that. And the in-process EventEmitter is the example CLAUDE.md names as real over-engineering in this codebase: the audit pipeline built on it costs an extra transaction per audit and breaks atomicity. Before this is extended to a second consumer, the direct version — write the row in the same transaction — is the thing to beat.
 
-### 3.6 Integration rail: apptor-connect
+### 3.7 Integration rail: apptor-connect
 
 **Everything that leaves this process goes through apptor-connect** (`c:\development\apptor-connect`, HTTP surface `apptor-connect-service`, configured by `APPTOR_CONNECT_URL` + `APPTOR_CONNECT_API_KEY`). Email, SMS, postal mail, object storage, GIS, meter-reading systems, work-order systems and payment collection all arrive here rather than as vendor clients of their own.
 
