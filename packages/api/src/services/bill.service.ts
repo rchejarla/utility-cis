@@ -159,7 +159,7 @@ interface BillPeriod {
  * `month` may be out of range; `Date.UTC` normalises, so month -1 is
  * December of the previous year.
  */
-function billDayIn(year: number, month: number, billDayOfMonth: number): number {
+export function billDayIn(year: number, month: number, billDayOfMonth: number): number {
   // Day 0 of the next month is the last day of this one.
   const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
   return Math.min(billDayOfMonth, lastDay);

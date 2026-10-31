@@ -27,6 +27,10 @@ import {
 } from "./workers/delinquency-dispatcher.js";
 import { buildDelinquencyWorker } from "./workers/delinquency-worker.js";
 import {
+  buildBillingDispatcher,
+  registerBillingDispatchScheduler,
+} from "./workers/billing-dispatcher.js";
+import {
   buildSlaBreachWorker,
   registerSlaBreachScheduler,
 } from "./workers/sla-breach-worker.js";
@@ -230,6 +234,11 @@ async function main(): Promise<void> {
   if (activeQueues.includes(QUEUE_NAMES.imports)) {
     activeWorkers.push(buildImportWorker());
     await reclaimAndEnqueueZombies();
+  }
+
+  if (activeQueues.includes(QUEUE_NAMES.billingDispatch)) {
+    activeWorkers.push(buildBillingDispatcher());
+    await registerBillingDispatchScheduler();
   }
 
   if (activeQueues.includes(QUEUE_NAMES.billingRuns)) {
