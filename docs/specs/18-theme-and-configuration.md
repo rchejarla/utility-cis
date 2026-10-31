@@ -152,6 +152,74 @@ jsonb's real costs are *filtering* and *types*, never reading: pulling a
 key off a row already in hand is free. So anything never used in a `WHERE`
 is a fair candidate for jsonb.
 
+### Four cases, not two
+
+The column-or-jsonb rule answers where a value lives. A second question
+cuts across it, and the two together give four cases:
+
+> **Who names the key?** Code, or a tenant's own configuration.
+> **Does the value need a validity period?** Yes, or no.
+
+| | no dates | **dated** |
+|---|---|---|
+| **code names the key** | a column on `UtilityConfig`, or its `settings` jsonb | **its own table with `valid_from` / `valid_to`** — e.g. `utility_issuer` |
+| **configuration names the key** | — | `UtilityVariable` with `valid_from` / `valid_to` |
+
+The top-right cell is the one that is easy to get wrong, and it is why
+dating `settings.issuer` is more than adding two columns: **you cannot
+effective-date a key inside a jsonb bucket on a single-row table.** A
+dated value needs one row per version, so a dated member of `settings`
+has to leave `settings`. Putting it in `UtilityVariable` instead would
+be wrong for the other axis — the issuer's keys *are* code-known, and
+that table's whole character is that its keys are not.
+
+So `issuer` becomes its own typed, dated table rather than a jsonb
+namespace. Typed because every utility has exactly these fields and the
+code reads each by name; dated because a bill printed in 2024 shows
+2024's remittance address.
+
+### Effective dating: decided 2026-10-31, not built
+
+Two things get validity periods. Neither is built; this records the
+decision and what building it costs.
+
+**`UtilityVariable`** — `valid_from`, `valid_to`, unique on
+`[utility_id, name, valid_from]`.
+
+The case for it: `RateSchedule` is properly historied
+(`effectiveDate`, `version`, `supersedesId`), so a versioned formula
+currently reads an **unversioned** input. `BillSegmentLine` records
+`sourceComponentId`, so which component fired *is* recoverable — the gap
+is narrower than "the bill cannot be explained" — but the value that
+chose that branch is not. Nothing can say what the drought stage was in
+September once October has moved on.
+
+What it costs: every read takes an as-of date, and `TenantLoader` must
+pass **the bill period's end rather than `now`** — a rating run
+reproduces a past period, so `now` would be the wrong date even on the
+first run of a late bill. That is the change with the real risk in it: a
+reader that passes `now` by habit gets today's answer and nothing
+complains.
+
+**`issuer`** — moves out of `settings` into its own dated table, per the
+four cases above.
+
+The case for it is weaker than it looks and worth stating honestly,
+because `BillDocument` already stores the rendered PDF with a `sha256`,
+and the statement-snapshot migration says why: *"a reprint would then
+differ from the document the customer received, which is the one
+property `sha256` and byte-stable regeneration exist to protect."* So
+the first answer to "what did that bill say" is: fetch the bill. Dating
+adds three things the document does not — answering without a storage
+round trip, regenerating a byte-identical bill if a stored PDF is lost,
+and explaining the value somewhere other than a bill.
+
+**Both interact with caching**, and the rule is in §3.4 of the design
+doc: cache the value *with its validity window* and read by containment,
+so "now" hits and so does a reprint dated since the last change. The
+scoped tier is unaffected either way — within one run every read asks
+about the same date.
+
 The one case where the rule is not enough: a flag whose wrong default
 reaches the outside world. `scheduler_config.enabled` for billing defaults
 to false, and it is a column, because with jsonb a missing key is

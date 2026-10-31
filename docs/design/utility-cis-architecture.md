@@ -776,6 +776,32 @@ consequences worth knowing before touching this table:
   every tenant who has never changed a setting — for delinquency, all of
   them.
 
+### 4.21b UtilityVariable
+
+A named tenant-level value that **configuration** references.
+
+`(utility_id, name) → jsonb`, unique on `[utility_id, name]`, standard
+RLS. Six columns; see spec 18 for the full account.
+
+The distinction from `UtilityConfig` is **who names the key**.
+`UtilityConfig` holds settings code reads by name. Here the names come
+from outside this repository: a rate component can reference
+`drought_stage` or `flags.<anything>`, `manifest()` collects every
+variable key the active components mention, and `TenantLoader` fetches
+those names. Nothing declares `flags.summer_surcharge` — a configurator
+invented it writing a component. **So it has no list of valid keys and
+must not acquire one**; a list would defeat the mechanism.
+
+Called `utility_setting` until 2026-10-31. "Setting" is a synonym of
+"config", so the name carried none of that and had already aimed two
+designs at it wrongly — the AR ledger's fee-ranking order was earmarked
+for it, and the satellite list in §3 included it. Briefly
+`rate_variable`, which was worse: it named the table after its only
+current consumer, and `drought_stage` is an operating fact about the
+utility that rate components merely read.
+
+**Decided to be effective-dated; not built.** See spec 18.
+
 ### 4.22 SuspensionTypeDef
 
 Reference table for service-hold type codes. Replaces the former `SuspensionType` Prisma enum. A row with `utility_id IS NULL` is a global system code visible to every tenant; a row with a set `utility_id` is a tenant-scoped custom code.
