@@ -128,7 +128,7 @@ export interface QueueJobsResult {
  *
  * The same sentinel `WORKER_QUEUES` already uses, rather than a second
  * endpoint: "where are all the failures" is a question about the
- * deployment, and making an operator try eight queues in turn is not an
+ * deployment, and making an operator try nine queues in turn is not an
  * answer to it. Not a queue name, and `ALL_QUEUE_NAMES` is the guard
  * that keeps it from becoming one.
  */

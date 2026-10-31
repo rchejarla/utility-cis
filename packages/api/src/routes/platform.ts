@@ -179,7 +179,7 @@ export async function platformRoutes(app: FastifyInstance) {
    * Start and stop the worker process on this host.
    *
    * The worker is a separate Node process and `start_dev.bat` does not
-   * start it, so a dev stack normally has eight queues filling up with
+   * start it, so a dev stack normally has nine queues filling up with
    * nothing attached. `spawn` with a fixed argv and no shell: the only
    * operator input is the queue selection, which travels in the
    * environment after being checked against the registry.

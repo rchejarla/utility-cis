@@ -131,7 +131,7 @@ applied to the identity that sits above them.
 | DELETE | `/api/v1/platform/queues/:name/schedulers/:id` | Remove a cron no build knows about. Refuses an id the running build registers (409 `SCHEDULER_IS_REGISTERED`): worker boot no longer deletes orphans, so this is the only path that could stop a live cron |
 | GET | `/api/v1/platform/queues/:name/jobs` | The jobs in one queue and one state. `?state=` (required), `?limit=` (≤100), `?offset=` (≤1000). `name` may be the sentinel `all` |
 | POST | `/api/v1/platform/queues/:name/jobs/:id/:action` | `retry`, `promote` or `replay` on one job |
-| POST | `/api/v1/platform/workers/start` | `{ queues?: string[] }` — spawn a worker process on **this** node; empty means all eight queues |
+| POST | `/api/v1/platform/workers/start` | `{ queues?: string[] }` — spawn a worker process on **this** node; empty means all nine queues |
 | POST | `/api/v1/platform/workers/:id/stop` | Ask that worker to drain. By id, because the registry holds one record per worker and a deployment may have several |
 
 Shapes for all of these are in
@@ -215,9 +215,9 @@ Admin chrome is skipped for `/platform/*` (as it is for `/portal/*`,
 | Operators | `/platform/users` | The platform's own identities, `lastLoginAt`, deactivate and reactivate. Appointing opens in place rather than on its own page: an operator is an address and a name |
 | Cluster Overview | `/platform/cluster` | One verdict — unattended queues, paused queues, failures, "nothing is running at all" — and the recent failures with the tenant each belongs to. Nothing else |
 | Workers | `/platform/cluster/workers` | A table, one row per node, at every node count: node, worker id, pid, queues, uptime, attachment. Start is node-local (nothing portable starts a process on another machine, and the row says which node the request landed on rather than implying a choice); Stop is offered only where the pid is this node's to signal |
-| Queues | `/platform/cluster/queues` | The eight queues, counts only: workers, waiting, active, delayed, failed, DLQ, completed, paused. Each count links to the Jobs page with queue and state in the URL, and the page links out to Bull Board rather than putting it in the nav |
+| Queues | `/platform/cluster/queues` | The nine queues, counts only: workers, waiting, active, delayed, failed, DLQ, completed, paused. Each count links to the Jobs page with queue and state in the URL, and the page links out to Bull Board rather than putting it in the nav |
 | Schedulers | `/platform/cluster/schedulers` | Every armed cron with its cadence, next run, last run and lifetime count, and one sentence per row saying why it will not fire when it will not — paused queue, no worker, orphan, or overdue, in that precedence. Remove appears only on an orphan. A separate panel names crons nothing armed, which have no row to appear in. See [27 — Job Scheduling](27-job-scheduling.md) §1 |
-| Jobs | `/platform/cluster/jobs` | The jobs in one queue and one state, with queue and status as **URL filters** so the page is shareable and the browser's back button replaces a Close control. Queue filter includes **All queues**, which fans out across the eight and merges by "most recently relevant". Columns: queue, tenant, job, run-at, took, result, attempts. Per-job retry / promote / replay, and a plain-English reason where a job cannot run |
+| Jobs | `/platform/cluster/jobs` | The jobs in one queue and one state, with queue and status as **URL filters** so the page is shareable and the browser's back button replaces a Close control. Queue filter includes **All queues**, which fans out across the nine and merges by "most recently relevant". Columns: queue, tenant, job, run-at, took, result, attempts. Per-job retry / promote / replay, and a plain-English reason where a job cannot run |
 
 Three Cluster pages rather than one because they answer three questions:
 is anything wrong, who is doing the work, and what is the work. One page

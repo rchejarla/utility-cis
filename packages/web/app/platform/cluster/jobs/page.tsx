@@ -65,7 +65,7 @@ const JOBS_PER_PAGE = 20;
  * `WORKER_QUEUES` already uses.
  *
  * "Where are all the failures" is a question about the deployment, and
- * making the operator try eight queues in turn is not an answer. Merged
+ * making the operator try nine queues in turn is not an answer. Merged
  * newest-first, which is why each row then has to say which queue it
  * came from.
  */
@@ -429,7 +429,7 @@ function ClusterJobs() {
                *
                * It was FilterBar's clear item for a moment, which read
                * as cleared: the pill showed the bare label while the
-               * page was in fact filtering across all eight. A selection
+               * page was in fact filtering across all nine. A selection
                * the control does not show is worse than one it names, so
                * `all` is a value here and the built-in All is suppressed
                * — which is also what keeps it from appearing twice.

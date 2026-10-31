@@ -151,7 +151,7 @@ async function main(): Promise<void> {
 
   /*
    * The same gate the API has, and it matters more here: six of the
-   * eight queues sweep every tenant, so a worker on a database that is
+   * nine queues sweep every tenant, so a worker on a database that is
    * not enforcing isolation is the one process whose every job is
    * cross-tenant by design and cannot tell the difference.
    */

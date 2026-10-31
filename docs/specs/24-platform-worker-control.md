@@ -23,7 +23,7 @@ host-local control. Both were wrong, for reasons recorded under
 
 Workers are a separate Node process (`packages/api/src/worker.ts`).
 `start_dev.bat` deliberately does not start one, so the ordinary state of
-a development stack is eight queues filling up with nothing attached to
+a development stack is nine queues filling up with nothing attached to
 work them — and a queue with no worker has exactly the same counts as a
 healthy idle one. The console now reports attachment per queue, which
 makes the condition visible. This spec is about acting on it, including
@@ -34,7 +34,7 @@ when there is more than one API node.
 | | |
 |---|---|
 | `GET /api/v1/platform/queues` | counts, DLQ depth, recent failures with tenant names, per-queue worker attachment and age, `paused`, every connected API node, every registered worker, `thisNode`, `controllable` |
-| `POST /api/v1/platform/workers/start` | `{queues?}` — spawns one process on **this** node (empty means all eight) |
+| `POST /api/v1/platform/workers/start` | `{queues?}` — spawns one process on **this** node (empty means all nine) |
 | `POST /api/v1/platform/workers/:id/stop` | asks that worker to drain, by its own id |
 
 Start spawns `process.execPath --import tsx --env-file=.env src/worker.ts`
@@ -109,9 +109,9 @@ synchronous stretch past 30s can expire a job's own lock.
 
 ## Decisions reversed
 
-**One process per queue: dropped.** Six of the eight queues are
+**One process per queue: dropped.** Six of the nine queues are
 concurrency-1 cron sweeps that return in milliseconds; a process each
-means eight Prisma pools, eight ports (C1) and eight log files to run
+means nine Prisma pools, nine ports (C1) and nine log files to run
 nothing. And per-process concurrency (C2) means splitting does not divide
 work, it multiplies capacity against one database.
 

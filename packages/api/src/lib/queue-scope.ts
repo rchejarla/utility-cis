@@ -5,10 +5,10 @@ import { runAsPlatform, runAsTenant } from "./tenant-context.js";
 /**
  * Run a queue's work under the authority its tenancy implies.
  *
- * Six of the eight queues sweep every tenant in one pass, and under an
+ * Six of the nine queues sweep every tenant in one pass, and under an
  * enforcing policy a sweep with no tenant set reads nothing and reports
  * success: no rows flipped, no error raised, and nobody's SLA breached
- * overnight. The other two name a tenant in their payload and must be
+ * overnight. The other three name a tenant in their payload and must be
  * confined to it — a per-tenant job is exactly where cross-tenant
  * authority would be a defect rather than a feature.
  *
@@ -20,7 +20,7 @@ import { runAsPlatform, runAsTenant } from "./tenant-context.js";
  * builder that forgets to call this gets no scope at all, which is
  * fail-closed rather than quietly cross-tenant.
  *
- * Wrapping happens at the eight worker builders rather than inside each
+ * Wrapping happens at the nine worker builders rather than inside each
  * service, because a service is also reachable from a route, where the
  * request's own scope is the right one.
  */

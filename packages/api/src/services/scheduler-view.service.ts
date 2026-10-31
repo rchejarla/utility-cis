@@ -154,8 +154,8 @@ async function readQueue(name: QueueName): Promise<SchedulerView[] | null> {
   if (withKeys.length === 0) return [];
 
   // Only now, and only for a queue that has something armed: both of
-  // these are round trips, and seven of the eight queues hold one
-  // scheduler or none.
+  // these are round trips, and no queue holds more than one scheduler —
+  // most hold none.
   const [attachment, completed] = await Promise.all([
     readQueueAttachment(name),
     queue.getCompleted(0, COMPLETED_WINDOW).catch(() => [] as RawCompleted[]) as Promise<

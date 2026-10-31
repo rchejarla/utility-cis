@@ -17,7 +17,7 @@ vi.mock("../../lib/queues.js", async (importOriginal) => ({
  *
  * Task 7 of `docs/superpowers/plans/2026-10-24-rls-enforcement.md`.
  *
- * Six of the eight queues sweep every tenant in one pass. Under an
+ * Six of the nine queues sweep every tenant in one pass. Under an
  * enforcing policy a sweep with no tenant set reads *nothing* and
  * reports success — it flips no rows, logs no error, and the next
  * morning nobody's SLA has breached. That is the failure this task
@@ -105,7 +105,7 @@ afterAll(async () => {
 describe("a queue's authority", () => {
   /*
    * The scope is derived from `QUEUE_TENANCY` rather than applied by
-   * hand at each of the eight builders. That is the point: the plan
+   * hand at each of the nine builders. That is the point: the plan
    * asked for the declaration and the wrapping to agree, and deriving
    * one from the other is the only way they cannot drift. A seventh
    * all-tenants queue gets platform authority by being declared one.

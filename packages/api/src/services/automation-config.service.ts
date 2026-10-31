@@ -254,11 +254,6 @@ export async function markSchedulerRun(
   });
 }
 
-/** One scheduler's run hour, or null where the job has no time of day. */
-export function schedulerRunHour(config: AutomationConfig, scheduler: SchedulerKey): number | null {
-  return config.schedulers.find((s) => s.key === scheduler)?.runHourLocal ?? null;
-}
-
 /**
  * Determine whether the given UTC instant falls inside the tenant's
  * SMS quiet-hours window. Email is always eligible (quiet hours apply
