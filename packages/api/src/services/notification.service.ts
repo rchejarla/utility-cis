@@ -355,15 +355,44 @@ export async function sendNotification(
    * `manualSendSchema` is `.strict()` with no such field, so a request
    * cannot name its own destination.
    */
+  /**
+   * Whether `recipientId` names a customer of this tenant.
+   *
+   * `notification.customer_id` means "the customer this notification is
+   * about", and it carries a foreign key to `customer`. `recipientId`
+   * means "who to address", and the two are the same only for a
+   * customer notification: the import notifier addresses a member of
+   * staff and passes a `cis_user` id, which the insert used to write
+   * into that column unchecked. It raised no error only because no
+   * tenant has an active `import.complete` template, so this function
+   * returned at the template check and never reached the insert — the
+   * day one is created, every finished import fails on the key.
+   */
+  let recipientIsCustomer = false;
+
   if (!recipientEmail && !recipientPhone && input.recipientId) {
     const customer = await prisma.customer.findFirst({
       where: { id: input.recipientId, utilityId },
       select: { email: true, phone: true },
     });
     if (customer) {
+      recipientIsCustomer = true;
       recipientEmail = customer.email ?? null;
       recipientPhone = customer.phone ?? null;
     }
+  } else if (input.recipientId) {
+    /*
+     * An override supplied the address, so the lookup above was skipped
+     * and nothing yet knows what kind of id this is. One indexed read
+     * to find out, rather than trusting the caller: the alternative is
+     * a foreign-key violation at insert time, on the send rather than
+     * at the call site, in a worker.
+     */
+    const customer = await prisma.customer.findFirst({
+      where: { id: input.recipientId, utilityId },
+      select: { id: true },
+    });
+    recipientIsCustomer = customer !== null;
   }
 
   if (input.channel === "EMAIL" && !recipientEmail) {
@@ -399,7 +428,8 @@ export async function sendNotification(
       channel: input.channel,
       recipientEmail,
       recipientPhone,
-      customerId: input.recipientId || null,
+      // Only when the recipient is one — see `recipientIsCustomer`.
+      customerId: recipientIsCustomer ? input.recipientId : null,
       accountId: input.context.accountId || null,
       billId: input.billId ?? null,
       context: input.context as object,
