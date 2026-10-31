@@ -471,7 +471,7 @@ interface PendingWithTenantCfg {
   resolved_body: string;
   attempts: number;
   created_at: Date;
-  notification_send_enabled: boolean;
+  send_enabled: boolean;
   /** The tenant's settings JSON, for choosing a provider per row. */
   settings: unknown;
   /** The bill this delivers, and where its PDF lives — null for the rest. */
@@ -489,7 +489,8 @@ interface PendingWithTenantCfg {
  * BullMQ-worker entry point for notification-send. Replaces the
  * legacy in-process drain loop. Two added behaviors over the legacy:
  *
- *   1. Tenant gating: tenants with `notification_send_enabled = false`
+ *   1. Tenant gating: a `scheduler_config` row with `enabled = false`
+ *      for `notificationSend`; **no row means the declared default**, on
  *      have their notifications skipped (status stays PENDING). When
  *      they re-enable the toggle, the next tick picks the rows up.
  *   2. Quiet hours: for SMS rows only, if the tenant's local time
@@ -513,18 +514,38 @@ export async function processPendingNotificationsWithQuietHours(
     SELECT
       n.id, n.utility_id, n.channel, n.recipient_email, n.recipient_phone,
       n.resolved_subject, n.resolved_body, n.attempts, n.created_at,
-      tc.notification_send_enabled,
+      COALESCE(sc.enabled, true) AS send_enabled,
       tc.settings,
       n.bill_id,
       b.bill_number,
       d.storage_integration,
       d.storage_connection,
       d.object_key,
-      tc.timezone,
-      tc.notification_quiet_start,
-      tc.notification_quiet_end
+      COALESCE(tc.timezone, 'UTC') AS timezone,
+      COALESCE(tc.notification_quiet_start, '22:00') AS notification_quiet_start,
+      COALESCE(tc.notification_quiet_end, '07:00') AS notification_quiet_end
     FROM notification n
-    INNER JOIN utility_config tc ON tc.utility_id = n.utility_id
+    /*
+     * LEFT, not INNER, on both.
+     *
+     * The enable flag moved to scheduler_config on 2026-10-31 and a
+     * tenant with no row there takes the declared default, which for
+     * this scheduler is on — so an inner join would silently stop
+     * sending for every tenant who never touched the setting. The same
+     * was already true of utility_config: this was an INNER JOIN, so a
+     * utility with no config row — which is everything
+     * provision-tenant.ts creates — sent nothing and said nothing.
+     *
+     * (No backticks in here: this comment is inside a JS template
+     * literal, and a backtick would close it.)
+     *
+     * The quiet-hours and timezone fallbacks below match that table's
+     * column defaults, since the row they stand in for would have
+     * carried them.
+     */
+    LEFT JOIN utility_config tc ON tc.utility_id = n.utility_id
+    LEFT JOIN scheduler_config sc
+      ON sc.utility_id = n.utility_id AND sc.scheduler_key = 'notificationSend'
     LEFT JOIN bill b ON b.id = n.bill_id
     /*
      * The newest rendered document for the bill, where there is one.
@@ -540,7 +561,7 @@ export async function processPendingNotificationsWithQuietHours(
       LIMIT 1
     ) d ON n.bill_id IS NOT NULL
     WHERE n.status = 'PENDING'
-      AND tc.notification_send_enabled = true
+      AND COALESCE(sc.enabled, true) = true
     ORDER BY n.created_at ASC
     LIMIT ${BATCH_SIZE}
   `;

@@ -242,7 +242,12 @@ async function nextSegmentNumber(
 
 export async function createBillSegmentForServiceAgreement(
   utilityId: string,
-  actorId: string,
+  /**
+   * Null when a schedule did this rather than a person — the audit
+   * context has always taken `string | null` (the sweeps' convention),
+   * and the billing dispatcher is the first caller to use it.
+   */
+  actorId: string | null,
   actorName: string,
   saId: string,
   input: CreateBillSegmentInput,

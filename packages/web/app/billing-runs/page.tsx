@@ -117,6 +117,7 @@ export default function BillingRunsPage() {
                     </Link>
                     <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
                       {r.billingCycleCode}
+                      {r.scheduled && " · scheduled"}
                     </div>
                   </Td>
                   <Td style={{ fontSize: 12, color: "var(--text-muted)" }}>

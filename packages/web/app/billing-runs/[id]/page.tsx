@@ -515,7 +515,12 @@ export default function BillingRunDetailPage({ params }: { params: Promise<{ id:
       >
         {tab === "details" ? (
           <div style={CARD_PAD}>
-            <KV k="Started" v={new Date(run.createdAt).toLocaleString()} />
+            <KV
+              k="Started"
+              v={`${new Date(run.createdAt).toLocaleString()}${
+                run.scheduled ? " · by the schedule, not by a person" : ""
+              }`}
+            />
             <KV
               k="Last progress"
               v={run.lastProgressAt ? new Date(run.lastProgressAt).toLocaleString() : "—"}

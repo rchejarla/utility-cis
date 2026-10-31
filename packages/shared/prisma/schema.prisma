@@ -97,8 +97,9 @@ model Utility {
   userPreferences        UserPreference[]
   userRoles              UserRole[]
   utilityConfigs         UtilityConfig[]
+  schedulerConfigs       SchedulerConfig[]
   utilityModules         UtilityModule[]
-  utilitySettings        UtilitySetting[]
+  utilityVariables          UtilityVariable[]
   utilityThemes          UtilityTheme[]
   wqaValues              WqaValue[]
 
@@ -1375,17 +1376,11 @@ model UtilityConfig {
   requireHoldApproval Boolean  @default(false) @map("require_hold_approval")
   settings            Json     @default("{}") @map("settings")
 
-  // ─── Automation / scheduler config (per spec §3.4) ────────────────
-  // Per-tenant control of background-job behavior. Each scheduler
-  // gets its own boolean toggle; tenant-local timing inputs drive
-  // missed-tick recovery and DST-correct dispatch.
+  // ─── Automation settings that are not per-scheduler ───────────────
+  // Everything a tenant may configure about *one* background job moved
+  // to `SchedulerConfig` — a row per job rather than a column group per
+  // job. What remains is what belongs to the tenant as a whole.
   timezone                    String    @default("UTC") @map("timezone") @db.VarChar(64)
-  suspensionEnabled           Boolean   @default(true) @map("suspension_enabled")
-  notificationSendEnabled     Boolean   @default(true) @map("notification_send_enabled")
-  slaBreachSweepEnabled       Boolean   @default(true) @map("sla_breach_sweep_enabled")
-  delinquencyEnabled          Boolean   @default(true) @map("delinquency_enabled")
-  delinquencyRunHourLocal     Int       @default(3) @map("delinquency_run_hour_local") @db.SmallInt
-  delinquencyLastRunAt        DateTime? @map("delinquency_last_run_at") @db.Timestamptz
   notificationQuietStart      String    @default("22:00") @map("notification_quiet_start") @db.VarChar(5)
   notificationQuietEnd        String    @default("07:00") @map("notification_quiet_end") @db.VarChar(5)
   schedulerAuditRetentionDays Int       @default(365) @map("scheduler_audit_retention_days")
@@ -1395,6 +1390,44 @@ model UtilityConfig {
   updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   @@map("utility_config")
+}
+
+/// What a tenant may configure about one background job.
+///
+/// One row per (utility, scheduler). Replaces three repeated groups of
+/// columns on `UtilityConfig` — a one-to-many that had been modelled as
+/// repeated column groups, so adding a scheduler cost a migration.
+/// Adding one is now an INSERT, and onboarding a utility is rows.
+///
+/// **The storage rule:** a value every scheduler has is a column here; a
+/// value only one scheduler needs goes in `settings` and costs no
+/// migration. Values belonging to the tenant rather than to a job —
+/// timezone, quiet hours, audit retention — stay on `UtilityConfig`.
+///
+/// `schedulerKey` holds a `SchedulerKey` from
+/// `validators/automation-config.ts`. Keys are code, because each names
+/// a handler that must exist; values are configuration. A row whose key
+/// no build recognises is inert: nothing reads it.
+model SchedulerConfig {
+  id           String    @id @default(uuid()) @db.Uuid
+  utilityId    String    @map("utility_id") @db.Uuid
+  utility      Utility   @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  schedulerKey String    @map("scheduler_key") @db.VarChar(50)
+  enabled      Boolean   @default(true) @map("enabled")
+  /// Null where the job has no time of day — only delinquency and
+  /// billing have one.
+  runHourLocal Int?      @map("run_hour_local") @db.SmallInt
+  /// When the dispatcher last acted for this tenant and this job.
+  /// Distinguishes a tick that was missed from one never due.
+  lastRunAt    DateTime? @map("last_run_at") @db.Timestamptz
+  settings     Json      @default("{}") @map("settings")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  /// Two rows for one key would make "is billing enabled" a question
+  /// with two answers.
+  @@unique([utilityId, schedulerKey])
+  @@map("scheduler_config")
 }
 
 // Reference table for suspension (hold) types. Replaces the old
@@ -2190,10 +2223,58 @@ model RateServiceClass {
 /// resolve at evaluation time. Distinct from UtilityConfig (a single
 /// row of well-known scheduler/runtime fields) — this is an open-ended
 /// (utility_id, name) → JSON map.
-model UtilitySetting {
+/// A named tenant-level value that configuration references.
+///
+/// **What distinguishes it from `UtilityConfig` is who names the key.**
+/// `UtilityConfig` holds settings code reads by name; here the names
+/// come from outside this repository. Nothing declares
+/// `flags.summer_surcharge` — a configurator invented it writing a rate
+/// component.
+///
+/// Called `utility_setting` until 2026-10-31, where "setting" read as a
+/// synonym of "config" and carried none of that. Briefly called
+/// `rate_variable`, which was worse: it named the table after its only
+/// current consumer, and `drought_stage` is an operating fact about the
+/// utility — a city declares a drought stage — that rate components
+/// happen to consume. A bill message or a portal banner could read it
+/// tomorrow without becoming a rate.
+///
+/// The rate engine is how it is read today: a component can reference
+/// `drought_stage` or
+/// `flags.<anything>`, `manifest()` collects every variable key the
+/// active components mention, and `TenantLoader` fetches those names
+/// here. Nothing in this repository names `flags.summer_surcharge` — a
+/// configurator invented it writing a rate component.
+///
+/// So it has, and should keep, **no declaration of valid keys**: a list
+/// would defeat the mechanism. That is the opposite of
+/// `SchedulerConfig`, whose keys are code and whose values are
+/// configuration.
+///
+/// And it stays its own table rather than moving into
+/// `UtilityConfig.settings` for a measured reason: four of the eight
+/// readers of that row fetch it whole, three of them per bill or per
+/// notification, so an unbounded set of flags there would be dragged
+/// through every bill a run produces. Writing one key would also become
+/// `jsonb_set` (which Prisma cannot express) or a read-modify-write that
+/// loses concurrent updates, and `updated_at` per key would collapse
+/// into one timestamp for the whole row.
+///
+/// The old name had already sent two designs the wrong way — the AR
+/// ledger's fee-ranking order was earmarked for it, and the
+/// architecture doc filed it among the tenant-config satellites. A
+/// code-known tenant setting belongs in `UtilityConfig` or its
+/// `settings` jsonb; see spec 18 "Where a tenant setting goes".
+///
+/// A missing row is the zero case, deliberately: `drought_stage` absent
+/// reads as 0 ("no drought declared") and a missing flag as false, so a
+/// configurator can reference a variable before anyone has set it
+/// without breaking a rating run.
+model UtilityVariable {
   id        String   @id @default(uuid()) @db.Uuid
   utilityId String   @map("utility_id") @db.Uuid
   utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  /// Namespaced by convention — `drought_stage`, `flags.<name>`.
   name      String   @map("name") @db.VarChar(100)
   value     Json     @map("value")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -2201,7 +2282,7 @@ model UtilitySetting {
 
   @@unique([utilityId, name])
   @@index([utilityId])
-  @@map("utility_setting")
+  @@map("utility_variable")
 }
 
 /// Slice 4 task 5 — Winter Quarter Average (WQA) value backing the
@@ -2506,7 +2587,19 @@ model BillingRun {
   postingStartedAt DateTime?      @map("posting_started_at") @db.Timestamptz
   cancelRequested Boolean         @default(false) @map("cancel_requested")
   lastProgressAt DateTime?        @map("last_progress_at") @db.Timestamptz
-  createdBy      String           @map("created_by") @db.Uuid
+  /// Null means the schedule started this run, not a person.
+  ///
+  /// A scheduled run has no user principal. The audit trail carries the
+  /// sentence instead — `actorName` of "Billing dispatcher" and a
+  /// `source` of `scheduler:billing-dispatch` — which is the convention
+  /// the suspension sweep already writes. The alternative, a reserved
+  /// system uuid, would need a `cis_user` row that is not a user and
+  /// belongs to no tenant.
+  ///
+  /// The boot sweep resumes a run as `createdBy`, so it reads this too:
+  /// a reclaimed scheduled run stays scheduled rather than acquiring an
+  /// author.
+  createdBy      String?          @map("created_by") @db.Uuid
   createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
 
   cycle BillingCycle     @relation(fields: [billingCycleId], references: [id], onDelete: Restrict)

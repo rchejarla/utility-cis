@@ -305,7 +305,12 @@ export async function previewBillingRun(
  */
 export async function createBillingRun(
   utilityId: string,
-  actorId: string,
+  /**
+   * Null when the billing dispatcher started this run rather than a
+   * person. It lands in `billing_run.created_by`, which is nullable for
+   * exactly that, and in the audit context, which has always taken one.
+   */
+  actorId: string | null,
   actorName: string,
   args: CreateBillingRunArgs,
 ): Promise<BillingRunSummary> {

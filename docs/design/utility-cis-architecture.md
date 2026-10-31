@@ -103,7 +103,7 @@ replaced it follows, under "A `Utility` root now exists".*
 
 The tenant is a **JWT claim**. It arrives as `request.user.utilityId` (dev login defaults it to `00000000-0000-4000-8000-000000000001`), is pushed into `app.current_utility_id`, and RLS reads it from there. `CisUser.externalId` shows users mirror an external identity provider, so *which tenants exist* is owned outside this database and the claim is trusted on arrival.
 
-The four satellite models — `UtilityConfig`, `UtilityTheme`, `UtilityModule`, `UtilitySetting` — are keyed by `utility_id`. They were named `Tenant*` until 2026-10-18; "tenant" now names only the isolation mechanism (`withTenant()`, `tenantMiddleware`, `app.current_utility_id`, the `tenant_isolation` policies), while the entity itself is a Utility.
+The three satellite models — `UtilityConfig`, `UtilityTheme`, `UtilityModule` — are keyed by `utility_id`. (`UtilitySetting` was listed here until 2026-10-31 and did not belong: it is the rate engine's variable store, renamed `UtilityVariable`. The name had it filed among the tenant-config tables by this very sentence.) They were named `Tenant*` until 2026-10-18; "tenant" now names only the isolation mechanism (`withTenant()`, `tenantMiddleware`, `app.current_utility_id`, the `tenant_isolation` policies), while the entity itself is a Utility.
 
 **A `Utility` root now exists** (2026-10-18, build-order step 2 of
 `docs/superpowers/specs/2026-10-17-tenancy-and-platform-admin-design.md`). It carries id, display
@@ -131,7 +131,137 @@ Why it went unfixed for so long: a local `Utility` row largely mirrors provider-
 
 Note the distinction that keeps this from blocking work. The provider owns a tenant's *existence and id*; it has no opinion on a tenant's *operational facts* — remittance address, billing phone, bill messages. Those are CIS-owned and live in `UtilityConfig.settings` namespaces (see `docs/superpowers/specs/2026-10-11-bill-production-design.md`). With the `Utility` root now in place, moving identity onto it stayed the contained change this predicted: one model, one foreign key per table, and no migration of scattered columns.
 
-### 3.4 Integration Contract: CIS ↔ SaaSLogic
+### 3.4 Caching
+
+Three things are cached today, on one Redis client, and the pattern is
+worth stating because a fourth will arrive and should not invent a
+fourth convention.
+
+`lib/cache-redis.ts` is the cache-only client — separate from
+`queue-redis.ts`, which BullMQ needs with different settings. Its
+`cacheGet` / `cacheSet` / `cacheDel` helpers **swallow per-command
+errors**, so a Redis outage degrades to a DB-only path rather than
+failing requests. Anything cached must therefore be reconstructible from
+the database; nothing may live only in the cache.
+
+**The house convention is short TTL *and* explicit invalidation**, not
+one or the other. RBAC caches permissions for 300s and modules for 600s,
+and calls `cacheDel` when a role or a utility's status changes. The TTL
+is not the mechanism — it is the backstop for an invalidation somebody
+forgets to write, which is how every cache eventually breaks.
+
+#### Two tiers, and only one of them is the design
+
+| Tier | Where | Status | What it is for |
+|---|---|---|---|
+| **Scoped** | the `runAsTenant` AsyncLocalStorage store | **the design** — build this | collapsing N reads of a constant to 1, and giving one consistent view within a unit of work |
+| **Cross-request** | Redis, 300s + `cacheDel` | **conditional — do not build on sight** | avoiding a database read on a value that rarely changes |
+
+**The Redis tier needs a measurement first, and that is a correction to
+an earlier version of this section** which presented it as settled. The
+uncached read it replaces is a primary-key lookup on a one-row table.
+The scoped tier already removes the case anybody has named — a
+twelve-thousand-bill run reading the same value twice per bill — so
+what Redis adds is saving that lookup *outside* a run, and it costs an
+invalidation path on every writer, a second query to populate the
+validity window (below), the containment logic and a TTL backstop.
+
+Build it when a profile shows config reads are a measurable share of a
+request, or when a cross-tenant sweep reads config per tenant often
+enough to matter. RBAC earns its Redis cache because permissions are
+read many times per request; configuration is read a handful of times,
+which is a different case and should be measured rather than assumed.
+The rules below are how to do it correctly on the day it is justified —
+not an argument that it is.
+
+The scoped tier is the one that is usually missing and usually wanted.
+A 12,000-bill run reads the tenant's issuer identity and bill message
+once per bill — the same value, 12,000 times — and **its value is as
+much correctness as speed**: with no cache, or with a TTL cache that
+expires mid-run, an operator editing the remittance address at bill 400
+produces a run whose first 400 bills disagree with its last 11,600. A
+scoped read gives the run one answer. That is a property no
+cross-request cache can offer, so the two are not alternatives.
+
+#### Four rules
+
+1. **Cache by write frequency, not by table.** Two columns in one row can
+   belong in different tiers. `scheduler_config.enabled` changes almost
+   never; `scheduler_config.last_run_at` is written by every dispatch
+   tick, hourly per tenant per scheduler. Caching that row as a unit
+   means the hourly write busts an entry that exists for a read happening
+   thousands of times. Cache the stable fields; read the volatile ones.
+2. **Cache an effective-dated value with its validity window, and read
+   it by containment.** The entry holds the window the value applies to,
+   not just the value:
+
+   ```
+   issuer:<utilityId> → { value, validFrom, validTo }   // validTo null = still current
+   ```
+
+   Every read — dated or not — is then one check:
+
+   ```
+   validFrom <= askedFor < validTo   → hit
+   otherwise                         → database, repopulate
+   ```
+
+   The naive alternatives both fail. Putting the date in the key makes
+   nearly every key unique and the cache stops paying for itself.
+   Leaving the date out of a key that answers a dated question returns a
+   **wrong** answer rather than a stale one. And caching only the
+   current value with no upper bound is the subtle one: a read dated
+   after a change nobody noticed satisfies `askedFor >= validFrom` and
+   hits, while a newer version actually applies. **The upper bound is
+   what makes the check safe, not an optimisation.**
+
+   Two things fall out of it:
+
+   - **Historical reads since the last change hit.** A bill reprinted
+     from last month is inside the current window, so the common reprint
+     is a hit rather than a database read.
+   - **A future-dated handover is self-correcting, for a change the
+     cache already knows about.** When a cached entry's `validTo`
+     arrives, "now" stops satisfying the check, the read falls through
+     and repopulates. No clock and no sweep.
+
+     **It does not cover a change the cache never heard of.** If a new
+     version is written and the invalidation is missed, the stale entry
+     still says `validTo: null` and answers confidently until the TTL
+     expires it. So the TTL is not redundant here either — an earlier
+     version of this section said "no TTL is required for correctness",
+     which was wrong: the window handles *time passing*, the TTL handles
+     *a write nobody told the cache about*, and both failures are real.
+
+   Two costs to know before choosing this shape. Populating the window
+   needs "the row effective at D **and** where the next one starts" — a
+   window function or a second query, not a key lookup, so the miss is
+   dearer than it looks. And the hit-rate claim is narrower than it
+   first appears: a historical read hits only if its date falls in the
+   *current* window, so the honest statement is "reprints since the last
+   change hit" — usually most of them, because these values change
+   rarely, but not "recent reprints hit".
+3. **A scoped entry is keyed by everything the answer depends on too** —
+   including the as-of date, once values are dated. Within a *generation*
+   run every read asks about the same date, so that is one entry; a bulk
+   reprint asks about each bill's own issue date, and a scope keyed by
+   tenant alone would hand the second bill the first one's answer. The
+   rule is the same one as for the Redis key, and the scoped tier does
+   not escape it — only the invalidation problem.
+4. **One accessor owns both tiers.** A consumer asks for the value, never
+   for a cache. Where a value has many direct readers — tenant config has
+   eight — add the accessor before either tier, or there are eight places
+   to cache it and eight chances to do it differently.
+
+#### A caution about the scoped tier
+
+The scope is per tenant (`runAsTenant`), so a scoped map cannot leak
+across tenants — but a **process**-level map keyed by `utilityId` could,
+if anything ever read it outside a scope. Redis with the id in the key is
+safe on that count; a module-level `Map` is not, and should not be added
+without the same scrutiny §3.3 gives any cross-tenant read.
+
+### 3.5 Integration Contract: CIS ↔ SaaSLogic
 
 **Amount due (CIS → SaaSLogic):** when a `Bill` is issued, CIS registers its total with SaaSLogic so the customer has something payable, keyed on the Bill for idempotency. No usage, no rate configuration and no line detail is sent for pricing — CIS has already priced it.
 
@@ -141,13 +271,13 @@ This replaces the earlier "structured billing instruction per service agreement"
 
 **Both directions ride apptor-connect** (§3.6, decided 2026-10-21): the amount goes out over the `proxy` plane, the result comes back over the `events` plane. CIS holds no SaaSLogic credential.
 
-### 3.5 Event Bus: CIS ↔ ApptorFlow
+### 3.6 Event Bus: CIS ↔ ApptorFlow
 
 Every significant CIS state change emits a domain event. ApptorFlow subscribes and triggers workflows. Phase 1 uses internal EventEmitter.
 
 **Two caveats on this section, both unresolved.** The original "Phase 3+ will use Kafka or RabbitMQ" now sits against §3.6, which already has a `kafka` connector and an `events` plane — so the transport question is whether ApptorFlow is reached over the rail like every other external consumer, and no one has decided that. And the in-process EventEmitter is the example CLAUDE.md names as real over-engineering in this codebase: the audit pipeline built on it costs an extra transaction per audit and breaks atomicity. Before this is extended to a second consumer, the direct version — write the row in the same transaction — is the thing to beat.
 
-### 3.6 Integration rail: apptor-connect
+### 3.7 Integration rail: apptor-connect
 
 **Everything that leaves this process goes through apptor-connect** (`c:\development\apptor-connect`, HTTP surface `apptor-connect-service`, configured by `APPTOR_CONNECT_URL` + `APPTOR_CONNECT_API_KEY`). Email, SMS, postal mail, object storage, GIS, meter-reading systems, work-order systems and payment collection all arrive here rather than as vendor clients of their own.
 
@@ -591,6 +721,94 @@ Per-tenant configuration flags. One row per utility, created lazily the first ti
 **Unique:** [utility_id]
 **RLS:** standard `utility_id = current_setting('app.current_utility_id')::uuid`.
 
+**Where a tenant setting goes** (settled 2026-10-31): a value every
+utility has is a column; a value only some have goes in `settings` jsonb.
+Where that is arguable, the tiebreaker is mechanical — a column if it is
+filtered on in SQL, jsonb if it is only read off a row already in hand.
+jsonb costs filtering and types, never reading.
+
+Per-scheduler settings used to live here as three repeated groups of the
+same columns, one group per background job. They are rows in
+`SchedulerConfig` now; see §4.21a.
+
+### 4.21a SchedulerConfig
+
+What a tenant may configure about **one** background job. One row per
+(utility, scheduler).
+
+A one-to-many that had been modelled as repeated column groups on
+`UtilityConfig`: an enable flag, a run hour and a last-run timestamp, once
+per job. Adding billing's group cost a migration and seven files, which is
+the tax a repeated column group charges. Adding a scheduler is now a row.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | FK → `utility(id)` RESTRICT |
+| scheduler_key | VARCHAR(50) | A `SchedulerKey` from `validators/automation-config.ts` |
+| enabled | BOOLEAN | Default true. A missing row means the scheduler's declared default |
+| run_hour_local | SMALLINT | Null where the job has no time of day |
+| last_run_at | TIMESTAMPTZ | Written by a dispatcher; tells a missed tick from one not yet due |
+| settings | JSONB | Knobs only this job needs — no migration to add one |
+
+**Unique:** [utility_id, scheduler_key]
+**RLS:** standard one-argument policy. With no tenant set it raises rather
+than returning nothing, because "no rows" would read as "nothing is
+enabled" and a dispatcher that believes that bills nobody and reports
+success.
+
+**Keys are code; values are configuration.** Each key names a handler that
+must exist, so the set lives in `SCHEDULER_DEFINITIONS` — one entry per
+job with its label, help text, whether it has a run hour, and its default.
+The settings page renders from that list, so a scheduler added there gets
+its controls without the page being touched. A row whose key no build
+recognises is inert.
+
+**No `cron_pattern` column**, deliberately. Every scheduler has a cadence
+so the storage rule would admit one, but three of the five patterns
+resolve a tenant-facing hour and a slower cadence makes that hour silently
+unreachable — no job, no error. Cadence stays in code until spec 24's
+signed command path exists; see `docs/specs/27-job-scheduling.md` §4.
+
+**A missing row means the declared default**, which has three
+consequences worth knowing before touching this table:
+
+- A scheduler added in code appears for every existing tenant with no
+  backfill; its row materialises on the first save.
+- Therefore **anything added from now on must default to disabled** — a
+  new job defaulting to on would start work for every tenant the day it
+  shipped. The three defaulting to true predate the table.
+- A cross-tenant read cannot filter on rows alone. `tenantsForScheduler`
+  reads tenants and rows and joins in memory, because filtering would skip
+  every tenant who has never changed a setting — for delinquency, all of
+  them.
+
+### 4.21b UtilityVariable
+
+A named tenant-level value that **configuration** references.
+
+`(utility_id, name) → jsonb`, unique on `[utility_id, name]`, standard
+RLS. Six columns; see spec 18 for the full account.
+
+The distinction from `UtilityConfig` is **who names the key**.
+`UtilityConfig` holds settings code reads by name. Here the names come
+from outside this repository: a rate component can reference
+`drought_stage` or `flags.<anything>`, `manifest()` collects every
+variable key the active components mention, and `TenantLoader` fetches
+those names. Nothing declares `flags.summer_surcharge` — a configurator
+invented it writing a component. **So it has no list of valid keys and
+must not acquire one**; a list would defeat the mechanism.
+
+Called `utility_setting` until 2026-10-31. "Setting" is a synonym of
+"config", so the name carried none of that and had already aimed two
+designs at it wrongly — the AR ledger's fee-ranking order was earmarked
+for it, and the satellite list in §3 included it. Briefly
+`rate_variable`, which was worse: it named the table after its only
+current consumer, and `drought_stage` is an operating fact about the
+utility that rate components merely read.
+
+**Decided to be effective-dated; not built.** See spec 18.
+
 ### 4.22 SuspensionTypeDef
 
 Reference table for service-hold type codes. Replaces the former `SuspensionType` Prisma enum. A row with `utility_id IS NULL` is a global system code visible to every tenant; a row with a set `utility_id` is a tenant-scoped custom code.
@@ -828,7 +1046,7 @@ A corollary, worth stating because it is easy to get backwards: the audit row re
 
 **Background schedulers:** Long-running, time-driven work runs in-process via `setInterval` from `packages/api/src/schedulers/*`. Schedulers register themselves from `buildApp` after the Fastify instance is constructed, gated by the `DISABLE_SCHEDULERS` environment variable so tests and worker processes can opt out of side effects. Currently one scheduler exists — the suspension scheduler — which ticks hourly and flips `PENDING → ACTIVE` and `ACTIVE → COMPLETED` on ServiceSuspensions whose dates have arrived, respecting the per-tenant approval gate (see spec 12). **Single-instance only.** Running two API processes will transition the same hold twice and emit duplicate audit events. When the deployment moves to multi-instance, replace the in-process scheduler with BullMQ + Redis-backed job locking; the transition helper (`transitionSuspensions(utilityId, now)`) is already factored so the scheduler wrapper can be swapped without touching service logic.
 
-**Queue-backed work:** Work too long for a request runs on BullMQ over the same Redis as the RBAC and settings caches. Eight queues are registered in `packages/api/src/lib/queues.ts` with their concurrency and retry policy declared in one place: `suspension-transitions`, `notification-send`, `sla-breach-sweep`, `delinquency-dispatch`, `delinquency-tenant`, `audit-retention`, `imports` and `billing-runs`. Enqueueing goes through `enqueueSafely`, which logs and swallows a Redis failure rather than failing the request that caused it — the row is already committed, and a boot sweep or a re-enqueue can take it later.
+**Queue-backed work:** Work too long for a request runs on BullMQ over the same Redis as the RBAC and settings caches. Nine queues are registered in `packages/api/src/lib/queues.ts` with their concurrency and retry policy declared in one place: `suspension-transitions`, `notification-send`, `sla-breach-sweep`, `delinquency-dispatch`, `billing-dispatch`, `delinquency-tenant`, `audit-retention`, `imports` and `billing-runs`. Enqueueing goes through `enqueueSafely`, which logs and swallows a Redis failure rather than failing the request that caused it — the row is already committed, and a boot sweep or a re-enqueue can take it later.
 
 Two of those queues carry a **progress row**, not just a job: `import_batch` / `import_row` and `billing_run` / `billing_run_item`. Both process per item in its own transaction, resume by filtering on item status rather than retrying the job (`attempts: 1` — an auto-retry would redo work already committed), honour a `cancel_requested` flag checked between items, and are reclaimed on boot if a replica died holding one. The two are deliberately **copies, not an abstraction**: they share a shape, not a reason, and a common "async batch job" base would make a change to imports a change to billing. Billing runs are concurrency 1 — a run is already a loop over thousands of accounts through the rate engine, so two at once would halve neither's wall clock. See spec 09 for what a run does.
 
@@ -923,7 +1141,7 @@ Eight pages behind the platform actor, outside the tenant permission model.
 | Operators | `/platform/users` | The platform's own identities, `lastLoginAt`, deactivate / reactivate; appointing opens in place |
 | Cluster Overview | `/platform/cluster` | One verdict — unattended queues, paused queues, failures — and the recent failures with the tenant each belongs to |
 | Workers | `/platform/cluster/workers` | One row per API node: worker id, pid, queues, uptime, attachment. Start is node-local; Stop only where the pid is this node's to signal |
-| Queues | `/platform/cluster/queues` | The eight queues, counts only; each count links to Jobs with queue and state in the URL |
+| Queues | `/platform/cluster/queues` | The nine queues, counts only; each count links to Jobs with queue and state in the URL |
 | Jobs | `/platform/cluster/jobs` | Jobs in one queue and one state, queue and status as URL filters (so the page is shareable and Back replaces a Close control), **All queues** fan-out merged by "most recently relevant", per-job retry / promote / replay, and a plain-English reason where a job cannot run |
 
 ### 6.3 Shared UI Components (Phase 2)
@@ -1271,7 +1489,7 @@ Special assessments: Assessment districts, parcel-based assessments, installment
 
 ### Platform and tenancy (shipped, outside the numbered phases)
 
-This belongs to no phase because it is about the deployment rather than about what a utility does. A tenant is now a **row** — `Utility`, with every `utility_id` a foreign key to it under `ON DELETE RESTRICT` — rather than a UUID in a column with no row, no name and no status. Above tenants sits one identity, the **platform actor**: a `CisUser` with a null `utility_id`, holding no role, whose routes are gated on being that row rather than on a permission. Its console is eight pages at `/platform/*` in two sections — tenant lifecycle (provision with a dry-run preview, modules, roles from above the tenant, suspend, operators) and the cluster (nodes, worker processes, the eight queues, and the jobs behind a count with retry, promote and replay). Suspension is enforced in the same authorization pass that checks enabled modules, so a token minted before it stops working rather than running out its lifetime.
+This belongs to no phase because it is about the deployment rather than about what a utility does. A tenant is now a **row** — `Utility`, with every `utility_id` a foreign key to it under `ON DELETE RESTRICT` — rather than a UUID in a column with no row, no name and no status. Above tenants sits one identity, the **platform actor**: a `CisUser` with a null `utility_id`, holding no role, whose routes are gated on being that row rather than on a permission. Its console is eight pages at `/platform/*` in two sections — tenant lifecycle (provision with a dry-run preview, modules, roles from above the tenant, suspend, operators) and the cluster (nodes, worker processes, the nine queues, and the jobs behind a count with retry, promote and replay). Suspension is enforced in the same authorization pass that checks enabled modules, so a token minted before it stops working rather than running out its lifetime.
 
 Three things are deliberately *not* in it: editing global reference rows (a write to a `utility_id = NULL` row changes behaviour for every tenant at once, so that is a migration or a tenant override), pausing a queue (a decision about a queue, not a job), and purging a tenant. Still outstanding: worker control across nodes (spec 24, steps 2–4), `TENANCY_MODE` as boot configuration, and nullable `audit_log.utility_id` / `entity_id` so host-level actions can be audited at all rather than only logged. See `docs/specs/25-platform-console.md` and `docs/specs/24-platform-worker-control.md`.
 

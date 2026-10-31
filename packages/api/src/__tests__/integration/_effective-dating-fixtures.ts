@@ -366,6 +366,10 @@ const RESET_TABLES = [
   "commodity",
   "utility_module",
   "utility_config",
+  // References `utility`, not `utility_config`, so truncating the
+  // config row does not cascade to it — listing the roots is not enough
+  // for this one.
+  "scheduler_config",
 ].join(", ");
 
 /** Postgres `lock_not_available` — what `lock_timeout` raises. */

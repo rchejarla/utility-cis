@@ -5,6 +5,7 @@ import { assessFee } from "./ar/fee.service.js";
 import { reverseEntry } from "./ar/reversal.service.js";
 import { chargeableDebits, tierFeeAmount } from "./delinquency-fee.js";
 import type { TxClient } from "./ar/posting.service.js";
+import { markSchedulerRun } from "./automation-config.service.js";
 
 /** A tier that charges, with the fee columns proven non-null by the caller. */
 interface ChargingRule {
@@ -550,10 +551,10 @@ export async function evaluateDelinquencyForTenant(
   now: Date = new Date(),
 ): Promise<{ accountsEvaluated: number; actionsCreated: number }> {
   const result = await evaluateAll(utilityId);
-  await prisma.utilityConfig.update({
-    where: { utilityId },
-    data: { delinquencyLastRunAt: now },
-  });
+  // One row per scheduler per tenant since 2026-10-31. An upsert, since
+  // a tenant inherits the catalogue default until something writes a row
+  // and a dispatch is often the first thing that does.
+  await markSchedulerRun(utilityId, "delinquency", now);
   return result;
 }
 

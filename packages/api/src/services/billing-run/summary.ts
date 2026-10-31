@@ -50,6 +50,18 @@ export interface BillingRunSummary {
   postingStartedAt: Date | null;
   cancelRequested: boolean;
   lastProgressAt: Date | null;
+  /**
+   * Nobody started this run; the schedule did.
+   *
+   * Derived from a null `created_by` rather than stored. The screens
+   * need it because a run that appears with no explanation reads as a
+   * defect — and before the dispatcher there was no such run, so
+   * neither screen said who started anything at all. Which *person*
+   * started a manual run is a separate question needing a `cis_user`
+   * lookup that no relation supports (`created_by` has no foreign key);
+   * this answers the one the dispatcher made urgent.
+   */
+  scheduled: boolean;
   createdAt: Date;
 }
 
@@ -72,6 +84,7 @@ export function toSummary(run: {
   postingStartedAt: Date | null;
   cancelRequested: boolean;
   lastProgressAt: Date | null;
+  createdBy: string | null;
   createdAt: Date;
   cycle: { name: string; cycleCode: string };
 }): BillingRunSummary {
@@ -94,6 +107,7 @@ export function toSummary(run: {
     postingStartedAt: run.postingStartedAt,
     cancelRequested: run.cancelRequested,
     lastProgressAt: run.lastProgressAt,
+    scheduled: run.createdBy === null,
     createdAt: run.createdAt,
   };
 }

@@ -125,7 +125,12 @@ beforeEach(async () => {
       rate_schedule,
       commodity,
       billing_cycle,
-      utility_config
+      utility_config,
+      -- scheduler_config references utility, not utility_config, so
+      -- truncating the config row does not cascade to it. Listed
+      -- explicitly, or the second test's fixture collides on its
+      -- (utility_id, scheduler_key) unique index.
+      scheduler_config
     RESTART IDENTITY CASCADE
   `);
 });
@@ -133,10 +138,13 @@ beforeEach(async () => {
 async function seedTenant(utilityId: string, opts: { suspensionEnabled?: boolean; requireHoldApproval?: boolean } = {}): Promise<void> {
   const { prisma } = prismaImports;
   await prisma.utilityConfig.create({
+    data: { utilityId, requireHoldApproval: opts.requireHoldApproval ?? false },
+  });
+  await prisma.schedulerConfig.create({
     data: {
       utilityId,
-      requireHoldApproval: opts.requireHoldApproval ?? false,
-      suspensionEnabled: opts.suspensionEnabled ?? true,
+      schedulerKey: "suspension",
+      enabled: opts.suspensionEnabled ?? true,
     },
   });
 }

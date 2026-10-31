@@ -43,6 +43,7 @@ function run(over: Record<string, unknown> = {}) {
     cancelRequested: false,
     lastProgressAt: "2026-10-15T10:00:00.000Z",
     createdAt: "2026-10-15T09:00:00.000Z",
+    scheduled: false,
     ...over,
   };
 }
@@ -325,5 +326,19 @@ describe("Starting a run", () => {
       expect(post).toHaveBeenCalledWith("/api/v1/billing-runs", { billingCycleId: "cyc-1" }),
     );
     expect(await screen.findByText(/Nothing is owed until it is posted/i)).toBeInTheDocument();
+  });
+
+  it("marks a run the schedule started, which nobody pressed a button for", async () => {
+    /*
+     * A run appearing with no explanation reads as a defect. Before the
+     * dispatcher every run had a person behind it, so neither screen
+     * said who started anything — which is why the API field alone was
+     * not enough (27-job-scheduling SCH-BILL-10).
+     */
+    routeGets({ runs: [run({ scheduled: true })] });
+
+    renderPage();
+
+    expect(await screen.findByText(/scheduled/i)).toBeInTheDocument();
   });
 });

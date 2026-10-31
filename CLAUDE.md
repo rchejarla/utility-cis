@@ -57,13 +57,13 @@ docs/specs/
 ├── 23-accounts-receivable.md        — AR ledger, posting, balance (slice 1 complete)
 ├── 16-special-assessments.md        — Districts, parcel assessments
 ├── 17-reporting-and-audit.md        — Audit log, reports
-├── 18-theme-and-configuration.md    — Tenant theme, settings
+├── 18-theme-and-configuration.md    — Tenant theme, settings, and **where a tenant setting goes** (column vs jsonb vs scheduler_config)
 ├── 19-rbac.md                       — Roles, permissions, preset roles
 ├── 22-import-infrastructure.md      — ImportBatch, ImportRow, the imports queue
 ├── 24-platform-worker-control.md    — Worker lifecycle across nodes (step 1 built)
 ├── 25-platform-console.md           — Platform actor's console: tenants + cluster (shipped)
 ├── 26-time-of-use-rates.md          — TOU calendars, seasons, interval data (proposed; nothing built)
-└── 27-job-scheduling.md             — Scheduler visibility, queue pause and concurrency, the billing dispatcher (proposed; nothing built)
+└── 27-job-scheduling.md             — Scheduler visibility, queue pause and concurrency, the billing dispatcher (slices 1-3 shipped; the two alerts and an end-to-end dispatcher test remain)
 ```
 
 ### Master Design Document
@@ -207,6 +207,10 @@ Consequences worth knowing before touching `cis_user`:
 
 **Suspending a tenant** sets `Utility.status` and is enforced on every request, in the same authorization pass that checks enabled modules — a token minted before the suspension would otherwise keep working for its lifetime. It deletes nothing; purge is a separate, deferred capability.
 
+**`utility_variable` is not a settings table.** `(utility_id, name) → jsonb`, holding values a tenant's *rate components* reference by name — `drought_stage`, `flags.<x>` — where `manifest()` collects the keys from the active components and `TenantLoader` fetches them. **Nothing in code names those keys**, so it has no declaration of valid ones and should not acquire one. It was called `utility_setting` until 2026-10-31; that name read as the general tenant settings table and had already aimed two designs at it wrongly. A code-known tenant setting belongs in `UtilityConfig`.
+
+**Where a tenant setting goes** (spec 18): a value every utility has is a column; a value only some have goes in `settings` jsonb. Where that is arguable the tiebreaker is mechanical — a column if it is filtered on in SQL, jsonb if it is only read off a row already in hand. Per-scheduler settings are neither: they are rows in **`scheduler_config`**, one per (utility, scheduler), because an enable flag plus a run hour plus a last-run timestamp *per job* is a one-to-many, and three repeated column groups on `utility_config` made adding the fourth cost a migration and seven files. **A missing row means the default declared in `SCHEDULER_DEFINITIONS`**, so a scheduler added in code reaches every tenant with no backfill — and anything added from now on must default to disabled, or it starts work for every tenant the day it ships. A knob only one scheduler needs goes in that row's jsonb and costs no migration. `packages/api/scripts/smoke-scheduler-config.ts` exercises all of it against a real database, which the unit suites cannot: they mock Prisma end to end, and so stayed green for three commits while the dev database was missing columns the code referenced.
+
 **Anything writing tenant-scoped rows must ensure the utility row exists first.** Integration tests declare their tenants at `bootPostgres({ utilities: [...] })`, or call `ensureUtilities(prisma, [...])` if they boot their own container; `schema-invariants.integration.test.ts` guards the shape.
 
 ## Portal
@@ -226,7 +230,7 @@ Lives at `/platform/*` in the web app, behind the **platform actor** (see Multi-
 Two nav sections, because they answer two different questions:
 
 - **Platform** — tenant lifecycle: `/platform/utilities`, `/platform/utilities/new` (provision, with a dry-run Preview), `/platform/utilities/:id` (modules, roles, staff, readiness, from-outside history), `/platform/users` (the operators themselves).
-- **Cluster** — the deployment: `/platform/cluster` (is anything wrong), `/platform/cluster/workers` (nodes and worker processes), `/platform/cluster/queues` (counts for the eight queues, each one's pause and its two concurrency limits), `/platform/cluster/schedulers` (every armed cron, what it will not fire for, and which registered crons nothing armed), `/platform/cluster/jobs` (the jobs behind a count, with retry/promote/replay).
+- **Cluster** — the deployment: `/platform/cluster` (is anything wrong), `/platform/cluster/workers` (nodes and worker processes), `/platform/cluster/queues` (counts for the nine queues, each one's pause and its two concurrency limits), `/platform/cluster/schedulers` (every armed cron, what it will not fire for, and which registered crons nothing armed), `/platform/cluster/jobs` (the jobs behind a count, with retry/promote/replay).
 
   **Two limits per queue, not one** (`lib/queue-limits.ts`): *per node* bounds one worker process and *cluster-wide* bounds the shared database, so what runs is `min(cluster, workers × perNode)`. Neither is derived from the other or from the node count — a cluster limit of 4 with per node 1 on three nodes runs 3, which the page prints rather than rejecting, because it binds the day a fourth node joins. The cluster limit is BullMQ's own `meta` field, honoured by every node on its next fetch; per node reaches a built `Worker` through its `concurrency` setter and so takes effect at next worker start. Pausing lives in the same hash (`paused` beside `concurrency`) and needs no command path for the same reason. **A pause requires a reason**, kept in `platform:queue-pauses`.
 
@@ -236,6 +240,6 @@ Two nav sections, because they answer two different questions:
 
 Chrome is `components/platform-shell.tsx`. These screens mount **no `AuthPermissionProvider`** on purpose: `/auth/me` answers 403 for a platform token and the provider then falls back to granting every permission, so any gating it appeared to do here would be fabricated. The real gate is `{ config: { platform: true } }`, server-side.
 
-**Workers are a separate Node process** (`packages/api/src/worker.ts`) and `start_dev.bat` does not start one, so the ordinary state of a dev stack is eight queues filling up with nothing attached. Start one from `/platform/cluster/workers`, or run `pnpm --filter @utility-cis/api dev:worker`. Worker control is allowed unless `NODE_ENV=production`, where `WORKER_CONTROL_ENABLED` must be set explicitly (`workerControlAllowed()`); a start lands on the node serving the request, and a stop is offered only where the pid is that node's to signal — cluster-wide control is steps 2–4 of `docs/specs/24-platform-worker-control.md`.
+**Workers are a separate Node process** (`packages/api/src/worker.ts`) and `start_dev.bat` does not start one, so the ordinary state of a dev stack is nine queues filling up with nothing attached. Start one from `/platform/cluster/workers`, or run `pnpm --filter @utility-cis/api dev:worker`. Worker control is allowed unless `NODE_ENV=production`, where `WORKER_CONTROL_ENABLED` must be set explicitly (`workerControlAllowed()`); a start lands on the node serving the request, and a stop is offered only where the pid is that node's to signal — cluster-wide control is steps 2–4 of `docs/specs/24-platform-worker-control.md`.
 
 **Tests must not enqueue into the dev Redis.** Integration tests that exercise a route which enqueues mock `enqueueSafely`; without that, a test run leaves jobs behind that look like real stuck work on this console — which is exactly how 102 unrunnable dev jobs appeared.

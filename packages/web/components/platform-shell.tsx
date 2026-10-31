@@ -67,7 +67,7 @@ const PLATFORM_SECTIONS: NavSection[] = [
      * The deployment itself, rather than any tenant in it.
      *
      * One page held all of this — the verdict, the nodes, the worker
-     * processes, the eight queues and the jobs behind one count — and
+     * processes, the nine queues and the jobs behind one count — and
      * each thing added made the others harder to find. Three pages,
      * because they answer three questions: is anything wrong, who is
      * doing the work, and what is the work.

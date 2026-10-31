@@ -163,7 +163,7 @@ describe("the cluster jobs page", () => {
   it("reads every queue at once, and says which one each job is in", async () => {
     /*
      * "Where are all the failures" is a question about the deployment,
-     * and trying eight queues in turn is not an answer. The Queue column
+     * and trying nine queues in turn is not an answer. The Queue column
      * appears only here: on a single queue every row would say the same
      * thing.
      */
@@ -516,7 +516,7 @@ describe("the cluster jobs page", () => {
     /*
      * It was modelled as FilterBar's "clear" for a moment, which reads as
      * no selection: the pill showed the bare label "Queue" while the page
-     * was filtering across all eight. A selection the control does not
+     * was filtering across all nine. A selection the control does not
      * name is worse than one it does.
      */
     arriveAt("all", "failed");

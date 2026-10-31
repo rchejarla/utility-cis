@@ -48,12 +48,13 @@ beforeEach(async () => {
 });
 
 describe("QUEUE_NAMES + ALL_QUEUE_NAMES", () => {
-  it("exposes the eight expected queue names", () => {
+  it("exposes the nine expected queue names", () => {
     expect(QUEUE_NAMES).toEqual({
       suspensionTransitions: "suspension-transitions",
       notificationSend: "notification-send",
       slaBreachSweep: "sla-breach-sweep",
       delinquencyDispatch: "delinquency-dispatch",
+      billingDispatch: "billing-dispatch",
       delinquencyTenant: "delinquency-tenant",
       auditRetention: "audit-retention",
       imports: "imports",
@@ -63,7 +64,7 @@ describe("QUEUE_NAMES + ALL_QUEUE_NAMES", () => {
 
   it("ALL_QUEUE_NAMES is the value list of QUEUE_NAMES", () => {
     expect(new Set(ALL_QUEUE_NAMES)).toEqual(new Set(Object.values(QUEUE_NAMES)));
-    expect(ALL_QUEUE_NAMES).toHaveLength(8);
+    expect(ALL_QUEUE_NAMES).toHaveLength(9);
   });
 });
 

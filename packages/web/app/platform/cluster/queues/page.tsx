@@ -18,7 +18,7 @@ import {
 import type { JobState, QueueHealth } from "@/components/cluster/types";
 
 /**
- * The eight queues, at a glance.
+ * The nine queues, at a glance.
  *
  * Counts only. The jobs behind a count live on the Jobs page, reached by
  * clicking one — which took three attempts to get right. First the job

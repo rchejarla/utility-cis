@@ -57,7 +57,16 @@ export const BILLING_RUN_POST_JOB_NAME = "post-billing-run";
 export interface BillingRunJobData {
   runId: string;
   utilityId: string;
-  actorId: string;
+  /**
+   * Null when the schedule started this run rather than a person.
+   *
+   * `billing_run.created_by` became nullable for scheduled runs, and the
+   * reclaim takes `actorId` straight from it — so a resumed scheduled
+   * run carries a null here, and every audit write downstream has to
+   * accept one. Declared rather than cast: `enqueueSafely` does not
+   * type its payload, so nothing else would have caught this.
+   */
+  actorId: string | null;
   actorName: string;
 }
 

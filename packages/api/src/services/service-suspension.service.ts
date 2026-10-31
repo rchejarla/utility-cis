@@ -367,7 +367,9 @@ interface AffectedSuspension {
  * audit rows land iff suspension rows flip.
  *
  * Tenant gating:
- *   - `utility_config.suspension_enabled = true` — opted-in tenants
+ *   - the tenant has not switched the suspension scheduler off — a
+ *     `scheduler_config` row with `enabled = false`; **no row means the
+ *     declared default**, which for this scheduler is on
  *     only. Defaults to true so existing tenants keep their
  *     pre-migration behavior.
  *   - For activation: tenants with `require_hold_approval = true`
@@ -389,15 +391,34 @@ export async function sweepSuspensionsAllTenants(
       // PENDING → ACTIVE. Two-clause approval gate handled in SQL so
       // we don't have to fan out per tenant: if `require_hold_approval`
       // is true on the tenant, require `approved_by IS NOT NULL`.
+      /*
+        * Correlated lookups rather than a join, for two reasons.
+        *
+        * The enable flag moved to `scheduler_config` on 2026-10-31, and
+        * **a tenant with no row there takes the declared default** —
+        * which for this scheduler is on. An inner join would skip
+        * exactly those tenants, which is the bug the old query had with
+        * `utility_config`: it joined that table, so a utility with no
+        * config row — everything `provision-tenant.ts` creates — had no
+        * suspension transitions at all and no error to say so.
+        *
+        * Both COALESCE defaults match the declarations they stand in
+        * for: `enabled` defaults on in SCHEDULER_DEFINITIONS,
+        * `require_hold_approval` defaults false on the column.
+        */
       const activated = await tx.$queryRaw<AffectedSuspension[]>`
         UPDATE service_suspension AS ss
         SET status = 'ACTIVE'
-        FROM utility_config AS tc
-        WHERE tc.utility_id = ss.utility_id
-          AND tc.suspension_enabled = true
-          AND ss.status = 'PENDING'
+        WHERE ss.status = 'PENDING'
           AND ss.start_date <= ${now}
-          AND (tc.require_hold_approval = false OR ss.approved_by IS NOT NULL)
+          AND COALESCE((
+            SELECT sc.enabled FROM scheduler_config sc
+            WHERE sc.utility_id = ss.utility_id AND sc.scheduler_key = 'suspension'
+          ), true) = true
+          AND (COALESCE((
+            SELECT tc.require_hold_approval FROM utility_config tc
+            WHERE tc.utility_id = ss.utility_id
+          ), false) = false OR ss.approved_by IS NOT NULL)
         RETURNING ss.id, ss.utility_id, ss.service_agreement_id
       `;
 
@@ -405,12 +426,13 @@ export async function sweepSuspensionsAllTenants(
       const completed = await tx.$queryRaw<AffectedSuspension[]>`
         UPDATE service_suspension AS ss
         SET status = 'COMPLETED'
-        FROM utility_config AS tc
-        WHERE tc.utility_id = ss.utility_id
-          AND tc.suspension_enabled = true
-          AND ss.status = 'ACTIVE'
+        WHERE ss.status = 'ACTIVE'
           AND ss.end_date IS NOT NULL
           AND ss.end_date <= ${now}
+          AND COALESCE((
+            SELECT sc.enabled FROM scheduler_config sc
+            WHERE sc.utility_id = ss.utility_id AND sc.scheduler_key = 'suspension'
+          ), true) = true
         RETURNING ss.id, ss.utility_id, ss.service_agreement_id
       `;
 

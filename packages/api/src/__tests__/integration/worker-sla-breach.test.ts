@@ -96,15 +96,25 @@ beforeEach(async () => {
       rate_schedule,
       commodity,
       billing_cycle,
-      utility_config
+      utility_config,
+      -- scheduler_config references utility, not utility_config, so
+      -- truncating the config row does not cascade to it. Listed
+      -- explicitly, or the second test's fixture collides on its
+      -- (utility_id, scheduler_key) unique index.
+      scheduler_config
     RESTART IDENTITY CASCADE
   `);
 });
 
 async function seedTenant(utilityId: string, opts: { slaBreachSweepEnabled?: boolean } = {}): Promise<void> {
   const { prisma } = prismaImports;
-  await prisma.utilityConfig.create({
-    data: { utilityId, slaBreachSweepEnabled: opts.slaBreachSweepEnabled ?? true },
+  await prisma.utilityConfig.create({ data: { utilityId } });
+  await prisma.schedulerConfig.create({
+    data: {
+      utilityId,
+      schedulerKey: "slaBreachSweep",
+      enabled: opts.slaBreachSweepEnabled ?? true,
+    },
   });
 }
 

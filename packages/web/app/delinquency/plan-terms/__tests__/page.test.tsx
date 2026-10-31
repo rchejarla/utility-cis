@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
@@ -88,12 +88,24 @@ describe("plan terms screen", () => {
 
     await waitFor(() => expect(screen.getByLabelText(/at least/i)).toBeInTheDocument());
     const max = screen.getByLabelText(/at most/i);
-    await userEvent.clear(max);
-    await userEvent.type(max, "2");
+    /*
+     * One change event, not `clear` then `type`.
+     *
+     * `Num` keeps a draft string and resyncs it from the parent on every
+     * `value` change, so a clear-then-type sequence has an intermediate
+     * state where the draft is empty and the parent still holds the old
+     * number. Under a loaded suite run this test lost that race while
+     * passing alone: the click arrived before the parent had 2, so Save
+     * saw a valid range and legitimately called the API. Setting the
+     * value in a single event removes the intermediate state.
+     */
+    fireEvent.change(max, { target: { value: "2" } });
+    await waitFor(() => expect(max).toHaveValue(2));
+
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
 
-    // Refused at the control, not on save: the API would reject it too,
-    // but an operator should not have to press Save to be told.
+    // Refused client-side: the API would reject it too, but an operator
+    // should not need a round trip to be told.
     expect(put).not.toHaveBeenCalled();
     expect(screen.getByText(/at least the minimum/i)).toBeInTheDocument();
   });

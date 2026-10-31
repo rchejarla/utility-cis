@@ -26,6 +26,16 @@ export interface BillingRunRow {
   postedAt: string | null;
   cancelRequested: boolean;
   lastProgressAt: string | null;
+  /**
+   * Nobody started this run; the schedule did.
+   *
+   * Rendered on both screens, because a run appearing with no
+   * explanation reads as a defect. Before the billing dispatcher every
+   * run had a person behind it, so neither screen said who started
+   * anything — which is why carrying this from the API was not enough on
+   * its own (27-job-scheduling SCH-BILL-10).
+   */
+  scheduled: boolean;
   createdAt: string;
 }
 

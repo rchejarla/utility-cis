@@ -27,6 +27,10 @@ import {
 } from "./workers/delinquency-dispatcher.js";
 import { buildDelinquencyWorker } from "./workers/delinquency-worker.js";
 import {
+  buildBillingDispatcher,
+  registerBillingDispatchScheduler,
+} from "./workers/billing-dispatcher.js";
+import {
   buildSlaBreachWorker,
   registerSlaBreachScheduler,
 } from "./workers/sla-breach-worker.js";
@@ -147,7 +151,7 @@ async function main(): Promise<void> {
 
   /*
    * The same gate the API has, and it matters more here: six of the
-   * eight queues sweep every tenant, so a worker on a database that is
+   * nine queues sweep every tenant, so a worker on a database that is
    * not enforcing isolation is the one process whose every job is
    * cross-tenant by design and cannot tell the difference.
    */
@@ -230,6 +234,11 @@ async function main(): Promise<void> {
   if (activeQueues.includes(QUEUE_NAMES.imports)) {
     activeWorkers.push(buildImportWorker());
     await reclaimAndEnqueueZombies();
+  }
+
+  if (activeQueues.includes(QUEUE_NAMES.billingDispatch)) {
+    activeWorkers.push(buildBillingDispatcher());
+    await registerBillingDispatchScheduler();
   }
 
   if (activeQueues.includes(QUEUE_NAMES.billingRuns)) {

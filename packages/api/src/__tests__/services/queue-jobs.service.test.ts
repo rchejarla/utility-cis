@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * it cannot answer: waiting since when, for whom, and is the delayed one
  * the scheduler's repeatable job or something stuck. So each count is
  * drillable, fetched only when asked, rather than making the summary
- * carry samples for eight queues and five states nobody looked at.
+ * carry samples for nine queues and five states nobody looked at.
  *
  * **The payload is not included, on purpose.** Job data holds account
  * ids, run ids, customer ids and file names — D6 sizes this actor by the

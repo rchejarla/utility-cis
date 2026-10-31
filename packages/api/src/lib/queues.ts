@@ -21,6 +21,7 @@ export const QUEUE_NAMES = {
   notificationSend: "notification-send",
   slaBreachSweep: "sla-breach-sweep",
   delinquencyDispatch: "delinquency-dispatch",
+  billingDispatch: "billing-dispatch",
   delinquencyTenant: "delinquency-tenant",
   auditRetention: "audit-retention",
   imports: "imports",
@@ -52,6 +53,7 @@ export const QUEUE_TENANCY: Record<QueueName, "all-tenants" | "per-tenant"> = {
   "notification-send": "all-tenants",
   "sla-breach-sweep": "all-tenants",
   "delinquency-dispatch": "all-tenants",
+  "billing-dispatch": "all-tenants",
   "delinquency-tenant": "per-tenant",
   "audit-retention": "all-tenants",
   imports: "per-tenant",
@@ -114,6 +116,21 @@ export const QUEUE_DEFAULTS: Record<QueueName, QueueDefaults> = {
   "delinquency-dispatch": {
     concurrency: 1,
     defaultJobOptions: {
+      attempts: 2,
+      backoff: { type: "fixed", delay: 60_000 },
+      ...RETENTION_OPTS,
+    },
+  },
+  "billing-dispatch": {
+    // One cross-tenant read and a run per due cycle. Nothing to
+    // parallelise, and two dispatchers at once would race for the same
+    // `@@unique([utilityId, billingCycleId, windowEnd])` — which is
+    // safe, and noisy for no gain.
+    concurrency: 1,
+    defaultJobOptions: {
+      // Two attempts, like the delinquency dispatcher: creating a run
+      // is idempotent on that unique constraint, so a retry after a
+      // transient database error cannot produce a second set of bills.
       attempts: 2,
       backoff: { type: "fixed", delay: 60_000 },
       ...RETENTION_OPTS,

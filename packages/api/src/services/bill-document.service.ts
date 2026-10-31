@@ -148,7 +148,12 @@ function storageOf(settings: unknown): { integration: string; connection: string
 export async function generateBillDocument(
   utilityId: string,
   billId: string,
-  actorId: string,
+  /**
+   * Null when a schedule did this rather than a person — the audit
+   * context has always taken `string | null` (the sweeps' convention),
+   * and the billing dispatcher is the first caller to use it.
+   */
+  actorId: string | null,
   actorName: string,
   opts: { force?: boolean } = {},
 ): Promise<BillDocumentRow> {

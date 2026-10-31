@@ -23,7 +23,7 @@ import { queueRedisConnection } from "./queue-redis.js";
 import { logger } from "./logger.js";
 
 /** Where the pause records live, beside `platform:queue-concurrency`. */
-export const PAUSE_RECORD_KEY = "platform:queue-pauses";
+const PAUSE_RECORD_KEY = "platform:queue-pauses";
 
 /** Long enough to say why, short enough to read in a table cell. */
 const MAX_REASON = 200;

@@ -132,9 +132,124 @@ Future additions (non-breaking, additive):
 
 ---
 
+### Where a tenant setting goes
+
+Three places, and the rule for choosing between them is the thing worth
+remembering (settled 2026-10-31):
+
+> **A value every utility has goes in a column. A value only some have
+> goes in jsonb.** And where "every utility has one" is arguable, the
+> tiebreaker is mechanical: **a column if we filter on it in SQL, jsonb
+> if we only read it once we already have the row.**
+
+| Where | For | Cost of adding one |
+|---|---|---|
+| A column on `UtilityConfig` | tenant-wide, universal, sometimes filtered — `timezone`, `auto_post_bills` | a migration |
+| A column on `SchedulerConfig` | something **every** configurable background job has — `enabled`, `run_hour_local` | a migration, and rare: those columns are what defines the set |
+| `settings` jsonb (on either row) | anything only some utilities or some jobs need — `numberFormats`, `issuer` | nothing |
+
+jsonb's real costs are *filtering* and *types*, never reading: pulling a
+key off a row already in hand is free. So anything never used in a `WHERE`
+is a fair candidate for jsonb.
+
+### Four cases, not two
+
+The column-or-jsonb rule answers where a value lives. A second question
+cuts across it, and the two together give four cases:
+
+> **Who names the key?** Code, or a tenant's own configuration.
+> **Does the value need a validity period?** Yes, or no.
+
+| | no dates | **dated** |
+|---|---|---|
+| **code names the key** | a column on `UtilityConfig`, or its `settings` jsonb | **its own table with `valid_from` / `valid_to`** — e.g. `utility_issuer` |
+| **configuration names the key** | — | `UtilityVariable` with `valid_from` / `valid_to` |
+
+The top-right cell is the one that is easy to get wrong, and it is why
+dating `settings.issuer` is more than adding two columns: **you cannot
+effective-date a key inside a jsonb bucket on a single-row table.** A
+dated value needs one row per version, so a dated member of `settings`
+has to leave `settings`. Putting it in `UtilityVariable` instead would
+be wrong for the other axis — the issuer's keys *are* code-known, and
+that table's whole character is that its keys are not.
+
+So `issuer` becomes its own typed, dated table rather than a jsonb
+namespace. Typed because every utility has exactly these fields and the
+code reads each by name; dated because a bill printed in 2024 shows
+2024's remittance address.
+
+### Effective dating: decided 2026-10-31, not built
+
+Two things get validity periods. Neither is built; this records the
+decision and what building it costs.
+
+**`UtilityVariable`** — `valid_from`, `valid_to`, unique on
+`[utility_id, name, valid_from]`.
+
+The case for it: `RateSchedule` is properly historied
+(`effectiveDate`, `version`, `supersedesId`), so a versioned formula
+currently reads an **unversioned** input. `BillSegmentLine` records
+`sourceComponentId`, so which component fired *is* recoverable — the gap
+is narrower than "the bill cannot be explained" — but the value that
+chose that branch is not. Nothing can say what the drought stage was in
+September once October has moved on.
+
+What it costs: every read takes an as-of date, and `TenantLoader` must
+pass **the bill period's end rather than `now`** — a rating run
+reproduces a past period, so `now` would be the wrong date even on the
+first run of a late bill. That is the change with the real risk in it: a
+reader that passes `now` by habit gets today's answer and nothing
+complains.
+
+**`issuer`** — moves out of `settings` into its own dated table, per the
+four cases above.
+
+The case for it is weaker than it looks and worth stating honestly,
+because `BillDocument` already stores the rendered PDF with a `sha256`,
+and the statement-snapshot migration says why: *"a reprint would then
+differ from the document the customer received, which is the one
+property `sha256` and byte-stable regeneration exist to protect."* So
+the first answer to "what did that bill say" is: fetch the bill. Dating
+adds three things the document does not — answering without a storage
+round trip, regenerating a byte-identical bill if a stored PDF is lost,
+and explaining the value somewhere other than a bill.
+
+**Both interact with caching**, and the rule is in §3.4 of the design
+doc: cache the value *with its validity window* and read by containment,
+so "now" hits and so does a reprint dated since the last change.
+
+**The scoped tier needs the date in its key as well**, which an earlier
+version of this section denied. "Within one run every read asks about
+the same date" holds for a *generation* run — one cycle, one window end
+— and fails for a bulk reprint or a regeneration, where each bill asks
+about its own issue date. Keyed by utility alone, bill #3 would be
+handed the address from bill #1's period. Keyed by
+`(value, asOfDate)` it is one entry per distinct date, which in a
+generation run is still one.
+
+And dating raises the floor cost of a miss, which is an argument for the
+scoped tier rather than against it: a dated read is "the row effective
+at D" — a range scan, plus a second lookup for the upper bound — not the
+primary-key lookup the uncached case used to be.
+
+The one case where the rule is not enough: a flag whose wrong default
+reaches the outside world. `scheduler_config.enabled` for billing defaults
+to false, and it is a column, because with jsonb a missing key is
+indistinguishable from `false` only as long as every reader agrees — and
+the day one reader defaults it to true, a utility that never asked for
+automation bills its customers. A declared default in one place is the
+mitigation; see "What is still unmanaged" below.
+
 ### UtilityConfig
 
 Tenant-wide configuration flags that don't belong to the theme module. One row per utility, created lazily the first time any flag is set; absence of a row means "all defaults." Lives in its own table alongside UtilityTheme and UtilityModule so it can be extended without schema migrations via the `settings` JSONB bucket.
+
+**It no longer holds per-scheduler settings.** Until 2026-10-31 it carried
+three repeated groups of the same shape — an enable flag, a run hour and a
+last-run timestamp, once per background job — which is a one-to-many
+modelled as repeated column groups. Adding billing's group cost a
+migration and seven files. Those nine columns are now rows in
+`SchedulerConfig`.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -215,6 +330,244 @@ The last two shipped with bill production and were undocumented here until 2026-
 Additional keys can be added to the bucket for future tenant-level flags without schema changes.
 
 ---
+
+### SchedulerConfig
+
+What a tenant may configure about **one** background job. One row per
+(utility, scheduler), added 2026-10-31.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | FK → `utility(id)` ON DELETE RESTRICT |
+| scheduler_key | VARCHAR(50) | A `SchedulerKey` from `validators/automation-config.ts` |
+| enabled | BOOLEAN | Default true. A missing row means the scheduler's declared default |
+| run_hour_local | SMALLINT | Null where the job has no time of day — only `delinquency` and `billing` have one |
+| last_run_at | TIMESTAMPTZ | Written by a dispatcher. Distinguishes a missed tick from one not yet due |
+| settings | JSONB | Knobs only this job needs. No migration to add one |
+
+**Unique constraint:** `[utility_id, scheduler_key]` — two rows for one
+key would make "is billing enabled" a question with two answers.
+
+**RLS:** standard one-argument policy. With no tenant set it raises rather
+than returning nothing: "no rows" would read as "nothing is enabled", and
+a dispatcher that believes that bills nobody and reports success.
+
+**Keys are code; values are configuration.** Each key names a handler that
+has to exist, so the set of keys lives in `SCHEDULER_DEFINITIONS` — one
+entry per job carrying its label, help text, whether it has a run hour and
+its default. A row whose key no build recognises is inert: nothing reads
+it. There is deliberately **no `cron_pattern` column**; see
+[27 — Job Scheduling](27-job-scheduling.md) §4 for why cadence stays in
+code.
+
+**A missing row means the declared default**, and that is load-bearing in
+two directions:
+
+- A scheduler added to `SCHEDULER_DEFINITIONS` appears for every existing
+  tenant with no backfill, and its row materialises the first time anyone
+  saves a setting.
+- So **anything added from now on must default to disabled.** A new job
+  defaulting to on would start doing work for every tenant the day it
+  shipped. The three that default to true predate the table.
+- And a cross-tenant read cannot filter on rows alone. `tenantsForScheduler`
+  reads tenants and rows and joins in memory, because filtering would
+  silently skip every tenant who never touched a setting — which for
+  delinquency is all of them.
+
+What this buys: **onboarding a utility is rows, not schema.** Adding a
+scheduler is a list entry plus a handler. A knob only one scheduler needs
+is a jsonb key and no migration at all.
+
+### UtilityVariable is not a settings bucket
+
+`utility_variable(utility_id, name, value jsonb)` was called
+`utility_setting` until 2026-10-31, which read as the general tenant
+settings table. **It is the rate engine's variable store**, and the old
+name had already sent two designs the wrong way: the AR ledger's
+fee-ranking order was earmarked for it, and the sentence in the
+architecture doc listing the tenant-config satellites included it.
+
+A tenant's rate schedule is data, and a component can reference a named
+variable — `drought_stage`, or `flags.<anything>`. At rate time
+`manifest()` walks the active components and collects every variable key
+they mention; `TenantLoader` then fetches those names from this table.
+
+```
+rate component (tenant-authored)  →  references "flags.summer_surcharge"
+          ↓  manifest() collects the key
+utility_variable row of that name    →  supplies the value
+```
+
+So its keys come from the tenant's configuration, **not from code**.
+Nothing in this repository names `flags.summer_surcharge`; a configurator
+invented it writing a rate component. That is why it is a table keyed on
+`name` and read with `name IN (…)` for whatever batch the engine just
+discovered, rather than a jsonb bucket whose keys a reader names one at a
+time.
+
+It therefore has, and should keep, **no declaration of what keys exist** —
+a list of valid keys would defeat the mechanism. That is the exact
+opposite of `SchedulerConfig`, whose keys are code and whose values are
+configuration, and the reason the two cannot share a table.
+
+An earlier version of this section called it "the storage half of a
+managed settings mechanism" missing a declaration. That was wrong, and
+would have sent somebody to fix something correct.
+
+**A code-known tenant setting does not belong here.** It belongs in
+`UtilityConfig` or its `settings` jsonb, by the rule at the top of this
+section. That is now written into `validators/ledger.ts` where the
+wrong answer used to be.
+
+### Three kinds of tenant configuration
+
+| Kind | Who names the key | Cost of adding one |
+|---|---|---|
+| A column (`utility_config`, `scheduler_config`) | code, and it may filter on it in SQL | a migration |
+| `settings` jsonb on either row | code still names it; not every tenant has it | nothing |
+| `utility_variable` | **the tenant's own configuration** — code never names it | nothing, and no deploy |
+
+The third row is the only place where a new knob needs no code at all, and
+it is worth understanding why: the thing that reads it is itself data. A
+rate formula referencing a variable is configuration reading
+configuration, so the engine satisfies "something must read it" once,
+generically, for every variable a tenant will ever invent.
+
+**Everywhere else, the behaviour cannot be configuration.** A knob nothing
+reads does nothing — "don't bill under $5" needs code comparing a total to
+a threshold, however the threshold is stored. The target for those is to
+make everything *except* that comparison free: one declaration and one
+read, with no migration, no DTO edit and no UI edit. That is what
+`SCHEDULER_DEFINITIONS` achieved for the schedulers, and the pattern to
+copy when the first non-scheduler knob of this kind arrives.
+
+## Reading tenant configuration
+
+**Not built. This is the design, and the reason it is written before it
+is needed is that the cost of not having it grows with every consumer.**
+
+### The problem
+
+Eight call sites read `utility_config` directly, each with its own query:
+
+| reader | selects |
+|---|---|
+| `ar/posting.service` | `{ autoPostBills }` |
+| `automation-config.service` | the tenant-wide columns |
+| `payment-plan/terms` | `{ settings }` |
+| `utility-readiness.service` | `{ settings }` |
+| `bill-document.service` | **the whole row** |
+| `bill-presentation/issuer` | **the whole row** |
+| `notification.service` | **the whole row** |
+| `tenant-config.service` | **the whole row** |
+
+Two consequences, and the second is the expensive one:
+
+- Four fetch the row whole, three of them on per-bill or per-dispatch
+  paths. A 12,000-bill run calls `bill-document` and `issuer` once each,
+  so anything added to `settings` is read 24,000 times by callers that
+  do not want it.
+- **Every consumer knows the table's shape.** Both storage changes made
+  on 2026-10-31 — moving nine columns to `scheduler_config`, renaming
+  `utility_setting` — touched every reader. That cost is linear in
+  consumers and is the actual debt; the unselective reads are a symptom.
+
+### The accessor
+
+One module owns tenant-configuration reads and exposes named, narrow
+ones — `tenantTimezone(utilityId)`, `issuerIdentity(utilityId)`,
+`autoPostBills(utilityId)`. Consumers stop knowing the table, which
+gives three things at once: the narrow selects, a single seam to cache
+at, and one file to change when storage moves again.
+
+**Build the accessor before either cache tier.** With eight direct
+readers there are eight places to add caching and eight chances to do it
+differently.
+
+### Which tier each value belongs to
+
+Per §3.4 of the design doc — scoped for a consistent view within a unit
+of work, Redis for values that cross requests and rarely change.
+
+**The scoped column is the design; the Redis column is conditional.**
+§3.4 says why: the read Redis replaces is a key lookup on a one-row
+table, the scoped tier already removes the only case anybody has named,
+and the measurement that would justify the rest has not been taken. The
+assignments below are what to cache *where* on the day it is justified,
+not a licence to build it now.
+
+| Value | Tier | Why |
+|---|---|---|
+| `timezone` | both | read per dispatch tick cross-tenant; changes almost never |
+| `issuer`, `numberFormats`, bill message | scoped at minimum | read once per bill; a mid-run change must not split a run |
+| `autoPostBills` | both | read per posted bill; changes rarely |
+| quiet hours | both | read per notification |
+| `scheduler_config.enabled`, `run_hour_local` | both | read hourly cross-tenant; changes almost never |
+| `scheduler_config.last_run_at` | **neither** | written every dispatch tick — caching it busts the entry its own row's stable fields would live in |
+| anything effective-dated | both | cached **with its validity window** and read by containment, so recent as-of reads hit too; see §3.4 rule 2 |
+
+### Sequence, and what to measure first
+
+1. **The accessor.** Narrow named reads, so the four whole-row fetches
+   stop and there is one seam to cache at. Worth doing on its own
+   merits: it is also the file that absorbs the next storage change
+   instead of eight files absorbing it.
+2. **The scoped tier.** Captures the twelve-thousand-bill case and
+   carries the consistency property no TTL cache can offer.
+3. **Measure.** Then decide about Redis.
+
+The third step is a real gate, not a formality. RBAC earns its Redis
+cache because permissions are read many times per request;
+configuration is read a handful of times per request from a one-row
+table. Nobody has profiled it, and three rounds of refining *how* to
+cache it correctly did not establish *that* it needs caching — which is
+the order this design got wrong before being corrected.
+
+### settings.issuer: effective-dated, and still cacheable
+
+**Decided 2026-10-31: the issuer identity gets validity periods.**
+
+`settings.issuer` is the remittance address, utility name and billing
+phone printed on a bill. A customer querying a two-year-old bill is the
+case it exists for.
+
+The stored document already answers most of it — `BillDocument` keeps
+the rendered PDF with a `sha256`, and the statement-snapshot migration
+says why in so many words: *"a reprint would then differ from the
+document the customer received, which is the one property `sha256` and
+byte-stable regeneration exist to protect."* So the first answer to
+"what did that bill say" is: fetch the bill. Validity periods buy three
+things the document does not:
+
+- answering the question without a storage round trip,
+- regenerating a byte-identical bill if a stored PDF is ever lost,
+- explaining the value somewhere other than a bill — a report, an audit
+  query.
+
+**Effective dating does not rule out caching**, which was the original
+objection and it was wrong twice over. If the Redis tier is ever built,
+the entry carries the value *and the window it applies to* and a read is
+a containment check — so "now" hits, and so does a reprint dated since
+the last change, because that date is inside the current window. Only a
+read predating the current version goes to the database. See §3.4 rule 2
+for why the window needs an **upper** bound: with `validFrom` alone, a
+read dated after a change nobody noticed would hit while a newer version
+actually applied.
+
+The scoped tier is unaffected by any of this: within one run every read
+asks about the same date, so one entry serves the run whether the value
+is dated or not.
+
+What it costs, and the second is the one to watch:
+
+- a write becomes "close the old row, open a new one" rather than an
+  update;
+- **every reader needs to say which question it is asking.** A reader
+  that calls the "now" accessor when it meant "as of" gets today's
+  answer silently — the same failure as the bad cache key, moved into
+  the application. Two named entry points is the mitigation, not a
+  convention anyone has to remember.
 
 ## Identifier Generation
 

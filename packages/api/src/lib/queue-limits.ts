@@ -36,7 +36,7 @@ import { logger } from "./logger.js";
  * what the `moveToActive` script reads. One copy, and it is the copy
  * that enforces.
  */
-export const PER_NODE_LIMIT_KEY = "platform:queue-concurrency";
+const PER_NODE_LIMIT_KEY = "platform:queue-concurrency";
 
 /** The largest either limit may be set to. */
 const MAX_CONCURRENCY = 1_000;
