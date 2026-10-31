@@ -35,8 +35,16 @@ import { prisma } from "../lib/prisma.js";
 import { runAsPlatform } from "../lib/tenant-context.js";
 import { QUEUE_NAMES, type QueueName } from "../lib/queues.js";
 import type { PauseRecord } from "../lib/queue-pause.js";
+/*
+ * Type-only, and that matters at runtime as well as on paper.
+ * `scheduler-view.service` reaches `lib/schedulers.ts`, which imports
+ * six worker modules for their scheduler-id constants — so a value
+ * import here would drag the whole worker layer into everything that
+ * touches the cluster console. It did, for one commit: the queue-health
+ * unit suite began timing out in its `beforeEach` import, which is how
+ * the weight showed up. The schedulers are passed in instead.
+ */
 import type { SchedulerView } from "./scheduler-view.service.js";
-import { getSchedulerReport } from "./scheduler-view.service.js";
 
 export type AlertKind = "unpromotedScheduler" | "mailHeldPaused";
 
@@ -274,7 +282,12 @@ function describe(seconds: number): string {
 }
 
 /**
- * Both conditions, over the live cluster.
+ * Both conditions, over data the caller has already read.
+ *
+ * Composed by the route rather than inside `getQueueHealth`, which is
+ * the rule `/api/v1/platform/queues` already states for the worker
+ * status beside it: one call answers what is in the queues, another what
+ * is armed, and only the page needs both at once.
  *
  * The quiet windows are read as the platform actor: this crosses every
  * tenant by design, and a confined connection would find no windows and
@@ -288,14 +301,13 @@ export async function getSchedulingAlerts(
     pauseRecord: PauseRecord | null;
     counts: { waiting: number };
   }[],
+  /** Null when the schedulers could not be read — not "none armed". */
+  schedulers: readonly SchedulerView[] | null,
   now: Date = new Date(),
 ): Promise<SchedulingAlert[]> {
   const alerts: SchedulingAlert[] = [];
 
-  const report = await getSchedulerReport();
-  if (report.reachable) {
-    alerts.push(...unpromotedSchedulerAlerts(report.schedulers, now));
-  }
+  if (schedulers) alerts.push(...unpromotedSchedulerAlerts(schedulers, now));
 
   const mail = queues.find((q) => q.name === QUEUE_NAMES.notificationSend);
   if (mail?.paused) {

@@ -60,7 +60,9 @@ function inTenantZone(iso: string, timezone: string): string {
 
 const CARD: React.CSSProperties = {
   background: "var(--bg-surface)",
-  border: "1px solid var(--border-default)",
+  // `--border`, as the runs table beside it uses. `--border-default` is
+  // not a token in this theme; the css-tokens drift guard is what said so.
+  border: "1px solid var(--border)",
   borderRadius: 8,
   marginBottom: 20,
   overflow: "hidden",

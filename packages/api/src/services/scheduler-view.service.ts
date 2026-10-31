@@ -22,6 +22,7 @@
  * route's job, and deliberate.
  */
 import { ALL_QUEUE_NAMES, getQueue, type QueueName } from "../lib/queues.js";
+import { withQueueTimeout } from "../lib/queue-inspect.js";
 import { SCHEDULER_REGISTRY } from "../lib/schedulers.js";
 import { readQueueAttachment } from "./queue-health.service.js";
 import { logger } from "../lib/logger.js";
@@ -181,10 +182,29 @@ async function readQueue(name: QueueName): Promise<SchedulerView[] | null> {
   }));
 }
 
+/**
+ * How long to wait for Redis before calling the page unreadable.
+ *
+ * The same budget `getQueueHealth` uses, and for the same reason:
+ * ioredis queues commands while disconnected and retries indefinitely,
+ * so it never rejects — it simply never answers. The per-queue
+ * `try/catch` below cannot see that, which left this report able to hang
+ * its request for ever against an unreachable server.
+ */
+const TIMEOUT_MS = 3_000;
+
 export async function getSchedulerReport(): Promise<SchedulerReport> {
   const checkedAt = new Date().toISOString();
 
-  const perQueue = await Promise.all(ALL_QUEUE_NAMES.map((name) => readQueue(name)));
+  const perQueue = await withQueueTimeout(
+    () => Promise.all(ALL_QUEUE_NAMES.map((name) => readQueue(name))),
+    TIMEOUT_MS,
+  );
+  if (perQueue === null) {
+    logger.warn({ component: "scheduler-view", timeoutMs: TIMEOUT_MS }, "Scheduler read timed out");
+    return { reachable: false, checkedAt, schedulers: [], unarmed: [] };
+  }
+
   const schedulers = perQueue.flatMap((rows) => rows ?? []);
 
   /*

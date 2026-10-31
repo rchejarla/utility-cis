@@ -199,9 +199,19 @@ sold as complete.
   restart, and a precondition there would make the record a lock on the
   one action that matters during an incident. The reason is required on
   the way in and not on the way out, for the same reason.
-- **SCH-PAUSE-6 (Should).** `notification-send` paused for longer than
-  its quiet-hours window is surfaced on `/platform/cluster`, since
-  nothing else reports mail that is queued rather than late.
+- **SCH-PAUSE-6 (Should, built 2026-10-31).** `notification-send` paused
+  for longer than its quiet-hours window is surfaced on
+  `/platform/cluster`, since nothing else reports mail that is queued
+  rather than late. The threshold is **the longest quiet-hours window any
+  tenant has set**, because that is the span the product already treats
+  as acceptable silence; with no tenant configured at all it falls back
+  to a declared eight hours. **A pause with no record alerts whatever its
+  age** — resume never requires a record (SCH-PAUSE-5), so a queue paused
+  straight in Redis has none, and there is then nobody to ask and no
+  reason on file. The backlog is reported but never gates the alert:
+  nothing queued is not reassurance, because the sweep is what moves
+  messages into the queue, so an empty backlog behind a paused queue is
+  mail that never got as far as being late.
 
 ## 3. The billing dispatcher
 
@@ -323,14 +333,67 @@ cross-tenant read, one per-tenant job with a deterministic id.
   carries `scheduled`, derived from a null `created_by`. *Which person*
   started a manual run stays unanswered: `created_by` has no foreign key,
   so it needs a `cis_user` lookup no relation supports, and the
-  dispatcher did not make that urgent. The list and detail screens
-  showing the flag is the half still to build.
-- **SCH-BILL-11 (Should).** The tenant is told when a due cycle did not
-  dispatch (SCH-BILL-5) or when a window closed with no run
-  (SCH-BILL-7), through the existing notification templates. A silent
+  dispatcher did not make that urgent. **Both screens draw the flag as of
+  2026-10-31** — the list as "· scheduled" and the detail as "by the
+  schedule, not by a person". It shipped readable and settable with no
+  control drawn for one commit, which is exactly the `autoPostBills`
+  failure the Automation page's drift guard exists to catch.
+- **SCH-BILL-11 (Should, built 2026-10-31).** The tenant is told when a
+  due cycle did not dispatch (SCH-BILL-5) or when a window closed with no
+  run (SCH-BILL-7), through the existing notification templates. A silent
   failure to bill is the most expensive silence in the product.
-- **SCH-BILL-12 (Should).** `/billing-runs` shows the next scheduled run
-  per cycle, so "is it going to happen" is answerable before the day.
+
+  **Told once per window, not once per tick.** The dispatcher fires
+  hourly; a notice arriving every hour for a month is one an operator
+  mutes, which leaves exactly the silence this requirement removes. The
+  ledger of what has been said lives in the billing scheduler's own
+  `scheduler_config.settings` jsonb — the storage rule's case for a knob
+  only one scheduler needs (spec 18) — and it is keyed on **cycle and
+  window**, because a cycle that fails two months running has two things
+  wrong and a cycle-only key would say nothing the second time. Entries
+  are pruned after 90 days, and an unreadable ledger counts as empty:
+  of the two ways to be wrong, a duplicate notice costs an email and
+  silence costs a month's billing.
+
+  Not the `notification` table, and that is the point: `sendNotification`
+  returns null for a tenant with no active template, so a ledger kept
+  there would record nothing and re-notify forever — for precisely the
+  tenant who has not asked to be mailed.
+
+  **The screen is the floor and the email is the escalation.** Email
+  alone would be a silent channel for a silence. `/billing-runs` shows an
+  unbilled window as overdue whether or not a template exists
+  (SCH-BILL-12); this adds the push for a tenant that has configured
+  one, addressed to the tenant's own **System Admin** role holders — no
+  new setting, no new screen and no address for an operator to keep
+  current. A tenant with no active System Admin gets no email, logged;
+  inventing a destination would be worse.
+
+  SCH-BILL-7's half is the one nothing else could see. While a bill day
+  is the most recent one, the dispatcher keeps retrying and reports the
+  refusal every tick — but the moment the *next* bill day arrives, the
+  planner's window moves on and the unbilled window is never considered
+  again. It is now asked for per cycle, against the window the planner
+  would have computed the day before this bill day.
+- **SCH-BILL-12 (Should, built 2026-10-31).** `/billing-runs` shows the
+  next scheduled run per cycle, so "is it going to happen" is answerable
+  before the day.
+
+  **Projected by stepping `billingDueAt` forward** over the UTC hour
+  boundaries the cron fires on, not by converting "the 10th at 03:00 in
+  Denver" to an instant. A second calculation is a second chance to
+  disagree with the dispatcher, and a screen that disagrees with the
+  schedule is worse than no screen. Stepping real instants also gets DST
+  right for free: the offset used is the one in force on the future bill
+  day, which a projection made in February for a March bill day would
+  otherwise get an hour wrong.
+
+  `overdue` is reported distinctly from `scheduled`, because on the 12th
+  "scheduled for the 10th" is not true. An active cycle whose frequency
+  the rate engine cannot bill says so rather than showing a blank, and
+  a tenant with automation off is told that nothing will start a run at
+  all — which, billing being the one scheduler that defaults to off, is
+  the most useful thing this panel says.
 
 ## 4. What stays fixed, and why
 
@@ -418,11 +481,41 @@ things around it do not, and they are cheaper to fix than to discover.
   plus a deterministic job id so two boots in the same hour enqueue one
   job. Any future sweep that looks for abandoned work follows the same
   two rules.
-- **SCH-NODE-4 (Should).** A queue with an armed scheduler and **no
-  worker attached for longer than its own interval** raises an alert,
-  not only a row on a page. The failure this spec is here to prevent is
-  silent, and "nobody opened the console" and "the month did not bill"
-  must not be the same event.
+- **SCH-NODE-4 (Should, built 2026-10-31).** A queue with an armed
+  scheduler and **no worker attached for longer than its own interval**
+  raises an alert, not only a row on a page. The failure this spec is
+  here to prevent is silent, and "nobody opened the console" and "the
+  month did not bill" must not be the same event.
+
+  Four things keep it quiet, and each is a false alarm it would otherwise
+  raise on every deployment: a worker *being* attached (late with one
+  attached is a slow or wedged handler, a different fault); attachment
+  being **unknown** rather than zero, since a managed Redis refuses
+  `CLIENT LIST`; the queue being **paused**, which is deliberate and
+  already reported with who, when and why; and being inside **one
+  interval**, since a worker that restarted a second ago leaves a
+  scheduler briefly past due with nothing attached. An **orphan** with
+  nothing attached is both conditions at once and gets the opposite
+  advice — remove it, rather than arm a worker for work no handler
+  claims.
+
+  The interval is measured from the pattern BullMQ reports, with
+  `cron-parser` — BullMQ's own parser, and a direct dependency as of this
+  slice. Declaring each cadence in a second list beside the workers'
+  `upsertJobScheduler` calls would be a threshold free to disagree with
+  the schedule it guards, and reading `notification-send`'s six-field
+  pattern as five fields would make its threshold sixty times too long,
+  on the one queue where held mail matters most.
+
+  **What is built is the detection, not a delivery channel.** This
+  codebase has no outbound path for a *platform* alert: every
+  notification template is keyed `(utility_id, event_type)` and addressed
+  to a tenant's customer. Inventing one around two conditions would be
+  designing the mechanism from its first two callers. The conditions are
+  carried on the cluster report and stated on `/platform/cluster` **above
+  the verdict**, in a shape a channel can consume unchanged. The open
+  question is which channel, and it is the same question SCH-BILL-11
+  answers for tenants.
 
 ## 6. How much runs at once
 
@@ -595,8 +688,8 @@ every node checks before taking a job.
 | Slice | Delivers | Unblocks |
 |---|---|---|
 | 1 | Scheduler view (SCH-VIEW-*) | **Shipped 2026-10-30.** Seeing what is armed, what is orphaned and what nothing armed |
-| 2 | Pause, resume and the two limits (SCH-PAUSE-*, SCH-CONC-*) | **Shipped 2026-10-30**, except SCH-PAUSE-6 (the alert) |
-| 3 | Billing dispatcher (SCH-BILL-*) | **Shipped 2026-10-31**, bar the two Shoulds and the run screens |
+| 2 | Pause, resume and the two limits (SCH-PAUSE-*, SCH-CONC-*) | **Shipped 2026-10-30**; SCH-PAUSE-6 followed on 2026-10-31 |
+| 3 | Billing dispatcher (SCH-BILL-*) | **Shipped 2026-10-31**, in full |
 | 4 | Editable cadence for the two preferences (SCH-FIX-1, 2) | After spec 24 steps 2–3 only |
 
 Pause and the limits were one slice because they are one route shape and
@@ -605,11 +698,25 @@ one table: `paused` and `concurrency` sit side by side in
 `/platform/cluster/queues`. Shipped together, with SCH-CONC-8's database
 claim first — it is what makes a settable limit safe at all.
 
-**SCH-PAUSE-6 is the one thing left in this slice**, and it is an
-alerting concern rather than a control: nothing yet notices that
-`notification-send` has been paused past its quiet-hours window. It
-belongs with SCH-NODE-4, which is the same shape — a condition nobody is
-looking at a page to see.
+**SCH-PAUSE-6 was the one thing left in this slice** and shipped on
+2026-10-31 with SCH-NODE-4, which is the same shape — a condition nobody
+is looking at a page to see. They share a module (`scheduling-alerts`)
+and a line on `/platform/cluster`, stated above the verdict because the
+verdict chain reads counts, worker attachment and pauses and cannot see
+either condition.
+
+Composing them taught something worth recording: the alerts were first
+computed *inside* `getQueueHealth`, which made the cluster health service
+import the scheduler view, which reaches `lib/schedulers.ts` and its six
+worker modules. The whole worker layer came in behind it, and the symptom
+was the queue-health unit suite timing out in its `beforeEach` import.
+The scheduler report is now read by the route and passed in — the rule
+`/api/v1/platform/queues` already stated for the worker status beside it.
+A second lesson from the same commit: the alert read was then left
+*outside* every deadline, which reintroduced the hang `withQueueTimeout`
+exists for, since ioredis never rejects and simply never answers.
+`getSchedulerReport` carries its own deadline now, which its own page
+needed anyway.
 
 SCH-NODE-1 was fixed on 2026-10-30, ahead of the slices, because it was
 wrong on `main` and the first scheduler slice 3 adds would have met it.
@@ -624,39 +731,63 @@ what nothing else could — which crons are armed nowhere at all.
 **Slice 3 shipped on 2026-10-31**, and with it the question this spec
 exists for: a billing cycle's bill day now has a clock behind it.
 
-What is left, and why each was left:
+Everything on slice 3's list closed on 2026-10-31. For the record of what
+each was:
 
-- **SCH-BILL-10's screens.** The run list and detail carry `scheduled`
-  from the API and do not draw it yet.
-- **SCH-BILL-11 and 12 (both Should).** Notifying a tenant when a due
-  cycle did not dispatch, and showing the next scheduled run per cycle.
-  The dispatcher records every refusal by name in its result already;
-  these are the surfaces that would carry it outward.
-- **SCH-PAUSE-6 and SCH-NODE-4 (both Should).** The two alerts. Same
-  shape as each other: a condition nobody is looking at a page to see.
-- **An end-to-end test of the dispatcher.** `billingDueAt` has twelve
-  unit cases and `dispatchBilling` has none — no test takes a seeded
-  tenant, a due cycle and reads in the window and asserts that a run
-  appears. That is the gap I would close before letting it start runs
-  unattended, and it is the one thing on this list that is not optional.
+- **SCH-BILL-10's screens.** Drawn on both the list and the detail.
+- **SCH-BILL-11 and 12.** Notifying a tenant when a due cycle did not
+  dispatch, and showing the next scheduled run per cycle. Both above.
+- **SCH-PAUSE-6 and SCH-NODE-4.** The two alerts, above.
+- **An end-to-end test of the dispatcher.** `dispatchBilling` had none —
+  twelve unit cases for `billingDueAt` and nothing that took a seeded
+  tenant, a due cycle and reads in the window and asserted a run
+  appeared. It was the one item on this list that was not optional, and
+  it earned its keep immediately: writing it found the dispatcher
+  honouring its own clock by halves. `dispatchBilling(now)` decided
+  *whether* a cycle was due from `now`, while `resolveRunPlan` defaulted
+  its as-of to `new Date()` and so decided *which period* from the real
+  clock. The two agree in production, because production passes the real
+  clock — but only by coincidence, and a parameter that governs half of
+  what it appears to govern is one a test can be fooled by. It fooled
+  that test: a dispatch dated years ahead still read the current window,
+  found the seeded reads there, and started a run the reads gate should
+  have refused. `now` reaches the planner now, which also pins every
+  cycle in one sweep to one instant rather than each to its own.
+
+What is left in this spec is slice 4 (SCH-FIX-1 and 2, blocked on spec 24
+steps 2–3), and the open questions below — of which the first is now the
+live one, since both alerts and SCH-BILL-11 have detections and no
+channel beyond a screen and an email a tenant opts into.
 
 ## Open questions
 
-1. **Does a scheduled run notify anyone on success?** SCH-BILL-11 covers
+1. **Where does an alert actually go?** The live question, now that
+   SCH-PAUSE-6, SCH-NODE-4 and SCH-BILL-11 all have detections. A tenant
+   can be emailed through the existing templates, which is what
+   SCH-BILL-11 does; the **platform** operator cannot be, because every
+   notification template is keyed `(utility_id, event_type)` and
+   addressed to a tenant's customer. Until that exists, both cluster
+   alerts are a line on a page somebody has to open — which is half of
+   what "not only a row on a page" asks for.
+2. **Does a scheduled run notify anyone on success?** SCH-BILL-11 covers
    failure. A monthly "12,384 bills generated" is either reassurance or
    noise, and which it is depends on whether anyone is accountable for
    looking.
-2. **May the platform operator start a tenant's billing run?** The
+3. **May the platform operator start a tenant's billing run?** The
    console can retry and replay jobs today. Starting a *new* run charges
    a tenant's customers, which reads like a different kind of authority.
    My inclination is no, and that the console's job is to show why the
    tenant's own schedule did not fire.
-3. **`created_by` nullable, or a reserved system uuid?** SCH-BILL-9
+4. **`created_by` nullable, or a reserved system uuid?** SCH-BILL-9
    proposes nullable, matching the audit convention. A reserved uuid
    keeps the column non-null at the cost of a row that is not a user.
-4. **Who is told about an orphaned scheduler?** SCH-VIEW-3 shows it. It
-   only appears after a deploy removes a cron, which is rare enough that
-   a page may be enough and an alert may be noise.
+5. **Who is told about an orphaned scheduler?** SCH-VIEW-3 shows it, and
+   since 2026-10-31 an orphan *with no worker attached* also raises
+   SCH-NODE-4's alert, with the advice to remove it rather than arm a
+   worker for it. An orphan that is still being promoted is a page entry
+   and nothing more. That split is a guess at where the noise is: an
+   orphan only appears after a deploy removes a cron, which is rare
+   enough that the quiet half may be right.
 **Closed:**
 
 - *How does a per-node limit reach a running worker?* It does not — next

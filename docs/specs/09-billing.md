@@ -419,6 +419,7 @@ act repeated rather than a new kind of power.
 | POST | `/api/v1/billing-runs` | `accounts:EDIT` | Start a run. **202** with the PENDING run and `queued` — the work is minutes long, so the response is the record to watch rather than the result |
 | GET | `/api/v1/billing-runs` | `accounts:VIEW` | The 100 most recent runs, newest first |
 | GET | `/api/v1/billing-runs/preview` | `accounts:VIEW` | What starting a run would do — resolved window, dates, and how many accounts are due — without writing anything. Same fields as the create body, as a query |
+| GET | `/api/v1/billing-runs/schedule` | `accounts:VIEW` | Each active cycle's next dispatch, before the day (SCH-BILL-12). `enabled` false says nothing will start a run at all, which — billing being the one scheduler that defaults to off — is the most useful answer it gives. `reason` separates `scheduled` from `overdue`, since on the 12th "scheduled for the 10th" is not true, and names `unsupportedFrequency` rather than showing a blank. Projected by stepping `billingDueAt` forward over the cron's own hour boundaries, so it cannot disagree with the dispatcher |
 | GET | `/api/v1/billing-runs/:id` | `accounts:VIEW` | One run's counts and status, plus `billedTotal` — what posting would raise — and `postedCount` / `awaitingPostCount`, which is what the Post button is gated on rather than `postedAt` |
 | GET | `/api/v1/billing-runs/:id/items` | `accounts:VIEW` | The item list. `?status=FAILED` is the work queue; `limit` (≤500) / `offset` |
 | POST | `/api/v1/billing-runs/:id/post` | `accounts:EDIT` | Queue a posting pass over every bill the run produced. **202** with `{ queued, jobId }` — the counts land on the run, not in this response. Refusals (`RUN_NOT_FOUND`, `RUN_NOT_FINISHED`, `RUN_POSTING_IN_FLIGHT`) are answered synchronously, before the enqueue |
@@ -671,6 +672,21 @@ never existed.
 
 A run is identified by its cycle and window — "the October residential
 run" — so those are the first two columns and the id is not shown at all.
+
+**Above the table: what *will* run** (SCH-BILL-12, shipped 2026-10-31).
+The table is a history, and nothing on the screen answered the question an
+operator has on the 8th rather than the 11th. One line per active cycle
+with its next dispatch **in the tenant's own zone** — the reader's zone
+would print an hour nobody configured — plus the window it would cover and
+whether a run already covers it. `Overdue` is marked distinctly from a
+future date, and a cycle whose frequency cannot be billed says so rather
+than showing a blank. For a tenant with automation off the panel leads
+with the fact that nothing will start a run, and links to the Automation
+settings; that is the most valuable thing it says, since billing is the
+one scheduler that defaults to off. The panel is loaded separately from
+the table and its failure is swallowed — the table is what the operator
+came for, and an error about the projection would put a failure on a
+screen that is working.
 
 **Failed and skipped are separate columns, never one "exceptions" figure.**
 Failed is the only number on the screen that means somebody has work to do.

@@ -63,7 +63,7 @@ docs/specs/
 ├── 24-platform-worker-control.md    — Worker lifecycle across nodes (step 1 built)
 ├── 25-platform-console.md           — Platform actor's console: tenants + cluster (shipped)
 ├── 26-time-of-use-rates.md          — TOU calendars, seasons, interval data (proposed; nothing built)
-└── 27-job-scheduling.md             — Scheduler visibility, queue pause and concurrency, the billing dispatcher (slices 1-3 shipped; the two alerts and an end-to-end dispatcher test remain)
+└── 27-job-scheduling.md             — Scheduler visibility, queue pause and concurrency, the billing dispatcher (slices 1-3 shipped in full; slice 4 waits on spec 24 steps 2-3)
 ```
 
 ### Master Design Document
@@ -237,6 +237,8 @@ Two nav sections, because they answer two different questions:
   **Worker boot reports orphaned schedulers; it does not delete them** (`lib/schedulers.ts`, which also holds `SCHEDULER_REGISTRY` — `worker.ts` cannot be imported, since loading it starts a worker). Deleting at boot was wrong with two builds in flight: during a rolling deploy the old node removed the cron the new node had just armed, and registration happens only at boot, so it stayed gone. Removal is now `DELETE /api/v1/platform/queues/:name/schedulers/:id`, which refuses an id the running build registers.
 
   **What stops two passes overlapping over one billing run is the database, not a concurrency number** (`services/billing-run/claim.ts`): one conditional `UPDATE` claims the run, judged on whether a pass is still reporting progress rather than on whether one is marked. That is what makes the limits safe to expose at all — `concurrency: 1` only ever guaranteed it with a single replica.
+
+  **Two conditions are stated above the verdict, because the verdict cannot see them** (`services/scheduling-alerts.ts`): an armed scheduler on a queue with nothing attached, past due by more than its own interval, and `notification-send` paused for longer than the longest quiet-hours window any tenant has set. The verdict chain reads counts, worker attachment and pauses — and a queue with an armed cron and no worker shows a *healthy* queue's counts. They are **detections, not a delivery channel**: there is no outbound path for a platform alert, since every notification template is keyed `(utility_id, event_type)` and addressed to a tenant's customer. **Compose them in the route, never inside `getQueueHealth`** — that service importing the scheduler view pulls in `lib/schedulers.ts` and its six worker modules, and with them the whole worker layer; the symptom was the queue-health unit suite timing out in its `beforeEach` import. Anything reading Redis needs its own `withQueueTimeout` deadline, including `getSchedulerReport`: ioredis queues commands while disconnected and retries for ever, so it never rejects — it simply never answers, and a `try/catch` cannot see that.
 
 Chrome is `components/platform-shell.tsx`. These screens mount **no `AuthPermissionProvider`** on purpose: `/auth/me` answers 403 for a platform token and the provider then falls back to granting every permission, so any gating it appeared to do here would be fabricated. The real gate is `{ config: { platform: true } }`, server-side.
 

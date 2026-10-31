@@ -10,6 +10,11 @@ import { runAsTenant } from "../lib/tenant-context.js";
 import { DEFAULT_RUN_HOUR_LOCAL } from "@utility-cis/shared";
 import { billDayIn } from "../services/bill.service.js";
 import { previewBillingRun, createBillingRun } from "../services/billing-run.service.js";
+import {
+  findClosedUnbilledWindows,
+  reportBillingNotices,
+  type BillingNotice,
+} from "../services/billing-notice.service.js";
 import { BILLING_RUN_JOB_NAME } from "./billing-run-worker.js";
 
 /**
@@ -126,6 +131,15 @@ export interface SkippedCycle {
   cycleCode: string;
   reason: DueReason | "readsIncomplete" | "alreadyRun" | "failed";
   detail?: string;
+  /**
+   * The window that was not billed, where one was computed.
+   *
+   * Carried so the tenant notice can be keyed on it (SCH-BILL-11): a
+   * notice is sent once per window, and without the window the only
+   * key available would be the cycle — which would say nothing the
+   * second month a cycle failed to bill.
+   */
+  windowEnd?: string;
 }
 
 export interface BillingDispatchResult {
@@ -134,6 +148,13 @@ export interface BillingDispatchResult {
   reasons: { onSchedule: number; catchingUp: number };
   /** Only the ones worth an operator's attention; not every "not yet". */
   skipped: SkippedCycle[];
+  /**
+   * Windows the tenant was told about on this sweep (SCH-BILL-11).
+   *
+   * Lower than `skipped` on every tick but the first: a window is
+   * reported once, not once an hour.
+   */
+  notified: number;
 }
 
 /**
@@ -186,6 +207,7 @@ export async function dispatchBilling(now: Date = new Date()): Promise<BillingDi
     started: 0,
     reasons: { onSchedule: 0, catchingUp: 0 },
     skipped: [],
+    notified: 0,
   };
   if (tenants.length === 0) return result;
 
@@ -245,7 +267,64 @@ export async function dispatchBilling(now: Date = new Date()): Promise<BillingDi
     }
   }
 
+  result.notified = await tellTenants(tenants, result, now);
   return result;
+}
+
+/**
+ * Tell each tenant what did not bill (SCH-BILL-11).
+ *
+ * After the sweep rather than inside it, and per tenant rather than per
+ * cycle: a tenant with four cycles whose reads all failed is told once
+ * about four windows, not mailed four times, and the ledger that makes
+ * the notice once-per-window is one read and one write instead of eight.
+ *
+ * Tolerant per tenant. Notifying is the last thing this job does and the
+ * least important: a tenant whose mail cannot be arranged must not cost
+ * another tenant the record of its own missed month, and must not fail
+ * the sweep that has already started everything it could.
+ */
+async function tellTenants(
+  tenants: readonly { utilityId: string }[],
+  result: BillingDispatchResult,
+  now: Date,
+): Promise<number> {
+  let told = 0;
+
+  for (const tenant of tenants) {
+    const { utilityId } = tenant;
+    try {
+      const refused: BillingNotice[] = result.skipped
+        .filter((s) => s.utilityId === utilityId && s.reason === "readsIncomplete" && s.windowEnd)
+        .map((s) => ({
+          billingCycleId: s.billingCycleId,
+          cycleCode: s.cycleCode,
+          windowEnd: s.windowEnd as string,
+          reason: "readsIncomplete" as const,
+          detail: s.detail ?? "Its reads had not landed when the window came due.",
+        }));
+
+      const sent = await runAsTenant(utilityId, async () => {
+        /*
+         * Both conditions in one pass. The closed-window check is the
+         * half nothing else could see: while a bill day is the most
+         * recent one the dispatcher keeps retrying and reporting, but
+         * once the next bill day arrives the planner's window moves on
+         * and the unbilled one is never considered again.
+         */
+        const closed = await findClosedUnbilledWindows(utilityId, now);
+        return reportBillingNotices(utilityId, [...refused, ...closed], now);
+      });
+      told += sent.length;
+    } catch (err) {
+      logger.error(
+        { err, component: "billing-dispatcher", utilityId },
+        "Could not tell this tenant that billing did not happen",
+      );
+    }
+  }
+
+  return told;
 }
 
 /**
@@ -313,6 +392,7 @@ async function startOneCycle(
         cycleCode: cycle.cycleCode,
         reason: "readsIncomplete",
         detail: `No meter read in ${plan.windowStart.toISOString().slice(0, 10)}..${plan.windowEnd.toISOString().slice(0, 10)}`,
+        windowEnd: plan.windowEnd.toISOString().slice(0, 10),
       });
       logger.warn(
         { component: "billing-dispatcher", utilityId, cycleCode: cycle.cycleCode },
