@@ -299,27 +299,56 @@ What this buys: **onboarding a utility is rows, not schema.** Adding a
 scheduler is a list entry plus a handler. A knob only one scheduler needs
 is a jsonb key and no migration at all.
 
-### What is still unmanaged
+### UtilitySetting is not a settings bucket
 
-`utility_setting(utility_id, name, value jsonb)` already exists — a
-generic per-utility key-value store, with one consumer (the rate engine's
-tenant loader). It is the storage half of a managed settings mechanism,
-and it has none of the other halves: no declaration of what keys exist, no
-label or help text, no control type, no validation, and no declared
-default. So every key in it is hand-wired at both ends.
+`utility_setting(utility_id, name, value jsonb)` looks like a third
+generic store and is not one. **It is the rate engine's variable store.**
 
-The smaller step, when the first one-off tenant knob arrives that is not
-per-scheduler: give it the same treatment `SCHEDULER_DEFINITIONS` gave the
-schedulers — one code-side declaration per key carrying label, type,
-default and validation, with the settings page rendering from it. That
-makes adding a knob a declaration plus one read at the point of behaviour,
-and nothing else.
+A tenant's rate schedule is data, and a component can reference a named
+variable — `drought_stage`, or `flags.<anything>`. At rate time
+`manifest()` walks the active components and collects every variable key
+they mention; `TenantLoader` then fetches those names from this table.
 
-**What can never be configuration:** the behaviour itself. A knob that
-nothing reads does nothing, so "don't bill under $5" needs code that
-compares a total to a threshold however the value is stored. The target is
-to make everything *except* that comparison free, not to pretend the
-comparison can be declared away.
+```
+rate component (tenant-authored)  →  references "flags.summer_surcharge"
+          ↓  manifest() collects the key
+utility_setting row of that name  →  supplies the value
+```
+
+So its keys come from the tenant's configuration, **not from code**.
+Nothing in this repository names `flags.summer_surcharge`; a configurator
+invented it writing a rate component. That is why it is a table keyed on
+`name` and read with `name IN (…)` for whatever batch the engine just
+discovered, rather than a jsonb bucket whose keys a reader names one at a
+time.
+
+It therefore has, and should keep, **no declaration of what keys exist** —
+a list of valid keys would defeat the mechanism. An earlier version of
+this section called it "the storage half of a managed settings mechanism"
+missing a catalogue. That was wrong, and would have sent somebody to fix
+something correct.
+
+### Three kinds of tenant configuration
+
+| Kind | Who names the key | Cost of adding one |
+|---|---|---|
+| A column (`utility_config`, `scheduler_config`) | code, and it may filter on it in SQL | a migration |
+| `settings` jsonb on either row | code still names it; not every tenant has it | nothing |
+| `utility_setting` | **the tenant's own configuration** — code never names it | nothing, and no deploy |
+
+The third row is the only place where a new knob needs no code at all, and
+it is worth understanding why: the thing that reads it is itself data. A
+rate formula referencing a variable is configuration reading
+configuration, so the engine satisfies "something must read it" once,
+generically, for every variable a tenant will ever invent.
+
+**Everywhere else, the behaviour cannot be configuration.** A knob nothing
+reads does nothing — "don't bill under $5" needs code comparing a total to
+a threshold, however the threshold is stored. The target for those is to
+make everything *except* that comparison free: one declaration and one
+read, with no migration, no DTO edit and no UI edit. That is what
+`SCHEDULER_DEFINITIONS` achieved for the schedulers, and the pattern to
+copy when the first non-scheduler knob of this kind arrives.
 
 ## Identifier Generation
 
