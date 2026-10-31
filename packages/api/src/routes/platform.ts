@@ -19,6 +19,7 @@ import { setPerNodeLimit, setClusterLimit } from "../lib/queue-limits.js";
 import { pauseQueue, resumeQueue } from "../lib/queue-pause.js";
 import { removeScheduler, SCHEDULER_REGISTRY } from "../lib/schedulers.js";
 import { getSchedulerReport } from "../services/scheduler-view.service.js";
+import { getSchedulingAlerts } from "../services/scheduling-alerts.js";
 import { logger } from "../lib/logger.js";
 import { getQueueJobs, QUEUE_JOB_STATES } from "../services/queue-jobs.service.js";
 import { actOnQueueJob, QUEUE_ACTIONS } from "../services/queue-actions.service.js";
@@ -167,12 +168,38 @@ export async function platformRoutes(app: FastifyInstance) {
      * and only the page needs both at once. Keeping them apart also means
      * a Redis that will not list its clients costs the attachment and
      * not the counts.
+     *
+     * The alerts (SCH-NODE-4, SCH-PAUSE-6) join them for the same
+     * reason, and the rule has teeth: computing them inside
+     * `getQueueHealth` made that service import the scheduler view,
+     * which reaches `lib/schedulers.ts` and its six worker modules — so
+     * the cluster health service pulled the whole worker layer in behind
+     * it. The scheduler report is read here and passed in.
      */
-    const [health, workerControl] = await Promise.all([
+    const [health, workerControl, schedulers] = await Promise.all([
       getQueueHealth(),
       getWorkerControlStatus(),
+      getSchedulerReport(),
     ]);
-    return reply.send({ ...health, ...workerControl });
+
+    /*
+     * Tolerant, and last. The alerts are the least important thing in
+     * this payload and the counts are what the operator came for, so a
+     * failure here must not cost the report. `reachable: false` means
+     * the schedulers could not be read, which is not "none armed" — the
+     * alerts are withheld rather than invented.
+     */
+    let alerts: Awaited<ReturnType<typeof getSchedulingAlerts>> = [];
+    try {
+      alerts = await getSchedulingAlerts(
+        health.queues,
+        schedulers.reachable ? schedulers.schedulers : null,
+      );
+    } catch (err) {
+      app.log.warn({ err }, "could not compute scheduling alerts");
+    }
+
+    return reply.send({ ...health, ...workerControl, alerts });
   });
 
   /*

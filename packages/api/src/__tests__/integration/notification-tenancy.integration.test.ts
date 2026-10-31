@@ -249,6 +249,49 @@ describe("POST /api/v1/notifications/send — across tenants", () => {
     }));
 
   /**
+   * A notification addressed to a member of staff, not a customer.
+   *
+   * `recipientId` is written straight into `notification.customer_id`,
+   * which carries `notification_customer_id_fkey -> customer(id)`. The
+   * import notifier has always passed `batch.createdBy` there — a
+   * `cis_user` id — with the actor's address as an override, and it has
+   * never failed only because no tenant has an active `import.complete`
+   * template, so `sendNotification` returns at the template check and
+   * never reaches the insert. The day a tenant creates one, every
+   * finished import raises a foreign-key violation.
+   *
+   * Reachable only against a real database: the FK is what fails, and
+   * the mocked companion file has no constraints to violate. Asserted
+   * through the service rather than the route because `manualSendSchema`
+   * is `.strict()` with no `recipientOverride` — a request cannot name
+   * its own destination, by design.
+   */
+  it("addresses a staff recipient without claiming they are a customer", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const { sendNotification } = await import("../../services/notification.service.js");
+      const { runAsTenant } = await import("../../lib/tenant-context.js");
+
+      const id = await runAsTenant(TENANT_A, () =>
+        sendNotification(TENANT_A, {
+          eventType: EVENT_TYPE,
+          channel: "EMAIL",
+          // A real cis_user id, which is what the import notifier passes.
+          recipientId: ACTOR,
+          recipientOverride: { email: "ops@example.com" },
+          context: {},
+        }),
+      );
+
+      expect(id).not.toBeNull();
+      const row = await prisma.notification.findUniqueOrThrow({ where: { id: id as string } });
+      expect(row.recipientEmail).toBe("ops@example.com");
+      // The column means "the customer this is about", and this one is
+      // about nobody's account.
+      expect(row.customerId).toBeNull();
+    }));
+
+  /**
    * `context` is caller-supplied, so it is a second route to another
    * tenant's data — and the one that persists, since the rendered body
    * and `resolved_variables` are stored under the caller's own

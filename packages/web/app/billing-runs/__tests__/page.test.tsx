@@ -96,13 +96,34 @@ function renderPage() {
   );
 }
 
-/** Route the page's two different GETs by path. */
-function routeGets(opts: { runs?: unknown[]; cycles?: unknown[]; preview?: unknown }) {
+/**
+ * Route the page's several GETs by path.
+ *
+ * The schedule defaults to no cycles, so the "next scheduled run" panel
+ * renders nothing unless a test asks for it — every assertion in this
+ * file below is about the runs table, and a default panel would put a
+ * second "R01" on screen and make `getByText` ambiguous.
+ *
+ * The fallback used to answer `[]` for any unrecognised path, which is
+ * how adding the schedule endpoint broke all fourteen tests at once:
+ * an array arrived where the panel expected an object and it read
+ * `.cycles.length` off `undefined`.
+ */
+function routeGets(opts: {
+  runs?: unknown[];
+  cycles?: unknown[];
+  preview?: unknown;
+  schedule?: unknown;
+}) {
   get.mockImplementation((path: string) => {
     if (path === "/api/v1/billing-runs") return Promise.resolve(opts.runs ?? []);
     if (path === "/api/v1/billing-cycles") return Promise.resolve(opts.cycles ?? [cycle()]);
     if (path === "/api/v1/billing-runs/preview")
       return Promise.resolve(opts.preview ?? preview());
+    if (path === "/api/v1/billing-runs/schedule")
+      return Promise.resolve(
+        opts.schedule ?? { enabled: true, timezone: "UTC", runHourLocal: 3, cycles: [] },
+      );
     return Promise.resolve([]);
   });
 }
@@ -116,6 +137,39 @@ afterEach(() => {
 });
 
 describe("Billing runs list", () => {
+  it("answers whether the next run will happen, above the history of ones that did", async () => {
+    /*
+     * SCH-BILL-12, wired. The component has its own tests; this one
+     * exists because the panel was invisible until the page fetched the
+     * schedule and passed it down — the half a component test cannot
+     * see.
+     */
+    routeGets({
+      runs: [run()],
+      schedule: {
+        enabled: false,
+        timezone: "UTC",
+        runHourLocal: 3,
+        cycles: [
+          {
+            billingCycleId: "c1",
+            cycleCode: "R01",
+            cycleName: "Residential",
+            nextRunAt: "2026-12-10T03:00:00.000Z",
+            reason: "scheduled",
+            windowEnd: "2026-12-10",
+            alreadyRun: false,
+          },
+        ],
+      },
+    });
+    renderPage();
+
+    // Automation off is the answer worth leading with: billing is the
+    // one scheduler that defaults to off.
+    expect(await screen.findByText(/nothing will start a billing run/i)).toBeInTheDocument();
+  });
+
   it("counts failed and skipped in separate columns", async () => {
     routeGets({ runs: [run({ failedCount: 3, skippedCount: 40 })] });
     renderPage();

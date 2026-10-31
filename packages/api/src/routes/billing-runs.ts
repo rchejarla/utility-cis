@@ -17,6 +17,7 @@ import {
   summariseRunExceptions,
   sendBillingRun,
 } from "../services/billing-run.service.js";
+import { getBillingSchedule } from "../services/billing-schedule.service.js";
 import { QUEUE_NAMES, enqueueSafely } from "../lib/queues.js";
 import {
   BILLING_RUN_JOB_NAME,
@@ -96,6 +97,23 @@ export async function billingRunRoutes(app: FastifyInstance) {
           dueDate: query.dueDate ? new Date(query.dueDate) : undefined,
         }),
       );
+    },
+  );
+
+  /**
+   * Whether each cycle's next run is going to happen (SCH-BILL-12).
+   *
+   * The dispatcher reports what it did; this answers the question before
+   * the day, which is the one an operator has on the 8th. `VIEW` and a
+   * static sibling of `/:id`, for the same two reasons as `/preview`
+   * above.
+   */
+  app.get(
+    "/api/v1/billing-runs/schedule",
+    { config: { module: "accounts", permission: "VIEW" } },
+    async (request, reply) => {
+      const { utilityId } = request.user;
+      return reply.send(await getBillingSchedule(utilityId));
     },
   );
 

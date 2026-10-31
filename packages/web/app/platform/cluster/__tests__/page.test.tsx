@@ -257,4 +257,83 @@ describe("the cluster overview", () => {
     expect(screen.queryByText(/all clear/i)).not.toBeInTheDocument();
   });
 
+  /*
+   * The two alerts (SCH-NODE-4, SCH-PAUSE-6).
+   *
+   * These three tests are a self-checking set: the banner has to be
+   * absent on an ordinary report and present on one carrying an alert,
+   * so a banner that always rendered fails the first and one that never
+   * rendered fails the other two. Without that pair a test asserting
+   * only the presence would pass against a page that showed the banner
+   * unconditionally.
+   */
+  it("draws no alert banner on a report that carries none", async () => {
+    get.mockResolvedValue(report());
+
+    render(<ClusterOverviewPage />);
+
+    expect(await screen.findByText(/nothing failed or dead-lettered/i)).toBeInTheDocument();
+    expect(screen.queryByText(/work is not happening/i)).not.toBeInTheDocument();
+  });
+
+  it("leads with a scheduler nothing is promoting, above the verdict", async () => {
+    /*
+     * The condition the verdict chain cannot reach. Counts, attachment
+     * and pauses are all it reads, and an armed cron with nothing
+     * attached shows a healthy queue's counts — so this report would
+     * otherwise open with "Partly unattended" and never say that a
+     * month has stopped billing.
+     */
+    get.mockResolvedValue(
+      report({
+        queues: [queue({ name: "billing-dispatch", workers: 0, workerAgeSeconds: null })],
+        alerts: [
+          {
+            kind: "unpromotedScheduler",
+            queue: "billing-dispatch",
+            schedulerId: "billing-dispatch-cron",
+            forSeconds: 7200,
+            message:
+              "billing-dispatch-cron has had no worker on billing-dispatch for 2 hours, so it " +
+              "has missed every fire since. Start a worker for billing-dispatch.",
+          },
+        ],
+      }),
+    );
+
+    render(<ClusterOverviewPage />);
+
+    expect(await screen.findByText(/work is not happening/i)).toBeInTheDocument();
+    expect(screen.getByText(/missed every fire since/i)).toBeInTheDocument();
+  });
+
+  it("names held mail with how long and why, not just that a queue is paused", async () => {
+    get.mockResolvedValue(
+      report({
+        queues: [queue({ name: "notification-send", paused: true })],
+        alerts: [
+          {
+            kind: "mailHeldPaused",
+            queue: "notification-send",
+            schedulerId: null,
+            forSeconds: 43200,
+            message:
+              'notification-send has been paused for 12 hours by Ops ("provider maintenance") — ' +
+              "longer than any tenant's quiet hours, and 41 messages are queued behind it. No " +
+              "mail or SMS is going out.",
+          },
+        ],
+      }),
+    );
+
+    render(<ClusterOverviewPage />);
+
+    // The three facts the bare "Queues are paused" verdict omits: how
+    // long, who and why, and how much is stuck behind it.
+    const banner = await screen.findByText(/no mail or SMS is going out/i);
+    expect(banner).toHaveTextContent(/12 hours/);
+    expect(banner).toHaveTextContent(/provider maintenance/);
+    expect(banner).toHaveTextContent(/41 messages/);
+  });
+
 });

@@ -213,7 +213,7 @@ Admin chrome is skipped for `/platform/*` (as it is for `/portal/*`,
 | Provision | `/platform/utilities/new` | Name, optional first admin, optional explicit id. **Preview** runs the same provisioning as a dry run against the same constraints and rolls back, so a name already taken is refused before anyone commits. Hand-composed rather than `EntityFormPage`: that component gates on `canCreate` for a *tenant* permission module, and no second submit button exists in it |
 | Utility Detail | `/platform/utilities/:id` | Readiness panel, the 32 modules with per-module toggles, roles (create / edit / delete), staff, portal-customer **count**, and the from-outside history. The list showed counts with nothing behind them — "6 roles" raises the question it cannot answer |
 | Operators | `/platform/users` | The platform's own identities, `lastLoginAt`, deactivate and reactivate. Appointing opens in place rather than on its own page: an operator is an address and a name |
-| Cluster Overview | `/platform/cluster` | One verdict — unattended queues, paused queues, failures, "nothing is running at all" — and the recent failures with the tenant each belongs to. Nothing else |
+| Cluster Overview | `/platform/cluster` | The two alerts above one verdict — unattended queues, paused queues, failures, "nothing is running at all" — and the recent failures with the tenant each belongs to. Nothing else |
 | Workers | `/platform/cluster/workers` | A table, one row per node, at every node count: node, worker id, pid, queues, uptime, attachment. Start is node-local (nothing portable starts a process on another machine, and the row says which node the request landed on rather than implying a choice); Stop is offered only where the pid is this node's to signal |
 | Queues | `/platform/cluster/queues` | The nine queues, counts only: workers, waiting, active, delayed, failed, DLQ, completed, paused. Each count links to the Jobs page with queue and state in the URL, and the page links out to Bull Board rather than putting it in the nav |
 | Schedulers | `/platform/cluster/schedulers` | Every armed cron with its cadence, next run, last run and lifetime count, and one sentence per row saying why it will not fire when it will not — paused queue, no worker, orphan, or overdue, in that precedence. Remove appears only on an orphan. A separate panel names crons nothing armed, which have no row to appear in. See [27 — Job Scheduling](27-job-scheduling.md) §1 |
@@ -224,6 +224,20 @@ is anything wrong, who is doing the work, and what is the work. One page
 held all five subjects — the verdict, the nodes, the workers, the queues
 and the jobs behind one count — and each thing added made the others
 harder to find.
+
+**The alerts sit above the verdict, not under it** (SCH-NODE-4,
+SCH-PAUSE-6, shipped 2026-10-31). The verdict chain reads counts, worker
+attachment and pauses, and neither condition is visible to any of the
+three: a queue with an armed cron and nothing attached shows a *healthy*
+queue's counts, and a long-paused `notification-send` reads as the
+ordinary "Queues are paused" line, which says nothing about mail piling
+up behind it. Underneath the verdict they would be the second thing read
+on a page whose first line says "all clear". `alerts` is composed by
+`GET /platform/queues` rather than by `getQueueHealth` — the same rule
+the worker status beside it follows, and one with teeth: computing them
+inside that service made it import the scheduler view, and with it
+`lib/schedulers.ts` and its six worker modules. See
+[27 — Job Scheduling](27-job-scheduling.md) §2 and §5.
 
 The drill-down took three attempts: a job table nested inside the queue
 table (its header row landed among the queue rows and read as though it

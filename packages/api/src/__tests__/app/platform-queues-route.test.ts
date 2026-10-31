@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createTestToken, createPlatformToken } from "../setup.js";
+// Type-only: the module itself is mocked below, and the annotation is
+// erased, so importing it here pulls in nothing at runtime.
+import type { SchedulerReport } from "../../services/scheduler-view.service.js";
 
 /**
  * Who may read the queue summary, and that it is a read.
@@ -71,7 +74,14 @@ vi.mock("../../lib/schedulers.js", () => ({
   removeScheduler: (...args: unknown[]) => removeScheduler(...(args as [])),
 }));
 
-const getSchedulerReport = vi.fn(async () => ({
+/*
+ * Typed against the real contract rather than inferred from this
+ * default. Inference pinned `lastRunAt` to `string` and `iterations` to
+ * `number`, so a test overriding either with the null the type allows
+ * did not compile — and the annotation now also fails here if
+ * `SchedulerReport` itself drifts.
+ */
+const getSchedulerReport = vi.fn(async (): Promise<SchedulerReport> => ({
   reachable: true,
   checkedAt: "2026-10-30T10:00:00.000Z",
   schedulers: [
@@ -325,6 +335,84 @@ describe("GET /api/v1/platform/queues", () => {
 
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body)).toMatchObject({ reachable: true, totals: { dlq: 2 } });
+  });
+
+  it("carries the alerts the overview page states above its verdict", async () => {
+    /*
+     * SCH-NODE-4 and SCH-PAUSE-6 are composed here rather than inside
+     * `getQueueHealth`, so nothing in that service's own tests can see
+     * whether they reach the body. Without this the field is an orphan
+     * of the kind `autoPostBills` already taught this codebase about:
+     * computed, serialised, and renderable by a page that would quietly
+     * stop receiving it.
+     *
+     * An armed scheduler with no worker, two hours past an hourly cron,
+     * is the condition — and the mocked queue summary carries no paused
+     * `notification-send`, so the mail alert correctly stays silent.
+     */
+    getSchedulerReport.mockResolvedValueOnce({
+      reachable: true,
+      checkedAt: new Date().toISOString(),
+      schedulers: [
+        {
+          queue: "billing-dispatch",
+          schedulerId: "billing-dispatch-cron",
+          jobName: "dispatch-billing",
+          pattern: "0 * * * *",
+          everyMs: null,
+          timezone: "UTC",
+          nextRunAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+          overdue: true,
+          lastRunAt: null,
+          iterations: null,
+          orphan: false,
+          workers: 0,
+          paused: false,
+        },
+      ],
+      unarmed: [],
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/platform/queues",
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.alerts).toHaveLength(1);
+    expect(body.alerts[0]).toMatchObject({
+      kind: "unpromotedScheduler",
+      queue: "billing-dispatch",
+      schedulerId: "billing-dispatch-cron",
+    });
+  });
+
+  it("still answers when the schedulers cannot be read, without inventing alerts", async () => {
+    /*
+     * `reachable: false` means the schedulers could not be read, which
+     * is not "none armed" — so the alerts are withheld rather than
+     * fabricated, and the counts still arrive. The alerts are the least
+     * important thing in this payload and must never cost the report.
+     */
+    getSchedulerReport.mockResolvedValueOnce({
+      reachable: false,
+      checkedAt: new Date().toISOString(),
+      schedulers: [],
+      unarmed: [],
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/platform/queues",
+      headers: { authorization: `Bearer ${createPlatformToken()}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.alerts).toEqual([]);
+    expect(body.totals.dlq).toBe(2);
   });
 
   it("refuses a tenant admin, whatever they hold", async () => {

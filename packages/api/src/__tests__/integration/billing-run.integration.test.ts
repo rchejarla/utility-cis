@@ -1159,13 +1159,23 @@ describe("dispatching a billing run", () => {
     return { result, enqueue: vi.mocked(queues.enqueueSafely) };
   };
 
-  /** Turn billing automation on for the seeded tenant. */
+  /**
+   * Turn billing automation on for the seeded tenant.
+   *
+   * `settings` is cleared as well, which is not cosmetic: SCH-BILL-11's
+   * ledger of "windows this tenant has already been told about" lives in
+   * that jsonb, and it is meant to survive — in production that is the
+   * whole point. Within one test file it makes the tests order-dependent,
+   * because two of them dispatch at the same instant and the second
+   * found the window already reported. The product keeps the ledger; the
+   * fixture starts each test without one.
+   */
   async function enableBilling(enabled = true) {
     const { prisma } = prismaImports;
     await prisma.schedulerConfig.upsert({
       where: { utilityId_schedulerKey: { utilityId, schedulerKey: "billing" } },
       create: { utilityId, schedulerKey: "billing", enabled, runHourLocal: 3 },
-      update: { enabled, runHourLocal: 3, lastRunAt: null },
+      update: { enabled, runHourLocal: 3, lastRunAt: null, settings: {} },
     });
   }
 
@@ -1277,6 +1287,53 @@ describe("dispatching a billing run", () => {
 
       const { prisma } = prismaImports;
       expect(await prisma.billingRun.count({ where: { utilityId } })).toBe(0);
+    }), 300_000);
+
+  it("tells the tenant a window did not bill, once and not every hour", () =>
+    seedAsPlatform(async () => {
+      /*
+       * SCH-BILL-11, and the half of it that matters. A silent failure
+       * to bill is the most expensive silence in the product — but a
+       * notice that arrives every hour for a month is one an operator
+       * mutes, which leaves exactly that silence. The dispatcher fires
+       * hourly, so "once per window" is the requirement, not "on every
+       * refusal".
+       *
+       * The ledger is in the billing scheduler's own `settings` jsonb
+       * rather than in the `notification` table, and this test is why:
+       * no tenant here has an active `billing.not_dispatched` template,
+       * so no notification row is written at all. A ledger kept in that
+       * table would record nothing and re-notify forever — for exactly
+       * the tenant that has not asked to be mailed.
+       */
+      await enableBilling();
+      const { prisma } = prismaImports;
+
+      const first = await dispatch(new Date("2031-01-10T10:00:00.000Z"));
+      // The window has to travel on the refusal, or the notice has no
+      // key to be remembered under but the cycle.
+      expect(first.result.skipped[0]).toMatchObject({
+        reason: "readsIncomplete",
+        windowEnd: expect.any(String),
+      });
+      expect(first.result.notified).toBeGreaterThan(0);
+
+      const row = await prisma.schedulerConfig.findFirstOrThrow({
+        where: { utilityId, schedulerKey: "billing" },
+      });
+      const ledger = (row.settings as Record<string, unknown>).noticedWindows as Record<
+        string,
+        string
+      >;
+      // Keyed by cycle *and* window: a cycle that fails two months
+      // running has two things wrong, and a cycle-only key would say
+      // nothing the second time.
+      expect(Object.keys(ledger).some((k) => k.includes(":"))).toBe(true);
+
+      // An hour later, the same refusal. Nothing new to say.
+      const second = await dispatch(new Date("2031-01-10T11:00:00.000Z"));
+      expect(second.result.skipped.length).toBeGreaterThan(0);
+      expect(second.result.notified).toBe(0);
     }), 300_000);
 });
 

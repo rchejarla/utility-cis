@@ -307,6 +307,50 @@ The daily digest is a special template (`operations.daily_digest`) sent to a sta
 6. **Rate limiting:** Send job processes 50 per tick (10-second interval). Configurable per tenant.
 7. **Dev mode:** `ConsoleProvider` logs rendered messages to stdout. Notification rows are created with `status = SENT` so the rest of the system works identically.
 8. **Every id the engine resolves is scoped to the tenant that asked.** Recipient, the five context entities and the preview's template all carry `utility_id` in the lookup. An id outside the tenant is not found, which means blank variables for a context entity and a refused send for a recipient — never another tenant's data in a rendered message. The one deliberate exception is the send job, which sweeps `PENDING` rows across all tenants by design and claims them by primary key.
+9. **`recipientId` is who to address; `customer_id` is who the message is about.** They coincide for a customer notification and not otherwise, and `notification.customer_id` carries a foreign key to `customer`, so the column is set only when the recipient resolves to a customer of this tenant. It was written unchecked until 2026-10-31, which meant a staff-addressed notification put a `cis_user` id in a customer key — the import notifier has always done exactly that, and it never failed only because no tenant has an active `import.complete` template, so the function returned at rule 2 above and never reached the insert.
+
+## Mail from the platform, not from a tenant
+
+**Decided, not built.** There is no way today to send a message that
+belongs to no tenant: `notification.utility_id` and
+`notification_template.utility_id` are both NOT NULL with a foreign key
+to `utility`. The decided shape when the first such message exists is to
+make both **nullable**, where NULL means "from us, about no tenant's
+customer" — the same meaning the seven global reference tables give it,
+and the same shape `cis_user` already uses for the platform actor.
+
+Why that is cheaper than it looks: the RLS policy is the strict
+`utility_id = current_setting('app.current_utility_id')::uuid` form, so a
+NULL row matches nothing and **tenant isolation survives untouched with
+no policy change** — unlike the eight policies that opt into
+`utility_id IS NULL OR …` so every tenant can read global reference data,
+which is the opposite of what is wanted here. Nothing in the codebase
+reads either column as a value, so there is no type ripple.
+
+What it does cost: a **partial unique index** on `(event_type) WHERE
+utility_id IS NULL`, because `@@unique([utilityId, eventType])` stops
+constraining when `utility_id` is NULL — Postgres treats NULLs as
+distinct, exactly as it does for `cis_user.email`. Prisma cannot express
+it, so it joins the hand-written SQL that `migrate dev` would propose
+dropping. Plus a second path through `sendNotification`, whose template
+lookup is `findUnique({ utilityId_eventType })` and cannot match a NULL.
+And `schema-invariants.integration.test.ts` pins the set of tables
+allowed a nullable `utility_id` **by name**, so widening it is a
+deliberate edit to that test — which is that guard working, not an
+obstacle.
+
+**Deferred because there are no callers.** No platform-originated message
+exists in the product. When one does — trial expiry, a maintenance
+window, our own invoice to a tenant — this is the shape, and the change
+is small enough to make then.
+
+**It is not the carrier for the cluster alerts**, and that was asked and
+answered on 2026-10-31. SCH-PAUSE-6's condition *is* a paused
+`notification-send`, and SCH-NODE-4's includes having no worker — and a
+worker is what drains the outbox. An alert about a stopped mail queue,
+queued in that stopped mail queue, arrives once somebody has already
+fixed it. Those two are published as metrics instead; see
+[27 — Job Scheduling](27-job-scheduling.md) open question 1.
 
 ## Phase Roadmap
 

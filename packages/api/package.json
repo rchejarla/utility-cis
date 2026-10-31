@@ -24,6 +24,7 @@
     "@utility-cis/shared": "workspace:*",
     "@vvo/tzdb": "^6",
     "bullmq": "^5",
+    "cron-parser": "^4.9.0",
     "decimal.js": "^10.6.0",
     "fastify": "^5.2.1",
     "ioredis": "^5.10.1",
