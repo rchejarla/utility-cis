@@ -164,12 +164,31 @@ export interface QueueJobsResult {
   hasMore: boolean;
 }
 
+/**
+ * A condition nobody would find by reading the counts (SCH-NODE-4,
+ * SCH-PAUSE-6).
+ *
+ * The counts for a queue with no worker attached are identical to a
+ * healthy queue's, and mail held behind a paused queue looks exactly
+ * like mail that has already gone out. These say so in a sentence.
+ */
+export interface SchedulingAlert {
+  kind: "unpromotedScheduler" | "mailHeldPaused";
+  queue: string;
+  schedulerId: string | null;
+  message: string;
+  /** Null where the duration is not knowable — a pause with no record. */
+  forSeconds: number | null;
+}
+
 export interface ClusterReport {
   /** False when Redis did not answer — not an empty deployment. */
   reachable: boolean;
   checkedAt: string;
   queues: QueueHealth[];
   totals: { waiting: number; active: number; failed: number; dlq: number };
+  /** Empty means none found, which an unreachable report cannot claim. */
+  alerts: SchedulingAlert[];
   /**
    * When the serving node's sources were last written, or null where
    * there are none — a built deployment has no sources to be stale

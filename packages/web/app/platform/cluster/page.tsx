@@ -22,6 +22,7 @@ export default function ClusterOverviewPage() {
   const { report, error } = useCluster();
 
   const queues = report?.queues ?? [];
+  const alerts = report?.alerts ?? [];
   const unattended = queues.filter((q) => q.workers === 0);
   const unknownWorkers = queues.filter((q) => q.workers === null);
   const paused = queues.filter((q) => q.paused);
@@ -49,6 +50,65 @@ export default function ClusterOverviewPage() {
           }}
         >
           {error}
+        </div>
+      )}
+
+      {/*
+       * Above the verdict, deliberately.
+       *
+       * The verdict chain below reads counts, worker attachment and
+       * pauses — and these two conditions are invisible to all three. A
+       * queue with an armed cron and nothing attached has a healthy
+       * queue's counts, and a long-paused `notification-send` reads as
+       * the ordinary "Queues are paused" line, which says nothing about
+       * mail piling up behind it. Underneath the verdict they would be
+       * the second thing read on a page whose first line says "all
+       * clear".
+       */}
+      {alerts.length > 0 && (
+        <div
+          style={{
+            ...card,
+            borderColor: "var(--danger)",
+            marginBottom: 20,
+            padding: "12px 14px",
+            fontSize: 13,
+            display: "grid",
+            gap: 8,
+          }}
+        >
+          <strong style={{ color: "var(--danger)" }}>
+            {alerts.length === 1
+              ? "Work is not happening."
+              : `Work is not happening in ${alerts.length} places.`}
+          </strong>
+          {alerts.map((a) => (
+            <div key={`${a.kind}-${a.queue}-${a.schedulerId ?? ""}`} style={{ display: "grid", gap: 2 }}>
+              <div style={{ color: "var(--text-secondary)" }}>{a.message}</div>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "monospace" }}>
+                {a.queue}
+                {a.kind === "unpromotedScheduler" && (
+                  <>
+                    {" · "}
+                    <Link
+                      href="/platform/cluster/schedulers"
+                      style={{ color: "var(--accent-primary)" }}
+                    >
+                      schedulers
+                    </Link>
+                  </>
+                )}
+                {a.kind === "mailHeldPaused" && (
+                  <>
+                    {" · "}
+                    <Link href="/platform/cluster/queues" style={{ color: "var(--accent-primary)" }}>
+                      resume it
+                    </Link>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
       )}
 

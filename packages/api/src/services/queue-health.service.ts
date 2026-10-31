@@ -9,6 +9,7 @@ import {
 import { utilityIdOf, utilityNames, withQueueTimeout } from "../lib/queue-inspect.js";
 import { effectiveLimit, readQueueLimits } from "../lib/queue-limits.js";
 import { readPauseRecord, type PauseRecord } from "../lib/queue-pause.js";
+import { getSchedulingAlerts, type SchedulingAlert } from "./scheduling-alerts.js";
 
 /**
  * Reports what is in each queue, who is attached to work it, and what
@@ -107,6 +108,13 @@ export interface QueueHealthReport {
   checkedAt: string;
   queues: QueueHealth[];
   totals: { waiting: number; active: number; failed: number; dlq: number };
+  /**
+   * Conditions nobody would see by reading the counts (SCH-NODE-4,
+   * SCH-PAUSE-6). Empty is the ordinary answer and means "none found",
+   * which is not the same as the report being unreachable — an
+   * unreachable report has no alerts because nothing was read.
+   */
+  alerts: SchedulingAlert[];
 }
 
 type RawJob = {
@@ -263,6 +271,7 @@ export async function getQueueHealth(
     checkedAt,
     queues: [],
     totals: { waiting: 0, active: 0, failed: 0, dlq: 0 },
+    alerts: [],
   };
 
   try {
@@ -277,6 +286,21 @@ export async function getQueueHealth(
       return unreachable;
     }
 
+    /*
+     * Outside the timeout above, and tolerant on its own. The alerts
+     * need the schedulers as well as the counts, which is a second set
+     * of round trips — folding them into the deadline would let a slow
+     * scheduler read turn a readable report into "unreachable", and the
+     * counts are the thing this page is mostly for. A failure here
+     * costs the alerts; it does not cost the report.
+     */
+    let alerts: SchedulingAlert[] = [];
+    try {
+      alerts = await getSchedulingAlerts(queues, new Date());
+    } catch (err) {
+      logger.warn({ err }, "could not compute scheduling alerts");
+    }
+
     return {
       reachable: true,
       checkedAt,
@@ -287,6 +311,7 @@ export async function getQueueHealth(
         failed: queues.reduce((n, q) => n + q.counts.failed, 0),
         dlq: queues.reduce((n, q) => n + q.dlqDepth, 0),
       },
+      alerts,
     };
   } catch (err) {
     logger.warn({ err }, "queue health check failed");
