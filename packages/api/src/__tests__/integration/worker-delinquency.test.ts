@@ -102,8 +102,29 @@ afterAll(async () => {
 beforeEach(async () => {
   const { prisma } = prismaImports;
   await prisma.$executeRawUnsafe(`
-    TRUNCATE TABLE delinquency_action, delinquency_rule, account, customer, utility_config RESTART IDENTITY CASCADE
+    TRUNCATE TABLE delinquency_action, delinquency_rule, account, customer, utility_config, scheduler_config RESTART IDENTITY CASCADE
   `);
+
+  /*
+   * Switch every tenant in this suite off, so each test's premise is
+   * what it seeds rather than what it omits.
+   *
+   * The four `utility` rows are created once in `beforeAll` and survive
+   * the truncate above, while `utility_config` does not. Until
+   * 2026-10-31 the dispatcher enumerated tenants from `utility_config`,
+   * so an unseeded tenant was invisible and a test could say "one fires"
+   * while two others sat there unconfigured. It enumerates from
+   * `utility` now — which is the fix for a provisioned tenant getting no
+   * automation at all — and a tenant with no `scheduler_config` row
+   * takes the declared default, which for delinquency is **on**. So all
+   * four would fire at 03:00 UTC, and the old expectations were reading
+   * the bug.
+   */
+  for (const utilityId of [TENANT_A, TENANT_B, TENANT_C, TENANT_D]) {
+    await prisma.schedulerConfig.create({
+      data: { utilityId, schedulerKey: "delinquency", enabled: false },
+    });
+  }
   // Obliterate the per-tenant queue between tests so jobs from prior
   // cases don't leak forward AND idempotency-key markers don't
   // suppress legitimate re-enqueues. `drain(true)` only removes
@@ -129,10 +150,19 @@ async function seedTenant(utilityId: string, opts: SeedTenantOpts = {}): Promise
   // Per-scheduler settings are a `scheduler_config` row since
   // 2026-10-31. Written explicitly even for the defaults, because this
   // suite asserts on the hour and the last-run it sets.
-  await prisma.schedulerConfig.create({
-    data: {
+  // Upsert, not create: `beforeEach` has already written a disabled row
+  // for every tenant in this suite, and seeding one is how a test says
+  // "this is the tenant I mean".
+  await prisma.schedulerConfig.upsert({
+    where: { utilityId_schedulerKey: { utilityId, schedulerKey: "delinquency" } },
+    create: {
       utilityId,
       schedulerKey: "delinquency",
+      enabled: opts.delinquencyEnabled ?? true,
+      runHourLocal: opts.runHourLocal ?? 3,
+      lastRunAt: opts.lastRunAt ?? null,
+    },
+    update: {
       enabled: opts.delinquencyEnabled ?? true,
       runHourLocal: opts.runHourLocal ?? 3,
       lastRunAt: opts.lastRunAt ?? null,

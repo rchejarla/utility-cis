@@ -96,7 +96,12 @@ beforeEach(async () => {
       rate_schedule,
       commodity,
       billing_cycle,
-      utility_config
+      utility_config,
+      -- scheduler_config references utility, not utility_config, so
+      -- truncating the config row does not cascade to it. Listed
+      -- explicitly, or the second test's fixture collides on its
+      -- (utility_id, scheduler_key) unique index.
+      scheduler_config
     RESTART IDENTITY CASCADE
   `);
 });

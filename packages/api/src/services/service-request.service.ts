@@ -416,7 +416,8 @@ interface BreachedSrRow {
  * are inside one prisma.$transaction so the breached flag and the
  * audit row land together or neither does.
  *
- * Tenant gating: tenants with `sla_breach_sweep_enabled = false`
+ * Tenant gating: a `scheduler_config` row with `enabled = false` for
+ * `slaBreachSweep`. **No row means the declared default**, which is on
  * have their requests skipped (the join filter excludes them).
  *
  * Per-row audit (one row per flipped SR rather than a single
@@ -440,9 +441,10 @@ export async function sweepBreachedSRs(
       const flipped = await tx.$queryRaw<BreachedSrRow[]>`
         UPDATE service_request AS sr
         SET sla_breached = true, updated_at = now()
-        FROM utility_config AS tc
-        WHERE tc.utility_id = sr.utility_id
-          AND tc.sla_breach_sweep_enabled = true
+        WHERE COALESCE((
+            SELECT sc.enabled FROM scheduler_config sc
+            WHERE sc.utility_id = sr.utility_id AND sc.scheduler_key = 'slaBreachSweep'
+          ), true) = true
           AND sr.status NOT IN ('COMPLETED', 'CANCELLED')
           AND sr.sla_due_at IS NOT NULL
           AND sr.sla_due_at <= ${now}
