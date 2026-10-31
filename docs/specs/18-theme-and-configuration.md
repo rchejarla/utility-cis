@@ -418,7 +418,8 @@ of work, Redis for values that cross requests and rarely change.
 | quiet hours | both | read per notification |
 | `scheduler_config.enabled`, `run_hour_local` | both | read hourly cross-tenant; changes almost never |
 | `scheduler_config.last_run_at` | **neither** | written every dispatch tick — caching it busts the entry its own row's stable fields would live in |
-| anything effective-dated | **scoped only** | a Redis key without the date is a wrong answer, not a stale one |
+| anything effective-dated, read as "now" | both | cached under a date-free key; see §3.4 rule 2 |
+| anything effective-dated, read "as of" a past date | **scoped only** | the date belongs in the key, which would make nearly every key unique |
 
 ### Sequence, and what to measure first
 
@@ -429,17 +430,44 @@ earns its Redis cache because permissions are read many times per
 request — configuration is read a handful of times, so the case should
 be measured rather than assumed.
 
-### The open question that changes this design
+### settings.issuer: effective-dated, and still cacheable
 
-`settings.issuer` is the remittance address printed on a bill. Today it
-is a code-known setting with no history, which makes it a good Redis
-candidate. If it becomes effective-dated — and a customer querying a
-two-year-old bill is the reason it might — it moves to "read by date",
-and rule 2 puts it permanently outside the Redis tier.
+**Decided 2026-10-31: the issuer identity gets validity periods.**
 
-**That decision should come before the cache, not after.** Caching it
-and then unwinding is the more expensive order, and the same question
-applies to every value a document is printed from.
+`settings.issuer` is the remittance address, utility name and billing
+phone printed on a bill. A customer querying a two-year-old bill is the
+case it exists for.
+
+The stored document already answers most of it — `BillDocument` keeps
+the rendered PDF with a `sha256`, and the statement-snapshot migration
+says why in so many words: *"a reprint would then differ from the
+document the customer received, which is the one property `sha256` and
+byte-stable regeneration exist to protect."* So the first answer to
+"what did that bill say" is: fetch the bill. Validity periods buy three
+things the document does not:
+
+- answering the question without a storage round trip,
+- regenerating a byte-identical bill if a stored PDF is ever lost,
+- explaining the value somewhere other than a bill — a report, an audit
+  query.
+
+**It does not leave the cache**, which was the objection and it was
+wrong. Reads split into "now" and "as of", the first is cached under a
+date-free key and the second goes to the database, and since documents
+are produced now while only reprints ask historically the hit rate stays
+high. See §3.4 rule 2, including the part that matters here: a
+future-dated row expires the cached value with no write to invalidate
+on, so the TTL becomes the only thing that notices.
+
+What it costs, and the second is the one to watch:
+
+- a write becomes "close the old row, open a new one" rather than an
+  update;
+- **every reader needs to say which question it is asking.** A reader
+  that calls the "now" accessor when it meant "as of" gets today's
+  answer silently — the same failure as the bad cache key, moved into
+  the application. Two named entry points is the mitigation, not a
+  convention anyone has to remember.
 
 ## Identifier Generation
 
