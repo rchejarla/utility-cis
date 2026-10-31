@@ -133,10 +133,13 @@ beforeEach(async () => {
 async function seedTenant(utilityId: string, opts: { suspensionEnabled?: boolean; requireHoldApproval?: boolean } = {}): Promise<void> {
   const { prisma } = prismaImports;
   await prisma.utilityConfig.create({
+    data: { utilityId, requireHoldApproval: opts.requireHoldApproval ?? false },
+  });
+  await prisma.schedulerConfig.create({
     data: {
       utilityId,
-      requireHoldApproval: opts.requireHoldApproval ?? false,
-      suspensionEnabled: opts.suspensionEnabled ?? true,
+      schedulerKey: "suspension",
+      enabled: opts.suspensionEnabled ?? true,
     },
   });
 }

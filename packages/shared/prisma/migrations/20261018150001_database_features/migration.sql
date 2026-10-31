@@ -322,6 +322,7 @@ ALTER TABLE sla ENABLE ROW LEVEL SECURITY;
 ALTER TABLE suspension_type_def ENABLE ROW LEVEL SECURITY;
 ALTER TABLE unit_of_measure ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_preference ENABLE ROW LEVEL SECURITY;
+ALTER TABLE scheduler_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_role ENABLE ROW LEVEL SECURITY;
 ALTER TABLE utility ENABLE ROW LEVEL SECURITY;
 ALTER TABLE utility_config ENABLE ROW LEVEL SECURITY;
@@ -390,5 +391,6 @@ CREATE POLICY tenant_isolation ON utility USING ((id = (current_setting('app.cur
 CREATE POLICY tenant_isolation ON utility_config USING ((utility_id = (current_setting('app.current_utility_id'::text))::uuid));
 CREATE POLICY tenant_isolation ON utility_module USING ((utility_id = (current_setting('app.current_utility_id'::text))::uuid));
 CREATE POLICY tenant_isolation ON utility_setting USING ((utility_id = (current_setting('app.current_utility_id'::text, true))::uuid));
+CREATE POLICY tenant_isolation ON scheduler_config USING ((utility_id = (current_setting('app.current_utility_id'::text))::uuid));
 CREATE POLICY tenant_isolation ON utility_theme USING ((utility_id = (current_setting('app.current_utility_id'::text))::uuid));
 CREATE POLICY tenant_isolation ON wqa_value USING ((utility_id = (current_setting('app.current_utility_id'::text, true))::uuid));

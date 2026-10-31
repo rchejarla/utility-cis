@@ -124,12 +124,18 @@ interface SeedTenantOpts {
 async function seedTenant(utilityId: string, opts: SeedTenantOpts = {}): Promise<void> {
   const { prisma } = prismaImports;
   await prisma.utilityConfig.create({
+    data: { utilityId, timezone: opts.timezone ?? "UTC" },
+  });
+  // Per-scheduler settings are a `scheduler_config` row since
+  // 2026-10-31. Written explicitly even for the defaults, because this
+  // suite asserts on the hour and the last-run it sets.
+  await prisma.schedulerConfig.create({
     data: {
       utilityId,
-      delinquencyEnabled: opts.delinquencyEnabled ?? true,
-      timezone: opts.timezone ?? "UTC",
-      delinquencyRunHourLocal: opts.runHourLocal ?? 3,
-      delinquencyLastRunAt: opts.lastRunAt ?? null,
+      schedulerKey: "delinquency",
+      enabled: opts.delinquencyEnabled ?? true,
+      runHourLocal: opts.runHourLocal ?? 3,
+      lastRunAt: opts.lastRunAt ?? null,
     },
   });
 

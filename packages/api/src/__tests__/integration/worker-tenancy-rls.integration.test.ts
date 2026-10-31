@@ -56,8 +56,9 @@ beforeAll(async () => {
       // skipped entirely — which is the tenant opt-out working, and was
       // why this first flipped nothing at all.
       for (const uid of [utilityId, otherUtility]) {
-        await seeder.utilityConfig.create({
-          data: { utilityId: uid, slaBreachSweepEnabled: true },
+        await seeder.utilityConfig.create({ data: { utilityId: uid } });
+        await seeder.schedulerConfig.create({
+          data: { utilityId: uid, schedulerKey: "slaBreachSweep", enabled: true },
         });
       }
 

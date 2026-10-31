@@ -24,12 +24,6 @@ describe("automation-config routes", () => {
       requireHoldApproval: false,
       settings: {},
       timezone: "UTC",
-      suspensionEnabled: true,
-      notificationSendEnabled: true,
-      slaBreachSweepEnabled: true,
-      delinquencyEnabled: true,
-      delinquencyRunHourLocal: 3,
-      delinquencyLastRunAt: null,
       notificationQuietStart: "22:00",
       notificationQuietEnd: "07:00",
       schedulerAuditRetentionDays: 365,
@@ -60,6 +54,15 @@ describe("automation-config routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     grantTenantProfileEdit();
+    /*
+     * A tenant being patched has a config row, so the re-read the patch
+     * ends with finds one rather than lazily creating it. Set here
+     * because otherwise the read's own upsert counts against the
+     * patch's, which measures the mock rather than the service. The GET
+     * cases override it where they need a miss.
+     */
+    (prisma.utilityConfig.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(defaultRow());
+    (prisma.schedulerConfig.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   });
 
   describe("GET /api/v1/settings/automation", () => {
@@ -79,12 +82,29 @@ describe("automation-config routes", () => {
       const body = res.json();
       expect(body).toMatchObject({
         timezone: "UTC",
-        suspensionEnabled: true,
-        delinquencyRunHourLocal: 3,
         notificationQuietStart: "22:00",
         schedulerAuditRetentionDays: 365,
       });
-      expect(body.delinquencyLastRunAt).toBeNull();
+
+      /*
+       * Per-scheduler settings are a list, one entry per catalogue key
+       * whether or not a row exists — so a scheduler added in code
+       * appears for every tenant without a backfill, taking its
+       * catalogue default until somebody saves one.
+       */
+      expect(body.schedulers.map((s: { key: string }) => s.key)).toEqual([
+        "suspension",
+        "notificationSend",
+        "slaBreachSweep",
+        "delinquency",
+        "billing",
+      ]);
+      const billing = body.schedulers.find((s: { key: string }) => s.key === "billing");
+      expect(billing).toMatchObject({ enabled: false, runHourLocal: 3, lastRunAt: null });
+      // No hour for a job that has none, rather than a number nothing reads.
+      expect(
+        body.schedulers.find((s: { key: string }) => s.key === "suspension").runHourLocal,
+      ).toBeNull();
     });
 
     it("creates a default row on first read for a tenant that has none", async () => {
@@ -127,26 +147,49 @@ describe("automation-config routes", () => {
   });
 
   describe("PATCH /api/v1/settings/automation", () => {
-    it("applies a partial patch and returns the updated config", async () => {
+    it("applies a tenant-wide patch and returns the updated config", async () => {
       const upsertMock = prisma.utilityConfig.upsert as ReturnType<typeof vi.fn>;
-      upsertMock.mockResolvedValueOnce({
-        ...defaultRow(),
-        delinquencyRunHourLocal: 5,
-      });
 
       const app = await createTestApp();
       const res = await app.inject({
         method: "PATCH",
         url: "/api/v1/settings/automation",
         headers: adminHeaders,
-        payload: { delinquencyRunHourLocal: 5 },
+        payload: { schedulerAuditRetentionDays: 90 },
       });
 
       expect(res.statusCode).toBe(200);
-      expect(res.json().delinquencyRunHourLocal).toBe(5);
       expect(upsertMock).toHaveBeenCalledTimes(1);
-      const args = upsertMock.mock.calls[0][0];
-      expect(args.update).toMatchObject({ delinquencyRunHourLocal: 5 });
+      expect(upsertMock.mock.calls[0][0].update).toMatchObject({
+        schedulerAuditRetentionDays: 90,
+      });
+    });
+
+    it("patches one scheduler as a row, leaving the others untouched", async () => {
+      /*
+       * The point of the table: changing billing's hour writes one
+       * `scheduler_config` row. It does not touch `utility_config`, and
+       * it does not materialise rows for the four jobs nobody changed —
+       * each of those keeps inheriting its catalogue default.
+       */
+      const schedulerUpsert = prisma.schedulerConfig.upsert as ReturnType<typeof vi.fn>;
+
+      const app = await createTestApp();
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/api/v1/settings/automation",
+        headers: adminHeaders,
+        payload: { schedulers: [{ key: "billing", enabled: true, runHourLocal: 5 }] },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(schedulerUpsert).toHaveBeenCalledTimes(1);
+      const args = schedulerUpsert.mock.calls[0][0];
+      expect(args.where).toMatchObject({
+        utilityId_schedulerKey: { utilityId, schedulerKey: "billing" },
+      });
+      expect(args.update).toMatchObject({ enabled: true, runHourLocal: 5 });
+      expect(prisma.utilityConfig.upsert).not.toHaveBeenCalled();
     });
 
     it("rejects an invalid IANA timezone with 400 (semantic guard in the service)", async () => {
@@ -172,13 +215,13 @@ describe("automation-config routes", () => {
       expect(res.statusCode).toBe(400);
     });
 
-    it("rejects out-of-range delinquencyRunHourLocal", async () => {
+    it("rejects an out-of-range run hour", async () => {
       const app = await createTestApp();
       const res = await app.inject({
         method: "PATCH",
         url: "/api/v1/settings/automation",
         headers: adminHeaders,
-        payload: { delinquencyRunHourLocal: 24 },
+        payload: { schedulers: [{ key: "delinquency", runHourLocal: 24 }] },
       });
       expect(res.statusCode).toBe(400);
     });
@@ -211,7 +254,7 @@ describe("automation-config routes", () => {
         method: "PATCH",
         url: "/api/v1/settings/automation",
         headers: adminHeaders,
-        payload: { delinquencyRunHourLocal: 5 },
+        payload: { schedulers: [{ key: "delinquency", runHourLocal: 5 }] },
       });
       expect(res.statusCode).toBe(403);
     });

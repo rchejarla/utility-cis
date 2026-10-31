@@ -805,12 +805,10 @@ CREATE TABLE "utility_config" (
     "require_hold_approval" BOOLEAN NOT NULL DEFAULT false,
     "settings" JSONB NOT NULL DEFAULT '{}',
     "timezone" VARCHAR(64) NOT NULL DEFAULT 'UTC',
-    "suspension_enabled" BOOLEAN NOT NULL DEFAULT true,
-    "notification_send_enabled" BOOLEAN NOT NULL DEFAULT true,
-    "sla_breach_sweep_enabled" BOOLEAN NOT NULL DEFAULT true,
-    "delinquency_enabled" BOOLEAN NOT NULL DEFAULT true,
-    "delinquency_run_hour_local" SMALLINT NOT NULL DEFAULT 3,
-    "delinquency_last_run_at" TIMESTAMPTZ,
+    -- Anything a tenant configures about *one* background job lives in
+    -- `scheduler_config`, a row per job. What stays here belongs to the
+    -- tenant as a whole. The rule: a value every utility has is a
+    -- column; a value only some have goes in `settings` jsonb.
     "notification_quiet_start" VARCHAR(5) NOT NULL DEFAULT '22:00',
     "notification_quiet_end" VARCHAR(5) NOT NULL DEFAULT '07:00',
     "scheduler_audit_retention_days" INTEGER NOT NULL DEFAULT 365,
@@ -820,6 +818,64 @@ CREATE TABLE "utility_config" (
 
     CONSTRAINT "utility_config_pkey" PRIMARY KEY ("id")
 );
+
+-- CreateTable
+--
+-- What a tenant may configure about one background job: one row per
+-- (utility, scheduler).
+--
+-- A one-to-many, where the first draft of this schema had three
+-- repeated groups of the same columns on `utility_config` — so adding a
+-- scheduler cost a migration and seven files. Adding one is an INSERT
+-- now, and onboarding a utility is rows rather than schema.
+--
+-- `scheduler_key` holds a `SchedulerKey` from
+-- `validators/automation-config.ts`. Keys are code, because each names
+-- a handler that has to exist; values are configuration. A row whose
+-- key no build recognises is inert: nothing reads it.
+--
+-- `enabled`, `run_hour_local` and `last_run_at` are columns because
+-- every configurable scheduler has them. A knob only one scheduler
+-- needs goes in `settings` and costs no migration.
+--
+-- Deliberately absent: `cron_pattern`. Every scheduler has a cadence,
+-- so the storage rule would admit it — but three of the five patterns
+-- resolve a tenant-facing hour, and a slower cadence makes that hour
+-- silently unreachable: no job, no error, no notice. Patterns stay in
+-- code until spec 24's signed command path exists, so two nodes cannot
+-- disagree about one. 27-job-scheduling §4.
+CREATE TABLE "scheduler_config" (
+    "id" UUID NOT NULL,
+    "utility_id" UUID NOT NULL,
+    "scheduler_key" VARCHAR(50) NOT NULL,
+    "enabled" BOOLEAN NOT NULL DEFAULT true,
+    -- Null where the job has no time of day. Only delinquency and
+    -- billing have one; the rest run on a fixed cadence, and storing 3
+    -- for them would be a number that means nothing.
+    "run_hour_local" SMALLINT,
+    "last_run_at" TIMESTAMPTZ,
+    "settings" JSONB NOT NULL DEFAULT '{}',
+    "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMPTZ NOT NULL,
+
+    CONSTRAINT "scheduler_config_pkey" PRIMARY KEY ("id")
+);
+
+-- Two rows for one key would make "is billing enabled" a question with
+-- two answers.
+CREATE UNIQUE INDEX "scheduler_config_utility_id_scheduler_key_key"
+    ON "scheduler_config" ("utility_id", "scheduler_key");
+
+-- No index on `scheduler_key` alone, although the billing dispatcher's
+-- cross-tenant read filters on exactly that. At five keys per tenant the
+-- table is a few hundred rows and a sequential scan is microseconds; an
+-- index chosen for a query shape rather than a measured cost is the kind
+-- that accumulates. Add one when the tenant count reaches thousands.
+
+ALTER TABLE "scheduler_config"
+    ADD CONSTRAINT "scheduler_config_utility_id_fkey"
+    FOREIGN KEY ("utility_id") REFERENCES "utility"("id")
+    ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- CreateTable
 CREATE TABLE "suspension_type_def" (
@@ -1283,7 +1339,13 @@ CREATE TABLE "billing_run" (
     "posted_by" UUID,
     "cancel_requested" BOOLEAN NOT NULL DEFAULT false,
     "last_progress_at" TIMESTAMPTZ,
-    "created_by" UUID NOT NULL,
+    -- Null means the schedule started this run, not a person. A
+    -- scheduled run has no user principal; the audit trail carries
+    -- the sentence instead ('Billing dispatcher', source
+    -- scheduler:billing-dispatch). A reserved system uuid would
+    -- need a cis_user row that is not a user and belongs to no
+    -- tenant. 27-job-scheduling SCH-BILL-9.
+    "created_by" UUID,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "billing_run_pkey" PRIMARY KEY ("id")

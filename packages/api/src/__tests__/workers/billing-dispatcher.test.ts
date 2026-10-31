@@ -28,7 +28,7 @@ import { billingDueAt } from "../../workers/billing-dispatcher.js";
 /** A tenant and a cycle, as the verdict wants them. */
 const tenant = (over: Record<string, unknown> = {}) => ({
   timezone: "America/Denver",
-  billingRunHourLocal: 3,
+  runHourLocal: 3,
   ...over,
 });
 const cycle = (over: Record<string, unknown> = {}) => ({
@@ -166,7 +166,7 @@ describe("the hour, across a daylight-saving change", () => {
      * late. "At or after the hour" cannot miss an hour that does not
      * exist.
      */
-    const onHourTwo = tenant({ billingRunHourLocal: 2 });
+    const onHourTwo = tenant({ runHourLocal: 2 });
     const eighth = cycle({ billDayOfMonth: 8 });
 
     // 08:30Z is 01:30 MST — before the configured hour.

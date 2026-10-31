@@ -5,7 +5,9 @@ import { QUEUE_NAMES, getQueue, enqueueSafely, workerOptions } from "../lib/queu
 import { scopedJob } from "../lib/queue-scope.js";
 import { localHour, formatInTimeZone } from "../lib/iana-tz.js";
 import { prisma } from "../lib/prisma.js";
+import { markSchedulerRun, tenantsForScheduler } from "../services/automation-config.service.js";
 import { runAsTenant } from "../lib/tenant-context.js";
+import { DEFAULT_RUN_HOUR_LOCAL } from "@utility-cis/shared";
 import { billDayIn } from "../services/bill.service.js";
 import { previewBillingRun, createBillingRun } from "../services/billing-run.service.js";
 import { BILLING_RUN_JOB_NAME } from "./billing-run-worker.js";
@@ -75,7 +77,12 @@ export interface DueVerdict {
  */
 export function billingDueAt(
   now: Date,
-  tenant: { timezone: string; billingRunHourLocal: number },
+  /**
+   * `runHourLocal` is null only for a scheduler that has no time of
+   * day, which billing is not — the catalogue marks it `hasRunHour`,
+   * so the default stands in when a tenant has never set one.
+   */
+  tenant: { timezone: string; runHourLocal: number | null },
   cycle: { billDayOfMonth: number; frequency: string },
 ): DueVerdict {
   /*
@@ -98,7 +105,7 @@ export function billingDueAt(
 
   if (day < billDay) return { due: false, reason: "windowOpen" };
   if (day === billDay) {
-    return hour >= tenant.billingRunHourLocal
+    return hour >= (tenant.runHourLocal ?? DEFAULT_RUN_HOUR_LOCAL)
       ? { due: true, reason: "onSchedule" }
       : { due: false, reason: "waitingForHour" };
   }
@@ -172,10 +179,7 @@ export async function dispatchBilling(now: Date = new Date()): Promise<BillingDi
    * on a confined connection finds nothing and reports success, which
    * is the one failure mode worse than an error.
    */
-  const tenants = await prisma.utilityConfig.findMany({
-    where: { billingEnabled: true },
-    select: { utilityId: true, timezone: true, billingRunHourLocal: true },
-  });
+  const tenants = await tenantsForScheduler("billing");
 
   const result: BillingDispatchResult = {
     cyclesConsidered: 0,
@@ -342,12 +346,9 @@ async function startOneCycle(
     );
   });
 
-  // Outside the tenant scope: one row per tenant, written as the
-  // platform actor that the job already runs under.
-  await prisma.utilityConfig.update({
-    where: { utilityId },
-    data: { billingLastRunAt: new Date() },
-  });
+  // Outside the tenant scope: one row per tenant per scheduler, written
+  // as the platform actor the job already runs under.
+  await markSchedulerRun(utilityId, "billing");
 }
 
 export function buildBillingDispatcher(): Worker {

@@ -144,6 +144,10 @@ vi.mock("../lib/prisma.js", () => {
     utility: crud(),
     utilityModule: crud(),
     utilityConfig: crud(),
+    // One row per (utility, scheduler) since 2026-10-31. Omitting it
+    // makes `prisma.schedulerConfig` undefined, which surfaces as
+    // "Cannot read properties of undefined" rather than a missing mock.
+    schedulerConfig: crud(),
     customFieldSchema: crud(),
     notificationTemplate: crud(),
     notification: crud(),

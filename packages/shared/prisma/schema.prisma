@@ -97,6 +97,7 @@ model Utility {
   userPreferences        UserPreference[]
   userRoles              UserRole[]
   utilityConfigs         UtilityConfig[]
+  schedulerConfigs       SchedulerConfig[]
   utilityModules         UtilityModule[]
   utilitySettings        UtilitySetting[]
   utilityThemes          UtilityTheme[]
@@ -1375,32 +1376,11 @@ model UtilityConfig {
   requireHoldApproval Boolean  @default(false) @map("require_hold_approval")
   settings            Json     @default("{}") @map("settings")
 
-  // ─── Automation / scheduler config (per spec §3.4) ────────────────
-  // Per-tenant control of background-job behavior. Each scheduler
-  // gets its own boolean toggle; tenant-local timing inputs drive
-  // missed-tick recovery and DST-correct dispatch.
+  // ─── Automation settings that are not per-scheduler ───────────────
+  // Everything a tenant may configure about *one* background job moved
+  // to `SchedulerConfig` — a row per job rather than a column group per
+  // job. What remains is what belongs to the tenant as a whole.
   timezone                    String    @default("UTC") @map("timezone") @db.VarChar(64)
-  suspensionEnabled           Boolean   @default(true) @map("suspension_enabled")
-  notificationSendEnabled     Boolean   @default(true) @map("notification_send_enabled")
-  slaBreachSweepEnabled       Boolean   @default(true) @map("sla_breach_sweep_enabled")
-  delinquencyEnabled          Boolean   @default(true) @map("delinquency_enabled")
-  delinquencyRunHourLocal     Int       @default(3) @map("delinquency_run_hour_local") @db.SmallInt
-  delinquencyLastRunAt        DateTime? @map("delinquency_last_run_at") @db.Timestamptz
-  /// Whether the billing dispatcher may start runs for this tenant.
-  ///
-  /// Default **false**, unlike every other flag here. A tenant that has
-  /// been billing by hand must not discover automation by finding bills
-  /// it did not ask for — the one default on this table that would
-  /// charge somebody's customers.
-  ///
-  /// Per tenant rather than per cycle (27-job-scheduling SCH-BILL-8):
-  /// one switch for a utility's automated billing. `BillingCycle.active`
-  /// remains the way to stop one cycle being billed at all.
-  billingEnabled              Boolean   @default(false) @map("billing_enabled")
-  billingRunHourLocal         Int       @default(3) @map("billing_run_hour_local") @db.SmallInt
-  /// When the dispatcher last acted for this tenant. Distinguishes a
-  /// tick that was missed from one that never came due.
-  billingLastRunAt            DateTime? @map("billing_last_run_at") @db.Timestamptz
   notificationQuietStart      String    @default("22:00") @map("notification_quiet_start") @db.VarChar(5)
   notificationQuietEnd        String    @default("07:00") @map("notification_quiet_end") @db.VarChar(5)
   schedulerAuditRetentionDays Int       @default(365) @map("scheduler_audit_retention_days")
@@ -1410,6 +1390,44 @@ model UtilityConfig {
   updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   @@map("utility_config")
+}
+
+/// What a tenant may configure about one background job.
+///
+/// One row per (utility, scheduler). Replaces three repeated groups of
+/// columns on `UtilityConfig` — a one-to-many that had been modelled as
+/// repeated column groups, so adding a scheduler cost a migration.
+/// Adding one is now an INSERT, and onboarding a utility is rows.
+///
+/// **The storage rule:** a value every scheduler has is a column here; a
+/// value only one scheduler needs goes in `settings` and costs no
+/// migration. Values belonging to the tenant rather than to a job —
+/// timezone, quiet hours, audit retention — stay on `UtilityConfig`.
+///
+/// `schedulerKey` holds a `SchedulerKey` from
+/// `validators/automation-config.ts`. Keys are code, because each names
+/// a handler that must exist; values are configuration. A row whose key
+/// no build recognises is inert: nothing reads it.
+model SchedulerConfig {
+  id           String    @id @default(uuid()) @db.Uuid
+  utilityId    String    @map("utility_id") @db.Uuid
+  utility      Utility   @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  schedulerKey String    @map("scheduler_key") @db.VarChar(50)
+  enabled      Boolean   @default(true) @map("enabled")
+  /// Null where the job has no time of day — only delinquency and
+  /// billing have one.
+  runHourLocal Int?      @map("run_hour_local") @db.SmallInt
+  /// When the dispatcher last acted for this tenant and this job.
+  /// Distinguishes a tick that was missed from one never due.
+  lastRunAt    DateTime? @map("last_run_at") @db.Timestamptz
+  settings     Json      @default("{}") @map("settings")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  /// Two rows for one key would make "is billing enabled" a question
+  /// with two answers.
+  @@unique([utilityId, schedulerKey])
+  @@map("scheduler_config")
 }
 
 // Reference table for suspension (hold) types. Replaces the old

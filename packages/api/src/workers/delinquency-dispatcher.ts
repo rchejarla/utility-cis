@@ -9,7 +9,11 @@ import {
 } from "../lib/queues.js";
 import { scopedJob } from "../lib/queue-scope.js";
 import { localHour, formatInTimeZone } from "../lib/iana-tz.js";
-import { priorityForTenant } from "../services/automation-config.service.js";
+import { DEFAULT_RUN_HOUR_LOCAL } from "@utility-cis/shared";
+import {
+  priorityForTenant,
+  tenantsForScheduler,
+} from "../services/automation-config.service.js";
 import { prisma } from "../lib/prisma.js";
 
 /**
@@ -43,22 +47,17 @@ export interface DispatchResult {
 }
 
 export async function dispatchDelinquency(now: Date = new Date()): Promise<DispatchResult> {
-  const candidates = await prisma.utilityConfig.findMany({
-    where: { delinquencyEnabled: true },
-    select: {
-      utilityId: true,
-      timezone: true,
-      delinquencyRunHourLocal: true,
-      delinquencyLastRunAt: true,
-    },
-  });
+  // One row per scheduler per tenant since 2026-10-31; a tenant with no
+  // row takes the catalogue default, which for delinquency is enabled —
+  // so this cannot be a filter on rows alone.
+  const candidates = await tenantsForScheduler("delinquency");
 
   let onSchedule = 0;
   let missedRecovery = 0;
 
   for (const c of candidates) {
     const localHourNow = localHour(now, c.timezone);
-    const matchesSchedule = localHourNow === c.delinquencyRunHourLocal;
+    const matchesSchedule = localHourNow === (c.runHourLocal ?? DEFAULT_RUN_HOUR_LOCAL);
 
     // Missed-tick recovery only fires for tenants that previously
     // ran AND haven't run in over 23 hours. A brand-new tenant
@@ -67,8 +66,8 @@ export async function dispatchDelinquency(now: Date = new Date()): Promise<Dispa
     // delinquency on a fresh tenant would dispatch every dispatcher
     // tick until the first run, regardless of run-hour config.
     const missedToday =
-      c.delinquencyLastRunAt !== null &&
-      (now.getTime() - c.delinquencyLastRunAt.getTime()) / 3_600_000 >= MISSED_TICK_HOURS;
+      c.lastRunAt !== null &&
+      (now.getTime() - c.lastRunAt.getTime()) / 3_600_000 >= MISSED_TICK_HOURS;
 
     if (!matchesSchedule && !missedToday) continue;
 

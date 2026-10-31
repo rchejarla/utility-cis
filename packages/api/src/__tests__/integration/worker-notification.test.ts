@@ -105,10 +105,18 @@ async function seedTenant(utilityId: string, opts: TenantOpts = {}): Promise<voi
   await prisma.utilityConfig.create({
     data: {
       utilityId,
-      notificationSendEnabled: opts.notificationSendEnabled ?? true,
       timezone: opts.timezone ?? "UTC",
       notificationQuietStart: opts.quietStart ?? "22:00",
       notificationQuietEnd: opts.quietEnd ?? "07:00",
+    },
+  });
+  // The enable flag is a `scheduler_config` row since 2026-10-31; quiet
+  // hours and the zone belong to the tenant, so they stay above.
+  await prisma.schedulerConfig.create({
+    data: {
+      utilityId,
+      schedulerKey: "notificationSend",
+      enabled: opts.notificationSendEnabled ?? true,
     },
   });
 }

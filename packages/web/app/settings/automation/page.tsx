@@ -2,7 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { getTimeZones } from "@vvo/tzdb";
-import type { AutomationConfig, AutomationConfigPatch } from "@utility-cis/shared";
+import {
+  type AutomationConfig,
+  type AutomationConfigPatch,
+  type SchedulerKey,
+  type SchedulerSetting,
+  SCHEDULER_DEFINITIONS,
+  schedulerDefinition,
+} from "@utility-cis/shared";
 import {
   SettingsSection,
   SettingsCard,
@@ -46,62 +53,6 @@ const TIME_INPUT: React.CSSProperties = {
   ...settingInputStyle,
   width: 140,
 };
-
-interface SchedulerToggleSpec {
-  key: keyof Pick<
-    AutomationConfig,
-    | "suspensionEnabled"
-    | "notificationSendEnabled"
-    | "slaBreachSweepEnabled"
-    | "delinquencyEnabled"
-    | "billingEnabled"
-  >;
-  /**
-   * Shown when the toggle is off, where off is the default and the
-   * consequence is that nothing happens. Every other scheduler here
-   * defaults on, so "disabled" reads as somebody's decision; billing
-   * defaults off, and silence about it reads as a feature that is
-   * broken rather than one not yet switched on.
-   */
-  offNote?: string;
-  label: string;
-  description: string;
-}
-
-const SCHEDULER_TOGGLES: SchedulerToggleSpec[] = [
-  {
-    key: "suspensionEnabled",
-    label: "Suspension transitions · hourly",
-    description:
-      "Automatically activates pending service holds at their start date and completes active holds at their end date.",
-  },
-  {
-    key: "notificationSendEnabled",
-    label: "Notification dispatch · every 10 seconds",
-    description:
-      "Drains the notification outbox to email/SMS providers. Disable only during maintenance — queued messages will not deliver.",
-  },
-  {
-    key: "slaBreachSweepEnabled",
-    label: "SLA breach sweep · every 5 minutes",
-    description:
-      "Marks open service requests as breached when their SLA due date has passed. Drives the breached filter on the request queue.",
-  },
-  {
-    key: "delinquencyEnabled",
-    label: "Delinquency evaluation · daily",
-    description:
-      "Runs your tenant's delinquency rules at the configured local hour. Sends notices, creates delinquency actions.",
-  },
-  {
-    key: "billingEnabled",
-    label: "Billing runs · on each cycle's bill day",
-    description:
-      "Starts a billing run for every active cycle on its own bill day, at the configured local hour. It generates bills; it does not post them — posting stays with the Post button and the auto-post setting.",
-    offNote:
-      "Off: nothing starts a billing run. Somebody has to open each cycle on its bill day and press Start.",
-  },
-];
 
 const RETENTION_PRESETS = [90, 180, 365, 730];
 
@@ -168,15 +119,67 @@ export default function AutomationSettingsPage() {
   function patchOf(): AutomationConfigPatch {
     if (!original || !draft) return {};
     const out: AutomationConfigPatch = {};
+
+    /*
+     * Tenant-wide fields: anything that changed, except `schedulers`,
+     * which is a list and diffs per entry below. `lastRunAt` needs no
+     * exclusion any more — the patch schema has no field for it, so a
+     * dispatcher's timestamp is unreachable from here by construction
+     * rather than by a name this function has to remember.
+     */
     (Object.keys(draft) as (keyof AutomationConfig)[]).forEach((k) => {
-      if (k === "delinquencyLastRunAt") return; // worker-only
-      if (k === "billingLastRunAt") return; // worker-only, same reason
+      if (k === "schedulers") return;
       if (draft[k] !== original[k]) {
-        // Type-safe assignment via index signature.
         (out as Record<string, unknown>)[k] = draft[k];
       }
     });
+
+    // Only the jobs whose settings moved. Sending every job would
+    // materialise a row for each one on the first save of any.
+    const changed = draft.schedulers.filter((next) => {
+      const before = original.schedulers.find((s) => s.key === next.key);
+      return (
+        !before ||
+        before.enabled !== next.enabled ||
+        before.runHourLocal !== next.runHourLocal ||
+        JSON.stringify(before.settings) !== JSON.stringify(next.settings)
+      );
+    });
+    if (changed.length > 0) {
+      out.schedulers = changed.map((c) => ({
+        key: c.key,
+        enabled: c.enabled,
+        runHourLocal: c.runHourLocal,
+        settings: c.settings,
+      }));
+    }
     return out;
+  }
+
+  /** One job's setting, by key, leaving the others alone. */
+  function setScheduler(key: SchedulerKey, change: Partial<SchedulerSetting>) {
+    setDraft((d) =>
+      d
+        ? {
+            ...d,
+            schedulers: d.schedulers.map((s) => (s.key === key ? { ...s, ...change } : s)),
+          }
+        : d,
+    );
+  }
+
+  /** The entry for a catalogue key, or the catalogue default. */
+  function schedulerOf(key: SchedulerKey): SchedulerSetting {
+    const def = schedulerDefinition(key);
+    return (
+      draft?.schedulers.find((s) => s.key === key) ?? {
+        key,
+        enabled: def.defaultEnabled,
+        runHourLocal: def.hasRunHour ? 3 : null,
+        lastRunAt: null,
+        settings: {},
+      }
+    );
   }
 
   async function save() {
@@ -243,28 +246,39 @@ export default function AutomationSettingsPage() {
         description="Toggle individual background jobs. Cadence is fixed at the platform level — these toggles control whether the job does any work for your utility."
       >
         <SettingsCard>
-          {SCHEDULER_TOGGLES.map((spec) => (
-            <SettingRow
-              key={spec.key}
-              label={spec.label}
-              description={
-                // Concatenated rather than marked up: `SettingRow` takes
-                // a string, and widening a prop every settings page uses
-                // to colour one sentence is the wrong trade. The words
-                // carry it.
-                spec.offNote && !draft[spec.key]
-                  ? `${spec.description} ${spec.offNote}`
-                  : spec.description
-              }
-              control={
-                <ToggleSwitch
-                  checked={draft[spec.key]}
-                  disabled={!canEdit}
-                  onChange={(v) => setField(spec.key, v)}
-                />
-              }
-            />
-          ))}
+          {/*
+            * Rendered from the shared catalogue, not from a list in this
+            * file. A scheduler added in `SCHEDULER_DEFINITIONS` gets its
+            * switch — and its hour, below — without this page being
+            * touched, which is the point of the change: onboarding a
+            * utility is configuration, and adding a job is a catalogue
+            * entry plus a handler.
+            */}
+          {SCHEDULER_DEFINITIONS.map((def) => {
+            const row = schedulerOf(def.key);
+            return (
+              <SettingRow
+                key={def.key}
+                label={def.label}
+                description={
+                  // Concatenated rather than marked up: `SettingRow` takes
+                  // a string, and widening a prop every settings page uses
+                  // to colour one sentence is the wrong trade. The words
+                  // carry it.
+                  "offNote" in def && def.offNote && !row.enabled
+                    ? `${def.description} ${def.offNote}`
+                    : def.description
+                }
+                control={
+                  <ToggleSwitch
+                    checked={row.enabled}
+                    disabled={!canEdit}
+                    onChange={(v) => setScheduler(def.key, { enabled: v })}
+                  />
+                }
+              />
+            );
+          })}
         </SettingsCard>
       </SettingsSection>
 
@@ -323,78 +337,71 @@ export default function AutomationSettingsPage() {
 
       <SettingsSection
         title="Daily runs"
-        description="Time-of-day for the daily delinquency evaluation and the billing dispatcher, in your tenant's local time."
+        description="Time-of-day for the jobs that have one, in your tenant's local time. The dispatcher wakes hourly and acts when your local hour matches, so a zone with a half-hour offset runs inside the chosen hour rather than at the top of it."
       >
         <SettingsCard>
-          <SettingRow
-            label="Delinquency run hour"
-            description="0–23, local time. The dispatcher fires this evaluation when the tenant-local hour matches."
-            control={
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <input
-                  type="number"
-                  min={0}
-                  max={23}
-                  step={1}
-                  value={draft.delinquencyRunHourLocal}
-                  disabled={!canEdit}
-                  onChange={(e) =>
-                    setField(
-                      "delinquencyRunHourLocal",
-                      Math.max(0, Math.min(23, Number(e.target.value) || 0)),
-                    )
-                  }
-                  style={NUMBER_INPUT}
-                />
-                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                  {String(draft.delinquencyRunHourLocal).padStart(2, "0")}:00 local
-                </span>
-              </div>
-            }
-          />
-          <SettingRow
-            label="Billing run hour"
-            description="0–23, local time. On a cycle's bill day, the dispatcher starts its run when the tenant-local hour matches. A month shorter than the cycle's bill day bills on its last day."
-            control={
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <input
-                  type="number"
-                  min={0}
-                  max={23}
-                  step={1}
-                  value={draft.billingRunHourLocal}
-                  disabled={!canEdit || !draft.billingEnabled}
-                  onChange={(e) =>
-                    setField(
-                      "billingRunHourLocal",
-                      Math.max(0, Math.min(23, Number(e.target.value) || 0)),
-                    )
-                  }
-                  style={NUMBER_INPUT}
-                />
-                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                  {String(draft.billingRunHourLocal).padStart(2, "0")}:00 local
-                  {!draft.billingEnabled && " · billing automation is off"}
-                </span>
-              </div>
-            }
-          />
           {/*
-            * The dispatcher writes this; the page shows it and never
-            * patches it, like `delinquencyLastRunAt`. It is the only way
-            * to tell a tick that was missed from one not yet due.
+            * One block per job that declares `hasRunHour`, from the same
+            * catalogue as the switches above. Jobs without an hour get no
+            * control rather than a disabled one: suspension and the SLA
+            * sweep run on a fixed cadence, and an hour box for them would
+            * be a value nothing reads.
             */}
-          <SettingRow
-            label="Last billing dispatch"
-            description="When the dispatcher last acted for your utility. Written by the scheduler, not editable here."
-            control={
-              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                {draft.billingLastRunAt
-                  ? new Date(draft.billingLastRunAt).toLocaleString()
-                  : "never"}
-              </span>
-            }
-          />
+          {SCHEDULER_DEFINITIONS.filter((def) => def.hasRunHour).map((def) => {
+            const row = schedulerOf(def.key);
+            return (
+              <SettingRow
+                key={def.key}
+                label={`${def.label.split(" · ")[0]} run hour`}
+                description="0–23, local time. The dispatcher acts when the tenant-local hour matches or has passed, so an hour the clocks skip in spring cannot strand the job."
+                control={
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input
+                      type="number"
+                      min={0}
+                      max={23}
+                      step={1}
+                      aria-label={`${def.key} run hour`}
+                      value={row.runHourLocal ?? 0}
+                      disabled={!canEdit || !row.enabled}
+                      onChange={(e) =>
+                        setScheduler(def.key, {
+                          runHourLocal: Math.max(0, Math.min(23, Number(e.target.value) || 0)),
+                        })
+                      }
+                      style={NUMBER_INPUT}
+                    />
+                    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                      {String(row.runHourLocal ?? 0).padStart(2, "0")}:00 local
+                      {!row.enabled && " · this job is off"}
+                    </span>
+                  </div>
+                }
+              />
+            );
+          })}
+          {/*
+            * The dispatcher writes these; the page shows them and never
+            * patches them. The patch schema has no field for `lastRunAt`
+            * at all, so that is structural rather than a rule this page
+            * has to keep. It is the only way to tell a tick that was
+            * missed from one not yet due.
+            */}
+          {SCHEDULER_DEFINITIONS.filter((def) => def.hasRunHour).map((def) => {
+            const row = schedulerOf(def.key);
+            return (
+              <SettingRow
+                key={`${def.key}-last`}
+                label={`Last run — ${def.label.split(" · ")[0]}`}
+                description="When the dispatcher last acted for your utility. Written by the scheduler, not editable here."
+                control={
+                  <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                    {row.lastRunAt ? new Date(row.lastRunAt).toLocaleString() : "never"}
+                  </span>
+                }
+              />
+            );
+          })}
         </SettingsCard>
       </SettingsSection>
 

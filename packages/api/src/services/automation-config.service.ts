@@ -1,119 +1,119 @@
-import type {
-  AutomationConfig,
-  AutomationConfigPatch,
-  SchedulerKey,
+import {
+  type AutomationConfig,
+  type AutomationConfigPatch,
+  type SchedulerKey,
+  type SchedulerSetting,
+  DEFAULT_RUN_HOUR_LOCAL,
+  SCHEDULER_DEFINITIONS,
+  schedulerDefinition,
 } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { isValidIANA, localHour } from "../lib/iana-tz.js";
 
 /**
- * Service layer for the per-tenant automation/scheduler config.
+ * The per-tenant automation config, assembled from two places.
  *
- * The DB-side schema is on `UtilityConfig`; this module is the
- * application-side surface that the routes, worker handlers, and
- * dispatchers all read through.
+ * Tenant-wide values are columns on `utility_config`. Per-scheduler
+ * values are one `scheduler_config` row per job — so adding a job is a
+ * row rather than a migration, and onboarding a utility is rows rather
+ * than schema.
  *
- * What stays here vs in tenant-config.service.ts:
- *   - Anything specifically about scheduler behavior (timezone,
- *     enable flags, quiet hours, run hour) lives here.
- *   - General UtilityConfig CRUD stays in tenant-config.service.ts.
- *   - This split keeps `tenant-config.service.ts` from growing into
- *     a kitchen-sink module as more automation knobs land.
+ * **A missing row means the catalogue default.** Rows are written when
+ * somebody saves a setting, not when a tenant is created, which is what
+ * lets a newly added scheduler appear for every existing tenant without
+ * a backfill. It is also why `SCHEDULER_DEFINITIONS` requires anything
+ * new to default to disabled: a missing row would otherwise start work
+ * for every tenant the day it shipped.
  */
 
-interface AutomationConfigRow {
-  timezone: string;
-  suspensionEnabled: boolean;
-  notificationSendEnabled: boolean;
-  slaBreachSweepEnabled: boolean;
-  delinquencyEnabled: boolean;
-  delinquencyRunHourLocal: number;
-  delinquencyLastRunAt: Date | null;
-  billingEnabled: boolean;
-  billingRunHourLocal: number;
-  billingLastRunAt: Date | null;
-  notificationQuietStart: string;
-  notificationQuietEnd: string;
-  schedulerAuditRetentionDays: number;
-  autoPostBills: boolean;
-}
-
-/**
- * The columns this module reads, in one place.
- *
- * It was the same eleven-field list written out three times, and the
- * third copy is where a field added to the other two goes missing.
- * `satisfies` keeps it a literal Prisma select rather than widening to
- * `Record<string, boolean>`.
- */
-const AUTOMATION_SELECT = {
+/** The tenant-wide columns this module reads, in one place. */
+const TENANT_SELECT = {
   timezone: true,
-  suspensionEnabled: true,
-  notificationSendEnabled: true,
-  slaBreachSweepEnabled: true,
-  delinquencyEnabled: true,
-  delinquencyRunHourLocal: true,
-  delinquencyLastRunAt: true,
-  billingEnabled: true,
-  billingRunHourLocal: true,
-  billingLastRunAt: true,
   notificationQuietStart: true,
   notificationQuietEnd: true,
   schedulerAuditRetentionDays: true,
   autoPostBills: true,
 } as const;
 
-function toDto(row: AutomationConfigRow): AutomationConfig {
+interface TenantRow {
+  timezone: string;
+  notificationQuietStart: string;
+  notificationQuietEnd: string;
+  schedulerAuditRetentionDays: number;
+  autoPostBills: boolean;
+}
+
+interface SchedulerRow {
+  schedulerKey: string;
+  enabled: boolean;
+  runHourLocal: number | null;
+  lastRunAt: Date | null;
+  settings: unknown;
+}
+
+/**
+ * One entry per catalogue key, whether or not a row exists.
+ *
+ * Driven by the catalogue rather than by what the table happens to
+ * hold, so a scheduler added in code appears immediately and a row left
+ * behind by a removed one is ignored rather than rendered.
+ */
+function toSchedulers(rows: SchedulerRow[]): SchedulerSetting[] {
+  return SCHEDULER_DEFINITIONS.map((def) => {
+    const row = rows.find((r) => r.schedulerKey === def.key);
+    return {
+      key: def.key,
+      enabled: row?.enabled ?? def.defaultEnabled,
+      runHourLocal: def.hasRunHour ? (row?.runHourLocal ?? DEFAULT_RUN_HOUR_LOCAL) : null,
+      lastRunAt: row?.lastRunAt ? row.lastRunAt.toISOString() : null,
+      settings: (row?.settings as Record<string, unknown> | null) ?? {},
+    };
+  });
+}
+
+function toDto(tenant: TenantRow, rows: SchedulerRow[]): AutomationConfig {
   return {
-    timezone: row.timezone,
-    suspensionEnabled: row.suspensionEnabled,
-    notificationSendEnabled: row.notificationSendEnabled,
-    slaBreachSweepEnabled: row.slaBreachSweepEnabled,
-    delinquencyEnabled: row.delinquencyEnabled,
-    delinquencyRunHourLocal: row.delinquencyRunHourLocal,
-    delinquencyLastRunAt: row.delinquencyLastRunAt
-      ? row.delinquencyLastRunAt.toISOString()
-      : null,
-    billingEnabled: row.billingEnabled,
-    billingRunHourLocal: row.billingRunHourLocal,
-    billingLastRunAt: row.billingLastRunAt ? row.billingLastRunAt.toISOString() : null,
-    notificationQuietStart: row.notificationQuietStart,
-    notificationQuietEnd: row.notificationQuietEnd,
-    schedulerAuditRetentionDays: row.schedulerAuditRetentionDays,
-    autoPostBills: row.autoPostBills,
+    timezone: tenant.timezone,
+    notificationQuietStart: tenant.notificationQuietStart,
+    notificationQuietEnd: tenant.notificationQuietEnd,
+    schedulerAuditRetentionDays: tenant.schedulerAuditRetentionDays,
+    autoPostBills: tenant.autoPostBills,
+    schedulers: toSchedulers(rows),
   };
 }
 
 /**
- * Fetch the automation slice of a tenant's config. If the tenant has
- * no `utility_config` row yet (legacy), one is upserted with defaults
- * so callers can rely on a stable shape. The defaults mirror the
- * column-level defaults in the migration so behavior is identical.
+ * Fetch the automation config. A tenant with no `utility_config` row yet
+ * gets one with defaults, so callers can rely on a stable shape; the
+ * scheduler rows are not created here, because a missing row already
+ * means the catalogue default.
  */
 export async function getAutomationConfig(utilityId: string): Promise<AutomationConfig> {
-  const row = await prisma.utilityConfig.findUnique({
-    where: { utilityId },
-    select: AUTOMATION_SELECT,
-  });
-  if (row) return toDto(row);
+  const [tenant, rows] = await Promise.all([
+    prisma.utilityConfig.findUnique({ where: { utilityId }, select: TENANT_SELECT }),
+    prisma.schedulerConfig.findMany({
+      where: { utilityId },
+      select: { schedulerKey: true, enabled: true, runHourLocal: true, lastRunAt: true, settings: true },
+    }),
+  ]);
+  if (tenant) return toDto(tenant, rows);
 
-  // No row yet — create with defaults. UPSERT-on-read keeps the rest
-  // of the system simple at the cost of one cheap write the first
-  // time we see a fresh tenant.
   const created = await prisma.utilityConfig.upsert({
     where: { utilityId },
     create: { utilityId },
     update: {},
-    select: AUTOMATION_SELECT,
+    select: TENANT_SELECT,
   });
-  return toDto(created);
+  return toDto(created, rows);
 }
 
 /**
- * Apply a partial patch. Validates IANA timezone if supplied — the
- * Zod schema only checks shape; this is the semantic gate. Returns
- * the post-patch full config.
+ * Apply a partial patch, at both levels.
+ *
+ * An absent `schedulers` leaves every job alone; a job listed without
+ * `enabled` keeps the enabled it had. Each listed job is upserted, which
+ * is what materialises a row the first time anybody changes a setting.
  */
 export async function patchAutomationConfig(
   utilityId: string,
@@ -122,45 +122,141 @@ export async function patchAutomationConfig(
   if (patch.timezone !== undefined && !isValidIANA(patch.timezone)) {
     throw new Error(`Invalid IANA timezone: "${patch.timezone}"`);
   }
-  // Quiet-hour values are validated by Zod regex at the route layer;
-  // any HH:mm pair is acceptable here. Equal start/end (e.g.,
-  // "00:00"/"00:00") effectively disables quiet hours — that's a
-  // configurable choice, not a bug.
 
-  const row = await prisma.utilityConfig.upsert({
-    where: { utilityId },
-    create: { utilityId, ...patch },
-    update: patch,
-    select: AUTOMATION_SELECT,
-  });
+  const { schedulers, ...tenantPatch } = patch;
+
+  if (Object.keys(tenantPatch).length > 0) {
+    await prisma.utilityConfig.upsert({
+      where: { utilityId },
+      create: { utilityId, ...tenantPatch },
+      update: tenantPatch,
+    });
+  }
+
+  for (const change of schedulers ?? []) {
+    const def = schedulerDefinition(change.key);
+    /*
+     * An hour for a job that has none would be a value nothing reads,
+     * and the next person to look would reasonably believe it mattered.
+     */
+    const runHourLocal = def.hasRunHour ? change.runHourLocal : null;
+    await prisma.schedulerConfig.upsert({
+      where: { utilityId_schedulerKey: { utilityId, schedulerKey: change.key } },
+      create: {
+        utilityId,
+        schedulerKey: change.key,
+        enabled: change.enabled ?? def.defaultEnabled,
+        runHourLocal: runHourLocal ?? (def.hasRunHour ? DEFAULT_RUN_HOUR_LOCAL : null),
+        settings: (change.settings ?? {}) as object,
+      },
+      update: {
+        ...(change.enabled !== undefined ? { enabled: change.enabled } : {}),
+        ...(change.runHourLocal !== undefined ? { runHourLocal } : {}),
+        ...(change.settings !== undefined ? { settings: change.settings as object } : {}),
+      },
+    });
+  }
+
   logger.info(
-    { component: "automation-config", utilityId, patchedKeys: Object.keys(patch) },
+    {
+      component: "automation-config",
+      utilityId,
+      patchedKeys: Object.keys(tenantPatch),
+      patchedSchedulers: (schedulers ?? []).map((c) => c.key),
+    },
     "Automation config patched",
   );
-  return toDto(row);
+  return getAutomationConfig(utilityId);
 }
 
 /**
- * Read a single scheduler's enable flag from a config object. Used by
- * worker handlers that have already loaded the config and want to
- * gate work by scheduler.
+ * Read one scheduler's enable flag from a config object.
+ *
+ * A lookup now rather than a switch over columns. The switch had to
+ * grow an arm per scheduler, which is the same tax the columns charged.
  */
-export function isSchedulerEnabled(
-  config: AutomationConfig,
-  scheduler: SchedulerKey,
-): boolean {
-  switch (scheduler) {
-    case "suspension":
-      return config.suspensionEnabled;
-    case "notificationSend":
-      return config.notificationSendEnabled;
-    case "slaBreachSweep":
-      return config.slaBreachSweepEnabled;
-    case "delinquency":
-      return config.delinquencyEnabled;
-    case "billing":
-      return config.billingEnabled;
+export function isSchedulerEnabled(config: AutomationConfig, scheduler: SchedulerKey): boolean {
+  const entry = config.schedulers.find((s) => s.key === scheduler);
+  return entry?.enabled ?? schedulerDefinition(scheduler).defaultEnabled;
+}
+
+export interface SchedulerTenant {
+  utilityId: string;
+  /** The zone the dispatcher reads the clock in. */
+  timezone: string;
+  /** Null where the job has no time of day. */
+  runHourLocal: number | null;
+  lastRunAt: Date | null;
+}
+
+/**
+ * Every tenant this scheduler is enabled for, with what a dispatcher
+ * needs to decide: the zone and the hour.
+ *
+ * Two small queries and an in-memory join rather than one filter on
+ * `scheduler_config`. **A tenant with no row takes the catalogue
+ * default**, so filtering on rows alone would silently skip every
+ * tenant who has never touched the setting — which for a job that
+ * defaults to enabled, like delinquency, is every tenant. One row per
+ * tenant and at most one row per tenant per scheduler, so both reads
+ * are a few hundred rows at the scale this runs at.
+ *
+ * Cross-tenant: the caller supplies platform authority, which the
+ * `all-tenants` queues do through `scopedJob`.
+ */
+export async function tenantsForScheduler(key: SchedulerKey): Promise<SchedulerTenant[]> {
+  const def = schedulerDefinition(key);
+  const [tenants, rows] = await Promise.all([
+    prisma.utilityConfig.findMany({ select: { utilityId: true, timezone: true } }),
+    prisma.schedulerConfig.findMany({
+      where: { schedulerKey: key },
+      select: { utilityId: true, enabled: true, runHourLocal: true, lastRunAt: true },
+    }),
+  ]);
+
+  const out: SchedulerTenant[] = [];
+  for (const tenant of tenants) {
+    const row = rows.find((r) => r.utilityId === tenant.utilityId);
+    if (!(row?.enabled ?? def.defaultEnabled)) continue;
+    out.push({
+      utilityId: tenant.utilityId,
+      timezone: tenant.timezone,
+      runHourLocal: def.hasRunHour ? (row?.runHourLocal ?? DEFAULT_RUN_HOUR_LOCAL) : null,
+      lastRunAt: row?.lastRunAt ?? null,
+    });
   }
+  return out;
+}
+
+/**
+ * Record that a dispatcher acted for one tenant.
+ *
+ * An upsert, because the row may not exist: a tenant inherits the
+ * catalogue default until something writes one, and a dispatcher
+ * running is the first thing that does for a job nobody configured.
+ */
+export async function markSchedulerRun(
+  utilityId: string,
+  key: SchedulerKey,
+  at: Date = new Date(),
+): Promise<void> {
+  const def = schedulerDefinition(key);
+  await prisma.schedulerConfig.upsert({
+    where: { utilityId_schedulerKey: { utilityId, schedulerKey: key } },
+    create: {
+      utilityId,
+      schedulerKey: key,
+      enabled: def.defaultEnabled,
+      runHourLocal: def.hasRunHour ? DEFAULT_RUN_HOUR_LOCAL : null,
+      lastRunAt: at,
+    },
+    update: { lastRunAt: at },
+  });
+}
+
+/** One scheduler's run hour, or null where the job has no time of day. */
+export function schedulerRunHour(config: AutomationConfig, scheduler: SchedulerKey): number | null {
+  return config.schedulers.find((s) => s.key === scheduler)?.runHourLocal ?? null;
 }
 
 /**
