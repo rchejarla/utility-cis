@@ -216,9 +216,21 @@ and explaining the value somewhere other than a bill.
 
 **Both interact with caching**, and the rule is in §3.4 of the design
 doc: cache the value *with its validity window* and read by containment,
-so "now" hits and so does a reprint dated since the last change. The
-scoped tier is unaffected either way — within one run every read asks
-about the same date.
+so "now" hits and so does a reprint dated since the last change.
+
+**The scoped tier needs the date in its key as well**, which an earlier
+version of this section denied. "Within one run every read asks about
+the same date" holds for a *generation* run — one cycle, one window end
+— and fails for a bulk reprint or a regeneration, where each bill asks
+about its own issue date. Keyed by utility alone, bill #3 would be
+handed the address from bill #1's period. Keyed by
+`(value, asOfDate)` it is one entry per distinct date, which in a
+generation run is still one.
+
+And dating raises the floor cost of a miss, which is an argument for the
+scoped tier rather than against it: a dated read is "the row effective
+at D" — a range scan, plus a second lookup for the upper bound — not the
+primary-key lookup the uncached case used to be.
 
 The one case where the rule is not enough: a flag whose wrong default
 reaches the outside world. `scheduler_config.enabled` for billing defaults

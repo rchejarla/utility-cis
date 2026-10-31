@@ -183,7 +183,7 @@ produces a run whose first 400 bills disagree with its last 11,600. A
 scoped read gives the run one answer. That is a property no
 cross-request cache can offer, so the two are not alternatives.
 
-#### Three rules
+#### Four rules
 
 1. **Cache by write frequency, not by table.** Two columns in one row can
    belong in different tiers. `scheduler_config.enabled` changes almost
@@ -241,7 +241,14 @@ cross-request cache can offer, so the two are not alternatives.
    *current* window, so the honest statement is "reprints since the last
    change hit" — usually most of them, because these values change
    rarely, but not "recent reprints hit".
-3. **One accessor owns both tiers.** A consumer asks for the value, never
+3. **A scoped entry is keyed by everything the answer depends on too** —
+   including the as-of date, once values are dated. Within a *generation*
+   run every read asks about the same date, so that is one entry; a bulk
+   reprint asks about each bill's own issue date, and a scope keyed by
+   tenant alone would hand the second bill the first one's answer. The
+   rule is the same one as for the Redis key, and the scoped tier does
+   not escape it — only the invalidation problem.
+4. **One accessor owns both tiers.** A consumer asks for the value, never
    for a cache. Where a value has many direct readers — tenant config has
    eight — add the accessor before either tier, or there are eight places
    to cache it and eight chances to do it differently.
