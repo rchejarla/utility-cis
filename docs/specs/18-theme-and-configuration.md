@@ -418,8 +418,7 @@ of work, Redis for values that cross requests and rarely change.
 | quiet hours | both | read per notification |
 | `scheduler_config.enabled`, `run_hour_local` | both | read hourly cross-tenant; changes almost never |
 | `scheduler_config.last_run_at` | **neither** | written every dispatch tick — caching it busts the entry its own row's stable fields would live in |
-| anything effective-dated, read as "now" | both | cached under a date-free key; see §3.4 rule 2 |
-| anything effective-dated, read "as of" a past date | **scoped only** | the date belongs in the key, which would make nearly every key unique |
+| anything effective-dated | both | cached **with its validity window** and read by containment, so recent as-of reads hit too; see §3.4 rule 2 |
 
 ### Sequence, and what to measure first
 
@@ -452,12 +451,13 @@ things the document does not:
   query.
 
 **It does not leave the cache**, which was the objection and it was
-wrong. Reads split into "now" and "as of", the first is cached under a
-date-free key and the second goes to the database, and since documents
-are produced now while only reprints ask historically the hit rate stays
-high. See §3.4 rule 2, including the part that matters here: a
-future-dated row expires the cached value with no write to invalidate
-on, so the TTL becomes the only thing that notices.
+wrong twice over. The entry carries the value *and the window it applies
+to*, and a read is a containment check — so "now" hits, and so does a
+reprint of last month's bill, because that date is inside the current
+window. Only a read predating the current version goes to the database.
+See §3.4 rule 2, including why the window needs an **upper** bound: with
+`validFrom` alone, a read dated after a change nobody noticed would hit
+while a newer version actually applied.
 
 What it costs, and the second is the one to watch:
 

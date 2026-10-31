@@ -174,32 +174,42 @@ cross-request cache can offer, so the two are not alternatives.
    tick, hourly per tenant per scheduler. Caching that row as a unit
    means the hourly write busts an entry that exists for a read happening
    thousands of times. Cache the stable fields; read the volatile ones.
-2. **Cache the currently-effective value; send as-of reads to the
-   database.** An effective-dated value is read two ways, and they want
-   different treatment:
+2. **Cache an effective-dated value with its validity window, and read
+   it by containment.** The entry holds the window the value applies to,
+   not just the value:
 
-   | call | key | cached |
-   |---|---|---|
-   | `issuerNow(utilityId)` | `issuer:<utilityId>` | yes |
-   | `issuerAsOf(utilityId, date)` | — | no |
+   ```
+   issuer:<utilityId> → { value, validFrom, validTo }   // validTo null = still current
+   ```
 
-   Putting the date in a shared key would make nearly every key unique
-   and the cache would stop paying for itself; leaving the date *out* of
-   a key that answers a dated question returns a **wrong** answer rather
-   than a stale one. So the accessor exposes two entry points and the
-   hazard disappears by construction — a historical read cannot land on
-   the current-value key because it never asks for it. The hit rate
-   stays high because documents are produced *now*; only reprints and
-   disputes ask historically.
+   Every read — dated or not — is then one check:
 
-   **And this is where the TTL stops being a backstop.** A row with
-   `valid_from` in the future expires the cached current value **with no
-   write to invalidate on** — at midnight the answer changes because
-   time passed, not because anybody saved anything. Invalidation-on-write
-   cannot see that; the TTL is the only thing that does. So for
-   effective-dated values the TTL is load-bearing, not redundant, which
-   is worth knowing before anyone "simplifies" this to
-   invalidate-only.
+   ```
+   validFrom <= askedFor < validTo   → hit
+   otherwise                         → database, repopulate
+   ```
+
+   The naive alternatives both fail. Putting the date in the key makes
+   nearly every key unique and the cache stops paying for itself.
+   Leaving the date out of a key that answers a dated question returns a
+   **wrong** answer rather than a stale one. And caching only the
+   current value with no upper bound is the subtle one: a read dated
+   after a change nobody noticed satisfies `askedFor >= validFrom` and
+   hits, while a newer version actually applies. **The upper bound is
+   what makes the check safe, not an optimisation.**
+
+   Two things fall out of it:
+
+   - **Recent historical reads hit.** A bill reprinted from last month
+     is inside the current window, so the common reprint is a hit rather
+     than a database read.
+   - **A future-dated handover is self-correcting.** When `validTo`
+     arrives, "now" stops satisfying the check, the read falls through
+     and repopulates with the new version. No clock, no sweep, no
+     invalidation — and so **no TTL is required for correctness here**.
+     The TTL stays what it is everywhere else: a backstop for a write
+     somebody forgot to invalidate on, such as editing a live row's
+     value in place instead of closing it and opening a new one.
 3. **One accessor owns both tiers.** A consumer asks for the value, never
    for a cache. Where a value has many direct readers — tenant config has
    eight — add the accessor before either tier, or there are eight places
