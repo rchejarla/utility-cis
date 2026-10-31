@@ -99,7 +99,7 @@ model Utility {
   utilityConfigs         UtilityConfig[]
   schedulerConfigs       SchedulerConfig[]
   utilityModules         UtilityModule[]
-  rateVariables          RateVariable[]
+  utilityVariables          UtilityVariable[]
   utilityThemes          UtilityTheme[]
   wqaValues              WqaValue[]
 
@@ -2223,11 +2223,24 @@ model RateServiceClass {
 /// resolve at evaluation time. Distinct from UtilityConfig (a single
 /// row of well-known scheduler/runtime fields) — this is an open-ended
 /// (utility_id, name) → JSON map.
-/// A tenant-level value a rate component references by name.
+/// A named tenant-level value that configuration references.
 ///
-/// **Not a settings table**, despite having been called `utility_setting`
-/// until 2026-10-31. Its keys come from the tenant's own rate schedules,
-/// not from code: a component can reference `drought_stage` or
+/// **What distinguishes it from `UtilityConfig` is who names the key.**
+/// `UtilityConfig` holds settings code reads by name; here the names
+/// come from outside this repository. Nothing declares
+/// `flags.summer_surcharge` — a configurator invented it writing a rate
+/// component.
+///
+/// Called `utility_setting` until 2026-10-31, where "setting" read as a
+/// synonym of "config" and carried none of that. Briefly called
+/// `rate_variable`, which was worse: it named the table after its only
+/// current consumer, and `drought_stage` is an operating fact about the
+/// utility — a city declares a drought stage — that rate components
+/// happen to consume. A bill message or a portal banner could read it
+/// tomorrow without becoming a rate.
+///
+/// The rate engine is how it is read today: a component can reference
+/// `drought_stage` or
 /// `flags.<anything>`, `manifest()` collects every variable key the
 /// active components mention, and `TenantLoader` fetches those names
 /// here. Nothing in this repository names `flags.summer_surcharge` — a
@@ -2237,6 +2250,15 @@ model RateServiceClass {
 /// would defeat the mechanism. That is the opposite of
 /// `SchedulerConfig`, whose keys are code and whose values are
 /// configuration.
+///
+/// And it stays its own table rather than moving into
+/// `UtilityConfig.settings` for a measured reason: four of the eight
+/// readers of that row fetch it whole, three of them per bill or per
+/// notification, so an unbounded set of flags there would be dragged
+/// through every bill a run produces. Writing one key would also become
+/// `jsonb_set` (which Prisma cannot express) or a read-modify-write that
+/// loses concurrent updates, and `updated_at` per key would collapse
+/// into one timestamp for the whole row.
 ///
 /// The old name had already sent two designs the wrong way — the AR
 /// ledger's fee-ranking order was earmarked for it, and the
@@ -2248,7 +2270,7 @@ model RateServiceClass {
 /// reads as 0 ("no drought declared") and a missing flag as false, so a
 /// configurator can reference a variable before anyone has set it
 /// without breaking a rating run.
-model RateVariable {
+model UtilityVariable {
   id        String   @id @default(uuid()) @db.Uuid
   utilityId String   @map("utility_id") @db.Uuid
   utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
@@ -2260,7 +2282,7 @@ model RateVariable {
 
   @@unique([utilityId, name])
   @@index([utilityId])
-  @@map("rate_variable")
+  @@map("utility_variable")
 }
 
 /// Slice 4 task 5 — Winter Quarter Average (WQA) value backing the

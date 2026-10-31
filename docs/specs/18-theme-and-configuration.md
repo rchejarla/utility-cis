@@ -299,9 +299,9 @@ What this buys: **onboarding a utility is rows, not schema.** Adding a
 scheduler is a list entry plus a handler. A knob only one scheduler needs
 is a jsonb key and no migration at all.
 
-### RateVariable is not a settings bucket
+### UtilityVariable is not a settings bucket
 
-`rate_variable(utility_id, name, value jsonb)` was called
+`utility_variable(utility_id, name, value jsonb)` was called
 `utility_setting` until 2026-10-31, which read as the general tenant
 settings table. **It is the rate engine's variable store**, and the old
 name had already sent two designs the wrong way: the AR ledger's
@@ -316,7 +316,7 @@ they mention; `TenantLoader` then fetches those names from this table.
 ```
 rate component (tenant-authored)  →  references "flags.summer_surcharge"
           ↓  manifest() collects the key
-rate_variable row of that name    →  supplies the value
+utility_variable row of that name    →  supplies the value
 ```
 
 So its keys come from the tenant's configuration, **not from code**.
@@ -346,7 +346,7 @@ wrong answer used to be.
 |---|---|---|
 | A column (`utility_config`, `scheduler_config`) | code, and it may filter on it in SQL | a migration |
 | `settings` jsonb on either row | code still names it; not every tenant has it | nothing |
-| `rate_variable` | **the tenant's own configuration** — code never names it | nothing, and no deploy |
+| `utility_variable` | **the tenant's own configuration** — code never names it | nothing, and no deploy |
 
 The third row is the only place where a new knob needs no code at all, and
 it is worth understanding why: the thing that reads it is itself data. A

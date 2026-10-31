@@ -103,7 +103,7 @@ replaced it follows, under "A `Utility` root now exists".*
 
 The tenant is a **JWT claim**. It arrives as `request.user.utilityId` (dev login defaults it to `00000000-0000-4000-8000-000000000001`), is pushed into `app.current_utility_id`, and RLS reads it from there. `CisUser.externalId` shows users mirror an external identity provider, so *which tenants exist* is owned outside this database and the claim is trusted on arrival.
 
-The three satellite models — `UtilityConfig`, `UtilityTheme`, `UtilityModule` — are keyed by `utility_id`. (`UtilitySetting` was listed here until 2026-10-31 and did not belong: it is the rate engine's variable store, renamed `RateVariable`. The name had it filed among the tenant-config tables by this very sentence.) They were named `Tenant*` until 2026-10-18; "tenant" now names only the isolation mechanism (`withTenant()`, `tenantMiddleware`, `app.current_utility_id`, the `tenant_isolation` policies), while the entity itself is a Utility.
+The three satellite models — `UtilityConfig`, `UtilityTheme`, `UtilityModule` — are keyed by `utility_id`. (`UtilitySetting` was listed here until 2026-10-31 and did not belong: it is the rate engine's variable store, renamed `UtilityVariable`. The name had it filed among the tenant-config tables by this very sentence.) They were named `Tenant*` until 2026-10-18; "tenant" now names only the isolation mechanism (`withTenant()`, `tenantMiddleware`, `app.current_utility_id`, the `tenant_isolation` policies), while the entity itself is a Utility.
 
 **A `Utility` root now exists** (2026-10-18, build-order step 2 of
 `docs/superpowers/specs/2026-10-17-tenancy-and-platform-admin-design.md`). It carries id, display

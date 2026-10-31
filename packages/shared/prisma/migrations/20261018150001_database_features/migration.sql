@@ -206,8 +206,8 @@ ALTER TABLE service_point ALTER COLUMN updated_at SET DEFAULT now();
 ALTER TABLE service_point_meter ALTER COLUMN id SET DEFAULT gen_random_uuid();
 ALTER TABLE user_role ALTER COLUMN id SET DEFAULT gen_random_uuid();
 ALTER TABLE user_role ALTER COLUMN updated_at SET DEFAULT now();
-ALTER TABLE rate_variable ALTER COLUMN id SET DEFAULT gen_random_uuid();
-ALTER TABLE rate_variable ALTER COLUMN updated_at SET DEFAULT now();
+ALTER TABLE utility_variable ALTER COLUMN id SET DEFAULT gen_random_uuid();
+ALTER TABLE utility_variable ALTER COLUMN updated_at SET DEFAULT now();
 ALTER TABLE wqa_value ALTER COLUMN id SET DEFAULT gen_random_uuid();
 
 -- ─── Check constraints ───────────────────────────────────────────
@@ -327,7 +327,7 @@ ALTER TABLE user_role ENABLE ROW LEVEL SECURITY;
 ALTER TABLE utility ENABLE ROW LEVEL SECURITY;
 ALTER TABLE utility_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE utility_module ENABLE ROW LEVEL SECURITY;
-ALTER TABLE rate_variable ENABLE ROW LEVEL SECURITY;
+ALTER TABLE utility_variable ENABLE ROW LEVEL SECURITY;
 ALTER TABLE utility_theme ENABLE ROW LEVEL SECURITY;
 ALTER TABLE wqa_value ENABLE ROW LEVEL SECURITY;
 
@@ -390,7 +390,7 @@ CREATE POLICY tenant_isolation ON user_role USING ((utility_id = (current_settin
 CREATE POLICY tenant_isolation ON utility USING ((id = (current_setting('app.current_utility_id'::text, true))::uuid));
 CREATE POLICY tenant_isolation ON utility_config USING ((utility_id = (current_setting('app.current_utility_id'::text))::uuid));
 CREATE POLICY tenant_isolation ON utility_module USING ((utility_id = (current_setting('app.current_utility_id'::text))::uuid));
-CREATE POLICY tenant_isolation ON rate_variable USING ((utility_id = (current_setting('app.current_utility_id'::text, true))::uuid));
+CREATE POLICY tenant_isolation ON utility_variable USING ((utility_id = (current_setting('app.current_utility_id'::text, true))::uuid));
 CREATE POLICY tenant_isolation ON scheduler_config USING ((utility_id = (current_setting('app.current_utility_id'::text))::uuid));
 CREATE POLICY tenant_isolation ON utility_theme USING ((utility_id = (current_setting('app.current_utility_id'::text))::uuid));
 CREATE POLICY tenant_isolation ON wqa_value USING ((utility_id = (current_setting('app.current_utility_id'::text, true))::uuid));

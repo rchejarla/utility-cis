@@ -11,7 +11,7 @@ import type { Loader, LoaderCapability } from "../types.js";
  *                                       (currently-declared drought stage; 0 = none)
  *   - `tenant:flags:<flag_name>`     → boolean
  *
- * Both pull from the per-tenant `rate_variable` table. The
+ * Both pull from the per-tenant `utility_variable` table. The
  * setting `name` column is shaped to match the variable key minus the
  * `tenant:` prefix:
  *
@@ -59,7 +59,7 @@ export class TenantLoader implements Loader {
     const out = new Map<VariableKey, VariableValue>();
     if (keys.length === 0) return out;
 
-    // Map each requested variable key to the rate_variable.name we
+    // Map each requested variable key to the utility_variable.name we
     // expect to find. Keep the key→name pairing local so we can map
     // results back to their original keys after the batched query.
     const settingNames = new Set<string>();
@@ -79,7 +79,7 @@ export class TenantLoader implements Loader {
 
     if (keyToSettingName.size === 0) return out;
 
-    const rows = await this.prisma.rateVariable.findMany({
+    const rows = await this.prisma.utilityVariable.findMany({
       where: { utilityId: this.utilityId, name: { in: [...settingNames] } },
       select: { name: true, value: true },
     });
