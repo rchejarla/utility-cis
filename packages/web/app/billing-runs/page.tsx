@@ -9,6 +9,8 @@ import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { useToast } from "@/components/ui/toast";
 import { StartRunDialog } from "@/components/billing-runs/start-run-dialog";
+import { NextRuns } from "@/components/billing-runs/next-runs";
+import type { BillingSchedule } from "@/components/billing-runs/next-runs";
 import { fmtDate } from "@/components/billing-runs/run-format";
 import type { BillingRunRow } from "@/components/billing-runs/run-format";
 
@@ -31,6 +33,7 @@ export default function BillingRunsPage() {
   const { toast } = useToast();
 
   const [runs, setRuns] = useState<BillingRunRow[]>([]);
+  const [schedule, setSchedule] = useState<BillingSchedule | null>(null);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
 
@@ -45,9 +48,28 @@ export default function BillingRunsPage() {
     }
   }, [toast]);
 
+  /*
+   * The schedule is loaded separately and its failure is swallowed.
+   *
+   * It is an extra panel on a screen whose subject is the runs table: a
+   * toast about the projection failing would put an error on a page
+   * that is working, and the table is what the operator came for. The
+   * panel simply does not appear.
+   */
+  const loadSchedule = useCallback(async () => {
+    try {
+      setSchedule(await apiClient.get<BillingSchedule>("/api/v1/billing-runs/schedule"));
+    } catch {
+      setSchedule(null);
+    }
+  }, []);
+
   useEffect(() => {
-    if (canView) void load();
-  }, [canView, load]);
+    if (canView) {
+      void load();
+      void loadSchedule();
+    }
+  }, [canView, load, loadSchedule]);
 
   /*
    * Poll only while something is actually moving. A finished run never
@@ -76,6 +98,10 @@ export default function BillingRunsPage() {
           ) : undefined
         }
       />
+
+      {/* Above the table: what will run comes before what did, and it
+          is the half the table cannot answer. */}
+      {schedule && <NextRuns schedule={schedule} />}
 
       {loading ? (
         <p style={{ color: "var(--text-muted)" }}>Loading…</p>
