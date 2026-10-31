@@ -410,6 +410,13 @@ differently.
 Per §3.4 of the design doc — scoped for a consistent view within a unit
 of work, Redis for values that cross requests and rarely change.
 
+**The scoped column is the design; the Redis column is conditional.**
+§3.4 says why: the read Redis replaces is a key lookup on a one-row
+table, the scoped tier already removes the only case anybody has named,
+and the measurement that would justify the rest has not been taken. The
+assignments below are what to cache *where* on the day it is justified,
+not a licence to build it now.
+
 | Value | Tier | Why |
 |---|---|---|
 | `timezone` | both | read per dispatch tick cross-tenant; changes almost never |
@@ -422,12 +429,20 @@ of work, Redis for values that cross requests and rarely change.
 
 ### Sequence, and what to measure first
 
-Scoped tier first, then measure before adding Redis. Scoped captures the
-whole billing-run win and carries the consistency property; the Redis
-tier saves one primary-key lookup on a one-row table per request. RBAC
-earns its Redis cache because permissions are read many times per
-request — configuration is read a handful of times, so the case should
-be measured rather than assumed.
+1. **The accessor.** Narrow named reads, so the four whole-row fetches
+   stop and there is one seam to cache at. Worth doing on its own
+   merits: it is also the file that absorbs the next storage change
+   instead of eight files absorbing it.
+2. **The scoped tier.** Captures the twelve-thousand-bill case and
+   carries the consistency property no TTL cache can offer.
+3. **Measure.** Then decide about Redis.
+
+The third step is a real gate, not a formality. RBAC earns its Redis
+cache because permissions are read many times per request;
+configuration is read a handful of times per request from a one-row
+table. Nobody has profiled it, and three rounds of refining *how* to
+cache it correctly did not establish *that* it needs caching — which is
+the order this design got wrong before being corrected.
 
 ### settings.issuer: effective-dated, and still cacheable
 
@@ -450,14 +465,19 @@ things the document does not:
 - explaining the value somewhere other than a bill — a report, an audit
   query.
 
-**It does not leave the cache**, which was the objection and it was
-wrong twice over. The entry carries the value *and the window it applies
-to*, and a read is a containment check — so "now" hits, and so does a
-reprint of last month's bill, because that date is inside the current
-window. Only a read predating the current version goes to the database.
-See §3.4 rule 2, including why the window needs an **upper** bound: with
-`validFrom` alone, a read dated after a change nobody noticed would hit
-while a newer version actually applied.
+**Effective dating does not rule out caching**, which was the original
+objection and it was wrong twice over. If the Redis tier is ever built,
+the entry carries the value *and the window it applies to* and a read is
+a containment check — so "now" hits, and so does a reprint dated since
+the last change, because that date is inside the current window. Only a
+read predating the current version goes to the database. See §3.4 rule 2
+for why the window needs an **upper** bound: with `validFrom` alone, a
+read dated after a change nobody noticed would hit while a newer version
+actually applied.
+
+The scoped tier is unaffected by any of this: within one run every read
+asks about the same date, so one entry serves the run whether the value
+is dated or not.
 
 What it costs, and the second is the one to watch:
 

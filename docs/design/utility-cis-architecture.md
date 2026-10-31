@@ -150,12 +150,29 @@ and calls `cacheDel` when a role or a utility's status changes. The TTL
 is not the mechanism — it is the backstop for an invalidation somebody
 forgets to write, which is how every cache eventually breaks.
 
-#### Two tiers, and they solve different problems
+#### Two tiers, and only one of them is the design
 
-| Tier | Where | Lifetime | Invalidation | What it is for |
-|---|---|---|---|---|
-| **Scoped** | the `runAsTenant` AsyncLocalStorage store | one request or job | none needed | collapsing N reads of a constant to 1, and giving one consistent view within a unit of work |
-| **Cross-request** | Redis, 300s + `cacheDel` | minutes | explicit, on every writer | avoiding a database read on a value that rarely changes |
+| Tier | Where | Status | What it is for |
+|---|---|---|---|
+| **Scoped** | the `runAsTenant` AsyncLocalStorage store | **the design** — build this | collapsing N reads of a constant to 1, and giving one consistent view within a unit of work |
+| **Cross-request** | Redis, 300s + `cacheDel` | **conditional — do not build on sight** | avoiding a database read on a value that rarely changes |
+
+**The Redis tier needs a measurement first, and that is a correction to
+an earlier version of this section** which presented it as settled. The
+uncached read it replaces is a primary-key lookup on a one-row table.
+The scoped tier already removes the case anybody has named — a
+twelve-thousand-bill run reading the same value twice per bill — so
+what Redis adds is saving that lookup *outside* a run, and it costs an
+invalidation path on every writer, a second query to populate the
+validity window (below), the containment logic and a TTL backstop.
+
+Build it when a profile shows config reads are a measurable share of a
+request, or when a cross-tenant sweep reads config per tenant often
+enough to matter. RBAC earns its Redis cache because permissions are
+read many times per request; configuration is read a handful of times,
+which is a different case and should be measured rather than assumed.
+The rules below are how to do it correctly on the day it is justified —
+not an argument that it is.
 
 The scoped tier is the one that is usually missing and usually wanted.
 A 12,000-bill run reads the tenant's issuer identity and bill message
@@ -200,16 +217,30 @@ cross-request cache can offer, so the two are not alternatives.
 
    Two things fall out of it:
 
-   - **Recent historical reads hit.** A bill reprinted from last month
-     is inside the current window, so the common reprint is a hit rather
-     than a database read.
-   - **A future-dated handover is self-correcting.** When `validTo`
+   - **Historical reads since the last change hit.** A bill reprinted
+     from last month is inside the current window, so the common reprint
+     is a hit rather than a database read.
+   - **A future-dated handover is self-correcting, for a change the
+     cache already knows about.** When a cached entry's `validTo`
      arrives, "now" stops satisfying the check, the read falls through
-     and repopulates with the new version. No clock, no sweep, no
-     invalidation — and so **no TTL is required for correctness here**.
-     The TTL stays what it is everywhere else: a backstop for a write
-     somebody forgot to invalidate on, such as editing a live row's
-     value in place instead of closing it and opening a new one.
+     and repopulates. No clock and no sweep.
+
+     **It does not cover a change the cache never heard of.** If a new
+     version is written and the invalidation is missed, the stale entry
+     still says `validTo: null` and answers confidently until the TTL
+     expires it. So the TTL is not redundant here either — an earlier
+     version of this section said "no TTL is required for correctness",
+     which was wrong: the window handles *time passing*, the TTL handles
+     *a write nobody told the cache about*, and both failures are real.
+
+   Two costs to know before choosing this shape. Populating the window
+   needs "the row effective at D **and** where the next one starts" — a
+   window function or a second query, not a key lookup, so the miss is
+   dearer than it looks. And the hit-rate claim is narrower than it
+   first appears: a historical read hits only if its date falls in the
+   *current* window, so the honest statement is "reprints since the last
+   change hit" — usually most of them, because these values change
+   rarely, but not "recent reprints hit".
 3. **One accessor owns both tiers.** A consumer asks for the value, never
    for a cache. Where a value has many direct readers — tenant config has
    eight — add the accessor before either tier, or there are eight places
