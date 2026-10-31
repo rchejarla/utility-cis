@@ -99,7 +99,7 @@ model Utility {
   utilityConfigs         UtilityConfig[]
   schedulerConfigs       SchedulerConfig[]
   utilityModules         UtilityModule[]
-  utilitySettings        UtilitySetting[]
+  rateVariables          RateVariable[]
   utilityThemes          UtilityTheme[]
   wqaValues              WqaValue[]
 
@@ -2223,10 +2223,36 @@ model RateServiceClass {
 /// resolve at evaluation time. Distinct from UtilityConfig (a single
 /// row of well-known scheduler/runtime fields) — this is an open-ended
 /// (utility_id, name) → JSON map.
-model UtilitySetting {
+/// A tenant-level value a rate component references by name.
+///
+/// **Not a settings table**, despite having been called `utility_setting`
+/// until 2026-10-31. Its keys come from the tenant's own rate schedules,
+/// not from code: a component can reference `drought_stage` or
+/// `flags.<anything>`, `manifest()` collects every variable key the
+/// active components mention, and `TenantLoader` fetches those names
+/// here. Nothing in this repository names `flags.summer_surcharge` — a
+/// configurator invented it writing a rate component.
+///
+/// So it has, and should keep, **no declaration of valid keys**: a list
+/// would defeat the mechanism. That is the opposite of
+/// `SchedulerConfig`, whose keys are code and whose values are
+/// configuration.
+///
+/// The old name had already sent two designs the wrong way — the AR
+/// ledger's fee-ranking order was earmarked for it, and the
+/// architecture doc filed it among the tenant-config satellites. A
+/// code-known tenant setting belongs in `UtilityConfig` or its
+/// `settings` jsonb; see spec 18 "Where a tenant setting goes".
+///
+/// A missing row is the zero case, deliberately: `drought_stage` absent
+/// reads as 0 ("no drought declared") and a missing flag as false, so a
+/// configurator can reference a variable before anyone has set it
+/// without breaking a rating run.
+model RateVariable {
   id        String   @id @default(uuid()) @db.Uuid
   utilityId String   @map("utility_id") @db.Uuid
   utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  /// Namespaced by convention — `drought_stage`, `flags.<name>`.
   name      String   @map("name") @db.VarChar(100)
   value     Json     @map("value")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -2234,7 +2260,7 @@ model UtilitySetting {
 
   @@unique([utilityId, name])
   @@index([utilityId])
-  @@map("utility_setting")
+  @@map("rate_variable")
 }
 
 /// Slice 4 task 5 — Winter Quarter Average (WQA) value backing the

@@ -299,10 +299,14 @@ What this buys: **onboarding a utility is rows, not schema.** Adding a
 scheduler is a list entry plus a handler. A knob only one scheduler needs
 is a jsonb key and no migration at all.
 
-### UtilitySetting is not a settings bucket
+### RateVariable is not a settings bucket
 
-`utility_setting(utility_id, name, value jsonb)` looks like a third
-generic store and is not one. **It is the rate engine's variable store.**
+`rate_variable(utility_id, name, value jsonb)` was called
+`utility_setting` until 2026-10-31, which read as the general tenant
+settings table. **It is the rate engine's variable store**, and the old
+name had already sent two designs the wrong way: the AR ledger's
+fee-ranking order was earmarked for it, and the sentence in the
+architecture doc listing the tenant-config satellites included it.
 
 A tenant's rate schedule is data, and a component can reference a named
 variable — `drought_stage`, or `flags.<anything>`. At rate time
@@ -312,7 +316,7 @@ they mention; `TenantLoader` then fetches those names from this table.
 ```
 rate component (tenant-authored)  →  references "flags.summer_surcharge"
           ↓  manifest() collects the key
-utility_setting row of that name  →  supplies the value
+rate_variable row of that name    →  supplies the value
 ```
 
 So its keys come from the tenant's configuration, **not from code**.
@@ -323,10 +327,18 @@ discovered, rather than a jsonb bucket whose keys a reader names one at a
 time.
 
 It therefore has, and should keep, **no declaration of what keys exist** —
-a list of valid keys would defeat the mechanism. An earlier version of
-this section called it "the storage half of a managed settings mechanism"
-missing a catalogue. That was wrong, and would have sent somebody to fix
-something correct.
+a list of valid keys would defeat the mechanism. That is the exact
+opposite of `SchedulerConfig`, whose keys are code and whose values are
+configuration, and the reason the two cannot share a table.
+
+An earlier version of this section called it "the storage half of a
+managed settings mechanism" missing a declaration. That was wrong, and
+would have sent somebody to fix something correct.
+
+**A code-known tenant setting does not belong here.** It belongs in
+`UtilityConfig` or its `settings` jsonb, by the rule at the top of this
+section. That is now written into `validators/ledger.ts` where the
+wrong answer used to be.
 
 ### Three kinds of tenant configuration
 
@@ -334,7 +346,7 @@ something correct.
 |---|---|---|
 | A column (`utility_config`, `scheduler_config`) | code, and it may filter on it in SQL | a migration |
 | `settings` jsonb on either row | code still names it; not every tenant has it | nothing |
-| `utility_setting` | **the tenant's own configuration** — code never names it | nothing, and no deploy |
+| `rate_variable` | **the tenant's own configuration** — code never names it | nothing, and no deploy |
 
 The third row is the only place where a new knob needs no code at all, and
 it is worth understanding why: the thing that reads it is itself data. A

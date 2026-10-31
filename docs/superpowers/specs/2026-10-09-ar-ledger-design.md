@@ -350,7 +350,7 @@ Walk open debits in this order:
 1. **Type class:** `FEE`, then `ADJUSTMENT_DEBIT`, then `BILL_CHARGE`
 2. **Oldest `dueDate`** within a class, tie-broken by `postedAt`
 
-Which is spec 10's rule — reconnection fees, then late fees, then oldest bills FIFO. The ranking lives in **one constant**. Spec 10 says it should be tenant-configurable; not built, because no second tenant wants a different order. When one does, it moves to `UtilitySetting`, which already exists.
+Which is spec 10's rule — reconnection fees, then late fees, then oldest bills FIFO. The ranking lives in **one constant**. Spec 10 says it should be tenant-configurable; not built, because no second tenant wants a different order. When one does, it belongs in `UtilityConfig.settings`. (This said `UtilitySetting`, which is the rate engine's variable store — renamed `RateVariable` on 2026-10-31 for exactly this reason: its keys come from a tenant's rate components, not from code.)
 
 Each application consumes what it can; shortfall stays as `openAmount` on the debit. Partial payments need no special case.
 

@@ -8,7 +8,7 @@ import { runAsTenant } from "../../lib/tenant-context.js";
  * Slice 4 task 4 — TenantLoader integration tests.
  *
  * Boots a Postgres container, applies migrations, and exercises the
- * loader's two declared patterns against real `utility_setting` rows:
+ * loader's two declared patterns against real `rate_variable` rows:
  *   - tenant:drought_stage          (number stored in JSON column)
  *   - tenant:flags:<flag_name>      (boolean stored in JSON column,
  *                                    keyed by `flags.<name>`)
@@ -50,9 +50,9 @@ beforeEach(() =>
   seedAsPlatform(async () => {    /* Fixture rows and read-backs under the fixture authority; the
      * scoped wrappers re-enter their own tenant scope. */
     const { prisma } = prismaImports;
-    // utility_setting isn't in resetDb's truncate list (post-dates it);
+    // rate_variable isn't in resetDb's truncate list (post-dates it);
     // wipe it explicitly so each test starts from a known state.
-    await prisma.$executeRawUnsafe("DELETE FROM utility_setting");
+    await prisma.$executeRawUnsafe("DELETE FROM rate_variable");
     await resetDb();
 
   }));
@@ -69,7 +69,7 @@ async function seedSetting(utilityId: string, name: string, value: unknown): Pro
 
   return seedAsPlatform(async () => {
     const { prisma } = prismaImports;
-    await prisma.utilitySetting.create({
+    await prisma.rateVariable.create({
       data: { utilityId, name, value: value as object },
     });
 
@@ -113,17 +113,17 @@ describe("TenantLoader", () => {
     expect(out.get("tenant:flags:missing")).toBe(false);
   });
 
-  it("batches multiple keys into a single utility_setting query", async () => {
+  it("batches multiple keys into a single rate_variable query", async () => {
     await makeTenantFixture(prismaImports.prisma, TENANT_A);
     await seedSetting(TENANT_A, "drought_stage", 3);
     await seedSetting(TENANT_A, "flags.autopay", true);
     await seedSetting(TENANT_A, "flags.paperless_default", false);
 
-    const original = prismaImports.prisma.utilitySetting.findMany.bind(
-      prismaImports.prisma.utilitySetting,
+    const original = prismaImports.prisma.rateVariable.findMany.bind(
+      prismaImports.prisma.rateVariable,
     );
     const spy = vi
-      .spyOn(prismaImports.prisma.utilitySetting, "findMany")
+      .spyOn(prismaImports.prisma.rateVariable, "findMany")
       .mockImplementation((args) => original(args) as ReturnType<typeof original>);
     try {
       const loader = new TenantLoader(prismaImports.prisma, TENANT_A);

@@ -1206,7 +1206,12 @@ CREATE TABLE "rate_service_class" (
 );
 
 -- CreateTable
-CREATE TABLE "utility_setting" (
+-- A tenant-level value a rate component references by name.
+--
+-- Named `utility_setting` until 2026-10-31, which read as the general
+-- tenant settings table and twice sent a design the wrong way. Its keys
+-- come from the tenant's own rate schedules, not from code.
+CREATE TABLE "rate_variable" (
     "id" UUID NOT NULL,
     "utility_id" UUID NOT NULL,
     "name" VARCHAR(100) NOT NULL,
@@ -1214,7 +1219,7 @@ CREATE TABLE "utility_setting" (
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ NOT NULL,
 
-    CONSTRAINT "utility_setting_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "rate_variable_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -1797,10 +1802,10 @@ CREATE INDEX "rate_service_class_utility_id_commodity_id_is_active_sort_o_idx" O
 CREATE UNIQUE INDEX "rate_service_class_utility_id_commodity_id_code_key" ON "rate_service_class"("utility_id", "commodity_id", "code");
 
 -- CreateIndex
-CREATE INDEX "utility_setting_utility_id_idx" ON "utility_setting"("utility_id");
+CREATE INDEX "rate_variable_utility_id_idx" ON "rate_variable"("utility_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "utility_setting_utility_id_name_key" ON "utility_setting"("utility_id", "name");
+CREATE UNIQUE INDEX "rate_variable_utility_id_name_key" ON "rate_variable"("utility_id", "name");
 
 -- CreateIndex
 CREATE INDEX "wqa_value_utility_id_service_agreement_id_idx" ON "wqa_value"("utility_id", "service_agreement_id");
@@ -2202,7 +2207,7 @@ ALTER TABLE "rate_service_class" ADD CONSTRAINT "rate_service_class_utility_id_f
 ALTER TABLE "rate_service_class" ADD CONSTRAINT "rate_service_class_commodity_id_fkey" FOREIGN KEY ("commodity_id") REFERENCES "commodity"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "utility_setting" ADD CONSTRAINT "utility_setting_utility_id_fkey" FOREIGN KEY ("utility_id") REFERENCES "utility"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "rate_variable" ADD CONSTRAINT "rate_variable_utility_id_fkey" FOREIGN KEY ("utility_id") REFERENCES "utility"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "wqa_value" ADD CONSTRAINT "wqa_value_utility_id_fkey" FOREIGN KEY ("utility_id") REFERENCES "utility"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

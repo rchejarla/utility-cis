@@ -33,7 +33,10 @@ export const ENTRY_SIGN: Record<DebitType | CreditType, 1 | -1> = {
  *
  * One constant, deliberately. Spec 10 wants this tenant-configurable; it
  * is not built, because no second tenant wants a different order. When
- * one does it moves to `UtilitySetting`, which already exists.
+ * one does, it belongs in `UtilityConfig.settings` — a code-known
+ * tenant setting. Not `RateVariable` (named `UtilitySetting` until
+ * 2026-10-31), whose keys come from a tenant's rate components and
+ * which nothing in code names.
  */
 export const DEBIT_ALLOCATION_ORDER = [
   "FEE",
