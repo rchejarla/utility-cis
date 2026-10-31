@@ -554,6 +554,26 @@ every node checks before taking a job.
   `cis_platform`; the per-tenant work it enqueues runs under
   `runAsTenant` via `scopedJob`, like every other fan-out. A sweep on a
   confined connection finds nothing and reports success.
+- **SCH-X-6 (Must, fixed 2026-10-31).** **A dispatcher enumerates
+  tenants from `utility`, filtered to ACTIVE** — not from
+  `utility_config`.
+
+  Two defects, one line. `utility_config` is written lazily the first
+  time somebody opens `/settings/automation` and
+  `provision-tenant.ts` does not create it, so enumerating from there
+  skipped every freshly provisioned utility: no billing runs, no
+  delinquency notices, until a person happened to visit a settings page.
+  That is the case a dispatcher first meets in production, and the
+  delinquency dispatcher had shipped with it.
+
+  And suspension is enforced on every *request*, which a scheduler is
+  not — so a suspended utility's runs and notices kept firing. The
+  status filter is in the query rather than applied after, so a
+  suspended tenant is never read.
+
+  A tenant with no config row takes `utility_config.timezone`'s column
+  default, which the service names in one constant beside the query
+  rather than repeating the literal.
 - **SCH-X-3 (Must).** Pause, resume, concurrency changes and dispatch
   outcomes are logged with actor and node, the old value beside the new
   (`component: "scheduler-control"`). They are not

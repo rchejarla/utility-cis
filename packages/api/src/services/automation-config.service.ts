@@ -190,23 +190,44 @@ export interface SchedulerTenant {
 }
 
 /**
+ * The zone a tenant with no `utility_config` row is read in.
+ *
+ * Must match `utility_config.timezone`'s column default, because the
+ * row this stands in for would have carried that value.
+ */
+const DEFAULT_TIMEZONE = "UTC";
+
+/**
  * Every tenant this scheduler is enabled for, with what a dispatcher
  * needs to decide: the zone and the hour.
  *
- * Two small queries and an in-memory join rather than one filter on
- * `scheduler_config`. **A tenant with no row takes the catalogue
- * default**, so filtering on rows alone would silently skip every
- * tenant who has never touched the setting — which for a job that
- * defaults to enabled, like delinquency, is every tenant. One row per
- * tenant and at most one row per tenant per scheduler, so both reads
- * are a few hundred rows at the scale this runs at.
+ * **The list comes from `utility`**, the table that defines what a
+ * tenant is — and that is the fix for a defect this helper inherited
+ * from the delinquency dispatcher. Enumerating from `utility_config`
+ * skips any tenant with no config row, `provision-tenant.ts` does not
+ * create one, and the row is otherwise written lazily the first time
+ * somebody opens the settings page. So a freshly provisioned utility
+ * had no automation at all — no billing runs, no delinquency notices —
+ * which is exactly the case a dispatcher first meets in production.
+ *
+ * **ACTIVE only.** Suspension is enforced on every request, but a
+ * scheduler is not a request, so until this filter existed suspending a
+ * utility left its runs and notices firing. In the query rather than
+ * applied after, so a suspended tenant is never read at all.
+ *
+ * Three small reads and an in-memory join rather than one filter on
+ * `scheduler_config`: **a tenant with no row takes the catalogue
+ * default**, so filtering on rows alone would skip everyone who has
+ * never touched the setting — which for a job defaulting to enabled is
+ * every tenant. One row per tenant at most in each read.
  *
  * Cross-tenant: the caller supplies platform authority, which the
  * `all-tenants` queues do through `scopedJob`.
  */
 export async function tenantsForScheduler(key: SchedulerKey): Promise<SchedulerTenant[]> {
   const def = schedulerDefinition(key);
-  const [tenants, rows] = await Promise.all([
+  const [utilities, configs, rows] = await Promise.all([
+    prisma.utility.findMany({ where: { status: "ACTIVE" }, select: { id: true } }),
     prisma.utilityConfig.findMany({ select: { utilityId: true, timezone: true } }),
     prisma.schedulerConfig.findMany({
       where: { schedulerKey: key },
@@ -215,12 +236,13 @@ export async function tenantsForScheduler(key: SchedulerKey): Promise<SchedulerT
   ]);
 
   const out: SchedulerTenant[] = [];
-  for (const tenant of tenants) {
-    const row = rows.find((r) => r.utilityId === tenant.utilityId);
+  for (const utility of utilities) {
+    const row = rows.find((r) => r.utilityId === utility.id);
     if (!(row?.enabled ?? def.defaultEnabled)) continue;
+    const config = configs.find((c) => c.utilityId === utility.id);
     out.push({
-      utilityId: tenant.utilityId,
-      timezone: tenant.timezone,
+      utilityId: utility.id,
+      timezone: config?.timezone ?? DEFAULT_TIMEZONE,
       runHourLocal: def.hasRunHour ? (row?.runHourLocal ?? DEFAULT_RUN_HOUR_LOCAL) : null,
       lastRunAt: row?.lastRunAt ?? null,
     });

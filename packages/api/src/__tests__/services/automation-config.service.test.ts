@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   isSchedulerEnabled,
+  tenantsForScheduler,
   isInQuietHours,
   priorityForTenant,
   patchAutomationConfig,
@@ -274,3 +275,81 @@ describe("patchAutomationConfig — IANA validation guard", () => {
     expect(schedulerUpsert.mock.calls[0][0].update).toMatchObject({ runHourLocal: null });
   });
 });
+
+/**
+ * Which tenants a dispatcher acts for.
+ *
+ * The list has to come from `utility`, the table that defines what a
+ * tenant *is*. Reading it from `utility_config` — which is what the
+ * delinquency dispatcher did and what I carried into this helper —
+ * silently skips any tenant with no config row, and
+ * `provision-tenant.ts` does not create one. So a utility created by
+ * the provisioning script had no automation at all until somebody
+ * happened to open its settings page, which is precisely the case a
+ * billing dispatcher first meets in production.
+ */
+describe("tenantsForScheduler", () => {
+  const ACTIVE = { id: "11111111-1111-4111-8111-111111111111" };
+  const OTHER = { id: "22222222-2222-4222-8222-222222222222" };
+
+  beforeEach(() => {
+    (prisma.utility.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([ACTIVE]);
+    (prisma.utilityConfig.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (prisma.schedulerConfig.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  });
+
+  it("includes a tenant that has never saved any setting", async () => {
+    // No utility_config row and no scheduler_config row: the tenant
+    // takes the column default for its zone and the catalogue default
+    // for the flag. Delinquency defaults on, so it must be dispatched.
+    const tenants = await tenantsForScheduler("delinquency");
+
+    expect(tenants).toEqual([
+      { utilityId: ACTIVE.id, timezone: "UTC", runHourLocal: 3, lastRunAt: null },
+    ]);
+  });
+
+  it("leaves out a suspended tenant", async () => {
+    /*
+     * Suspension is enforced on every request, but a scheduler is not a
+     * request — so until the list came from `utility`, suspending a
+     * utility left its billing runs and delinquency notices firing. The
+     * filter is in the query rather than applied after, so a suspended
+     * tenant is never read.
+     */
+    await tenantsForScheduler("delinquency");
+
+    const where = (prisma.utility.findMany as ReturnType<typeof vi.fn>).mock.calls[0][0].where;
+    expect(where).toMatchObject({ status: "ACTIVE" });
+  });
+
+  it("uses the tenant's own timezone and hour where it has them", async () => {
+    (prisma.utilityConfig.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { utilityId: ACTIVE.id, timezone: "America/Denver" },
+    ]);
+    (prisma.schedulerConfig.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { utilityId: ACTIVE.id, enabled: true, runHourLocal: 5, lastRunAt: null },
+    ]);
+
+    expect(await tenantsForScheduler("billing")).toEqual([
+      { utilityId: ACTIVE.id, timezone: "America/Denver", runHourLocal: 5, lastRunAt: null },
+    ]);
+  });
+
+  it("leaves out a tenant whose row disables the scheduler", async () => {
+    (prisma.utility.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([ACTIVE, OTHER]);
+    (prisma.schedulerConfig.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { utilityId: ACTIVE.id, enabled: false, runHourLocal: 3, lastRunAt: null },
+    ]);
+
+    // OTHER has no row, so it takes delinquency's default of enabled.
+    expect((await tenantsForScheduler("delinquency")).map((t) => t.utilityId)).toEqual([OTHER.id]);
+  });
+
+  it("leaves out every tenant for a scheduler that defaults off", async () => {
+    // Billing defaults off, so a tenant with no row is not dispatched —
+    // automation nobody asked for would charge their customers.
+    expect(await tenantsForScheduler("billing")).toEqual([]);
+  });
+});
+
