@@ -591,6 +591,68 @@ Per-tenant configuration flags. One row per utility, created lazily the first ti
 **Unique:** [utility_id]
 **RLS:** standard `utility_id = current_setting('app.current_utility_id')::uuid`.
 
+**Where a tenant setting goes** (settled 2026-10-31): a value every
+utility has is a column; a value only some have goes in `settings` jsonb.
+Where that is arguable, the tiebreaker is mechanical — a column if it is
+filtered on in SQL, jsonb if it is only read off a row already in hand.
+jsonb costs filtering and types, never reading.
+
+Per-scheduler settings used to live here as three repeated groups of the
+same columns, one group per background job. They are rows in
+`SchedulerConfig` now; see §4.21a.
+
+### 4.21a SchedulerConfig
+
+What a tenant may configure about **one** background job. One row per
+(utility, scheduler).
+
+A one-to-many that had been modelled as repeated column groups on
+`UtilityConfig`: an enable flag, a run hour and a last-run timestamp, once
+per job. Adding billing's group cost a migration and seven files, which is
+the tax a repeated column group charges. Adding a scheduler is now a row.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | FK → `utility(id)` RESTRICT |
+| scheduler_key | VARCHAR(50) | A `SchedulerKey` from `validators/automation-config.ts` |
+| enabled | BOOLEAN | Default true. A missing row means the scheduler's declared default |
+| run_hour_local | SMALLINT | Null where the job has no time of day |
+| last_run_at | TIMESTAMPTZ | Written by a dispatcher; tells a missed tick from one not yet due |
+| settings | JSONB | Knobs only this job needs — no migration to add one |
+
+**Unique:** [utility_id, scheduler_key]
+**RLS:** standard one-argument policy. With no tenant set it raises rather
+than returning nothing, because "no rows" would read as "nothing is
+enabled" and a dispatcher that believes that bills nobody and reports
+success.
+
+**Keys are code; values are configuration.** Each key names a handler that
+must exist, so the set lives in `SCHEDULER_DEFINITIONS` — one entry per
+job with its label, help text, whether it has a run hour, and its default.
+The settings page renders from that list, so a scheduler added there gets
+its controls without the page being touched. A row whose key no build
+recognises is inert.
+
+**No `cron_pattern` column**, deliberately. Every scheduler has a cadence
+so the storage rule would admit one, but three of the five patterns
+resolve a tenant-facing hour and a slower cadence makes that hour silently
+unreachable — no job, no error. Cadence stays in code until spec 24's
+signed command path exists; see `docs/specs/27-job-scheduling.md` §4.
+
+**A missing row means the declared default**, which has three
+consequences worth knowing before touching this table:
+
+- A scheduler added in code appears for every existing tenant with no
+  backfill; its row materialises on the first save.
+- Therefore **anything added from now on must default to disabled** — a
+  new job defaulting to on would start work for every tenant the day it
+  shipped. The three defaulting to true predate the table.
+- A cross-tenant read cannot filter on rows alone. `tenantsForScheduler`
+  reads tenants and rows and joins in memory, because filtering would skip
+  every tenant who has never changed a setting — for delinquency, all of
+  them.
+
 ### 4.22 SuspensionTypeDef
 
 Reference table for service-hold type codes. Replaces the former `SuspensionType` Prisma enum. A row with `utility_id IS NULL` is a global system code visible to every tenant; a row with a set `utility_id` is a tenant-scoped custom code.

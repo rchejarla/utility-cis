@@ -132,9 +132,44 @@ Future additions (non-breaking, additive):
 
 ---
 
+### Where a tenant setting goes
+
+Three places, and the rule for choosing between them is the thing worth
+remembering (settled 2026-10-31):
+
+> **A value every utility has goes in a column. A value only some have
+> goes in jsonb.** And where "every utility has one" is arguable, the
+> tiebreaker is mechanical: **a column if we filter on it in SQL, jsonb
+> if we only read it once we already have the row.**
+
+| Where | For | Cost of adding one |
+|---|---|---|
+| A column on `UtilityConfig` | tenant-wide, universal, sometimes filtered — `timezone`, `auto_post_bills` | a migration |
+| A column on `SchedulerConfig` | something **every** configurable background job has — `enabled`, `run_hour_local` | a migration, and rare: those columns are what defines the set |
+| `settings` jsonb (on either row) | anything only some utilities or some jobs need — `numberFormats`, `issuer` | nothing |
+
+jsonb's real costs are *filtering* and *types*, never reading: pulling a
+key off a row already in hand is free. So anything never used in a `WHERE`
+is a fair candidate for jsonb.
+
+The one case where the rule is not enough: a flag whose wrong default
+reaches the outside world. `scheduler_config.enabled` for billing defaults
+to false, and it is a column, because with jsonb a missing key is
+indistinguishable from `false` only as long as every reader agrees — and
+the day one reader defaults it to true, a utility that never asked for
+automation bills its customers. A declared default in one place is the
+mitigation; see "What is still unmanaged" below.
+
 ### UtilityConfig
 
 Tenant-wide configuration flags that don't belong to the theme module. One row per utility, created lazily the first time any flag is set; absence of a row means "all defaults." Lives in its own table alongside UtilityTheme and UtilityModule so it can be extended without schema migrations via the `settings` JSONB bucket.
+
+**It no longer holds per-scheduler settings.** Until 2026-10-31 it carried
+three repeated groups of the same shape — an enable flag, a run hour and a
+last-run timestamp, once per background job — which is a one-to-many
+modelled as repeated column groups. Adding billing's group cost a
+migration and seven files. Those nine columns are now rows in
+`SchedulerConfig`.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -215,6 +250,76 @@ The last two shipped with bill production and were undocumented here until 2026-
 Additional keys can be added to the bucket for future tenant-level flags without schema changes.
 
 ---
+
+### SchedulerConfig
+
+What a tenant may configure about **one** background job. One row per
+(utility, scheduler), added 2026-10-31.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| id | UUID | PK |
+| utility_id | UUID | FK → `utility(id)` ON DELETE RESTRICT |
+| scheduler_key | VARCHAR(50) | A `SchedulerKey` from `validators/automation-config.ts` |
+| enabled | BOOLEAN | Default true. A missing row means the scheduler's declared default |
+| run_hour_local | SMALLINT | Null where the job has no time of day — only `delinquency` and `billing` have one |
+| last_run_at | TIMESTAMPTZ | Written by a dispatcher. Distinguishes a missed tick from one not yet due |
+| settings | JSONB | Knobs only this job needs. No migration to add one |
+
+**Unique constraint:** `[utility_id, scheduler_key]` — two rows for one
+key would make "is billing enabled" a question with two answers.
+
+**RLS:** standard one-argument policy. With no tenant set it raises rather
+than returning nothing: "no rows" would read as "nothing is enabled", and
+a dispatcher that believes that bills nobody and reports success.
+
+**Keys are code; values are configuration.** Each key names a handler that
+has to exist, so the set of keys lives in `SCHEDULER_DEFINITIONS` — one
+entry per job carrying its label, help text, whether it has a run hour and
+its default. A row whose key no build recognises is inert: nothing reads
+it. There is deliberately **no `cron_pattern` column**; see
+[27 — Job Scheduling](27-job-scheduling.md) §4 for why cadence stays in
+code.
+
+**A missing row means the declared default**, and that is load-bearing in
+two directions:
+
+- A scheduler added to `SCHEDULER_DEFINITIONS` appears for every existing
+  tenant with no backfill, and its row materialises the first time anyone
+  saves a setting.
+- So **anything added from now on must default to disabled.** A new job
+  defaulting to on would start doing work for every tenant the day it
+  shipped. The three that default to true predate the table.
+- And a cross-tenant read cannot filter on rows alone. `tenantsForScheduler`
+  reads tenants and rows and joins in memory, because filtering would
+  silently skip every tenant who never touched a setting — which for
+  delinquency is all of them.
+
+What this buys: **onboarding a utility is rows, not schema.** Adding a
+scheduler is a list entry plus a handler. A knob only one scheduler needs
+is a jsonb key and no migration at all.
+
+### What is still unmanaged
+
+`utility_setting(utility_id, name, value jsonb)` already exists — a
+generic per-utility key-value store, with one consumer (the rate engine's
+tenant loader). It is the storage half of a managed settings mechanism,
+and it has none of the other halves: no declaration of what keys exist, no
+label or help text, no control type, no validation, and no declared
+default. So every key in it is hand-wired at both ends.
+
+The smaller step, when the first one-off tenant knob arrives that is not
+per-scheduler: give it the same treatment `SCHEDULER_DEFINITIONS` gave the
+schedulers — one code-side declaration per key carrying label, type,
+default and validation, with the settings page rendering from it. That
+makes adding a knob a declaration plus one read at the point of behaviour,
+and nothing else.
+
+**What can never be configuration:** the behaviour itself. A knob that
+nothing reads does nothing, so "don't bill under $5" needs code that
+compares a total to a threshold however the value is stored. The target is
+to make everything *except* that comparison free, not to pretend the
+comparison can be declared away.
 
 ## Identifier Generation
 

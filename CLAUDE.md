@@ -57,13 +57,13 @@ docs/specs/
 ├── 23-accounts-receivable.md        — AR ledger, posting, balance (slice 1 complete)
 ├── 16-special-assessments.md        — Districts, parcel assessments
 ├── 17-reporting-and-audit.md        — Audit log, reports
-├── 18-theme-and-configuration.md    — Tenant theme, settings
+├── 18-theme-and-configuration.md    — Tenant theme, settings, and **where a tenant setting goes** (column vs jsonb vs scheduler_config)
 ├── 19-rbac.md                       — Roles, permissions, preset roles
 ├── 22-import-infrastructure.md      — ImportBatch, ImportRow, the imports queue
 ├── 24-platform-worker-control.md    — Worker lifecycle across nodes (step 1 built)
 ├── 25-platform-console.md           — Platform actor's console: tenants + cluster (shipped)
 ├── 26-time-of-use-rates.md          — TOU calendars, seasons, interval data (proposed; nothing built)
-└── 27-job-scheduling.md             — Scheduler visibility, queue pause and concurrency, the billing dispatcher (proposed; nothing built)
+└── 27-job-scheduling.md             — Scheduler visibility, queue pause and concurrency, the billing dispatcher (slices 1-3 shipped; the two alerts and an end-to-end dispatcher test remain)
 ```
 
 ### Master Design Document
@@ -206,6 +206,8 @@ Consequences worth knowing before touching `cis_user`:
 - `request.user` is **not** set on a platform request; `request.platformActor` is, and the authorization middleware refuses each kind on the other's routes. That is deliberate: `request.user.utilityId` stays a non-nullable string at all 243 of its read sites.
 
 **Suspending a tenant** sets `Utility.status` and is enforced on every request, in the same authorization pass that checks enabled modules — a token minted before the suspension would otherwise keep working for its lifetime. It deletes nothing; purge is a separate, deferred capability.
+
+**Where a tenant setting goes** (spec 18): a value every utility has is a column; a value only some have goes in `settings` jsonb. Where that is arguable the tiebreaker is mechanical — a column if it is filtered on in SQL, jsonb if it is only read off a row already in hand. Per-scheduler settings are neither: they are rows in **`scheduler_config`**, one per (utility, scheduler), because an enable flag plus a run hour plus a last-run timestamp *per job* is a one-to-many, and three repeated column groups on `utility_config` made adding the fourth cost a migration and seven files. **A missing row means the default declared in `SCHEDULER_DEFINITIONS`**, so a scheduler added in code reaches every tenant with no backfill — and anything added from now on must default to disabled, or it starts work for every tenant the day it ships. A knob only one scheduler needs goes in that row's jsonb and costs no migration. `packages/api/scripts/smoke-scheduler-config.ts` exercises all of it against a real database, which the unit suites cannot: they mock Prisma end to end, and so stayed green for three commits while the dev database was missing columns the code referenced.
 
 **Anything writing tenant-scoped rows must ensure the utility row exists first.** Integration tests declare their tenants at `bootPostgres({ utilities: [...] })`, or call `ensureUtilities(prisma, [...])` if they boot their own container; `schema-invariants.integration.test.ts` guards the shape.
 

@@ -209,20 +209,36 @@ The shape is `delinquency-dispatch`, which is the pattern this codebase
 already uses for "fire often, decide per tenant": one hourly cron, one
 cross-tenant read, one per-tenant job with a deterministic id.
 
-- **SCH-BILL-1 (Must).** A new `billing-dispatch` queue, `all-tenants`
+- **SCH-BILL-1 (Must, built 2026-10-31).** A new `billing-dispatch` queue, `all-tenants`
   in `QUEUE_TENANCY`, on `0 * * * *`. Each fire reads every active
   `BillingCycle` of every tenant with billing automation enabled and
   enqueues onto the existing `billing-runs` queue.
-- **SCH-BILL-2 (Must).** A cycle is due when the **tenant-local date**
-  is its `billDayOfMonth` and the local hour matches the tenant's
-  billing run hour. Local, via the tenant's `timezone`, exactly as
-  `localHour` decides the delinquency hour — a bill dated a day early
-  because the server is in UTC is a bill with the wrong period on it.
-- **SCH-BILL-3 (Must).** A month shorter than the configured day bills
+- **SCH-BILL-2 (Must, built 2026-10-31).** A cycle is due when the
+  **tenant-local date** is its `billDayOfMonth` and the local hour
+  matches the tenant's billing run hour. Local, via the tenant's
+  `timezone`, exactly as `localHour` decides the delinquency hour — a
+  bill dated a day early because the server is in UTC is a bill with the
+  wrong period on it. `2026-10-10T04:00Z` is still the 9th in Denver.
+
+  **At or after the hour, not equal to it.** An equality match strands a
+  cycle on the day the clocks spring forward, when the configured local
+  hour never occurs — it would bill a day late, every spring, for
+  whichever tenants chose the skipped hour. The cost of `>=` is a verdict
+  that stays true for the rest of the day, which costs nothing: the
+  database's unique constraint is what stops a second run (SCH-BILL-4),
+  and it is the only thing that needs to.
+
+  This is why the dispatcher wakes **hourly** rather than daily: the
+  finest choice a tenant can make is a whole hour, so hourly is exactly
+  enough, and one daily cron at a fixed UTC time can only be the right
+  local hour for one zone. A UTC-hourly fire lands at :30 past the local
+  hour in a half-hour zone, which is inside the chosen hour — all the
+  setting promises.
+- **SCH-BILL-3 (Must, built 2026-10-31).** A month shorter than the configured day bills
   on its **last day** (a cycle set to 31 bills on 30 November), the same
   clamp the plan schedule uses. The alternative is a cycle that silently
   skips four months a year.
-- **SCH-BILL-4 (Must).** Idempotency is the database's, not the
+- **SCH-BILL-4 (Must, built 2026-10-31).** Idempotency is the database's, not the
   dispatcher's. `billing_run` already holds
   `@@unique([utilityId, billingCycleId, windowEnd])` — "one run per
   cycle per window; a second attempt is a 409 naming the first, not a
@@ -230,28 +246,51 @@ cross-tenant read, one per-tenant job with a deterministic id.
   done* and logs it at debug. Nothing about double-firing, restarts or
   two nodes can produce two sets of bills, and no new guard should be
   written as if it could.
-- **SCH-BILL-5 (Must).** **Reads first.** A cycle whose
-  `readDayOfMonth` has passed with reads still missing is **not
-  dispatched**; it is recorded as a named exception the tenant can see.
-  The field exists for this reason: billing before the reads land
+- **SCH-BILL-5 (Must, built 2026-10-31, narrowed).** **Reads first.** A
+  cycle whose `readDayOfMonth` has passed with reads still missing is
+  **not dispatched**; it is recorded as a named exception the tenant can
+  see. The field exists for this reason: billing before the reads land
   produces a bill for zero usage and then a double one next period. A
   scheduled run must refuse where a human would have noticed.
-- **SCH-BILL-6 (Must).** **It generates; it does not post.** Posting is
+
+  **Narrowed in the build, deliberately: the refusal triggers on *no*
+  reads, not on any missing read.** Read strictly, one unread meter would
+  block a twelve-thousand-account cycle, and a dispatcher that almost
+  never fires is the failure this spec exists to remove. The line falls
+  where the two facts differ in kind — "no reads at all" is a fact about
+  the cycle (the import did not happen), while *some* missing reads are
+  facts about meters, which the run already reports per account as
+  `NO_READ_IN_WINDOW` skips in the exception list that is a run's whole
+  value. If a utility wants a stricter gate, a threshold belongs in that
+  scheduler's `settings` jsonb, which costs no migration.
+- **SCH-BILL-6 (Must, built 2026-10-31).** **It generates; it does not post.** Posting is
   governed by `autoPostBills`, which is already per tenant with a
   per-account override, and 09-billing has already decided what
   automatic posting needs (rules, a circuit-breaker). A dispatcher that
   posted would silently become that feature without any of its brakes.
-- **SCH-BILL-7 (Must).** **A missed tick runs late, within its own
+- **SCH-BILL-7 (Must, built 2026-10-31).** **A missed tick runs late, within its own
   window; it never silently skips.** BullMQ repeatables do not backfill,
   so a worker that was down at 03:00 on the bill day would otherwise
   skip the month. The dispatcher re-checks a due cycle until a run
   exists for that window or the window closes, mirroring
   `delinquency-dispatch`'s missed-tick recovery. A window that closes
   with no run is an exception, not silence.
-- **SCH-BILL-8 (Must, decided per tenant 2026-10-30).**
-  `AutomationConfig` gains `billingEnabled` (default **false**) and
-  `billingRunHourLocal`, beside the delinquency pair, and both appear in
-  the Schedulers card on `/settings/automation`. Default off: a tenant
+- **SCH-BILL-8 (Must, built 2026-10-31; per tenant, decided 2026-10-30).**
+  Billing gets an enable flag (default **false**) and a run hour, and
+  both appear on `/settings/automation`.
+
+  **Not columns.** They were added as columns on `utility_config` on
+  2026-10-30 and moved the next day: an enable flag, a run hour and a
+  last-run timestamp per job is a one-to-many, and three repeated column
+  groups had made adding billing's cost a migration and seven files.
+  They are a `scheduler_config` row now, keyed on
+  `(utility_id, scheduler_key)`, and the page renders from
+  `SCHEDULER_DEFINITIONS` so a scheduler added there needs no page edit.
+  See [18 — Theme and Configuration](18-theme-and-configuration.md).
+
+  A **missing row means the declared default**, which is what lets a new
+  scheduler reach every existing tenant with no backfill — and is why
+  anything added from now on must default to disabled. Default off: a tenant
   that has been billing by hand must not discover automation by finding
   bills it did not ask for.
 
@@ -266,7 +305,7 @@ cross-tenant read, one per-tenant job with a deterministic id.
   does not foreclose it, which is the reason it is safe to make now.
   **`active` on a cycle remains the way to stop one being billed at
   all**, automated or not, so the gap is narrower than it reads.
-- **SCH-BILL-9 (Must).** `billing_run.created_by` is non-nullable and a
+- **SCH-BILL-9 (Must, built 2026-10-31).** `billing_run.created_by` was non-nullable and a
   scheduled run has no user principal. It becomes **nullable**, with the
   audit convention the sweeps already use — `actorId: null`, a named
   `actorName` ("Billing dispatcher") and a `source` of
@@ -274,8 +313,18 @@ cross-tenant read, one per-tenant job with a deterministic id.
   boot sweep reads `run.createdBy` to resume a run and must take the
   same path. *(Schema change: `00-data-model-overview.md`, `09-billing.md`
   and the master design doc are updated with it.)*
-- **SCH-BILL-10 (Must).** The run's own screens say it was scheduled —
-  a run nobody started, with a blank "created by", reads as a defect.
+- **SCH-BILL-10 (Must, part built 2026-10-31).** The run's own screens
+  say it was scheduled — a run nobody started reads as a defect.
+
+  The premise needed correcting: the run screens showed **no** "created
+  by" at all, so there was no blank field to fill. The gap the dispatcher
+  creates is narrower and real — a scheduled run would be
+  indistinguishable from a hand-started one. `BillingRunSummary` now
+  carries `scheduled`, derived from a null `created_by`. *Which person*
+  started a manual run stays unanswered: `created_by` has no foreign key,
+  so it needs a `cis_user` lookup no relation supports, and the
+  dispatcher did not make that urgent. The list and detail screens
+  showing the flag is the half still to build.
 - **SCH-BILL-11 (Should).** The tenant is told when a due cycle did not
   dispatch (SCH-BILL-5) or when a window closed with no run
   (SCH-BILL-7), through the existing notification templates. A silent
@@ -515,7 +564,7 @@ every node checks before taking a job.
   that enqueues into the dev Redis leaves jobs that look like real stuck
   work on this very console — which is how 102 unrunnable dev jobs
   appeared.
-- **SCH-X-5 (Must).** `dispatchBilling(now)` is a pure-ish function
+- **SCH-X-5 (Must, built 2026-10-31).** `billingDueAt(now, tenant, cycle)` is a pure function
   taking the clock, like `dispatchDelinquency(now)`, so month-end,
   timezone and missed-tick cases are unit-testable without a container.
 
@@ -527,7 +576,7 @@ every node checks before taking a job.
 |---|---|---|
 | 1 | Scheduler view (SCH-VIEW-*) | **Shipped 2026-10-30.** Seeing what is armed, what is orphaned and what nothing armed |
 | 2 | Pause, resume and the two limits (SCH-PAUSE-*, SCH-CONC-*) | **Shipped 2026-10-30**, except SCH-PAUSE-6 (the alert) |
-| 3 | Billing dispatcher (SCH-BILL-*) | Billing that happens on its own day |
+| 3 | Billing dispatcher (SCH-BILL-*) | **Shipped 2026-10-31**, bar the two Shoulds and the run screens |
 | 4 | Editable cadence for the two preferences (SCH-FIX-1, 2) | After spec 24 steps 2–3 only |
 
 Pause and the limits were one slice because they are one route shape and
@@ -552,11 +601,24 @@ Slice 1 was worth shipping alone, and it was: the orphan report
 SCH-NODE-1 moved into a log line now has a screen, and SCH-VIEW-7 says
 what nothing else could — which crons are armed nowhere at all.
 
-**Slice 3 is what remains, and it is the one that answers the question
-this spec exists for.** It depends on nothing in 1 or 2, and on two
-decisions: open question 5 (`billingEnabled` per tenant or per cycle)
-changes what gets built, and SCH-BILL-9's nullable `created_by` is a
-hand-written migration.
+**Slice 3 shipped on 2026-10-31**, and with it the question this spec
+exists for: a billing cycle's bill day now has a clock behind it.
+
+What is left, and why each was left:
+
+- **SCH-BILL-10's screens.** The run list and detail carry `scheduled`
+  from the API and do not draw it yet.
+- **SCH-BILL-11 and 12 (both Should).** Notifying a tenant when a due
+  cycle did not dispatch, and showing the next scheduled run per cycle.
+  The dispatcher records every refusal by name in its result already;
+  these are the surfaces that would carry it outward.
+- **SCH-PAUSE-6 and SCH-NODE-4 (both Should).** The two alerts. Same
+  shape as each other: a condition nobody is looking at a page to see.
+- **An end-to-end test of the dispatcher.** `billingDueAt` has twelve
+  unit cases and `dispatchBilling` has none — no test takes a seeded
+  tenant, a due cycle and reads in the window and asserts that a run
+  appears. That is the gap I would close before letting it start runs
+  unattended, and it is the one thing on this list that is not optional.
 
 ## Open questions
 
