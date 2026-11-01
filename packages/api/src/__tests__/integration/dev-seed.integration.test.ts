@@ -84,8 +84,36 @@ describe("the dev seed produces a database that can bill", () => {
         where: { utilityId: UTILITY_ID, cycleCode: "R01" },
       });
 
+      /*
+       * The window is stated, not defaulted — and that is a finding
+       * about the seed rather than a convenience here.
+       *
+       * `prisma/seed.ts` dates its reads to the last day of last month,
+       * while `computeBillPeriod` ends a window on the cycle's bill day
+       * (the 10th, for R01). Between the 1st and the 9th of any month
+       * the default window therefore ends on *last* month's bill day,
+       * which is before the reads — so a freshly seeded database cannot
+       * bill anything for the first nine days of every month, which is
+       * exactly the "only the service charge" outcome the seed's own
+       * comment says those reads exist to prevent. This test found it by
+       * failing on 1 November having passed all October.
+       *
+       * Asking for the window that does contain the reads keeps this
+       * test about what it is for — whether the seed's data can be
+       * rated — instead of about the calendar. The seed itself is left
+       * alone deliberately: moving its read dates would ripple through
+       * every suite that bills, and which window it should target is a
+       * decision about dev data, not a test fix.
+       */
+      const now = new Date();
+      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      const windowEnd = new Date(
+        Date.UTC(now.getFullYear(), now.getMonth(), Math.min(cycle.billDayOfMonth, lastDay)),
+      );
+
       const run = await svc.createBillingRun(UTILITY_ID, ACTOR_ID, "Seed test", {
         billingCycleId: cycle.id,
+        windowEnd,
       });
       const done = await svc.processBillingRun({
         runId: run.id,

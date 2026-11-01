@@ -35,14 +35,15 @@ export const ALL_QUEUE_NAMES: readonly QueueName[] = Object.values(QUEUE_NAMES);
 /**
  * Whether each queue's jobs name one tenant, or sweep across all of them.
  *
- * Read off the handlers rather than assumed. The five `all-tenants`
+ * Read off the handlers rather than assumed. The six `all-tenants`
  * queues are enqueued by nothing but `worker.ts` — grep for their
  * `QUEUE_NAMES` constants — and each fire runs a single cross-tenant
  * sweep: `sweepSuspensionsAllTenants`, `sweepExpiredSchedulerAudits` and
  * their siblings. `delinquency-dispatch` is the same shape: it reads
- * every tenant's config and fans out onto `delinquency-tenant`. The
- * other three are enqueued per tenant, from a request or from the
- * dispatcher, and their payloads carry `utilityId`.
+ * every tenant's config and fans out onto `delinquency-tenant`, and
+ * `billing-dispatch` fans out onto `billing-runs`. The other three are
+ * enqueued per tenant, from a request or from the dispatcher, and their
+ * payloads carry `utilityId`.
  *
  * Worth writing down because the two cases looked identical in the
  * platform job list — a blank tenant. On a sweep that is correct; on
