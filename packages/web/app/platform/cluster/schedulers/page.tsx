@@ -103,7 +103,20 @@ export default function ClusterSchedulersPage() {
     <div>
       <PageHeader
         title="Schedulers"
-        subtitle="Every cron armed in Redis — its cadence, when it next runs, and whether anything will run it"
+        /*
+         * "The occurrence it is waiting on", not "when it next runs".
+         *
+         * Stopping a worker does not disarm anything — the scheduler
+         * records persist, and boot reports orphans rather than deleting
+         * them — so this page keeps listing every cron with a `next`
+         * that nothing is left to advance. Calling that "when it next
+         * runs" promises a future the page cannot deliver, and it
+         * contradicts the page's own reason for existing: the case that
+         * motivated it was audit-retention reading "due the 18th" with
+         * the date at the 20th. The per-row sentence says which crons
+         * will not fire and why; the header must not undercut it.
+         */
+        subtitle="Every cron armed in Redis — its cadence, the occurrence it is waiting on, and whether anything will run it"
       />
 
       {error && (
@@ -151,7 +164,17 @@ export default function ClusterSchedulersPage() {
             Nothing armed {report.unarmed.length === 1 ? "this cron" : "these crons"}.
           </strong>{" "}
           They are registered in the code and absent from Redis, so they will not fire at all.
-          Schedulers are armed at worker boot — start a worker that serves their queues.
+          Schedulers are armed at worker boot — start a worker that serves their queues.{" "}
+          {/*
+            * The last clause exists because this panel told an operator
+            * who had just pressed Start to start a worker. Boot arms the
+            * six crons one block at a time and `billing-dispatch` is the
+            * last of them, so the cron added most recently is the one
+            * most likely to be caught mid-boot — and the advice reads as
+            * though the start had failed.
+            */}
+          A worker that has just started arms them in turn, so reload in a moment before acting on
+          this.
           <div style={{ fontFamily: "monospace", marginTop: 6, color: "var(--text-primary)" }}>
             {report.unarmed.join(", ")}
           </div>
