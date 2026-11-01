@@ -939,9 +939,37 @@ async function main() {
   ));
   const saList = await p.serviceAgreement.findMany({
     where: { utilityId: UID },
-    include: { servicePoints: { include: { meters: { include: { meter: { select: { uomId: true } } } } } } },
+    include: {
+      servicePoints: { include: { meters: { include: { meter: { select: { uomId: true } } } } } },
+      // The cycle decides when a read is taken — see `readDayFor`.
+      account: { select: { billingCycle: { select: { billDayOfMonth: true, readDayOfMonth: true } } } },
+    },
     orderBy: { agreementNumber: "asc" },
   });
+
+  /**
+   * The day of the month a read is taken, from the agreement's own cycle.
+   *
+   * This was a flat **15th** for every read, and that is five days after
+   * R01's bill day. `computeBillPeriod` ends a window on the cycle's
+   * `billDayOfMonth` — the 10th for R01 — so from the 1st to the 9th of
+   * any month the window in force ends on *last* month's 10th, and the
+   * newest unbilled read, last month's 15th, falls after it. Nine days
+   * in every month, a freshly seeded database could bill nothing at all:
+   * every account skipped with NO_READ_IN_WINDOW, and "Generate Bill"
+   * produced the service-charge-only bill these reads exist to prevent.
+   *
+   * It survived unnoticed because it comes right for the other three
+   * weeks, and `dev-seed.integration.test.ts` caught it on 2026-11-01
+   * having passed every day of October.
+   *
+   * The cycles already say when they read — R01 on the 8th and bills on
+   * the 10th, R02 on the 15th and the 17th — so using that is both
+   * correct and what a utility actually does. Because `readDayOfMonth`
+   * precedes `billDayOfMonth` in both, the read is inside the window by
+   * construction on every day of every month.
+   */
+  const readDayFor = (sa) => sa?.account?.billingCycle?.readDayOfMonth ?? 8;
   const sa0001 = saList.find(s => s.agreementNumber === "SA-0001");
   const sa0006 = saList.find(s => s.agreementNumber === "SA-0006");
   let readCount = 0;
@@ -954,11 +982,12 @@ async function main() {
     const meterId = firstSpm.meterId;
     const uomId = firstSpm.meter.uomId;
     let running = baseReading;
+    const readDay = readDayFor(sa);
     for (let m = 11; m >= 0; m--) {
       const d = new Date(Date.UTC(
         READ_DAY_UTC.getUTCFullYear(),
         READ_DAY_UTC.getUTCMonth() - m,
-        15,
+        readDay,
       ));
       const usage = monthlyUsage();
       const prior = running;
@@ -1591,12 +1620,25 @@ async function main() {
    * run real work on a period nothing else claims.
    *
    * Two rather than one because a cycle's bill day can precede its read
-   * day — R01 bills on the 10th and the meters are read on the 15th, so
-   * a run on the 10th closes on the *previous* month's read. Leave only
-   * one and that cycle has nothing it is allowed to bill.
+   * day — R01 bills on the 10th and the meters were read on the 15th, so
+   * a run on the 10th closed on the *previous* month's read. Leave only
+   * one and that cycle had nothing it was allowed to bill.
+   *
+   * **That tension is gone**: reads are now taken on the cycle's own
+   * `readDayOfMonth`, which precedes its bill day (see `readDayFor`). The
+   * two unbilled reads stay, because a run still wants real work.
+   *
+   * **These period dates have to land on the cycle's bill day.** They
+   * were the 15th and the 16th, which is nowhere in R01's calendar: its
+   * windows run the 11th to the 10th, so a historical bill ending on the
+   * 15th sat *inside* the live window and every account was skipped with
+   * BILL_ALREADY_EXISTS_FOR_PERIOD. Aligning them means the seed's bills
+   * occupy whole cycle periods and leave the current one free, which is
+   * the state a developer pressing Generate Bill needs to be in.
    */
-  const billPeriodEnd = new Date(Date.UTC(READ_DAY_UTC.getUTCFullYear(), READ_DAY_UTC.getUTCMonth() - 2, 15));
-  const billPeriodStart = new Date(Date.UTC(billPeriodEnd.getUTCFullYear(), billPeriodEnd.getUTCMonth() - 1, 16));
+  const BILL_DAY = 10; // R01's billDayOfMonth, which these accounts are on.
+  const billPeriodEnd = new Date(Date.UTC(READ_DAY_UTC.getUTCFullYear(), READ_DAY_UTC.getUTCMonth() - 2, BILL_DAY));
+  const billPeriodStart = new Date(Date.UTC(billPeriodEnd.getUTCFullYear(), billPeriodEnd.getUTCMonth() - 1, BILL_DAY + 1));
   const billDue = new Date(billPeriodEnd);
   billDue.setUTCDate(billDue.getUTCDate() + 30);
 

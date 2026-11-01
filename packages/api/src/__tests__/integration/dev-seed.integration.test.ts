@@ -85,35 +85,26 @@ describe("the dev seed produces a database that can bill", () => {
       });
 
       /*
-       * The window is stated, not defaulted — and that is a finding
-       * about the seed rather than a convenience here.
+       * **No `windowEnd`, deliberately.** Defaulting it is the whole
+       * assertion: the planner picks the window in force right now, and
+       * the seed's reads have to be inside it for a freshly seeded
+       * database to bill anything.
        *
-       * `prisma/seed.ts` dates its reads to the last day of last month,
-       * while `computeBillPeriod` ends a window on the cycle's bill day
-       * (the 10th, for R01). Between the 1st and the 9th of any month
-       * the default window therefore ends on *last* month's bill day,
-       * which is before the reads — so a freshly seeded database cannot
-       * bill anything for the first nine days of every month, which is
-       * exactly the "only the service charge" outcome the seed's own
-       * comment says those reads exist to prevent. This test found it by
-       * failing on 1 November having passed all October.
+       * They were not, between the 1st and the 9th of every month. The
+       * seed dated every read to the last day of last month while
+       * `computeBillPeriod` ends a window on the cycle's bill day, so on
+       * 1 November the window was 11 September to 10 October and the
+       * reads sat on 31 October — after it. The engine found no
+       * consumption and produced exactly the service-charge-only bill
+       * those reads exist to prevent. Fixed in `prisma/seed.ts` by
+       * dating each read on its own cycle's read day inside the period
+       * being billed, which is what a utility does anyway.
        *
-       * Asking for the window that does contain the reads keeps this
-       * test about what it is for — whether the seed's data can be
-       * rated — instead of about the calendar. The seed itself is left
-       * alone deliberately: moving its read dates would ripple through
-       * every suite that bills, and which window it should target is a
-       * decision about dev data, not a test fix.
+       * Stating a window here would have hidden that permanently, which
+       * is why this test is the one place the default must stay.
        */
-      const now = new Date();
-      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-      const windowEnd = new Date(
-        Date.UTC(now.getFullYear(), now.getMonth(), Math.min(cycle.billDayOfMonth, lastDay)),
-      );
-
       const run = await svc.createBillingRun(UTILITY_ID, ACTOR_ID, "Seed test", {
         billingCycleId: cycle.id,
-        windowEnd,
       });
       const done = await svc.processBillingRun({
         runId: run.id,
@@ -121,7 +112,6 @@ describe("the dev seed produces a database that can bill", () => {
         actorId: ACTOR_ID,
         actorName: "Seed test",
       });
-
       // Nothing may fail. A skip is ordinary — the seed gives most meters
       // no reads — but a failure means the seed produced data the engine
       // cannot rate, which is the whole class of fault this file exists

@@ -297,23 +297,37 @@ const holdBill = (...args: Parameters<typeof hold.holdBill>) =>
  * gate correctly refused to bill — taking twelve tests in this file down
  * with it, none of which are about reads.
  *
- * The cycle's bill day **in the current month** is the window end that
- * always contains the seed's reads, whatever the date: that window spans
- * last month's bill day to this month's, and the last day of last month
- * lies between them for any bill day under 28. It is assigned in
- * `beforeAll`, from the seeded cycle rather than from a second copy of
- * the number.
+ * What this needs is the window the *planner* is in — the most recent
+ * bill day at or before today, which is what `computeBillPeriod`
+ * defaults to and therefore the window the seed now dates its reads
+ * into. Asking for any other window would be asking for one the seed
+ * has not populated. Assigned in `beforeAll` from the seeded cycle,
+ * rather than from a second copy of the bill day.
  */
 let WINDOW_END: string;
 
-/** The bill day of the month we are in, clamped, as `yyyy-MM-dd`. */
+/**
+ * The most recent bill day at or before `now`, clamped, as `yyyy-MM-dd`.
+ *
+ * The same rule as `computeBillPeriod`'s `periodEnd`, which is the point:
+ * this is the window a run gets when nobody names one.
+ */
 function windowEndFor(billDayOfMonth: number, now = new Date()): string {
-  const year = now.getFullYear();
-  const month = now.getMonth();
-  // Local, to match the seed's own local-time arithmetic.
-  const lastDay = new Date(year, month + 1, 0).getDate();
-  const day = Math.min(billDayOfMonth, lastDay);
-  return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  const clampedDay = (y: number, m: number, day: number) =>
+    Math.min(day, new Date(Date.UTC(y, m + 1, 0)).getUTCDate());
+
+  // Before this month's bill day, the window still ends on last
+  // month's. `Date.UTC` with month - 1 = -1 rolls the year back itself.
+  const billDayThisMonth = clampedDay(year, month, billDayOfMonth);
+  const anchor = new Date(
+    Date.UTC(year, now.getUTCDate() >= billDayThisMonth ? month : month - 1, 1),
+  );
+  const y = anchor.getUTCFullYear();
+  const m = anchor.getUTCMonth();
+  const day = clampedDay(y, m, billDayOfMonth);
+  return `${y}-${String(m + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 async function startRun(body: Record<string, unknown> = {}) {
