@@ -742,13 +742,53 @@ async function main() {
   console.log(`  ${saSpecs.length} service agreements (created ${saCount}, ${asCount} new assignments)`);
 
   // ============ SAMPLE METER READS (so bill generation has data) ============
-  // One read per water meter for the most recent full calendar month, with
-  // priorReading + reading chosen to give realistic SFR/MFR consumption.
-  // Without these, "Generate Bill" runs the engine against zero
-  // consumption and produces only the service charge.
+  // One read per water meter, with priorReading + reading chosen to give
+  // realistic SFR/MFR consumption. Without these, "Generate Bill" runs
+  // the engine against zero consumption and produces only the service
+  // charge.
   const today = new Date();
-  const periodEnd = new Date(today.getFullYear(), today.getMonth(), 0); // last day of last month
-  const periodEndDt = new Date(periodEnd.getFullYear(), periodEnd.getMonth(), periodEnd.getDate(), 12, 0, 0);
+
+  /**
+   * When a read was taken: the cycle's own read day, in the period its
+   * bill day has most recently closed.
+   *
+   * This used to be **the last day of last month**, for every read,
+   * ignoring the cycle. That is not where a biller looks.
+   * `computeBillPeriod` ends a window on the cycle's `billDayOfMonth`
+   * and starts it the day after the previous one — so for R01, billing
+   * on the 10th, the window in force on 1 November is 11 September to 10
+   * October, and a read dated 31 October falls *after* it. Between the
+   * 1st and the 9th of every month a freshly seeded database could
+   * therefore bill nothing at all: the engine found no consumption and
+   * produced exactly the service-charge-only bill these reads exist to
+   * prevent. It went unnoticed because it comes right for the other
+   * three weeks of the month, and `dev-seed.integration.test.ts` caught
+   * it on 2026-11-01 having passed every day of October.
+   *
+   * Reading on the cycle's read day is also simply what a utility does —
+   * R01 reads on the 8th and bills on the 10th, R02 on the 15th and the
+   * 17th — and because `readDayOfMonth` precedes `billDayOfMonth` in
+   * both, the date is inside the window by construction, whatever the
+   * calendar does. Per cycle, not per run, since the two cycles close
+   * their periods a week apart.
+   */
+  function readDateFor(cycle: { billDayOfMonth: number; readDayOfMonth: number }): Date {
+    const clampedDay = (y: number, m: number, day: number) =>
+      Math.min(day, new Date(Date.UTC(y, m + 1, 0)).getUTCDate());
+
+    const y = today.getUTCFullYear();
+    const m = today.getUTCMonth();
+    // The month whose bill day has already passed — last month's, until
+    // this month's arrives. `Date.UTC` with m - 1 = -1 rolls to December
+    // of the previous year on its own.
+    const billDayThisMonth = clampedDay(y, m, cycle.billDayOfMonth);
+    const anchor = new Date(
+      Date.UTC(y, today.getUTCDate() >= billDayThisMonth ? m : m - 1, 1),
+    );
+    const ay = anchor.getUTCFullYear();
+    const am = anchor.getUTCMonth();
+    return new Date(Date.UTC(ay, am, clampedDay(ay, am, cycle.readDayOfMonth)));
+  }
   // saIdx is the position in saSpecs above (0=SA-0001, 1=SA-0002, 2=SA-0003,
   // 3=SA-0004, 4=SA-0006, 5=SA-0007, 6=SA-0008, 7=SA-0009, 8=SA-0010 — note
   // SA-0005 is skipped in the spec list).
@@ -772,10 +812,23 @@ async function main() {
     const meter = await prisma.meter.findUniqueOrThrow({
       where: { id: meterId }, select: { uomId: true },
     });
+    // The agreement's own cycle decides the date: R01 and R02 close
+    // their periods a week apart, so one date for all reads would put
+    // some of them outside the window that bills them.
+    const sa = await prisma.serviceAgreement.findUniqueOrThrow({
+      where: { id: saId },
+      select: {
+        account: {
+          select: { billingCycle: { select: { billDayOfMonth: true, readDayOfMonth: true } } },
+        },
+      },
+    });
+    const readDate = readDateFor(sa.account.billingCycle);
+    const readDatetime = new Date(readDate.getTime() + 12 * 3_600_000);
     const existing = await prisma.meterRead.findFirst({
       where: {
         utilityId: UTILITY_ID, meterId, serviceAgreementId: saId,
-        readDate: periodEnd,
+        readDate,
       },
     });
     if (!existing) {
@@ -785,8 +838,8 @@ async function main() {
           meterId,
           serviceAgreementId: saId,
           uomId: meter.uomId,
-          readDate: periodEnd,
-          readDatetime: periodEndDt,
+          readDate,
+          readDatetime,
           reading: r.reading,
           priorReading: r.prior,
           consumption: r.reading - r.prior,
@@ -797,7 +850,10 @@ async function main() {
       readCount++;
     }
   }
-  console.log(`  ${readCount} sample meter reads (period ending ${periodEnd.toISOString().slice(0, 10)})`);
+  console.log(
+    `  ${readCount} sample meter reads (R01 read ${readDateFor(cycle1).toISOString().slice(0, 10)}, ` +
+      `R02 read ${readDateFor(cycle2).toISOString().slice(0, 10)})`,
+  );
 
   // ============ CONTAINERS (with size/frequency/itemType) ============
   // Premise 0: garbage 65 weekly + recycling 65 weekly + organics 35 weekly
