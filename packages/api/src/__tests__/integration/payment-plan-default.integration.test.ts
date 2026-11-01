@@ -59,6 +59,31 @@ function daysOut(n: number): Date {
   return d;
 }
 
+/**
+ * A start date `months` whole calendar months plus `extraDays` in the
+ * past — the arithmetic `addPeriods` uses, run backwards.
+ *
+ * Counting days instead is what broke this file on 2026-11-01. A start
+ * date of `daysOut(-31)` was written to mean "just past the first
+ * monthly instalment", and it is, in a month of 30 days or fewer. From
+ * 1 November, 31 days back is 1 October — *exactly* one calendar month,
+ * so instalment 1 fell due that same day, and `planProgress` skips an
+ * instalment due today on purpose (`dueDate === todayUtc` → `continue`,
+ * lifecycle.ts): due is not late. The expectation of one late
+ * instalment then failed, having passed every day of October.
+ *
+ * Expressing the offset in months removes the month-length assumption:
+ * `monthsBack(1, 1)` is one month and a day before today whatever the
+ * calendar does, so instalment 1 is always exactly one day overdue.
+ */
+function monthsBack(months: number, extraDays = 0): Date {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  d.setUTCMonth(d.getUTCMonth() - months);
+  d.setUTCDate(d.getUTCDate() - extraDays);
+  return d;
+}
+
 async function reasonId(code: string): Promise<string> {
   return seedAsPlatform(async () => {
     const r = await prismaImports.prisma.ledgerReasonDef.findFirstOrThrow({
@@ -93,6 +118,20 @@ async function debit(opts: { amount: string; open?: string; dueDaysAgo?: number 
  *
  * Monthly, so `startedDaysAgo` of 40 puts the down payment and the
  * first instalment behind us.
+ *
+ * **Never pass a multiple of 31 here.** Instalments fall on calendar
+ * months (`addPeriods`), and `planProgress` treats one due *today* as
+ * due rather than late, on purpose. So a day count that lands exactly on
+ * a month boundary reports one fewer late instalment than the test
+ * expects — and whether it lands there depends on the month. 31 is
+ * exactly one month from the 1st of any month following a 31-day month,
+ * and 62 is exactly two from 1 September and 1 February. Both were used
+ * here and both passed until 2026-11-01.
+ *
+ * 32 and 63 are the safe equivalents: at worst one day past the
+ * boundary, at best four, and never on it. They stay inside a grace of
+ * 5 for every month length, which is what the late-not-missed
+ * expectations below depend on.
  */
 async function plan(opts: {
   entryIds: string[];
@@ -244,27 +283,28 @@ describe("planProgress", () => {
   });
 
   it("counts an instalment late the day after its date, and not missed yet", async () => {
-    // 31 days in, monthly: the down payment and instalment 1 are due.
-    // Only the down payment has been paid.
-    const p = svc.planProgress({ ...terms, startDate: daysOut(-31) }, "75.00", daysOut(0));
+    // One month and a day in, monthly: the down payment and instalment
+    // 1 are due, and only the down payment has been paid.
+    const p = svc.planProgress({ ...terms, startDate: monthsBack(1, 1) }, "75.00", daysOut(0));
     expect(p.late).toBe(1);
     expect(p.missed).toBe(0);
     expect(p.onTrack).toBe(false);
   });
 
   it("counts it missed once grace has expired", async () => {
-    // 36 days in: instalment 1 was due at day 30ish and grace is 5.
-    const p = svc.planProgress({ ...terms, startDate: daysOut(-40) }, "75.00", daysOut(0));
+    // One month and ten days in: instalment 1 is ten days overdue and
+    // grace is 5.
+    const p = svc.planProgress({ ...terms, startDate: monthsBack(1, 10) }, "75.00", daysOut(0));
     expect(p.missed).toBe(1);
   });
 
   it("treats a part payment as a miss unless the tenant says otherwise", async () => {
     // $30 toward a $75 instalment, with the down payment already paid.
-    const short = svc.planProgress({ ...terms, startDate: daysOut(-40) }, "105.00", daysOut(0));
+    const short = svc.planProgress({ ...terms, startDate: monthsBack(1, 10) }, "105.00", daysOut(0));
     expect(short.missed).toBe(1);
 
     const lenient = svc.planProgress(
-      { ...terms, partialInstallmentCounts: true, startDate: daysOut(-40) },
+      { ...terms, partialInstallmentCounts: true, startDate: monthsBack(1, 10) },
       "105.00",
       daysOut(0),
     );
@@ -291,7 +331,7 @@ describe("planProgress", () => {
   });
 
   it("reports what is left, which is the figure a CSR reads out", async () => {
-    const p = svc.planProgress({ ...terms, startDate: daysOut(-40) }, "150.00", daysOut(0));
+    const p = svc.planProgress({ ...terms, startDate: monthsBack(1, 10) }, "150.00", daysOut(0));
     expect(p.remaining).toBe("150.00");
   });
 });
@@ -301,7 +341,7 @@ describe("sweepPaymentPlans — defaulting", () => {
     // Late by a day with graceDays 5. Suppression holds, and that is
     // the state the CSR panel calls "1 payment behind".
     const d = await debit({ amount: "300.00" });
-    const planId = await plan({ entryIds: [d.id], startedDaysAgo: 31 });
+    const planId = await plan({ entryIds: [d.id], startedDaysAgo: 32 });
     await settle(d.id, "225.00"); // the down payment arrived
 
     const result = await sweep();
@@ -312,7 +352,7 @@ describe("sweepPaymentPlans — defaulting", () => {
 
   it("reports how many instalments are late, which the status cannot", async () => {
     const d = await debit({ amount: "300.00" });
-    await plan({ entryIds: [d.id], startedDaysAgo: 31 });
+    await plan({ entryIds: [d.id], startedDaysAgo: 32 });
     await settle(d.id, "225.00");
 
     const result = await sweep();
@@ -323,7 +363,7 @@ describe("sweepPaymentPlans — defaulting", () => {
   it("notifies once when an instalment goes late, not on every sweep", async () => {
     // Nobody is defaulted silently, and nobody is told five times.
     const d = await debit({ amount: "300.00" });
-    await plan({ entryIds: [d.id], startedDaysAgo: 31, graceDays: 20 });
+    await plan({ entryIds: [d.id], startedDaysAgo: 32, graceDays: 20 });
     await settle(d.id, "225.00");
 
     expect((await sweep()).notified).toBe(1);
@@ -337,14 +377,14 @@ describe("sweepPaymentPlans — defaulting", () => {
     // Once per instalment, not once per plan: a customer two payments
     // behind has been told twice, which is what the record should say.
     const d = await debit({ amount: "300.00" });
-    const planId = await plan({ entryIds: [d.id], startedDaysAgo: 31, graceDays: 400 });
+    const planId = await plan({ entryIds: [d.id], startedDaysAgo: 32, graceDays: 400 });
     await settle(d.id, "225.00");
     expect((await sweep()).notified).toBe(1);
 
     await seedAsPlatform(async () =>
       prismaImports.prisma.paymentPlan.update({
         where: { id: planId },
-        data: { startDate: daysOut(-62) },
+        data: { startDate: daysOut(-63) },
       }),
     );
 
@@ -543,7 +583,7 @@ describe("sweepPaymentPlans — defaulting", () => {
      */
     sendNotification.mockResolvedValueOnce(null as never);
     const d = await debit({ amount: "300.00" });
-    const planId = await plan({ entryIds: [d.id], startedDaysAgo: 31, graceDays: 20 });
+    const planId = await plan({ entryIds: [d.id], startedDaysAgo: 32, graceDays: 20 });
     await settle(d.id, "225.00");
 
     expect((await sweep()).notified).toBe(0);

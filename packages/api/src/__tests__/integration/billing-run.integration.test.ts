@@ -134,6 +134,8 @@ beforeAll(() =>
   utilityId = cycle.utilityId;
   await ensurePrincipal(prismaImports.prisma, utilityId);
   cycleId = cycle.id;
+  // From the seeded cycle, so the suite cannot disagree with it.
+  WINDOW_END = windowEndFor(cycle.billDayOfMonth);
 
   /*
    * The seed creates no `utility_module` rows, so every gated route
@@ -282,8 +284,37 @@ const postBill = (...args: Parameters<typeof posting.postBill>) =>
 const holdBill = (...args: Parameters<typeof hold.holdBill>) =>
   runAsTenant(args[0], async () => hold.holdBill(...args));
 
-/** The window end that covers the seed's reads. */
-const WINDOW_END = "2026-10-10";
+/**
+ * The window end that covers the seed's reads — computed, not written
+ * down.
+ *
+ * `prisma/seed.ts` dates every meter read to **the last day of last
+ * month**, from the real clock (`new Date(y, m, 0)`). A literal date
+ * therefore only holds for the month it was written in: `"2026-10-10"`
+ * passed every day of October, because the seed's reads sat on
+ * 2026-09-30, inside the 09-10 → 10-10 window. At midnight on 1
+ * November the reads moved to 2026-10-31, fell outside it, and the reads
+ * gate correctly refused to bill — taking twelve tests in this file down
+ * with it, none of which are about reads.
+ *
+ * The cycle's bill day **in the current month** is the window end that
+ * always contains the seed's reads, whatever the date: that window spans
+ * last month's bill day to this month's, and the last day of last month
+ * lies between them for any bill day under 28. It is assigned in
+ * `beforeAll`, from the seeded cycle rather than from a second copy of
+ * the number.
+ */
+let WINDOW_END: string;
+
+/** The bill day of the month we are in, clamped, as `yyyy-MM-dd`. */
+function windowEndFor(billDayOfMonth: number, now = new Date()): string {
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  // Local, to match the seed's own local-time arithmetic.
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const day = Math.min(billDayOfMonth, lastDay);
+  return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
 
 async function startRun(body: Record<string, unknown> = {}) {
   return app.inject({
@@ -445,7 +476,11 @@ describe("processing a run", () => {
       // agreement that does bill.
       const latest = await prisma.meterRead.findFirst({ orderBy: { readDate: "desc" } });
       if (!latest) throw new Error("fixture has no reads to clone");
-      const lateDate = new Date("2026-10-20T00:00:00Z");
+      // Ten days after the window closes, derived from the window rather
+      // than written down — a literal date here stopped being "after the
+      // window" the moment the month turned over.
+      const lateDate = new Date(`${WINDOW_END}T00:00:00Z`);
+      lateDate.setUTCDate(lateDate.getUTCDate() + 10);
       await prisma.meterRead.create({
         data: {
           utilityId,
@@ -1144,12 +1179,19 @@ describe("one pass at a time over a run", () => {
  * no-op, and `created_by` being null.
  *
  * The seed's R01 cycle bills on the 10th and this suite's reads sit in
- * the window ending 2026-10-10, so a dispatch at that instant lines up
- * with data that already exists rather than needing its own fixture.
+ * the window ending on `WINDOW_END`, so a dispatch at that instant lines
+ * up with data that already exists rather than needing its own fixture.
  */
 describe("dispatching a billing run", () => {
-  /** 10:00 UTC on R01's bill day; the tenant is UTC and its hour is 3. */
-  const ON_BILL_DAY = new Date("2026-10-10T10:00:00.000Z");
+  /**
+   * 10:00 UTC on R01's bill day; the tenant is UTC and its hour is 3.
+   *
+   * A function, not a const: a `describe` body runs at collection time,
+   * before `beforeAll` has seeded anything or assigned `WINDOW_END`, so
+   * a constant here would capture `undefined` and every dispatch test
+   * would run against `Invalid Date`.
+   */
+  const onBillDay = () => new Date(`${WINDOW_END}T10:00:00.000Z`);
 
   const dispatch = async (now: Date) => {
     const dispatcher = await import("../../workers/billing-dispatcher.js");
@@ -1186,7 +1228,7 @@ describe("dispatching a billing run", () => {
       // finding bills it did not ask for.
       await enableBilling(false);
 
-      const { result } = await dispatch(ON_BILL_DAY);
+      const { result } = await dispatch(onBillDay());
 
       expect(result.started).toBe(0);
       const { prisma } = prismaImports;
@@ -1197,7 +1239,7 @@ describe("dispatching a billing run", () => {
     seedAsPlatform(async () => {
       await enableBilling();
 
-      const { result, enqueue } = await dispatch(ON_BILL_DAY);
+      const { result, enqueue } = await dispatch(onBillDay());
 
       expect(result.started).toBe(1);
       expect(result.reasons.onSchedule).toBe(1);
@@ -1225,7 +1267,7 @@ describe("dispatching a billing run", () => {
     seedAsPlatform(async () => {
       await enableBilling();
 
-      await dispatch(ON_BILL_DAY);
+      await dispatch(onBillDay());
 
       const { prisma } = prismaImports;
       const row = await prisma.schedulerConfig.findFirstOrThrow({
@@ -1245,8 +1287,8 @@ describe("dispatching a billing run", () => {
        */
       await enableBilling();
 
-      const first = await dispatch(ON_BILL_DAY);
-      const second = await dispatch(ON_BILL_DAY);
+      const first = await dispatch(onBillDay());
+      const second = await dispatch(onBillDay());
 
       expect(first.result.started).toBe(1);
       expect(second.result.started).toBe(0);
