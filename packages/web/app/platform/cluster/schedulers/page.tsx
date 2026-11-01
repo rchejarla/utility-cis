@@ -119,6 +119,66 @@ export default function ClusterSchedulersPage() {
         subtitle="Every cron armed in Redis — its cadence, the occurrence it is waiting on, and whether anything will run it"
       />
 
+      {/*
+       * The verdict, which this page went without for a day.
+       *
+       * Every row already carried its own reason, so with the worker
+       * stopped the page said "no worker attached, so nothing will
+       * promote it" once per cron, under a header describing the
+       * columns. All the information was there and it still made an
+       * operator infer a total outage from repetition — the same
+       * mistake the cluster overview avoids by leading with "Nothing is
+       * running". The rows keep their reasons, because when the causes
+       * differ that is the only place the difference shows; this says
+       * the whole once.
+       */}
+      {report?.reachable && report.schedulers.length > 0 && (
+        <div style={{ ...card, marginBottom: 20, padding: "12px 14px", fontSize: 13 }}>
+          {(() => {
+            // A paused queue promotes nothing however many workers are
+            // attached, so counting workers alone would call it healthy.
+            const idle = report.schedulers.filter((s) => s.paused || s.workers === 0);
+            const total = report.schedulers.length;
+
+            if (idle.length === 0) {
+              return (
+                <>
+                  <strong style={{ color: "var(--success)" }}>All armed and attended.</strong>{" "}
+                  {total === 1 ? "The one cron" : `All ${total} crons`} on this deployment have a
+                  worker on their queue.
+                </>
+              );
+            }
+
+            if (idle.length === total) {
+              return (
+                <>
+                  <strong style={{ color: "var(--danger)" }}>Nothing will fire.</strong>{" "}
+                  No worker is attached to any of the {total === 1 ? "queue" : `${total} queues`}{" "}
+                  below, so every cron here is waiting on an occurrence that will not come.{" "}
+                  <Link
+                    href="/platform/cluster/workers"
+                    style={{ color: "var(--accent-primary)" }}
+                  >
+                    Start one
+                  </Link>
+                  .
+                </>
+              );
+            }
+
+            return (
+              <>
+                <strong style={{ color: "var(--warning)" }}>
+                  {idle.length} of {total} will not fire.
+                </strong>{" "}
+                {idle.map((s) => s.queue).join(", ")} — the rest are attended.
+              </>
+            );
+          })()}
+        </div>
+      )}
+
       {error && (
         <div
           style={{

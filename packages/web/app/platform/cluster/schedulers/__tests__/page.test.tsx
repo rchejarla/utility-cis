@@ -52,6 +52,80 @@ beforeEach(() => {
   del.mockReset();
 });
 
+/**
+ * The verdict, which this page went without for a day.
+ *
+ * Every row already carried its own reason, so with the worker stopped
+ * the page said "no worker attached, so nothing will promote it" nine
+ * times under a header that read like a neutral description of the
+ * columns. The information was all there and the page still made an
+ * operator infer a total outage from repetition. The overview page
+ * leads with "Nothing is running"; this one now does the same.
+ */
+describe("whether anything will fire at all", () => {
+  it("says nothing will fire when no queue has a worker, rather than repeating itself", async () => {
+    get.mockResolvedValue(
+      report({
+        schedulers: [
+          scheduler({ workers: 0 }),
+          scheduler({ queue: "billing-dispatch", schedulerId: "billing-dispatch-cron", workers: 0 }),
+        ],
+      }),
+    );
+
+    render(<ClusterSchedulersPage />);
+
+    expect(await screen.findByText(/nothing will fire/i)).toBeInTheDocument();
+    // Said once, about all of them — and it points at the fix.
+    expect(screen.getByText(/no worker is attached to any/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /start one/i })).toHaveAttribute(
+      "href",
+      "/platform/cluster/workers",
+    );
+  });
+
+  it("names the few that will not fire when the rest are healthy", async () => {
+    // A partial outage is a different sentence: naming the queue is what
+    // an operator acts on, and "nothing will fire" would be a lie.
+    get.mockResolvedValue(
+      report({
+        schedulers: [
+          scheduler(),
+          scheduler({ queue: "billing-dispatch", schedulerId: "billing-dispatch-cron", workers: 0 }),
+        ],
+      }),
+    );
+
+    render(<ClusterSchedulersPage />);
+
+    expect(await screen.findByText(/1 of 2/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing will fire/i)).not.toBeInTheDocument();
+  });
+
+  it("says so plainly when every cron is armed and attended", async () => {
+    /*
+     * The quiet case still gets a sentence. An unlabelled healthy table
+     * looks identical to a table whose rows nobody has read, which is
+     * the confusion this whole page exists to remove.
+     */
+    get.mockResolvedValue(report());
+
+    render(<ClusterSchedulersPage />);
+
+    expect(await screen.findByText(/all armed and attended/i)).toBeInTheDocument();
+  });
+
+  it("counts a paused queue as something that will not fire", async () => {
+    // A paused queue promotes nothing however many workers are attached,
+    // so a verdict that only counted workers would call this healthy.
+    get.mockResolvedValue(report({ schedulers: [scheduler({ workers: 2, paused: true })] }));
+
+    render(<ClusterSchedulersPage />);
+
+    expect(await screen.findByText(/nothing will fire/i)).toBeInTheDocument();
+  });
+});
+
 describe("the cluster schedulers page", () => {
   it("names each cron with its pattern and when it next runs", async () => {
     get.mockResolvedValue(report());
