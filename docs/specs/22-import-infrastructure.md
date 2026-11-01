@@ -1,9 +1,9 @@
 # Import Infrastructure
 
 **Module:** 22 — Import Infrastructure (cross-cutting)
-**Status:** Design (this doc) — implementation pending
+**Status:** Slices 1–4c shipped. Six kinds registered: `meter_read`, `customer`, `premise`, `meter`, `account`, `service_agreement`.
 **Entities:** ImportBatch (extended), ImportRow (new), InAppNotification (new)
-**Cross-cuts:** every entity that supports bulk import (meter reads first, then customers, premises, meters, accounts).
+**Cross-cuts:** every entity that supports bulk import (meter reads first, then customers, premises, meters, accounts, service agreements).
 
 ## Overview
 
@@ -258,7 +258,7 @@ POST /api/v1/imports
 Content-Type: multipart/form-data
 
   file: <binary, the operator's CSV or JSON>
-  kind: meter_read | customer | premise | meter | account | ...
+  kind: meter_read | customer | premise | meter | account | service_agreement | ...
   source: AMR | AMI | MANUAL_UPLOAD | API
   fileName: "2026-04-15-route-A.csv"   (optional, defaults to multipart's file name)
   mapping: '{"fields": ["meterNumber", "ignore", "readDatetime", "reading"]}'  (JSON-encoded)
@@ -679,6 +679,32 @@ First non-meter-read consumer. Customer canonical fields, parser, processRow. `/
 
 ### Slice 4a — Premise / Meter / Account handlers  *(✓ shipped 2026-04-29)*
 Three new handlers (`premise`, `meter`, `account`) and three `/<entity>/import` pages mounting the existing `<ImportWizard>`. Premise resolves owner-by-email and commodity-codes via `prepareBatch`. Meter resolves premise (composite address+zip), commodity-by-code, and UoM-by-code-per-commodity in `prepareBatch`; ambiguous premises and unique-meter-number conflicts surface as row-level errors. Account resolves customer-by-email and surfaces unique-account-number conflicts as `DUPLICATE_ACCOUNT`.
+
+### Slice 4c — Service agreement handler  *(✓ shipped 2026-11-01)*
+The handler spec 28 names as a prerequisite (OVL-IN-4), and the first one
+that writes **more than one row per source row**: an agreement is not
+billable without the service point that places it at a premise, so one CSV
+line produces a `ServiceAgreement`, a `ServicePoint`, optionally a
+`ServicePointMeter` and optionally an `SAScheduleAssignment` — all inside
+the framework's per-row transaction, so a row that fails partway leaves
+nothing behind.
+
+Four-way resolution in `prepareBatch` (account by number, commodity by
+code, premise by composite address+zip, meter by number) plus rate
+schedule by code, each miss carrying its own error code so an operator
+fixing a file knows which column was wrong. `agreementNumber` is
+optional — blank generates one from the tenant's numbering template, the
+same `generateNumber` call `createServiceAgreement` makes.
+
+**It restates rule 1 of `createServiceAgreement` rather than calling it:**
+a meter already installed on a `PENDING` or `ACTIVE` agreement for the
+same commodity is refused as `METER_ALREADY_ASSIGNED`. The service itself
+takes a validated API payload and returns a fully-included row, neither
+of which fits a per-row loop — but an import that let one meter serve two
+live agreements would be a way around a rule the API enforces, and that
+meter would then feed two bills. The check runs inside the row's own
+transaction, so two lines of one file naming the same meter cannot both
+pass. `/service-agreements/import` mounts the existing wizard.
 
 ### Slice 4b — Bell icon  *(✓ shipped 2026-04-29)*
 Topbar bell renders unread `InAppNotification` rows. Three backend endpoints under `/api/v1/inbox/*` (separated from `/api/v1/notifications/*` which already serves the outbound email/SMS template log): `GET /inbox/unread` (list + unread count), `POST /inbox/:id/read`, `POST /inbox/read-all`. These intentionally bypass the tenant-module gate — every signed-in user sees their own bell — but auth + tenant scoping still apply via the standard middleware. Bell polls every 30s while focused, pauses on blur, optimistic mark-read on click. Items with a `link` (e.g. `/imports/<id>`) render as clickable rows.

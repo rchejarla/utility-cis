@@ -85,6 +85,7 @@ export default function ServiceAgreementsPage() {
       getDetailHref={(row) => `/service-agreements/${row.id}`}
       columns={columns}
       newAction={{ label: "Add Agreement", href: "/service-agreements/new" }}
+      importHref="/service-agreements/import"
       emptyState={{
         headline: "No service agreements yet",
         description:

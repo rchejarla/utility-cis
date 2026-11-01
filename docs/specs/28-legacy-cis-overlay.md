@@ -200,7 +200,8 @@ workflow reports its outcome back to the CIS API through apptor-connect.
 
 | Needed | Status | Why |
 |---|---|---|
-| Module 22 handlers for customers, premises, meters, accounts, agreements | Design only | Every overlay import goes through it; the same handlers are the CIS migration tool |
+| Module 22 handlers for customers, premises, meters, accounts, agreements | **Built** (agreements landed 2026-11-01; the other four were already shipped) | Every overlay import goes through it; the same handlers are the CIS migration tool |
+| Upsert by legacy key (OVL-IN-5) | **Not built** — the one gap left in OVL-IN-4's prerequisite | Every handler is create-only: a re-sent file reports `DUPLICATE_*` per row. Fine for a one-shot migration, fatal for a cycle-by-cycle mirror, where the second cycle's export would be ~100% duplicate errors. Needs a legacy-key column on the five mirrored entities plus an upsert path, not a handler change |
 | apptor-workflow hosted form renderer | Planned | What a billing lead sees after clicking the email link |
 | SMS delivery channel in apptor-workflow and a Twilio-class connector in apptor-connect | Not built | Only for customer-facing alerts, which are out of scope for v1 |
 
@@ -208,7 +209,7 @@ workflow reports its outcome back to the CIS API through apptor-connect.
 
 | Slice | Delivers | Unblocks |
 |---|---|---|
-| 1 | Overlay mode and its refusals (OVL-T-*), module 22 handlers, the first connector pack, SFTP pickup (OVL-IN-1 – 5) | A pilot's data in CIS, refreshed each cycle |
+| 1 | Overlay mode and its refusals (OVL-T-*), ~~module 22 handlers~~ (done), upsert by legacy key, the first connector pack, SFTP pickup (OVL-IN-1 – 5) | A pilot's data in CIS, refreshed each cycle |
 | 2 | Charge-code map, golden bills from real registers, shadow-rating and variance (OVL-R-1, 2; OVL-S-*) | The first "we found $X" report |
 | 3 | Exceptions (OVL-E-*), high-bill hold and cycle review workflows (OVL-W-1, 2, 4) | Findings acted on before bills mail |
 | 4 | Revenue leakage review, bill explanations, AI-assisted tariff setup (OVL-W-3, OVL-X-1, OVL-R-3) | Faster onboarding of the next pilot |
