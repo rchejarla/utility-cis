@@ -2,6 +2,7 @@ import { EVENT_TYPES } from "@utility-cis/shared";
 import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { prisma } from "../../lib/prisma.js";
 import { registerImportKind } from "../registry.js";
+import { identityConflict, legacyKeyField, legacyKeyOf } from "../legacy-key.js";
 import type { ImportKindHandler } from "../types.js";
 
 /**
@@ -40,6 +41,8 @@ type CreditRating = (typeof CREDIT_RATINGS)[number];
 // against the account_type_def reference table at processRow time.
 
 interface AccountRow {
+  /** The account's id in the legacy CIS, when the file carries it. */
+  legacyKey?: string;
   accountNumber: string;
   accountType: string; // validated against account_type_def in prepareBatch
   status: AccountStatus;
@@ -61,6 +64,11 @@ interface BatchData {
   validAccountTypes: Set<string>;
   /** cycleCode → billingCycle.id, populated once per batch. */
   cycleByCode: Map<string, string>;
+  /** Legacy key → the account already mirrored under it. */
+  existingByLegacyKey: Map<
+    string,
+    { id: string; accountNumber: string; customerId: string | null }
+  >;
 }
 
 function parseBool(s: string | undefined): boolean | undefined {
@@ -80,6 +88,7 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
   wizardPath: "/accounts/import",
 
   canonicalFields: [
+    legacyKeyField,
     {
       name: "accountNumber",
       label: "Account number",
@@ -256,6 +265,7 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
     return {
       ok: true,
       row: {
+        legacyKey: ((raw.legacyKey ?? "").trim()) || undefined,
         accountNumber,
         accountType,
         status,
@@ -302,7 +312,30 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
       for (const c of cycles) cycleByCode.set(c.cycleCode, c.id);
     }
 
-    return { customerByEmail, validAccountTypes, cycleByCode };
+    const legacyKeys = new Set(
+      rows.map((r) => legacyKeyOf(r)).filter((k): k is string => Boolean(k)),
+    );
+    const existingByLegacyKey = new Map<
+      string,
+      { id: string; accountNumber: string; customerId: string | null }
+    >();
+    if (legacyKeys.size > 0) {
+      const existing = await prisma.account.findMany({
+        where: { utilityId: ctx.utilityId, legacyKey: { in: [...legacyKeys] } },
+        select: { id: true, legacyKey: true, accountNumber: true, customerId: true },
+      });
+      for (const e of existing) {
+        if (e.legacyKey) {
+          existingByLegacyKey.set(e.legacyKey, {
+            id: e.id,
+            accountNumber: e.accountNumber,
+            customerId: e.customerId,
+          });
+        }
+      }
+    }
+
+    return { customerByEmail, validAccountTypes, cycleByCode, existingByLegacyKey };
   },
 
   async processRow(ctx, row, batch) {
@@ -336,10 +369,75 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
       customerId = id;
     }
 
+    /*
+     * Already mirrored under this key? Update in place (spec 28,
+     * OVL-IN-5), so an overlay's cycle export does not report a
+     * duplicate per row on its second run.
+     *
+     * Identity is the account number and the customer. A mirrored
+     * account whose number changed, or which now hangs off a different
+     * customer, is not the same account — either the legacy system
+     * re-used an id or the connector pack maps it wrongly, and applying
+     * it silently would move a balance between people.
+     *
+     * **The deposit is deliberately not re-applied.** On create an
+     * imported deposit becomes a DEPOSIT ledger entry, and running that
+     * again every cycle would post the same money repeatedly and inflate
+     * the balance — the column is a cache of the entries, so it is left
+     * to the ledger and never written here.
+     */
+    const legacyKey = legacyKeyOf(row);
+    const existing = legacyKey ? batch.existingByLegacyKey.get(legacyKey) : undefined;
+    if (existing) {
+      const conflict = identityConflict(
+        { accountNumber: existing.accountNumber, customerId: existing.customerId },
+        row.customerEmail
+          ? { accountNumber: row.accountNumber, customerId }
+          : { accountNumber: row.accountNumber },
+      );
+      if (conflict) {
+        return {
+          ok: false,
+          code: "LEGACY_KEY_CONFLICT",
+          message: `Legacy id "${legacyKey}" is already mirrored to a different account — ${conflict}`,
+        };
+      }
+
+      const updated = await ctx.tx.account.update({
+        where: { id: existing.id },
+        data: {
+          accountType: row.accountType,
+          status: row.status,
+          billingCycleId,
+          creditRating: row.creditRating ?? "UNRATED",
+          languagePref: row.languagePref ?? "en-US",
+          paperlessBilling: row.paperlessBilling ?? false,
+          budgetBilling: row.budgetBilling ?? false,
+        },
+      });
+
+      await writeAuditRow(
+        ctx.tx,
+        {
+          utilityId: ctx.utilityId,
+          actorId: ctx.actorId,
+          actorName: ctx.actorName,
+          entityType: "Account",
+        },
+        EVENT_TYPES.ACCOUNT_UPDATED,
+        updated.id,
+        null,
+        updated,
+      );
+
+      return { ok: true, entityId: updated.id };
+    }
+
     try {
       const created = await ctx.tx.account.create({
         data: {
           utilityId: ctx.utilityId,
+          legacyKey: legacyKey ?? null,
           accountNumber: row.accountNumber,
           accountType: row.accountType,
           status: row.status,

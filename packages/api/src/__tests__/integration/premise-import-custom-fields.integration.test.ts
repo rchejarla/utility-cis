@@ -229,6 +229,54 @@ describe("GET /imports/kinds/premise/fields — the tenant's own columns", () =>
     }), 60_000);
 });
 
+describe("POST /api/v1/imports — a re-sent premise export (OVL-IN-5)", () => {
+  const LK_HEADER = `legacy_id,address1,city,state,zip,premise_type,eru
+`;
+  const LK_MAPPING = {
+    legacy_id: "legacyKey",
+    address1: "addressLine1",
+    city: "city",
+    state: "state",
+    zip: "zip",
+    premise_type: "premiseType",
+    eru: "custom:eru_count",
+  };
+
+  it("corrects the address and the ERU count in place, rather than duplicating", () =>
+    seedAsPlatform(async () => {
+      /*
+       * The address is the thing most likely to be corrected between
+       * cycles, which is why it is not part of the premise's identity —
+       * a premise has no immutable business key, so the legacy id is
+       * the only handle, and correcting an address is half the point of
+       * re-importing.
+       */
+      const { prisma } = prismaImports;
+
+      const first = JSON.parse(
+        (await postCsv(LK_HEADER + `LEG-P1,100 Rain St,Testville,TS,00001,RESIDENTIAL,2
+`, LK_MAPPING)).body,
+      );
+      expect(first.importedCount).toBe(1);
+
+      const second = JSON.parse(
+        (await postCsv(LK_HEADER + `LEG-P1,100 Rainfall Street,Testville,TS,00001,RESIDENTIAL,4.5
+`, LK_MAPPING)).body,
+      );
+      expect(second.errorCount).toBe(0);
+      expect(second.importedCount).toBe(1);
+
+      const rows = await prisma.premise.findMany({
+        where: { utilityId: fixA.utilityId, legacyKey: "LEG-P1" },
+      });
+      expect(rows).toHaveLength(1);
+      expect(rows[0].addressLine1).toBe("100 Rainfall Street");
+      // The tenant's own fact follows the correction too — stormwater
+      // is priced off this number.
+      expect(rows[0].customFields).toEqual({ eru_count: 4.5 });
+    }), 120_000);
+});
+
 describe("POST /api/v1/imports — premise custom fields", () => {
   it("stores the tenant's facts on the imported premise, typed", () =>
     seedAsPlatform(async () => {

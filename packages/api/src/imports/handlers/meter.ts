@@ -2,6 +2,7 @@ import { EVENT_TYPES } from "@utility-cis/shared";
 import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { prisma } from "../../lib/prisma.js";
 import { registerImportKind } from "../registry.js";
+import { identityConflict, legacyKeyField, legacyKeyOf } from "../legacy-key.js";
 import type { ImportKindHandler } from "../types.js";
 
 /**
@@ -31,6 +32,8 @@ type MeterType = (typeof METER_TYPES)[number];
 type MeterStatus = (typeof METER_STATUSES)[number];
 
 interface MeterRow {
+  /** The meter's id in the legacy CIS, when the file carries it. */
+  legacyKey?: string;
   meterNumber: string;
   premiseAddress: string;
   premiseZip: string;
@@ -54,6 +57,11 @@ interface BatchData {
   /** Composite "<commodityId>|<UPPER UoM code>" → uom id. UoM codes
    *  are unique per commodity, not globally. */
   uomByCommodityCode: Map<string, string>;
+  /** Legacy key → the meter already mirrored under it. */
+  existingByLegacyKey: Map<
+    string,
+    { id: string; meterNumber: string; premiseId: string; commodityId: string }
+  >;
 }
 
 const AMBIGUOUS = "__ambiguous__";
@@ -73,6 +81,7 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
   wizardPath: "/meters/import",
 
   canonicalFields: [
+    legacyKeyField,
     {
       name: "meterNumber",
       label: "Meter number",
@@ -268,6 +277,7 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
     return {
       ok: true,
       row: {
+        legacyKey: ((raw.legacyKey ?? "").trim()) || undefined,
         meterNumber,
         premiseAddress,
         premiseZip,
@@ -341,7 +351,42 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
       for (const u of uoms) uomByCommodityCode.set(uomKey(u.commodityId, u.code), u.id);
     }
 
-    return { premiseByAddressZip, commodityByCode, uomByCommodityCode };
+    const legacyKeys = new Set(
+      rows.map((r) => legacyKeyOf(r)).filter((k): k is string => Boolean(k)),
+    );
+    const existingByLegacyKey = new Map<
+      string,
+      { id: string; meterNumber: string; premiseId: string; commodityId: string }
+    >();
+    if (legacyKeys.size > 0) {
+      const existing = await prisma.meter.findMany({
+        where: { utilityId: ctx.utilityId, legacyKey: { in: [...legacyKeys] } },
+        select: {
+          id: true,
+          legacyKey: true,
+          meterNumber: true,
+          premiseId: true,
+          commodityId: true,
+        },
+      });
+      for (const e of existing) {
+        if (e.legacyKey) {
+          existingByLegacyKey.set(e.legacyKey, {
+            id: e.id,
+            meterNumber: e.meterNumber,
+            premiseId: e.premiseId,
+            commodityId: e.commodityId,
+          });
+        }
+      }
+    }
+
+    return {
+      premiseByAddressZip,
+      commodityByCode,
+      uomByCommodityCode,
+      existingByLegacyKey,
+    };
   },
 
   async processRow(ctx, row, batch) {
@@ -380,10 +425,72 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
       };
     }
 
+    /*
+     * Already mirrored under this key? Update in place (spec 28,
+     * OVL-IN-5).
+     *
+     * Identity is the badge number, the premise and the commodity. A
+     * meter is its badge, and a mirrored meter that has moved premises
+     * or changed commodity is a different device — a move is an install
+     * and a removal, with their own dates and their own effect on
+     * billing, not a column overwrite. Either the legacy system re-used
+     * an id or the connector pack maps it wrongly, and both want a
+     * person.
+     */
+    const legacyKey = legacyKeyOf(row);
+    const existing = legacyKey ? batch.existingByLegacyKey.get(legacyKey) : undefined;
+    if (existing) {
+      const conflict = identityConflict(
+        {
+          meterNumber: existing.meterNumber,
+          premiseId: existing.premiseId,
+          commodityId: existing.commodityId,
+        },
+        { meterNumber: row.meterNumber, premiseId, commodityId },
+      );
+      if (conflict) {
+        return {
+          ok: false,
+          code: "LEGACY_KEY_CONFLICT",
+          message: `Legacy id "${legacyKey}" is already mirrored to a different meter — ${conflict}`,
+        };
+      }
+
+      const updated = await ctx.tx.meter.update({
+        where: { id: existing.id },
+        data: {
+          uomId,
+          meterType: row.meterType,
+          installDate: row.installDate,
+          status: row.status ?? "ACTIVE",
+          dialCount: row.dialCount ?? null,
+          multiplier: row.multiplier ?? 1.0,
+          notes: row.notes ?? null,
+        },
+      });
+
+      await writeAuditRow(
+        ctx.tx,
+        {
+          utilityId: ctx.utilityId,
+          actorId: ctx.actorId,
+          actorName: ctx.actorName,
+          entityType: "Meter",
+        },
+        EVENT_TYPES.METER_UPDATED,
+        updated.id,
+        null,
+        updated,
+      );
+
+      return { ok: true, entityId: updated.id };
+    }
+
     try {
       const created = await ctx.tx.meter.create({
         data: {
           utilityId: ctx.utilityId,
+          legacyKey: legacyKey ?? null,
           premiseId,
           meterNumber: row.meterNumber,
           commodityId,

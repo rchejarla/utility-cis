@@ -105,7 +105,54 @@ tenants are its first users).
   handlers a prerequisite (see Dependencies).
 - **OVL-IN-5 (Must).** Imports are idempotent by legacy key. Each
   mirrored row stores its legacy identifier; a re-sent file updates in
-  place and never duplicates.
+  place and never duplicates. **Built 2026-11-02.**
+
+  `legacy_key varchar(255)` on `customer`, `premise`, `meter`,
+  `account` and `service_agreement`, nullable, with a partial unique
+  index per table on `(utility_id, legacy_key) WHERE legacy_key IS NOT
+  NULL`. Every handler offers a `legacyKey` column: supply it and a
+  re-sent row updates in place, leave it blank and the row is created
+  exactly as before, so a one-shot migration is unaffected and only an
+  overlay opts into the second shape. A blank cell is **absence, not a
+  key** — a CSV carries a cell for every declared column, and the
+  partial index covers only rows that have one.
+
+  Three of the five already had a unique business number —
+  `account_number`, `meter_number`, `agreement_number` — so matching on
+  those would have needed no migration. Rejected: premise and customer
+  have no unique business key at all (an address is not unique, which is
+  why the import reports `PREMISE_AMBIGUOUS`; `customer.email` is
+  nullable and shared by households), so a column was needed for those
+  two regardless, and two matching rules are worse than one. A business
+  number is also not a stable handle — a connector pack reformats it,
+  and a utility renumbers accounts during a billing-system change, which
+  is exactly when an overlay runs.
+
+  **What an update touches is deliberately narrow, and what it refuses
+  is the point.** Each entity's identity-bearing fields are compared,
+  and a difference is `LEGACY_KEY_CONFLICT` rather than a silent
+  rewrite: the account and commodity of an agreement (and the premise of
+  its service point), the number and customer of an account, the badge,
+  premise and commodity of a meter, the type of a customer, the owner of
+  a premise. A key whose identity has moved means the legacy system
+  re-used an id or the connector pack maps it wrongly, and applying it
+  would move a balance between people or an agreement between accounts —
+  a billing change nobody asked for that no later cycle would reveal.
+
+  Below the matched row, **children are not reconciled.** An agreement's
+  service point, meter install and rate assignment are left as they are,
+  because `meter_read.service_agreement_id` is RESTRICT: recreating a
+  point would fail on exactly the agreements that have been billed. The
+  one exception is a *missing* rate assignment, since filling a gap
+  cannot destroy anything; a file naming a **different** schedule than
+  the live assignment is reported as `RATE_ASSIGNMENT_CHANGED`, because
+  assignments are effective dated and the right answer is a new window,
+  not an overwrite. An imported deposit is likewise never re-applied on
+  update — it posts a DEPOSIT ledger entry on create, and running that
+  each cycle would inflate the balance.
+
+  Reconciling children, and turning these refusals into the variance
+  report of §4 instead of row errors, is the next slice.
 - **OVL-IN-6 (Should).** A missing or late cycle export raises an
   exception to the tenant's staff (see §5), because silence looks like
   a clean cycle.
@@ -201,7 +248,7 @@ workflow reports its outcome back to the CIS API through apptor-connect.
 | Needed | Status | Why |
 |---|---|---|
 | Module 22 handlers for customers, premises, meters, accounts, agreements | **Built** (agreements landed 2026-11-01; the other four were already shipped) | Every overlay import goes through it; the same handlers are the CIS migration tool |
-| Upsert by legacy key (OVL-IN-5) | **Not built** — the one gap left in OVL-IN-4's prerequisite | Every handler is create-only: a re-sent file reports `DUPLICATE_*` per row. Fine for a one-shot migration, fatal for a cycle-by-cycle mirror, where the second cycle's export would be ~100% duplicate errors. Needs a legacy-key column on the five mirrored entities plus an upsert path, not a handler change |
+| Upsert by legacy key (OVL-IN-5) | **Built** 2026-11-02 | `legacy_key` on all five mirrored tables, partial-unique per tenant; every handler matches on it and updates in place. A row without a key is created exactly as before, so an ordinary migration is unchanged. See below for what an update touches |
 | apptor-workflow hosted form renderer | Planned | What a billing lead sees after clicking the email link |
 | SMS delivery channel in apptor-workflow and a Twilio-class connector in apptor-connect | Not built | Only for customer-facing alerts, which are out of scope for v1 |
 

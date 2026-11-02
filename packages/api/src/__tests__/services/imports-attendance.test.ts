@@ -71,11 +71,21 @@ afterEach(() => {
 });
 
 describe("getImport — queue attendance", () => {
+  /*
+   * A generous timeout on the first case only, and it is not the
+   * assertion that is slow: it is the first `await import` of
+   * `imports.service.js`, which transitively loads the registry, all
+   * six handlers and the queue layer. Measured at ~3.8s on an idle
+   * machine against vitest's 5s default, so under any load this failed
+   * on module loading while every later case in the file — importing
+   * the same cached module — ran in a millisecond. That asymmetry is
+   * the tell, and it cost a red suite run before this comment existed.
+   */
   it("reports an unattended queue for a batch still waiting", async () => {
     const result = await getImport("PENDING");
     expect(result.attendance).toEqual({ workers: 0, paused: false });
     expect(readQueueAttachment).toHaveBeenCalledWith("imports");
-  });
+  }, 30_000);
 
   it("reports the worker count when one is attached", async () => {
     readQueueAttachment.mockResolvedValue({

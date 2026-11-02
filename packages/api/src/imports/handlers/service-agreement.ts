@@ -3,6 +3,7 @@ import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { generateNumber } from "../../lib/number-generator.js";
 import { prisma } from "../../lib/prisma.js";
 import { registerImportKind } from "../registry.js";
+import { identityConflict, legacyKeyField, legacyKeyOf } from "../legacy-key.js";
 import type { ImportKindHandler } from "../types.js";
 
 /**
@@ -64,6 +65,8 @@ const SERVICE_POINT_TYPES = ["METERED", "ITEM_BASED", "NON_BADGED"] as const;
 type ServicePointTypeCode = (typeof SERVICE_POINT_TYPES)[number];
 
 interface ServiceAgreementRow {
+  /** The agreement's id in the legacy CIS, when the file carries it. */
+  legacyKey?: string;
   /** Blank is allowed: a number is generated from the tenant template. */
   agreementNumber?: string;
   accountNumber: string;
@@ -99,6 +102,15 @@ interface BatchData {
   scheduleByCode: Map<string, string>;
   /** Upper-cased codes that exist in any state, published or not. */
   knownScheduleCodes: Set<string>;
+  /**
+   * Legacy key → the agreement already mirrored under it, with the
+   * fields an update is judged against. Empty unless the file carries
+   * keys, so an ordinary migration pays nothing for this.
+   */
+  existingByLegacyKey: Map<
+    string,
+    { id: string; accountId: string; commodityId: string; premiseId: string | null }
+  >;
 }
 
 const AMBIGUOUS = "__ambiguous__";
@@ -123,6 +135,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
   wizardPath: "/service-agreements/import",
 
   canonicalFields: [
+    legacyKeyField,
     {
       name: "agreementNumber",
       label: "Agreement number",
@@ -235,6 +248,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
 
   templateRows: [
     {
+      legacyKey: "LEG-100045",
       agreementNumber: "SA-1001",
       accountNumber: "ACC-1001",
       commodityCode: "WATER",
@@ -364,6 +378,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
     return {
       ok: true,
       row: {
+        legacyKey: ((raw.legacyKey ?? "").trim()) || undefined,
         agreementNumber: ((raw.agreementNumber ?? "").trim()) || undefined,
         accountNumber,
         commodityCode,
@@ -475,6 +490,44 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       }
     }
 
+    /*
+     * Agreements already mirrored under the keys this file carries.
+     * One query, and none at all for a file without keys — an ordinary
+     * migration pays nothing for the overlay's behaviour.
+     *
+     * The service point's premise comes along because it is part of what
+     * the row *is*: an agreement that moved premises is not the same
+     * agreement, so the update has to refuse rather than apply.
+     */
+    const legacyKeys = new Set(
+      rows.map((r) => legacyKeyOf(r)).filter((k): k is string => Boolean(k)),
+    );
+    const existingByLegacyKey = new Map<
+      string,
+      { id: string; accountId: string; commodityId: string; premiseId: string | null }
+    >();
+    if (legacyKeys.size > 0) {
+      const existing = await prisma.serviceAgreement.findMany({
+        where: { utilityId: ctx.utilityId, legacyKey: { in: [...legacyKeys] } },
+        select: {
+          id: true,
+          legacyKey: true,
+          accountId: true,
+          commodityId: true,
+          servicePoints: { select: { premiseId: true }, take: 1 },
+        },
+      });
+      for (const e of existing) {
+        if (!e.legacyKey) continue;
+        existingByLegacyKey.set(e.legacyKey, {
+          id: e.id,
+          accountId: e.accountId,
+          commodityId: e.commodityId,
+          premiseId: e.servicePoints[0]?.premiseId ?? null,
+        });
+      }
+    }
+
     return {
       accountByNumber,
       commodityByCode,
@@ -482,6 +535,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       meterByNumber,
       scheduleByCode,
       knownScheduleCodes,
+      existingByLegacyKey,
     };
   },
 
@@ -560,6 +614,101 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       rateScheduleId = id;
     }
 
+    /*
+     * Already mirrored under this key? Update in place (spec 28,
+     * OVL-IN-5). This is what lets the overlay re-import the same
+     * export every cycle instead of reporting a duplicate per row.
+     *
+     * **What an update touches is deliberately narrow: the agreement's
+     * own mutable columns, and nothing below it.** The service point,
+     * the meter install and the rate assignment are left as they are.
+     * Re-deriving them each cycle would mean deleting and recreating
+     * service points, and `meter_read.service_agreement_id` is
+     * RESTRICT — a point with reads against it cannot be replaced, so a
+     * half-done reconciliation would fail on exactly the agreements
+     * that have been billed. Reconciling children is its own piece of
+     * work; silently half-doing it would be worse than not doing it.
+     *
+     * The one exception is a rate assignment that is **missing**:
+     * filling a gap cannot destroy anything, so a file naming a
+     * schedule for a role with no live assignment gets one. A file
+     * naming a *different* schedule than the live assignment is
+     * reported instead of applied, because assignments are effective
+     * dated and the right answer is a new window, not an overwrite.
+     */
+    const legacyKey = legacyKeyOf(row);
+    const existing = legacyKey ? batch.existingByLegacyKey.get(legacyKey) : undefined;
+    if (existing) {
+      const conflict = identityConflict(
+        { accountId: existing.accountId, commodityId: existing.commodityId, premiseId: existing.premiseId },
+        { accountId, commodityId, premiseId },
+      );
+      if (conflict) {
+        return {
+          ok: false,
+          code: "LEGACY_KEY_CONFLICT",
+          message: `Legacy id "${legacyKey}" is already mirrored to a different agreement — ${conflict}`,
+        };
+      }
+
+      await ctx.tx.serviceAgreement.update({
+        where: { id: existing.id },
+        data: {
+          startDate: row.startDate,
+          endDate: row.endDate ?? null,
+          status: row.status,
+          readSequence: row.readSequence,
+        },
+      });
+
+      if (rateScheduleId) {
+        const live = await ctx.tx.sAScheduleAssignment.findFirst({
+          where: {
+            serviceAgreementId: existing.id,
+            roleCode: row.rateRoleCode,
+            expirationDate: null,
+          },
+          select: { rateScheduleId: true },
+        });
+        if (!live) {
+          await ctx.tx.sAScheduleAssignment.create({
+            data: {
+              utilityId: ctx.utilityId,
+              serviceAgreementId: existing.id,
+              rateScheduleId,
+              roleCode: row.rateRoleCode,
+              effectiveDate: row.startDate,
+            },
+          });
+        } else if (live.rateScheduleId !== rateScheduleId) {
+          return {
+            ok: false,
+            code: "RATE_ASSIGNMENT_CHANGED",
+            message: `Legacy id "${legacyKey}" now names rate schedule "${row.rateScheduleCode}", but the agreement is assigned a different one for role "${row.rateRoleCode}" — assignments are effective dated, so open a new window rather than overwriting`,
+          };
+        }
+      }
+
+      const after = await ctx.tx.serviceAgreement.findUniqueOrThrow({
+        where: { id: existing.id },
+      });
+      await writeAuditRow(
+        ctx.tx,
+        {
+          utilityId: ctx.utilityId,
+          actorId: ctx.actorId,
+          actorName: ctx.actorName,
+          entityType: "ServiceAgreement",
+        },
+        EVENT_TYPES.SERVICE_AGREEMENT_UPDATED,
+        existing.id,
+        null,
+        after,
+      );
+
+      return { ok: true, entityId: existing.id };
+    }
+
     // Rule 1 of `createServiceAgreement`: one meter serves one live
     // agreement per commodity. Checked inside the row's tx, so two rows
     // of the same file naming one meter cannot both pass.
@@ -601,6 +750,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       const created = await ctx.tx.serviceAgreement.create({
         data: {
           utilityId: ctx.utilityId,
+          legacyKey: legacyKey ?? null,
           agreementNumber,
           accountId,
           commodityId,
