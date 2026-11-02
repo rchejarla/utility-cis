@@ -49,6 +49,20 @@ import type { ImportKindHandler } from "../types.js";
 const SA_STATUSES = ["PENDING", "ACTIVE", "FINAL", "CLOSED"] as const;
 type SaStatus = (typeof SA_STATUSES)[number];
 
+/**
+ * What the service point is. METERED reads a meter; ITEM_BASED bills
+ * counted things, like solid-waste containers; NON_BADGED bills from
+ * premise attributes with no device at all, which is what stormwater
+ * is — priced off `premise:attr:eru_count`.
+ *
+ * This used to be hardcoded METERED, following
+ * `createServiceAgreement`. For water that is right and for
+ * stormwater it is simply false: every imported stormwater agreement
+ * got a metered point with no meter on it.
+ */
+const SERVICE_POINT_TYPES = ["METERED", "ITEM_BASED", "NON_BADGED"] as const;
+type ServicePointTypeCode = (typeof SERVICE_POINT_TYPES)[number];
+
 interface ServiceAgreementRow {
   /** Blank is allowed: a number is generated from the tenant template. */
   agreementNumber?: string;
@@ -60,6 +74,7 @@ interface ServiceAgreementRow {
   endDate?: Date;
   status: SaStatus;
   readSequence?: number;
+  servicePointType: ServicePointTypeCode;
   meterNumber?: string;
   rateScheduleCode?: string;
   rateRoleCode: string;
@@ -182,6 +197,15 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       aliases: ["^readsequence$", "^readseq$", "^routesequence$", "^sequence$"],
     },
     {
+      name: "servicePointType",
+      label: "Service point type",
+      required: false,
+      description:
+        "METERED (default) reads a meter; ITEM_BASED bills counted things such as containers; NON_BADGED bills from premise attributes with no device — stormwater is NON_BADGED.",
+      example: "METERED",
+      aliases: ["^servicepointtype$", "^pointtype$", "^sptype$", "^servicetype$"],
+    },
+    {
       name: "meterNumber",
       label: "Meter number",
       required: false,
@@ -220,6 +244,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       endDate: "",
       status: "ACTIVE",
       readSequence: "140",
+      servicePointType: "METERED",
       meterNumber: "WM-1001",
       rateScheduleCode: "RES-WATER",
       rateRoleCode: "primary",
@@ -314,6 +339,19 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       readSequence = n;
     }
 
+    const sptRaw = (raw.servicePointType ?? "").trim().toUpperCase();
+    let servicePointType: ServicePointTypeCode = "METERED";
+    if (sptRaw) {
+      if (!SERVICE_POINT_TYPES.includes(sptRaw as ServicePointTypeCode)) {
+        return {
+          ok: false,
+          code: "INVALID_SERVICE_POINT_TYPE",
+          message: `service_point_type "${raw.servicePointType}" must be one of ${SERVICE_POINT_TYPES.join(", ")}`,
+        };
+      }
+      servicePointType = sptRaw as ServicePointTypeCode;
+    }
+
     const roleRaw = ((raw.rateRoleCode ?? "").trim() || "primary").toLowerCase();
     if (!(RATE_ASSIGNMENT_ROLE_CODES as readonly string[]).includes(roleRaw)) {
       return {
@@ -335,6 +373,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
         endDate,
         status,
         readSequence,
+        servicePointType,
         meterNumber: ((raw.meterNumber ?? "").trim()) || undefined,
         rateScheduleCode: ((raw.rateScheduleCode ?? "").trim()) || undefined,
         rateRoleCode: roleRaw,
@@ -580,7 +619,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
           utilityId: ctx.utilityId,
           serviceAgreementId: created.id,
           premiseId,
-          type: "METERED",
+          type: row.servicePointType,
           status: row.status === "PENDING" ? "PENDING" : "ACTIVE",
           startDate: row.startDate,
           endDate: row.endDate ?? null,

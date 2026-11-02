@@ -7,6 +7,7 @@ import { prisma } from "../lib/prisma.js";
 import { writeAuditRow } from "../lib/audit-wrap.js";
 import { uploadAttachment } from "./attachment.service.js";
 import { getKindHandler } from "../imports/registry.js";
+import { canonicalFieldsWithCustom } from "../imports/custom-fields.js";
 import { processBatch } from "./imports/process-batch.service.js";
 import { emitImportTerminalNotifications } from "./imports/notify.service.js";
 import { enqueueSafely, QUEUE_NAMES } from "../lib/queues.js";
@@ -90,7 +91,14 @@ export async function createImport(
   // ─── 1. Validate inputs ────────────────────────────────────────────
   const handler = getKindHandler(input.kind);
 
-  validateMapping(input.mapping, handler.canonicalFields);
+  // The tenant's custom fields are part of the mapping surface, so
+  // the same list the fields endpoint offered is what is validated
+  // here. Validating against the static list would refuse every
+  // custom column the wizard had just shown the operator.
+  validateMapping(
+    input.mapping,
+    await canonicalFieldsWithCustom(utilityId, handler),
+  );
 
   // ─── 2. Parse the file ─────────────────────────────────────────────
   // Decode bytes → text. We only support utf-8 in slice 1; vendors

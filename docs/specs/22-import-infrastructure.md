@@ -64,7 +64,15 @@ Existing table. Already has source, fileName, recordCount, importedCount, except
 | `cancel_requested` | `Boolean @default(false)` | User clicked Cancel; worker checks this between rows and exits gracefully |
 | `mapping` | `Json?` | The {sourceHeader → canonicalField} map used by this batch — recorded for audit and replay |
 
-**Original file storage:** the operator's uploaded file is stored via the existing `Attachment` table, polymorphic on `entityType="ImportBatch"` and `entityId=batch.id`. The Attachment infrastructure already handles bytes-to-disk persistence, traversal-safe download, and tenant scoping. The Imports detail page exposes a "Download original file" link that uses the existing attachment download endpoint. No new blob-storage dependency needed for Phase 1.
+**Original file storage: local disk, and moving to apptor-connect later (decided 2026-11-01, deliberately not now).**
+
+`attachment.service.ts` writes bytes to `path.resolve(process.cwd(), "../../uploads")` — one flat directory, a `crypto.randomUUID()` name never derived from the upload, re-resolved through `safeResolveStoragePath` so a traversal attempt cannot escape it. The `attachment` row is the index; tenant isolation is RLS on that row plus the download's ownership check, not the filesystem layout.
+
+**This is the one storage path in the codebase that does not go through apptor-connect**, which CLAUDE.md otherwise requires for everything leaving the process. Bill documents already use the files plane (`lib/apptor-connect/files-client.ts`). Three consequences are accepted for now: an uploaded file does not survive a container rebuild, it is not readable from another node, and a multi-node deployment would therefore drop a cycle export that landed on the wrong one — which spec 28's overlay mirror eventually cannot live with.
+
+It stays for now because nothing in flight needs it moved: imports are re-uploadable by the operator who ran them, and the original file is kept for audit rather than as a system of record. The migration is a **service swap, not a schema change** — `Attachment.storagePath` already holds an opaque string, so it can hold a files-plane key instead of a file name, and the download route resolves through the same service either way.
+
+The file itself is stored via the existing `Attachment` table, polymorphic on `entityType="ImportBatch"` and `entityId=batch.id`. The Attachment infrastructure already handles bytes-to-disk persistence, traversal-safe download, and tenant scoping. The Imports detail page exposes a "Download original file" link that uses the existing attachment download endpoint. No new blob-storage dependency needed for Phase 1.
 
 **Removed:** the existing `errors` JSON column on `ImportBatch` is dropped in the migration. Per-row errors live in `import_row`; the JSON column was only used by the meter-reads-specific import path that's being refactored.
 
@@ -334,6 +342,20 @@ On entering the mapping stage, the wizard auto-detects header → canonical mapp
 1. Exact lowercase match against canonical name.
 2. Match against handler-supplied alias regexes (e.g., `^meter(_?id|_?number|_?code)?$`).
 3. If multiple headers match the same canonical, first match wins; later headers fall through to other targets or `ignore`.
+
+### Tenant custom fields as columns *(shipped 2026-11-01)*
+
+A kind whose entity carries custom fields declares `customFieldEntity` on its handler, and the tenant's own declared fields are appended to that kind's canonical fields **per request**, named `custom:<key>`. The premise handler is the first; customer, account, meter and service agreement can opt in with one line each.
+
+They cannot be declared on the handler itself: `custom_field_schema` holds one row per (utility, entity type), while the registry is static and shared by every tenant. So the list is assembled by `imports/custom-fields.ts` and used in **two** places that must agree — `GET /imports/kinds/:kind/fields`, which the wizard renders from, and `validateMapping` inside `createImport`. Validating the submit against the static list would refuse, as `INVALID_MAPPING`, every custom column the wizard had just offered.
+
+The `custom:` prefix is load-bearing: a tenant may declare a key that matches a core column — `status` on a premise — and the prefix is what keeps the two apart in the mapping an operator submits. A key the tenant has not declared is not in the list, so it is refused rather than silently stored.
+
+**This is not tidiness; it is why stormwater could not be migrated.** Stormwater is priced from `premise:attr:eru_count`, a premise custom field, and a bulk-loaded premise used to arrive with `customFields = {}` — so its stormwater component had nothing to rate on and every ERU count had to be typed in by hand, at exactly the moment somebody has a file of ten thousand premises.
+
+**Every cell out of a CSV is a string, and that is the whole difficulty.** `buildZodFromFields` is built for JSON bodies and uses `z.coerce.boolean()`, which is `Boolean(value)` — every non-empty string is truthy, so a column of "false" would have imported as a column of yes, silently, in every file. Booleans are therefore read by word (`true/yes/y/1/t` against `false/no/n/0/f`) before the tenant's schema validates the result, and a word that is neither is `INVALID_CUSTOM_FIELD` rather than a guess. Numbers coerce safely; a date is expected as `YYYY-MM-DD`, which is what the validator wants. An empty cell is **absence, not a value** — a CSV carries a cell for every column whether it means anything or not, and storing `""` would make `eru_count` a string on half the rows; a required field left blank then fails validation, which is the right outcome.
+
+The definitions are read **once per batch** in `prepareBatch`, not per row: `validateCustomFields` does its own query, which over a 100k-row file would be 100k reads of the same row. `parseRow` is synchronous and tenant-blind, so it carries the `custom:`-prefixed cells through untouched on the typed row and `processRow` validates them against what `prepareBatch` loaded.
 
 ### Persistence
 
@@ -734,7 +756,7 @@ Each slice gets its own plan in `docs/superpowers/plans/`.
 | Decision | Outcome |
 |---|---|
 | Parsing location | Server is the parser of record; client peeks first 50 rows for the mapping UI. Both use `papaparse` (added to shared package). |
-| File storage | Original uploaded file stored via existing `Attachment` table, polymorphic on `(entityType="ImportBatch", entityId=batch.id)`. No new blob storage. |
+| File storage | Original uploaded file stored via existing `Attachment` table, polymorphic on `(entityType="ImportBatch", entityId=batch.id)`. No new blob storage. **Deferred, not settled — see below.** |
 | Backwards compat | None — existing `/api/v1/meter-reads/import` is removed in Slice 1; greenfield project, no external callers. |
 | Sync threshold | Start at 250 rows; revisit after we have real timing data. |
 | Email default | ON for async (> 250 rows) imports. Email body includes a one-click "stop emailing me about imports" link that flips the user's `notify_on_import_complete` preference. Sync imports never email — operator was watching the wizard. |
