@@ -39,14 +39,14 @@ export async function customerRoutes(app: FastifyInstance) {
     },
   );
 
-  app.post("/api/v1/customers", { config: { module: "customers", permission: "CREATE" } }, async (request, reply) => {
+  app.post("/api/v1/customers", { config: { module: "customers", permission: "CREATE", refusedWhenMirrored: true } }, async (request, reply) => {
     const { utilityId, id: actorId, name: actorName } = request.user;
     const data = createCustomerSchema.parse(request.body);
     const customer = await createCustomer(utilityId, actorId, actorName, data);
     return reply.status(201).send(customer);
   });
 
-  app.patch("/api/v1/customers/:id", { config: { module: "customers", permission: "EDIT" } }, async (request, reply) => {
+  app.patch("/api/v1/customers/:id", { config: { module: "customers", permission: "EDIT", refusedWhenMirrored: true } }, async (request, reply) => {
     const { utilityId, id: actorId, name: actorName } = request.user;
     const { id } = idParamSchema.parse(request.params);
     const data = updateCustomerSchema.parse(request.body);

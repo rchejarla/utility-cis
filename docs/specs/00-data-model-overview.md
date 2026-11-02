@@ -151,6 +151,15 @@ Full account, including what would undo it: `docs/design/utility-cis-architectur
 - **Configurable, not customizable.** All tenant-specific variation is driven by data (commodities, rate schedules, billing cycles), not code branches.
 - **Event-driven audit.** All state changes emit internal domain events that write to `audit_log` with before/after state.
 - **Defense in depth for data integrity.** Zod validators guard the API boundary, Prisma constrains the schema, and PostgreSQL CHECK constraints enforce invariants at the storage layer. A bug in any single layer can't produce data that breaks the others.
+- **A note is append-only.** `note` is polymorphic on
+  `(entity_type, entity_id)` like `attachment`, and has no update and no
+  delete — so no `updated_at`, because there is no second state for one
+  to describe. A note records that somebody observed something at a
+  time; an editable note records nothing in particular, since a later
+  reader cannot tell whether what they are reading is what was written.
+  A mistake is corrected by adding another note. `author_name` is copied
+  rather than joined, because a note outlives the staff member who wrote
+  it.
 - **A tenant says whether this system is its system of record.**
   `utility.operating_mode` is `FULL` or `OVERLAY` (spec 28, OVL-T-1),
   defaulting to FULL. OVERLAY means a legacy CIS still bills the

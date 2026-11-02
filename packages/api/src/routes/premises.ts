@@ -24,6 +24,10 @@ export async function premiseRoutes(app: FastifyInstance) {
   registerCrudRoutes(app, {
     basePath: "/api/v1/premises",
     module: "premises",
+    // Mirrored from a legacy CIS in overlay mode, so staff writes are
+    // refused there (spec 28, OVL-T-3). Reads and the overlay import
+    // are untouched.
+    mirroredFromLegacy: true,
     list: {
       querySchema: premiseQuerySchema,
       service: (utilityId, query) => listPremises(utilityId, query as never),

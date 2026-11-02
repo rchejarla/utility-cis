@@ -61,6 +61,7 @@ import { customFieldSchemaRoutes } from "./routes/custom-field-schemas.js";
 import { serviceEventRoutes } from "./routes/service-events.js";
 import { workflowRoutes } from "./routes/workflows.js";
 import { notificationRoutes } from "./routes/notifications.js";
+import { noteRoutes } from "./routes/notes.js";
 import { delinquencyRoutes } from "./routes/delinquency.js";
 import { serviceRequestTypeRoutes } from "./routes/service-request-types.js";
 import { slaRoutes } from "./routes/slas.js";
@@ -150,6 +151,7 @@ export async function buildApp() {
   await app.register(billingCycleRoutes);
   await app.register(billingRunRoutes);
   await app.register(serviceAgreementRoutes);
+  await app.register(noteRoutes);
   await app.register(serviceAgreementBillSegmentRoutes);
   await app.register(billSegmentRoutes);
   await app.register(accountBillRoutes);

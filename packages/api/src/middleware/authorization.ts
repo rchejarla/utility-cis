@@ -22,6 +22,12 @@ export async function authorizationMiddleware(
          * (spec 28, OVL-T-2).
          */
         refusedInOverlay?: boolean;
+        /**
+         * This route is a staff write to an entity the overlay import
+         * mirrors, so it is refused while the tenant is in OVERLAY mode
+         * (spec 28, OVL-T-3).
+         */
+        refusedWhenMirrored?: boolean;
       }
     | undefined;
 
@@ -103,7 +109,7 @@ export async function authorizationMiddleware(
     return;
   }
 
-  const { module, permission, refusedInOverlay } = routeConfig;
+  const { module, permission, refusedInOverlay, refusedWhenMirrored } = routeConfig;
   const user = request.user;
   if (!user) return; // auth middleware already handled this
 
@@ -175,6 +181,48 @@ export async function authorizationMiddleware(
    *     A null `guards` means the row could not be read, which is not
    *     overlay — same reasoning as the suspension check above.
    */
+  /*
+   * 1c. A staff write to a record the overlay import mirrors
+   *     (spec 28, OVL-T-3). Its own code, because the reason differs
+   *     from 1b's: that one says the legacy system does the billing,
+   *     this one says the legacy system owns *this record*.
+   *
+   *     The point is not tidiness. Since the import began matching on
+   *     a legacy key and updating in place, an edit made here does not
+   *     merely diverge — the next cycle's import **overwrites it
+   *     silently**, leaving an audit row for a change nobody asked for
+   *     and no trace of what the CSR had corrected. Before the upsert
+   *     the edit at least survived.
+   *
+   *     Reads are untouched, because viewing the mirror is the whole
+   *     product in overlay mode, and the import is untouched because it
+   *     writes through its own handler rather than these routes — so
+   *     there is no exception to carve out and nothing to get wrong
+   *     later.
+   *
+   *     The message points at notes, which exist for exactly this: a
+   *     CSR who cannot correct the record can still record what they
+   *     were told.
+   */
+  if (refusedWhenMirrored && guards?.operatingMode === "OVERLAY") {
+    /*
+     * Two audiences reach this. A portal token carries a `customerId`
+     * and belongs to a member of the public, who has no idea what a
+     * legacy CIS is and cannot add a note — telling them to is worse
+     * than telling them nothing. Staff get the reason and the outlet.
+     */
+    const isCustomer = user.customerId !== null && user.customerId !== undefined;
+    reply.status(409).send({
+      error: {
+        code: "RECORD_MIRRORED_FROM_LEGACY",
+        message: isCustomer
+          ? "Your details cannot be changed here at the moment. Please contact the utility to update them."
+          : "This utility is in overlay mode, so this record is mirrored from its existing CIS and cannot be edited here — the next import would overwrite the change. Correct it in that system, and add a note here to record what you were told.",
+      },
+    });
+    return;
+  }
+
   if (refusedInOverlay && guards?.operatingMode === "OVERLAY") {
     reply.status(409).send({
       error: {

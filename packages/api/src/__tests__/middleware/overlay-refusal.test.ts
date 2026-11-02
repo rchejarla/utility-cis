@@ -184,3 +184,76 @@ describe("overlay mode refusals", () => {
     expect(sent).toBeUndefined();
   });
 });
+
+describe("mirrored-record refusals (OVL-T-3)", () => {
+  it("refuses a staff write to a mirrored record, pointing at notes", async () => {
+    /*
+     * Since the import began matching on a legacy key and updating in
+     * place, an edit here does not merely diverge — the next cycle
+     * overwrites it silently, leaving an audit row for a change nobody
+     * asked for. Before the upsert the edit at least survived.
+     */
+    getUtilityGuards.mockResolvedValue({ status: "ACTIVE", operatingMode: "OVERLAY" });
+
+    const sent = await run({
+      module: "customers",
+      permission: "EDIT",
+      refusedWhenMirrored: true,
+    });
+
+    expect(sent.status).toBe(409);
+    expect(sent.body).toMatchObject({
+      error: { code: "RECORD_MIRRORED_FROM_LEGACY" },
+    });
+    expect(JSON.stringify(sent.body)).toMatch(/add a note/i);
+  });
+
+  it("leaves the read alone — viewing the mirror is the product", async () => {
+    getUtilityGuards.mockResolvedValue({ status: "ACTIVE", operatingMode: "OVERLAY" });
+    const sent = await run({ module: "customers", permission: "VIEW" });
+    expect(sent).toBeUndefined();
+  });
+
+  it("allows the write for a full tenant", async () => {
+    getUtilityGuards.mockResolvedValue({ status: "ACTIVE", operatingMode: "FULL" });
+    const sent = await run({
+      module: "customers",
+      permission: "EDIT",
+      refusedWhenMirrored: true,
+    });
+    expect(sent).toBeUndefined();
+  });
+
+  it("tells a portal customer something a customer can act on", async () => {
+    /*
+     * A portal token carries a customerId and belongs to a member of
+     * the public, who has no idea what a legacy CIS is and cannot add
+     * a note — telling them to would be worse than telling them
+     * nothing.
+     */
+    getUtilityGuards.mockResolvedValue({ status: "ACTIVE", operatingMode: "OVERLAY" });
+
+    const reply = fakeReply();
+    const { authorizationMiddleware } = await import(
+      "../../middleware/authorization.js"
+    );
+    await authorizationMiddleware(
+      {
+        user: { id: "user-1", utilityId: "tenant-1", customerId: "cust-1" },
+        url: "/portal/api/profile",
+        log: { warn: () => {} },
+        routeOptions: {
+          config: { module: "customers", permission: "EDIT", refusedWhenMirrored: true },
+        },
+      } as never,
+      reply as never,
+    );
+
+    expect(reply.sent[0].status).toBe(409);
+    // The *message* is what a customer reads; the code is for programs
+    // and is the same either way, so it is excluded from this.
+    const message = (reply.sent[0].body as { error: { message: string } }).error.message;
+    expect(message).toMatch(/contact the utility/i);
+    expect(message).not.toMatch(/legacy|overlay|note/i);
+  });
+});
