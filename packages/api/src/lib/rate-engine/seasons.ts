@@ -16,8 +16,16 @@
  */
 
 export interface SeasonDefinition {
-  /** What a tariff's `season` predicate compares against. */
-  code: string;
+  /**
+   * What a tariff's `season` predicate compares against.
+   *
+   * Qualified rather than a bare `code` because a TOU calendar resolves
+   * three of these vocabularies at once — season, day type and peak —
+   * and in this layer all three are plain strings. Passing one where
+   * another belongs would compile, run, and classify every interval
+   * wrong with nothing raised anywhere.
+   */
+  seasonCode: string;
   /** 1–12. */
   startMonth: number;
   startDay: number;
@@ -100,19 +108,19 @@ export function validateSeasons(seasons: SeasonDefinition[]): SeasonValidation {
   // meaningless, so reporting 366 gaps on top of it would bury it.
   for (const s of seasons) {
     if (!isRealDate(s.startMonth, s.startDay)) {
-      problems.push(`Season "${s.code}" starts on ${label(s.startMonth, s.startDay)}, which is not a date.`);
+      problems.push(`Season "${s.seasonCode}" starts on ${label(s.startMonth, s.startDay)}, which is not a date.`);
     }
     if (!isRealDate(s.endMonth, s.endDay)) {
-      problems.push(`Season "${s.code}" ends on ${label(s.endMonth, s.endDay)}, which is not a date.`);
+      problems.push(`Season "${s.seasonCode}" ends on ${label(s.endMonth, s.endDay)}, which is not a date.`);
     }
   }
 
   const seen = new Set<string>();
   for (const s of seasons) {
-    if (seen.has(s.code)) {
-      problems.push(`Two seasons are both called "${s.code}"; a tariff could not tell them apart.`);
+    if (seen.has(s.seasonCode)) {
+      problems.push(`Two seasons are both called "${s.seasonCode}"; a tariff could not tell them apart.`);
     }
-    seen.add(s.code);
+    seen.add(s.seasonCode);
   }
 
   if (problems.length > 0) return { ok: false, problems };
@@ -120,7 +128,7 @@ export function validateSeasons(seasons: SeasonDefinition[]): SeasonValidation {
   const total = ordinal(12, 31) + 1;
   const claimedBy: string[][] = Array.from({ length: total }, () => []);
   for (const s of seasons) {
-    for (const day of coveredOrdinals(s)) claimedBy[day].push(s.code);
+    for (const day of coveredOrdinals(s)) claimedBy[day].push(s.seasonCode);
   }
 
   for (let day = 0; day < total; day++) {
@@ -160,7 +168,7 @@ export function resolveSeason(date: Date, seasons: SeasonDefinition[]): string |
     const to = ordinal(s.endMonth, s.endDay);
     const inside =
       from <= to ? target >= from && target <= to : target >= from || target <= to;
-    if (inside) return s.code;
+    if (inside) return s.seasonCode;
   }
   return null;
 }

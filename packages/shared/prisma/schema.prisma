@@ -2775,8 +2775,11 @@ model Season {
   utility     Utility  @relation(fields: [utilityId], references: [id], onDelete: Restrict)
   seasonSetId String   @map("season_set_id") @db.Uuid
   seasonSet   SeasonSet @relation(fields: [utilityId, seasonSetId], references: [utilityId, id], onDelete: Cascade)
-  /// What a tariff's `season` predicate compares against.
-  code        String   @db.VarChar(50)
+  /// What a tariff's `season` predicate compares against. Qualified,
+  /// not a bare `code`, because the value travels: it is compared in the
+  /// engine and will be named on every `tou_slot` row, where three such
+  /// vocabularies meet (season, day type, peak) as bare strings.
+  seasonCode  String   @map("season_code") @db.VarChar(50)
   label       String   @db.VarChar(100)
   startMonth  Int      @map("start_month") @db.SmallInt
   startDay    Int      @map("start_day") @db.SmallInt
@@ -2786,7 +2789,7 @@ model Season {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  @@unique([utilityId, seasonSetId, code], map: "season_code_per_set")
+  @@unique([utilityId, seasonSetId, seasonCode], map: "season_season_code_per_set")
   @@index([utilityId, seasonSetId, sortOrder], map: "season_set_idx")
   @@map("season")
 }

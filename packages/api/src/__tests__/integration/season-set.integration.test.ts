@@ -94,7 +94,7 @@ async function seedDefaultSet(opts: { published?: boolean } = {}) {
       seasons: {
         create: [
           {
-            code: "summer",
+            seasonCode: "summer",
             label: "Summer",
             startMonth: 5,
             startDay: 1,
@@ -103,7 +103,7 @@ async function seedDefaultSet(opts: { published?: boolean } = {}) {
             sortOrder: 1,
           },
           {
-            code: "winter",
+            seasonCode: "winter",
             label: "Winter",
             startMonth: 11,
             startDay: 1,
@@ -128,7 +128,7 @@ describe("loadBase and the tenant's seasons", () => {
       await seedDefaultSet();
       const base = await load();
 
-      expect(base.seasons.map((s) => s.code)).toEqual(["summer", "winter"]);
+      expect(base.seasons.map((s) => s.seasonCode)).toEqual(["summer", "winter"]);
       expect(base.seasons[0]).toMatchObject({
         startMonth: 5,
         startDay: 1,
@@ -164,7 +164,7 @@ describe("loadBase and the tenant's seasons", () => {
           seasons: {
             create: [
               {
-                code: "all_year",
+                seasonCode: "all_year",
                 label: "All year",
                 startMonth: 1,
                 startDay: 1,
@@ -177,7 +177,7 @@ describe("loadBase and the tenant's seasons", () => {
       });
 
       const base = await load();
-      expect(base.seasons.map((s) => s.code)).toEqual(["summer", "winter"]);
+      expect(base.seasons.map((s) => s.seasonCode)).toEqual(["summer", "winter"]);
     }), 120_000);
 
   it("takes the most recent set in force when several are", () =>
@@ -193,7 +193,7 @@ describe("loadBase and the tenant's seasons", () => {
           seasons: {
             create: [
               {
-                code: "all_year",
+                seasonCode: "all_year",
                 label: "All year",
                 startMonth: 1,
                 startDay: 1,
@@ -206,7 +206,7 @@ describe("loadBase and the tenant's seasons", () => {
       });
 
       const base = await load();
-      expect(base.seasons.map((s) => s.code)).toEqual(["all_year"]);
+      expect(base.seasons.map((s) => s.seasonCode)).toEqual(["all_year"]);
     }), 120_000);
 
   it("resolves to no season for a tenant with no set at all", () =>
@@ -229,7 +229,7 @@ describe("the database's own guards", () => {
           data: {
             utilityId: TENANT_A,
             seasonSetId: set.id,
-            code: "summer",
+            seasonCode: "summer",
             label: "Summer again",
             startMonth: 1,
             startDay: 1,
@@ -249,7 +249,7 @@ describe("the database's own guards", () => {
           data: {
             utilityId: TENANT_A,
             seasonSetId: set.id,
-            code: "nope",
+            seasonCode: "nope",
             label: "Nope",
             startMonth: 13,
             startDay: 1,

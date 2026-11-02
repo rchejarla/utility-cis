@@ -21,7 +21,7 @@ import { resolveSeason, validateSeasons, type SeasonDefinition } from "../season
  */
 
 const summer = (over: Partial<SeasonDefinition> = {}): SeasonDefinition => ({
-  code: "summer",
+  seasonCode: "summer",
   startMonth: 5,
   startDay: 1,
   endMonth: 10,
@@ -30,7 +30,7 @@ const summer = (over: Partial<SeasonDefinition> = {}): SeasonDefinition => ({
 });
 
 const winter = (over: Partial<SeasonDefinition> = {}): SeasonDefinition => ({
-  code: "winter",
+  seasonCode: "winter",
   startMonth: 11,
   startDay: 1,
   endMonth: 4,
@@ -49,7 +49,7 @@ describe("validateSeasons", () => {
   it("accepts one season covering the whole year", () => {
     expect(
       validateSeasons([
-        { code: "all", startMonth: 1, startDay: 1, endMonth: 12, endDay: 31 },
+        { seasonCode: "all", startMonth: 1, startDay: 1, endMonth: 12, endDay: 31 },
       ]),
     ).toEqual({ ok: true });
   });
@@ -82,8 +82,8 @@ describe("validateSeasons", () => {
      * belong to a season.
      */
     const result = validateSeasons([
-      { code: "early", startMonth: 1, startDay: 1, endMonth: 2, endDay: 28 },
-      { code: "rest", startMonth: 3, startDay: 1, endMonth: 12, endDay: 31 },
+      { seasonCode: "early", startMonth: 1, startDay: 1, endMonth: 2, endDay: 28 },
+      { seasonCode: "rest", startMonth: 3, startDay: 1, endMonth: 12, endDay: 31 },
     ]);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.problems.join(" ")).toMatch(/29 February/);
@@ -100,7 +100,7 @@ describe("validateSeasons", () => {
 
   it("refuses a day that is not a day of its month", () => {
     const result = validateSeasons([
-      { code: "nope", startMonth: 2, startDay: 30, endMonth: 12, endDay: 31 },
+      { seasonCode: "nope", startMonth: 2, startDay: 30, endMonth: 12, endDay: 31 },
     ]);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.problems.join(" ")).toMatch(/30 February/);
