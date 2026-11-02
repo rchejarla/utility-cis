@@ -217,9 +217,21 @@ beforeEach(() =>
     meterNumber = meter.meterNumber;
     const schedule = await prisma.rateSchedule.findFirstOrThrow({
       where: { utilityId: fixA.utilityId },
-      select: { code: true },
+      select: { id: true, code: true },
     });
     rateScheduleCode = schedule.code;
+    /*
+     * **The fixture leaves its schedule unpublished**, and a draft is
+     * not a tariff anything may bill on: `bill-segment.service` refuses
+     * one with a null `publishedAt`, so an assignment to it is a
+     * configuration that looks complete and fails hours later inside a
+     * run. Publishing it here is what makes the happy path below an
+     * assertion about a billable assignment rather than a row count.
+     */
+    await prisma.rateSchedule.update({
+      where: { id: schedule.id },
+      data: { publishedAt: new Date("2025-01-01T00:00:00.000Z") },
+    });
 
     const rbac = await import("../../services/rbac.service.js");
     await rbac.invalidateTenantModulesCache(fixA.utilityId);
@@ -489,6 +501,138 @@ describe("POST /api/v1/imports — service_agreement row errors", () => {
       expect(codesOf(result)).toEqual([
         { rowIndex: 1, code: "PREMISE_AMBIGUOUS" },
       ]);
+    }), 120_000);
+
+  it("refuses a rate code that exists only as a draft", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+
+      /*
+       * The two mistakes `assign-rate-schedule-dialog` was built to
+       * prevent are assigning a draft and assigning a superseded
+       * version, "because both mistakes are silent when made and
+       * surface much later inside a billing run" (spec 05). The dialog
+       * carries both guards; `createSAScheduleAssignment` carries
+       * neither. An import that resolved a code to whatever row it found
+       * would be the loosest path of the three, and the one that runs
+       * unattended over thousands of rows.
+       */
+      await prisma.rateSchedule.create({
+        data: {
+          utilityId: fixA.utilityId,
+          name: "Draft tariff",
+          code: "DRAFT-ONLY",
+          commodityId: fixA.commodityId,
+          effectiveDate: new Date("2026-01-01"),
+          version: 1,
+          // publishedAt left null — this is what a draft is.
+        },
+      });
+
+      const csv =
+        HEADER +
+        `SA-DRAFT,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,DRAFT-ONLY\n`;
+
+      const result = JSON.parse((await postCsv(csv)).body);
+      expect(result.errorCount).toBe(1);
+      expect(codesOf(result)).toEqual([
+        { rowIndex: 1, code: "RATE_SCHEDULE_NOT_PUBLISHED" },
+      ]);
+      expect(
+        await prisma.sAScheduleAssignment.count({ where: { utilityId: fixA.utilityId } }),
+      ).toBe(0);
+    }), 120_000);
+
+  it("refuses a code mid-revision, when the published version is superseded and its successor is a draft", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+
+      // `reviseRateSchedule` supersedes the predecessor immediately and
+      // leaves the revision a draft, so between revise and publish a
+      // code has no version that may bill. The honest answer is to say
+      // so, not to pick one of the two.
+      const v1 = await prisma.rateSchedule.create({
+        data: {
+          utilityId: fixA.utilityId,
+          name: "Mid-revision tariff",
+          code: "MID-REV",
+          commodityId: fixA.commodityId,
+          effectiveDate: new Date("2025-01-01"),
+          version: 1,
+          publishedAt: new Date("2025-01-01T00:00:00.000Z"),
+        },
+      });
+      const v2 = await prisma.rateSchedule.create({
+        data: {
+          utilityId: fixA.utilityId,
+          name: "Mid-revision tariff",
+          code: "MID-REV",
+          commodityId: fixA.commodityId,
+          effectiveDate: new Date("2026-01-01"),
+          version: 2,
+          supersedesId: v1.id,
+        },
+      });
+      await prisma.rateSchedule.update({
+        where: { id: v1.id },
+        data: { supersededById: v2.id, expirationDate: new Date("2026-01-01") },
+      });
+
+      const csv =
+        HEADER +
+        `SA-MID,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,MID-REV\n`;
+
+      const result = JSON.parse((await postCsv(csv)).body);
+      expect(result.errorCount).toBe(1);
+      expect(codesOf(result)).toEqual([
+        { rowIndex: 1, code: "RATE_SCHEDULE_NOT_PUBLISHED" },
+      ]);
+    }), 120_000);
+
+  it("assigns the current version of a revised code, not the superseded one", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+
+      const v1 = await prisma.rateSchedule.create({
+        data: {
+          utilityId: fixA.utilityId,
+          name: "Revised tariff",
+          code: "REVISED",
+          commodityId: fixA.commodityId,
+          effectiveDate: new Date("2025-01-01"),
+          version: 1,
+          publishedAt: new Date("2025-01-01T00:00:00.000Z"),
+        },
+      });
+      const v2 = await prisma.rateSchedule.create({
+        data: {
+          utilityId: fixA.utilityId,
+          name: "Revised tariff",
+          code: "REVISED",
+          commodityId: fixA.commodityId,
+          effectiveDate: new Date("2026-01-01"),
+          version: 2,
+          supersedesId: v1.id,
+          publishedAt: new Date("2026-01-01T00:00:00.000Z"),
+        },
+      });
+      await prisma.rateSchedule.update({
+        where: { id: v1.id },
+        data: { supersededById: v2.id, expirationDate: new Date("2026-01-01") },
+      });
+
+      const csv =
+        HEADER +
+        `SA-REV,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,,REVISED\n`;
+
+      const result = JSON.parse((await postCsv(csv)).body);
+      expect(result.errorCount).toBe(0);
+      expect(result.importedCount).toBe(1);
+
+      const assignment = await prisma.sAScheduleAssignment.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId },
+      });
+      expect(assignment.rateScheduleId).toBe(v2.id);
     }), 120_000);
 
   it("rejects a bad date and an unknown status in parseRow, before any lookup", () =>

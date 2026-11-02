@@ -75,8 +75,15 @@ interface BatchData {
   premiseByAddressZip: Map<string, string>;
   /** Upper-cased meter number → meter id. */
   meterByNumber: Map<string, string>;
-  /** Upper-cased rate schedule code → the highest-version schedule's id. */
+  /**
+   * Upper-cased rate schedule code → the id of its current version:
+   * highest `version` among those that are published and not
+   * superseded. A code with no such version is absent here even when
+   * rows for it exist, which is what separates the two errors below.
+   */
   scheduleByCode: Map<string, string>;
+  /** Upper-cased codes that exist in any state, published or not. */
+  knownScheduleCodes: Set<string>;
 }
 
 const AMBIGUOUS = "__ambiguous__";
@@ -391,16 +398,41 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       rows.map((r) => r.rateScheduleCode).filter((c): c is string => Boolean(c)),
     );
     const scheduleByCode = new Map<string, string>();
+    const knownScheduleCodes = new Set<string>();
     if (scheduleCodes.size > 0) {
-      // Ascending version, so the last write per code is the highest —
-      // a rate code names a tariff, and the current version of it is
-      // what a new agreement is billed under.
+      /*
+       * A rate code names a tariff, not a row: `(utility_id, code,
+       * version)` is the unique key, so one code has as many versions as
+       * it has had revisions. Which one may bill is the codebase's own
+       * three-way reading of two columns — draft is `published_at IS
+       * NULL AND superseded_by_id IS NULL`, published is `published_at
+       * IS NOT NULL AND superseded_by_id IS NULL`, superseded is
+       * `superseded_by_id IS NOT NULL` (`rate-schedule.service.ts`'s
+       * status filter). Only the middle one is billable, and
+       * `bill-segment.service` refuses an unpublished schedule outright.
+       *
+       * So the whole set is fetched and filtered here rather than taking
+       * the highest version, which would land on a draft revision every
+       * time a tariff is mid-revision: `reviseRateSchedule` supersedes
+       * the predecessor the moment the revision is created and leaves
+       * the revision unpublished, so in that window the newest version
+       * is precisely the one that cannot bill.
+       *
+       * Ascending version, so the last write per code is the highest of
+       * the billable ones.
+       */
       const schedules = await prisma.rateSchedule.findMany({
         where: { utilityId: ctx.utilityId, code: { in: [...scheduleCodes] } },
         orderBy: { version: "asc" },
-        select: { id: true, code: true },
+        select: { id: true, code: true, publishedAt: true, supersededById: true },
       });
-      for (const s of schedules) scheduleByCode.set(s.code.toUpperCase(), s.id);
+      for (const s of schedules) {
+        const code = s.code.toUpperCase();
+        knownScheduleCodes.add(code);
+        if (s.publishedAt !== null && s.supersededById === null) {
+          scheduleByCode.set(code, s.id);
+        }
+      }
     }
 
     return {
@@ -409,6 +441,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       premiseByAddressZip,
       meterByNumber,
       scheduleByCode,
+      knownScheduleCodes,
     };
   },
 
@@ -464,8 +497,20 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
 
     let rateScheduleId: string | undefined;
     if (row.rateScheduleCode) {
-      const id = batch.scheduleByCode.get(row.rateScheduleCode.toUpperCase());
+      const code = row.rateScheduleCode.toUpperCase();
+      const id = batch.scheduleByCode.get(code);
       if (!id) {
+        // Two different problems, and conflating them would send the
+        // operator to the wrong place: an unknown code means fix the
+        // file, a code with no billable version means publish the
+        // tariff.
+        if (batch.knownScheduleCodes.has(code)) {
+          return {
+            ok: false,
+            code: "RATE_SCHEDULE_NOT_PUBLISHED",
+            message: `Rate schedule "${row.rateScheduleCode}" exists but has no published, current version — publish it before importing agreements onto it`,
+          };
+        }
         return {
           ok: false,
           code: "RATE_SCHEDULE_NOT_FOUND",
