@@ -61,6 +61,32 @@ describe("NotesTab sits on a card", () => {
     expect(screen.getByTestId("notes-panel")).toHaveStyle({ background: CARD });
   });
 
+  it("draws exactly one, not a card per section", async () => {
+    /*
+     * The first version carded the compose form separately from the
+     * list, so the tab showed two stacked surfaces. `AttachmentsTab`
+     * gets away with a second card because its upload form appears only
+     * after "+ Upload"; this form is always visible, since a note is
+     * three seconds of typing. So compose and list share one card,
+     * divided rather than separated.
+     */
+    get.mockResolvedValue([
+      {
+        id: "n-1",
+        body: "Mud on the glass.",
+        authorName: "Jane CSR",
+        createdAt: "2026-11-02T09:15:00.000Z",
+      },
+    ]);
+    await renderNotes();
+    await screen.findByText(/Mud on the glass/);
+
+    const carded = Array.from(
+      document.querySelectorAll<HTMLElement>("[style]"),
+    ).filter((el) => el.style.background === CARD);
+    expect(carded).toHaveLength(1);
+  });
+
   it("draws one around the empty state too", async () => {
     // Otherwise the card appears only once somebody adds a note, which
     // is the odd half of the same bug.
