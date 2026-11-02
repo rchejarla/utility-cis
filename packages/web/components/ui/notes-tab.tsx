@@ -51,6 +51,13 @@ export function NotesTab({
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
+  /*
+   * Closed by default, like `AttachmentsTab`'s upload form. With the
+   * box always open the tab was a compose area with a list bolted
+   * under it; the common act on this tab is reading what is already
+   * there.
+   */
+  const [composing, setComposing] = useState(false);
 
   const path = `/api/v1/${subject}/${entityId}/notes`;
 
@@ -77,6 +84,7 @@ export function NotesTab({
     try {
       await apiClient.post(path, { body });
       setDraft("");
+      setComposing(false);
       await refresh();
     } catch (err) {
       toast(err instanceof Error ? err.message : "Could not add the note", "error");
@@ -85,14 +93,26 @@ export function NotesTab({
     }
   };
 
+
+  const withdraw = async (noteId: string) => {
+    try {
+      await apiClient.delete(`${path}/${noteId}`);
+      await refresh();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not remove the note", "error");
+    }
+  };
+
   /*
-   * **One card, not two.** `AttachmentsTab` shows its upload form in a
-   * second card, but only after you press "+ Upload" — so by default
-   * that tab is a single surface. This form is always visible, because
-   * a note is three seconds of typing and hiding it behind a button
-   * would cost more than it saves. Always-visible plus separately
-   * carded is what read as clutter, so the compose area sits inside the
-   * same card as the list, divided from it.
+   * **One card, and a button rather than a standing form.**
+   *
+   * `AttachmentsTab` reads as a single panel because by default it is
+   * only a list — its upload form appears after "+ Upload". This tab
+   * followed the opposite shape for three revisions: a compose box
+   * always open, with the list bolted underneath, which read as two
+   * stacked panels however the borders were arranged. The common act
+   * here is reading what is already on the record; writing is
+   * occasional.
    */
   return (
     <div
@@ -109,78 +129,119 @@ export function NotesTab({
           display: "flex",
           flexDirection: "column",
           gap: "8px",
-          padding: "16px 20px",
+          padding: "14px 18px",
         }}
       >
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="What happened, or what you were told."
-          rows={3}
-          style={{
-            width: "100%",
-            padding: "10px 12px",
-            /*
-             * `--bg-deep`, not `--bg-elevated`. An input inside a card
-             * is a recessed well, and the tokens are ordered: deep
-             * (#06080d) is darker than card (#111722), elevated
-             * (#171f2e) is lighter. Filling it with the lighter one
-             * made the textarea read as a raised panel sitting on the
-             * card — a second card, which is exactly what it looked
-             * like. In light mode it was worse: a blue box on white.
-             * `attachments-tab.tsx`'s `inputStyle` is the convention.
-             */
-            background: "var(--bg-deep)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius)",
-            color: "var(--text-primary)",
-            fontSize: "13px",
-            fontFamily: "inherit",
-            resize: "vertical",
-          }}
-        />
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button
-            type="button"
-            onClick={add}
-            disabled={saving || draft.trim() === ""}
-            style={{
-              padding: "8px 16px",
-              borderRadius: "var(--radius)",
-              background: draft.trim() === "" ? "transparent" : "var(--accent-primary)",
-              color: draft.trim() === "" ? "var(--text-muted)" : "#fff",
-              border:
-                draft.trim() === "" ? "1px solid var(--border)" : "1px solid var(--accent-primary)",
-              fontSize: "13px",
-              fontWeight: 500,
-              cursor: draft.trim() === "" ? "default" : "pointer",
-              fontFamily: "inherit",
-            }}
-          >
-            {saving ? "Adding…" : "Add note"}
-          </button>
-        </div>
+        {composing ? (
+          <>
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="What happened, or what you were told."
+              rows={3}
+              autoFocus
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                /*
+                 * `--bg-deep`, not `--bg-elevated`. The tokens are
+                 * ordered — deep is darker than card, elevated is
+                 * lighter — so filling an input with the lighter one
+                 * makes it read as a raised panel sitting on the card.
+                 * An input inside a card is a recessed well;
+                 * `attachments-tab.tsx`'s `inputStyle` is the
+                 * convention.
+                 */
+                background: "var(--bg-deep)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+                color: "var(--text-primary)",
+                fontSize: "13px",
+                fontFamily: "inherit",
+                resize: "vertical",
+                boxSizing: "border-box",
+              }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setComposing(false);
+                  setDraft("");
+                }}
+                style={{
+                  padding: "8px 16px",
+                  borderRadius: "var(--radius)",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  border: "1px solid var(--border)",
+                  fontSize: "13px",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={add}
+                disabled={saving || draft.trim() === ""}
+                style={{
+                  padding: "8px 16px",
+                  borderRadius: "var(--radius)",
+                  background: draft.trim() === "" ? "transparent" : "var(--accent-primary)",
+                  color: draft.trim() === "" ? "var(--text-muted)" : "#fff",
+                  border:
+                    draft.trim() === ""
+                      ? "1px solid var(--border)"
+                      : "1px solid var(--accent-primary)",
+                  fontSize: "13px",
+                  fontWeight: 500,
+                  cursor: draft.trim() === "" ? "default" : "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                {saving ? "Adding…" : "Save note"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div style={{ display: "flex", justifyContent: "flex-start" }}>
+            <button
+              type="button"
+              onClick={() => setComposing(true)}
+              style={{
+                padding: "8px 16px",
+                borderRadius: "var(--radius)",
+                background: "transparent",
+                color: "var(--accent-primary)",
+                border: "1px solid var(--accent-primary)",
+                fontSize: "13px",
+                fontWeight: 500,
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              Add note
+            </button>
+          </div>
+        )}
       </div>
 
       {/*
-        * **No rule and no empty block when there is nothing to list.**
-        * A full-width divider with a tall centred void beneath it split
-        * the one card into two visual halves, and that is what read as
-        * two cards — reported three times, while the markup really did
-        * contain a single card each time.
-        *
-        * `AttachmentsTab` looks like one panel because by default it
-        * *is* only a list. This tab always carries a compose area, so
-        * the list has to join onto it rather than sit under a seam.
-        * With notes present the rule reads as a list header and earns
-        * its place; with none it is a line across an empty box.
+        * No rule and no padded block when there is nothing to list: a
+        * full-width line with an empty region under it split the one
+        * card into two visual halves, which is what read as two cards
+        * through three reports. With notes the rule is a list header and
+        * earns its place.
         */}
       {loading ? (
-        <div style={{ padding: "0 20px 16px", color: "var(--text-muted)", fontSize: "13px" }}>
+        <div style={{ padding: "0 18px 14px", color: "var(--text-muted)", fontSize: "13px" }}>
           Loading notes…
         </div>
       ) : notes.length === 0 ? (
-        <div style={{ padding: "0 20px 16px", color: "var(--text-muted)", fontSize: "13px" }}>
+        <div style={{ padding: "0 18px 14px", color: "var(--text-muted)", fontSize: "13px" }}>
           No notes on this record yet.
         </div>
       ) : (
@@ -189,30 +250,56 @@ export function NotesTab({
             <div
               key={n.id}
               style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "12px",
                 padding: "14px 18px",
                 borderTop: i === 0 ? "none" : "1px solid var(--border-subtle)",
               }}
             >
-              <div
-                data-testid="note-body"
-                style={{
-                  fontSize: "13px",
-                  color: "var(--text-primary)",
-                  lineHeight: 1.55,
-                  whiteSpace: "pre-wrap",
-                }}
-              >
-                {n.body}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  data-testid="note-body"
+                  style={{
+                    fontSize: "13px",
+                    color: "var(--text-primary)",
+                    lineHeight: 1.55,
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
+                  {n.body}
+                </div>
+                <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--text-muted)" }}>
+                  {n.authorName} · {new Date(n.createdAt).toLocaleString()}
+                </div>
               </div>
-              <div
+              {/*
+                * Withdrawing is soft on the server — the row keeps
+                * `deletedAt` and `deletedBy` — so this removes the note
+                * from the record without erasing the fact that it was
+                * written. No confirmation dialog: the act is reversible
+                * in the database and the alternative, a modal on every
+                * stray note, is the kind of friction that trains people
+                * to click through.
+                */}
+              <button
+                type="button"
+                onClick={() => withdraw(n.id)}
+                aria-label="Remove note"
+                title="Remove this note"
                 style={{
-                  marginTop: "8px",
-                  fontSize: "12px",
+                  padding: "4px 8px",
+                  background: "transparent",
+                  border: "none",
                   color: "var(--text-muted)",
+                  fontSize: "12px",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  flexShrink: 0,
                 }}
               >
-                {n.authorName} · {new Date(n.createdAt).toLocaleString()}
-              </div>
+                Remove
+              </button>
             </div>
           ))}
         </div>

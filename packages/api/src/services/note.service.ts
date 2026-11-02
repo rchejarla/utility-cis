@@ -10,13 +10,18 @@ import { prisma } from "../lib/prisma.js";
  * exists: it holds one note, has no author, has no date, and the second
  * note overwrites the first.
  *
- * **Append-only.** There is no update and no delete, which is why this
- * module exports two functions and not four. A note records that
- * somebody observed something at a time; an editable note records
- * nothing in particular, because a later reader cannot tell whether
- * what they are reading is what was written. A mistake is corrected by
- * adding another note, which is how a paper file works and for the same
- * reason.
+ * **The body is never edited.** A note records that somebody observed
+ * something at a time; an editable note records nothing in particular,
+ * because a later reader cannot tell whether what they are reading is
+ * what was written. There is no update, and so no `updatedAt`.
+ *
+ * It can be **withdrawn**, which is the one state change it has, and
+ * that is soft. Two reasons, the second being the stronger: the
+ * data-model overview's standing rule is soft deletes only, and the
+ * purpose of this table is to be a record of what somebody said at a
+ * time — erasing the row would make "was there ever a note here"
+ * unanswerable, which is exactly what a dispute asks. A withdrawn note
+ * is still evidence that it was written and withdrawn, and by whom.
  *
  * **Not an overlay feature**, though spec 28's OVL-T-3 is what forced
  * it: a mirrored record is read-only to staff, and a read-only record
@@ -110,8 +115,41 @@ export async function listNotes(
   entityId: string,
 ): Promise<NoteRow[]> {
   return prisma.note.findMany({
-    where: { utilityId, entityType, entityId },
+    // Live notes only. `note_subject_idx` carries the same predicate,
+    // so this stays one index scan.
+    where: { utilityId, entityType, entityId, deletedAt: null },
     orderBy: { createdAt: "desc" },
     select: SELECT,
   });
+}
+
+/**
+ * Withdraw a note.
+ *
+ * Scoped by `(utilityId, entityType, entityId)` as well as by id, so a
+ * caller authorized for one record cannot withdraw a note belonging to
+ * another by passing its id — the route checks permission against the
+ * entity in the path, and this is what makes that check mean something.
+ *
+ * Idempotent in effect: a note already withdrawn is reported as not
+ * found rather than withdrawn twice, which keeps `deletedBy` the person
+ * who actually did it.
+ */
+export async function deleteNote(
+  utilityId: string,
+  actor: NoteAuthor,
+  entityType: string,
+  entityId: string,
+  noteId: string,
+): Promise<void> {
+  const { count } = await prisma.note.updateMany({
+    where: { id: noteId, utilityId, entityType, entityId, deletedAt: null },
+    data: { deletedAt: new Date(), deletedBy: actor.id },
+  });
+  if (count === 0) {
+    throw Object.assign(new Error("No such note on this record"), {
+      statusCode: 404,
+      code: "NOTE_NOT_FOUND",
+    });
+  }
 }

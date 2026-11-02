@@ -2224,6 +2224,64 @@ async function main() {
     update: { nextValue: 4n },
   });
 
+  // Notes.
+  //
+  // A few remarks on real records, so the Notes tab has something in it
+  // the first time anyone opens it. An empty panel says nothing about
+  // what the feature is for; one carrying a meter-reader's note says it
+  // immediately.
+  //
+  // Authored by the seeded sysadmin, with the name copied onto the row
+  // as the service copies it: a note outlives the staff member who wrote
+  // it, so "who said this" is a column rather than a join.
+  const noteDaysAgo = (d) => new Date(Date.now() - d * 24 * 60 * 60 * 1000);
+  const noteSeeds = [
+    {
+      entityType: "Meter",
+      entityId: mArr[0].id,
+      body: "Dial was unreadable on the April route, mud over the glass. Cleaned it and read 4312; the next reader should get a clean face.",
+      daysAgo: 21,
+    },
+    {
+      entityType: "Meter",
+      entityId: mArr[0].id,
+      body: "Owner asked whether the meter can be moved to the front of the property. Told her it needs a work order and a site visit first.",
+      daysAgo: 4,
+    },
+    {
+      entityType: "Customer",
+      entityId: cArr[0].id,
+      body: "Prefers the mobile, not the landline. The landline is the shop and nobody answers it after 4pm.",
+      daysAgo: 12,
+    },
+    {
+      entityType: "Account",
+      entityId: aArr[0].id,
+      body: "Disputed the September bill on the phone. Explained that the two late fees print on the next bill for this cycle; paying the undisputed part this week.",
+      daysAgo: 6,
+    },
+    {
+      entityType: "Premise",
+      entityId: pArr[0].id,
+      body: "Stop tap is under the driveway slab, not at the boundary. Noted here because the last crew spent an hour looking for it.",
+      daysAgo: 30,
+    },
+  ];
+  for (const n of noteSeeds) {
+    await p.note.create({
+      data: {
+        utilityId: UID,
+        entityType: n.entityType,
+        entityId: n.entityId,
+        body: n.body,
+        authorId: "00000000-0000-4000-8000-000000000091",
+        authorName: "Sarah Mitchell",
+        createdAt: noteDaysAgo(n.daysAgo),
+      },
+    });
+  }
+  console.log("  " + noteSeeds.length + " notes on meters, a customer, an account and a premise");
+
   console.log("\nDone! 10 premises, 8 accounts, 15 meters, " + saData.length + " agreements, " + assignmentCount + " assignments, 3 customers");
 }
 

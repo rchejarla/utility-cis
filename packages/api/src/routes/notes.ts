@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { addNote, listNotes } from "../services/note.service.js";
+import { addNote, deleteNote, listNotes } from "../services/note.service.js";
 
 /**
  * Notes on a record.
@@ -23,7 +23,9 @@ import { addNote, listNotes } from "../services/note.service.js";
  * also ordinary CIS work in full mode, so they are not an overlay
  * feature that happens to be always on.
  *
- * No PATCH and no DELETE: notes are append-only (see `note.service.ts`).
+ * No PATCH: a note's body is never edited. DELETE withdraws it —
+ * soft, so the record of what was said survives (see
+ * `note.service.ts`).
  */
 
 /**
@@ -44,6 +46,10 @@ const NOTE_SUBJECTS: Record<string, { entityType: string; module: string }> = {
 };
 
 const paramsSchema = z.object({ id: z.string().uuid() });
+const deleteParamsSchema = z.object({
+  id: z.string().uuid(),
+  noteId: z.string().uuid(),
+});
 const bodySchema = z.object({ body: z.string().min(1).max(10_000) });
 
 export async function noteRoutes(app: FastifyInstance) {
@@ -71,6 +77,22 @@ export async function noteRoutes(app: FastifyInstance) {
           { entityType: subject.entityType, entityId: id, body },
         );
         return reply.status(201).send(note);
+      },
+    );
+
+    app.delete(
+      `/api/v1/${segment}/:id/notes/:noteId`,
+      { config: { module: subject.module, permission: "EDIT" } },
+      async (request, reply) => {
+        const { id, noteId } = deleteParamsSchema.parse(request.params);
+        await deleteNote(
+          request.user.utilityId,
+          { id: request.user.id, name: request.user.name },
+          subject.entityType,
+          id,
+          noteId,
+        );
+        return reply.status(204).send();
       },
     );
   }

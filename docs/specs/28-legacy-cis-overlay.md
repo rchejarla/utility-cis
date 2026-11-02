@@ -166,10 +166,31 @@ tenants are its first users).
   either unauthorized or authorized by whatever was sent.
 
   A **Notes tab** on all five detail pages
-  (`components/ui/notes-tab.tsx`), in both operating modes. It has no
-  pencil and no bin, which is how the panel says the table is
-  append-only — offering either would promise something the API
-  refuses.
+  (`components/ui/notes-tab.tsx`), in both operating modes. Reading is
+  the common act, so it is a button first: the compose box opens on
+  **Add note**, as `AttachmentsTab`'s upload form opens on **+ Upload**.
+  There is no pencil — a note's body is never edited — but each note
+  carries **Remove**, which withdraws it.
+
+  **Withdrawing is soft** (`deleted_at`, `deleted_by`, both-or-neither
+  by CHECK, with the subject index made partial on the live rows). Two
+  reasons, the second stronger: the data-model overview's standing rule
+  is soft deletes only, and the purpose of the table is to be a record
+  of what somebody said at a time — erasing the row would make "was
+  there ever a note here" unanswerable, which is precisely what a
+  dispute asks. The service scopes a withdrawal by
+  `(utilityId, entityType, entityId)` as well as by id, so a caller
+  authorized for one record cannot withdraw another's note by passing
+  its id; and it refuses a second withdrawal, which keeps `deletedBy`
+  the person who actually did it.
+
+  The original shipped append-only, on the argument that an editable
+  note records nothing in particular. That holds for the body and never
+  covered the obvious case — a note on the wrong record — where the
+  only correction was another note saying "ignore the one above".
+
+  `seed.js` writes five, on a meter, a customer, an account and a
+  premise, so the tab is not empty the first time it is opened.
 - **OVL-T-4 (Should).** Switching `OVERLAY` → `FULL` is the conversion:
   a platform action, audited, run after a final import. It re-enables
   the refused functions; it does not move data, because the data is

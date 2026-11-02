@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
 import { NotesTab } from "../notes-tab";
@@ -99,6 +100,7 @@ describe("NotesTab sits on a card", () => {
     get.mockResolvedValue([]);
     await renderNotes();
     await screen.findByText(/no notes/i);
+    await userEvent.click(screen.getByRole("button", { name: /add note/i }));
 
     const box = screen.getByRole("textbox");
     expect(box).toHaveStyle({ background: "var(--bg-deep)" });

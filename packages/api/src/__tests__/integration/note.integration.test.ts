@@ -187,8 +187,59 @@ describe("reading notes", () => {
     }), 120_000);
 });
 
-describe("the append-only shape", () => {
-  it("exposes no way to change or remove a note", () =>
+describe("withdrawing a note", () => {
+  const withdraw = (utilityId: string, noteId: string, entityId?: string) =>
+    runAsTenant(utilityId, async () =>
+      svc.deleteNote(utilityId, ACTOR, "Customer", entityId ?? fixA.accountId, noteId),
+    );
+
+  it("takes it off the record without erasing it", () =>
+    seedAsPlatform(async () => {
+      /*
+       * Soft, because the purpose of the table is to be a record of
+       * what somebody said at a time — erasing the row would make "was
+       * there ever a note here" unanswerable, which is what a dispute
+       * asks.
+       */
+      const { prisma } = prismaImports;
+      const note = await addNote(TENANT_A, "Wrong record, sorry.");
+
+      await withdraw(TENANT_A, note.id);
+
+      expect(await listNotes(TENANT_A)).toEqual([]);
+      const row = await prisma.note.findUniqueOrThrow({ where: { id: note.id } });
+      expect(row.body).toBe("Wrong record, sorry.");
+      expect(row.deletedAt).toBeInstanceOf(Date);
+      expect(row.deletedBy).toBe(ACTOR.id);
+    }), 120_000);
+
+  it("refuses a note that belongs to a different record", () =>
+    seedAsPlatform(async () => {
+      /*
+       * The route checks permission against the entity in the path, so
+       * the service has to scope by it too — otherwise a caller
+       * authorized for one record could withdraw another's note by id.
+       */
+      const note = await addNote(TENANT_A, "On the account", fixA.accountId);
+      await expect(withdraw(TENANT_A, note.id, fixA.premiseId)).rejects.toMatchObject({
+        code: "NOTE_NOT_FOUND",
+      });
+      expect(await listNotes(TENANT_A, fixA.accountId)).toHaveLength(1);
+    }), 120_000);
+
+  it("will not withdraw the same note twice", () =>
+    seedAsPlatform(async () => {
+      // Keeps `deletedBy` the person who actually did it.
+      const note = await addNote(TENANT_A, "Once.");
+      await withdraw(TENANT_A, note.id);
+      await expect(withdraw(TENANT_A, note.id)).rejects.toMatchObject({
+        code: "NOTE_NOT_FOUND",
+      });
+    }), 120_000);
+});
+
+describe("what a note does not allow", () => {
+  it("exposes no way to change the body of one", () =>
     seedAsPlatform(async () => {
       /*
        * A note records that somebody observed something at a time, and
@@ -198,13 +249,15 @@ describe("the append-only shape", () => {
        * file.
        *
        * Asserted on the service's surface because that is the contract
-       * a caller has; the schema has no `updatedAt` to describe a
-       * second state either.
+       * a caller has; the schema has no `updatedAt` either, since
+       * withdrawing is described entirely by `deletedAt`/`deletedBy`.
        */
       const surface = Object.keys(svc);
       expect(surface).toContain("addNote");
       expect(surface).toContain("listNotes");
-      expect(surface.some((k) => /update|edit|delete|remove/i.test(k))).toBe(false);
+      // Withdrawing is the only state change; editing is not one.
+      expect(surface).toContain("deleteNote");
+      expect(surface.some((k) => /update|edit/i.test(k))).toBe(false);
     }), 60_000);
 });
 
