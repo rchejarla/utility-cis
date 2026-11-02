@@ -300,7 +300,7 @@ What this buys is narrower than it looks. The mechanism is chosen and running, s
 
 ### 4.1 Entity Summary
 
-**37 core domain entities** across 13 categories (a curated summary, not the full schema: the Prisma schema defines 62 models, and type-def, plumbing and later-phase models such as `Bill`, `BillDocument`, `BillMessage`, `BillingRun`, `BillingRunItem` and `ServicePoint` are not listed here):
+**47 core domain entities** across 14 categories (a curated summary, not the full schema: the Prisma schema defines 78 models, and type-def, plumbing and later-phase models such as `Bill`, `BillDocument`, `BillMessage`, `BillingRun`, `BillingRunItem` and `ServicePoint` are not listed here):
 
 | Category | Entities |
 |----------|----------|
@@ -317,6 +317,7 @@ What this buys is narrower than it looks. The mechanism is chosen and running, s
 | **Delinquency** | DelinquencyRule, DelinquencyAction |
 | **Service Requests** | ServiceRequest, Sla, ServiceRequestTypeDef (+ `service_request_counter` plumbing table for per-tenant/year `SR-YYYY-NNNNNN` numbering) |
 | **Accounts Receivable** | LedgerEntry, LedgerApplication, LedgerReasonDef |
+| **Rates** | SeasonSet, Season, TouCalendar, TouPeriod, TouDayType, TouDayTypeWeekday, TouSlot, TouDayOverride, TouHolidayList, TouHolidayRule (spec 26; added 2026-11-02) |
 
 **Service Request enums (Phase 4 slice B):**
 - `ServiceRequestStatus`: NEW, ASSIGNED, IN_PROGRESS, PENDING_FIELD, COMPLETED, CANCELLED, FAILED
@@ -1443,6 +1444,7 @@ Rating and billing (shipped — Rate Model v2 slices 1–5b.2, plus bill product
 - **Versioned schedules** — `RateSchedule` carries an explicit publish state and a `supersedes`/`supersededBy` chain, with a visual component editor in the web app.
 - **Charges** — `BillSegment` + `BillSegmentLine` per agreement per period (slice 5a); account-level `Bill` aggregating segments (slice 5b.2). Each line is traceable to the exact schedule version and component that produced it, and carries the `unit` its `quantity` is counted in — the tariff's unit, which the rate engine converts a meter's reading into (HCF tiers, gallon meters).
 - **Golden tests** pin the Bozeman water / sewer / stormwater / solid-waste tariffs and NorthWestern Energy residential electric.
+- **Seasons and the TOU calendar** (2026-11-02, spec 26 slice 1) — `SeasonSet`/`Season` replace a hard-coded `seasonOf()` that returned summer for May–October for every tenant; `TouCalendar` and its children carry which hours cost what, effective-dated and published like a rate schedule. Three pure modules do the work and never query: `seasons.ts` (tiling and resolution, validated against a leap year so a set cannot lose 29 February), `holidays.ts` (rules and observance — rules rather than dates, because a published calendar is immutable and a date list expires without raising), and `tou-calendar.ts` (classification and save-time validation). `tou-clock.ts` is the only module in the engine that knows a time zone exists, because TOU-CAL-7 classifies the repeated fall-back hour twice "both by the same wall-clock rule" — so the classifying rule must not see offsets. Half of the tiling rule is a database guarantee (an exclusion constraint on half-open minute ranges rules out overlap); gaps are a property of the set, so code owns them.
 
 SaaSLogic, reduced to a payment rail and reached over apptor-connect (see `docs/specs/21-saaslogic-billing.md` and §3.6):
 

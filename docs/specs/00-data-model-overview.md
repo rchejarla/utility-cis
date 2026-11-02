@@ -6,13 +6,13 @@
 
 ## Overview
 
-This document is the master entity reference for the Utility CIS data model. It describes the 35 core domain entities, their database tables, categories, the phase in which they were built, and their key relationships. Use this as the index when navigating module-level specs.
+This document is the master entity reference for the Utility CIS data model. It describes the 38 core domain entities, their database tables, categories, the phase in which they were built, and their key relationships. Use this as the index when navigating module-level specs.
 
 The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isolation is enforced at the database level via PostgreSQL Row-Level Security (RLS) policies, with the `utility_id` claim from the JWT applied per-request.
 
 ## Entity Summary
 
-**35 core domain entities** (curated; the Prisma schema defines 63 models, and type-def, plumbing and later-phase tables such as `Bill`, `BillingRun` and `ServicePoint` are not listed here) across 12 categories (RBAC category added in Phase 2; UtilityConfig and SuspensionTypeDef added alongside Service Holds v1; CustomFieldSchema added in Custom Fields Phase 1; Notifications and Delinquency categories added in Phase 3; Service Requests category added in Phase 4 slice B; Accounts Receivable category added in Phase 3 AR slice 1):
+**38 core domain entities** (curated; the Prisma schema defines 78 models, and type-def, plumbing and later-phase tables such as `Bill`, `BillingRun` and `ServicePoint` are not listed here) across 12 categories (RBAC category added in Phase 2; UtilityConfig and SuspensionTypeDef added alongside Service Holds v1; CustomFieldSchema added in Custom Fields Phase 1; Notifications and Delinquency categories added in Phase 3; Service Requests category added in Phase 4 slice B; Accounts Receivable category added in Phase 3 AR slice 1; Rates category added 2026-11-02 with seasons and the TOU calendar):
 
 | # | Entity | Table | Category | Phase Built | Key Relationships |
 |---|--------|-------|----------|-------------|-------------------|
@@ -54,6 +54,9 @@ The system is multi-tenant: every entity is scoped by `utility_id`. Tenant isola
 | 33 | LedgerApplication | `ledger_application` | Accounts Receivable | Phase 3 AR slice 1 | Which credit paid down which debit, and by how much. Table created in slice 1; written by payment allocation since slice 2. See spec 23. |
 | 27a | DelinquencyActionFee | `delinquency_action_fee` | Delinquency | Phase 3 | Which fees a delinquency action raised — a table because a tier charges per overdue bill, so one action owns one fee per qualifying bill. The bill each fee punishes is on the fee, in `ledger_entry.assessed_on_id`. See spec 11. |
 | 34 | LedgerReasonDef | `ledger_reason_def` | Accounts Receivable | Phase 3 AR slice 1 | Why a fee or adjustment was raised, in the utility's own words. Tenant-configurable, following the `*TypeDef` convention; 12 defaults seeded per tenant since slice 3, and `appliesToType` restricts which entry type may cite it. `isPenalty` (2026-10-25) says whether an entry citing it is itself a penalty, which is what a percentage late fee excludes from its base. See spec 23. |
+| 35 | SeasonSet + Season | `season_set`, `season` | Rates | 2026-11-02 | A tenant's seasons, effective-dated and published like a rate schedule — changing when summer starts changes what a bill costs. Replaces the hard-coded `seasonOf()`, which returned summer for May–October for every tenant; every existing tenant was seeded with that behaviour so no tariff changed meaning. A set must cover every day of the year exactly once including 29 February, which `lib/rate-engine/seasons.ts` enforces: the rule is a property of the set, so no CHECK can express it. See spec 26. |
+| 36 | TouCalendar + children | `tou_calendar`, `tou_period`, `tou_day_type`, `tou_day_type_weekday`, `tou_slot`, `tou_day_override` | Rates | 2026-11-02 | Which hours cost what. Effective-dated, versioned and published; names its season set, its IANA time zone and its clock basis (`prevailing` or `standard`). A `tou_slot` is a half-open minute span per (season, day type), with an **exclusion constraint** making "no two spans share a minute" a database guarantee while leaving gap detection to `validateCalendar`. `tou_day_type.is_holiday` is a flag rather than a code match, because TOU-CAL-2's day-type vocabulary is open; one per calendar via a partial unique index. Weekday coverage is a child table so a unique index can span the calendar. See spec 26. |
+| 37 | TouHolidayList + TouHolidayRule | `tou_holiday_list`, `tou_holiday_rule` | Rates | 2026-11-02 | Holidays as **rules** — fixed date, or nth weekday of a month — each with an observance rule, resolved by `lib/rate-engine/holidays.ts`. Rules rather than dates because a published calendar is immutable and a date list expires: a missed year silently stops the holiday day type applying. A list is shared across the tenant's calendars, each naming the one it uses. See spec 26. |
 
 ## ER Diagram
 

@@ -203,6 +203,117 @@ anything outside this codebase read it.
   days called for one region, TOU-CAL-9) is scoped by a service area that
   premises belong to, not by attaching calendars to premises.
 
+### Data model (built 2026-11-02)
+
+Eight tables, by the `tou_calendar` migration.
+
+```
+tou_calendar          utility_id, name, effective_date, published_at,
+                      season_set_id → season_set, tou_holiday_list_id?,
+                      time_zone, clock_basis
+                      unique (utility_id, name, effective_date)
+
+tou_period            utility_id, tou_calendar_id, peak_code, label, sort_order
+                      unique (utility_id, tou_calendar_id, peak_code)
+
+tou_day_type          utility_id, tou_calendar_id, day_type_code, label,
+                      is_holiday, sort_order
+                      unique (utility_id, tou_calendar_id, day_type_code)
+                      partial unique (utility_id, tou_calendar_id) where is_holiday
+
+tou_day_type_weekday  utility_id, tou_calendar_id, tou_day_type_id, iso_weekday
+                      unique (utility_id, tou_calendar_id, iso_weekday)
+
+tou_slot              utility_id, tou_calendar_id, season_code,
+                      tou_day_type_id, tou_period_id, start_minute, end_minute
+                      EXCLUDE on (utility, calendar, season_code, day_type,
+                                  int4range(start_minute, end_minute))
+
+tou_day_override      utility_id, tou_calendar_id, override_date,
+                      tou_day_type_id, reason
+                      unique (utility_id, tou_calendar_id, override_date)
+
+tou_holiday_list      utility_id, name
+                      unique (utility_id, name)
+
+tou_holiday_rule      utility_id, tou_holiday_list_id, code, label, kind,
+                      month, day?, weekday?, nth?, observance
+                      unique (utility_id, tou_holiday_list_id, code)
+```
+
+**`is_holiday` is a flag, not a code the resolver matches.** TOU-CAL-2
+makes the day-type vocabulary open — at least weekday, weekend and
+holiday, and a tenant may add Saturday — so `day_type_code` is the
+tenant's own string and no code path may compare it to a literal
+`'holiday'`. A tenant coding theirs `observed_holiday` would otherwise
+have every holiday classified as an ordinary weekday with nothing
+raised. One per calendar; `validateCalendar` reports a second before the
+save, the partial unique index refuses it.
+
+**Weekday coverage is a child table, not seven booleans on the day
+type.** The relationship is one-to-many (TOU-CAL-2's "say which weekdays
+each covers"), and seven columns is the repeated column group this
+codebase already decided against on `utility_config` (spec 18) — where
+three such groups made adding the fourth cost a migration and seven
+files. The child row carries `tou_calendar_id` so the unique index can
+span the calendar, which makes "no weekday is claimed by two day types"
+a database guarantee; booleans cannot express it at all.
+
+**A span references its period and day type, and names its season.** The
+first two are children of the same calendar, so a three-column key pins
+them to it and makes TOU-CAL-3's "every period referenced is defined" a
+database guarantee. A season is not: it lives in a separately versioned
+set, its code travels into the engine anyway, and keying it would mean
+carrying `season_set_id` on every span. A span naming a season the set
+has not got is refused by `validateCalendar`, and if one ever landed,
+rating fails loudly — `resolvePeak` answers "no period covers 17:15",
+not a plausible price.
+
+**A calendar names its season set** rather than reading whichever set is
+in force. A published calendar is immutable (TOU-CAL-5), so if the
+in-force set changed, its spans would reference codes that no longer
+exist and the hours they price would resolve to nothing. The tariff's
+seasons are part of the tariff (TOU-CAL-10). Non-TOU components keep
+using the in-force set, which is the existing `season` predicate's
+behaviour and unchanged.
+
+**What the database holds and what code holds.** Half of TOU-CAL-3 is a
+row-pair property, so the database holds it: no two spans of one
+(season, day type) share a minute, enforced by an exclusion constraint
+on a half-open `int4range`, so an adjacent span at the same boundary is
+still accepted. The other half — no *gaps* — is a property of the set
+and cannot be a constraint, so `validateCalendar` owns it. That is the
+same division `validateSeasons` draws for season tiling.
+
+Four things live only in SQL, and `migrate dev` would propose dropping
+each: the exclusion constraint, the partial unique index on
+`is_holiday`, the nullable composite key from a calendar to its holiday
+list, and the CHECK that keeps each holiday-rule kind's columns and not
+the other's.
+
+### Holiday rules rather than a list of dates (decided 2026-11-02)
+
+TOU-CAL-4 says "by fixed date, by rule", and the rules are kept even
+though a date list would need no resolution code. A published calendar
+is immutable, so a list of dates **expires**: a calendar published in
+2026 holds no holidays for 2029, and either somebody re-enters dates
+every year forever or the dates live outside the version, at which point
+publishing no longer fixes what the calendar means. A missed year raises
+nothing — the holiday day type silently stops applying and every TOU
+bill for those days misprices, which is the same failure shape as the
+interval timestamp basis (TOU-INT-2a).
+
+Three smaller consequences: TOU-CAL-4's three-year preview is a rule
+feature, since a list has no output to show; observance has to be
+computed, and with dates the person typing them applies it in their head
+and nothing records whether they did; and "fourth Thursday of November"
+survives a regulator's question where a bare `2027-11-25` does not.
+
+The honest limit: a fixed-date rule *is* a list entry with a leap-year
+guard, so the rules only earn their keep for the recurring-weekday and
+observance cases. Genuine one-offs are not forced into a rule —
+`tou_day_override` (TOU-CAL-9) is the mechanism for those.
+
 ## 3. Usage data
 
 Two ways to know when energy was used. Both are required, because the
