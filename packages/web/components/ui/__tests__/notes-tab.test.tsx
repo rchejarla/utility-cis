@@ -107,6 +107,60 @@ describe("NotesTab", () => {
     expect(await screen.findByText(/no notes/i)).toBeInTheDocument();
   });
 
+  it("shows each note on one line until it is asked to expand", async () => {
+    /*
+     * A list of three-line notes is a wall of text nobody scans, and
+     * the dates and authors you navigate by get pushed apart. But a
+     * note truncated with no way back is worse than a long one: "stop
+     * tap is under the driveway slab, not at the boundary" puts the
+     * whole point at the end. So one line, and the full text one click
+     * away.
+     *
+     * `nowrap` with an ellipsis rather than a character count, so the
+     * cut lands where the column ends instead of at a letter chosen for
+     * one screen width.
+     */
+    routeGets([note({ body: "A".repeat(400) })]);
+    await renderPanel();
+
+    const body = await screen.findByTestId("note-body");
+    expect(body).toHaveStyle({ whiteSpace: "nowrap", textOverflow: "ellipsis" });
+
+    await userEvent.click(body);
+    expect(screen.getByTestId("note-body")).toHaveStyle({ whiteSpace: "pre-wrap" });
+
+    await userEvent.click(screen.getByTestId("note-body"));
+    expect(screen.getByTestId("note-body")).toHaveStyle({ whiteSpace: "nowrap" });
+  });
+
+  it("expands one note without collapsing another", async () => {
+    // Reading two notes side by side is the normal way to catch up on
+    // a record, so expansion is per note rather than one-at-a-time.
+    routeGets([
+      note({ id: "n-1", body: "First" }),
+      note({ id: "n-2", body: "Second" }),
+    ]);
+    await renderPanel();
+    const bodies = await screen.findAllByTestId("note-body");
+
+    await userEvent.click(bodies[0]);
+    await userEvent.click(bodies[1]);
+
+    const after = screen.getAllByTestId("note-body");
+    expect(after[0]).toHaveStyle({ whiteSpace: "pre-wrap" });
+    expect(after[1]).toHaveStyle({ whiteSpace: "pre-wrap" });
+  });
+
+  it("keeps the whole note reachable to a keyboard", async () => {
+    routeGets([note({ body: "B".repeat(400) })]);
+    await renderPanel();
+    const body = await screen.findByTestId("note-body");
+
+    body.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByTestId("note-body")).toHaveStyle({ whiteSpace: "pre-wrap" });
+  });
+
   it("keeps the compose box closed until asked", async () => {
     // The common act on this tab is reading. Writing is occasional, so
     // it is a button first — as AttachmentsTab is.
