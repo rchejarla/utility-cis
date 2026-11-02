@@ -163,35 +163,29 @@ export function NotesTab({
       </div>
 
       {/*
-        * The list, divided from the compose area rather than carded
-        * apart from it. Loading and empty states live inside, because a
-        * panel with nothing in it is still a panel.
+        * **No rule and no empty block when there is nothing to list.**
+        * A full-width divider with a tall centred void beneath it split
+        * the one card into two visual halves, and that is what read as
+        * two cards — reported three times, while the markup really did
+        * contain a single card each time.
+        *
+        * `AttachmentsTab` looks like one panel because by default it
+        * *is* only a list. This tab always carries a compose area, so
+        * the list has to join onto it rather than sit under a seam.
+        * With notes present the rule reads as a list header and earns
+        * its place; with none it is a line across an empty box.
         */}
-      <div style={{ borderTop: "1px solid var(--border)" }}>
-        {loading ? (
-          <div
-            style={{
-              padding: "32px",
-              textAlign: "center",
-              color: "var(--text-muted)",
-              fontSize: "13px",
-            }}
-          >
-            Loading notes…
-          </div>
-        ) : notes.length === 0 ? (
-          <div
-            style={{
-              padding: "40px",
-              textAlign: "center",
-              color: "var(--text-muted)",
-              fontSize: "13px",
-            }}
-          >
-            No notes on this record yet.
-          </div>
-        ) : (
-          notes.map((n, i) => (
+      {loading ? (
+        <div style={{ padding: "0 20px 16px", color: "var(--text-muted)", fontSize: "13px" }}>
+          Loading notes…
+        </div>
+      ) : notes.length === 0 ? (
+        <div style={{ padding: "0 20px 16px", color: "var(--text-muted)", fontSize: "13px" }}>
+          No notes on this record yet.
+        </div>
+      ) : (
+        <div style={{ borderTop: "1px solid var(--border)" }}>
+          {notes.map((n, i) => (
             <div
               key={n.id}
               style={{
@@ -220,9 +214,9 @@ export function NotesTab({
                 {n.authorName} · {new Date(n.createdAt).toLocaleString()}
               </div>
             </div>
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
