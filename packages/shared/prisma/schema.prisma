@@ -50,6 +50,8 @@ model Utility {
   attachments            Attachment[]
   auditLogs              AuditLog[]
   notes                  Note[]
+  seasonSets             SeasonSet[]
+  seasons                Season[]
   billDocuments          BillDocument[]
   billMessages           BillMessage[]
   billSegmentLines       BillSegmentLine[]
@@ -2730,4 +2732,61 @@ model Note {
   @@index([utilityId, entityType, entityId, createdAt(sort: Desc)], map: "note_subject_idx")
   @@index([utilityId, authorId, createdAt(sort: Desc)], map: "note_author_idx")
   @@map("note")
+}
+
+/// A tenant's seasons, effective-dated and published like a rate
+/// schedule — changing when summer starts changes what a bill costs, so
+/// it is a new version with a date, never an edit to the one that
+/// billed (spec 26, TOU-SEA-2).
+///
+/// Replaces the hard-coded `seasonOf()`, which returned summer for
+/// May–October for every tenant. Every existing tenant was seeded with
+/// that behaviour by the `season_sets` migration, so no tariff changed
+/// meaning.
+model SeasonSet {
+  id            String    @id @default(uuid()) @db.Uuid
+  utilityId     String    @map("utility_id") @db.Uuid
+  utility       Utility   @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  name          String    @db.VarChar(100)
+  effectiveDate DateTime  @map("effective_date") @db.Date
+  /// Null until published. A published set is immutable.
+  publishedAt   DateTime? @map("published_at") @db.Timestamptz
+  /// How a non-TOU period spanning two seasons is decided (TOU-SEA-5).
+  /// Only START_DATE is implemented — today's behaviour; the column
+  /// exists so adopting MAJORITY or PRORATE is not a migration.
+  spanRule      String    @default("START_DATE") @map("span_rule") @db.VarChar(20)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  seasons Season[]
+
+  @@unique([utilityId, name], map: "season_set_name_per_tenant")
+  @@unique([utilityId, id], map: "season_set_tenant_id_key")
+  @@map("season_set")
+}
+
+/// One season: a month/day range that repeats every year and may wrap
+/// the year end (Nov 1 – Mar 31). A set must cover every day of the
+/// year exactly once, which `lib/rate-engine/seasons.ts` enforces —
+/// the rule is a property of the set, so no CHECK can express it.
+model Season {
+  id          String   @id @default(uuid()) @db.Uuid
+  utilityId   String   @map("utility_id") @db.Uuid
+  utility     Utility  @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  seasonSetId String   @map("season_set_id") @db.Uuid
+  seasonSet   SeasonSet @relation(fields: [utilityId, seasonSetId], references: [utilityId, id], onDelete: Cascade)
+  /// What a tariff's `season` predicate compares against.
+  code        String   @db.VarChar(50)
+  label       String   @db.VarChar(100)
+  startMonth  Int      @map("start_month") @db.SmallInt
+  startDay    Int      @map("start_day") @db.SmallInt
+  endMonth    Int      @map("end_month") @db.SmallInt
+  endDay      Int      @map("end_day") @db.SmallInt
+  sortOrder   Int      @default(0) @map("sort_order") @db.SmallInt
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([utilityId, seasonSetId, code], map: "season_code_per_set")
+  @@index([utilityId, seasonSetId, sortOrder], map: "season_set_idx")
+  @@map("season")
 }
