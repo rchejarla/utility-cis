@@ -64,7 +64,15 @@ Existing table. Already has source, fileName, recordCount, importedCount, except
 | `cancel_requested` | `Boolean @default(false)` | User clicked Cancel; worker checks this between rows and exits gracefully |
 | `mapping` | `Json?` | The {sourceHeader → canonicalField} map used by this batch — recorded for audit and replay |
 
-**Original file storage:** the operator's uploaded file is stored via the existing `Attachment` table, polymorphic on `entityType="ImportBatch"` and `entityId=batch.id`. The Attachment infrastructure already handles bytes-to-disk persistence, traversal-safe download, and tenant scoping. The Imports detail page exposes a "Download original file" link that uses the existing attachment download endpoint. No new blob-storage dependency needed for Phase 1.
+**Original file storage: local disk, and moving to apptor-connect later (decided 2026-11-01, deliberately not now).**
+
+`attachment.service.ts` writes bytes to `path.resolve(process.cwd(), "../../uploads")` — one flat directory, a `crypto.randomUUID()` name never derived from the upload, re-resolved through `safeResolveStoragePath` so a traversal attempt cannot escape it. The `attachment` row is the index; tenant isolation is RLS on that row plus the download's ownership check, not the filesystem layout.
+
+**This is the one storage path in the codebase that does not go through apptor-connect**, which CLAUDE.md otherwise requires for everything leaving the process. Bill documents already use the files plane (`lib/apptor-connect/files-client.ts`). Three consequences are accepted for now: an uploaded file does not survive a container rebuild, it is not readable from another node, and a multi-node deployment would therefore drop a cycle export that landed on the wrong one — which spec 28's overlay mirror eventually cannot live with.
+
+It stays for now because nothing in flight needs it moved: imports are re-uploadable by the operator who ran them, and the original file is kept for audit rather than as a system of record. The migration is a **service swap, not a schema change** — `Attachment.storagePath` already holds an opaque string, so it can hold a files-plane key instead of a file name, and the download route resolves through the same service either way.
+
+The file itself is stored via the existing `Attachment` table, polymorphic on `entityType="ImportBatch"` and `entityId=batch.id`. The Attachment infrastructure already handles bytes-to-disk persistence, traversal-safe download, and tenant scoping. The Imports detail page exposes a "Download original file" link that uses the existing attachment download endpoint. No new blob-storage dependency needed for Phase 1.
 
 **Removed:** the existing `errors` JSON column on `ImportBatch` is dropped in the migration. Per-row errors live in `import_row`; the JSON column was only used by the meter-reads-specific import path that's being refactored.
 
@@ -748,7 +756,7 @@ Each slice gets its own plan in `docs/superpowers/plans/`.
 | Decision | Outcome |
 |---|---|
 | Parsing location | Server is the parser of record; client peeks first 50 rows for the mapping UI. Both use `papaparse` (added to shared package). |
-| File storage | Original uploaded file stored via existing `Attachment` table, polymorphic on `(entityType="ImportBatch", entityId=batch.id)`. No new blob storage. |
+| File storage | Original uploaded file stored via existing `Attachment` table, polymorphic on `(entityType="ImportBatch", entityId=batch.id)`. No new blob storage. **Deferred, not settled — see below.** |
 | Backwards compat | None — existing `/api/v1/meter-reads/import` is removed in Slice 1; greenfield project, no external callers. |
 | Sync threshold | Start at 250 rows; revisit after we have real timing data. |
 | Email default | ON for async (> 250 rows) imports. Email body includes a one-click "stop emailing me about imports" link that flips the user's `notify_on_import_complete` preference. Sync imports never email — operator was watching the wizard. |
