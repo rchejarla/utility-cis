@@ -160,7 +160,16 @@ tenants are its first users).
   replaces. Routes are `GET`/`POST /api/v1/<entity>/:id/notes`,
   authorized by the host entity's module (`customers:VIEW` to read,
   `customers:EDIT` to add) rather than a `notes` module nobody would
-  switch off separately.
+  switch off separately. The entity comes from an **allow-list keyed by
+  URL segment**, not from a caller-supplied `entityType`: the segment
+  also picks which permission is checked, so a free-text type would be
+  either unauthorized or authorized by whatever was sent.
+
+  A **Notes tab** on all five detail pages
+  (`components/ui/notes-tab.tsx`), in both operating modes. It has no
+  pencil and no bin, which is how the panel says the table is
+  append-only — offering either would promise something the API
+  refuses.
 - **OVL-T-4 (Should).** Switching `OVERLAY` → `FULL` is the conversion:
   a platform action, audited, run after a final import. It re-enables
   the refused functions; it does not move data, because the data is

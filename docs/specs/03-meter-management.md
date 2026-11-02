@@ -172,6 +172,8 @@ Phase 1 tracks meters as either installed at a premise or removed. Full inventor
 
 ## UI Pages
 
+**Notes tab (2026-11-02).** A dated, attributed remark a staff member attaches to this record — `GET`/`POST /api/v1/<entity>/:id/notes`, append-only, so the panel offers no edit and no delete. Present in both operating modes; spec 28's OVL-T-3 forced it, because a record that is read-only in overlay mode needs somewhere to write what a customer said, but recording a conversation is ordinary CIS work. It replaces the pattern `meter.notes` represents: one note, no author, no date, overwritten by the second.
+
 | Page | Path | Features |
 |------|------|----------|
 | Meters List | `/meters` | Table with meter number, premise address, commodity, type, status; filter by commodity and status |

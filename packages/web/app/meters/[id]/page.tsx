@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { FieldDefinition } from "@utility-cis/shared";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
+import { NotesTab } from "@/components/ui/notes-tab";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { DataTable } from "@/components/ui/data-table";
@@ -266,6 +267,7 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
           { key: "overview", label: "Overview" },
           { key: "agreements", label: `Agreements (${meter.serviceAgreementMeters?.length ?? 0})` },
           { key: "history", label: "History" },
+          { key: "notes", label: "Notes" },
           { key: "attachments", label: "Attachments" },
         ]}
         activeTab={activeTab}
@@ -604,6 +606,8 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
             emptyMessage="This meter has not been assigned to any service agreement yet."
           />
         )}
+
+        {activeTab === "notes" && <NotesTab subject="meters" entityId={id} />}
 
         {activeTab === "attachments" && (
           <AttachmentsTab entityType="Meter" entityId={id} showForm={showUpload} onShowFormChange={setShowUpload} />
