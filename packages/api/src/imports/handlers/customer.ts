@@ -3,6 +3,11 @@ import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { prisma } from "../../lib/prisma.js";
 import { registerImportKind } from "../registry.js";
 import { identityConflict, legacyKeyField, legacyKeyOf } from "../legacy-key.js";
+import {
+  customFieldDefs,
+  extractCustomFields,
+  pickCustomCells,
+} from "../custom-fields.js";
 import type { ImportKindHandler } from "../types.js";
 
 /**
@@ -30,6 +35,13 @@ import type { ImportKindHandler } from "../types.js";
  */
 
 interface CustomerRow {
+  /**
+   * The row's `custom:`-prefixed cells, untouched. `parseRow` is
+   * synchronous and tenant-blind, so the tenant's own schema is
+   * applied in `processRow` against definitions `prepareBatch`
+   * loaded.
+   */
+  customCells: Record<string, string>;
   /** The customer's id in the legacy CIS, when the file carries it. */
   legacyKey?: string;
   customerType: "INDIVIDUAL" | "ORGANIZATION";
@@ -50,6 +62,8 @@ const CUSTOMER_STATUSES = ["ACTIVE", "INACTIVE"] as const;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 interface BatchData {
+  /** The tenant's declared custom fields for this entity. */
+  customDefs: Awaited<ReturnType<typeof customFieldDefs>>;
   /** Legacy key → the customer already mirrored under it. */
   existingByLegacyKey: Map<string, { id: string; customerType: string }>;
 }
@@ -60,6 +74,7 @@ const handler: ImportKindHandler<CustomerRow, BatchData> = {
   module: "customers",
   permission: "CREATE",
   wizardPath: "/customers/import",
+  customFieldEntity: "customer",
 
   canonicalFields: [
     legacyKeyField,
@@ -214,6 +229,7 @@ const handler: ImportKindHandler<CustomerRow, BatchData> = {
     return {
       ok: true,
       row: {
+        customCells: pickCustomCells(raw),
         legacyKey: ((raw.legacyKey ?? "").trim()) || undefined,
         customerType,
         firstName,
@@ -242,7 +258,11 @@ const handler: ImportKindHandler<CustomerRow, BatchData> = {
         }
       }
     }
-    return { existingByLegacyKey };
+    // One read for the batch, not one per row: `validateCustomFields`
+    // would query the schema for every line of the file.
+    const customDefs = await customFieldDefs(ctx.utilityId, "customer");
+
+    return { existingByLegacyKey, customDefs };
   },
 
   async processRow(ctx, row, batch) {
@@ -259,6 +279,11 @@ const handler: ImportKindHandler<CustomerRow, BatchData> = {
      * overwriting would leave a row whose required fields came from the
      * wrong half of the file.
      */
+    const custom = extractCustomFields(row.customCells, batch.customDefs);
+    if (!custom.ok) {
+      return { ok: false, code: custom.code, message: custom.message };
+    }
+
     const legacyKey = legacyKeyOf(row);
     const existing = legacyKey ? batch.existingByLegacyKey.get(legacyKey) : undefined;
     if (existing) {
@@ -277,6 +302,7 @@ const handler: ImportKindHandler<CustomerRow, BatchData> = {
       const updated = await ctx.tx.customer.update({
         where: { id: existing.id },
         data: {
+          customFields: custom.values as object,
           firstName: row.firstName ?? null,
           lastName: row.lastName ?? null,
           organizationName: row.organizationName ?? null,
@@ -305,6 +331,7 @@ const handler: ImportKindHandler<CustomerRow, BatchData> = {
 
     const created = await ctx.tx.customer.create({
       data: {
+        customFields: custom.values as object,
         utilityId: ctx.utilityId,
         legacyKey: legacyKey ?? null,
         customerType: row.customerType,

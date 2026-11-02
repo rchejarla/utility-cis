@@ -48,6 +48,7 @@ export function listKinds(): Array<{
   module: string;
   permission: "CREATE" | "EDIT";
   wizardPath: string;
+  customFieldEntity?: AnyHandler["customFieldEntity"];
   canonicalFields: AnyHandler["canonicalFields"];
   templateRows: AnyHandler["templateRows"];
 }> {
@@ -57,6 +58,7 @@ export function listKinds(): Array<{
     module: h.module,
     permission: h.permission,
     wizardPath: h.wizardPath,
+    customFieldEntity: h.customFieldEntity,
     canonicalFields: h.canonicalFields,
     templateRows: h.templateRows,
   }));

@@ -4,6 +4,11 @@ import { generateNumber } from "../../lib/number-generator.js";
 import { prisma } from "../../lib/prisma.js";
 import { registerImportKind } from "../registry.js";
 import { identityConflict, legacyKeyField, legacyKeyOf } from "../legacy-key.js";
+import {
+  customFieldDefs,
+  extractCustomFields,
+  pickCustomCells,
+} from "../custom-fields.js";
 import type { ImportKindHandler } from "../types.js";
 
 /**
@@ -65,6 +70,13 @@ const SERVICE_POINT_TYPES = ["METERED", "ITEM_BASED", "NON_BADGED"] as const;
 type ServicePointTypeCode = (typeof SERVICE_POINT_TYPES)[number];
 
 interface ServiceAgreementRow {
+  /**
+   * The row's `custom:`-prefixed cells, untouched. `parseRow` is
+   * synchronous and tenant-blind, so the tenant's own schema is
+   * applied in `processRow` against definitions `prepareBatch`
+   * loaded.
+   */
+  customCells: Record<string, string>;
   /** The agreement's id in the legacy CIS, when the file carries it. */
   legacyKey?: string;
   /** Blank is allowed: a number is generated from the tenant template. */
@@ -84,6 +96,8 @@ interface ServiceAgreementRow {
 }
 
 interface BatchData {
+  /** The tenant's declared custom fields for this entity. */
+  customDefs: Awaited<ReturnType<typeof customFieldDefs>>;
   /** Upper-cased account number → account id. */
   accountByNumber: Map<string, string>;
   /** Upper-cased commodity code → commodity id. */
@@ -133,6 +147,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
   module: "agreements",
   permission: "CREATE",
   wizardPath: "/service-agreements/import",
+  customFieldEntity: "service_agreement",
 
   canonicalFields: [
     legacyKeyField,
@@ -378,6 +393,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
     return {
       ok: true,
       row: {
+        customCells: pickCustomCells(raw),
         legacyKey: ((raw.legacyKey ?? "").trim()) || undefined,
         agreementNumber: ((raw.agreementNumber ?? "").trim()) || undefined,
         accountNumber,
@@ -528,6 +544,10 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       }
     }
 
+    // One read for the batch, not one per row: `validateCustomFields`
+    // would query the schema for every line of the file.
+    const customDefs = await customFieldDefs(ctx.utilityId, "service_agreement");
+
     return {
       accountByNumber,
       commodityByCode,
@@ -536,6 +556,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       scheduleByCode,
       knownScheduleCodes,
       existingByLegacyKey,
+      customDefs,
     };
   },
 
@@ -636,6 +657,11 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
      * reported instead of applied, because assignments are effective
      * dated and the right answer is a new window, not an overwrite.
      */
+    const custom = extractCustomFields(row.customCells, batch.customDefs);
+    if (!custom.ok) {
+      return { ok: false, code: custom.code, message: custom.message };
+    }
+
     const legacyKey = legacyKeyOf(row);
     const existing = legacyKey ? batch.existingByLegacyKey.get(legacyKey) : undefined;
     if (existing) {
@@ -654,6 +680,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
       await ctx.tx.serviceAgreement.update({
         where: { id: existing.id },
         data: {
+          customFields: custom.values as object,
           startDate: row.startDate,
           endDate: row.endDate ?? null,
           status: row.status,
@@ -749,6 +776,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
 
       const created = await ctx.tx.serviceAgreement.create({
         data: {
+          customFields: custom.values as object,
           utilityId: ctx.utilityId,
           legacyKey: legacyKey ?? null,
           agreementNumber,

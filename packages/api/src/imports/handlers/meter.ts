@@ -3,6 +3,11 @@ import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { prisma } from "../../lib/prisma.js";
 import { registerImportKind } from "../registry.js";
 import { identityConflict, legacyKeyField, legacyKeyOf } from "../legacy-key.js";
+import {
+  customFieldDefs,
+  extractCustomFields,
+  pickCustomCells,
+} from "../custom-fields.js";
 import type { ImportKindHandler } from "../types.js";
 
 /**
@@ -32,6 +37,13 @@ type MeterType = (typeof METER_TYPES)[number];
 type MeterStatus = (typeof METER_STATUSES)[number];
 
 interface MeterRow {
+  /**
+   * The row's `custom:`-prefixed cells, untouched. `parseRow` is
+   * synchronous and tenant-blind, so the tenant's own schema is
+   * applied in `processRow` against definitions `prepareBatch`
+   * loaded.
+   */
+  customCells: Record<string, string>;
   /** The meter's id in the legacy CIS, when the file carries it. */
   legacyKey?: string;
   meterNumber: string;
@@ -48,6 +60,8 @@ interface MeterRow {
 }
 
 interface BatchData {
+  /** The tenant's declared custom fields for this entity. */
+  customDefs: Awaited<ReturnType<typeof customFieldDefs>>;
   /** Composite key "addr1|zip" (lower-cased) → premise id, OR the
    *  literal sentinel "__ambiguous__" when the same address+zip
    *  matched more than one premise. */
@@ -79,6 +93,7 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
   module: "meters",
   permission: "CREATE",
   wizardPath: "/meters/import",
+  customFieldEntity: "meter",
 
   canonicalFields: [
     legacyKeyField,
@@ -277,6 +292,7 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
     return {
       ok: true,
       row: {
+        customCells: pickCustomCells(raw),
         legacyKey: ((raw.legacyKey ?? "").trim()) || undefined,
         meterNumber,
         premiseAddress,
@@ -381,11 +397,16 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
       }
     }
 
+    // One read for the batch, not one per row: `validateCustomFields`
+    // would query the schema for every line of the file.
+    const customDefs = await customFieldDefs(ctx.utilityId, "meter");
+
     return {
       premiseByAddressZip,
       commodityByCode,
       uomByCommodityCode,
       existingByLegacyKey,
+      customDefs,
     };
   },
 
@@ -437,6 +458,11 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
      * an id or the connector pack maps it wrongly, and both want a
      * person.
      */
+    const custom = extractCustomFields(row.customCells, batch.customDefs);
+    if (!custom.ok) {
+      return { ok: false, code: custom.code, message: custom.message };
+    }
+
     const legacyKey = legacyKeyOf(row);
     const existing = legacyKey ? batch.existingByLegacyKey.get(legacyKey) : undefined;
     if (existing) {
@@ -459,6 +485,7 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
       const updated = await ctx.tx.meter.update({
         where: { id: existing.id },
         data: {
+          customFields: custom.values as object,
           uomId,
           meterType: row.meterType,
           installDate: row.installDate,
@@ -489,6 +516,7 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
     try {
       const created = await ctx.tx.meter.create({
         data: {
+          customFields: custom.values as object,
           utilityId: ctx.utilityId,
           legacyKey: legacyKey ?? null,
           premiseId,
