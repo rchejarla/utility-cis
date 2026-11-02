@@ -503,13 +503,52 @@ raw intervals from the same meters. Compression is therefore entirely a
 
 ## 4. Rate engine
 
-- **TOU-ENG-1 (Must).** A consumption component can filter its quantity
-  to one or more TOU periods: `quantity_source: metered` with the
-  `tou_window_filter` transform naming the calendar and the periods.
-  This replaces the period-level `tou_window` **predicate**, which
+- **TOU-ENG-1 (Must).** A consumption component prices **one** TOU
+  period, named by a `tou_period` quantity-source base:
+
+  ```json
+  { "predicate": { "season": "summer" },
+    "quantitySource": { "base": "tou_period", "peak_code": "peak" },
+    "pricing": { "type": "flat", "rate": 0.3765, "unit": "kWh" } }
+  ```
+
+  *Built 2026-11-02, and this is the third shape the requirement has
+  had.* It first said a period-level `tou_window` **predicate**, which
   cannot be given a correct meaning — a monthly service period always
-  overlaps every TOU window. Remove `tou_window` from the predicate
-  grammar after confirming no saved schedule references it.
+  overlaps every TOU window. It then said `base: metered` with a
+  `tou_window_filter` **transform**, which is also wrong, for a
+  different reason: a transform takes a quantity and returns one, and
+  on-peak kWh cannot be derived from total kWh. Such a transform would
+  have to ignore its own input and read the buckets itself, which is a
+  lie about what a transform is.
+
+  A **base** is the honest shape, because the quantity *is* that
+  period's usage, read from where it lives. And one component per period
+  is how tariffs are written and how bills read — "Summer On-Peak Energy
+  $45.18" is a line a customer can check against the rate sheet, where a
+  single component carrying three prices would collapse into one line
+  nobody could verify. The season predicate needed no new machinery.
+
+  The `tou_window_filter` transform is left raising, pointing at the
+  base. It may yet earn its keep for **demand**, where filtering a
+  series to the on-peak window and then taking its maximum genuinely is
+  a filter — which waits for `peak_demand`, its own spec after slice 2.
+
+  **A bucket is required, not defaulted.** The loader emits one variable
+  per period in the calendar, zero included, so an absent bucket raises
+  rather than billing zero. Billing zero would charge a TOU customer
+  nothing for their most expensive usage, on a bill that read as an
+  ordinary quiet month.
+
+  **Consequence for TOU-BIL-2.** The engine suppresses zero-amount lines
+  — deliberately, and every other tariff depends on it — so a customer
+  who avoided the peak entirely produces no on-peak line, only a trace
+  entry reading `zero_amount`. The bill's by-period table therefore
+  **cannot be built by looping over the rated lines**: it is built from
+  the calendar's periods, with the trace or the buckets supplying the
+  zeros. Pinned in `smud-time-of-day-rating.test.ts`, because the
+  obvious implementation of TOU-BIL-2 is the one that silently drops a
+  period.
 - **TOU-ENG-2 (Must).** The engine stays a pure function. Loaders supply
   **per-TOU-period quantities** plus the resolved calendar version(s)
   and holiday dates for the period. It never queries the database.
