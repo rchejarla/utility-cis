@@ -141,6 +141,18 @@ describe("NWE Residential Electric — multi-schedule golden test", () => {
 
     const ctx: RatingContext = {
       base: {
+        /*
+         * The seasons every tenant was seeded with by the `season_sets`
+         * migration — summer 1 May – 31 October, winter the rest — which is
+         * what the hard-coded `seasonOf()` these tests were written against
+         * returned. Stated so a `season` predicate case still means what it
+         * meant.
+         */
+        seasons: [
+          { code: "summer", startMonth: 5, startDay: 1, endMonth: 10, endDay: 31 },
+          { code: "winter", startMonth: 11, startDay: 1, endMonth: 4, endDay: 30 },
+        ],
+        seasonSpanRule: "START_DATE" as const,
         sa: {
           id: "sa-1",
           utilityId: "u-1",

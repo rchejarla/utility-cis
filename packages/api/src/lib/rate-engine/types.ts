@@ -1,3 +1,4 @@
+import type { SeasonDefinition } from "./seasons.js";
 import type { Decimal } from "./decimal.js";
 
 export type VariableKey = string;
@@ -60,6 +61,25 @@ export interface BaseContext {
   premise: PremiseSnapshot;
   period: { startDate: Date; endDate: Date };
   assignments: ResolvedAssignment[];
+  /**
+   * The tenant's seasons, from the published set in force for this
+   * period (spec 26, TOU-SEA-1 – 3). Replaces the hard-coded
+   * `seasonOf()`.
+   *
+   * The *definitions* rather than a resolved answer, deliberately:
+   * slice 2 classifies each **interval** by season (TOU-SEA-4) against
+   * the same set, one interval at a time, so a loader that resolved a
+   * single season for the period would have to be unpicked then. The
+   * engine stays pure either way — it is handed the rules, not a
+   * database.
+   *
+   * Empty when the tenant has no published set, which resolves to no
+   * season rather than to a guess. See `spanRule` for how a period
+   * crossing two seasons is decided.
+   */
+  seasons: SeasonDefinition[];
+  /** TOU-SEA-5; only `START_DATE` is implemented, today's behaviour. */
+  seasonSpanRule: "START_DATE" | "MAJORITY" | "PRORATE";
 }
 
 export interface RatingContext {

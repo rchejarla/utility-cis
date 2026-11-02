@@ -80,7 +80,37 @@ export async function loadBase(
   }
   const premiseRow = sp.premise;
 
+  /*
+   * The tenant's seasons: the published set whose effective date is on
+   * or before this period's start, most recent first (spec 26,
+   * TOU-SEA-2). Unpublished sets are invisible here for the same reason
+   * an unpublished rate schedule is — a draft must never price a bill.
+   *
+   * No set yields an empty list, which resolves to no season rather
+   * than to a guess. Every existing tenant was seeded with today's
+   * behaviour by the `season_sets` migration, so in practice this is
+   * empty only for a tenant created without one.
+   */
+  const seasonSet = await prisma.seasonSet.findFirst({
+    where: {
+      utilityId,
+      publishedAt: { not: null },
+      effectiveDate: { lte: period.startDate },
+    },
+    orderBy: { effectiveDate: "desc" },
+    include: { seasons: { orderBy: { sortOrder: "asc" } } },
+  });
+
   return {
+    seasons: (seasonSet?.seasons ?? []).map((s) => ({
+      code: s.code,
+      startMonth: s.startMonth,
+      startDay: s.startDay,
+      endMonth: s.endMonth,
+      endDay: s.endDay,
+    })),
+    seasonSpanRule:
+      (seasonSet?.spanRule as BaseContext["seasonSpanRule"] | undefined) ?? "START_DATE",
     sa: {
       id: sa.id,
       utilityId: sa.utilityId,

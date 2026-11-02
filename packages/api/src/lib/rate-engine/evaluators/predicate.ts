@@ -1,6 +1,6 @@
 import type { RatingContext } from "../types.js";
 import { UnsupportedInSlice3Error } from "../types.js";
-import { seasonOf } from "../period.js";
+import { resolveSeason } from "../seasons.js";
 
 type Predicate = Record<string, unknown>;
 
@@ -43,7 +43,7 @@ export function evaluatePredicate(predicate: Predicate, ctx: RatingContext): boo
       return (value as string[]).includes(size as string);
     }
     case "season":
-      return computeSeason(ctx.base.period) === value;
+      return computeSeason(ctx) === value;
     case "tou_window":
       throw new UnsupportedInSlice3Error("tou_window predicate");
     case "drought_stage_active": {
@@ -108,6 +108,21 @@ function inferMeterId(ctx: RatingContext): string | undefined {
   return undefined;
 }
 
-function computeSeason(period: { startDate: Date; endDate: Date }): string {
-  return seasonOf(period.startDate);
+/**
+ * Which season this service period is in, per the tenant's configured
+ * set (spec 26, TOU-SEA-3).
+ *
+ * By the period's **start date**, which is what `seasonOf()` did and
+ * what TOU-SEA-5 names as the default. The alternatives — majority of
+ * days, or prorating the component across both seasons — are Shoulds
+ * carried on the set as `spanRule` and not implemented: changing how an
+ * existing seasonal tariff resolves, silently, is the one thing the
+ * migration that seeded these sets must not do.
+ *
+ * An empty string when no season claims the date, so a `season`
+ * predicate comparing against a code simply does not match. Guessing a
+ * season here would price a bill against a tariff nobody chose.
+ */
+function computeSeason(ctx: RatingContext): string {
+  return resolveSeason(ctx.base.period.startDate, ctx.base.seasons) ?? "";
 }
