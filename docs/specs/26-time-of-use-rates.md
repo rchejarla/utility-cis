@@ -42,7 +42,9 @@ does. To bill it, the system must know four things it does not know today:
 | `MeterRead` | TimescaleDB hypertable keyed on `read_datetime`, with `register_id`, `read_type` `AMI`, `read_source` `AMI`. Holds register reads, not interval consumption series. |
 | `MeterRegister` | Multiple registers per meter, each with UoM, multiplier and `measure_type_id`. No link to a TOU period. |
 | `intervalReadRetentionDays` tenant setting | Exists; nothing reads it (gap analysis §5 item 1) |
-| `meter:reads:<id>` loader | Return type already allows an optional `intervals` array; nothing populates it |
+| `meter:reads:<id>` loader | **Corrected 2026-11-02:** there is no `intervals` field. The loader moved to `lib/rate-engine-loaders/loaders/meter-loader.ts` and its return type declares none, so slice 2 adds the slot as well as the data — one step earlier than this table claimed. TOU-ENG-2's parenthetical is corrected below |
+| `indexed` pricing | **Built.** So a fuel or power-cost adjustment per kWh, driven off `rate_indices`, is already expressible — a real part of an electric tariff that needs no design |
+| `peak_demand`, `ratchet`, `power_factor`, `load_factor` | All listed `supported: false` beside `tou_window_filter`. **None has a spec.** Demand and power factor are what make commercial and industrial electric accounts billable, and this spec scopes them out deliberately — see *What electric still needs* |
 | Reference tariff | [07c — NorthWestern Energy](07c-northwestern-energy-rate-reference.md) RSGTOUD-1 (residential TOU + demand pilot); shapes only, no extracted prices |
 
 ## Scope
@@ -245,10 +247,15 @@ cheaper to support.
   overlaps every TOU window. Remove `tou_window` from the predicate
   grammar after confirming no saved schedule references it.
 - **TOU-ENG-2 (Must).** The engine stays a pure function. Loaders supply
-  either TOU register quantities or the interval series (the
-  `intervals` field `meter:reads` already declares), plus the resolved
-  calendar version(s) and holiday dates for the period. The engine does
-  the bucketing; it never queries the database.
+  either TOU register quantities or the interval series, plus the
+  resolved calendar version(s) and holiday dates for the period. The
+  engine does the bucketing; it never queries the database.
+
+  *Corrected 2026-11-02:* this requirement previously said the
+  `intervals` field was one `meter:reads` "already declares". It does
+  not — the loader carries no such field. Slice 2 therefore adds the
+  loader slot as well as the store, which is a smaller correction than
+  it sounds but would have been discovered mid-slice.
 - **TOU-ENG-3 (Must).** Each interval is classified by the calendar
   version and season in effect at its local start time (TOU-SEA-4,
   TOU-CAL-5). A calendar change mid-period applies from its effective
@@ -282,11 +289,71 @@ cheaper to support.
 
 ## 5. Configuration UI
 
-- **TOU-UI-1 (Must).** A calendar editor: one grid per season showing
-  day types × 24 hours (15-minute resolution), painted by period, with
-  validation inline. A read-only view of any published version.
-- **TOU-UI-2 (Must).** A holiday editor with the resolved dates for the
-  next three years.
+### The calendar editor
+
+Expanded 2026-11-02, because "a grid painted by period" is two lines
+describing the module's largest interaction, and the obvious reading of
+it is wrong.
+
+- **TOU-UI-1 (Must).** **Ranges are the input; the grid is the
+  verification.** A tariff says "on-peak is 4–9 pm on summer weekdays".
+  It does not say ninety-six things. So a (season, day type) is edited
+  as a short list of `from – to → period` rows, and the 96-slot grid is
+  rendered *from* those rows as the proof that they tile the day.
+
+  Painting cells was the obvious design and is the wrong one. Ninety-six
+  slots × three day types × two seasons is 576 targets, a drag-select
+  produces an off-by-one-slot peak nobody can see, and — the part that
+  decides it — **a painted calendar cannot be read back.** A regulator
+  asks "what are your peak hours"; the answer has to be four rows, not a
+  bitmap. The grid still earns its place as the thing that shows a gap
+  or an overlap at a glance, which a list cannot.
+
+- **TOU-UI-1a (Must).** Validation is **inline and positional**: an
+  uncovered or doubly-covered span is highlighted on the grid *and*
+  named in words ("Summer, weekday: 21:00–22:00 is assigned to no
+  period"). TOU-CAL-3 already requires the message; the grid is what
+  makes it findable.
+
+- **TOU-UI-1b (Must).** **Copy between day types and seasons.** Real
+  tariffs repeat: Saturday is often weekday-shaped, winter is often
+  summer with a shorter peak. Copying then editing is how a calendar is
+  actually built, and without it every season is retyped — which is
+  where transcription errors come from.
+
+- **TOU-UI-1c (Must).** **The spot check is in the editor, not an API
+  corner.** TOU-CAL-8's lookup — "Tuesday 3 July, 5:15 pm" — is a field
+  above the grid answering with the period, the day type and *why* ("3
+  July 2026 is observed as the Independence Day holiday, so the holiday
+  day type applies"). This is the single most valuable control on the
+  screen: it is how somebody checks a calendar before publishing, and
+  the holiday interaction is the part people get wrong.
+
+- **TOU-UI-1d (Must).** A published version is **read-only, with a diff
+  against the version it replaced**. "What changed between v1 and v2,
+  and from when" is what a regulator and a disputing customer both ask,
+  and reconstructing it by opening two screens is how the wrong answer
+  gets given. The diff is by span, not by slot: "on-peak shortened from
+  16:00–21:00 to 17:00–21:00 on summer weekdays".
+
+- **TOU-UI-1e (Should).** **Preview a date.** Enter a date and see which
+  day type and which season resolve for it, with the day's periods laid
+  out — the same mechanism as TOU-UI-1c but for a whole day, which is
+  how a holiday-observance rule gets sanity-checked.
+
+- **TOU-UI-2 (Must).** A holiday editor: fixed dates and rules ("fourth
+  Thursday of November"), each with its observance rule, and **the
+  resolved dates for the current and next two years shown beside the
+  rule that produced them**. A rule nobody can see the output of is a
+  rule nobody will trust — and the observance rules are where the
+  surprises live, since a Saturday holiday observed on the Friday moves
+  a peak day.
+
+- **TOU-UI-2a (Should).** A holiday list is **shared across calendars**
+  of the tenant, since a utility's holidays do not vary by tariff, with
+  each calendar naming the list it uses. TOU-CAL-4 says "per calendar";
+  this relaxes it to "named by the calendar" so that adding a holiday
+  does not mean editing three calendars and missing one.
 - **TOU-UI-3 (Must).** The rate schedule editor offers the TOU filter on
   consumption components, picking a published calendar and its periods,
   and refuses to publish a schedule whose periods do not cover every
@@ -341,6 +408,27 @@ cheaper to support.
   proration.
 
 ---
+
+## What electric still needs beyond this spec
+
+Verified against the grammar on 2026-11-02. TOU is one of five
+unsupported pieces, and the other four are not TOU's:
+
+- **`peak_demand` and `ratchet`** — demand charges. Billed on the
+  highest measured demand in the period, often with a ratchet holding a
+  floor from the highest of the last eleven months. This is what makes
+  commercial and industrial accounts billable, and it is where an
+  electric utility's revenue concentrates. Scoped out of this spec on
+  purpose (it needs slice 2's interval store but none of the TOU
+  pricing) and **has no spec of its own yet.**
+- **`power_factor` and `load_factor`** — adjustments on large accounts.
+  Also unspecified.
+
+So "we can bill electric" is three documents, not one. This spec gets a
+residential TOU bill out; a municipal electric utility with commercial
+accounts needs the demand spec as well. Worth stating plainly so the
+sequencing is a choice rather than a surprise: slice 1 below is
+genuinely the gate to *residential* electric, and nothing more.
 
 ## Suggested slices
 
