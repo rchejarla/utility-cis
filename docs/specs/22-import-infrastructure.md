@@ -343,6 +343,17 @@ On entering the mapping stage, the wizard auto-detects header → canonical mapp
 2. Match against handler-supplied alias regexes (e.g., `^meter(_?id|_?number|_?code)?$`).
 3. If multiple headers match the same canonical, first match wins; later headers fall through to other targets or `ignore`.
 
+### The legacy key, and updating instead of duplicating *(shipped 2026-11-02)*
+
+Every mirrored kind offers a `legacyKey` column (`imports/legacy-key.ts`). A row that carries one is matched on `(utility_id, legacy_key)` and **updated in place**; a row without one is created, exactly as before. So the create-only behaviour every handler had is still what a one-shot migration gets, and only a file that supplies legacy ids opts into the other shape.
+
+It exists because the overlay re-imports a utility's export **every cycle** (spec 28, OVL-IN-5). Create-only handlers made that impossible: cycle two reported `DUPLICATE_ACCOUNT`, `DUPLICATE_METER` and `DUPLICATE_AGREEMENT` on effectively every row, and the mirror never advanced past its first load.
+
+The column, the partial unique indexes, why a dedicated column rather than the business numbers three of the five tables already have, which fields are identity-bearing per entity, and why children are not reconciled are all in spec 28 under OVL-IN-5. Two framework-level notes belong here:
+
+- **A blank cell is absence, not a key.** A CSV carries a cell for every column it declares, so a file with the column present but empty on some rows creates those rows rather than matching them all against each other — and the partial index covers only rows that have a key, so a blank one is not unique anyway.
+- **`prepareBatch` does the lookup, in one query, and none at all for a file without keys.** The customer handler gained its first `prepareBatch` for this; it had none, because nothing else about a customer row needs resolving.
+
 ### Tenant custom fields as columns *(shipped 2026-11-01)*
 
 A kind whose entity carries custom fields declares `customFieldEntity` on its handler, and the tenant's own declared fields are appended to that kind's canonical fields **per request**, named `custom:<key>`. The premise handler is the first; customer, account, meter and service agreement can opt in with one line each.

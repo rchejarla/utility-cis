@@ -2,6 +2,7 @@ import { EVENT_TYPES } from "@utility-cis/shared";
 import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { prisma } from "../../lib/prisma.js";
 import { registerImportKind } from "../registry.js";
+import { identityConflict, legacyKeyField, legacyKeyOf } from "../legacy-key.js";
 import {
   customFieldDefs,
   extractCustomFields,
@@ -37,6 +38,8 @@ type PremiseStatus = (typeof PREMISE_STATUSES)[number];
 // their own codes via /settings/premise-types.
 
 interface PremiseRow {
+  /** The premise's id in the legacy CIS, when the file carries it. */
+  legacyKey?: string;
   addressLine1: string;
   addressLine2?: string;
   city: string;
@@ -68,6 +71,8 @@ interface BatchData {
   validPremiseTypes: Set<string>;
   /** The tenant's declared premise custom fields. */
   customDefs: Awaited<ReturnType<typeof customFieldDefs>>;
+  /** Legacy key → the premise already mirrored under it. */
+  existingByLegacyKey: Map<string, { id: string; ownerId: string | null }>;
 }
 
 const handler: ImportKindHandler<PremiseRow, BatchData> = {
@@ -82,6 +87,7 @@ const handler: ImportKindHandler<PremiseRow, BatchData> = {
   customFieldEntity: "premise",
 
   canonicalFields: [
+    legacyKeyField,
     {
       name: "addressLine1",
       label: "Address line 1",
@@ -289,6 +295,7 @@ const handler: ImportKindHandler<PremiseRow, BatchData> = {
         status,
         geoLat,
         geoLng,
+        legacyKey: ((raw.legacyKey ?? "").trim()) || undefined,
         customCells: pickCustomCells(raw),
       },
     };
@@ -337,7 +344,27 @@ const handler: ImportKindHandler<PremiseRow, BatchData> = {
     // would query the schema for every line of the file.
     const customDefs = await customFieldDefs(ctx.utilityId, "premise");
 
-    return { customerByEmail, commodityByCode, validPremiseTypes, customDefs };
+    const legacyKeys = new Set(
+      rows.map((r) => legacyKeyOf(r)).filter((k): k is string => Boolean(k)),
+    );
+    const existingByLegacyKey = new Map<string, { id: string; ownerId: string | null }>();
+    if (legacyKeys.size > 0) {
+      const existing = await prisma.premise.findMany({
+        where: { utilityId: ctx.utilityId, legacyKey: { in: [...legacyKeys] } },
+        select: { id: true, legacyKey: true, ownerId: true },
+      });
+      for (const e of existing) {
+        if (e.legacyKey) existingByLegacyKey.set(e.legacyKey, { id: e.id, ownerId: e.ownerId });
+      }
+    }
+
+    return {
+      customerByEmail,
+      commodityByCode,
+      validPremiseTypes,
+      customDefs,
+      existingByLegacyKey,
+    };
   },
 
   async processRow(ctx, row, batch) {
@@ -382,9 +409,76 @@ const handler: ImportKindHandler<PremiseRow, BatchData> = {
       return { ok: false, code: custom.code, message: custom.message };
     }
 
+    /*
+     * Already mirrored under this key? Update in place (spec 28,
+     * OVL-IN-5), so an overlay can re-import the same export every
+     * cycle instead of reporting a duplicate per row.
+     *
+     * A premise has no immutable business key of its own — an address
+     * is routinely corrected, which is half the point of re-importing —
+     * so the only identity check is the **owner**. Re-parenting a
+     * mirrored premise to a different customer is the case that needs a
+     * person: either the legacy system re-used an id or the connector
+     * pack maps it wrongly, and applying it silently would move a
+     * property between customers.
+     */
+    const legacyKey = legacyKeyOf(row);
+    const existing = legacyKey ? batch.existingByLegacyKey.get(legacyKey) : undefined;
+    if (existing) {
+      const conflict = identityConflict(
+        { ownerId: existing.ownerId },
+        // Only when the file names an owner: omitting the column is not
+        // an assertion that the premise has none.
+        row.ownerEmail ? { ownerId } : {},
+      );
+      if (conflict) {
+        return {
+          ok: false,
+          code: "LEGACY_KEY_CONFLICT",
+          message: `Legacy id "${legacyKey}" is already mirrored to a premise with a different owner — ${conflict}`,
+        };
+      }
+
+      const updated = await ctx.tx.premise.update({
+        where: { id: existing.id },
+        data: {
+          customFields: custom.values as object,
+          addressLine1: row.addressLine1,
+          addressLine2: row.addressLine2 ?? null,
+          city: row.city,
+          state: row.state,
+          zip: row.zip,
+          premiseType: row.premiseType,
+          ownerId,
+          commodityIds,
+          municipalityCode: row.municipalityCode ?? null,
+          status: row.status ?? "ACTIVE",
+          geoLat: row.geoLat ?? null,
+          geoLng: row.geoLng ?? null,
+        },
+      });
+
+      await writeAuditRow(
+        ctx.tx,
+        {
+          utilityId: ctx.utilityId,
+          actorId: ctx.actorId,
+          actorName: ctx.actorName,
+          entityType: "Premise",
+        },
+        EVENT_TYPES.PREMISE_UPDATED,
+        updated.id,
+        null,
+        updated,
+      );
+
+      return { ok: true, entityId: updated.id };
+    }
+
     const created = await ctx.tx.premise.create({
       data: {
         utilityId: ctx.utilityId,
+        legacyKey: legacyKey ?? null,
         customFields: custom.values as object,
         addressLine1: row.addressLine1,
         addressLine2: row.addressLine2 ?? null,

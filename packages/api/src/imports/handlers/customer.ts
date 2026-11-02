@@ -1,6 +1,8 @@
 import { EVENT_TYPES } from "@utility-cis/shared";
 import { writeAuditRow } from "../../lib/audit-wrap.js";
+import { prisma } from "../../lib/prisma.js";
 import { registerImportKind } from "../registry.js";
+import { identityConflict, legacyKeyField, legacyKeyOf } from "../legacy-key.js";
 import type { ImportKindHandler } from "../types.js";
 
 /**
@@ -13,9 +15,12 @@ import type { ImportKindHandler } from "../types.js";
  *
  * Compared to the meter-read handler, customer rows have no cross-row
  * dependencies — there's no "prior reading" or chronological ordering
- * to honour, so `prepareBatch` is a no-op. This is the simplest
- * shape a kind handler can take and exists partly to validate the
- * framework's abstraction holds for entities without batch-level state.
+ * to honour. It was the simplest shape a kind handler can take, with no
+ * `prepareBatch` at all, and existed partly to validate the framework's
+ * abstraction holds for entities without batch-level state. It gained
+ * one when legacy-key matching arrived (spec 28, OVL-IN-5): one query
+ * for the keys the file carries, and none at all for a file without
+ * them.
  *
  * Idempotency note: this slice does not de-duplicate against existing
  * customers. Re-running an import file produces duplicate Customer
@@ -25,6 +30,8 @@ import type { ImportKindHandler } from "../types.js";
  */
 
 interface CustomerRow {
+  /** The customer's id in the legacy CIS, when the file carries it. */
+  legacyKey?: string;
   customerType: "INDIVIDUAL" | "ORGANIZATION";
   firstName?: string;
   lastName?: string;
@@ -42,7 +49,12 @@ const CUSTOMER_STATUSES = ["ACTIVE", "INACTIVE"] as const;
 // happily store; this catches obvious typos (no @, trailing space).
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const handler: ImportKindHandler<CustomerRow, void> = {
+interface BatchData {
+  /** Legacy key → the customer already mirrored under it. */
+  existingByLegacyKey: Map<string, { id: string; customerType: string }>;
+}
+
+const handler: ImportKindHandler<CustomerRow, BatchData> = {
   kind: "customer",
   label: "Customers",
   module: "customers",
@@ -50,6 +62,7 @@ const handler: ImportKindHandler<CustomerRow, void> = {
   wizardPath: "/customers/import",
 
   canonicalFields: [
+    legacyKeyField,
     {
       name: "customerType",
       label: "Customer type",
@@ -201,6 +214,7 @@ const handler: ImportKindHandler<CustomerRow, void> = {
     return {
       ok: true,
       row: {
+        legacyKey: ((raw.legacyKey ?? "").trim()) || undefined,
         customerType,
         firstName,
         lastName,
@@ -212,10 +226,87 @@ const handler: ImportKindHandler<CustomerRow, void> = {
     };
   },
 
-  async processRow(ctx, row) {
+  async prepareBatch(ctx, rows) {
+    const legacyKeys = new Set(
+      rows.map((r) => legacyKeyOf(r)).filter((k): k is string => Boolean(k)),
+    );
+    const existingByLegacyKey = new Map<string, { id: string; customerType: string }>();
+    if (legacyKeys.size > 0) {
+      const existing = await prisma.customer.findMany({
+        where: { utilityId: ctx.utilityId, legacyKey: { in: [...legacyKeys] } },
+        select: { id: true, legacyKey: true, customerType: true },
+      });
+      for (const e of existing) {
+        if (e.legacyKey) {
+          existingByLegacyKey.set(e.legacyKey, { id: e.id, customerType: e.customerType });
+        }
+      }
+    }
+    return { existingByLegacyKey };
+  },
+
+  async processRow(ctx, row, batch) {
+    /*
+     * Already mirrored under this key? Update in place (spec 28,
+     * OVL-IN-5). This handler gained its first `prepareBatch` for the
+     * lookup — it had none, because nothing else about a customer row
+     * needs resolving.
+     *
+     * Identity is the customer *type*. An individual that has become an
+     * organisation under the same legacy id is not a corrected name, it
+     * is a different party: the name columns that matter swap over
+     * (`firstName`/`lastName` against `organizationName`), and
+     * overwriting would leave a row whose required fields came from the
+     * wrong half of the file.
+     */
+    const legacyKey = legacyKeyOf(row);
+    const existing = legacyKey ? batch.existingByLegacyKey.get(legacyKey) : undefined;
+    if (existing) {
+      const conflict = identityConflict(
+        { customerType: existing.customerType },
+        { customerType: row.customerType },
+      );
+      if (conflict) {
+        return {
+          ok: false,
+          code: "LEGACY_KEY_CONFLICT",
+          message: `Legacy id "${legacyKey}" is already mirrored to a customer of a different type — ${conflict}`,
+        };
+      }
+
+      const updated = await ctx.tx.customer.update({
+        where: { id: existing.id },
+        data: {
+          firstName: row.firstName ?? null,
+          lastName: row.lastName ?? null,
+          organizationName: row.organizationName ?? null,
+          email: row.email ?? null,
+          phone: row.phone ?? null,
+          status: row.status ?? "ACTIVE",
+        },
+      });
+
+      await writeAuditRow(
+        ctx.tx,
+        {
+          utilityId: ctx.utilityId,
+          actorId: ctx.actorId,
+          actorName: ctx.actorName,
+          entityType: "Customer",
+        },
+        EVENT_TYPES.CUSTOMER_UPDATED,
+        updated.id,
+        null,
+        updated,
+      );
+
+      return { ok: true, entityId: updated.id };
+    }
+
     const created = await ctx.tx.customer.create({
       data: {
         utilityId: ctx.utilityId,
+        legacyKey: legacyKey ?? null,
         customerType: row.customerType,
         firstName: row.firstName ?? null,
         lastName: row.lastName ?? null,

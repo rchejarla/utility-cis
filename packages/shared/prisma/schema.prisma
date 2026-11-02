@@ -376,6 +376,11 @@ model Premise {
   id                 String        @id @default(uuid()) @db.Uuid
   utilityId          String        @map("utility_id") @db.Uuid
   utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  /// The id of the row this was mirrored from in a utility's legacy CIS
+  /// (spec 28, OVL-IN-5). NULL on everything not created by an overlay
+  /// import. Unique per tenant where present, via a **partial** unique
+  /// index Prisma cannot express — see the legacy_key_mirror migration.
+  legacyKey      String?   @map("legacy_key") @db.VarChar(255)
   addressLine1       String        @map("address_line1") @db.VarChar(255)
   addressLine2       String?       @map("address_line2") @db.VarChar(255)
   city               String        @map("city") @db.VarChar(100)
@@ -417,6 +422,11 @@ model Meter {
   id           String      @id @default(uuid()) @db.Uuid
   utilityId    String      @map("utility_id") @db.Uuid
   utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  /// The id of the row this was mirrored from in a utility's legacy CIS
+  /// (spec 28, OVL-IN-5). NULL on everything not created by an overlay
+  /// import. Unique per tenant where present, via a **partial** unique
+  /// index Prisma cannot express — see the legacy_key_mirror migration.
+  legacyKey      String?   @map("legacy_key") @db.VarChar(255)
   premiseId    String      @map("premise_id") @db.Uuid
   meterNumber  String      @map("meter_number") @db.VarChar(100)
   commodityId  String      @map("commodity_id") @db.Uuid
@@ -456,6 +466,11 @@ model Account {
   id                  String        @id @default(uuid()) @db.Uuid
   utilityId           String        @map("utility_id") @db.Uuid
   utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  /// The id of the row this was mirrored from in a utility's legacy CIS
+  /// (spec 28, OVL-IN-5). NULL on everything not created by an overlay
+  /// import. Unique per tenant where present, via a **partial** unique
+  /// index Prisma cannot express — see the legacy_key_mirror migration.
+  legacyKey      String?   @map("legacy_key") @db.VarChar(255)
   accountNumber       String        @map("account_number") @db.VarChar(50)
   customerId          String?       @map("customer_id") @db.Uuid
   accountType         String        @map("account_type") @db.VarChar(50)
@@ -514,6 +529,11 @@ model ServiceAgreement {
   id              String                 @id @default(uuid()) @db.Uuid
   utilityId       String                 @map("utility_id") @db.Uuid
   utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  /// The id of the row this was mirrored from in a utility's legacy CIS
+  /// (spec 28, OVL-IN-5). NULL on everything not created by an overlay
+  /// import. Unique per tenant where present, via a **partial** unique
+  /// index Prisma cannot express — see the legacy_key_mirror migration.
+  legacyKey      String?   @map("legacy_key") @db.VarChar(255)
   agreementNumber String                 @map("agreement_number") @db.VarChar(50)
   accountId       String                 @map("account_id") @db.Uuid
   commodityId     String                 @map("commodity_id") @db.Uuid
@@ -993,6 +1013,11 @@ model Customer {
   id               String         @id @default(uuid()) @db.Uuid
   utilityId        String         @map("utility_id") @db.Uuid
   utility     Utility @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  /// The id of the row this was mirrored from in a utility's legacy CIS
+  /// (spec 28, OVL-IN-5). NULL on everything not created by an overlay
+  /// import. Unique per tenant where present, via a **partial** unique
+  /// index Prisma cannot express — see the legacy_key_mirror migration.
+  legacyKey      String?   @map("legacy_key") @db.VarChar(255)
   customerType     CustomerType   @map("customer_type")
   firstName        String?        @map("first_name") @db.VarChar(100)
   lastName         String?        @map("last_name") @db.VarChar(100)

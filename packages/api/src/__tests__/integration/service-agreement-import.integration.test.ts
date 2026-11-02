@@ -423,6 +423,241 @@ describe("POST /api/v1/imports — an unmetered service", () => {
     }), 120_000);
 });
 
+describe("POST /api/v1/imports — a re-sent export (spec 28, OVL-IN-5)", () => {
+  /** Header and mapping carrying the legacy id. */
+  const LK_HEADER =
+    "legacy_id,account_number,commodity_code,premise_address,premise_zip," +
+    "start_date,status,read_sequence\n";
+  const LK_MAPPING = {
+    legacy_id: "legacyKey",
+    account_number: "accountNumber",
+    commodity_code: "commodityCode",
+    premise_address: "premiseAddress",
+    premise_zip: "premiseZip",
+    start_date: "startDate",
+    status: "status",
+    read_sequence: "readSequence",
+  };
+
+  function post(csv: string, mapping: Record<string, string> = LK_MAPPING) {
+    const { body, contentType } = buildMultipart([
+      { name: "kind", value: "service_agreement" },
+      { name: "source", value: "MANUAL_UPLOAD" },
+      { name: "fileName", value: "cycle.csv" },
+      { name: "mapping", value: JSON.stringify(mapping) },
+      { name: "file", filename: "cycle.csv", contentType: "text/csv", body: csv },
+    ]);
+    return app.inject({
+      method: "POST",
+      url: "/api/v1/imports",
+      headers: { ...headers(), "content-type": contentType },
+      payload: body,
+    });
+  }
+
+  const row = (over: { key?: string; start?: string; status?: string; seq?: string } = {}) =>
+    `${over.key ?? "LEG-1"},${accountNumber},${commodityCode},${premiseAddress},${premiseZip},` +
+    `${over.start ?? "2026-01-01"},${over.status ?? "PENDING"},${over.seq ?? "10"}\n`;
+
+  it("updates in place the second time, instead of reporting a duplicate", () =>
+    seedAsPlatform(async () => {
+      /*
+       * The whole point. Every handler was create-only, so cycle two of
+       * an overlay mirror reported DUPLICATE_AGREEMENT on every row and
+       * the mirror never advanced past its first load.
+       */
+      const { prisma } = prismaImports;
+
+      const first = JSON.parse((await post(LK_HEADER + row())).body);
+      expect(first.importedCount).toBe(1);
+      expect(first.errorCount).toBe(0);
+
+      const created = await prisma.serviceAgreement.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId, legacyKey: "LEG-1" },
+      });
+      expect(created.status).toBe("PENDING");
+
+      // The next cycle's export: same legacy id, service has started.
+      const second = JSON.parse(
+        (await post(LK_HEADER + row({ status: "ACTIVE", seq: "25" }))).body,
+      );
+      expect(second.errorCount).toBe(0);
+      expect(second.importedCount).toBe(1);
+
+      const all = await prisma.serviceAgreement.findMany({
+        where: { utilityId: fixA.utilityId, legacyKey: "LEG-1" },
+      });
+      expect(all).toHaveLength(1);
+      expect(all[0].id).toBe(created.id);
+      expect(all[0].status).toBe("ACTIVE");
+      expect(all[0].readSequence).toBe(25);
+      // The number it was generated with is untouched — the legacy id
+      // is the handle, not the agreement number.
+      expect(all[0].agreementNumber).toBe(created.agreementNumber);
+    }), 120_000);
+
+  it("leaves the service point alone rather than re-deriving it", () =>
+    seedAsPlatform(async () => {
+      // Children are not reconciled: `meter_read.service_agreement_id`
+      // is RESTRICT, so recreating a point would fail on exactly the
+      // agreements that have been billed.
+      const { prisma } = prismaImports;
+      await post(LK_HEADER + row());
+      const before = await prisma.servicePoint.findMany({
+        where: { utilityId: fixA.utilityId },
+        select: { id: true, premiseId: true },
+      });
+      expect(before).toHaveLength(1);
+
+      await post(LK_HEADER + row({ status: "ACTIVE" }));
+
+      const after = await prisma.servicePoint.findMany({
+        where: { utilityId: fixA.utilityId },
+        select: { id: true, premiseId: true },
+      });
+      expect(after).toEqual(before);
+    }), 120_000);
+
+  it("still creates a row whose legacy id column is blank", () =>
+    seedAsPlatform(async () => {
+      // A CSV carries a cell for every declared column. Blank is
+      // absence, not a key — two blank rows must not match each other.
+      const { prisma } = prismaImports;
+      const csv = LK_HEADER + row({ key: "" }) + row({ key: "", start: "2026-03-01" });
+
+      const result = JSON.parse((await post(csv)).body);
+      expect(result.errorCount).toBe(0);
+      expect(result.importedCount).toBe(2);
+      expect(
+        await prisma.serviceAgreement.count({
+          where: { utilityId: fixA.utilityId, legacyKey: null },
+        }),
+      ).toBe(2);
+    }), 120_000);
+
+  it("refuses a key that now points at a different account", () =>
+    seedAsPlatform(async () => {
+      /*
+       * Either the legacy system re-used an id or the connector pack
+       * maps it wrongly. Applying it would silently move an agreement
+       * between accounts — a billing change nobody asked for, which no
+       * later cycle would reveal.
+       */
+      const { prisma } = prismaImports;
+      await post(LK_HEADER + row());
+
+      const other = await prisma.account.create({
+        data: {
+          utilityId: fixA.utilityId,
+          accountNumber: "OTHER-ACCT",
+          accountType: "RESIDENTIAL",
+          status: "ACTIVE",
+          billingCycleId: fixA.billingCycleId,
+          depositAmount: 0,
+        },
+      });
+      expect(other.accountNumber).toBe("OTHER-ACCT");
+
+      const csv =
+        LK_HEADER +
+        `LEG-1,OTHER-ACCT,${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,10\n`;
+      const result = JSON.parse((await post(csv)).body);
+      expect(codesOf(result)).toEqual([{ rowIndex: 1, code: "LEGACY_KEY_CONFLICT" }]);
+
+      // Unmoved.
+      const still = await prisma.serviceAgreement.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId, legacyKey: "LEG-1" },
+      });
+      expect(still.accountId).toBe(fixA.accountId);
+    }), 120_000);
+
+  it("fills a missing rate assignment on update, but reports a changed one", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const schedule = await prisma.rateSchedule.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId },
+        select: { id: true, code: true },
+      });
+
+      const withRate =
+        "legacy_id,account_number,commodity_code,premise_address,premise_zip,start_date,rate_schedule_code\n";
+      const rateMapping = {
+        legacy_id: "legacyKey",
+        account_number: "accountNumber",
+        commodity_code: "commodityCode",
+        premise_address: "premiseAddress",
+        premise_zip: "premiseZip",
+        start_date: "startDate",
+        rate_schedule_code: "rateScheduleCode",
+      };
+
+      // Created with no rate code at all.
+      await post(LK_HEADER + row());
+      expect(
+        await prisma.sAScheduleAssignment.count({ where: { utilityId: fixA.utilityId } }),
+      ).toBe(0);
+
+      // Filling a gap cannot destroy anything, so it is applied.
+      const filled = JSON.parse(
+        (await post(
+          withRate +
+            `LEG-1,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,${schedule.code}\n`,
+          rateMapping,
+        )).body,
+      );
+      expect(filled.errorCount).toBe(0);
+      const assignment = await prisma.sAScheduleAssignment.findFirstOrThrow({
+        where: { utilityId: fixA.utilityId },
+      });
+      expect(assignment.rateScheduleId).toBe(schedule.id);
+
+      // A different schedule is reported, not overwritten: assignments
+      // are effective dated, so the answer is a new window.
+      const second = await prisma.rateSchedule.create({
+        data: {
+          utilityId: fixA.utilityId,
+          name: "Second tariff",
+          code: "SECOND",
+          commodityId: fixA.commodityId,
+          effectiveDate: new Date("2026-01-01"),
+          version: 1,
+          publishedAt: new Date("2026-01-01T00:00:00.000Z"),
+        },
+      });
+      expect(second.code).toBe("SECOND");
+
+      const changed = JSON.parse(
+        (await post(
+          withRate +
+            `LEG-1,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,SECOND\n`,
+          rateMapping,
+        )).body,
+      );
+      expect(codesOf(changed)).toEqual([{ rowIndex: 1, code: "RATE_ASSIGNMENT_CHANGED" }]);
+      expect(
+        (await prisma.sAScheduleAssignment.findFirstOrThrow({
+          where: { utilityId: fixA.utilityId },
+        })).rateScheduleId,
+      ).toBe(schedule.id);
+    }), 120_000);
+
+  it("emits an update audit row, not a second created one", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      await post(LK_HEADER + row());
+      await post(LK_HEADER + row({ status: "ACTIVE" }));
+
+      const audits = await prisma.auditLog.findMany({
+        where: { utilityId: fixA.utilityId, entityType: "ServiceAgreement" },
+        select: { action: true },
+      });
+      // `action` is the audit's own verb, which is the distinction
+      // that matters here: the second cycle recorded a change to the
+      // existing agreement, not the birth of a second one.
+      expect(audits.map((a) => a.action).sort()).toEqual(["CREATE", "UPDATE"]);
+    }), 120_000);
+});
+
 describe("POST /api/v1/imports — service_agreement row errors", () => {
   it("names the column that missed: account, commodity, premise and meter each get their own code", () =>
     seedAsPlatform(async () => {
