@@ -104,6 +104,44 @@ describe("NotesTab sits on a card", () => {
     expect(box).toHaveStyle({ background: "var(--bg-deep)" });
   });
 
+  it("puts no divider across an empty panel", async () => {
+    /*
+     * The thing that actually looked like two cards, through three
+     * reports: a full-width rule with a tall centred void beneath it
+     * split the one card into halves. `AttachmentsTab` reads as one
+     * panel because by default it *is* only a list; this tab always
+     * carries a compose area, so with nothing to list the list must
+     * not announce itself.
+     */
+    get.mockResolvedValue([]);
+    await renderNotes();
+    await screen.findByText(/no notes/i);
+
+    const ruled = Array.from(
+      document.querySelectorAll<HTMLElement>("[style]"),
+    ).filter((el) => el.style.borderTop && el.style.borderTop !== "none");
+    expect(ruled).toHaveLength(0);
+  });
+
+  it("rules the list off from the compose area once there are notes", async () => {
+    // With content the rule reads as a list header and earns its place.
+    get.mockResolvedValue([
+      {
+        id: "n-1",
+        body: "Mud on the glass.",
+        authorName: "Jane CSR",
+        createdAt: "2026-11-02T09:15:00.000Z",
+      },
+    ]);
+    await renderNotes();
+    await screen.findByText(/Mud on the glass/);
+
+    const ruled = Array.from(
+      document.querySelectorAll<HTMLElement>("[style]"),
+    ).filter((el) => el.style.borderTop && el.style.borderTop !== "none");
+    expect(ruled.length).toBeGreaterThan(0);
+  });
+
   it("draws one around the empty state too", async () => {
     // Otherwise the card appears only once somebody adds a note, which
     // is the odd half of the same bug.
