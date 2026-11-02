@@ -404,6 +404,15 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
           headline={emptyState?.headline}
           description={emptyState?.description}
           action={canCreate && newAction ? newAction : undefined}
+          /*
+           * The header's actions are suppressed while this block shows,
+           * so the import has to travel with it or a tenant with no
+           * rows yet has no way to bulk load — which is precisely when
+           * they want one.
+           */
+          secondaryAction={
+            canCreate && importHref ? { label: "Import", href: importHref } : undefined
+          }
         />
       ) : (
         <>

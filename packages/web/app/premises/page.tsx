@@ -399,6 +399,11 @@ export default function PremisesPage() {
           action={
             canCreate ? { label: "Add Premise", href: "/premises/new" } : undefined
           }
+          // This page renders its own header, so it carries the import
+          // here itself rather than through EntityListPage.
+          secondaryAction={
+            canCreate ? { label: "Import", href: "/premises/import" } : undefined
+          }
         />
       ) : (
         <>

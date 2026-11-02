@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
@@ -85,9 +85,14 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+/*
+ * No `vi.restoreAllMocks()` here. It restores the mocks the setup file
+ * installs too — `window.matchMedia` among them, which jsdom does not
+ * implement and `useBreakpoint` calls — so every case after the first
+ * died on "Cannot read properties of undefined (reading 'matches')" in
+ * a component that has nothing to do with what is under test.
+ * `clearAllMocks` in `beforeEach` is what per-case isolation needs.
+ */
 
 describe("Import detail — why a queued batch is not moving", () => {
   it("says nothing is processing imports when the queue is unattended", async () => {

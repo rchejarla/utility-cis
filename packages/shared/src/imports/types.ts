@@ -40,6 +40,24 @@ export interface ImportKindHandlerMeta {
   module: string;
   /** Permission required on `module` to create an import of this kind. */
   permission: "CREATE" | "EDIT";
+  /**
+   * Where this kind's wizard lives in the web app — an absolute path
+   * ending in `/import`, e.g. `/service-agreements/import`.
+   *
+   * **Required, so a kind cannot register without a way in.** Adding a
+   * kind is one handler file and one line in `handlers/index.ts`, and
+   * the wizard route is a page somewhere else entirely; nothing used to
+   * connect the two, so a kind could serve its fields, generate its
+   * template, accept a POST and still be a URL you had to know. The
+   * `/imports` page builds its New-import menu from this, so a seventh
+   * kind appears there on registration with no page to edit.
+   *
+   * It is a client route named in a server contract, which is the
+   * narrower of two evils: the alternative is a kind → path map in the
+   * web app, which is the thing that gets forgotten. `module` and
+   * `permission` beside it exist to drive the client too.
+   */
+  wizardPath: string;
   /** Canonical fields the wizard exposes in its mapping stage. */
   canonicalFields: CanonicalFieldDef[];
   /**

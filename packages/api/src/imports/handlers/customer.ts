@@ -47,6 +47,7 @@ const handler: ImportKindHandler<CustomerRow, void> = {
   label: "Customers",
   module: "customers",
   permission: "CREATE",
+  wizardPath: "/customers/import",
 
   canonicalFields: [
     {

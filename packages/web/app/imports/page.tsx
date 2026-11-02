@@ -28,6 +28,100 @@ interface ImportBatchRow {
 interface KindMeta {
   kind: string;
   label: string;
+  /** Where this kind's wizard lives, declared by the handler. */
+  wizardPath?: string;
+}
+
+/**
+ * How you start an import.
+ *
+ * This page is reached from the sidebar's "Imports" entry, which is
+ * where anyone looks, and it listed history only: the sole affordance
+ * was a muted footnote under the table naming `/meter-reads/import`,
+ * one of six kinds, leaving the rest as URLs you had to know.
+ *
+ * The list is the registry's rather than a copy of it — each handler
+ * declares its own `wizardPath`, so a seventh kind appears here on
+ * registration with nothing to edit on this page. A kind that somehow
+ * arrives without one is listed as unavailable instead of rendering a
+ * link to nowhere.
+ */
+function NewImportMenu({ kinds }: { kinds: KindMeta[] }) {
+  const [open, setOpen] = useState(false);
+  const available = kinds.filter((k) => k.wizardPath);
+
+  if (available.length === 0) return null;
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "8px",
+          padding: "8px 16px",
+          borderRadius: "var(--radius)",
+          background: "var(--accent-primary)",
+          color: "#fff",
+          border: "none",
+          fontSize: "13px",
+          fontWeight: 600,
+          cursor: "pointer",
+          fontFamily: "inherit",
+        }}
+      >
+        New import
+        <i className="fa-solid fa-chevron-down" style={{ fontSize: "10px" }} aria-hidden />
+      </button>
+
+      {open && (
+        <>
+          {/* Click anywhere else to dismiss. */}
+          <div
+            onClick={() => setOpen(false)}
+            style={{ position: "fixed", inset: 0, zIndex: 10 }}
+            aria-hidden
+          />
+          <div
+            role="menu"
+            style={{
+              position: "absolute",
+              right: 0,
+              top: "calc(100% + 6px)",
+              zIndex: 11,
+              minWidth: "220px",
+              padding: "6px",
+              background: "var(--bg-card)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              boxShadow: "0 8px 24px rgba(0,0,0,0.28)",
+            }}
+          >
+            {available.map((k) => (
+              <Link
+                key={k.kind}
+                href={k.wizardPath as string}
+                onClick={() => setOpen(false)}
+                style={{
+                  display: "block",
+                  padding: "8px 10px",
+                  borderRadius: "6px",
+                  fontSize: "13px",
+                  color: "var(--text-primary)",
+                  textDecoration: "none",
+                }}
+              >
+                {k.label}
+              </Link>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 const STATUSES = ["PENDING", "PROCESSING", "COMPLETE", "PARTIAL", "FAILED", "CANCELLED"] as const;
@@ -62,7 +156,11 @@ export default function ImportsListPage() {
 
   return (
     <div>
-      <PageHeader title="Imports" subtitle="Cross-kind history of bulk uploads." />
+      <PageHeader
+        title="Imports"
+        subtitle="Cross-kind history of bulk uploads."
+        actions={<NewImportMenu kinds={kinds} />}
+      />
 
       <div
         style={{
@@ -158,13 +256,6 @@ export default function ImportsListPage() {
         </div>
       )}
 
-      <div style={{ marginTop: "16px", fontSize: "12px", color: "var(--text-muted)" }}>
-        Start a new import from the entity-specific page (e.g.,{" "}
-        <Link href="/meter-reads/import" style={{ color: "var(--accent-primary)" }}>
-          /meter-reads/import
-        </Link>
-        ).
-      </div>
     </div>
   );
 }
