@@ -85,16 +85,30 @@ export function NotesTab({
     }
   };
 
+  /*
+   * **One card, not two.** `AttachmentsTab` shows its upload form in a
+   * second card, but only after you press "+ Upload" — so by default
+   * that tab is a single surface. This form is always visible, because
+   * a note is three seconds of typing and hiding it behind a button
+   * would cost more than it saves. Always-visible plus separately
+   * carded is what read as clutter, so the compose area sits inside the
+   * same card as the list, divided from it.
+   */
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+    <div
+      data-testid="notes-panel"
+      style={{
+        background: "var(--bg-card)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        overflow: "hidden",
+      }}
+    >
       <div
         style={{
           display: "flex",
           flexDirection: "column",
           gap: "8px",
-          background: "var(--bg-card)",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius)",
           padding: "16px 20px",
         }}
       >
@@ -139,20 +153,11 @@ export function NotesTab({
       </div>
 
       {/*
-        * One card around the list, as `AttachmentsTab` draws, with the
-        * loading and empty states inside it: a panel with nothing in it
-        * is still a panel, and a card that appeared only once there was
-        * content would be the odd half of the same inconsistency.
+        * The list, divided from the compose area rather than carded
+        * apart from it. Loading and empty states live inside, because a
+        * panel with nothing in it is still a panel.
         */}
-      <div
-        data-testid="notes-panel"
-        style={{
-          background: "var(--bg-card)",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius)",
-          overflow: "hidden",
-        }}
-      >
+      <div style={{ borderTop: "1px solid var(--border)" }}>
         {loading ? (
           <div
             style={{
