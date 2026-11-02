@@ -1366,6 +1366,39 @@ async function main() {
         { key: "utility.name", label: "Utility name", sample: "Bozeman Utilities" },
       ],
     },
+    {
+      name: "Import Complete",
+      // Spec 22 slice 2 says this one is seeded for the dev tenant. It
+      // was not, and nothing noticed: the in-app notification lands
+      // either way, so a finished import looked entirely healthy while
+      // `sendNotification` logged "No active template for event" at
+      // warn level in the worker. Found by running
+      // `packages/api/scripts/smoke-async-import.ts` against the real
+      // stack and reading the log — no test could see it, because every
+      // import suite mocks the enqueue and never reaches the worker.
+      //
+      // Context keys come from `services/imports/notify.service.ts`.
+      eventType: "import.complete",
+      description:
+        "Sent to whoever started a background import when it reaches a terminal state.",
+      channels: {
+        email: {
+          subject: "{{kind}} import {{status}} — {{imported}} of {{total}} rows",
+          body: "Hello {{actorName}},\n\nYour {{kind}} import of {{fileName}} has finished: {{status}}.\n\n  Rows:     {{total}}\n  Imported: {{imported}}\n  Errors:   {{errored}}\n\nThe detail, including any rows that failed and a downloadable error report, is at {{link}}.\n\n{{utility.name}}",
+        },
+      },
+      variables: [
+        { key: "kind", label: "What was imported", sample: "Premise" },
+        { key: "status", label: "Terminal status", sample: "COMPLETE" },
+        { key: "fileName", label: "File name", sample: "premises-2026-11.csv" },
+        { key: "total", label: "Rows in the file", sample: "300" },
+        { key: "imported", label: "Rows imported", sample: "298" },
+        { key: "errored", label: "Rows in error", sample: "2" },
+        { key: "link", label: "Link to the batch", sample: "/imports/4c4bf3f1" },
+        { key: "actorName", label: "Who started it", sample: "Jane Smith" },
+        { key: "utility.name", label: "Utility name", sample: "Bozeman Utilities" },
+      ],
+    },
   ];
   for (const t of notifTemplates) {
     const existing = await p.notificationTemplate.findUnique({ where: { utilityId_eventType: { utilityId: UID, eventType: t.eventType } } });

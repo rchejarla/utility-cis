@@ -783,6 +783,29 @@ channel beyond a screen and an email a tenant opts into.
    worker is also the process with a `/metrics` route — the API has none,
    despite a comment in `lib/telemetry.ts` anticipating one.
 
+   **It published nothing at all until 2026-11-02, and the reason is
+   worth keeping.** `refreshSchedulingMetrics` ran with no tenant scope,
+   so `getQueueHealth` → `utilityNames` read the policied `utility`
+   table with `app.current_utility_id` unset; the policy compared
+   `''::uuid`, Postgres raised 22P02, `getQueueHealth`'s own try/catch
+   logged `queue health check failed` at warn level and returned
+   `reachable: false` — and this tick publishes nothing when the report
+   is unreachable, by design. So the gauges were empty from the day they
+   shipped, failing every 60 seconds in a process nobody watches. Fixed
+   by wrapping the tick in `runAsPlatform`, which is what a cross-tenant
+   read has always needed.
+
+   Two things conspired to hide it. **No unit test could see it** — they
+   mock Prisma, and a mock has no row-level security — and the platform
+   *route* was never affected, because it already runs as the platform
+   actor, so the console's queue page looked right throughout. It
+   surfaced only in the worker's own log, read while smoke testing the
+   async import path against a real stack
+   (`packages/api/scripts/smoke-async-import.ts`). The lesson is the one
+   `smoke-scheduler-config.ts` already exists for: a mocked Prisma
+   cannot tell you a query compiles, or is permitted, against the
+   database you have.
+
    That leaves a deployment with **no worker at all** publishing nothing,
    which is the right division of labour: a dead process cannot report
    its own death, and `up` / `absent()` on the worker target answers it.
