@@ -2689,10 +2689,12 @@ model BillingRunItem {
 /// A dated remark a staff member attaches to a record.
 ///
 /// Polymorphic on (entityType, entityId) like `Attachment`, so one
-/// table serves every entity. **Append-only**: no update, no delete,
-/// and therefore no `updatedAt` — a note records that somebody observed
-/// something at a time, and an editable note records nothing in
-/// particular. A mistake is corrected by adding another note.
+/// table serves every entity. The body is **never edited** — a note
+/// records that somebody observed something at a time, and an editable
+/// note records nothing in particular, so there is no `updatedAt`. It
+/// can be **withdrawn**, which is the one state change it has, and that
+/// is soft: `deletedAt`/`deletedBy` rather than a DELETE, because
+/// "was there ever a note here" is the question a dispute asks.
 ///
 /// `authorName` is copied, not joined: a note outlives the staff member
 /// who wrote it, and "who said this" has to survive their row being
@@ -2713,7 +2715,18 @@ model Note {
   authorId    String   @map("author_id") @db.Uuid
   authorName  String   @map("author_name") @db.VarChar(255)
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  /// Withdrawn, not erased. Soft because the table's purpose is to be a
+  /// record of what somebody said at a time — erasing the row would make
+  /// "was there ever a note here" unanswerable, which is the question a
+  /// dispute asks. Set together with `deletedBy`, which a CHECK enforces.
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz
+  deletedBy   String?   @map("deleted_by") @db.Uuid
 
+  /// Partial on the live rows — the common read is a record's notes,
+  /// newest first, and Postgres cannot use a plain index to skip
+  /// withdrawn ones. Prisma cannot express the predicate, so the real
+  /// index is in the `note_soft_delete` migration and this declaration
+  /// exists only so `migrate dev` is not tempted to add a second.
   @@index([utilityId, entityType, entityId, createdAt(sort: Desc)], map: "note_subject_idx")
   @@index([utilityId, authorId, createdAt(sort: Desc)], map: "note_author_idx")
   @@map("note")

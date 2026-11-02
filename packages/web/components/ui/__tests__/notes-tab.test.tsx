@@ -77,15 +77,46 @@ describe("NotesTab", () => {
     expect(screen.getByText(/Jane CSR/)).toBeInTheDocument();
   });
 
-  it("offers no way to edit or delete one", async () => {
-    // The table is append-only, so a pencil or a bin would promise
-    // something the API refuses.
+  it("offers no way to edit one, but does offer to remove it", async () => {
+    /*
+     * The body is never edited — a note records what somebody said at a
+     * time, so a pencil would promise something the API refuses. It can
+     * be withdrawn, which is soft on the server: the row keeps
+     * `deletedAt` and `deletedBy`, so the fact that a note was written
+     * and withdrawn survives.
+     */
     routeGets([note()]);
     await renderPanel();
     await screen.findByText(/mud on the glass/);
 
     expect(screen.queryByRole("button", { name: /edit/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /delete|remove/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /remove note/i })).toBeInTheDocument();
+  });
+
+  it("withdraws a note and refreshes the list", async () => {
+    routeGets([note()]);
+    const del = apiClient.delete as unknown as ReturnType<typeof vi.fn>;
+    del.mockResolvedValue(undefined);
+    await renderPanel();
+    await screen.findByText(/mud on the glass/);
+
+    routeGets([]);
+    await userEvent.click(screen.getByRole("button", { name: /remove note/i }));
+
+    expect(del).toHaveBeenCalledWith("/api/v1/meters/m-1/notes/n-1");
+    expect(await screen.findByText(/no notes/i)).toBeInTheDocument();
+  });
+
+  it("keeps the compose box closed until asked", async () => {
+    // The common act on this tab is reading. Writing is occasional, so
+    // it is a button first — as AttachmentsTab is.
+    routeGets([note()]);
+    await renderPanel();
+    await screen.findByText(/mud on the glass/);
+
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /add note/i }));
+    expect(screen.getByRole("textbox")).toBeInTheDocument();
   });
 
   it("keeps the order the API returned, newest first", async () => {
@@ -111,10 +142,11 @@ describe("NotesTab", () => {
     await renderPanel();
     await screen.findByText(/no notes/i);
 
+    await userEvent.click(screen.getByRole("button", { name: /add note/i }));
     await userEvent.type(screen.getByRole("textbox"), "Spoke to the owner.");
     // The list is refetched after a successful post.
     routeGets([note({ body: "Spoke to the owner." })]);
-    await userEvent.click(screen.getByRole("button", { name: /add note/i }));
+    await userEvent.click(screen.getByRole("button", { name: /save note/i }));
 
     expect(post).toHaveBeenCalledWith("/api/v1/meters/m-1/notes", {
       body: "Spoke to the owner.",
@@ -129,8 +161,9 @@ describe("NotesTab", () => {
 
     // Whitespace is not a note — the API and the database both refuse
     // it, so the button should not fire at all.
-    await userEvent.type(screen.getByRole("textbox"), "   ");
     await userEvent.click(screen.getByRole("button", { name: /add note/i }));
+    await userEvent.type(screen.getByRole("textbox"), "   ");
+    await userEvent.click(screen.getByRole("button", { name: /save note/i }));
 
     expect(post).not.toHaveBeenCalled();
   });
