@@ -141,10 +141,35 @@ Things that would make this a failure even if it worked:
   tariffs a consultant configured are the asset that carries over; the
   subjects do not, because by then there are real accounts.
 
+- **MOD-T-5 (Must).** A modelling tenant keeps the **audit log** (Rao,
+  2026-11-02). It has no customers, so most of what the log exists for
+  is absent — but a study is a document somebody defends, and "who
+  changed this tariff, and when, between the two runs" is the question
+  an opposing consultant asks. Tariff edits, scenario runs and subject
+  imports are all audited; the log is the only reason a dated run can
+  be trusted as the thing it claims to be.
+
 ## 2. Subjects: usage without a hierarchy
 
 **The question this module turns on: a usage file arrives with account
 numbers and consumption, and nothing else exists.**
+
+**A subject is one service, for one period, with the quantities that
+period used.** One row per account-month, in the way a rate consultant
+would count them: a 12,000-account utility studied over a year is
+144,000 subjects. It is the unit a tariff is applied to, which is why it
+is not called an account (an account may have water, sewer and
+stormwater) and not a bill (a bill is the output, and a study produces
+no bills).
+
+*The name is kept rather than changed, and that is a judgement: Rao had
+to ask what it meant, which is exactly the test a name should pass
+unaided. Every alternative was worse in a different way —
+`ModelAccount` is wrong because one account has several, `ModelBill`
+names the output, `ModelServicePeriod` is accurate and unreadable, and
+`account-month` breaks on quarterly solid waste. So it stays, defined
+here at first use and nowhere assumed. It also never reaches an invoice,
+since pricing is per seat and per study rather than per subject.*
 
 - **MOD-S-1 (Must).** Rating does **not** require a premise, meter,
   account or service agreement to exist. A `ModelSubject` is a flat row
@@ -206,8 +231,12 @@ notification. So:
 - **MOD-S-4 (Should).** A subject may carry **current billed revenue**
   for the period. Without it a study can model the proposed tariff but
   not the change, and "what does this do to the average residential
-  bill" is the only question anybody asks. It is optional because a
-  consultant does not always have it.
+  bill" is the only question anybody asks. **Optional** (Rao,
+  2026-11-02): a consultant cannot always get it from a legacy CIS, and
+  a product that refuses the study without it would lose the customers
+  least able to run one themselves. Studies that lack it can model the
+  proposed tariff but not the change, and the comparison screen says so
+  rather than showing a blank column.
 - **MOD-S-5 (Must).** Subjects carry no customer identity. The loader
   refuses a mapping onto a name, email, phone or address field, rather
   than accepting and discarding it — a file that was never loaded
@@ -267,8 +296,76 @@ notification. So:
 - **MOD-U-3 (Must).** The trace is **visible, not a developer tool**.
   Component by component: what was evaluated, the quantity, the unit it
   was converted to, the price applied, whether a minimum bound it.
-- **MOD-U-4 (Should).** Export: the comparison as a file a council
-  paper can quote. Format is an open question below.
+- **MOD-U-4 (Must).** **A PDF report is the deliverable** (Rao,
+  2026-11-02). A rate study is defended in a council meeting from a
+  paper, so the document is the product and the screen is how it is
+  assembled — not the other way round. It carries the comparison, the
+  aggregates, the assumptions and a worked example or two with their
+  traces, so a reader can follow one bill from quantity to total
+  without the application in front of them.
+
+  **Reuse the bill PDF stack**, not a second renderer:
+  `bill-generation/generate-bill-pdf.ts` already turns a presentation
+  object into a Buffer, with `stabilize-pdf.ts` beside it for
+  byte-stable output. A study report is a different presentation
+  through the same machinery. A second rendering path would drift in
+  fonts, page setup and the logo resolution that
+  `resolveLogoDataUri` already handles.
+
+  *Consequence worth naming:* byte-stable output matters more here than
+  it does for a bill. A report cited in a council paper may be
+  regenerated months later to answer a challenge, and it has to come
+  back identical — which `stabilize-pdf.ts` exists for, and which a
+  hand-rolled renderer would not give.
+
+## 6. One tenant, several clients' studies
+
+**Decided (Rao, 2026-11-02): a consultant's tenant holds studies for
+several utilities.** The alternative — a tenant per client — would have
+a consultant logging in once per city, which is the kind of friction
+that loses the account.
+
+This is the answer with real consequences, and they are worth stating
+before anyone builds slice 1, because `utility_id` is the isolation
+boundary everywhere in this codebase.
+
+- **MOD-C-1 (Must).** `ModelStudy` carries the **client** it is for — a
+  label, not a `Utility` row, because the studied utility is not a
+  tenant here and must not become one. Subjects, scenarios and results
+  all hang off the study, so the study is the grouping a consultant
+  navigates by.
+
+- **MOD-C-2 (Must).** **Tariffs are the problem.** `rate_schedule` is
+  keyed `@@unique([utilityId, code, version])`, so two clients' "RES-
+  WATER" collide inside one consultant's tenant — and they will, because
+  utilities name their residential water tariff the same thing.
+
+  The options, with the cost of each:
+
+  - **Study-scoped schedules.** A nullable `study_id` on
+    `rate_schedule`, with the unique key widened to include it. NULL
+    means a tenant-wide tariff, which is every schedule in every FULL
+    and OVERLAY tenant today, so nothing existing changes. Costs: a
+    migration on a table the billing path reads, and a nullable
+    dimension that every rate query must either ignore deliberately or
+    honour.
+  - **Code conventions.** `BZN-RES-WATER` versus `HLN-RES-WATER`, left
+    to the consultant. Costs nothing and fails the first time two
+    studies are for utilities with the same prefix, or the same utility
+    two years apart.
+  - **A tenant per client after all**, with the consultant switching.
+    Costs the decision above.
+
+  *Recommended: study-scoped schedules.* It is the only one that
+  cannot silently produce a wrong number, and the nullable column is
+  inert in every tenant that is not modelling. But it touches the
+  billing path's most load-bearing table, so it wants deciding before
+  slice 1 rather than discovered during slice 4.
+
+- **MOD-C-3 (Should).** A study can be **copied**, tariffs and all, as
+  the way a consultant starts the next city from the last one. That is
+  the workflow the per-study pricing implies, and it is only possible
+  if MOD-C-2 scopes tariffs to studies.
 
 ## Relationship to spec 26 (electric demand and TOU)
 
@@ -313,36 +410,25 @@ Same market, adjacent offers, and they should share:
 
 ## Open questions
 
-1. **Does a study end in a screen or a document?** MOD-U-4 assumes a
-   file. A rate study is defended in a council meeting from a paper, so
-   the export may be the deliverable and the screen merely how it is
-   assembled. That changes where the effort goes.
-2. **What does a consultant pay for, and per what?** Per study, per
-   subject, per seat? It decides whether a 40,000-subject run is a
-   normal act or an expensive one, which decides how much the runner
-   has to be optimised.
-3. **Does a consultant's tenant hold several utilities' studies?** A
-   consultant serves many utilities. One tenant per consultant with a
-   study per client collides with `utility_id` being the isolation
-   boundary; one tenant per client means a consultant logs in many
-   times. This is the sharpest unresolved design question in the module.
-4. **Current billed revenue (MOD-S-4): required or optional?** Required
-   makes every study comparable and excludes consultants who cannot get
-   it. Optional makes the product work for more people and the
-   headline comparison unavailable for some of them.
-5. **Does a modelling tenant get the audit log?** A study's defensibility
-   argues yes; a tenant with no customers arguably needs very little of
-   it.
+1. **Pricing is undecided** — likely per seat *and* per study (Rao,
+   2026-11-02). It stays open because it is commercial rather than
+   structural, with one consequence already taken: subject count is not
+   a billing unit, so the runner can be sized for honesty rather than
+   for metering, and a 144,000-subject study is an ordinary act.
+2. **How is a study delivered to the client?** The PDF is the artifact
+   (MOD-U-4), but whether the client ever logs in — to see the screens,
+   or not at all — decides whether a modelling tenant needs a read-only
+   guest role or none.
 
 ## Suggested slices
 
 | Slice | Delivers | Unblocks |
 |---|---|---|
-| 1 | `MODEL` operating mode, Rate Consultant preset role, the Modeling nav section (MOD-T-1 – 3) | A tenant that cannot bill anybody and says so |
+| 1 | `MODEL` operating mode, Rate Consultant preset role, the Modeling nav section, the audit log (MOD-T-1 – 5), **and the MOD-C-2 tariff-scoping decision** | A tenant that cannot bill anybody and says so |
 | 2 | `ModelSubject`, the `model_usage` import kind, the subject list (MOD-S-1 – 5) | A usage file in, with no hierarchy |
 | 3 | `POST /rate-preview` and the single-subject rater with its trace (MOD-P-*, MOD-U-2, MOD-U-3) | The demo, and the first thing worth selling |
 | 4 | `ModelScenario`, `ModelResult`, the runner, comparison and aggregates (MOD-R-*) | A rate study |
-| 5 | Export, assumptions, and the shared variance report with spec 28 §4 (MOD-U-4, MOD-R-5) | A council paper |
+| 5 | The PDF report through the bill PDF stack, assumptions, study copy, and the shared variance report with spec 28 §4 (MOD-U-4, MOD-R-5, MOD-C-3) | A council paper |
 
 Slice 3 is the one to build first if the sequence is ever in doubt: it
 is the shortest path to something demonstrable, and it is the part the
