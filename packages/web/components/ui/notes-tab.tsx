@@ -58,6 +58,15 @@ export function NotesTab({
    * there.
    */
   const [composing, setComposing] = useState(false);
+  /*
+   * Which notes are shown in full. The list collapses each to one line
+   * so it stays scannable, and a note is useless truncated — "stop tap
+   * is under the driveway slab, not at the boundary" puts the point at
+   * the end — so the full text has to be one click away rather than
+   * gone. A Set, because reading two notes side by side is the normal
+   * way to catch up on a record.
+   */
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const path = `/api/v1/${subject}/${entityId}/notes`;
 
@@ -93,6 +102,14 @@ export function NotesTab({
     }
   };
 
+
+  const toggle = (noteId: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(noteId)) next.delete(noteId);
+      else next.add(noteId);
+      return next;
+    });
 
   const withdraw = async (noteId: string) => {
     try {
@@ -260,13 +277,39 @@ export function NotesTab({
               }}
             >
               <div style={{ flex: 1, minWidth: 0 }}>
+                {/*
+                  * One line until asked. A list of three-line notes is
+                  * a wall of text that nobody scans, and the dates and
+                  * authors — the part you navigate by — get pushed
+                  * apart. Collapsed uses `nowrap` with an ellipsis
+                  * rather than a character count, so the cut lands
+                  * where the column actually ends instead of at an
+                  * arbitrary letter that is wrong at every width.
+                  */}
                 <div
                   data-testid="note-body"
+                  onClick={() => toggle(n.id)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      toggle(n.id);
+                    }
+                  }}
+                  title={expanded.has(n.id) ? "Show less" : n.body}
                   style={{
                     fontSize: "13px",
                     color: "var(--text-primary)",
                     lineHeight: 1.55,
-                    whiteSpace: "pre-wrap",
+                    cursor: "pointer",
+                    ...(expanded.has(n.id)
+                      ? { whiteSpace: "pre-wrap" }
+                      : {
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }),
                   }}
                 >
                   {n.body}
