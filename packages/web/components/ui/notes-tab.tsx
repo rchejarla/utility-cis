@@ -87,7 +87,17 @@ export function NotesTab({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+          background: "var(--bg-card)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          padding: "16px 20px",
+        }}
+      >
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -128,22 +138,50 @@ export function NotesTab({
         </div>
       </div>
 
-      {loading ? (
-        <div style={{ color: "var(--text-muted)", fontSize: "13px" }}>Loading…</div>
-      ) : notes.length === 0 ? (
-        <div style={{ color: "var(--text-muted)", fontSize: "13px", padding: "12px 0" }}>
-          No notes on this record yet.
-        </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-          {notes.map((n) => (
+      {/*
+        * One card around the list, as `AttachmentsTab` draws, with the
+        * loading and empty states inside it: a panel with nothing in it
+        * is still a panel, and a card that appeared only once there was
+        * content would be the odd half of the same inconsistency.
+        */}
+      <div
+        data-testid="notes-panel"
+        style={{
+          background: "var(--bg-card)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          overflow: "hidden",
+        }}
+      >
+        {loading ? (
+          <div
+            style={{
+              padding: "32px",
+              textAlign: "center",
+              color: "var(--text-muted)",
+              fontSize: "13px",
+            }}
+          >
+            Loading notes…
+          </div>
+        ) : notes.length === 0 ? (
+          <div
+            style={{
+              padding: "40px",
+              textAlign: "center",
+              color: "var(--text-muted)",
+              fontSize: "13px",
+            }}
+          >
+            No notes on this record yet.
+          </div>
+        ) : (
+          notes.map((n, i) => (
             <div
               key={n.id}
               style={{
-                padding: "12px 14px",
-                background: "var(--bg-card)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius)",
+                padding: "14px 18px",
+                borderTop: i === 0 ? "none" : "1px solid var(--border-subtle)",
               }}
             >
               <div
@@ -167,9 +205,9 @@ export function NotesTab({
                 {n.authorName} · {new Date(n.createdAt).toLocaleString()}
               </div>
             </div>
-          ))}
-        </div>
-      )}
+          ))
+        )}
+      </div>
     </div>
   );
 }

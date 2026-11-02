@@ -63,14 +63,36 @@ export function HistoryTimeline({
 
   if (sorted.length === 0) {
     return (
-      <div style={{ color: "var(--text-muted)", fontSize: "13px", padding: "12px 0" }}>
-        {emptyMessage}
+    <div
+      data-testid="history-panel"
+      style={{
+        background: "var(--bg-card)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        padding: "16px 20px",
+      }}
+    >
+        <div style={{ color: "var(--text-muted)", fontSize: "13px" }}>{emptyMessage}</div>
       </div>
     );
   }
 
+  /*
+   * On a card, as every other tab panel is: `AttachmentsTab` and
+   * `DataTable` each draw their own, and only `overview` is wrapped by
+   * the page. This root was a bare `div`, so History read as floating
+   * text beside every other tab on the meter and premise screens.
+   */
   return (
-    <div>
+    <div
+      data-testid="history-panel"
+      style={{
+        background: "var(--bg-card)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius)",
+        padding: "16px 20px",
+      }}
+    >
       {title && (
         <h3
           style={{

@@ -802,10 +802,14 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
               }
               const groups = [...byCommodity.values()];
               if (groups.length === 0) {
+                // The component's own empty state, rather than loose
+                // text: it is on a card like every other tab panel,
+                // and this duplicated its wording anyway.
                 return (
-                  <div style={{ color: "var(--text-muted)", fontSize: "13px", padding: "12px 0" }}>
-                    No service agreements have covered this premise yet.
-                  </div>
+                  <HistoryTimeline
+                    events={[]}
+                    emptyMessage="No service agreements have covered this premise yet."
+                  />
                 );
               }
               return groups.map((g) => (
