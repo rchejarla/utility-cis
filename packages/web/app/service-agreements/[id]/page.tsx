@@ -7,6 +7,7 @@ import type { FieldDefinition } from "@utility-cis/shared";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
+import { NotesTab } from "@/components/ui/notes-tab";
 import { AssignRateScheduleDialog } from "@/components/service-agreements/assign-rate-schedule-dialog";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
@@ -427,6 +428,7 @@ export default function ServiceAgreementDetailPage({
           { key: "overview", label: "Overview" },
           { key: "meters", label: `Meters (${sa.meters?.length ?? 0})` },
           { key: "bills", label: "Bills" },
+          { key: "notes", label: "Notes" },
           { key: "attachments", label: "Attachments" },
           { key: "audit", label: "Audit" },
         ]}
@@ -961,6 +963,8 @@ export default function ServiceAgreementDetailPage({
 
         {activeTab === "bills" && <BillSegmentsTab saId={id} canEdit={canEdit} />}
 
+
+        {activeTab === "notes" && <NotesTab subject="service-agreements" entityId={id} />}
 
         {activeTab === "attachments" && (
           <AttachmentsTab entityType="ServiceAgreement" entityId={id} showForm={showUpload} onShowFormChange={setShowUpload} />

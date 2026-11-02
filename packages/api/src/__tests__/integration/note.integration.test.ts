@@ -13,6 +13,7 @@ import {
   endAdminPool,
 } from "./_effective-dating-fixtures.js";
 import { runAsTenant } from "../../lib/tenant-context.js";
+import type { FastifyInstance } from "fastify";
 
 /**
  * Notes on a record.
@@ -36,6 +37,7 @@ let prismaImports: typeof import("../../lib/prisma.js");
 let svc: typeof import("../../services/note.service.js");
 let fixA: TenantFixture;
 let fixB: TenantFixture;
+let app: FastifyInstance;
 
 const ACTOR = {
   id: "00000000-0000-4000-8000-aaaa00000001",
@@ -47,9 +49,13 @@ beforeAll(async () => {
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   svc = await import("../../services/note.service.js");
+  const appImports = await import("../../app.js");
+  app = await appImports.buildApp();
+  await app.ready();
 }, 180_000);
 
 afterAll(async () => {
+  await app?.close().catch(() => {});
   // `$disconnect` does not dispose a pool the application owns — that is
   // the driver-adapter contract — and `bootPostgres({ utilities })`
   // opens the admin pool to declare them. All three have to be closed
@@ -69,6 +75,12 @@ beforeEach(() =>
     await ensurePrincipal(prisma, TENANT_A);
     fixA = await makeTenantFixture(prisma, TENANT_A);
     fixB = await makeTenantFixture(prisma, TENANT_B, { suffix: "b1" });
+
+    for (const moduleKey of ["meters", "customers"]) {
+      await prisma.utilityModule.create({ data: { utilityId: TENANT_A, moduleKey } });
+    }
+    const rbac = await import("../../services/rbac.service.js");
+    await rbac.invalidateTenantModulesCache(TENANT_A);
   }),
 );
 
@@ -194,4 +206,92 @@ describe("the append-only shape", () => {
       expect(surface).toContain("listNotes");
       expect(surface.some((k) => /update|edit|delete|remove/i.test(k))).toBe(false);
     }), 60_000);
+});
+
+describe("the note routes", () => {
+  function token(utilityId: string) {
+    const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+    const payload = Buffer.from(
+      JSON.stringify({
+        sub: ACTOR.id,
+        utility_id: utilityId,
+        email: "jane@example.com",
+        name: ACTOR.name,
+        role: "admin",
+      }),
+    ).toString("base64url");
+    return `${header}.${payload}.fake-signature`;
+  }
+  const headers = () => ({ authorization: `Bearer ${token(TENANT_A)}` });
+
+  it("adds and lists a note over HTTP, under the host entity's module", () =>
+    seedAsPlatform(async () => {
+      const created = await app.inject({
+        method: "POST",
+        url: `/api/v1/meters/${fixA.meterId}/notes`,
+        headers: headers(),
+        payload: { body: "Dial unreadable — mud on the glass." },
+      });
+      expect(created.statusCode).toBe(201);
+      expect(JSON.parse(created.body)).toMatchObject({
+        body: "Dial unreadable — mud on the glass.",
+        authorName: ACTOR.name,
+        entityType: "Meter",
+      });
+
+      const listed = await app.inject({
+        method: "GET",
+        url: `/api/v1/meters/${fixA.meterId}/notes`,
+        headers: headers(),
+      });
+      expect(listed.statusCode).toBe(200);
+      expect(JSON.parse(listed.body)).toHaveLength(1);
+    }), 120_000);
+
+  it("keeps each entity's notes under its own path", () =>
+    seedAsPlatform(async () => {
+      await app.inject({
+        method: "POST",
+        url: `/api/v1/meters/${fixA.meterId}/notes`,
+        headers: headers(),
+        payload: { body: "About the meter" },
+      });
+
+      const onCustomerPath = await app.inject({
+        method: "GET",
+        url: `/api/v1/customers/${fixA.meterId}/notes`,
+        headers: headers(),
+      });
+      // Same id, different entity type: the meter's note is not the
+      // customer's, which is what the (entityType, entityId) key buys.
+      expect(JSON.parse(onCustomerPath.body)).toEqual([]);
+    }), 120_000);
+
+  it("has no route for an entity that is not on the allow-list", () =>
+    seedAsPlatform(async () => {
+      /*
+       * `entityType` is not free text from the caller: the URL segment
+       * picks it, and the segment also picks which permission is
+       * checked. An unlisted one has no route at all, rather than being
+       * authorized by whatever the caller sent.
+       */
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/containers/${fixA.meterId}/notes`,
+        headers: headers(),
+        payload: { body: "Nope" },
+      });
+      expect(res.statusCode).toBe(404);
+    }), 120_000);
+
+  it("refuses an empty body at the route, before the service", () =>
+    seedAsPlatform(async () => {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/meters/${fixA.meterId}/notes`,
+        headers: headers(),
+        payload: { body: "" },
+      });
+      expect(res.statusCode).toBe(400);
+    }), 120_000);
 });

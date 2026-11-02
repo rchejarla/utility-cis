@@ -8,6 +8,7 @@ import { faEnvelope, faPhone } from "@fortawesome/pro-solid-svg-icons";
 import type { FieldDefinition } from "@utility-cis/shared";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
+import { NotesTab } from "@/components/ui/notes-tab";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { TypeBadge } from "@/components/ui/type-badge";
 import { DataTable } from "@/components/ui/data-table";
@@ -422,6 +423,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
           { key: "accounts", label: `Accounts (${accounts.length})` },
           { key: "premises", label: `Owned Premises (${ownedPremises.length})` },
           { key: "contacts", label: `Contacts (${contacts.length})` },
+          { key: "notes", label: "Notes" },
           { key: "attachments", label: "Attachments" },
         ]}
         activeTab={activeTab}
@@ -985,6 +987,8 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
           </div>
         )}
 
+
+        {activeTab === "notes" && <NotesTab subject="customers" entityId={id} />}
 
         {activeTab === "attachments" && (
           <AttachmentsTab entityType="Customer" entityId={id} showForm={showUpload} onShowFormChange={setShowUpload} />

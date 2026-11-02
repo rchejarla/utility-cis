@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { FieldDefinition } from "@utility-cis/shared";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
+import { NotesTab } from "@/components/ui/notes-tab";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { DataTable } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
@@ -388,6 +389,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
           { key: "contacts", label: `Contacts (${account.contacts?.length ?? 0})` },
           { key: "billing-addresses", label: `Billing Addresses (${account.billingAddresses?.length ?? 0})` },
           { key: "service-requests", label: "Service Requests" },
+          { key: "notes", label: "Notes" },
           { key: "attachments", label: "Attachments" },
           { key: "audit", label: "Audit" },
         ]}
@@ -858,6 +860,8 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
             }}
           />
         )}
+
+        {activeTab === "notes" && <NotesTab subject="accounts" entityId={id} />}
 
         {activeTab === "attachments" && (
           <AttachmentsTab entityType="Account" entityId={id} showForm={showUpload} onShowFormChange={setShowUpload} />

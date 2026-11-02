@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { FieldDefinition } from "@utility-cis/shared";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
+import { NotesTab } from "@/components/ui/notes-tab";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
 import { DataTable } from "@/components/ui/data-table";
@@ -333,6 +334,7 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
           { key: "meters", label: `Meters (${premise.meters?.length ?? 0})` },
           { key: "agreements", label: `Agreements (${premise.serviceAgreements?.length ?? 0})` },
           { key: "history", label: "History" },
+          { key: "notes", label: "Notes" },
           { key: "attachments", label: "Attachments" },
           { key: "audit", label: "Audit" },
         ]}
@@ -812,6 +814,8 @@ export default function PremiseDetailPage({ params }: { params: Promise<{ id: st
             })()}
           </div>
         )}
+
+        {activeTab === "notes" && <NotesTab subject="premises" entityId={id} />}
 
         {activeTab === "attachments" && (
           <AttachmentsTab entityType="Premise" entityId={id} showForm={showUpload} onShowFormChange={setShowUpload} />
