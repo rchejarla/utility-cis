@@ -15,3 +15,4 @@ import "./customer.js";
 import "./premise.js";
 import "./meter.js";
 import "./account.js";
+import "./service-agreement.js";
