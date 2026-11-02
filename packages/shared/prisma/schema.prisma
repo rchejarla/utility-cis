@@ -49,6 +49,7 @@ model Utility {
   accounts               Account[]
   attachments            Attachment[]
   auditLogs              AuditLog[]
+  notes                  Note[]
   billDocuments          BillDocument[]
   billMessages           BillMessage[]
   billSegmentLines       BillSegmentLine[]
@@ -2683,4 +2684,37 @@ model BillingRunItem {
   @@unique([billingRunId, accountId])
   @@index([billingRunId, status])
   @@map("billing_run_item")
+}
+
+/// A dated remark a staff member attaches to a record.
+///
+/// Polymorphic on (entityType, entityId) like `Attachment`, so one
+/// table serves every entity. **Append-only**: no update, no delete,
+/// and therefore no `updatedAt` — a note records that somebody observed
+/// something at a time, and an editable note records nothing in
+/// particular. A mistake is corrected by adding another note.
+///
+/// `authorName` is copied, not joined: a note outlives the staff member
+/// who wrote it, and "who said this" has to survive their row being
+/// deactivated or purged.
+///
+/// Writable in both operating modes. Spec 28's OVL-T-3 is what forced
+/// it — a mirrored record is read-only, and a read-only record with
+/// nowhere to note "the customer says this is wrong" just moves the
+/// note onto paper — but recording a conversation is not an overlay
+/// concern.
+model Note {
+  id          String   @id @default(uuid()) @db.Uuid
+  utilityId   String   @map("utility_id") @db.Uuid
+  utility     Utility  @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  entityType  String   @map("entity_type") @db.VarChar(100)
+  entityId    String   @map("entity_id") @db.Uuid
+  body        String   @db.Text
+  authorId    String   @map("author_id") @db.Uuid
+  authorName  String   @map("author_name") @db.VarChar(255)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([utilityId, entityType, entityId, createdAt(sort: Desc)], map: "note_subject_idx")
+  @@index([utilityId, authorId, createdAt(sort: Desc)], map: "note_author_idx")
+  @@map("note")
 }

@@ -12,6 +12,10 @@ export async function meterRoutes(app: FastifyInstance) {
   registerCrudRoutes(app, {
     basePath: "/api/v1/meters",
     module: "meters",
+    // Mirrored from a legacy CIS in overlay mode, so staff writes are
+    // refused there (spec 28, OVL-T-3). Reads and the overlay import
+    // are untouched.
+    mirroredFromLegacy: true,
     list: {
       querySchema: meterQuerySchema,
       service: (utilityId, query) => listMeters(utilityId, query as never),

@@ -36,6 +36,20 @@ type ListWithoutQuery = {
 export interface CrudRoutesConfig {
   basePath: string;
   module: string;
+  /**
+   * This entity is **mirrored** from a legacy CIS when the tenant is in
+   * overlay mode, so staff writes to it are refused there (spec 28,
+   * OVL-T-3). Reads are untouched — viewing the mirror is the point —
+   * and the overlay import is untouched too, because it writes through
+   * its own handler rather than these routes.
+   *
+   * Set it here rather than per verb: create, update and delete are all
+   * a staff member changing a record the legacy system owns. A
+   * hand-created row is the worst of the three, since it exists in no
+   * export and the two systems disagree from that moment with nothing
+   * to reconcile them.
+   */
+  mirroredFromLegacy?: boolean;
   list?: ListWithQuery | ListWithoutQuery;
   get?: (id: string, utilityId: string) => Promise<unknown>;
   create?: {
@@ -60,8 +74,12 @@ function hasQuerySchema(list: ListWithQuery | ListWithoutQuery): list is ListWit
 }
 
 export function registerCrudRoutes(app: FastifyInstance, cfg: CrudRoutesConfig): void {
-  const { basePath, module } = cfg;
+  const { basePath, module, mirroredFromLegacy } = cfg;
   const routeOpts = (permission: Permission) => ({ config: { module, permission } });
+  /** Reads stay open in overlay mode; writes do not. */
+  const writeOpts = (permission: Permission) => ({
+    config: { module, permission, refusedWhenMirrored: mirroredFromLegacy === true },
+  });
 
   if (cfg.list) {
     const list = cfg.list;
@@ -85,7 +103,7 @@ export function registerCrudRoutes(app: FastifyInstance, cfg: CrudRoutesConfig):
 
   if (cfg.create) {
     const create = cfg.create;
-    app.post(basePath, routeOpts("CREATE"), async (request, reply) => {
+    app.post(basePath, writeOpts("CREATE"), async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const data = create.bodySchema.parse(request.body);
       const result = await create.service({ utilityId, actorId, actorName }, data);
@@ -95,7 +113,7 @@ export function registerCrudRoutes(app: FastifyInstance, cfg: CrudRoutesConfig):
 
   if (cfg.update) {
     const update = cfg.update;
-    app.patch(`${basePath}/:id`, routeOpts("EDIT"), async (request, reply) => {
+    app.patch(`${basePath}/:id`, writeOpts("EDIT"), async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
       const data = update.bodySchema.parse(request.body);
@@ -106,7 +124,7 @@ export function registerCrudRoutes(app: FastifyInstance, cfg: CrudRoutesConfig):
 
   if (cfg.del) {
     const delFn = cfg.del;
-    app.delete(`${basePath}/:id`, routeOpts("DELETE"), async (request, reply) => {
+    app.delete(`${basePath}/:id`, writeOpts("DELETE"), async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
       await delFn(id, { utilityId, actorId, actorName });

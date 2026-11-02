@@ -114,7 +114,53 @@ tenants are its first users).
   escalating, sending.
 - **OVL-T-3 (Must).** Mirrored entities are written only by the overlay
   import. Staff may view them and add notes, not edit them, because the
-  next import would silently overwrite an edit.
+  next import would silently overwrite an edit. **Built 2026-11-02.**
+
+  **The urgency came from OVL-IN-5.** Before the import matched on a
+  legacy key, a staff edit survived — the import reported a duplicate
+  and did nothing. Since it upserts, the next cycle overwrites the edit
+  silently, leaving an audit row for a change nobody asked for and no
+  trace of what the CSR had corrected. So this stopped being tidiness
+  the day the upsert shipped.
+
+  Writes to `customer`, `premise`, `meter`, `account` and
+  `service_agreement` are refused in overlay mode with **409
+  `RECORD_MIRRORED_FROM_LEGACY`** — its own code, because the reason
+  differs from OVL-T-2's: that one says the legacy system does the
+  billing, this one says it owns *this record*. Reads are untouched,
+  because viewing the mirror is the product; and **the overlay import is
+  untouched without an exception being carved for it**, because it
+  writes through its own handler rather than these routes.
+
+  The sweep mattered more than the flag. The obvious CRUD endpoints are
+  three lines in `registerCrudRoutes` (`mirroredFromLegacy`), but the
+  mutating paths that are *not* CRUD are where a gate leaks: the
+  agreement lifecycle (`/activate`, `/close`, `/meters`,
+  `/meters/:id/remove`, `/meters/swap`), the workflows (`/move-in`,
+  `/move-out`, `/transfer`), and — found by grepping every Prisma write
+  to the five tables rather than reading the route files — **the
+  customer portal's own profile PATCH**, where a member of the public
+  edits a mirrored record. Thirteen routes in all.
+
+  That last one gets different words. A portal token carries a
+  `customerId`, so the refusal says "please contact the utility to
+  update them" rather than explaining a legacy CIS and offering a note,
+  neither of which a customer can act on. Whether the portal should be
+  offered to an overlay tenant at all is a product question, not a code
+  one: it would be answered by not enabling the portal modules.
+
+  **Notes are the outlet, and they are not an overlay feature.** A
+  read-only record with nowhere to write "the customer says this number
+  is wrong" just moves the note onto paper, so a `note` table came with
+  this — polymorphic on `(entity_type, entity_id)` like `attachment`,
+  append-only, carrying its author's name by copy so it outlives the
+  staff member who wrote it. It carries **no mode gate**: recording a
+  conversation is ordinary CIS work, and `meter.notes` — one note, no
+  author, no date, overwritten by the second — is the column it
+  replaces. Routes are `GET`/`POST /api/v1/<entity>/:id/notes`,
+  authorized by the host entity's module (`customers:VIEW` to read,
+  `customers:EDIT` to add) rather than a `notes` module nobody would
+  switch off separately.
 - **OVL-T-4 (Should).** Switching `OVERLAY` → `FULL` is the conversion:
   a platform action, audited, run after a final import. It re-enables
   the refused functions; it does not move data, because the data is

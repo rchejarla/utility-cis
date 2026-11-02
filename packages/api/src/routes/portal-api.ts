@@ -314,7 +314,14 @@ export async function portalApiRoutes(app: FastifyInstance) {
 
   app.patch(
     "/portal/api/profile",
-    { config: { module: "portal_profile", permission: "EDIT" } },
+    /*
+     * Refused in overlay mode for the same reason a CSR's edit is: the
+     * record is mirrored, so the next import overwrites whatever the
+     * customer changed and the edit was a lie. The middleware gives a
+     * portal token its own wording — a member of the public has no idea
+     * what a legacy CIS is.
+     */
+    { config: { module: "portal_profile", permission: "EDIT", refusedWhenMirrored: true } },
     async (request, reply) => {
       const customerId = requireCustomerId(request);
       const data = updateProfileSchema.parse(request.body);

@@ -23,7 +23,7 @@ export async function workflowRoutes(app: FastifyInstance) {
    */
   app.post(
     "/api/v1/service-agreements/:id/transfer",
-    { config: { module: "workflows", permission: "CREATE" } },
+    { config: { module: "workflows", permission: "CREATE" , refusedWhenMirrored: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -40,7 +40,7 @@ export async function workflowRoutes(app: FastifyInstance) {
    */
   app.post(
     "/api/v1/workflows/move-in",
-    { config: { module: "workflows", permission: "CREATE" } },
+    { config: { module: "workflows", permission: "CREATE" , refusedWhenMirrored: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const data = moveInSchema.parse(request.body);
@@ -55,7 +55,7 @@ export async function workflowRoutes(app: FastifyInstance) {
    */
   app.post(
     "/api/v1/workflows/move-out",
-    { config: { module: "workflows", permission: "CREATE" } },
+    { config: { module: "workflows", permission: "CREATE" , refusedWhenMirrored: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const data = moveOutSchema.parse(request.body);

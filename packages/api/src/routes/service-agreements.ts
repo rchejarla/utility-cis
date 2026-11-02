@@ -44,14 +44,14 @@ export async function serviceAgreementRoutes(app: FastifyInstance) {
     return reply.send(agreement);
   });
 
-  app.post("/api/v1/service-agreements", { config: { module: "agreements", permission: "CREATE" } }, async (request, reply) => {
+  app.post("/api/v1/service-agreements", { config: { module: "agreements", permission: "CREATE", refusedWhenMirrored: true } }, async (request, reply) => {
     const { utilityId, id: actorId, name: actorName } = request.user;
     const data = createServiceAgreementSchema.parse(request.body);
     const agreement = await createServiceAgreement(utilityId, actorId, actorName, data);
     return reply.status(201).send(agreement);
   });
 
-  app.patch("/api/v1/service-agreements/:id", { config: { module: "agreements", permission: "EDIT" } }, async (request, reply) => {
+  app.patch("/api/v1/service-agreements/:id", { config: { module: "agreements", permission: "EDIT", refusedWhenMirrored: true } }, async (request, reply) => {
     const { utilityId, id: actorId, name: actorName } = request.user;
     const { id } = idParamSchema.parse(request.params);
     const data = updateServiceAgreementSchema.parse(request.body);
@@ -65,7 +65,7 @@ export async function serviceAgreementRoutes(app: FastifyInstance) {
   // path (audit-emitting, validated against the transition table).
   app.post(
     "/api/v1/service-agreements/:id/activate",
-    { config: { module: "agreements", permission: "EDIT" } },
+    { config: { module: "agreements", permission: "EDIT" , refusedWhenMirrored: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -79,7 +79,7 @@ export async function serviceAgreementRoutes(app: FastifyInstance) {
   // the now-rejected lifecycle fields on PATCH.
   app.post(
     "/api/v1/service-agreements/:id/close",
-    { config: { module: "agreements", permission: "EDIT" } },
+    { config: { module: "agreements", permission: "EDIT" , refusedWhenMirrored: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -95,7 +95,7 @@ export async function serviceAgreementRoutes(app: FastifyInstance) {
   );
 
   // Add meter to agreement
-  app.post("/api/v1/service-agreements/:id/meters", { config: { module: "agreements", permission: "EDIT" } }, async (request, reply) => {
+  app.post("/api/v1/service-agreements/:id/meters", { config: { module: "agreements", permission: "EDIT", refusedWhenMirrored: true } }, async (request, reply) => {
     const { utilityId } = request.user;
     const { id } = idParamSchema.parse(request.params);
     const { meterId } = addMeterToAgreementSchema.parse(request.body);
@@ -108,7 +108,7 @@ export async function serviceAgreementRoutes(app: FastifyInstance) {
   // PATCH /:id/meters/:samId route which silently dropped audit rows.
   app.post(
     "/api/v1/service-agreements/:id/meters/:meterId/remove",
-    { config: { module: "agreements", permission: "EDIT" } },
+    { config: { module: "agreements", permission: "EDIT" , refusedWhenMirrored: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id, meterId } = meterIdParamSchema.parse(request.params);
@@ -127,7 +127,7 @@ export async function serviceAgreementRoutes(app: FastifyInstance) {
   // transaction with `added_date == removed_date == swapDate`.
   app.post(
     "/api/v1/service-agreements/:id/meters/swap",
-    { config: { module: "agreements", permission: "EDIT" } },
+    { config: { module: "agreements", permission: "EDIT" , refusedWhenMirrored: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
