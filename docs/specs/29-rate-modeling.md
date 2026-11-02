@@ -2,7 +2,7 @@
 
 **Module:** 29 — Rate Modeling (the rate engine as an independent offer)
 **Status:** proposed, 2026-11-02. Nothing in this spec is built.
-**Entities:** `ModelStudy`, `ModelSubject`, `ModelScenario`, `ModelResult` (all new)
+**Entities:** `ModelStudy`, `ModelSubject`, `ModelScenario`, `ModelResult`, `ModelStudyViewer` (all new)
 **Depends on:** the Rate Model v2 engine (built), module 22's import framework (built), spec 26 for electric demand and TOU (proposed, nothing built)
 
 ## The offer
@@ -23,6 +23,12 @@ that stalls every CIS sale.
 This is the same land-and-expand shape as the legacy CIS overlay
 (spec 28) and aimed at an overlapping market. The two should share
 everything they can — see **Relationship to spec 28**.
+
+And the introduction is built in: the studied utility logs in read-only
+to review its own study (§7), which puts its people inside the product,
+looking at their own rates, before anybody has pitched them a CIS. The
+overlay gets a utility's *data* into the product; this gets its
+*people* in, one step earlier.
 
 ## Why the architecture already fits
 
@@ -367,6 +373,74 @@ boundary everywhere in this codebase.
   the workflow the per-study pricing implies, and it is only possible
   if MOD-C-2 scopes tariffs to studies.
 
+## 7. The client's read-only view
+
+**Decided (Rao, 2026-11-02): the studied utility logs in, read-only, to
+see its own study — and that is how the product introduces itself.**
+
+This is the cheapest demo the product will ever have. A utility's
+finance director reviewing their own rate study is looking at their own
+rates, their own quantities and their own bills, inside the application
+we want them to buy. No sandbox, no sample data, no imagination
+required. It is the same land-and-expand reasoning as the overlay, one
+step earlier: the overlay gets a utility's data into the product, and
+this gets a utility's *people* into it.
+
+Which makes one thing a requirement rather than a nicety: **the
+read-only view is a shop window, so it has to look like the product.**
+A stripped-down viewer that reads as a report attachment wastes the
+only chance the offer has to be a demo.
+
+- **MOD-V-1 (Must).** A **Study Viewer** preset role: read a study, its
+  scenarios, its comparison and its traces. Nothing else — no tariff
+  editing, no subject import, no scenario runs, and no sight of any
+  other study.
+
+- **MOD-V-2 (Must).** **A viewer is scoped to studies, and the check
+  goes in the query.** The hazard is specific: a consultant's tenant
+  holds several clients' studies (§6), and granting a viewer
+  `studies:VIEW` would let one utility read another's rate study —
+  commercially the worst thing this product could do.
+
+  This is the customer portal's problem exactly, and gets the portal's
+  answer. Portal routes carry the ownership check in the query
+  (`requireCustomerId` plus `customerId` in the `where`) rather than
+  relying on RBAC, *because* a permission that says "may read studies"
+  cannot say "may read **this** study". A miss is a **404, not a 403**:
+  whether another utility's study exists is not this caller's to learn.
+
+- **MOD-V-3 (Must).** Access is a **join table**
+  (`ModelStudyViewer`: study, user), not a column on `cis_user`.
+
+  *Why not mirror `CisUser.customerId`, which is the precedent:* a
+  portal user belongs to exactly one customer for life, so a column
+  fits. A utility reviewing studies has several over time — this year's
+  and last year's — and several people, the finance director and the
+  city engineer. A column would mean a second login for the same person
+  to see the second study, which is the friction §6 rejected for
+  consultants and is no more acceptable here. One person, several
+  studies, one login.
+
+- **MOD-V-4 (Must).** A viewer sees **no customer identity**, which is
+  already true by construction: MOD-S-5 refuses a mapping onto a name,
+  email, phone or address, so a subject carries none. Worth stating
+  because it is the question a utility's counsel will ask before
+  issuing logins, and the honest answer is that the data was never
+  loaded.
+
+- **MOD-V-5 (Should).** The consultant controls when a study becomes
+  visible. A study in progress is not a deliverable, and a client
+  watching the numbers move while assumptions are still being argued is
+  worse for the consultant than no access at all. A published-to-client
+  flag, dated and audited, with the same reasoning as a rate schedule's
+  `publishedAt`: the dates decide when something applies, publishing
+  decides whether it may be seen.
+
+- **MOD-V-6 (Should).** The viewer's nav is the Modeling section with
+  the write items absent — the same mechanism as MOD-T-3, which gates
+  per item on module and permission, so a read-only role produces a
+  read-only menu without a second nav table.
+
 ## Relationship to spec 26 (electric demand and TOU)
 
 Rao noted on 2026-11-02 that **TOU and demand may be built before this
@@ -415,10 +489,12 @@ Same market, adjacent offers, and they should share:
    structural, with one consequence already taken: subject count is not
    a billing unit, so the runner can be sized for honesty rather than
    for metering, and a 144,000-subject study is an ordinary act.
-2. **How is a study delivered to the client?** The PDF is the artifact
-   (MOD-U-4), but whether the client ever logs in — to see the screens,
-   or not at all — decides whether a modelling tenant needs a read-only
-   guest role or none.
+2. **Does a client viewer ever become a buyer's account?** When a
+   utility converts — to an overlay pilot or a full tenant — the people
+   who reviewed the study already have logins in the *consultant's*
+   tenant. Whether those identities move, are re-created, or simply
+   lapse is unresolved, and it is the one place the land-and-expand path
+   touches identity rather than data.
 
 ## Suggested slices
 
@@ -429,6 +505,7 @@ Same market, adjacent offers, and they should share:
 | 3 | `POST /rate-preview` and the single-subject rater with its trace (MOD-P-*, MOD-U-2, MOD-U-3) | The demo, and the first thing worth selling |
 | 4 | `ModelScenario`, `ModelResult`, the runner, comparison and aggregates (MOD-R-*) | A rate study |
 | 5 | The PDF report through the bill PDF stack, assumptions, study copy, and the shared variance report with spec 28 §4 (MOD-U-4, MOD-R-5, MOD-C-3) | A council paper |
+| 6 | The client's read-only view: Study Viewer role, per-study access, publish-to-client (MOD-V-*) | The utility sees the product while reviewing its own rates |
 
 Slice 3 is the one to build first if the sequence is ever in doubt: it
 is the shortest path to something demonstrable, and it is the part the
