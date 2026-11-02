@@ -207,7 +207,9 @@ export function NotesTab({
             </div>
           </>
         ) : (
-          <div style={{ display: "flex", justifyContent: "flex-start" }}>
+          /* Top right, above the list — where an action on a panel
+             belongs, and where `AttachmentsTab` puts "+ Upload". */
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
             <button
               type="button"
               onClick={() => setComposing(true)}

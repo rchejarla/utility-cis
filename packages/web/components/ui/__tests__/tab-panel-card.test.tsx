@@ -144,6 +144,18 @@ describe("NotesTab sits on a card", () => {
     expect(ruled.length).toBeGreaterThan(0);
   });
 
+  it("puts Add note in the top right, above the list", async () => {
+    // An action on a panel belongs at its top right, which is where
+    // AttachmentsTab puts "+ Upload". Pinned because every visual
+    // property on this panel has needed a second pass.
+    get.mockResolvedValue([]);
+    await renderNotes();
+    await screen.findByText(/no notes/i);
+
+    const row = screen.getByRole("button", { name: /add note/i }).parentElement!;
+    expect(row).toHaveStyle({ justifyContent: "flex-end" });
+  });
+
   it("draws one around the empty state too", async () => {
     // Otherwise the card appears only once somebody adds a note, which
     // is the odd half of the same bug.
