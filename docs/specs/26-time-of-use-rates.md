@@ -676,20 +676,101 @@ genuinely the gate to *residential* electric, and nothing more.
 Demand charges (peak demand, on-peak demand, ratchets) follow slice 2 as
 their own spec.
 
-## Open questions
+## Open questions (settled 2026-11-02)
 
-1. **Which tariff first?** The first golden test needs a real TOU tariff
-   with prices. Whose — a prospect's, or a public municipal electric
-   schedule?
-2. **Register or interval first?** Slice 1 assumes the target utilities
-   have TOU-register meters. If the first customer is AMI-only, slices 1
-   and 2 swap their data halves.
-3. **Interval formats.** Which MDM systems and file formats do the target
-   utilities use (Itron, Sensus, Landis+Gyr, Honeywell/Elster)? That
-   decides TOU-INT-2's second format and TOU-INT-3's connector.
-4. **Tiers within TOU.** Total-first or per-period (TOU-ENG-5) — the
-   default should match the first tariff.
-5. **Mid-period rate change.** Confirm the current rule for non-TOU
-   schedules before fixing TOU-ENG-7.
-6. **Missing-data default.** Exception (this spec) versus estimation —
-   some utilities' tariffs mandate an estimation method.
+No prospect's tariff or meter population was available to answer these,
+and waiting would have stalled the build. **Rao's instruction was to
+pick samples and build generically**, so each is settled below as a
+build decision — by me, not by a customer — with what would reopen it.
+Treat every one as provisional against the first real utility.
+
+The general rule the answers follow: where a question is about a
+*vocabulary* the model takes it from the tenant, and where it is about
+*behaviour* the model declares the choice rather than hard-coding one.
+Three places already work that way — season codes, day-type codes and
+peak codes are all open sets, so nothing in code matches a literal
+value.
+
+1. **Which tariff first? — SMUD residential Time-of-Day (5–8 p.m.).**
+   Sacramento Municipal Utility District, a publicly owned utility,
+   which is the market this system targets, and it publishes the whole
+   calendar on one page: seasons, windows, the holiday list and the
+   observance rule.
+
+   Chosen because it exercises more of the model than a two-period
+   tariff would: a season that **wraps the year end** (non-summer is
+   1 Oct – 31 May), **three periods in summer and two in non-summer** so
+   the calendar's shape is not constant across seasons, a period
+   appearing **twice in one day** (summer mid-peak brackets the peak),
+   **eleven holidays** mixing fixed dates with nth-weekday rules
+   including a last-Monday, and an **observance rule that is not the one
+   a textbook assumes** — a fixed-date holiday falling on a weekend is
+   *not* shifted to an adjacent weekday, so all eleven rules are
+   `observance: "NONE"`.
+
+   Fixture and golden test: `__tests__/tariff-golden/_smud-time-of-day-fixtures.ts`
+   and `smud-time-of-day-calendar.test.ts`. The model accepted the
+   tariff unchanged; the test was then mutation-checked — a wrong
+   Thanksgiving week, a season that stops a day short of the wrap, and a
+   span boundary a quarter-hour out each failed exactly the assertion
+   meant to catch it.
+
+   **Deliberately omitted:** SMUD's monthly System Infrastructure Fixed
+   Charge. Sources disagree on which step is current, and a flat monthly
+   charge exercises nothing the Bozeman and NWE golden tests already
+   cover — so the fixture carries the energy charges only, which are the
+   part a TOU calendar decides. A tariff should not be cited for a
+   number that could not be confirmed.
+
+   *Reopens when* a prospect's schedule arrives. It becomes a second
+   fixture file, never an edit to this one.
+
+2. **Register or interval first? — registers, as slice 1 says, and the
+   choice costs nothing.** The storage decision above already makes both
+   meter kinds produce one shape: a TOU bucket is a `meter_read` row
+   with a nullable `tou_period_id`, and an interval is a row in
+   `meter_read_interval` that aggregates into the same shape. So the
+   engine does not branch on the source, TOU-ENG-2 collapses, and slice
+   2 adds a data source rather than a second code path. There is no
+   longer anything for slices 1 and 2 to swap.
+
+   *Reopens* only if a utility needs interval data before any register
+   meter exists, which changes the order of work and not the design.
+
+3. **Interval formats — deferred to slice 2, and generic by
+   construction.** The import infrastructure (spec 22) already takes a
+   declared column mapping per batch rather than a vendor-specific
+   parser, so a new MDM export is configuration until one proves
+   otherwise. The first format to need real code will be whichever one
+   is not a delimited file with a timestamp and a value per row.
+
+   *Reopens* when a utility names its MDM system.
+
+4. **Tiers within TOU — declared on the component, not assumed.**
+   SMUD's TOU rate has no tiers, so the golden tariff does not settle
+   it, and both behaviours are real: a tiered block applied to the
+   period's own usage, or to the month's total with the period deciding
+   only the price. TOU-ENG-5 names both as required, so this is where
+   building generically earns its keep — the pricing grammar gains one
+   enum, which is not an abstraction layer. **Default total-first**,
+   because that is what a tariff means when it is silent.
+
+   *Built with TOU-ENG-5, not before.*
+
+5. **Mid-period rate change — mine to answer, and not yet answered.**
+   `load-base.ts` loads *every* rate-schedule assignment overlapping the
+   period and does not pick one, and spec 09 documents proration only
+   for an agreement starting or ending mid-cycle, not for a schedule
+   change. So "what happens today" is still unknown, and TOU-ENG-7
+   cannot be fixed against an unknown. This is a code investigation
+   rather than a customer question, and its answer belongs in spec 07 or
+   09 once found.
+
+6. **Missing-data default — an exception, as this spec already says.**
+   Estimation is deferred until a tariff mandates a method, because the
+   method is the part that matters and inventing one would produce
+   confident wrong numbers. An exception stops the bill and names the
+   gap, which is the behaviour a utility can act on.
+
+   *Reopens* when a tariff specifies an estimation method, which is then
+   configuration naming that method — not a general estimation engine.
