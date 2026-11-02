@@ -3,6 +3,11 @@ import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { prisma } from "../../lib/prisma.js";
 import { registerImportKind } from "../registry.js";
 import { identityConflict, legacyKeyField, legacyKeyOf } from "../legacy-key.js";
+import {
+  customFieldDefs,
+  extractCustomFields,
+  pickCustomCells,
+} from "../custom-fields.js";
 import type { ImportKindHandler } from "../types.js";
 
 /**
@@ -41,6 +46,13 @@ type CreditRating = (typeof CREDIT_RATINGS)[number];
 // against the account_type_def reference table at processRow time.
 
 interface AccountRow {
+  /**
+   * The row's `custom:`-prefixed cells, untouched. `parseRow` is
+   * synchronous and tenant-blind, so the tenant's own schema is
+   * applied in `processRow` against definitions `prepareBatch`
+   * loaded.
+   */
+  customCells: Record<string, string>;
   /** The account's id in the legacy CIS, when the file carries it. */
   legacyKey?: string;
   accountNumber: string;
@@ -58,6 +70,8 @@ interface AccountRow {
 }
 
 interface BatchData {
+  /** The tenant's declared custom fields for this entity. */
+  customDefs: Awaited<ReturnType<typeof customFieldDefs>>;
   /** Lower-cased email → customer id, populated once per batch. */
   customerByEmail: Map<string, string>;
   /** Set of valid (active) account type codes for this tenant. */
@@ -86,6 +100,7 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
   module: "accounts",
   permission: "CREATE",
   wizardPath: "/accounts/import",
+  customFieldEntity: "account",
 
   canonicalFields: [
     legacyKeyField,
@@ -265,6 +280,7 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
     return {
       ok: true,
       row: {
+        customCells: pickCustomCells(raw),
         legacyKey: ((raw.legacyKey ?? "").trim()) || undefined,
         accountNumber,
         accountType,
@@ -335,7 +351,17 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
       }
     }
 
-    return { customerByEmail, validAccountTypes, cycleByCode, existingByLegacyKey };
+    // One read for the batch, not one per row: `validateCustomFields`
+    // would query the schema for every line of the file.
+    const customDefs = await customFieldDefs(ctx.utilityId, "account");
+
+    return {
+      customerByEmail,
+      validAccountTypes,
+      cycleByCode,
+      existingByLegacyKey,
+      customDefs,
+    };
   },
 
   async processRow(ctx, row, batch) {
@@ -386,6 +412,11 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
      * the balance — the column is a cache of the entries, so it is left
      * to the ledger and never written here.
      */
+    const custom = extractCustomFields(row.customCells, batch.customDefs);
+    if (!custom.ok) {
+      return { ok: false, code: custom.code, message: custom.message };
+    }
+
     const legacyKey = legacyKeyOf(row);
     const existing = legacyKey ? batch.existingByLegacyKey.get(legacyKey) : undefined;
     if (existing) {
@@ -406,6 +437,7 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
       const updated = await ctx.tx.account.update({
         where: { id: existing.id },
         data: {
+          customFields: custom.values as object,
           accountType: row.accountType,
           status: row.status,
           billingCycleId,
@@ -436,6 +468,7 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
     try {
       const created = await ctx.tx.account.create({
         data: {
+          customFields: custom.values as object,
           utilityId: ctx.utilityId,
           legacyKey: legacyKey ?? null,
           accountNumber: row.accountNumber,

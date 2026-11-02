@@ -362,3 +362,109 @@ describe("POST /api/v1/imports — premise custom fields", () => {
       expect(JSON.parse(res.body).error.code).toBe("INVALID_MAPPING");
     }), 120_000);
 });
+
+describe("the other entities carry them too", () => {
+  /*
+   * Premise was wired first because stormwater forced it — it is priced
+   * from `premise:attr:eru_count`. The other four stayed blind for a
+   * day, and nothing failed, which is the point: a handler that drops
+   * the tenant's own facts looks exactly like one that does not.
+   *
+   * Meter stands in for the four here. What it proves is the wiring
+   * shared by all of them — definitions loaded once per batch, cells
+   * carried through `parseRow`, validated in `processRow`, written on
+   * the row — and `registry.test.ts` pins that each of the five
+   * declares the entity at all.
+   */
+  it("stores a meter's declared facts, validated against its own schema", () =>
+    seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      await prisma.customFieldSchema.create({
+        data: {
+          utilityId: TENANT_A,
+          entityType: "meter",
+          fields: [
+            {
+              key: "last_tested_on",
+              label: "Last tested",
+              type: "date",
+              required: false,
+              searchable: false,
+              order: 1,
+              deprecated: false,
+            },
+            {
+              key: "remote_read_capable",
+              label: "Remote read capable",
+              type: "boolean",
+              required: false,
+              searchable: false,
+              order: 2,
+              deprecated: false,
+            },
+          ],
+        },
+      });
+      await prisma.utilityModule.create({
+        data: { utilityId: TENANT_A, moduleKey: "meters" },
+      });
+      const rbac = await import("../../services/rbac.service.js");
+      await rbac.invalidateTenantModulesCache(TENANT_A);
+
+      const premise = await prisma.premise.findUniqueOrThrow({
+        where: { id: fixA.premiseId },
+        select: { addressLine1: true, zip: true },
+      });
+      const commodity = await prisma.commodity.findUniqueOrThrow({
+        where: { id: fixA.commodityId },
+        select: { code: true },
+      });
+
+      const header = `meter_number,premise_address,premise_zip,commodity_code,uom_code,meter_type,install_date,tested,remote
+`;
+      const mapping = {
+        meter_number: "meterNumber",
+        premise_address: "premiseAddress",
+        premise_zip: "premiseZip",
+        commodity_code: "commodityCode",
+        uom_code: "uomCode",
+        meter_type: "meterType",
+        install_date: "installDate",
+        tested: "custom:last_tested_on",
+        remote: "custom:remote_read_capable",
+      };
+      const csv =
+        header +
+        `CF-MTR-1,${premise.addressLine1},${premise.zip},${commodity.code},GAL,MANUAL,2026-01-01,2025-06-15,false
+`;
+
+      const { body, contentType } = buildMultipart([
+        { name: "kind", value: "meter" },
+        { name: "source", value: "MANUAL_UPLOAD" },
+        { name: "fileName", value: "meters.csv" },
+        { name: "mapping", value: JSON.stringify(mapping) },
+        { name: "file", filename: "meters.csv", contentType: "text/csv", body: csv },
+      ]);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/imports",
+        headers: { ...headers(), "content-type": contentType },
+        payload: body,
+      });
+
+      const result = JSON.parse(res.body);
+      expect(result.errors).toEqual([]);
+      expect(result.importedCount).toBe(1);
+
+      const meter = await prisma.meter.findFirstOrThrow({
+        where: { utilityId: TENANT_A, meterNumber: "CF-MTR-1" },
+      });
+      // "false" reads as false, which a coercing validator would not:
+      // `z.coerce.boolean()` is `Boolean(value)` and every non-empty
+      // string is truthy.
+      expect(meter.customFields).toEqual({
+        last_tested_on: "2025-06-15",
+        remote_read_capable: false,
+      });
+    }), 120_000);
+});

@@ -366,7 +366,11 @@ The column, the partial unique indexes, why a dedicated column rather than the b
 
 ### Tenant custom fields as columns *(shipped 2026-11-01)*
 
-A kind whose entity carries custom fields declares `customFieldEntity` on its handler, and the tenant's own declared fields are appended to that kind's canonical fields **per request**, named `custom:<key>`. The premise handler is the first; customer, account, meter and service agreement can opt in with one line each.
+A kind whose entity carries custom fields declares `customFieldEntity` on its handler, and the tenant's own declared fields are appended to that kind's canonical fields **per request**, named `custom:<key>`. **All five entities that have a `custom_fields` column now do**: customer, premise, meter, account and service agreement. `meter_read` deliberately does not — a reading has no custom fields, and `CUSTOM_FIELD_ENTITY_TYPES` is where that is decided.
+
+Premise was wired first because stormwater forced it, and the other four stayed blind for a day afterwards while nothing failed — which is the hazard exactly: a handler that drops the tenant's own facts looks identical to one that does not. `registry.test.ts` now asserts that every kind whose entity can carry custom fields declares it, and that the one that cannot does not.
+
+Both write paths carry them. A row matched by legacy key updates its `custom_fields` as well as its core columns, since the mirror is only useful if the tenant's own facts follow the correction.
 
 They cannot be declared on the handler itself: `custom_field_schema` holds one row per (utility, entity type), while the registry is static and shared by every tenant. So the list is assembled by `imports/custom-fields.ts` and used in **two** places that must agree — `GET /imports/kinds/:kind/fields`, which the wizard renders from, and `validateMapping` inside `createImport`. Validating the submit against the static list would refuse, as `INVALID_MAPPING`, every custom column the wizard had just offered.
 

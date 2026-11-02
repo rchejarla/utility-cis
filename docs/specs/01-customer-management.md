@@ -135,6 +135,8 @@ All endpoints are live. Customer CRUD is at top-level routes; Contact and Billin
 
 ## UI Pages
 
+**Bulk import carries the tenant's custom fields (2026-11-02).** The handler maps its core columns plus every custom field the tenant has declared for this entity, offered as `custom:<key>` and validated against the tenant's own schema — on create and on a legacy-key update alike. Mechanics, including why a CSV's booleans cannot go through `z.coerce.boolean()`, are in spec 22 under "Tenant custom fields as columns".
+
 **Notes tab (2026-11-02).** A dated, attributed remark a staff member attaches to this record — `GET`/`POST /api/v1/<entity>/:id/notes`, append-only, so the panel offers no edit and no delete. Present in both operating modes; spec 28's OVL-T-3 forced it, because a record that is read-only in overlay mode needs somewhere to write what a customer said, but recording a conversation is ordinary CIS work. It replaces the pattern `meter.notes` represents: one note, no author, no date, overwritten by the second.
 
 | Page | Path | Features |

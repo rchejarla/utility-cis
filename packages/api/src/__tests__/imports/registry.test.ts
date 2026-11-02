@@ -58,6 +58,36 @@ describe("the import kind registry", () => {
     expect(new Set(paths).size).toBe(paths.length);
   });
 
+  it("declares custom fields for every kind whose entity can carry them", () => {
+    /*
+     * `CUSTOM_FIELD_ENTITY_TYPES` is the set of entities with a
+     * `custom_fields` column. A handler for one of them that forgets
+     * `customFieldEntity` silently drops the tenant's own facts — which
+     * is exactly what happened for months: premise was wired only when
+     * stormwater forced it, because stormwater is priced from
+     * `premise:attr:eru_count`, and the other four stayed blind for a
+     * day after that. Nothing would have failed.
+     *
+     * `meter_read` is deliberately absent: a reading has no custom
+     * fields, and the entity type list is where that is decided.
+     */
+    const CARRIES_CUSTOM_FIELDS: Record<string, string> = {
+      customer: "customer",
+      premise: "premise",
+      meter: "meter",
+      account: "account",
+      service_agreement: "service_agreement",
+    };
+    for (const kind of listKinds()) {
+      const expected = CARRIES_CUSTOM_FIELDS[kind.kind];
+      if (expected) {
+        expect(kind.customFieldEntity, `${kind.kind} must declare it`).toBe(expected);
+      } else {
+        expect(kind.customFieldEntity, `${kind.kind} must not`).toBeUndefined();
+      }
+    }
+  });
+
   it("names a label and a permission for each, which the menu gates on", () => {
     for (const kind of listKinds()) {
       expect(kind.label).toBeTruthy();
