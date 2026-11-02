@@ -61,6 +61,7 @@ const handler: ImportKindHandler<PremiseRow, BatchData> = {
   label: "Premises",
   module: "premises",
   permission: "CREATE",
+  wizardPath: "/premises/import",
 
   canonicalFields: [
     {

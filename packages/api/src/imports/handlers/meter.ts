@@ -70,6 +70,7 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
   label: "Meters",
   module: "meters",
   permission: "CREATE",
+  wizardPath: "/meters/import",
 
   canonicalFields: [
     {

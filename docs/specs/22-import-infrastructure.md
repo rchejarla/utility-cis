@@ -513,6 +513,14 @@ Cross-kind history table:
 
 Filters: kind, status, date range, actor. Click row → detail page.
 
+**Starting an import, from here (shipped 2026-11-01).** A **New import** menu in the header, built from `GET /imports/kinds` — one entry per registered kind, each linking to the `wizardPath` the handler itself declares.
+
+That field is **required on `ImportKindHandlerMeta`**, and the reason is the bug it replaces. This page is where the sidebar sends you and it listed history only: the one affordance was a 12px muted footnote under the table reading "Start a new import from the entity-specific page (e.g. /meter-reads/import)" — naming one kind of six and leaving the rest as URLs you had to know. Adding a kind is one handler file and one line in `handlers/index.ts`, while the wizard route is a page somewhere else entirely, so nothing connected the two: a kind could serve its fields, generate its template, accept a POST and still be unreachable. Declaring the route in the handler puts it in the one place that cannot be skipped without a type error, and `registry.test.ts` additionally pins that every kind's path is distinct and shaped `/<entity>/import`.
+
+It is a client route named in a server contract, which is the narrower of two evils — the alternative is a kind → path map in the web app, which is exactly the thing that gets forgotten. `module` and `permission` sit beside it and exist to drive the client too.
+
+**The empty state carries the import as well.** `EntityListPage` suppresses its entire header action group while the fresh-empty CTA is showing, and that CTA took a single action, so a tenant with no rows was offered "Add Customer" and nothing else — the import was invisible at the one moment somebody has a file of a thousand customers and no intention of typing them in. `ListEmptyCta` now takes a `secondaryAction`, passed automatically wherever `importHref` is set, and by the premises page directly since it renders its own header. A new utility's first interaction with this product is a migration, which makes the empty state the most important place for a bulk load to appear rather than a place it can be left out of.
+
 ### `/imports/:id` (detail page)
 
 Header: status, source, file name, kind, who/when, total rows, counts.

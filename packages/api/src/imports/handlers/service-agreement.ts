@@ -105,6 +105,7 @@ const handler: ImportKindHandler<ServiceAgreementRow, BatchData> = {
   label: "Service agreements",
   module: "agreements",
   permission: "CREATE",
+  wizardPath: "/service-agreements/import",
 
   canonicalFields: [
     {

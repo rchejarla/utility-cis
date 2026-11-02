@@ -58,6 +58,7 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
   label: "Meter reads",
   module: "meter_reads",
   permission: "CREATE",
+  wizardPath: "/meter-reads/import",
 
   canonicalFields: [
     {

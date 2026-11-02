@@ -47,6 +47,7 @@ export function listKinds(): Array<{
   label: string;
   module: string;
   permission: "CREATE" | "EDIT";
+  wizardPath: string;
   canonicalFields: AnyHandler["canonicalFields"];
   templateRows: AnyHandler["templateRows"];
 }> {
@@ -55,6 +56,7 @@ export function listKinds(): Array<{
     label: h.label,
     module: h.module,
     permission: h.permission,
+    wizardPath: h.wizardPath,
     canonicalFields: h.canonicalFields,
     templateRows: h.templateRows,
   }));

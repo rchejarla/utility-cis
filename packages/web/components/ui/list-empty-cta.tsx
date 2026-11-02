@@ -30,6 +30,22 @@ interface ListEmptyCtaProps {
     label: string;
     href: string;
   };
+  /**
+   * Optional second action, rendered quietly beside the primary one.
+   *
+   * Exists for the import: `EntityListPage` suppresses its whole header
+   * action group while this block is showing, so before this a fresh
+   * tenant was offered "Add Customer" and nothing else — and the import
+   * was invisible at the one moment somebody has a file of a thousand
+   * customers and no intention of typing them in. A new utility's first
+   * interaction with this product is a migration, which makes the empty
+   * state the most important place for a bulk load to appear, not a
+   * place it can be left out of.
+   */
+  secondaryAction?: {
+    label: string;
+    href: string;
+  };
   /** Optional icon override. Defaults to a muted inbox. */
   icon?: IconDefinition;
 }
@@ -46,6 +62,7 @@ export function ListEmptyCta({
   headline,
   description,
   action,
+  secondaryAction,
   icon,
 }: ListEmptyCtaProps) {
   return (
@@ -103,25 +120,47 @@ export function ListEmptyCta({
           {description}
         </p>
       )}
-      {action && (
-        <Link
-          href={action.href}
-          style={{
-            marginTop: 6,
-            display: "inline-flex",
-            alignItems: "center",
-            padding: "9px 18px",
-            fontSize: 13,
-            fontWeight: 600,
-            background: "var(--accent-primary)",
-            color: "#fff",
-            border: "none",
-            borderRadius: "var(--radius)",
-            textDecoration: "none",
-          }}
-        >
-          {action.label}
-        </Link>
+      {(action || secondaryAction) && (
+        <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 10 }}>
+          {action && (
+            <Link
+              href={action.href}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                padding: "9px 18px",
+                fontSize: 13,
+                fontWeight: 600,
+                background: "var(--accent-primary)",
+                color: "#fff",
+                border: "none",
+                borderRadius: "var(--radius)",
+                textDecoration: "none",
+              }}
+            >
+              {action.label}
+            </Link>
+          )}
+          {secondaryAction && (
+            <Link
+              href={secondaryAction.href}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                padding: "9px 18px",
+                fontSize: 13,
+                fontWeight: 600,
+                background: "transparent",
+                color: "var(--accent-primary)",
+                border: "1px solid var(--accent-primary)",
+                borderRadius: "var(--radius)",
+                textDecoration: "none",
+              }}
+            >
+              {secondaryAction.label}
+            </Link>
+          )}
+        </div>
       )}
     </div>
   );

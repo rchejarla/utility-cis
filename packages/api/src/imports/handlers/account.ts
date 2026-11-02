@@ -77,6 +77,7 @@ const handler: ImportKindHandler<AccountRow, BatchData> = {
   label: "Accounts",
   module: "accounts",
   permission: "CREATE",
+  wizardPath: "/accounts/import",
 
   canonicalFields: [
     {
