@@ -120,7 +120,17 @@ export function NotesTab({
           style={{
             width: "100%",
             padding: "10px 12px",
-            background: "var(--bg-elevated)",
+            /*
+             * `--bg-deep`, not `--bg-elevated`. An input inside a card
+             * is a recessed well, and the tokens are ordered: deep
+             * (#06080d) is darker than card (#111722), elevated
+             * (#171f2e) is lighter. Filling it with the lighter one
+             * made the textarea read as a raised panel sitting on the
+             * card — a second card, which is exactly what it looked
+             * like. In light mode it was worse: a blue box on white.
+             * `attachments-tab.tsx`'s `inputStyle` is the convention.
+             */
+            background: "var(--bg-deep)",
             border: "1px solid var(--border)",
             borderRadius: "var(--radius)",
             color: "var(--text-primary)",

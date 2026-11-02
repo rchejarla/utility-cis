@@ -87,6 +87,23 @@ describe("NotesTab sits on a card", () => {
     expect(carded).toHaveLength(1);
   });
 
+  it("recesses the compose box instead of raising it", async () => {
+    /*
+     * The real cause of "two cards". The background tokens are ordered
+     * — deep (#06080d) < card (#111722) < elevated (#171f2e) — so
+     * filling an input with `--bg-elevated` makes it *lighter* than the
+     * card it sits on, and it reads as a raised panel. In light mode it
+     * was a blue box on white. An input inside a card is a well, which
+     * is what `attachments-tab.tsx`'s `inputStyle` uses.
+     */
+    get.mockResolvedValue([]);
+    await renderNotes();
+    await screen.findByText(/no notes/i);
+
+    const box = screen.getByRole("textbox");
+    expect(box).toHaveStyle({ background: "var(--bg-deep)" });
+  });
+
   it("draws one around the empty state too", async () => {
     // Otherwise the card appears only once somebody adds a note, which
     // is the odd half of the same bug.
