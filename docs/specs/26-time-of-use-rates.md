@@ -164,6 +164,69 @@ Two ways to know when energy was used. Both are required, because the
 utilities this targets have both kinds of meter, and the first is far
 cheaper to support.
 
+### How usage is stored (decided 2026-11-02)
+
+Settled before slice 1, because it decides how much of the engine slice
+1 has to build. **No arrays and no jsonb anywhere** — every quantity is
+a row.
+
+**A TOU bucket is a `meter_read` row.** `meter_read` gains a nullable
+`tou_period_id` beside `registerId`, and several rows may describe one
+period — which is not new, since a multi-register meter already
+produces one row per register. For a register meter the period is
+derived from the register's mapping (TOU-REG-1), so **a register-based
+TOU meter needs no schema change at all: its buckets are already rows.**
+For an interval meter the roll-up writes them directly.
+
+*Why not a child table.* `meter_read` already carries `billedAt`,
+`isFrozen`, `correctsReadId`, `exceptionCode` and `importBatchId`. A
+`meter_read_tou` table would mean teaching freezing, billing,
+corrections, exceptions and retention about a second table — five
+behaviours re-implemented to hold four numbers. Reusing the row
+inherits all of them.
+
+**`reading` and `priorReading` become nullable.** A bucket rolled up
+from intervals has consumption with no dial behind it, and a per-TOU-
+period dial value does not exist even in principle. The model reads as
+"a read row records consumption for a period; for a dial meter it also
+records the dial values". Every existing reader sees dial-meter rows
+where both are present, so the change is smaller than it looks.
+
+*Rejected: `priorReading = 0, reading = consumption`.* It satisfies the
+constraint and is a lie in the shape of data — the kind that surfaces
+two years later in a dispute.
+
+**Intervals are one row per interval**, in `meter_read_interval`, with
+TimescaleDB's native compression policy rather than a value we pack
+ourselves.
+
+*Why not pack them.* A compressed value cannot be appended to, so a
+row covering a month must be decompressed, extended and recompressed
+on each of ~30 nightly deliveries — 96 + 192 + … + 2,880 ≈ 44,600
+values processed to store 2,880, with two overlapping imports silently
+losing a night (both read the same prefix, both write back their own).
+Per-day rows avoid the amplification, but packing at any grain costs
+three things worth more than the bytes: per-interval quality flags,
+which TOU-GAP-1 and "a bill containing an estimate says so" both read;
+plain SQL for "which services have gaps this period"; and correctness,
+since a hand-written codec is one more place to be silently off by one
+interval in a spec that already worries about exactly that. Timescale's
+compression already packs columns into arrays per chunk, so the
+storage win arrives without a codec.
+
+**The consequence that matters most.** Both meter types now produce the
+same thing — per-TOU-period quantities as rows — so the engine never
+learns which kind it was. TOU-ENG-2's "either TOU register quantities
+or the interval series" collapses to "per-TOU-period quantities", and
+a whole branch of slice 1's engine work stops needing to exist.
+Reconciliation (TOU-REG-1, TOU-INT-5) becomes one rule for both:
+the bucket rows' consumption sums to the total register's.
+
+Volume, for the record: four buckets per read per month is ~48 rows per
+meter per year, ~576,000 a year at 12,000 meters — against ~420 million
+raw intervals from the same meters. Compression is therefore entirely a
+`meter_read_interval` question.
+
 ### 3a. TOU registers (meters that split the total themselves)
 
 - **TOU-REG-1 (Must).** A `MeterRegister` can be mapped to a TOU period
@@ -179,11 +242,18 @@ cheaper to support.
 
 ### 3b. Interval data
 
-- **TOU-INT-1 (Must).** Interval consumption is stored per meter (and
-  register) as a series: interval start (UTC), length (5, 15, 30 or 60
-  minutes), quantity, unit, and a quality flag (`actual`, `estimated`,
-  `missing`, `edited`). A TimescaleDB hypertable with compression, under
-  RLS with `FORCE`, scoped by `utility_id` like every tenant table.
+- **TOU-INT-1 (Must).** Interval consumption is stored in
+  **`meter_read_interval`**, one row per interval per meter (and
+  register): interval start (UTC), length (5, 15, 30 or 60 minutes),
+  quantity, unit, and a quality flag (`actual`, `estimated`, `missing`,
+  `edited`). A TimescaleDB hypertable with a **native compression
+  policy** — no packed arrays, for the reasons under *How usage is stored* — under RLS with
+  `FORCE`, scoped by `utility_id` like every tenant table.
+
+  Compression has no precedent in this codebase: no migration calls
+  `add_compression_policy` and `meter_read` is uncompressed. This is
+  the first, and the policy's threshold should sit outside the rebill
+  window so a correction never has to decompress a chunk.
 - **TOU-INT-2 (Must).** Import by file, through the existing import
   infrastructure ([22](22-import-infrastructure.md)): CSV (meter, start,
   length, quantity, quality) and Green Button Connect / ESPI XML. An
@@ -247,9 +317,17 @@ cheaper to support.
   overlaps every TOU window. Remove `tou_window` from the predicate
   grammar after confirming no saved schedule references it.
 - **TOU-ENG-2 (Must).** The engine stays a pure function. Loaders supply
-  either TOU register quantities or the interval series, plus the
-  resolved calendar version(s) and holiday dates for the period. The
-  engine does the bucketing; it never queries the database.
+  **per-TOU-period quantities** plus the resolved calendar version(s)
+  and holiday dates for the period. It never queries the database.
+
+  *Simplified 2026-11-02.* This used to say "either TOU register
+  quantities or the interval series", and the engine would bucket the
+  series itself. Storing both meter types' output as `meter_read` rows
+  with a `tou_period_id` (see *How usage is stored*) means the engine
+  receives one shape and never learns which kind of meter produced it.
+  The bucketing moves to the roll-up, which happens once per period
+  rather than on every rating pass, and slice 1 loses a branch it would
+  otherwise have had to build and test twice.
 
   *Corrected 2026-11-02:* this requirement previously said the
   `intervals` field was one `meter:reads` "already declares". It does
