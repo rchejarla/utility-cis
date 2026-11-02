@@ -41,6 +41,7 @@
 import { logger } from "../lib/logger.js";
 import { schedulingAlertGauge, schedulingAlertSecondsGauge } from "../lib/telemetry.js";
 import { getQueueHealth } from "./queue-health.service.js";
+import { runAsPlatform } from "../lib/tenant-context.js";
 import { getSchedulerReport } from "./scheduler-view.service.js";
 import { getSchedulingAlerts, type SchedulingAlert } from "./scheduling-alerts.js";
 
@@ -95,8 +96,30 @@ export function publishSchedulingAlerts(alerts: readonly SchedulingAlert[]): voi
   }
 }
 
-/** Read the cluster and publish. Tolerant: a bad tick costs one tick. */
+/**
+ * Read the cluster and publish. Tolerant: a bad tick costs one tick.
+ *
+ * **Under the platform authority, because this reads across tenants.**
+ * `getQueueHealth` resolves each job's tenant name through
+ * `utilityNames`, a read of the policied `utility` table; unscoped, the
+ * policy compares `current_setting('app.current_utility_id')::uuid`
+ * against `''` and Postgres rejects it as 22P02. Its own try/catch then
+ * turned that into `logger.warn("queue health check failed")` and
+ * returned `reachable: false`, which makes this tick publish nothing on
+ * purpose — so the alert gauges were empty from the day they shipped,
+ * failing every 60 seconds at warn level in a process nobody watches.
+ *
+ * No unit test could see it: they mock Prisma, and a mock has no
+ * row-level security. It surfaced in the worker's log while smoke
+ * testing the async import path against the real stack. The platform
+ * route was never affected — it already runs as the platform actor,
+ * which is why the console's queue page looked right throughout.
+ */
 export async function refreshSchedulingMetrics(now: Date = new Date()): Promise<void> {
+  return runAsPlatform(() => refreshUnscoped(now));
+}
+
+async function refreshUnscoped(now: Date): Promise<void> {
   try {
     const [health, schedulers] = await Promise.all([getQueueHealth(), getSchedulerReport()]);
 

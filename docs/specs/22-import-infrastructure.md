@@ -343,6 +343,16 @@ On entering the mapping stage, the wizard auto-detects header → canonical mapp
 2. Match against handler-supplied alias regexes (e.g., `^meter(_?id|_?number|_?code)?$`).
 3. If multiple headers match the same canonical, first match wins; later headers fall through to other targets or `ignore`.
 
+### Proving the async path *(2026-11-02)*
+
+`packages/api/scripts/smoke-async-import.ts` pushes 300 rows through the real queue and a real worker, against the dev stack. It exists because **every integration suite mocks `enqueueSafely` on purpose** — a test that enqueued into the developer's Redis would leave jobs behind naming rows from a torn-down container, which is how 102 unrunnable dev jobs once appeared on the platform console. So nothing had ever watched a BullMQ job be picked up and drive a batch to a terminal state.
+
+Measured on first run: 300 rows → async branch, `PENDING`, picked up, progress stamped in steps of 50 (the designed heartbeat), `COMPLETE` 300/300 in ~9s, with 300 `import_row` rows `IMPORTED`, 300 `Premise` CREATE audit rows and one in-app notification. Run with **no worker attached** it reports `attendance: { workers: 0 }` and sits in `PENDING` indefinitely, which is the screen a utility admin sees and the banner above now explains. A second run of the same file updated all 300 in place rather than duplicating, which is the legacy key working over a real queue.
+
+It found two defects that no test could. The `import.complete` **email template was never seeded** despite slice 2 claiming it was — the in-app notification lands either way, so a finished import looked healthy while the worker logged `No active template for event`; now in `seed.js`. And the worker's metrics tick ran unscoped, so every scheduling-alert gauge had been empty since it shipped (spec 27 has the account).
+
+The 300 premises it writes all carry a `SMOKE-` legacy key; `--cleanup` removes them and the batches, which leaves the database as it was found.
+
 ### The legacy key, and updating instead of duplicating *(shipped 2026-11-02)*
 
 Every mirrored kind offers a `legacyKey` column (`imports/legacy-key.ts`). A row that carries one is matched on `(utility_id, legacy_key)` and **updated in place**; a row without one is created, exactly as before. So the create-only behaviour every handler had is still what a one-shot migration gets, and only a file that supplies legacy ids opts into the other shape.
