@@ -525,6 +525,14 @@ Tabs:
 
 Actions in header (when applicable): Cancel (during PROCESSING), Retry (when FAILED/PARTIAL/CANCELLED), View entities (link to filtered entity list — meter-reads list with `?importBatchId=...`).
 
+**Why a queued batch is not moving (shipped 2026-11-01).** `GET /imports/:id` carries `attendance: { workers, paused } | null` beside the batch, and a banner above the tabs says when the queue is unattended or paused. Without it a PENDING badge covered two different situations — starting in a second, and waiting for a worker nobody has started — and the page polled the first one for ever while showing the second.
+
+**The reason it belongs on a tenant page at all is who is looking.** Imports are initiated by a utility admin, and worker attachment is visible only on `/platform/cluster/queues` and `/platform/cluster/workers`, behind the platform actor, which a tenant's own System Admin is **refused** by design. So the one fact that explained the screen reached nobody who was looking at it, and the admin's remaining move was a support ticket. What crosses the boundary is a fact about their own job — is anything processing imports, and is the queue paused — and nothing else about the deployment.
+
+Three states read differently, and the third is the one worth stating: `workers: 0` is unattended, `paused: true` is attached-but-stopped (an attached worker on a paused queue still runs nothing, so the count alone would mislead), and `workers: null` means **not known** — a managed Redis that refuses `CLIENT LIST` answers with an entry carrying no address, so counting it would report a phantom worker. The banner stays silent on `null`: telling somebody nothing is processing imports when we could not tell sends them to chase a worker that is running.
+
+`attendance` is null for a terminal batch — nothing to wait for, and this costs a Redis round trip per page load. The read is wrapped in a **3s deadline, not merely a try/catch**: ioredis queues commands while disconnected and retries indefinitely, so an unreachable cache never rejects, it just never answers, and `readQueueAttachment`'s own `catch` cannot see that. Without the deadline one unreachable Redis would hang every request for this page.
+
 ### `<ImportWizard kind="..." />`
 
 The component the four+ entity-specific pages mount. Stages:

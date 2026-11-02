@@ -10,6 +10,8 @@ import { getKindHandler } from "../imports/registry.js";
 import { processBatch } from "./imports/process-batch.service.js";
 import { emitImportTerminalNotifications } from "./imports/notify.service.js";
 import { enqueueSafely, QUEUE_NAMES } from "../lib/queues.js";
+import { withQueueTimeout } from "../lib/queue-inspect.js";
+import { readQueueAttachment } from "./queue-health.service.js";
 import { IMPORT_WORKER_JOB_NAME } from "../workers/import-worker.js";
 
 /**
@@ -421,6 +423,25 @@ export async function listImports(
   };
 }
 
+/** Statuses a batch can still move out of on its own. */
+const IN_FLIGHT_STATUSES = ["PENDING", "PROCESSING"];
+
+/** How long to wait for Redis before answering without it. */
+const ATTENDANCE_TIMEOUT_MS = 3_000;
+
+/**
+ * Whether anything is draining the imports queue, as the person who
+ * submitted the batch needs to know it.
+ *
+ * `workers: null` means it could not be determined — distinct from
+ * zero, which is a real answer. `paused` matters on its own: an
+ * attached worker on a paused queue still runs nothing.
+ */
+export interface QueueAttendance {
+  workers: number | null;
+  paused: boolean;
+}
+
 export async function getImport(utilityId: string, batchId: string) {
   const batch = await prisma.importBatch.findFirstOrThrow({
     where: { id: batchId, utilityId },
@@ -430,7 +451,33 @@ export async function getImport(utilityId: string, batchId: string) {
     where: { utilityId, entityType: "ImportBatch", entityId: batchId },
     select: { id: true, fileName: true, fileSize: true, fileType: true },
   });
-  return { batch, attachment };
+
+  /*
+   * A batch over SYNC_THRESHOLD_ROWS is enqueued, and a deployment
+   * with no worker attached leaves it PENDING for ever. Imports are
+   * initiated by a utility admin, and worker attachment is visible
+   * only on `/platform/cluster/*` behind the platform actor — which a
+   * tenant's System Admin is refused — so without this the one fact
+   * that explains the screen reaches nobody who is looking at it.
+   *
+   * Only for a batch that is still in flight: a finished one has
+   * nothing to wait for, and this is a Redis round trip per page load.
+   *
+   * **Wrapped in a deadline, not merely a try/catch.** ioredis queues
+   * commands while disconnected and retries indefinitely, so an
+   * unreachable cache never rejects — it never answers, which a
+   * `catch` cannot see. `readQueueAttachment` is tolerant but has no
+   * deadline of its own, so one unreachable Redis would otherwise hang
+   * every request for this page.
+   */
+  const attendance = IN_FLIGHT_STATUSES.includes(batch.status)
+    ? await withQueueTimeout(async (): Promise<QueueAttendance> => {
+        const read = await readQueueAttachment(QUEUE_NAMES.imports);
+        return { workers: read.workers, paused: read.paused };
+      }, ATTENDANCE_TIMEOUT_MS)
+    : null;
+
+  return { batch, attachment, attendance };
 }
 
 export async function getImportRows(

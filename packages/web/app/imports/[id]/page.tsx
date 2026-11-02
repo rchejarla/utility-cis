@@ -48,6 +48,72 @@ interface AttachmentMeta {
 interface DetailResponse {
   batch: ImportBatch;
   attachment: AttachmentMeta | null;
+  /**
+   * Whether anything is draining the imports queue. Null for a batch
+   * that has finished, and `workers: null` when it could not be
+   * determined — which is not the same as zero and must not read like
+   * it.
+   */
+  attendance: { workers: number | null; paused: boolean } | null;
+}
+
+/**
+ * Why a queued batch is not moving, when the reason is outside the
+ * batch.
+ *
+ * A file over the sync threshold is enqueued, and nothing in the batch
+ * row says whether anything is there to pick it up — so a PENDING badge
+ * covers both "starting in a second" and "waiting for a worker nobody
+ * has started". The operator who submitted it is a utility admin and
+ * cannot see `/platform/cluster/*`, so without this line the one fact
+ * that explains the screen reaches nobody who is looking at it.
+ *
+ * Silent unless we actually know something is wrong: an undetermined
+ * worker count says nothing rather than sending somebody to chase a
+ * worker that is running.
+ */
+function QueueNotice({
+  attendance,
+}: {
+  attendance: DetailResponse["attendance"];
+}) {
+  if (!attendance) return null;
+  const { workers, paused } = attendance;
+
+  let message: string | null = null;
+  if (paused) {
+    message =
+      "The imports queue is paused, so this batch will not start until it is resumed. A platform operator can resume it.";
+  } else if (workers === 0) {
+    message =
+      "This batch is queued, but nothing is processing imports right now, so it has not started. A platform operator needs to attach a worker.";
+  }
+  if (!message) return null;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: "10px",
+        alignItems: "flex-start",
+        padding: "12px 14px",
+        marginBottom: "20px",
+        background: "var(--warning-subtle)",
+        border: "1px solid var(--warning)",
+        borderRadius: "var(--radius)",
+        color: "var(--text-primary)",
+        fontSize: "13px",
+        lineHeight: 1.5,
+      }}
+    >
+      <i
+        className="fa-solid fa-triangle-exclamation"
+        style={{ color: "var(--warning)", marginTop: "2px" }}
+        aria-hidden
+      />
+      <span>{message}</span>
+    </div>
+  );
 }
 
 interface ErrorSummaryEntry {
@@ -136,7 +202,7 @@ export default function ImportDetailPage({
     return <div style={{ color: "var(--text-muted)", padding: "20px 0" }}>Loading…</div>;
   }
 
-  const { batch, attachment } = detail;
+  const { batch, attachment, attendance } = detail;
 
   return (
     <div>
@@ -229,6 +295,8 @@ export default function ImportDetailPage({
           accent={batch.errorCount > 0 ? "var(--danger)" : undefined}
         />
       </div>
+
+      <QueueNotice attendance={attendance} />
 
       <Tabs
         tabs={[
