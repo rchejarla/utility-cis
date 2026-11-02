@@ -103,7 +103,7 @@ export async function loadBase(
 
   return {
     seasons: (seasonSet?.seasons ?? []).map((s) => ({
-      code: s.code,
+      seasonCode: s.seasonCode,
       startMonth: s.startMonth,
       startDay: s.startDay,
       endMonth: s.endMonth,

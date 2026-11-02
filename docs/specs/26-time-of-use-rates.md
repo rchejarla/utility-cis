@@ -90,6 +90,51 @@ existing seasonal tariffs, so seasons become configuration first.
   (today's behaviour, the default), by majority of days, or by prorating
   the component across both. Recorded on the season set.
 
+## Naming (decided 2026-11-02)
+
+Three tenant-chosen vocabularies meet in a TOU calendar, and in the pure
+resolver all three are plain strings. Passing one where another belongs
+would compile, run, and classify every interval wrong with nothing
+raised — the same failure shape this spec already guards against for
+interval timestamp bases (TOU-INT-2a): plausible output, no error. The
+database is safe, because each lives in its own table behind its own
+foreign key; the code is not. So the names carry what the schema was
+carrying.
+
+| Vocabulary | Column | Example values |
+|---|---|---|
+| Which part of the year | `season_code` | `summer`, `winter`, `shoulder` |
+| What kind of day | `day_type_code` | `weekday`, `weekend`, `holiday` |
+| What those hours cost | `peak_code` | `on_peak`, `mid_peak`, `off_peak` |
+
+Qualified rather than a bare `code`, which follows the distinction the
+schema already draws: thirteen tables carry a bare `code` where the
+value is a local identifier its table always contextualises
+(`commodity`, `unit_of_measure`, `rate_schedule`), and eight carry a
+qualified one where the value **travels** — `cycle_code`, `kind_code`,
+`role_code`, `module_key`, `account_number`, `meter_number`,
+`agreement_number`. A TOU code travels: compared in the engine, named on
+every slot row, filtered on by a tariff component.
+
+**`peak_code`, not `period_code`** (Rao, 2026-11-02). "Period" is
+already taken three times in this codebase — the service period, the
+billing period, and `BaseContext.period` with its `startDate`/`endDate`
+— so a `periodCode` sitting beside `period.startDate` in the resolver
+reintroduces exactly the ambiguity the qualification removes. The
+values are all `*_peak` anyway, so the name reads as the question it
+answers.
+
+The **table** stays `tou_period`, because "TOU period" is the industry
+term this spec uses throughout and renaming it would put the schema and
+the document in different languages. So one wrinkle is accepted
+knowingly: `tou_period.peak_code`. A period and a peak are the same
+thing here — the table keeps the domain's word, the column keeps the
+one that is unambiguous in code.
+
+`season.code` was renamed to `season_code` by the
+`season_code_qualified` migration, an hour after it shipped and before
+anything outside this codebase read it.
+
 ## 2. TOU calendar
 
 - **TOU-CAL-1 (Must).** A tenant defines a TOU calendar: for each season

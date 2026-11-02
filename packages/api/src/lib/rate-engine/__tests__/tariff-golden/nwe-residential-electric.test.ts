@@ -149,8 +149,8 @@ describe("NWE Residential Electric — multi-schedule golden test", () => {
          * meant.
          */
         seasons: [
-          { code: "summer", startMonth: 5, startDay: 1, endMonth: 10, endDay: 31 },
-          { code: "winter", startMonth: 11, startDay: 1, endMonth: 4, endDay: 30 },
+          { seasonCode: "summer", startMonth: 5, startDay: 1, endMonth: 10, endDay: 31 },
+          { seasonCode: "winter", startMonth: 11, startDay: 1, endMonth: 4, endDay: 30 },
         ],
         seasonSpanRule: "START_DATE" as const,
         sa: {
