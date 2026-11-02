@@ -89,6 +89,13 @@ export interface UtilitySummary {
   id: string;
   name: string;
   status: "ACTIVE" | "SUSPENDED";
+  /**
+   * Whether this system is the tenant's system of record (spec 28,
+   * OVL-T-1). Carried on the summary so the platform console can mark
+   * overlay tenants in the list — an operator looking at a tenant whose
+   * billing is refused needs to see why without opening it.
+   */
+  operatingMode: "FULL" | "OVERLAY";
   createdAt: Date;
   moduleCount: number;
   roleCount: number;
@@ -322,6 +329,7 @@ const SUMMARY_SELECT = {
   id: true,
   name: true,
   status: true,
+  operatingMode: true,
   createdAt: true,
   _count: { select: { utilityModules: true, roles: true, cisUsers: true } },
 } as const;
@@ -330,6 +338,7 @@ type SummaryRow = {
   id: string;
   name: string;
   status: "ACTIVE" | "SUSPENDED";
+  operatingMode: "FULL" | "OVERLAY";
   createdAt: Date;
   _count: { utilityModules: number; roles: number; cisUsers: number };
 };
@@ -339,6 +348,7 @@ function toSummary(r: SummaryRow): UtilitySummary {
     id: r.id,
     name: r.name,
     status: r.status,
+    operatingMode: r.operatingMode,
     createdAt: r.createdAt,
     moduleCount: r._count.utilityModules,
     roleCount: r._count.roles,
@@ -561,6 +571,87 @@ async function setUtilityStatus(
       utilityId,
       { status: existing.status },
       { status },
+    );
+    return updated;
+  });
+
+  await invalidateUtilityStatusCache(utilityId);
+  return toSummary(row);
+}
+
+/**
+ * Move a tenant between operating modes (spec 28, OVL-T-1 and OVL-T-4).
+ *
+ * `OVERLAY -> FULL` **is the conversion.** It moves no data, because
+ * the data is already in place: an overlay tenant's customers,
+ * premises, meters, accounts and agreements live in the ordinary
+ * tables, mirrored there by the overlay import. What changes is who
+ * owns the money — so the switch re-enables billing runs, AR posting,
+ * payments, delinquency actions and customer notifications, and is run
+ * after a final import rather than before one.
+ *
+ * A platform action, not a tenant setting, for the same reason
+ * suspension is: a tenant's own System Admin must not be able to decide
+ * that this system may start billing. Audited either way, with its own
+ * event per direction, because "when did we start billing these
+ * customers" is a question somebody will ask.
+ *
+ * **Invalidating the cache is the load-bearing line.** `getUtilityGuards`
+ * holds its answer for 300 seconds and the authorization pass consults
+ * it on every request, so a conversion that skipped this would leave
+ * every refused capability refused for up to five minutes after the
+ * platform operator was told it had succeeded.
+ *
+ * No guard against a redundant switch beyond reporting it: setting FULL
+ * on a tenant already FULL is a no-op that writes no audit row, which
+ * is honest, rather than a 409 for an operator confirming a state.
+ */
+export async function setUtilityOperatingMode(
+  utilityId: string,
+  operatingMode: "FULL" | "OVERLAY",
+  actor: LifecycleActor,
+): Promise<UtilitySummary> {
+  const existing = await prisma.utility.findUnique({
+    where: { id: utilityId },
+    select: { id: true, operatingMode: true },
+  });
+  if (!existing) {
+    throw new ProvisioningError(
+      "UTILITY_NOT_FOUND",
+      404,
+      `No utility with id ${utilityId}.`,
+    );
+  }
+
+  if (existing.operatingMode === operatingMode) {
+    const unchanged = await prisma.utility.findUniqueOrThrow({
+      where: { id: utilityId },
+      select: SUMMARY_SELECT,
+    });
+    return toSummary(unchanged);
+  }
+
+  const row = await prisma.$transaction(async (tx) => {
+    const updated = await tx.utility.update({
+      where: { id: utilityId },
+      data: { operatingMode },
+      select: SUMMARY_SELECT,
+    });
+    await writeAuditRow(
+      tx,
+      {
+        utilityId,
+        actorId: actor.id,
+        actorName: actor.name,
+        entityType: "Utility",
+        source: actor.source,
+      },
+      operatingMode === "FULL"
+        ? EVENT_TYPES.UTILITY_CONVERTED_TO_FULL
+        : EVENT_TYPES.UTILITY_SET_TO_OVERLAY,
+      utilityId,
+      { operatingMode: existing.operatingMode },
+      { operatingMode },
     );
     return updated;
   });

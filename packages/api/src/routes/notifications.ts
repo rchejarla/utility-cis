@@ -191,7 +191,7 @@ export async function notificationRoutes(app: FastifyInstance) {
 
   app.post(
     "/api/v1/notifications/send",
-    { config: { module: "notifications", permission: "CREATE" } },
+    { config: { module: "notifications", permission: "CREATE" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const data = manualSendSchema.parse(request.body);

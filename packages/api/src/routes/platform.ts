@@ -7,6 +7,7 @@ import {
   listUtilities,
   getUtilityDetail,
   suspendUtility,
+  setUtilityOperatingMode,
   reactivateUtility,
   setUtilityModule,
   assertUtilityExists,
@@ -82,6 +83,16 @@ const provisionBodySchema = z
   .strict();
 
 const tenantParamsSchema = z.object({ id: z.string().uuid() });
+/*
+ * The mode is named in the body rather than split into two endpoints
+ * (`/convert` and `/to-overlay`), because the pair are one decision with
+ * two directions and an operator reading the audit log wants them under
+ * one action. The enum is closed, so a typo is a 400 rather than a
+ * tenant left in a mode nothing recognises.
+ */
+const operatingModeSchema = z.object({
+  operatingMode: z.enum(["FULL", "OVERLAY"]),
+});
 
 const moduleParamsSchema = z.object({
   id: z.string().uuid(),
@@ -627,6 +638,24 @@ export async function platformRoutes(app: FastifyInstance) {
       const { id, moduleKey } = moduleParamsSchema.parse(request.params);
       const { isEnabled } = moduleBodySchema.parse(request.body);
       return reply.send(await setUtilityModule(id, moduleKey, isEnabled, actorOf(request)));
+    },
+  );
+
+  /*
+   * The conversion (spec 28, OVL-T-4). A platform action rather than a
+   * tenant setting for the same reason suspension is: a tenant's own
+   * System Admin must not be able to decide that this system may start
+   * billing its customers.
+   */
+  app.post(
+    "/api/v1/platform/utilities/:id/operating-mode",
+    { config: { platform: true } },
+    async (request, reply) => {
+      const { id } = tenantParamsSchema.parse(request.params);
+      const body = operatingModeSchema.parse(request.body);
+      return reply.send(
+        await setUtilityOperatingMode(id, body.operatingMode, actorOf(request)),
+      );
     },
   );
 

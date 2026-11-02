@@ -33,6 +33,12 @@ model Utility {
   id        String        @id @default(uuid()) @db.Uuid
   name      String        @db.VarChar(255)
   status    UtilityStatus @default(ACTIVE)
+  /// Whether this system is the tenant's system of record (spec 28,
+  /// OVL-T-1). OVERLAY means a legacy CIS still bills the customers and
+  /// we mirror it, so billing runs, AR posting, payments, delinquency
+  /// actions and customer notifications are refused. Separate from
+  /// `status`: a tenant is routinely ACTIVE and OVERLAY at once.
+  operatingMode UtilityOperatingMode @default(FULL) @map("operating_mode")
   createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime      @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -111,6 +117,15 @@ enum UtilityStatus {
   SUSPENDED
 
   @@map("utility_status")
+}
+
+enum UtilityOperatingMode {
+  /// This system is the system of record: it bills, posts and collects.
+  FULL
+  /// A legacy CIS is the system of record and we mirror it.
+  OVERLAY
+
+  @@map("utility_operating_mode")
 }
 
 // ─── Enums ────────────────────────────────────────────────────────────────────

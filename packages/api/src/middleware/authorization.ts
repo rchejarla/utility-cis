@@ -3,7 +3,7 @@ import {
   getUserRole,
   getTenantModules,
   getPlatformActor,
-  getUtilityStatus,
+  getUtilityGuards,
 } from "../services/rbac.service.js";
 import { config as appConfig } from "../config.js";
 
@@ -12,7 +12,17 @@ export async function authorizationMiddleware(
   reply: FastifyReply
 ): Promise<void> {
   const routeConfig = request.routeOptions?.config as
-    | { module?: string; permission?: string; platform?: boolean }
+    | {
+        module?: string;
+        permission?: string;
+        platform?: boolean;
+        /**
+         * This route performs something an overlay tenant's legacy CIS
+         * owns, so it is refused while the tenant is in OVERLAY mode
+         * (spec 28, OVL-T-2).
+         */
+        refusedInOverlay?: boolean;
+      }
     | undefined;
 
   /*
@@ -93,7 +103,7 @@ export async function authorizationMiddleware(
     return;
   }
 
-  const { module, permission } = routeConfig;
+  const { module, permission, refusedInOverlay } = routeConfig;
   const user = request.user;
   if (!user) return; // auth middleware already handled this
 
@@ -111,8 +121,8 @@ export async function authorizationMiddleware(
    * is still reported as MODULE_DISABLED before anything is said about
    * the user's role. Only the fetching moved.
    */
-  const [utilityStatus, enabledModules, userRole] = await Promise.all([
-    getUtilityStatus(user.utilityId),
+  const [guards, enabledModules, userRole] = await Promise.all([
+    getUtilityGuards(user.utilityId),
     getTenantModules(user.utilityId),
     getUserRole(user.id, user.utilityId),
   ]);
@@ -122,7 +132,7 @@ export async function authorizationMiddleware(
   //    tenant sends an operator to the wrong screen entirely. A null
   //    status means the status could not be read, which is not a
   //    suspension — see getUtilityStatus.
-  if (utilityStatus === "SUSPENDED") {
+  if (guards?.status === "SUSPENDED") {
     reply.status(403).send({
       error: {
         code: "UTILITY_SUSPENDED",
@@ -136,6 +146,42 @@ export async function authorizationMiddleware(
   if (!enabledModules.includes(module)) {
     reply.status(403).send({
       error: { code: "MODULE_DISABLED", message: `Module "${module}" is not enabled for this tenant` },
+    });
+    return;
+  }
+
+  /*
+   * 1b. The tenant has the module, but a legacy CIS is its system of
+   *     record, so this particular operation is not ours to perform
+   *     (spec 28, OVL-T-2). Billing runs, AR posting, payments,
+   *     delinquency actions and customer notifications all land here.
+   *
+   *     Nothing structural stopped us before: an overlay tenant is an
+   *     ordinary tenant to every route, so a CSR pressing Run would
+   *     produce a second bill for a period the legacy system has
+   *     already billed — and ours is the one with our name on it.
+   *
+   *     **409, not 403.** The caller is permitted and the module is
+   *     enabled; the tenant is in a state where the operation is
+   *     meaningless. A 403 sends an operator to check their role, which
+   *     is the wrong screen, so the message names the mode instead.
+   *
+   *     After the module check and before the permission one, on
+   *     purpose. "Not enabled" is about what the tenant bought and is
+   *     the earlier question; the permission check is later because a
+   *     CSR who *does* hold the permission must still be told the mode
+   *     rather than be left doubting their role.
+   *
+   *     A null `guards` means the row could not be read, which is not
+   *     overlay — same reasoning as the suspension check above.
+   */
+  if (refusedInOverlay && guards?.operatingMode === "OVERLAY") {
+    reply.status(409).send({
+      error: {
+        code: "UTILITY_IN_OVERLAY_MODE",
+        message:
+          "This utility is in overlay mode: its existing CIS is the system of record, so billing, posting, collection, delinquency and customer notifications are refused here. Converting the tenant to full mode re-enables them.",
+      },
     });
     return;
   }

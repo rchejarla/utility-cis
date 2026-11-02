@@ -37,7 +37,7 @@ import {
 export async function billingRunRoutes(app: FastifyInstance) {
   app.post(
     "/api/v1/billing-runs",
-    { config: { module: "accounts", permission: "EDIT" } },
+    { config: { module: "accounts", permission: "EDIT" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const body = createBillingRunSchema.parse(request.body ?? {});
@@ -169,7 +169,7 @@ export async function billingRunRoutes(app: FastifyInstance) {
    */
   app.post(
     "/api/v1/billing-runs/:id/send",
-    { config: { module: "accounts", permission: "EDIT" } },
+    { config: { module: "accounts", permission: "EDIT" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -194,7 +194,7 @@ export async function billingRunRoutes(app: FastifyInstance) {
    */
   app.post(
     "/api/v1/billing-runs/:id/post",
-    { config: { module: "accounts", permission: "EDIT" } },
+    { config: { module: "accounts", permission: "EDIT" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -220,7 +220,7 @@ export async function billingRunRoutes(app: FastifyInstance) {
    */
   app.post(
     "/api/v1/billing-runs/:id/resume",
-    { config: { module: "accounts", permission: "EDIT" } },
+    { config: { module: "accounts", permission: "EDIT" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);

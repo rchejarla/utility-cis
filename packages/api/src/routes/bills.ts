@@ -85,7 +85,7 @@ export async function billRoutes(app: FastifyInstance) {
    */
   app.post(
     "/api/v1/bills/:id/deliver",
-    { config: { module: "accounts", permission: "EDIT" } },
+    { config: { module: "accounts", permission: "EDIT" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);

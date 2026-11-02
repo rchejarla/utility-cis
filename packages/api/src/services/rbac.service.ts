@@ -137,28 +137,71 @@ export async function getTenantModules(utilityId: string): Promise<string[]> {
  * (by SQL, say) takes to bite; `suspendUtility` invalidates the key
  * directly, so the API path is immediate.
  */
-export async function getUtilityStatus(
-  utilityId: string,
-): Promise<"ACTIVE" | "SUSPENDED" | null> {
-  const cacheKey = `utility-status:${utilityId}`;
+/**
+ * The two things about a tenant that gate every request: whether it may
+ * be used at all, and whether this system is its system of record.
+ *
+ * One row, one cache entry, one round trip. They are fetched together
+ * because they are read together — the authorization pass needs both on
+ * every authenticated request, and that pass once added a flat two
+ * seconds to every request by fetching its inputs in sequence. A second
+ * accessor with a second cache key would have put that back.
+ *
+ * `null` means the row could not be read, which is deliberately not the
+ * same as any particular state: a blip must not take a tenant offline
+ * or quietly change what it is allowed to do.
+ *
+ * The cache key is `utility-guards:`, not the old `utility-status:`, so
+ * that a cached bare status string from a previous build can never be
+ * parsed as this object — it would yield `operatingMode: undefined`,
+ * which reads as FULL, which is the one wrong answer that matters.
+ */
+export interface UtilityGuards {
+  status: "ACTIVE" | "SUSPENDED";
+  operatingMode: "FULL" | "OVERLAY";
+}
+
+export async function getUtilityGuards(utilityId: string): Promise<UtilityGuards | null> {
+  const cacheKey = `utility-guards:${utilityId}`;
 
   const cached = await cacheGet(cacheKey);
   if (cached) {
-    return JSON.parse(cached) as "ACTIVE" | "SUSPENDED";
+    return JSON.parse(cached) as UtilityGuards;
   }
 
   const utility = await prisma.utility
-    .findUnique({ where: { id: utilityId }, select: { status: true } })
+    .findUnique({
+      where: { id: utilityId },
+      select: { status: true, operatingMode: true },
+    })
     .catch(() => null);
 
   if (!utility) return null;
 
-  await cacheSet(cacheKey, 300, JSON.stringify(utility.status));
-  return utility.status;
+  const guards: UtilityGuards = {
+    status: utility.status,
+    operatingMode: utility.operatingMode,
+  };
+  await cacheSet(cacheKey, 300, JSON.stringify(guards));
+  return guards;
 }
 
-/** Drop a tenant's cached status, so a suspension bites at once. */
+/** The status alone, for callers that do not care about the mode. */
+export async function getUtilityStatus(
+  utilityId: string,
+): Promise<"ACTIVE" | "SUSPENDED" | null> {
+  return (await getUtilityGuards(utilityId))?.status ?? null;
+}
+
+/**
+ * Drop a tenant's cached guards, so a suspension — or a conversion out
+ * of overlay mode — bites at once rather than up to 300s later.
+ *
+ * The old key is cleared too: a build that wrote it may have left an
+ * entry behind, and nothing else will ever remove it.
+ */
 export async function invalidateUtilityStatusCache(utilityId: string): Promise<void> {
+  await cacheDel(`utility-guards:${utilityId}`);
   await cacheDel(`utility-status:${utilityId}`);
 }
 

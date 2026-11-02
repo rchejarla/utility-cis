@@ -151,6 +151,15 @@ Full account, including what would undo it: `docs/design/utility-cis-architectur
 - **Configurable, not customizable.** All tenant-specific variation is driven by data (commodities, rate schedules, billing cycles), not code branches.
 - **Event-driven audit.** All state changes emit internal domain events that write to `audit_log` with before/after state.
 - **Defense in depth for data integrity.** Zod validators guard the API boundary, Prisma constrains the schema, and PostgreSQL CHECK constraints enforce invariants at the storage layer. A bug in any single layer can't produce data that breaks the others.
+- **A tenant says whether this system is its system of record.**
+  `utility.operating_mode` is `FULL` or `OVERLAY` (spec 28, OVL-T-1),
+  defaulting to FULL. OVERLAY means a legacy CIS still bills the
+  customers while we mirror it, so billing runs, AR posting, payments,
+  delinquency actions and customer notifications are refused — at the
+  request (409 `UTILITY_IN_OVERLAY_MODE`) *and* in
+  `tenantsForScheduler`, because the scheduled path answers to no
+  request. Deliberately a different axis from `status`: a tenant is
+  routinely ACTIVE and OVERLAY at once.
 - **A mirrored row remembers where it came from.** `customer`, `premise`, `meter`, `account` and `service_agreement` carry a nullable `legacy_key varchar(255)`, unique per tenant among the rows that have one, via a **partial** unique index Prisma cannot express (`WHERE legacy_key IS NOT NULL`, in the `legacy_key_mirror` migration). It is set only by an overlay import, which re-reads a utility's legacy CIS export every cycle and must update rather than duplicate (spec 28, OVL-IN-5); everything created through the UI or any other path leaves it NULL. It is a *provenance* key, never an identity the application reads — nothing joins on it, and a row's own id remains the only handle inside CIS.
 
 ## Database Invariants (CHECK constraints)

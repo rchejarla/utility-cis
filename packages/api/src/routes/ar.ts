@@ -55,7 +55,7 @@ import { listLedger } from "../services/ar/ledger.service.js";
 export async function arRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     "/api/v1/bills/:id/post",
-    { config: { module: "accounts", permission: "EDIT" } },
+    { config: { module: "accounts", permission: "EDIT" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id: billId } = idParamSchema.parse(request.params);
@@ -141,7 +141,7 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
 
   app.post(
     "/api/v1/accounts/:id/payments",
-    { config: { module: "payments", permission: "CREATE" } },
+    { config: { module: "payments", permission: "CREATE" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id: accountId } = idParamSchema.parse(request.params);
@@ -184,7 +184,7 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
 
   app.post(
     "/api/v1/accounts/:id/refunds",
-    { config: { module: "payments", permission: "CREATE" } },
+    { config: { module: "payments", permission: "CREATE" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id: accountId } = idParamSchema.parse(request.params);
@@ -196,7 +196,7 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
 
   app.post(
     "/api/v1/ledger-entries/:id/reverse",
-    { config: { module: "payments", permission: "EDIT" } },
+    { config: { module: "payments", permission: "EDIT" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id: entryId } = idParamSchema.parse(request.params);
@@ -242,7 +242,7 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
 
   app.post(
     "/api/v1/accounts/:id/fees",
-    { config: { module: "ar_adjustments", permission: "CREATE" } },
+    { config: { module: "ar_adjustments", permission: "CREATE" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id: accountId } = idParamSchema.parse(request.params);
@@ -254,7 +254,7 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
 
   app.post(
     "/api/v1/accounts/:id/adjustments",
-    { config: { module: "ar_adjustments", permission: "CREATE" } },
+    { config: { module: "ar_adjustments", permission: "CREATE" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id: accountId } = idParamSchema.parse(request.params);
@@ -266,7 +266,7 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
 
   app.post(
     "/api/v1/accounts/:id/waivers",
-    { config: { module: "ar_adjustments", permission: "EDIT" } },
+    { config: { module: "ar_adjustments", permission: "EDIT" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id: accountId } = idParamSchema.parse(request.params);
@@ -278,7 +278,7 @@ export async function arRoutes(app: FastifyInstance): Promise<void> {
 
   app.post(
     "/api/v1/accounts/:id/write-offs",
-    { config: { module: "ar_adjustments", permission: "EDIT" } },
+    { config: { module: "ar_adjustments", permission: "EDIT" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id: accountId } = idParamSchema.parse(request.params);

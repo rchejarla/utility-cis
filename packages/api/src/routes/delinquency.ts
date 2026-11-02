@@ -281,7 +281,7 @@ export async function delinquencyRoutes(app: FastifyInstance) {
 
   app.post(
     "/api/v1/accounts/:id/delinquency/escalate",
-    { config: { module: "delinquency", permission: "EDIT" } },
+    { config: { module: "delinquency", permission: "EDIT" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId, id: userId } = request.user;
       const { id } = request.params as { id: string };
@@ -349,7 +349,7 @@ export async function delinquencyRoutes(app: FastifyInstance) {
 
   app.post(
     "/api/v1/delinquency/evaluate",
-    { config: { module: "delinquency", permission: "CREATE" } },
+    { config: { module: "delinquency", permission: "CREATE" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const result = await evaluateAll(utilityId);

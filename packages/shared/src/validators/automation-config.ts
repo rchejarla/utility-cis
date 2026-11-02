@@ -40,10 +40,27 @@ const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
  * defaulting to on would start doing work for every existing tenant the
  * moment it shipped. New schedulers are opt-in. The three that default
  * to `true` predate this table and have rows provisioned for them.
+ *
+ * `refusedInOverlay` says whether an **overlay** tenant is excluded
+ * from the job (spec 28, OVL-T-2). It is declared here, beside
+ * `defaultEnabled`, because `tenantsForScheduler` is the one place
+ * every scheduled dispatcher selects tenants — so one flag per
+ * scheduler, enforced once, covers the whole scheduled surface. Without
+ * it the request-level refusal would be half a gate: an overlay tenant
+ * with a cycle configured and a worker attached would still be billed
+ * on its bill day by nobody pressing anything.
+ *
+ * The three that are refused are the ones OVL-T-2 names — billing runs,
+ * delinquency actions and customer notifications. `suspension` and
+ * `slaBreachSweep` stay on, and that is a judgement rather than an
+ * omission: a service hold transitioning is a state change with no
+ * outward effect and no money in it, and service requests are ours in
+ * either mode (spec 28 §6 builds on them).
  */
 export const SCHEDULER_DEFINITIONS = [
   {
     key: "suspension",
+    refusedInOverlay: false,
     label: "Suspension transitions · hourly",
     description:
       "Automatically activates pending service holds at their start date and completes active holds at their end date.",
@@ -52,6 +69,7 @@ export const SCHEDULER_DEFINITIONS = [
   },
   {
     key: "notificationSend",
+    refusedInOverlay: true,
     label: "Notification dispatch · every 10 seconds",
     description:
       "Drains the notification outbox to email/SMS providers. Disable only during maintenance — queued messages will not deliver.",
@@ -60,6 +78,7 @@ export const SCHEDULER_DEFINITIONS = [
   },
   {
     key: "slaBreachSweep",
+    refusedInOverlay: false,
     label: "SLA breach sweep · every 5 minutes",
     description:
       "Marks open service requests as breached when their SLA due date has passed. Drives the breached filter on the request queue.",
@@ -68,6 +87,7 @@ export const SCHEDULER_DEFINITIONS = [
   },
   {
     key: "delinquency",
+    refusedInOverlay: true,
     label: "Delinquency evaluation · daily",
     description:
       "Runs your tenant's delinquency rules at the configured local hour. Sends notices, creates delinquency actions.",
@@ -76,6 +96,7 @@ export const SCHEDULER_DEFINITIONS = [
   },
   {
     key: "billing",
+    refusedInOverlay: true,
     label: "Billing runs · on each cycle's bill day",
     description:
       "Starts a billing run for every active cycle on its own bill day, at the configured local hour. It generates bills; it does not post them.",
