@@ -218,6 +218,20 @@ export const navSections: NavSection[] = [
       { href: "/service-requests", label: "Service Requests", icon: faClipboardCheck, module: "service_requests" },
       { href: "/accounts", label: "Accounts", icon: faUser, module: "accounts" },
       { href: "/service-agreements", label: "Agreements", icon: faFileContract, module: "agreements" },
+      {
+        href: "/service-suspensions",
+        label: "Service Holds",
+        icon: faPauseCircle,
+        // Here, beside Agreements, rather than under Solid Waste, where
+        // it sat because suspensions were built during that phase and
+        // the motivating case was a vacation hold on a cart.
+        // `ServiceSuspension` hangs off a `ServiceAgreement` and nothing
+        // on it is commodity-aware, so it holds water and electric too —
+        // and a CSR asked to hold a water account had no reason to open
+        // Solid Waste.
+        module: "service_suspensions",
+        tooltip: "Pause service and billing on an agreement — vacation holds, seasonal pauses, regulatory and dispute holds",
+      },
       { href: "/workflows", label: "Workflows", icon: faArrowRightArrowLeft, module: "workflows" },
       { href: "/notifications", label: "Notifications", icon: faEnvelope, module: "notifications" },
       {
@@ -237,7 +251,6 @@ export const navSections: NavSection[] = [
     icon: faRecycle,
     items: [
       { href: "/containers", label: "Containers", icon: faDumpster, module: "containers" },
-      { href: "/service-suspensions", label: "Service Holds", icon: faPauseCircle, module: "service_suspensions" },
       { href: "/service-events", label: "RAMS Events", icon: faTruck, module: "service_events", tooltip: "Route and Asset Management System — field events from solid-waste collection crews" },
     ],
   },

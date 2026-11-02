@@ -45,6 +45,8 @@ A physical cart or container assigned to a premise for solid waste service.
 
 Temporary suspension of a service (solid waste, water, electric, etc.) — despite living in the solid-waste spec for historical reasons, this entity applies to every commodity. Covers vacation holds, seasonal service pauses, regulatory holds, dispute holds, and "service physically unavailable" scenarios.
 
+**Its screen moved out of the Solid Waste nav section on 2026-11-01**, to Operations beside Agreements. It had sat with Containers and RAMS Events because suspensions were built during the solid-waste phase and the motivating case was a vacation hold on a cart — but a hold hangs off a `ServiceAgreement` and nothing on it is commodity-aware, so a CSR asked to hold a *water* account had no reason to open Solid Waste and no general way in but the URL. `ramsNotified` / `ramsNotifiedAt` stay on the entity: solid-waste-only fields that a real integration reads, and they say nothing about where the screen belongs. Pinned by `components/__tests__/nav-placement.test.tsx`.
+
 | Field | Type | Notes |
 |-------|------|-------|
 | id | UUID | PK |
