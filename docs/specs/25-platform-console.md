@@ -81,6 +81,7 @@ act on a tenant name it in the path.
 | GET | `/api/v1/platform/utilities/:id` | One tenant: modules, roles, staff, portal-customer count, plus `readiness` |
 | POST | `/api/v1/platform/utilities` | Provision: utility row, 32 modules, six preset roles, optional first admin. `dryRun: true` → **200** and nothing written; a real create → **201** |
 | POST | `/api/v1/platform/utilities/:id/suspend` | Set `status = SUSPENDED`. Enforced on every request in the same authorization pass that checks enabled modules, so a token minted before the suspension stops working |
+| POST | `/api/v1/platform/utilities/:id/operating-mode` | Set `FULL` or `OVERLAY` (spec 28, OVL-T-1/4). `OVERLAY → FULL` **is the conversion**: it moves no data, because an overlay tenant's rows are already in the ordinary tables, and re-enables the five capabilities overlay mode refuses. A platform action for the same reason suspension is — a tenant's own System Admin must not decide that this system may start billing. Audited per direction; invalidates the cached guards so the change bites at once rather than up to 300s later |
 | POST | `/api/v1/platform/utilities/:id/reactivate` | Back to `ACTIVE` |
 | GET | `/api/v1/platform/utilities/:id/history` | Only what was done to this tenant **from outside it** — not the tenant's own audit log |
 | PATCH | `/api/v1/platform/utilities/:id/modules/:moduleKey` | `{ isEnabled }`. PATCH with the end state rather than enable/disable verbs: one boolean on one row cannot then be applied twice by mistake |

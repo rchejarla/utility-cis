@@ -68,18 +68,75 @@ tenants are its first users).
 - **OVL-T-1 (Must).** A tenant carries an operating mode, `FULL` or
   `OVERLAY`. Overlay tenants use the normal tables (customers,
   premises, meters, accounts, agreements, reads, rate schedules), so the
-  existing loaders and `rate()` work unchanged.
+  existing loaders and `rate()` work unchanged. **Built 2026-11-02.**
+
+  `utility.operating_mode`, an enum defaulting to `FULL` — so every
+  existing tenant is already correct and the backfill is the default.
+  A column rather than a `utility_config.settings` key because every
+  utility has one and it is read on every authenticated request (spec
+  18's rule, both halves). Separate from `status` on purpose: suspension
+  is a commercial state meaning "may not use the system at all", overlay
+  is an operating state meaning "uses it, and the legacy system owns the
+  money", and a tenant is routinely ACTIVE and OVERLAY at once.
+
 - **OVL-T-2 (Must).** In `OVERLAY` mode the legacy CIS is the system of
   record. Billing runs, AR posting, payments, delinquency actions and
   customer notifications are refused for the tenant, server-side, with a
-  message naming the mode. The UI hides them.
+  message naming the mode. The UI hides them. **Server-side half built
+  2026-11-02; the UI still shows the controls.**
+
+  **It takes two gates, and the second is the one that matters.** The
+  request gate lives in the authorization pass beside suspension and the
+  module check — 16 routes declare `refusedInOverlay: true` and get a
+  **409 `UTILITY_IN_OVERLAY_MODE`** naming the mode. 409 rather than
+  403: the caller is permitted and the module is enabled, so a 403 would
+  send an operator to check their role, which is the wrong screen. It
+  sits after the module check (what the tenant bought is the earlier
+  question) and before the permission check (a CSR who *does* hold the
+  permission must be told the mode, not left doubting their role).
+
+  But **nobody presses a button for a billing run on a bill day.** The
+  dispatcher reaches it on a schedule, so a request gate alone would
+  leave an overlay tenant billed unprompted for a period its legacy CIS
+  had already billed. `SCHEDULER_DEFINITIONS` therefore declares
+  `refusedInOverlay` per scheduler and `tenantsForScheduler` filters on
+  it — the one place every scheduled dispatcher selects tenants, which
+  is why its existing `status: "ACTIVE"` filter is there too. Refused:
+  `billing`, `delinquency`, `notificationSend`. Still running:
+  `suspension` and `slaBreachSweep`, which is a judgement — a hold
+  transitioning has no outward effect and no money in it, and service
+  requests are ours in either mode (§6 builds on them).
+
+  Configuration is deliberately **not** refused: rate schedules,
+  delinquency rules and notification templates are all things an overlay
+  tenant must set up, because §3 has its tariffs configured as for a
+  full tenant. What is refused is acting — running, posting, collecting,
+  escalating, sending.
 - **OVL-T-3 (Must).** Mirrored entities are written only by the overlay
   import. Staff may view them and add notes, not edit them, because the
   next import would silently overwrite an edit.
 - **OVL-T-4 (Should).** Switching `OVERLAY` → `FULL` is the conversion:
   a platform action, audited, run after a final import. It re-enables
   the refused functions; it does not move data, because the data is
-  already in place.
+  already in place. **Built 2026-11-02.**
+
+  `POST /api/v1/platform/utilities/:id/operating-mode`, body
+  `{ operatingMode }`, behind the platform actor — for the same reason
+  suspension is: a tenant's own System Admin must not be able to decide
+  that this system may start billing its customers. One endpoint for
+  both directions, because they are one decision and an operator
+  reading the audit log wants them under one action; separate events
+  (`utility.converted_to_full`, `utility.set_to_overlay`) name which
+  way it went, since "when did we start billing these customers" is a
+  question somebody will ask.
+
+  **Invalidating the cached guards is the load-bearing line.**
+  `getUtilityGuards` holds its answer for 300s and the authorization
+  pass consults it on every request, so a conversion that skipped it
+  would leave every refused capability refused for five minutes after
+  the operator was told it had succeeded. Setting a mode that already
+  matches is a no-op that writes no audit row, rather than a 409 at an
+  operator confirming a state.
 
 ## 2. Export contract (data in)
 

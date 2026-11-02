@@ -227,7 +227,25 @@ const DEFAULT_TIMEZONE = "UTC";
 export async function tenantsForScheduler(key: SchedulerKey): Promise<SchedulerTenant[]> {
   const def = schedulerDefinition(key);
   const [utilities, configs, rows] = await Promise.all([
-    prisma.utility.findMany({ where: { status: "ACTIVE" }, select: { id: true } }),
+    /*
+     * Active tenants, and their operating mode.
+     *
+     * An **overlay** tenant is excluded from the jobs its legacy CIS
+     * owns (spec 28, OVL-T-2), and this is where that has to happen:
+     * the request-level refusal is only half a gate, because nobody
+     * presses a button for a billing run on a bill day. The dispatcher
+     * reaches it on a schedule, so an overlay tenant with a cycle
+     * configured and a worker attached would be billed unprompted, for
+     * a period its legacy system has already billed.
+     *
+     * One flag per scheduler in SCHEDULER_DEFINITIONS, filtered once
+     * here, covers every scheduled dispatcher — the same reasoning that
+     * already put the `status: "ACTIVE"` filter in this query.
+     */
+    prisma.utility.findMany({
+      where: { status: "ACTIVE" },
+      select: { id: true, operatingMode: true },
+    }),
     prisma.utilityConfig.findMany({ select: { utilityId: true, timezone: true } }),
     prisma.schedulerConfig.findMany({
       where: { schedulerKey: key },
@@ -237,6 +255,7 @@ export async function tenantsForScheduler(key: SchedulerKey): Promise<SchedulerT
 
   const out: SchedulerTenant[] = [];
   for (const utility of utilities) {
+    if (def.refusedInOverlay && utility.operatingMode === "OVERLAY") continue;
     const row = rows.find((r) => r.utilityId === utility.id);
     if (!(row?.enabled ?? def.defaultEnabled)) continue;
     const config = configs.find((c) => c.utilityId === utility.id);

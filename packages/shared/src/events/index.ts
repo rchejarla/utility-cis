@@ -22,6 +22,10 @@ export const EVENT_TYPES = {
   UTILITY_SUSPENDED: "utility.suspended",
   UTILITY_REACTIVATED: "utility.reactivated",
   UTILITY_MODULE_CHANGED: "utility_module.updated",
+  /** OVERLAY -> FULL: the conversion (spec 28, OVL-T-4). */
+  UTILITY_CONVERTED_TO_FULL: "utility.converted_to_full",
+  /** FULL -> OVERLAY: a tenant is put behind its legacy CIS. */
+  UTILITY_SET_TO_OVERLAY: "utility.set_to_overlay",
   /**
    * A platform operator pushed a job along: retried a failed one,
    * promoted a delayed one, or replayed a dead-lettered one.
