@@ -291,6 +291,44 @@ each: the exclusion constraint, the partial unique index on
 list, and the CHECK that keeps each holiday-rule kind's columns and not
 the other's.
 
+### How the engine reads it (built 2026-11-02)
+
+`lib/rate-engine-loaders/load-tou-calendar.ts` is the only place these
+tables are read for rating, so the engine's filter, the calendar
+screen's preview and the bill's period footnote cannot disagree about
+which version was in force or what it said.
+
+Three rules it fixes:
+
+- **Which version:** the newest *published* one whose effective date is
+  on or before the **period's** start — never today's date. That is what
+  makes re-rating an old period reproducible: a calendar published since
+  then has a later effective date and is not reached.
+- **Which seasons:** the set the calendar *names*, for the reason above.
+- **Which holidays:** resolved for **every year the period touches**, not
+  just its start year. A December-to-January period that resolved only
+  the first year would price New Year's Day as an ordinary weekday — at
+  peak, on a day the tariff calls off-peak, with nothing raised.
+
+It does **not** re-validate. `validateCalendar` runs at save and
+publishing freezes the result, so re-checking 96 cells per (season, day
+type) on every bill would buy nothing — and the safety net is already
+better placed: a calendar with a gap makes `resolvePeak` answer "no
+period covers 17:15" at the first interval it cannot classify, which
+stops the bill and names the hole.
+
+Failure is a discriminated result, not null or a throw, because the two
+ways it fails are two different operator mistakes — "you never published
+it" and "the component names a calendar you have not got" — and one
+message for both sends somebody to the wrong screen.
+
+Covered by `tou-calendar-loader.integration.test.ts`, which is a **round
+trip**: the SMUD tariff is written into the schema and read back, and the
+loaded definition must equal the fixture the pure tests classify with.
+That proves the schema can hold a tariff nobody designed it around and
+that the loader does not reshape it on the way out — two things neither
+test proves alone.
+
 ### Holiday rules rather than a list of dates (decided 2026-11-02)
 
 TOU-CAL-4 says "by fixed date, by rule", and the rules are kept even

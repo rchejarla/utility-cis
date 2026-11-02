@@ -370,6 +370,25 @@ const RESET_TABLES = [
   // config row does not cascade to it — listing the roots is not enough
   // for this one.
   "scheduler_config",
+  /*
+   * The rate engine's tenant configuration (spec 26). Three roots, and
+   * CASCADE takes the rest: `season_set` → `season`, `tou_calendar` →
+   * its periods, day types, weekday rows, spans and overrides, and
+   * `tou_holiday_list` → its rules.
+   *
+   * `season_set` was missing from this list from the day it shipped,
+   * which leaked a season set from one test into the next — and the
+   * symptom is not an obvious one: the second test's own `create` fails
+   * on `season_set_name_per_tenant`, or worse, its lookup of "the set
+   * in force" quietly finds the previous test's.
+   *
+   * `tou_calendar` is listed before `season_set` because it references
+   * it with RESTRICT. CASCADE would reach it anyway; naming it is
+   * cheaper to read than relying on that.
+   */
+  "tou_calendar",
+  "tou_holiday_list",
+  "season_set",
 ].join(", ");
 
 /** Postgres `lock_not_available` — what `lock_timeout` raises. */
