@@ -424,15 +424,65 @@ raw intervals from the same meters. Compression is therefore entirely a
 ### 3a. TOU registers (meters that split the total themselves)
 
 - **TOU-REG-1 (Must).** A `MeterRegister` can be mapped to a TOU period
-  of a named calendar (e.g. register 2 = `on_peak`, register 3 =
-  `off_peak`). A meter's TOU registers plus any total register must
-  reconcile: if a total register exists, the TOU registers' consumption
-  sums to it within a tenant tolerance, or the read is an exception.
+  (e.g. register 2 = `peak`, register 3 = `off_peak`). A meter's TOU
+  registers plus any total register must reconcile: if a total register
+  exists, the TOU registers' consumption sums to it within a tenant
+  tolerance, or the read is an exception.
+
+  *Built 2026-11-03 (`tou_registers` migration), except the
+  reconciliation check, which belongs with the import path and is the
+  next step.* Three things worth knowing:
+
+  **A `peak_code`, not a key to `tou_period`.** The spec said
+  `tou_period_id`; this reverses it. A `tou_period` row belongs to one
+  calendar *version*, so pointing a register at one would bind a fact
+  about a **device** to a version of a **tariff** — every republished
+  calendar would need every register re-pointed, and TOU-CAL-11 is
+  explicit that what a meter is programmed with never decides pricing.
+  The integrity a key would buy already exists and is better placed: a
+  read carrying a code no component prices does not bill silently,
+  because the `tou_period` quantity source raises when its bucket is
+  absent, and the mapping itself is checked once per register against
+  the meter's programmed calendar — rather than by a foreign key on
+  every row of a hypertable that will take tens of millions of rows a
+  month at TOU granularity.
+
+  **The mapped registers are the declaration of which periods a meter
+  can report**, and that is what makes the loader safe. It answers for a
+  mapped period, zero included; it answers *not at all* for a period no
+  register covers. A two-register meter cannot report mid-peak, and a
+  zero there would bill nothing for mid-peak usage the meter rolled into
+  one of its two registers. The absent key makes rating raise instead.
+
+  **`meter_read.reading` and `prior_reading` became nullable**, paired by
+  a CHECK. A register-based bucket has a dial reading; an
+  interval-derived one is a sum over classified intervals and has none,
+  and inventing one would put a number on a bill that matches nothing on
+  the device. `consumption` stays NOT NULL.
 - **TOU-REG-2 (Must).** Rating a register-based TOU service uses the
   registers' consumption for the period directly; no interval data is
   needed. The meter's own clock decides the periods — the system records
   which calendar the meter is programmed with and flags a mismatch with
   the calendar the rate schedule references.
+
+  *`meter.tou_calendar_id` built 2026-11-03; the mismatch flag is the
+  next step.* The column keys a specific **version**, because that is
+  what is in the device — firmware holds switch times, not a name. The
+  mismatch check compares calendar **names**, so republishing a calendar
+  does not flag every TOU meter in the territory; the version is
+  recorded for the audit trail of what we believe was loaded.
+
+  **A defect this nearly introduced, now guarded.** `meter:reads` sums
+  `MeterRead.consumption` for the period, and a TOU meter may carry a
+  total read *and* a row per period for the same month — which
+  TOU-REG-1's reconciliation assumes. A naive sum counts the month
+  twice, and the symptom is not an error: it is a tiered charge at
+  double the usage, on an ordinary-looking bill. So totals and buckets
+  are summed separately and the total wins; where there is no total
+  read, the buckets are summed, because a TOU meter with no total
+  register still has a month's total and a flat or tiered component on
+  the same schedule would otherwise bill zero. Pinned by a
+  mutation-checked test in `meter-loader.integration.test.ts`.
 
 ### 3b. Interval data
 

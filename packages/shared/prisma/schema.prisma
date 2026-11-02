@@ -465,6 +465,17 @@ model Meter {
   status       MeterStatus @map("status")
   notes        String?     @map("notes") @db.Text
   customFields Json        @default("{}") @map("custom_fields")
+  /// The TOU calendar version this meter is programmed with (spec 26,
+  /// TOU-REG-2). A fact about the **device**: it records what we believe
+  /// the firmware's switch times are, and it never decides pricing
+  /// (TOU-CAL-11) — the rate schedule's own calendar does that.
+  ///
+  /// The mismatch check compares calendar **names**, not versions, so
+  /// republishing a calendar does not flag every TOU meter in the
+  /// territory. The key itself is in the `tou_registers` migration:
+  /// Prisma requires every referencing field of an optional composite
+  /// relation to be optional, and `utility_id` is not.
+  touCalendarId String?    @map("tou_calendar_id") @db.Uuid
   createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz
   updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -944,9 +955,27 @@ model MeterRead {
   uomId              String     @map("uom_id") @db.Uuid
   readDate           DateTime   @map("read_date") @db.Date
   readDatetime       DateTime   @map("read_datetime") @db.Timestamptz
-  reading            Decimal    @map("reading") @db.Decimal(12, 4)
-  priorReading       Decimal    @map("prior_reading") @db.Decimal(12, 4)
+  /// Optional since the `tou_registers` migration. A register-based
+  /// read has a dial reading; an interval-derived TOU bucket is a sum
+  /// over classified intervals and has none, and inventing one would put
+  /// a number on a bill that matches nothing on the device. A CHECK
+  /// keeps the pair together — `consumption` is their difference, so one
+  /// without the other is a record whose consumption cannot be checked.
+  reading            Decimal?   @map("reading") @db.Decimal(12, 4)
+  priorReading       Decimal?   @map("prior_reading") @db.Decimal(12, 4)
+  /// Always present: the thing every read has and rating uses.
   consumption        Decimal    @map("consumption") @db.Decimal(12, 4)
+  /// Which TOU period this row's consumption belongs to (spec 26).
+  /// NULL for a total read, which is every row written before
+  /// 2026-11-03.
+  ///
+  /// Carried here as well as being derivable from the register, because
+  /// the two meter kinds must produce one shape: a register-based bucket
+  /// takes the code from its register, an interval-derived one is
+  /// classified by the calendar and has no register. A code rather than
+  /// a key to `tou_period`, which belongs to one calendar version — see
+  /// the migration.
+  peakCode           String?    @map("peak_code") @db.VarChar(50)
   readType           ReadType   @map("read_type")
   readSource         ReadSource @map("read_source")
   exceptionCode      String?    @map("exception_code") @db.VarChar(50)
@@ -1137,6 +1166,16 @@ model MeterRegister {
   uomId          String   @map("uom_id") @db.Uuid
   measureTypeId  String   @map("measure_type_id") @db.Uuid
   multiplier     Decimal  @default(1.0) @db.Decimal(10, 4)
+  /// Which TOU period this register counts (spec 26, TOU-REG-1). NULL
+  /// for a total register or a non-TOU meter.
+  ///
+  /// The registers with a code are also the declaration of *which
+  /// periods this meter can report*, which is what the bucket loader
+  /// uses: a calendar period no register covers gets no bucket, so the
+  /// component pricing it raises rather than billing zero for usage the
+  /// meter never counted. A partial unique index allows one register
+  /// per period per meter — two would be summed and so charged twice.
+  peakCode       String?  @map("peak_code") @db.VarChar(50)
   isActive       Boolean  @default(true) @map("is_active")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
 

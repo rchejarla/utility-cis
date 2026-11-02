@@ -503,8 +503,13 @@ describe("processing a run", () => {
           uomId: latest.uomId,
           readDate: lateDate,
           readDatetime: lateDate,
-          priorReading: latest.reading,
-          reading: latest.reading.plus(1000),
+          // `reading` became nullable with the `tou_registers`
+          // migration — an interval-derived TOU bucket has no dial
+          // reading. The row this test builds on is a register read, so
+          // it has one; asserting that is clearer than a `?? 0` that
+          // would hide the fixture changing shape.
+          priorReading: latest.reading!,
+          reading: latest.reading!.plus(1000),
           consumption: 1000,
           readType: latest.readType,
           readSource: latest.readSource,

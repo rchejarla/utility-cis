@@ -327,6 +327,34 @@ export async function createBillSegmentForServiceAgreement(
       const meterIds = spMeters.servicePoints.flatMap((sp) => sp.meters.map((m) => m.meterId));
       const meterKeys = meterIds.flatMap((id) => [`meter:reads:${id}`, `meter:size:${id}`]);
 
+      /*
+       * 4a. TOU buckets (spec 26, TOU-REG-1).
+       *
+       * Asked for by (meter, period) from the **registers**, because a
+       * register carrying a peak code is the meter's declaration that
+       * it counts that period. Not from the calendar's periods: a
+       * two-register meter cannot report mid-peak, and asking for a
+       * bucket it has no register for would get a zero back and bill
+       * nothing for usage the meter rolled into another register.
+       *
+       * Asking only for what the meter reports leaves the key unset
+       * instead, which makes the `tou_period` quantity source raise and
+       * names the period. A non-TOU meter has no mapped registers, so
+       * this adds no keys and costs one indexed query.
+       */
+      const touRegisters = meterIds.length
+        ? await tx.meterRegister.findMany({
+            where: {
+              meterId: { in: meterIds },
+              utilityId,
+              isActive: true,
+              peakCode: { not: null },
+            },
+            select: { meterId: true, peakCode: true },
+          })
+        : [];
+      const touKeys = touRegisters.map((r) => `meter:tou:${r.meterId}:${r.peakCode}`);
+
       // 5. registry + loadVariables
       const registry = buildRegistry(tx as unknown as typeof prisma, {
         utilityId,
@@ -335,7 +363,7 @@ export async function createBillSegmentForServiceAgreement(
         premiseId: base.sa.premiseId,
         period,
       });
-      const vars = await registry.loadVariables([...manifestKeys, ...meterKeys]);
+      const vars = await registry.loadVariables([...manifestKeys, ...meterKeys, ...touKeys]);
 
       // 6. rate
       const result = engine.rate({ base, vars });

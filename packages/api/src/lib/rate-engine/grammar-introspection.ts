@@ -92,7 +92,15 @@ export const VARIABLE_NAMESPACES = [
   { pattern: "meter:reads:<meter_id>", scope: "per_sa", description: "Aggregated meter consumption for the billing period" },
   { pattern: "meter:size:<meter_id>", scope: "per_sa", description: "Meter size (e.g. 5/8\", 1\")" },
   { pattern: "meter:role:<meter_id>", scope: "per_sa", description: "Meter role (primary, irrigation, etc.)" },
+  // Supplied per (meter, period) from the meter's mapped registers, so a
+  // period the meter does not report has no variable at all rather than
+  // a zero (spec 26, TOU-REG-1).
+  { pattern: "meter:tou:<meter_id>:<peak_code>", scope: "per_sa", description: "One TOU period's consumption for the billing period" },
   { pattern: "wqa:current:<sa_id>", scope: "per_sa", description: "Current WQA value (override or computed)" },
+  // Fully implemented since the WQA loader shipped, and undocumented
+  // until 2026-11-03 — so a tariff that wanted the override alone could
+  // not be authored. Found by grammar-introspection.test.ts.
+  { pattern: "wqa:override:<sa_id>", scope: "per_sa", description: "Override-only WQA value (null when no override is set)" },
   { pattern: "tenant:drought_stage", scope: "per_tenant", description: "Currently declared drought stage" },
   { pattern: "tenant:flags:<flag_name>", scope: "per_tenant", description: "Tenant-level boolean flag" },
   { pattern: "premise:attr:<attr_name>", scope: "per_sa", description: "Premise attribute (eru_count, has_stormwater_infra, etc.)" },
