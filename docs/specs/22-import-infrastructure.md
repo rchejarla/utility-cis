@@ -335,6 +335,20 @@ On entering the mapping stage, the wizard auto-detects header → canonical mapp
 2. Match against handler-supplied alias regexes (e.g., `^meter(_?id|_?number|_?code)?$`).
 3. If multiple headers match the same canonical, first match wins; later headers fall through to other targets or `ignore`.
 
+### Tenant custom fields as columns *(shipped 2026-11-01)*
+
+A kind whose entity carries custom fields declares `customFieldEntity` on its handler, and the tenant's own declared fields are appended to that kind's canonical fields **per request**, named `custom:<key>`. The premise handler is the first; customer, account, meter and service agreement can opt in with one line each.
+
+They cannot be declared on the handler itself: `custom_field_schema` holds one row per (utility, entity type), while the registry is static and shared by every tenant. So the list is assembled by `imports/custom-fields.ts` and used in **two** places that must agree — `GET /imports/kinds/:kind/fields`, which the wizard renders from, and `validateMapping` inside `createImport`. Validating the submit against the static list would refuse, as `INVALID_MAPPING`, every custom column the wizard had just offered.
+
+The `custom:` prefix is load-bearing: a tenant may declare a key that matches a core column — `status` on a premise — and the prefix is what keeps the two apart in the mapping an operator submits. A key the tenant has not declared is not in the list, so it is refused rather than silently stored.
+
+**This is not tidiness; it is why stormwater could not be migrated.** Stormwater is priced from `premise:attr:eru_count`, a premise custom field, and a bulk-loaded premise used to arrive with `customFields = {}` — so its stormwater component had nothing to rate on and every ERU count had to be typed in by hand, at exactly the moment somebody has a file of ten thousand premises.
+
+**Every cell out of a CSV is a string, and that is the whole difficulty.** `buildZodFromFields` is built for JSON bodies and uses `z.coerce.boolean()`, which is `Boolean(value)` — every non-empty string is truthy, so a column of "false" would have imported as a column of yes, silently, in every file. Booleans are therefore read by word (`true/yes/y/1/t` against `false/no/n/0/f`) before the tenant's schema validates the result, and a word that is neither is `INVALID_CUSTOM_FIELD` rather than a guess. Numbers coerce safely; a date is expected as `YYYY-MM-DD`, which is what the validator wants. An empty cell is **absence, not a value** — a CSV carries a cell for every column whether it means anything or not, and storing `""` would make `eru_count` a string on half the rows; a required field left blank then fails validation, which is the right outcome.
+
+The definitions are read **once per batch** in `prepareBatch`, not per row: `validateCustomFields` does its own query, which over a 100k-row file would be 100k reads of the same row. `parseRow` is synchronous and tenant-blind, so it carries the `custom:`-prefixed cells through untouched on the typed row and `processRow` validates them against what `prepareBatch` loaded.
+
 ### Persistence
 
 Per the earlier discussion: **in-memory + localStorage by header signature**.

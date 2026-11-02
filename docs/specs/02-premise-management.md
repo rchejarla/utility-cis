@@ -140,6 +140,13 @@ Phase 1 stores only the current address. Phase 2 (Bozeman Req 4) will add an `Ad
 | Premises Map | `/premises` (map view) | Mapbox GL JS full-screen map; Supercluster clustering; popups with commodity badges showing commodity names (not raw UUIDs); filter by premise type; adapts to dark/light theme; stats cards update when filters change |
 | Premise Detail | `/premises/:id` | Tabs: Overview (inline editable fields), Meters (meters installed here + Add Meter inline form), Agreements (agreements at this address + Add Agreement inline form), Attachments; Deactivate button with confirmation dialog; Upload button in tab bar; commodity editing via toggle buttons (not free-form UUID input) |
 | Premise Create | `/premises/new` | Form with address fields, type selector, commodity multi-select, optional geo coordinates, owner SearchableSelect (Customer lookup), HelpTooltip on key fields |
+| Premise Import | `/premises/import` | Module 22's `<ImportWizard kind="premise" />`; reached from Import on the list page and from the empty state |
+
+**Bulk import carries the tenant's custom fields (2026-11-01).** The handler maps thirteen core columns — address lines, city, state, zip, type, owner email, commodity codes, service territory, municipality code, status, lat, lng — **plus every custom field the tenant has declared for `premise`**, offered as `custom:<key>` and validated against the tenant's own schema.
+
+That last part is why it matters rather than being completeness: **stormwater is priced from `premise:attr:eru_count`**, which is a premise custom field. Until this, a bulk-loaded premise arrived with `customFields = {}`, so a migrated tenant's stormwater had nothing to rate on and every ERU count had to be typed in by hand. Full mechanics, including why a CSV's booleans cannot go through `z.coerce.boolean()`, are in spec 22 under "Tenant custom fields as columns".
+
+`serviceTerritory` is still the one declared column that is accepted and dropped — resolving the name to a `service_territory` row needs its own lookup and is deferred.
 
 **Stats bar (list view):** Shows total count, counts by type (Residential / Commercial / Industrial / Municipal), and counts by status (Active / Inactive / Condemned). Stats update to reflect the current search/filter state.
 

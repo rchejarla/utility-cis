@@ -11,6 +11,7 @@ import {
   retryImport,
 } from "../services/imports.service.js";
 import { getKindHandler, listKinds } from "../imports/registry.js";
+import { canonicalFieldsWithCustom } from "../imports/custom-fields.js";
 import { idParamSchema } from "../lib/route-schemas.js";
 import { getUserRole, getTenantModules } from "../services/rbac.service.js";
 
@@ -107,7 +108,16 @@ export async function importRoutes(app: FastifyInstance) {
         return reply.send({
           kind: handler.kind,
           label: handler.label,
-          canonicalFields: handler.canonicalFields,
+          /*
+           * The tenant's own custom fields are appended here, and the
+           * POST validates the mapping against the same list — if the
+           * two disagreed, the wizard would offer a column the submit
+           * refuses as INVALID_MAPPING.
+           */
+          canonicalFields: await canonicalFieldsWithCustom(
+            request.user.utilityId,
+            handler,
+          ),
         });
       } catch (err) {
         if (err && typeof err === "object" && "statusCode" in err) throw err;

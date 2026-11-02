@@ -61,6 +61,21 @@ export interface ImportKindHandlerMeta {
   /** Canonical fields the wizard exposes in its mapping stage. */
   canonicalFields: CanonicalFieldDef[];
   /**
+   * Set when this kind's entity carries custom fields, naming which
+   * entity type's schema to read.
+   *
+   * The tenant's declared fields are appended to `canonicalFields` per
+   * request — the registry is static and shared by every tenant, so a
+   * handler cannot name them itself. Prefixed `custom:` so a tenant key
+   * matching a core column keeps them apart.
+   */
+  customFieldEntity?:
+    | "customer"
+    | "account"
+    | "premise"
+    | "service_agreement"
+    | "meter";
+  /**
    * Sample rows (objects keyed by canonical-field name) used by
    * `/api/v1/imports/kinds/:kind/template.csv` to render the template.
    * Two or three rows is plenty.

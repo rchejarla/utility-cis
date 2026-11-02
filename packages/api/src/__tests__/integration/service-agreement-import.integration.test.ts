@@ -362,6 +362,67 @@ describe("POST /api/v1/imports — service_agreement happy path", () => {
     }), 120_000);
 });
 
+describe("POST /api/v1/imports — an unmetered service", () => {
+  it("creates a NON_BADGED service point for stormwater, with no meter", () =>
+    seedAsPlatform(async () => {
+      /*
+       * Stormwater has no device: it is priced from premise attributes,
+       * so its service point is NON_BADGED. The handler hardcoded
+       * METERED, following `createServiceAgreement`, which is right for
+       * water and simply false here — every imported stormwater
+       * agreement got a metered point with nothing metering it.
+       */
+      const { prisma } = prismaImports;
+      const header =
+        "agreement_number,account_number,commodity_code,premise_address,premise_zip," +
+        "start_date,status,service_point_type\n";
+      const mapping = {
+        agreement_number: "agreementNumber",
+        account_number: "accountNumber",
+        commodity_code: "commodityCode",
+        premise_address: "premiseAddress",
+        premise_zip: "premiseZip",
+        start_date: "startDate",
+        status: "status",
+        service_point_type: "servicePointType",
+      };
+      const csv =
+        header +
+        `SA-SW-1,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,ACTIVE,NON_BADGED\n` +
+        // Blank still means METERED, so nothing already loading water
+        // agreements changes behaviour.
+        `SA-SW-2,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-02-01,ACTIVE,\n`;
+
+      const { body, contentType } = buildMultipart([
+        { name: "kind", value: "service_agreement" },
+        { name: "source", value: "MANUAL_UPLOAD" },
+        { name: "fileName", value: "stormwater.csv" },
+        { name: "mapping", value: JSON.stringify(mapping) },
+        { name: "file", filename: "stormwater.csv", contentType: "text/csv", body: csv },
+      ]);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/imports",
+        headers: { ...headers(), "content-type": contentType },
+        payload: body,
+      });
+
+      const result = JSON.parse(res.body);
+      expect(result.errorCount).toBe(0);
+      expect(result.importedCount).toBe(2);
+
+      const points = await prisma.servicePoint.findMany({
+        where: { utilityId: fixA.utilityId },
+        include: { serviceAgreement: { select: { agreementNumber: true } }, meters: true },
+        orderBy: { startDate: "asc" },
+      });
+      expect(points).toHaveLength(2);
+      expect(points[0]).toMatchObject({ type: "NON_BADGED" });
+      expect(points[0].meters).toHaveLength(0);
+      expect(points[1]).toMatchObject({ type: "METERED" });
+    }), 120_000);
+});
+
 describe("POST /api/v1/imports — service_agreement row errors", () => {
   it("names the column that missed: account, commodity, premise and meter each get their own code", () =>
     seedAsPlatform(async () => {
@@ -633,6 +694,44 @@ describe("POST /api/v1/imports — service_agreement row errors", () => {
         where: { utilityId: fixA.utilityId },
       });
       expect(assignment.rateScheduleId).toBe(v2.id);
+    }), 120_000);
+
+  it("rejects a service point type the enum does not have", () =>
+    seedAsPlatform(async () => {
+      const header =
+        "agreement_number,account_number,commodity_code,premise_address,premise_zip," +
+        "start_date,service_point_type\n";
+      const mapping = {
+        agreement_number: "agreementNumber",
+        account_number: "accountNumber",
+        commodity_code: "commodityCode",
+        premise_address: "premiseAddress",
+        premise_zip: "premiseZip",
+        start_date: "startDate",
+        service_point_type: "servicePointType",
+      };
+      const csv =
+        header +
+        `SA-BADTYPE,${accountNumber},${commodityCode},${premiseAddress},${premiseZip},2026-01-01,UNMETERED\n`;
+
+      const { body, contentType } = buildMultipart([
+        { name: "kind", value: "service_agreement" },
+        { name: "source", value: "MANUAL_UPLOAD" },
+        { name: "fileName", value: "agreements.csv" },
+        { name: "mapping", value: JSON.stringify(mapping) },
+        { name: "file", filename: "agreements.csv", contentType: "text/csv", body: csv },
+      ]);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/imports",
+        headers: { ...headers(), "content-type": contentType },
+        payload: body,
+      });
+
+      const result = JSON.parse(res.body);
+      expect(codesOf(result)).toEqual([
+        { rowIndex: 1, code: "INVALID_SERVICE_POINT_TYPE" },
+      ]);
     }), 120_000);
 
   it("rejects a bad date and an unknown status in parseRow, before any lookup", () =>

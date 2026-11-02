@@ -2,6 +2,11 @@ import { EVENT_TYPES } from "@utility-cis/shared";
 import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { prisma } from "../../lib/prisma.js";
 import { registerImportKind } from "../registry.js";
+import {
+  customFieldDefs,
+  extractCustomFields,
+  pickCustomCells,
+} from "../custom-fields.js";
 import type { ImportKindHandler } from "../types.js";
 
 /**
@@ -45,6 +50,13 @@ interface PremiseRow {
   status?: PremiseStatus;
   geoLat?: number;
   geoLng?: number;
+  /**
+   * The row's `custom:`-prefixed cells, untouched. `parseRow` is
+   * synchronous and tenant-blind, so the tenant's schema cannot be
+   * applied there; `processRow` validates these against the
+   * definitions `prepareBatch` loaded.
+   */
+  customCells: Record<string, string>;
 }
 
 interface BatchData {
@@ -54,6 +66,8 @@ interface BatchData {
   commodityByCode: Map<string, string>;
   /** Set of valid (active) premise type codes for this tenant. */
   validPremiseTypes: Set<string>;
+  /** The tenant's declared premise custom fields. */
+  customDefs: Awaited<ReturnType<typeof customFieldDefs>>;
 }
 
 const handler: ImportKindHandler<PremiseRow, BatchData> = {
@@ -62,6 +76,10 @@ const handler: ImportKindHandler<PremiseRow, BatchData> = {
   module: "premises",
   permission: "CREATE",
   wizardPath: "/premises/import",
+  // Stormwater is priced from `premise:attr:eru_count`, a premise
+  // custom field, so a bulk load that dropped these produced
+  // premises nothing could rate.
+  customFieldEntity: "premise",
 
   canonicalFields: [
     {
@@ -271,6 +289,7 @@ const handler: ImportKindHandler<PremiseRow, BatchData> = {
         status,
         geoLat,
         geoLng,
+        customCells: pickCustomCells(raw),
       },
     };
   },
@@ -314,7 +333,11 @@ const handler: ImportKindHandler<PremiseRow, BatchData> = {
       });
       for (const c of commodities) commodityByCode.set(c.code.toUpperCase(), c.id);
     }
-    return { customerByEmail, commodityByCode, validPremiseTypes };
+    // One read for the batch, not one per row: `validateCustomFields`
+    // would query the schema for every line of the file.
+    const customDefs = await customFieldDefs(ctx.utilityId, "premise");
+
+    return { customerByEmail, commodityByCode, validPremiseTypes, customDefs };
   },
 
   async processRow(ctx, row, batch) {
@@ -354,9 +377,15 @@ const handler: ImportKindHandler<PremiseRow, BatchData> = {
       }
     }
 
+    const custom = extractCustomFields(row.customCells, batch.customDefs);
+    if (!custom.ok) {
+      return { ok: false, code: custom.code, message: custom.message };
+    }
+
     const created = await ctx.tx.premise.create({
       data: {
         utilityId: ctx.utilityId,
+        customFields: custom.values as object,
         addressLine1: row.addressLine1,
         addressLine2: row.addressLine2 ?? null,
         city: row.city,
