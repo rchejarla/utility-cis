@@ -794,6 +794,42 @@ it is wrong.
 - **TOU-BIL-1 (Must).** The billing run's pre-run check lists TOU
   services with incomplete intervals, unreconciled registers or a
   calendar mismatch (TOU-REG-2), each with its cause.
+
+  *`tou-readiness.service.ts` built 2026-11-03; wiring it into the
+  run's preview is the next step, and incomplete intervals wait for
+  slice 2.* It reports five problems, and **four of them are invisible
+  on the resulting bill**, which is the whole reason this is a pre-run
+  check rather than something rating discovers:
+
+  | Problem | What it does to the bill |
+  |---|---|
+  | `CALENDAR_MISMATCH` | Bills correctly against hours the meter was not counting by. Every figure reconciles; the split is wrong. |
+  | `CALENDAR_UNKNOWN` | Nobody can tell whether there is a mismatch. |
+  | `REGISTERS_UNRECONCILED` | Some usage billed twice or not at all. |
+  | `PERIOD_NOT_REPORTED` | **Stops** rating — the one visible failure, and better found before a run of thousands than halfway through one. |
+  | `NO_TOU_READS` | A TOU tariff with no TOU usage to price. |
+
+  **Reported, not enforced.** The operator approves the preview, and a
+  tenant mid-migration may knowingly bill a service whose meter
+  programming is not yet recorded.
+
+  **The mismatch compares calendar *names*, not versions** (TOU-REG-2),
+  so republishing a calendar does not flag every TOU meter in the
+  territory. The version on the meter is the audit trail of what we
+  believe was loaded into the device.
+
+  **Two tolerances, and a read reconciles within *either*** (TOU-REG-1,
+  `settings.tou`). A relative tolerance alone fails absurdly at low
+  usage — 0.5% of 2 kWh is 0.01, tighter than any dial reads — and an
+  absolute one alone fails at high usage, where 1 kWh of slack on 40,000
+  hides a real fault. The defaults (1 absolute, 0.5%) are a judgement
+  and not a figure from a utility: none was available. They are loose
+  enough not to flood a queue on day one, and a tenant who knows their
+  meters should tighten them.
+
+  **Every problem a meter has is reported, not the first**, for the
+  reason `validateSeasons` and `validateCalendar` do the same: an
+  operator fixing one at a time turns one run into four.
 - **TOU-BIL-2 (Must).** The bill PDF shows usage and charges by TOU
   period, and names the periods' hours in a footnote ("On-peak: 4–9 pm
   weekdays, Jun–Sep, excluding holidays").

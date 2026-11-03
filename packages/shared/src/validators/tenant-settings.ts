@@ -198,3 +198,40 @@ export const DEFAULT_BILLING_INTEGRATION: Required<
   sandbox: true,
   pollMinutes: 5,
 };
+
+/**
+ * Time-of-use settings (spec 26).
+ *
+ * A namespace rather than columns because only utilities with TOU
+ * tariffs have any of it, and nothing queries on it — it is edited in
+ * Settings and read off a config row already in hand, which is spec
+ * 18's tiebreaker.
+ *
+ * **Two tolerances, not one** (TOU-REG-1). A TOU meter's registers
+ * should sum to its total register, and the discrepancies that do occur
+ * come from dial rounding and read timing. A single *relative* tolerance
+ * fails absurdly at low usage — 0.1% of 2 kWh is 0.002, which any
+ * rounding breaks — and a single *absolute* one fails at high usage,
+ * where 1 kWh of slack on 40,000 hides a real fault. So a read
+ * reconciles if it is within **either**.
+ *
+ * The defaults below are a judgement, not a figure from a utility: no
+ * real tolerance was available when this was written. They are set loose
+ * enough not to flood a queue on day one, and a tenant who knows their
+ * meters should tighten them.
+ */
+export const touSettingsSchema = z
+  .object({
+    /** Absolute slack, in the meter's own unit. Default 1. */
+    registerToleranceAbsolute: z.number().min(0).max(1000).optional(),
+    /** Relative slack, as a percentage of the total. Default 0.5. */
+    registerTolerancePercent: z.number().min(0).max(100).optional(),
+  })
+  .strict();
+export type TouSettings = z.infer<typeof touSettingsSchema>;
+
+/** What `tou-readiness` uses when a tenant has set nothing. */
+export const TOU_DEFAULTS = {
+  registerToleranceAbsolute: 1,
+  registerTolerancePercent: 0.5,
+} as const;
