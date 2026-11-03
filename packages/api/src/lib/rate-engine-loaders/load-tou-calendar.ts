@@ -56,6 +56,64 @@ export type TouCalendarLoad =
   | { ok: false; problem: string };
 
 /**
+ * The fields `toTouCalendarDefinition` reads.
+ *
+ * Declared structurally rather than taken from Prisma's generated
+ * types, because this is the seam between the database and the pure
+ * engine: any query whose include supplies these may use the mapper.
+ * Two do — the rating load below, and the calendar editor's own query,
+ * which additionally selects the ids, labels and sort orders the engine
+ * has no use for.
+ *
+ * That shared mapper is the point. The editor's validation, spot check
+ * and day preview have to answer exactly what rating would answer, and
+ * two copies of twenty lines of mapping is how a screen ends up
+ * confirming a calendar the engine reads differently.
+ */
+export interface TouCalendarDefinitionRows {
+  dayTypes: Array<{
+    dayTypeCode: string;
+    isHoliday: boolean;
+    weekdays: Array<{ isoWeekday: number }>;
+  }>;
+  periods: Array<{ peakCode: string }>;
+  slots: Array<{
+    seasonCode: string;
+    startMinute: number;
+    endMinute: number;
+    dayType: { dayTypeCode: string };
+    period: { peakCode: string };
+  }>;
+  overrides: Array<{ overrideDate: Date; dayType: { dayTypeCode: string } }>;
+}
+
+/** Rows → the pure definition the engine classifies with. */
+export function toTouCalendarDefinition(row: TouCalendarDefinitionRows): TouCalendarDefinition {
+  return {
+    dayTypes: row.dayTypes.map((d) => ({
+      dayTypeCode: d.dayTypeCode,
+      weekdays: d.weekdays.map((w) => w.isoWeekday as IsoWeekday),
+      isHoliday: d.isHoliday,
+    })),
+    peakCodes: row.periods.map((p) => p.peakCode),
+    slots: row.slots.map((s) => ({
+      seasonCode: s.seasonCode,
+      dayTypeCode: s.dayType.dayTypeCode,
+      startMinute: s.startMinute,
+      endMinute: s.endMinute,
+      peakCode: s.period.peakCode,
+    })),
+    overrides: row.overrides.map((o) => ({
+      // `@db.Date` comes back as UTC midnight, so the ISO date is the
+      // date — no local getters, which would shift it a day west of
+      // Greenwich.
+      date: o.overrideDate.toISOString().slice(0, 10),
+      dayTypeCode: o.dayType.dayTypeCode,
+    })),
+  };
+}
+
+/**
  * Load the calendar in force for a period.
  *
  * A discriminated result rather than null or a throw, matching the rest
@@ -118,28 +176,7 @@ export async function loadTouCalendar(
       : { ok: false, problem: `There is no TOU calendar named "${name}".` };
   }
 
-  const definition: TouCalendarDefinition = {
-    dayTypes: row.dayTypes.map((d) => ({
-      dayTypeCode: d.dayTypeCode,
-      weekdays: d.weekdays.map((w) => w.isoWeekday as IsoWeekday),
-      isHoliday: d.isHoliday,
-    })),
-    peakCodes: row.periods.map((p) => p.peakCode),
-    slots: row.slots.map((s) => ({
-      seasonCode: s.seasonCode,
-      dayTypeCode: s.dayType.dayTypeCode,
-      startMinute: s.startMinute,
-      endMinute: s.endMinute,
-      peakCode: s.period.peakCode,
-    })),
-    overrides: row.overrides.map((o) => ({
-      // `@db.Date` comes back as UTC midnight, so the ISO date is the
-      // date — no local getters, which would shift it a day west of
-      // Greenwich.
-      date: o.overrideDate.toISOString().slice(0, 10),
-      dayTypeCode: o.dayType.dayTypeCode,
-    })),
-  };
+  const definition = toTouCalendarDefinition(row);
 
   return {
     ok: true,
@@ -174,7 +211,7 @@ export async function loadTouCalendar(
  * from a calendar to its list is nullable and composite, which Prisma
  * cannot express; the foreign key itself is in the migration.
  */
-async function loadObservedHolidays(
+export async function loadObservedHolidays(
   prisma: PrismaClient,
   utilityId: string,
   touHolidayListId: string | null,

@@ -56,6 +56,20 @@ export const EVENT_TYPES = {
   RATE_SCHEDULE_CREATED: "rate_schedule.created",
   RATE_SCHEDULE_REVISED: "rate_schedule.revised",
   RATE_SCHEDULE_PUBLISHED: "rate_schedule.published",
+  /**
+   * A TOU calendar decides what a bill costs as surely as a price does,
+   * so its lifecycle is audited the way a rate schedule's is. The
+   * content edits get their own type rather than one `updated`, because
+   * "who moved the peak hours" is the question asked after a disputed
+   * bill and it is not answerable from a header change.
+   */
+  TOU_CALENDAR_CREATED: "tou_calendar.created",
+  TOU_CALENDAR_UPDATED: "tou_calendar.updated",
+  TOU_CALENDAR_PUBLISHED: "tou_calendar.published",
+  TOU_CALENDAR_PERIODS_SET: "tou_calendar.periods_set",
+  TOU_CALENDAR_DAY_TYPES_SET: "tou_calendar.day_types_set",
+  TOU_CALENDAR_SPANS_SET: "tou_calendar.spans_set",
+  TOU_CALENDAR_OVERRIDES_SET: "tou_calendar.overrides_set",
   BILLING_CYCLE_CREATED: "billing_cycle.created",
   BILLING_CYCLE_UPDATED: "billing_cycle.updated",
   BILL_SEGMENT_CREATED: "bill_segment.created",

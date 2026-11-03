@@ -5,6 +5,7 @@ export * from "./meter";
 export * from "./account";
 export * from "./service-agreement";
 export * from "./rate-schedule";
+export * from "./tou-calendar";
 export * from "./billing-cycle";
 export * from "./bill-segment";
 export * from "./billing-run";
