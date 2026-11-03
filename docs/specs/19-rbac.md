@@ -393,20 +393,45 @@ Meters               ✓        □        □        □
 
 Seeded on tenant creation (`is_system: true`):
 
-| Role | customers | premises | meters | accounts | agreements | commodities | rate_schedules | billing_cycles | delinquency | audit_log | attachments | theme | settings |
-|------|-----------|----------|--------|----------|------------|-------------|----------------|----------------|-------------|-----------|-------------|-------|----------|
-| **System Admin** | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | V | VCED | VCED | VCED |
-| **Utility Admin** | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | V | VCED | VCED | V |
-| **CSR** | VCE | VCE | V | VCE | VCE | V | V | V | **VC** | V | VCE | — | — |
-| **Field Technician** | V | VE | VE | V | V | V | — | — | — | V | VCE | — | — |
-| **Read-Only** | V | V | V | V | V | V | V | V | V | V | V | — | — |
+| Role | customers | premises | meters | accounts | **billing** | agreements | rate_schedules | delinquency | audit_log | **tenant_profile** | **tenant_users** | settings |
+|------|-----------|----------|--------|----------|-------------|------------|----------------|-------------|-----------|--------------------|------------------|----------|
+| **System Admin** | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | V | VCED | VCED | VCED |
+| **Utility Admin** | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | V | VCED | VCED | V |
+| **CSR** | VCE | VCE | V | VCE | **V** | VCE | V | **VC** | V | — | — | — |
+| **Field Technician** | V | VE | VE | V | — | V | — | — | V | — | — | — |
+| **Read-Only** | V | V | V | V | V | V | V | V | V | V | V | — |
 
 V=VIEW, C=CREATE, E=EDIT, D=DELETE, —=no access
 
-The table is not the whole matrix — `everyModule()` gives both admin
-roles every module, and Read-Only gets VIEW on all but `settings`,
-`theme` and the portal. The columns shown are the ones where the roles
-differ meaningfully.
+**`role-presets.ts` is the source of truth; this is a summary and is
+maintained by hand.** It cannot be otherwise without 33 columns, so it
+shows the keys where a role's authority is most often misread — and it
+has drifted before: the CSR had no `delinquency` key at all until
+2026-10-29, and the three bold columns were missing on 2026-11-03 while
+two of them were the keys being got wrong.
+
+`everyModule()` gives both admin roles every module, so an absent
+column means VCED for them; Read-Only gets VIEW on all but `settings`,
+`theme` and the portal. `role-presets.test.ts` guards the grants
+themselves, and `presetDrift` reports a tenant whose copy of a role has
+since been edited.
+
+The three added on 2026-11-03 are the keys a menu review found were not
+doing what their names said:
+
+- **`billing`** — running a cycle, posting, delivery, documents, and the
+  cross-account bill list. It was `accounts:EDIT`, the verb that edits a
+  mailing address, so every CSR could bill the cycle and send the bills.
+  A CSR keeps VIEW: reading a bill is counter work.
+- **`tenant_users`** — staff users and roles. The APIs gated on
+  `settings`, which Utility Admin holds VIEW-only, so that role could
+  not create a user; and no route enforced `tenant_users` at all while
+  two menus named it.
+- **`tenant_profile`** — the tenant's own configuration, which now
+  includes bill messages, custom fields, suspension types and the
+  premise / account / measure type lists. Those writes answered to
+  `settings` or to an operational key, so a Field Technician holding
+  `premises:EDIT` for field work could rewrite the premise type list.
 
 **The CSR's `delinquency: VC` was added 2026-10-29**, with payment plans
 slice 1. It had **no `delinquency` key at all** — not VIEW — so the role

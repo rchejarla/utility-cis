@@ -1,3 +1,15 @@
+/*
+ * `RunBlocker` and `RunWarning` come from `shared`. They were
+ * declared here as well until 2026-11-03 — two hand-maintained
+ * copies of a union of codes, where adding a code on one side only
+ * type-checks on both and shows the operator an empty row.
+ *
+ * The wording stays here. That is this file's job.
+ */
+import type { RunBlocker, RunWarning } from "@utility-cis/shared";
+
+export type { RunBlocker, RunWarning };
+
 /**
  * What a billing run looks like to this app, and how its dates are read.
  *
@@ -82,24 +94,6 @@ export interface BillingRunPreview {
   existingRun: { id: string; status: string } | null;
 }
 
-export interface RunBlocker {
-  code:
-    | "NO_ACTIVE_ASSIGNMENTS"
-    | "SCHEDULE_NOT_PUBLISHED"
-    /* TOU, and blockers because rating raises: no bucket, no bill. */
-    | "TOU_PERIOD_NOT_REPORTED"
-    | "TOU_NO_READS";
-  accountCount: number;
-  detail: string;
-  sampleAccounts: string[];
-}
-
-export interface RunWarning {
-  code: "TOU_CALENDAR_MISMATCH" | "TOU_CALENDAR_UNKNOWN" | "TOU_REGISTERS_UNRECONCILED";
-  accountCount: number;
-  detail: string;
-  sampleAccounts: string[];
-}
 
 const plural = (n: number) => `${n.toLocaleString()} account${n === 1 ? "" : "s"}`;
 
