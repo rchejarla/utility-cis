@@ -748,6 +748,41 @@ it is wrong.
   consumption components, picking a published calendar and its periods,
   and refuses to publish a schedule whose periods do not cover every
   period in the calendar (or says which are deliberately unpriced).
+
+  *Server side built 2026-11-03; the editor UI is still to come.*
+  `rate_schedule.tou_calendar_id` is what the schedule references —
+  **on the schedule, not on each component**, because the components of
+  one tariff share one set of peak hours, and per component two of them
+  could name different calendars, which has no coherent meaning but
+  would save and bill. It keys a specific version: a published schedule
+  is immutable and cannot follow a calendar republished with different
+  hours, so new hours mean a new schedule version against a new
+  calendar version — which is what a regulator expects to see.
+
+  `publishRateSchedule` now refuses four things, each a 409:
+  `TOU_CALENDAR_REQUIRED` (prices TOU periods, names no calendar),
+  `TOU_CALENDAR_NOT_PUBLISHED` (TOU-CAL-5 — a published schedule cannot
+  reference a draft whose hours can still change),
+  `TOU_CALENDAR_MISSING`, and `TOU_PRICING_INCOMPLETE` from
+  `validateTouPricing`, which checks both directions.
+
+  **The costly direction is the quiet one.** A component pricing a
+  period the calendar has not got never bills and raises when rated —
+  annoying, visible. A calendar period *no component prices* is energy
+  the customer uses and is never charged for, and **nothing raises at
+  all**: the bucket is never asked about and the bill looks complete.
+  That is why this refuses rather than warns.
+
+  **"Deliberately unpriced" has no mechanism and does not need one.**
+  The escape hatch already exists and documents itself: a component
+  priced at zero, labelled for what it is. The engine suppresses
+  zero-amount lines so it never reaches the bill, but it states the
+  intent where a reader of the tariff finds it. The refusal message says
+  so.
+
+  Checked at publish rather than at save, because a draft is allowed to
+  be half-written — an author adds the calendar and the components in
+  whichever order suits them, and publishing is the commitment.
 - **TOU-UI-4 (Must).** Meter register screens allow mapping a register
   to a TOU period (TOU-REG-1).
 - **TOU-UI-5 (Should).** A test-rating panel: pick a service agreement

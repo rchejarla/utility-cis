@@ -453,3 +453,53 @@ export function resolvePeak(args: {
     dayTypeReason: dayType.reason,
   };
 }
+
+/**
+ * Do a schedule's TOU components and its calendar line up (TOU-UI-3)?
+ *
+ * Both directions are errors, and they fail differently:
+ *
+ * - a component pricing a period the calendar has not got **never
+ *   bills** — no meter reports that period, so the quantity source
+ *   finds no bucket and rating raises. Usually a typo.
+ * - a calendar period **no component prices** is energy the customer
+ *   uses and is never charged for. Nothing raises at all: the bucket is
+ *   simply never asked about, and the bill looks complete.
+ *
+ * The second is the expensive one, and it is why this refuses rather
+ * than warns. TOU-UI-3 allows "or says which are deliberately
+ * unpriced"; no mechanism is built for that declaration, because the
+ * escape hatch already exists and documents itself — a component priced
+ * at zero, labelled for what it is. The engine suppresses zero-amount
+ * lines, so it never reaches the bill, but it states the intent where a
+ * reader of the tariff will find it.
+ */
+export function validateTouPricing(
+  /** The peak codes this schedule's components price; duplicates are fine. */
+  pricedCodes: readonly string[],
+  /** The periods the referenced calendar defines. */
+  calendarPeriods: readonly string[],
+): CalendarValidation {
+  const problems: string[] = [];
+  const defined = new Set(calendarPeriods);
+  const priced = new Set(pricedCodes);
+
+  for (const code of [...priced].sort()) {
+    if (!defined.has(code)) {
+      problems.push(
+        `A component prices period "${code}", which this schedule's TOU calendar does not define.`,
+      );
+    }
+  }
+
+  const unpriced = [...defined].filter((c) => !priced.has(c)).sort();
+  if (unpriced.length > 0) {
+    problems.push(
+      `The calendar defines ${unpriced.length === 1 ? "a period" : "periods"} no component prices: ${unpriced.join(", ")}. ` +
+        "Usage in an unpriced period is never charged, and nothing raises — " +
+        "add a component for it, or one priced at zero if it is genuinely not charged separately.",
+    );
+  }
+
+  return problems.length === 0 ? { ok: true } : { ok: false, problems };
+}

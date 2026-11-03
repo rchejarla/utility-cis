@@ -3,6 +3,7 @@ import {
   resolveDayType,
   resolvePeak,
   validateCalendar,
+  validateTouPricing,
   type TouCalendarDefinition,
   type TouDayTypeDefinition,
   type TouSlotDefinition,
@@ -387,5 +388,93 @@ describe("resolvePeak", () => {
     // last span of today would hide that.
     const r = lookup(localDay(2026, 7, 1), 1440);
     expect(r.ok).toBe(false);
+  });
+});
+
+
+describe("validateTouPricing (spec 26, TOU-UI-3)", () => {
+  /**
+   * Do a schedule's TOU components and its calendar line up?
+   *
+   * Both directions matter and they fail differently:
+   *
+   * - a component pricing a period the calendar has not got **never
+   *   bills**, because no meter reports that period and the quantity
+   *   source finds no bucket;
+   * - a calendar period **no component prices** is energy the customer
+   *   uses and is never charged for. Nothing raises: the bucket is
+   *   simply never asked about, and the bill looks complete.
+   *
+   * The second is the expensive one, which is why it is an error here
+   * rather than a warning.
+   */
+
+  it("accepts a schedule that prices every period exactly once", () => {
+    expect(validateTouPricing(["peak", "off_peak"], ["peak", "off_peak"])).toEqual({ ok: true });
+  });
+
+  it("accepts a period priced by more than one component", () => {
+    // One component per season is the normal shape: summer on-peak and
+    // non-summer on-peak both price `peak`.
+    expect(validateTouPricing(["peak", "peak", "off_peak"], ["peak", "off_peak"])).toEqual({
+      ok: true,
+    });
+  });
+
+  it("refuses a component pricing a period the calendar has not got", () => {
+    // Usually a typo in the peak code. It would never bill: no meter
+    // reports `pekk`, so the quantity source finds no bucket.
+    const result = validateTouPricing(["peak", "pekk"], ["peak", "off_peak"]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.problems.join(" ")).toMatch(/pekk/);
+      expect(result.problems.join(" ")).toMatch(/does not define/i);
+    }
+  });
+
+  it("refuses a calendar period no component prices", () => {
+    /*
+     * The costly direction. The calendar routes usage into mid-peak,
+     * the meter reports it, and no component charges for it - so the
+     * customer gets that energy free and the bill looks complete.
+     */
+    const result = validateTouPricing(["peak", "off_peak"], ["peak", "mid_peak", "off_peak"]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.problems.join(" ")).toMatch(/mid_peak/);
+      expect(result.problems.join(" ")).toMatch(/no component prices/i);
+      // The message has to say what happens, not just that it is wrong:
+      // whoever reads it is about to decide whether to publish anyway.
+      expect(result.problems.join(" ")).toMatch(/never charged/i);
+    }
+  });
+
+  it("names every unpriced period, not just the first", () => {
+    const result = validateTouPricing(["peak"], ["peak", "mid_peak", "off_peak", "super_off_peak"]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const all = result.problems.join(" ");
+      expect(all).toMatch(/mid_peak/);
+      expect(all).toMatch(/off_peak/);
+      expect(all).toMatch(/super_off_peak/);
+    }
+  });
+
+  it("reports both directions at once", () => {
+    const result = validateTouPricing(["peak", "typo"], ["peak", "mid_peak"]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.problems).toHaveLength(2);
+  });
+
+  it("refuses a schedule that prices nothing against a TOU calendar", () => {
+    // A calendar referenced by a schedule with no TOU components means
+    // every period is unpriced, which is the same costly failure.
+    const result = validateTouPricing([], ["peak", "off_peak"]);
+    expect(result.ok).toBe(false);
+  });
+
+  it("accepts a schedule with no TOU components and no calendar", () => {
+    // The ordinary non-TOU tariff. Nothing to line up.
+    expect(validateTouPricing([], [])).toEqual({ ok: true });
   });
 });

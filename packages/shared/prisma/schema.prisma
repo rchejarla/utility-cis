@@ -692,6 +692,23 @@ model RateSchedule {
   supersedesId   String?   @map("supersedes_id") @db.Uuid
   supersededById String?   @map("superseded_by_id") @db.Uuid
   publishedAt    DateTime? @map("published_at") @db.Timestamptz
+  /// The TOU calendar version this schedule's TOU components are written
+  /// against (spec 26, TOU-CAL-10). NULL for a non-TOU schedule.
+  ///
+  /// On the schedule rather than on each component, because the
+  /// components of one tariff share one set of peak hours — repeated per
+  /// component, two of them could name different calendars, which has no
+  /// coherent meaning but would save and bill.
+  ///
+  /// A specific **version**, because a published schedule is immutable
+  /// and must keep meaning what it meant: it cannot follow a calendar
+  /// republished with different hours. New hours mean a new schedule
+  /// version against the new calendar version.
+  ///
+  /// The key is in the `rate_schedule_tou_calendar` migration — Prisma
+  /// requires every referencing field of an optional composite relation
+  /// to be optional, and `utility_id` is not.
+  touCalendarId  String?   @map("tou_calendar_id") @db.Uuid
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
 
   // Relations
