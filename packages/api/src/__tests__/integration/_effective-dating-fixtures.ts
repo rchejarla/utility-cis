@@ -335,6 +335,51 @@ export async function bootPostgres(
     });
   }
 
+  /*
+   * A cold cache, because this file has a cold database.
+   *
+   * Every file here boots its own Postgres, but they all share one Redis
+   * (db 9, set in `vitest.integration.config.ts`) and they share
+   * `TENANT_A` and `ACTOR`. So a cache entry outlives the database it
+   * describes: the container stops, the entry does not.
+   *
+   * On 2026-11-03 that cost all 17 tests in
+   * `rate-schedule-publish.integration.test.ts`, which had just passed
+   * 17/17 on its own. `payment-plan-routes` strips the shared actor's
+   * role to `{"accounts":["VIEW"]}` for its last assertion and leaves
+   * `user-role:<TENANT_A>:<ACTOR>:tenant` holding that for 300 seconds.
+   * The next file then has a fresh database where the actor holds every
+   * permission, and 403s on every request.
+   *
+   * Flushed rather than invalidated key by key, because
+   * `invalidateUserRoleCache` cannot reach the per-account variants —
+   * its own comment says so — and the next leak will be under a key
+   * nobody thought to list. A file that boots its own database should
+   * boot its own cache.
+   *
+   * Safe here: db 9 is not the dev stack's db 0, files run one at a time
+   * (`fileParallelism: false`), and a `worker-*` file that has pointed
+   * `REDIS_URL` at its own container flushes that container instead.
+   * Best-effort, like the cache itself — a suite with no Redis still
+   * runs, so a failure to clear nothing is not this file's problem.
+   */
+  const redisUrl = process.env.REDIS_URL;
+  if (redisUrl) {
+    const { default: Redis } = await import("ioredis");
+    const client = new Redis(redisUrl, {
+      lazyConnect: true,
+      maxRetriesPerRequest: 1,
+    });
+    try {
+      await client.connect();
+      await client.flushdb();
+    } catch {
+      // No Redis reachable: nothing is cached, so there is nothing to clear.
+    } finally {
+      client.disconnect();
+    }
+  }
+
   return { container, dbUrl, appUrl, platformUrl };
 }
 

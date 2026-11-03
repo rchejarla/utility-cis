@@ -536,6 +536,7 @@ describe("POST /api/v1/payment-plans/:id/cancel", () => {
 describe("authorization", () => {
   it("refuses a caller with no delinquency permission", async () => {
     // The module is enabled above; this strips the verb.
+    const rbac = await import("../../services/rbac.service.js");
     await seedAsPlatform(async () => {
       const role = await prismaImports.prisma.role.findFirstOrThrow({
         where: { utilityId: TENANT_A },
@@ -545,12 +546,31 @@ describe("authorization", () => {
         where: { id: role.id },
         data: { permissions: { accounts: ["VIEW"] } },
       });
-      const rbac = await import("../../services/rbac.service.js");
-      await rbac.invalidateTenantModulesCache(TENANT_A);
+      /*
+       * Permissions are cached under `user-role:`, not
+       * `tenant-modules:` — which is the cache this used to clear, and
+       * so cleared nothing that mattered here.
+       */
+      await rbac.invalidateUserRoleCache(ACTOR, TENANT_A);
     });
 
-    const res = await get(`/api/v1/accounts/${fix.accountId}/payment-plans`);
+    try {
+      const res = await get(`/api/v1/accounts/${fix.accountId}/payment-plans`);
 
-    expect(res.statusCode).toBe(403);
+      expect(res.statusCode).toBe(403);
+    } finally {
+      /*
+       * Put the fixture back, pass or fail. The role found above is the
+       * one `ensurePrincipal` declares, and `TENANT_A` and `ACTOR` are
+       * shared with every other file in this suite — so a role left
+       * stripped, or a cache entry left describing it, is the next
+       * file's unexplained 403. That is how 17 tests in
+       * `rate-schedule-publish` failed on 2026-11-03. `bootPostgres`
+       * now flushes the cache per file, which closes the leak from the
+       * other side; this keeps the damage from being done at all.
+       */
+      await ensurePrincipal(prismaImports.prisma, TENANT_A);
+      await rbac.invalidateUserRoleCache(ACTOR, TENANT_A);
+    }
   });
 });
