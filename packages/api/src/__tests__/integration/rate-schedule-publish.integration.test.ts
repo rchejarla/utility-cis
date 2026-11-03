@@ -385,3 +385,165 @@ describe("GET /api/v1/rate-schedules?status=", () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+
+describe("publishing a TOU schedule (spec 26, TOU-UI-3 and TOU-CAL-5)", () => {
+  /**
+   * The periods a schedule prices and the periods its calendar defines
+   * have to agree, and the check is at publish rather than at save
+   * because a draft is allowed to be half-written - the author adds the
+   * calendar and the components in whichever order suits them.
+   *
+   * The failure worth refusing for is the quiet one: a calendar period
+   * no component prices is energy the customer uses and is never charged
+   * for. Nothing raises, because the bucket is simply never asked about,
+   * and the bill looks complete.
+   */
+
+  /** A TOU calendar with the periods named, published unless told not to. */
+  async function makeCalendar(
+    name: string,
+    peakCodes: string[],
+    opts: { publish?: boolean } = {},
+  ): Promise<string> {
+    return seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      const seasonSet = await prisma.seasonSet.create({
+        data: {
+          utilityId: TENANT_A,
+          name: `seasons for ${name}`,
+          effectiveDate: new Date(Date.UTC(2026, 0, 1)),
+          publishedAt: new Date(),
+        },
+      });
+      await prisma.season.create({
+        data: {
+          utilityId: TENANT_A,
+          seasonSetId: seasonSet.id,
+          seasonCode: "all",
+          label: "All year",
+          startMonth: 1,
+          startDay: 1,
+          endMonth: 12,
+          endDay: 31,
+        },
+      });
+      const calendar = await prisma.touCalendar.create({
+        data: {
+          utilityId: TENANT_A,
+          name,
+          effectiveDate: new Date(Date.UTC(2026, 0, 1)),
+          publishedAt: opts.publish === false ? null : new Date(),
+          seasonSetId: seasonSet.id,
+          timeZone: "America/Denver",
+        },
+      });
+      for (const [i, peakCode] of peakCodes.entries()) {
+        await prisma.touPeriod.create({
+          data: {
+            utilityId: TENANT_A,
+            touCalendarId: calendar.id,
+            peakCode,
+            label: peakCode,
+            sortOrder: i,
+          },
+        });
+      }
+      return calendar.id;
+    });
+  }
+
+  /** Point a draft schedule at a calendar and give it TOU components. */
+  async function makeTouSchedule(
+    code: string,
+    peakCodesPriced: string[],
+    calendarId: string | null,
+  ): Promise<string> {
+    const draft = await createDraftSchedule(code, `TOU ${code}`);
+    await seedAsPlatform(async () => {
+      const { prisma } = prismaImports;
+      if (calendarId) {
+        await prisma.rateSchedule.update({
+          where: { id: draft.id },
+          data: { touCalendarId: calendarId },
+        });
+      }
+      for (const [i, peakCode] of peakCodesPriced.entries()) {
+        await prisma.rateComponent.create({
+          data: {
+            utilityId: TENANT_A,
+            rateScheduleId: draft.id,
+            kindCode: "consumption",
+            label: `${peakCode} energy`,
+            sortOrder: (i + 1) * 10,
+            effectiveDate: new Date(Date.UTC(2026, 0, 1)),
+            predicate: {},
+            quantitySource: { base: "tou_period", peak_code: peakCode },
+            pricing: { type: "flat", rate: 0.1, unit: "kWh" },
+          },
+        });
+      }
+    });
+    return draft.id;
+  }
+
+  const publish = (id: string) =>
+    app.inject({ method: "POST", url: `/api/v1/rate-schedules/${id}/publish`, headers: headers() });
+
+  it("publishes when every period is priced and every priced period exists", async () => {
+    const calendarId = await makeCalendar("TOD-OK", ["peak", "off_peak"]);
+    const id = await makeTouSchedule("TOU-OK", ["peak", "off_peak"], calendarId);
+
+    const res = await publish(id);
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).publishedAt).not.toBeNull();
+  });
+
+  it("refuses when a calendar period is unpriced, and names it", async () => {
+    const calendarId = await makeCalendar("TOD-GAP", ["peak", "mid_peak", "off_peak"]);
+    const id = await makeTouSchedule("TOU-GAP", ["peak", "off_peak"], calendarId);
+
+    const res = await publish(id);
+    expect(res.statusCode).toBe(409);
+    const body = JSON.parse(res.body);
+    expect(body.error?.code).toBe("TOU_PRICING_INCOMPLETE");
+    expect(body.error?.message).toMatch(/mid_peak/);
+    expect(body.error?.message).toMatch(/never charged/i);
+  });
+
+  it("refuses a component pricing a period the calendar does not define", async () => {
+    const calendarId = await makeCalendar("TOD-TYPO", ["peak", "off_peak"]);
+    const id = await makeTouSchedule("TOU-TYPO", ["peak", "off_peak", "pekk"], calendarId);
+
+    const res = await publish(id);
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res.body).error?.message).toMatch(/pekk/);
+  });
+
+  it("refuses a TOU schedule that names no calendar", async () => {
+    const id = await makeTouSchedule("TOU-NOCAL", ["peak", "off_peak"], null);
+
+    const res = await publish(id);
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res.body).error?.code).toBe("TOU_CALENDAR_REQUIRED");
+  });
+
+  it("refuses a calendar that is still a draft", async () => {
+    // TOU-CAL-5: a published schedule cannot reference one whose hours
+    // can still change.
+    const calendarId = await makeCalendar("TOD-DRAFT", ["peak", "off_peak"], { publish: false });
+    const id = await makeTouSchedule("TOU-DRAFT", ["peak", "off_peak"], calendarId);
+
+    const res = await publish(id);
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res.body).error?.code).toBe("TOU_CALENDAR_NOT_PUBLISHED");
+  });
+
+  it("leaves a non-TOU schedule alone", async () => {
+    // The check must cost nothing and refuse nothing on the ordinary
+    // tariff, which is almost all of them.
+    const draft = await createDraftSchedule("PLAIN-1", "Plain Water");
+    const res = await publish(draft.id);
+    expect(res.statusCode).toBe(200);
+  });
+});

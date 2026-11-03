@@ -327,6 +327,25 @@ export async function createBillSegmentForServiceAgreement(
       const meterIds = spMeters.servicePoints.flatMap((sp) => sp.meters.map((m) => m.meterId));
       const meterKeys = meterIds.flatMap((id) => [`meter:reads:${id}`, `meter:size:${id}`]);
 
+      /*
+       * 4a. TOU buckets (spec 26, TOU-REG-1).
+       *
+       * Asked for by **what the tariff prices**, crossed with the SA's
+       * meters — not by the meter's current register mapping. A rate
+       * schedule is versioned and effective-dated; a register mapping is
+       * neither, so deriving the keys from it made re-rating a period
+       * from before a remap ask about today's periods and fail rather
+       * than reproduce the original bill.
+       *
+       * Whether a period is *answerable* is then the loader's business,
+       * and it reads that off the reads themselves, which carry the code
+       * they were stamped with at import. A non-TOU schedule prices no
+       * TOU period, so this adds no keys and costs no query.
+       */
+      const touKeys = engine
+        .touPeakCodes(base)
+        .flatMap((peakCode) => meterIds.map((id) => `meter:tou:${id}:${peakCode}`));
+
       // 5. registry + loadVariables
       const registry = buildRegistry(tx as unknown as typeof prisma, {
         utilityId,
@@ -335,7 +354,7 @@ export async function createBillSegmentForServiceAgreement(
         premiseId: base.sa.premiseId,
         period,
       });
-      const vars = await registry.loadVariables([...manifestKeys, ...meterKeys]);
+      const vars = await registry.loadVariables([...manifestKeys, ...meterKeys, ...touKeys]);
 
       // 6. rate
       const result = engine.rate({ base, vars });

@@ -51,10 +51,18 @@ export class MeterLoader implements Loader {
         description: "Meter role (e.g. primary, irrigation, sub-meter)",
       },
       {
+        pattern: "meter:tou:<meter_id>:<peak_code>",
+        paramTypes: { meter_id: z.string().uuid(), peak_code: z.string() },
+        scope: "per_sa",
+        returns: z.object({ quantity: z.unknown(), unit: z.string() }),
+        description: "One TOU period's consumption for the billing period (spec 26, TOU-REG-1)",
+      },
+      {
         pattern: "meter:peak_demand:<meter_id>:<window>",
         paramTypes: { meter_id: z.string().uuid(), window: z.string() },
         scope: "per_sa",
         description: "Peak demand for a meter — not implemented in Slice 4",
+        unsupported: true,
       },
     ];
   }
@@ -66,9 +74,19 @@ export class MeterLoader implements Loader {
     const meterIdsForReads = new Set<string>();
     const meterIdsForMeta = new Set<string>(); // size + role
     const peakDemandKeys: VariableKey[] = [];
+    /** `meter:tou:<meterId>:<peakCode>` → the two parts, parsed. */
+    const touKeys: Array<{ key: VariableKey; meterId: string; peakCode: string }> = [];
 
     for (const k of keys) {
-      if (k.startsWith("meter:reads:")) {
+      if (k.startsWith("meter:tou:")) {
+        // Parsed, not suffix-matched: peak codes mostly end in "peak",
+        // so a suffix test would answer one period's key with
+        // another's usage.
+        const parts = k.split(":");
+        if (parts.length === 4) {
+          touKeys.push({ key: k, meterId: parts[2]!, peakCode: parts[3]! });
+        }
+      } else if (k.startsWith("meter:reads:")) {
         meterIdsForReads.add(k.slice("meter:reads:".length));
       } else if (k.startsWith("meter:size:")) {
         meterIdsForMeta.add(k.slice("meter:size:".length));
@@ -125,21 +143,113 @@ export class MeterLoader implements Loader {
         select: {
           meterId: true,
           consumption: true,
+          peakCode: true,
           uom: { select: { code: true } },
         },
       });
 
-      const sumByMeter = new Map<string, { quantity: Decimal; unit: string }>();
+      /*
+       * **Totals and TOU buckets are summed separately**, and the total
+       * wins where both exist.
+       *
+       * Since the `tou_registers` migration a meter may carry a total
+       * read *and* a row per TOU period for the same month — TOU-REG-1
+       * expects them to reconcile. Summing the lot would count the month
+       * twice, and the symptom would not be an error: it would be a
+       * tiered charge at double the usage, on an ordinary-looking bill.
+       *
+       * Falling back to the buckets matters just as much. A TOU meter
+       * with no total register still has a month's total, and it is the
+       * sum of its periods — without the fallback, a flat or tiered
+       * component on the same schedule would bill such a customer zero.
+       */
+      const totals = new Map<string, { quantity: Decimal; unit: string }>();
+      const buckets = new Map<string, { quantity: Decimal; unit: string }>();
       for (const r of reads) {
-        const existing = sumByMeter.get(r.meterId);
+        const into = r.peakCode === null ? totals : buckets;
+        const existing = into.get(r.meterId);
         const c = new Decimal(r.consumption.toString());
-        const q = existing ? existing.quantity.plus(c) : c;
-        sumByMeter.set(r.meterId, { quantity: q, unit: r.uom?.code ?? "HCF" });
+        into.set(r.meterId, {
+          quantity: existing ? existing.quantity.plus(c) : c,
+          unit: r.uom?.code ?? "HCF",
+        });
       }
 
       for (const meterId of meterIdsForReads) {
-        const summary = sumByMeter.get(meterId) ?? { quantity: ZERO, unit: "HCF" };
+        const summary =
+          totals.get(meterId) ?? buckets.get(meterId) ?? { quantity: ZERO, unit: "HCF" };
         out.set(`meter:reads:${meterId}`, summary);
+      }
+    }
+
+    /*
+     * TOU buckets (spec 26, TOU-REG-1).
+     *
+     * **The reads decide which periods are answerable, not the register
+     * mapping.** A register meter is read once and the read event
+     * captures *every* register, so a period the meter counts has a row
+     * even when its consumption is zero — and a period with no row is
+     * one the meter has no register for.
+     *
+     * That asymmetry is the point. A customer who used nothing on-peak
+     * owes nothing on-peak and gets a zero. A two-register meter cannot
+     * report mid-peak, and a zero there would bill nothing for mid-peak
+     * usage the meter rolled into one of its other registers — so the
+     * key stays unset, which makes the `tou_period` quantity source
+     * raise and name the period.
+     *
+     * It used to gate on `meter_register.peak_code`. That mapping is
+     * the utility's assignment of meaning to a dial, not something the
+     * device reports (Rao, 2026-11-03), and it is neither versioned nor
+     * effective-dated — so re-rating a period from before a register was
+     * remapped asked about today's periods and failed instead of
+     * reproducing the bill. The reads carry the code they were stamped
+     * with at import and never change, which is what makes a re-rate
+     * exact.
+     *
+     * **The contract this puts on the importer:** write a row per TOU
+     * register on every read event, zero consumption included. Writing
+     * only the non-zero ones would make an unused period
+     * indistinguishable from an absent register, and bill it as the
+     * latter — stopping a bill that should have shown a zero.
+     */
+    if (touKeys.length > 0) {
+      const meterIds = [...new Set(touKeys.map((t) => t.meterId))];
+      const peakCodes = [...new Set(touKeys.map((t) => t.peakCode))];
+
+      const touReads = await this.prisma.meterRead.findMany({
+        where: {
+          meterId: { in: meterIds },
+          utilityId: this.utilityId,
+          peakCode: { in: peakCodes },
+          readDate: { gte: this.period.startDate, lte: this.period.endDate },
+        },
+        select: {
+          meterId: true,
+          peakCode: true,
+          consumption: true,
+          uom: { select: { code: true } },
+        },
+      });
+
+      const summed = new Map<string, { quantity: Decimal; unit: string }>();
+      for (const r of touReads) {
+        const slot = `${r.meterId}:${r.peakCode}`;
+        const existing = summed.get(slot);
+        const c = new Decimal(r.consumption.toString());
+        summed.set(slot, {
+          quantity: existing ? existing.quantity.plus(c) : c,
+          unit: r.uom?.code ?? "HCF",
+        });
+      }
+
+      for (const { key, meterId, peakCode } of touKeys) {
+        const bucket = summed.get(`${meterId}:${peakCode}`);
+        // No row for this period: the meter has no register for it, so
+        // the key stays unset and rating raises rather than billing a
+        // zero for usage another register absorbed.
+        if (!bucket) continue;
+        out.set(key, bucket);
       }
     }
 

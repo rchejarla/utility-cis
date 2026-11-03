@@ -266,6 +266,15 @@ SELECT rate_schedule_id, role
 
 Returns the union of schedules active during the period. The engine then pulls every component from those schedules (each with its own predicate / quantity_source / pricing) and sums them.
 
+**That is right across roles and wrong within one** — and the engine does not currently tell them apart (found 2026-11-03). The example above is swept clean by its own dates: the swap lands on 2026-05-01, so the old supply row expired 2026-04-30 and the query never returns it. Move the swap to 2026-05-15 and the query returns **both** supply rows, `rate()` fires the components of each in full, and the bill carries two supply fixed charges and the month's kWh priced twice. `role` is loaded onto the engine's assignment snapshot and never read, so "delivery + supply + rider" — which must be summed — and "the old supply and its replacement" — which must not — are indistinguishable to it. Nothing refuses the overlap either: `SAScheduleAssignment` has no exclusion constraint, by a deferral its own schema comment records.
+
+Two changes fix it, neither of them an abstraction:
+
+- An **exclusion constraint** on `(utility_id, service_agreement_id, role_code, daterange(effective_date, expiration_date))`, so the swap must be expressed as two non-overlapping windows and a half-done swap is refused at write time rather than discovered on a bill.
+- A **per-window split** in `rate()`: where two windows for one role meet inside a period, each prices only its own part of it — days for a register meter, the intervals themselves where interval data exists (spec 26, TOU-ENG-7).
+
+Until both exist, a tenant must end one assignment on the day before the next period starts. Nothing enforces that, and spec 09 rule 4 says the same from the billing side.
+
 #### Why a join table beats columns or arrays
 
 - **More columns on SA** (`delivery_schedule_id`, `supply_schedule_id`, ...) doesn't scale: every new tariff bundle is a schema change, and most customers have NULLs for most columns.

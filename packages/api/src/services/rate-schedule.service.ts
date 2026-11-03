@@ -9,6 +9,7 @@ import type {
 } from "@utility-cis/shared";
 import { paginatedTenantList } from "../lib/pagination.js";
 import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
+import { validateTouPricing } from "../lib/rate-engine/tou-calendar.js";
 
 /**
  * Recursive deep-walk that rewrites every `component_id: <uuid>` key it
@@ -244,6 +245,8 @@ export async function publishRateSchedule(
     );
   }
 
+  await assertTouPricingComplete(utilityId, before.id, before.touCalendarId);
+
   return auditUpdate(
     { utilityId, actorId, actorName, entityType: "RateSchedule" },
     EVENT_TYPES.RATE_SCHEDULE_PUBLISHED,
@@ -258,4 +261,84 @@ export async function publishRateSchedule(
       return updated;
     },
   );
+}
+
+/**
+ * Publishing a TOU schedule: its periods and its calendar's must agree
+ * (spec 26, TOU-UI-3 and TOU-CAL-5).
+ *
+ * Checked at publish rather than at save, because a draft is allowed to
+ * be half-written — the author adds the calendar, then the components,
+ * in whichever order they like. Publishing is the commitment, and
+ * TOU-CAL-5 is explicit that only a published calendar may be
+ * referenced by a published schedule.
+ *
+ * The expensive failure this exists for is the quiet one: a calendar
+ * period no component prices is energy the customer uses and is never
+ * charged for, and nothing raises — the bucket is simply never asked
+ * about and the bill looks complete.
+ */
+async function assertTouPricingComplete(
+  utilityId: string,
+  scheduleId: string,
+  touCalendarId: string | null,
+): Promise<void> {
+  const components = await prisma.rateComponent.findMany({
+    where: { rateScheduleId: scheduleId, utilityId },
+    select: { quantitySource: true },
+  });
+
+  const pricedCodes = components.flatMap((c) => {
+    const qs = c.quantitySource as Record<string, unknown> | null;
+    if (!qs || typeof qs !== "object" || qs.base !== "tou_period") return [];
+    return typeof qs.peak_code === "string" && qs.peak_code.length > 0 ? [qs.peak_code] : [];
+  });
+
+  if (pricedCodes.length === 0 && touCalendarId === null) return; // Not a TOU tariff.
+
+  if (touCalendarId === null) {
+    throw Object.assign(
+      new Error(
+        "This schedule prices TOU periods but names no TOU calendar, so there is nothing to " +
+          "say which hours those periods cover. Choose a published calendar before publishing.",
+      ),
+      { statusCode: 409, code: "TOU_CALENDAR_REQUIRED" },
+    );
+  }
+
+  const calendar = await prisma.touCalendar.findFirst({
+    where: { id: touCalendarId, utilityId },
+    select: { name: true, publishedAt: true, periods: { select: { peakCode: true } } },
+  });
+  if (!calendar) {
+    throw Object.assign(new Error("The schedule's TOU calendar no longer exists."), {
+      statusCode: 409,
+      code: "TOU_CALENDAR_MISSING",
+    });
+  }
+
+  // TOU-CAL-5: a published schedule cannot reference a draft calendar,
+  // because a draft is still editable and the schedule would stop
+  // meaning what it meant when it was approved.
+  if (calendar.publishedAt === null) {
+    throw Object.assign(
+      new Error(
+        `TOU calendar "${calendar.name}" is still a draft. Publish the calendar first — a ` +
+          "published schedule cannot reference one whose hours can still change.",
+      ),
+      { statusCode: 409, code: "TOU_CALENDAR_NOT_PUBLISHED" },
+    );
+  }
+
+  const result = validateTouPricing(
+    pricedCodes,
+    calendar.periods.map((p) => p.peakCode),
+  );
+  if (!result.ok) {
+    throw Object.assign(new Error(result.problems.join(" ")), {
+      statusCode: 409,
+      code: "TOU_PRICING_INCOMPLETE",
+      problems: result.problems,
+    });
+  }
 }

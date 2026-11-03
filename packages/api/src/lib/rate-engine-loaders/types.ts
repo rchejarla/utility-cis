@@ -12,6 +12,19 @@ export interface LoaderCapability {
   returns?: ZodSchema;
   scope: "per_sa" | "per_tenant" | "global";
   description: string;
+  /**
+   * Declared so the registry routes the key, but the loader raises
+   * rather than answering it.
+   *
+   * It exists to give a recognised key a clear error instead of "no
+   * registered loader", which reads as a typo. Marked rather than
+   * inferred, because the one thing that must never happen is the
+   * rate-schedule editor offering an author a variable that always
+   * fails: `grammar-introspection.test.ts` requires every *other*
+   * capability to be documented in `VARIABLE_NAMESPACES`, and skips
+   * these.
+   */
+  unsupported?: true;
 }
 
 export class UnsupportedInSlice4Error extends Error {

@@ -11,7 +11,21 @@ export type QuantitySource = {
   source_attr?: string;
   interval_minutes?: number;
   aggregation?: "max" | "sum" | "avg";
+  /** `tou_period` base: which of the calendar's periods this prices. */
+  peak_code?: string;
 };
+
+/**
+ * Where a TOU bucket lives: `meter:tou:<meterId>:<peakCode>`.
+ *
+ * **The loader emits one per period in the calendar, zero included.**
+ * That contract is what lets an absent bucket raise instead of billing
+ * nothing: a customer with no on-peak usage has a bucket reading zero,
+ * so a missing bucket means the TOU data did not load — and returning
+ * zero there would bill a TOU customer nothing for their peak usage on
+ * a bill that looked like a quiet month.
+ */
+const TOU_VAR_PREFIX = "meter:tou:";
 
 /**
  * The quantity a component prices, in the unit that component prices in.
@@ -98,6 +112,53 @@ function lookupBase(
       }
       return toDecimal(total);
     }
+    case "tou_period": {
+      /*
+       * One TOU period's usage (spec 26, TOU-ENG-1).
+       *
+       * A base rather than a filter on `metered`, because on-peak kWh
+       * cannot be derived from total kWh — the quantity *is* this
+       * period's usage, read from where it lives. Each period is its
+       * own component with its own price and its own bill line, which
+       * is how tariffs are written and how bills read.
+       */
+      const peakCode = qsource.peak_code;
+      if (!peakCode) {
+        throw new Error("tou_period quantity source requires peak_code");
+      }
+
+      /*
+       * The key is parsed, not suffix-matched. `peak`, `mid_peak`,
+       * `off_peak` and `super_off_peak` all end in "peak", so a suffix
+       * test would have the on-peak charge price off-peak usage — at
+       * roughly twice the rate, on every TOU bill, with nothing raised.
+       */
+      const buckets = [...ctx.vars.keys()].filter((key) => {
+        if (!key.startsWith(TOU_VAR_PREFIX)) return false;
+        const parts = key.split(":");
+        return parts.length === 4 && parts[3] === peakCode;
+      });
+
+      if (buckets.length === 0) {
+        throw new Error(
+          `Quantity source 'tou_period' requires a ${TOU_VAR_PREFIX}<meter>:${peakCode} variable. ` +
+            "The loader emits one per period in the calendar, zero included, so none means " +
+            "the TOU data did not load for this period.",
+        );
+      }
+
+      // Summed across the agreement's meters, each converted first: two
+      // meters reporting in different units cannot simply be added.
+      let total = ZERO;
+      for (const key of buckets) {
+        const read = ctx.vars.get(key) as { quantity: number | string; unit?: string };
+        const quantity = toDecimal(read.quantity);
+        total = total.plus(
+          targetUnit && read.unit ? convertQuantity(quantity, read.unit, targetUnit) : quantity,
+        );
+      }
+      return total;
+    }
     case "peak_demand":
       throw new UnsupportedInSlice3Error("peak_demand quantity source");
     default:
@@ -136,7 +197,21 @@ function applyTransform(
       return Decimal.max(ZERO, qty.minus(linked));
     }
     case "tou_window_filter":
-      throw new UnsupportedInSlice3Error("tou_window_filter transform");
+      /*
+       * Left unimplemented on purpose. A transform takes a quantity and
+       * returns one, and on-peak kWh cannot be computed from total kWh
+       * — so this would have to ignore its own input and read the
+       * buckets itself. The `tou_period` base above is that, honestly
+       * shaped.
+       *
+       * It may yet earn its keep for **demand**, where filtering to the
+       * on-peak window and then taking the maximum genuinely is a
+       * filter over a series. That waits for `peak_demand`, which is
+       * its own spec after slice 2.
+       */
+      throw new UnsupportedInSlice3Error(
+        "tou_window_filter transform — use the 'tou_period' quantity source base instead",
+      );
     case "power_factor":
       throw new UnsupportedInSlice3Error("power_factor transform");
     case "load_factor":

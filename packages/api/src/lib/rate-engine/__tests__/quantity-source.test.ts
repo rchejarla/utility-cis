@@ -316,3 +316,127 @@ describe("resolveQuantity — transforms", () => {
     expect(result.toString()).toBe("0.2");
   });
 });
+
+describe("tou_period base (spec 26, TOU-ENG-1)", () => {
+  /**
+   * Each TOU period is its own charge with its own price and its own
+   * bill line, which is how tariffs are written and how bills read. So
+   * the component names the period whose quantity it prices, and the
+   * quantity *is* that period's usage — read from where it lives, not
+   * derived from the total.
+   *
+   * That is why this is a base and not the `tou_window_filter`
+   * transform the grammar first sketched: on-peak kWh cannot be
+   * computed from total kWh, so such a transform would have to ignore
+   * its own input.
+   */
+
+  const bucket = (quantity: string | number, unit?: string) => ({ quantity, unit });
+
+  it("prices the named period's usage", () => {
+    const vars = new Map<string, unknown>([
+      ["meter:tou:m-1:peak", bucket(120, "kWh")],
+      ["meter:tou:m-1:off_peak", bucket(680, "kWh")],
+    ]);
+    const result = resolveQuantity({ base: "tou_period", peak_code: "peak" }, makeCtx({}, vars));
+    expect(result.toString()).toBe("120");
+  });
+
+  it("bills a period with no usage as zero rather than raising", () => {
+    // A customer who used nothing on-peak owes nothing on-peak. The
+    // bucket exists and reads zero, which is a different thing from the
+    // bucket being absent.
+    const vars = new Map<string, unknown>([["meter:tou:m-1:peak", bucket(0, "kWh")]]);
+    const result = resolveQuantity({ base: "tou_period", peak_code: "peak" }, makeCtx({}, vars));
+    expect(result.toString()).toBe("0");
+  });
+
+  it("raises when the period's bucket is absent", () => {
+    /*
+     * **The contract that closes the silent-zero failure.** The loader
+     * emits a bucket for every period in the calendar, zero included,
+     * so an absent one means the TOU data did not load. Returning zero
+     * here would bill a TOU customer nothing for their on-peak usage
+     * and look like a quiet month.
+     */
+    const vars = new Map<string, unknown>([["meter:tou:m-1:off_peak", bucket(680, "kWh")]]);
+    expect(() =>
+      resolveQuantity({ base: "tou_period", peak_code: "peak" }, makeCtx({}, vars)),
+    ).toThrow(/meter:tou:.*peak/);
+  });
+
+  it("requires the component to name a period", () => {
+    expect(() => resolveQuantity({ base: "tou_period" }, makeCtx({}, new Map()))).toThrow(
+      /peak_code/,
+    );
+  });
+
+  it("does not confuse one period's code with another's", () => {
+    /*
+     * `peak`, `mid_peak`, `off_peak` and `super_off_peak` all end in
+     * "peak". Matching the key by suffix would have the on-peak charge
+     * price the off-peak usage — at roughly twice the rate, on every
+     * TOU bill, with nothing raised.
+     */
+    const vars = new Map<string, unknown>([
+      ["meter:tou:m-1:peak", bucket(10, "kWh")],
+      ["meter:tou:m-1:mid_peak", bucket(200, "kWh")],
+      ["meter:tou:m-1:off_peak", bucket(300, "kWh")],
+      ["meter:tou:m-1:super_off_peak", bucket(400, "kWh")],
+    ]);
+    const ctx = makeCtx({}, vars);
+    expect(resolveQuantity({ base: "tou_period", peak_code: "peak" }, ctx).toString()).toBe("10");
+    expect(resolveQuantity({ base: "tou_period", peak_code: "mid_peak" }, ctx).toString()).toBe("200");
+    expect(resolveQuantity({ base: "tou_period", peak_code: "off_peak" }, ctx).toString()).toBe("300");
+    expect(
+      resolveQuantity({ base: "tou_period", peak_code: "super_off_peak" }, ctx).toString(),
+    ).toBe("400");
+  });
+
+  it("sums the period across an agreement's meters", () => {
+    // An agreement with two meters owes the sum of their on-peak usage.
+    const vars = new Map<string, unknown>([
+      ["meter:tou:m-1:peak", bucket(120, "kWh")],
+      ["meter:tou:m-2:peak", bucket(80, "kWh")],
+    ]);
+    const result = resolveQuantity({ base: "tou_period", peak_code: "peak" }, makeCtx({}, vars));
+    expect(result.toString()).toBe("200");
+  });
+
+  it("converts each meter into the pricing unit before summing", () => {
+    // Two meters in different units cannot simply be added. 1 MWh is
+    // 1000 kWh, so this is 1120 and not 121.
+    const vars = new Map<string, unknown>([
+      ["meter:tou:m-1:peak", bucket(120, "kWh")],
+      ["meter:tou:m-2:peak", bucket(1, "MWh")],
+    ]);
+    const result = resolveQuantity(
+      { base: "tou_period", peak_code: "peak" },
+      makeCtx({}, vars),
+      "kWh",
+    );
+    expect(result.toString()).toBe("1120");
+  });
+
+  it("keeps decimal precision when summing meters", () => {
+    const vars = new Map<string, unknown>([
+      ["meter:tou:m-1:peak", bucket("0.1", "kWh")],
+      ["meter:tou:m-2:peak", bucket("0.2", "kWh")],
+    ]);
+    const result = resolveQuantity({ base: "tou_period", peak_code: "peak" }, makeCtx({}, vars));
+    expect(result.toString()).toBe("0.3");
+  });
+
+  it("still applies transforms, so a TOU quantity can be prorated", () => {
+    const vars = new Map<string, unknown>([["meter:tou:m-1:peak", bucket(100, "kWh")]]);
+    const result = resolveQuantity(
+      {
+        base: "tou_period",
+        peak_code: "peak",
+        transforms: [{ type: "clamp", max: 60 }],
+      },
+      makeCtx({}, vars),
+    );
+    expect(result.toString()).toBe("60");
+  });
+});
