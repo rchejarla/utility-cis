@@ -89,6 +89,34 @@ existing seasonal tariffs, so seasons become configuration first.
   chooses how a period spanning two seasons is decided — by start date
   (today's behaviour, the default), by majority of days, or by prorating
   the component across both. Recorded on the season set.
+- **TOU-SEA-6 (Must; built 2026-11-03).** Publishing a set must name the
+  **published TOU calendars keyed on a different one**, before the
+  button is pressed and again in the response.
+
+  A TOU calendar names its season set explicitly and a published one is
+  immutable, so it keeps those seasons for ever — that is TOU-CAL-10 and
+  it is correct. Non-TOU charges do not: `load-base.ts` takes whichever
+  published set is in force for the period. So from the day a new set
+  takes effect, one customer's water bill follows the new boundaries
+  while their TOU electric bill keeps the old ones. **Both are right by
+  their own rules and nothing else in the system compares them**, which
+  is what makes this a screen's job rather than a validation rule: it
+  cannot be refused, because the state is legitimate. What is not
+  legitimate is a tenant not knowing.
+
+  Reported on the editor (`calendarsOnOtherSets`) rather than only on
+  the publish response, because a warning that arrives after an
+  irreversible step is a post-mortem. Draft calendars are left out —
+  they have priced nothing — and so is a calendar keyed on the set being
+  published, since reporting agreement would train people to ignore the
+  warning.
+
+  The matching refusal is on the other side: a season **code** a
+  calendar's hours reference cannot be removed or renamed
+  (`SEASON_CODE_IN_USE`), because `tou_slot.season_code` is a string
+  with no foreign key, so a rename would leave those hours pricing
+  nothing and `resolvePeak` answering "no period covers 17:15" on every
+  bill.
 
 ## Naming (decided 2026-11-02)
 
@@ -682,6 +710,39 @@ raw intervals from the same meters. Compression is therefore entirely a
 
 ## 5. Configuration UI
 
+> **Built 2026-11-03**, except where a requirement says otherwise below:
+> `/season-sets` and `/tou-calendars` with their editors, the API under
+> `/api/v1/season-sets` and `/api/v1/tou-calendars`, and a read-only
+> `/api/v1/tou-holiday-lists` carrying the resolved dates. All under the
+> **`rate_schedules`** module rather than one of their own — a calendar
+> is only ever the hours a schedule prices against, and a separate
+> module would have to be enabled per tenant, leaving someone with
+> `rate_schedules:EDIT` able to build a schedule they cannot publish.
+>
+> **The child collections are replaced whole** (`PUT …/periods`,
+> `…/day-types`, `…/spans`, `…/overrides`, `…/seasons`) rather than
+> edited row by row. Every invariant they carry belongs to the list: the
+> spans of a (season, day type) must tile the day exactly once, the
+> seven weekdays must be claimed exactly once, a set must cover the year
+> exactly once. Row-at-a-time saving makes every intermediate state
+> invalid, which reduces validation to advice — and "move Saturday from
+> weekday to weekend" is not expressible as two row edits at all,
+> because `tou_day_type_weekday_once_per_calendar` makes a weekday one
+> day type's property.
+>
+> **Both editors run the engine's own functions.** `validateCalendar`,
+> `resolvePeak`, `resolveDayType`, `validateSeasons` and
+> `seasonCoverage` are called server-side over the definition the
+> *rating* loader's mapper produces (`toTouCalendarDefinition`, extracted
+> for this). So the validation, the spot check, the day preview and the
+> year bar cannot say anything a bill would not. A second classifier in
+> the browser would eventually bless a calendar the engine reads
+> differently, and the wrapped season is exactly where it would start.
+>
+> **Still to build:** TOU-UI-1d (the published-version diff), the
+> holiday *editor* (TOU-UI-2's write half — rules are still inserted by
+> hand), TOU-UI-3's editor half, TOU-UI-4 and TOU-UI-5.
+
 ### The calendar editor
 
 Expanded 2026-11-02, because "a grid painted by period" is two lines
@@ -722,7 +783,8 @@ it is wrong.
   screen: it is how somebody checks a calendar before publishing, and
   the holiday interaction is the part people get wrong.
 
-- **TOU-UI-1d (Must).** A published version is **read-only, with a diff
+- **TOU-UI-1d (Must).** *Read-only is built; the diff is not.* A
+  published version is **read-only, with a diff
   against the version it replaced**. "What changed between v1 and v2,
   and from when" is what a regulator and a disputing customer both ask,
   and reconstructing it by opening two screens is how the wrong answer
@@ -734,7 +796,12 @@ it is wrong.
   out — the same mechanism as TOU-UI-1c but for a whole day, which is
   how a holiday-observance rule gets sanity-checked.
 
-- **TOU-UI-2 (Must).** A holiday editor: fixed dates and rules ("fourth
+- **TOU-UI-2 (Must).** *The resolved dates are built
+  (`GET /api/v1/tou-holiday-lists/:id/resolved`, three years, each date
+  flagged `moved` where the observance rule shifted it and
+  `sharesObservedDate` where two rules land on one day); the editing
+  half is not, so rules are still inserted by hand.* A holiday editor:
+  fixed dates and rules ("fourth
   Thursday of November"), each with its observance rule, and **the
   resolved dates for the current and next two years shown beside the
   rule that produced them**. A rule nobody can see the output of is a

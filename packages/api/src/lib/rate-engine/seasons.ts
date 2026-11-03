@@ -90,6 +90,36 @@ function isRealDate(month: number, day: number): boolean {
 }
 
 /**
+ * Which seasons claim each day of the year, by ordinal.
+ *
+ * 366 entries, because the year enumerated is a leap year on purpose —
+ * see `LEAP_YEAR`. Exported so the season editor's year bar is drawn
+ * from the same computation that decides whether the set is valid: a
+ * screen with its own containment arithmetic would eventually show a
+ * tidy green year for a set the validator rejects, and the wrap case
+ * (Nov 1 – Mar 31) is exactly where that would happen.
+ *
+ * A season whose boundary is not a real date claims nothing, which is
+ * the truth — `30 February` covers no day — and leaves those days
+ * showing as uncovered while `validateSeasons` names the real fault.
+ */
+export function seasonCoverage(seasons: SeasonDefinition[]): string[][] {
+  const total = ordinal(12, 31) + 1;
+  const claimedBy: string[][] = Array.from({ length: total }, () => []);
+  for (const s of seasons) {
+    if (!isRealDate(s.startMonth, s.startDay) || !isRealDate(s.endMonth, s.endDay)) continue;
+    for (const day of coveredOrdinals(s)) claimedBy[day].push(s.seasonCode);
+  }
+  return claimedBy;
+}
+
+/** The month and day an ordinal falls on, for labelling the year bar. */
+export function ordinalDate(day: number): { month: number; day: number } {
+  const d = new Date(Date.UTC(LEAP_YEAR, 0, 1) + day * 86_400_000);
+  return { month: d.getUTCMonth() + 1, day: d.getUTCDate() };
+}
+
+/**
  * Does this set cover every day of the year exactly once?
  *
  * Reports **every** gap and overlap by date rather than stopping at the
@@ -125,11 +155,8 @@ export function validateSeasons(seasons: SeasonDefinition[]): SeasonValidation {
 
   if (problems.length > 0) return { ok: false, problems };
 
-  const total = ordinal(12, 31) + 1;
-  const claimedBy: string[][] = Array.from({ length: total }, () => []);
-  for (const s of seasons) {
-    for (const day of coveredOrdinals(s)) claimedBy[day].push(s.seasonCode);
-  }
+  const claimedBy = seasonCoverage(seasons);
+  const total = claimedBy.length;
 
   for (let day = 0; day < total; day++) {
     const d = new Date(Date.UTC(LEAP_YEAR, 0, 1) + day * 86_400_000);

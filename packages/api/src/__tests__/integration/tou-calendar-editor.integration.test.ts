@@ -598,6 +598,83 @@ describe("publishing", () => {
   });
 });
 
+describe("the holiday list's resolved dates (TOU-UI-2)", () => {
+  /*
+   * A rule nobody can see the output of is a rule nobody will trust,
+   * and the observance rules are where the surprises live: "4 July,
+   * nearest weekday" does not tell anybody that 2026 lands on a
+   * Saturday and moves the holiday to the Friday — which moves a peak
+   * weekday to off-peak.
+   */
+  it("resolves three years and marks the dates an observance rule moved", async () => {
+    const res = await inject(
+      "GET",
+      `/api/v1/tou-holiday-lists/${holidayListId}/resolved?fromYear=2026`,
+    );
+    expect(res.statusCode).toBe(200);
+    const payload = body(res);
+    expect(payload.fromYear).toBe(2026);
+    expect(payload.toYear).toBe(2028);
+
+    const independence = payload.resolved.filter(
+      (r: { code: string }) => r.code === "independence_day",
+    );
+    expect(independence).toHaveLength(3);
+
+    // 2026: 4 July is a Saturday, so it is observed on Friday the 3rd.
+    const y2026 = independence.find((r: { year: number }) => r.year === 2026);
+    expect(y2026).toMatchObject({ actual: "2026-07-04", observed: "2026-07-03", moved: true });
+
+    // 2027: 4 July is a Sunday → the Monday after.
+    const y2027 = independence.find((r: { year: number }) => r.year === 2027);
+    expect(y2027).toMatchObject({ actual: "2027-07-04", observed: "2027-07-05", moved: true });
+
+    // 2028: a Tuesday, so nothing moves and `moved` must say so.
+    const y2028 = independence.find((r: { year: number }) => r.year === 2028);
+    expect(y2028).toMatchObject({ actual: "2028-07-04", observed: "2028-07-04", moved: false });
+  });
+
+  it("resolves an nth-weekday rule to the right date", async () => {
+    const res = await inject(
+      "GET",
+      `/api/v1/tou-holiday-lists/${holidayListId}/resolved?fromYear=2026`,
+    );
+    const thanksgiving = body(res).resolved.find(
+      (r: { code: string; year: number }) => r.code === "thanksgiving" && r.year === 2026,
+    );
+    // The fourth Thursday of November 2026 is the 26th.
+    expect(thanksgiving).toMatchObject({ observed: "2026-11-26", moved: false });
+  });
+
+  it("lists the rules beside their output", async () => {
+    const res = await inject(
+      "GET",
+      `/api/v1/tou-holiday-lists/${holidayListId}/resolved?fromYear=2026`,
+    );
+    expect(body(res).rules.map((r: { code: string }) => r.code).sort()).toEqual([
+      "independence_day",
+      "thanksgiving",
+    ]);
+  });
+});
+
+describe("season sets, for the calendar form", () => {
+  it("lists them with their seasons, so the form can say how many", async () => {
+    const res = await inject("GET", "/api/v1/season-sets");
+    expect(res.statusCode).toBe(200);
+    const published = body(res).data.find(
+      (s: { name: string }) => s.name === "Published seasons",
+    );
+    expect(published.seasons).toHaveLength(2);
+    expect(published.publishedAt).toBeTruthy();
+  });
+
+  it("includes drafts, because a draft calendar may name one", async () => {
+    const res = await inject("GET", "/api/v1/season-sets?status=draft");
+    expect(body(res).data.map((s: { name: string }) => s.name)).toEqual(["Draft seasons"]);
+  });
+});
+
 describe("deleting", () => {
   it("deletes a draft", async () => {
     const calendar = await createCalendar();

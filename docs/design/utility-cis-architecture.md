@@ -921,6 +921,22 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | POST | `/api/v1/rate-schedules` | Rate |
 | GET | `/api/v1/rate-schedules/:id` | Rate |
 | POST | `/api/v1/rate-schedules/:id/revise` | Rate |
+| GET POST | `/api/v1/season-sets` | Rate (seasons; `rate_schedules` module) |
+| GET PATCH DELETE | `/api/v1/season-sets/:id` | Rate |
+| PUT | `/api/v1/season-sets/:id/seasons` | Rate (whole list — the coverage rule is the list's) |
+| POST | `/api/v1/season-sets/:id/publish` | Rate (names diverging TOU calendars) |
+| GET POST | `/api/v1/tou-calendars` | Rate |
+| GET PATCH DELETE | `/api/v1/tou-calendars/:id` | Rate |
+| PUT | `/api/v1/tou-calendars/:id/periods` | Rate (whole list) |
+| PUT | `/api/v1/tou-calendars/:id/day-types` | Rate (whole list, with weekdays) |
+| PUT | `/api/v1/tou-calendars/:id/spans` | Rate (one season + day type's hours) |
+| PUT | `/api/v1/tou-calendars/:id/overrides` | Rate (whole list) |
+| POST | `/api/v1/tou-calendars/:id/publish` | Rate |
+| GET | `/api/v1/tou-calendars/:id/validation` | Rate |
+| GET | `/api/v1/tou-calendars/:id/spot-check` | Rate (date + time → period, and why) |
+| GET | `/api/v1/tou-calendars/:id/day` | Rate (a whole day laid out) |
+| GET | `/api/v1/tou-holiday-lists` | Rate (read-only; no editor yet) |
+| GET | `/api/v1/tou-holiday-lists/:id/resolved` | Rate (three years of dates, `moved` flagged) |
 | GET | `/api/v1/billing-cycles` | Billing |
 | POST | `/api/v1/billing-cycles` | Billing |
 | GET | `/api/v1/billing-cycles/:id` | Billing |
@@ -1123,6 +1139,12 @@ Clients can pull the document and generate SDKs, contract tests, or API consoles
 | Rate Schedules | `/rate-schedules` | Table with commodity/type/active filters |
 | Rate Schedule Detail | `/rate-schedules/:id` | Tabs: Overview, Version History, Revise action; contextual tooltips referencing BR-RS rules |
 | Rate Schedule Create | `/rate-schedules/new` | Dynamic form: tier builder for TIERED, JSON for TOU/DEMAND; HelpTooltip on all fields |
+| Seasons | `/season-sets` | Table with status filter; season labels and how many TOU calendars are keyed on each |
+| Season Set Detail | `/season-sets/[id]` | 366-day year bar drawn from the engine's own coverage; month/day rows that may wrap the year; validation by date; publish, which names published TOU calendars keyed on a different set (TOU-SEA-6); read-only once published |
+| Season Set Create | `/season-sets/new` | Header only — the seasons are a list with a coverage rule, added on the editor |
+| TOU Calendars | `/tou-calendars` | Table with status filter; the span count, which is what shows a half-built calendar |
+| TOU Calendar Detail | `/tou-calendars/[id]` | Periods and day types as whole lists; a 96-quarter strip per (season, day type) rendered *from* the span rows; validation in words; spot check and whole-day preview answered by the engine server-side; copy hours between groups; read-only once published |
+| TOU Calendar Create | `/tou-calendars/new` | Header only: name, effective date, season set, holiday list, IANA zone, clock basis |
 | Billing Cycles | `/billing-cycles` | Table |
 | Billing Cycle Detail | `/billing-cycles/:id` | Overview; inline editing; Deactivate button |
 | Commodities & UOM | `/commodities` | Inline edit, UOM table per commodity |

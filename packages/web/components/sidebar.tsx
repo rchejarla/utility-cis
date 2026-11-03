@@ -18,6 +18,7 @@ import {
   faMoneyBill,
   faMoneyBillTransfer,
   faCalendarDays,
+  faClock,
   faDroplet,
   faClipboardList,
   faClipboardCheck,
@@ -320,6 +321,20 @@ export const navSections: NavSection[] = [
       { href: "/premise-types", label: "Premise Types", icon: faHouse, module: "premises" },
       { href: "/account-types", label: "Account Types", icon: faIdCard, module: "accounts" },
       { href: "/rate-schedules", label: "Rate Schedules", icon: faMoneyBill, module: "rate_schedules" },
+      /*
+       * Beside Rate Schedules and under the same module, because that is
+       * the relationship: a calendar is only ever the hours a schedule
+       * prices against, and a schedule naming one cannot be published
+       * unless the two agree.
+       */
+      { href: "/tou-calendars", label: "TOU Calendars", icon: faClock, module: "rate_schedules" },
+      /*
+       * Seasons sit under a calendar rather than above it in the list,
+       * even though a calendar depends on a set, because a tenant meets
+       * them in that order: they come looking for time-of-use and find
+       * out seasons exist.
+       */
+      { href: "/season-sets", label: "Seasons", icon: faCalendarDays, module: "rate_schedules" },
       { href: "/billing-cycles", label: "Billing Cycles", icon: faCalendarDays, module: "billing_cycles" },
       { href: "/settings/custom-fields", label: "Custom Fields", icon: faListCheck, module: "tenant_profile" },
       { href: "/settings/bill-messages", label: "Bill Messages", icon: faCommentDots, module: "settings" },

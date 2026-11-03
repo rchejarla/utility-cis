@@ -70,6 +70,15 @@ export const EVENT_TYPES = {
   TOU_CALENDAR_DAY_TYPES_SET: "tou_calendar.day_types_set",
   TOU_CALENDAR_SPANS_SET: "tou_calendar.spans_set",
   TOU_CALENDAR_OVERRIDES_SET: "tou_calendar.overrides_set",
+  /**
+   * A season boundary decides which price applies, so moving one
+   * changes bills as surely as changing a price does — audited for the
+   * same reason the calendar is.
+   */
+  SEASON_SET_CREATED: "season_set.created",
+  SEASON_SET_UPDATED: "season_set.updated",
+  SEASON_SET_PUBLISHED: "season_set.published",
+  SEASON_SET_SEASONS_SET: "season_set.seasons_set",
   BILLING_CYCLE_CREATED: "billing_cycle.created",
   BILLING_CYCLE_UPDATED: "billing_cycle.updated",
   BILL_SEGMENT_CREATED: "bill_segment.created",
