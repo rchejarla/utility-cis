@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { manifest } from "../manifest.js";
+import { manifest, touPeakCodes } from "../manifest.js";
 import type {
   BaseContext,
   RateComponentSnapshot,
@@ -249,5 +249,85 @@ describe("manifest()", () => {
       "meter:reads:m-2",
       "tenant:drought_stage",
     ]);
+  });
+});
+
+
+describe("touPeakCodes (spec 26, TOU-ENG-1)", () => {
+  /**
+   * Which TOU periods a schedule prices, which is what the caller
+   * crosses with the SA's meters to ask for buckets.
+   *
+   * **Driven by the tariff, not by the meter's registers.** A rate
+   * schedule is versioned and effective-dated; a register mapping is
+   * neither, so deriving the keys from the registers made re-rating a
+   * period from before a remap ask about today's periods and fail
+   * instead of reproducing the original bill.
+   */
+
+  const touComponent = (id: string, peakCode: string): RateComponentSnapshot =>
+    mkComponent({
+      id,
+      kindCode: "consumption",
+      quantitySource: { base: "tou_period", peak_code: peakCode },
+      pricing: { type: "flat", rate: 0.1, unit: "kWh" },
+    });
+
+  it("collects the distinct periods, sorted", () => {
+    const base = mkBase([
+      mkAssignment("rs-1", [
+        touComponent("c-peak", "peak"),
+        touComponent("c-off", "off_peak"),
+        touComponent("c-mid", "mid_peak"),
+      ]),
+    ]);
+    expect(touPeakCodes(base)).toEqual(["mid_peak", "off_peak", "peak"]);
+  });
+
+  it("collects a period once however many components price it", () => {
+    // One per season is the normal shape: summer on-peak and
+    // non-summer on-peak are two components pricing one period.
+    const base = mkBase([
+      mkAssignment("rs-1", [touComponent("c-summer-peak", "peak"), touComponent("c-winter-peak", "peak")]),
+    ]);
+    expect(touPeakCodes(base)).toEqual(["peak"]);
+  });
+
+  it("collects across every assigned schedule", () => {
+    // Delivery and supply are separate schedules on one agreement, and
+    // either may price TOU.
+    const base = mkBase([
+      mkAssignment("rs-delivery", [touComponent("c-d", "peak")]),
+      mkAssignment("rs-supply", [touComponent("c-s", "off_peak")]),
+    ]);
+    expect(touPeakCodes(base)).toEqual(["off_peak", "peak"]);
+  });
+
+  it("returns nothing for a schedule that prices no TOU period", () => {
+    // The common case, and the reason this costs a non-TOU bill
+    // nothing: no codes, so no keys, so no query.
+    const base = mkBase([
+      mkAssignment("rs-1", [
+        mkComponent({ id: "c-flat", quantitySource: { base: "metered" } }),
+        mkComponent({ id: "c-fixed", quantitySource: { base: "fixed" } }),
+      ]),
+    ]);
+    expect(touPeakCodes(base)).toEqual([]);
+  });
+
+  it("ignores a tou_period component with no peak code", () => {
+    /*
+     * A half-authored component. `meter:tou:<meter>:` is not a key any
+     * loader answers, so asking for it would fail in the registry
+     * rather than at the quantity source, which already raises on a
+     * missing `peak_code` and names the component.
+     */
+    const base = mkBase([
+      mkAssignment("rs-1", [
+        mkComponent({ id: "c-broken", quantitySource: { base: "tou_period" } }),
+        mkComponent({ id: "c-empty", quantitySource: { base: "tou_period", peak_code: "" } }),
+      ]),
+    ]);
+    expect(touPeakCodes(base)).toEqual([]);
   });
 });

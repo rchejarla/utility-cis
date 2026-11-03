@@ -185,32 +185,37 @@ export class MeterLoader implements Loader {
     /*
      * TOU buckets (spec 26, TOU-REG-1).
      *
-     * **The mapped registers decide which periods are answerable.** A
-     * register carrying a peak code is the meter's declaration that it
-     * counts that period, so this answers for a mapped period — zero
-     * included, since a customer who used nothing on-peak owes nothing
-     * — and answers *not at all* for a period no register covers.
+     * **The reads decide which periods are answerable, not the register
+     * mapping.** A register meter is read once and the read event
+     * captures *every* register, so a period the meter counts has a row
+     * even when its consumption is zero — and a period with no row is
+     * one the meter has no register for.
      *
-     * That asymmetry is the point. A two-register meter cannot report
-     * mid-peak, and a zero there would bill nothing for mid-peak usage
-     * the meter rolled into one of its two registers. Leaving the key
-     * unset makes the `tou_period` quantity source raise, which stops
-     * the bill and names the period.
+     * That asymmetry is the point. A customer who used nothing on-peak
+     * owes nothing on-peak and gets a zero. A two-register meter cannot
+     * report mid-peak, and a zero there would bill nothing for mid-peak
+     * usage the meter rolled into one of its other registers — so the
+     * key stays unset, which makes the `tou_period` quantity source
+     * raise and name the period.
+     *
+     * It used to gate on `meter_register.peak_code`. That mapping is
+     * the utility's assignment of meaning to a dial, not something the
+     * device reports (Rao, 2026-11-03), and it is neither versioned nor
+     * effective-dated — so re-rating a period from before a register was
+     * remapped asked about today's periods and failed instead of
+     * reproducing the bill. The reads carry the code they were stamped
+     * with at import and never change, which is what makes a re-rate
+     * exact.
+     *
+     * **The contract this puts on the importer:** write a row per TOU
+     * register on every read event, zero consumption included. Writing
+     * only the non-zero ones would make an unused period
+     * indistinguishable from an absent register, and bill it as the
+     * latter — stopping a bill that should have shown a zero.
      */
     if (touKeys.length > 0) {
       const meterIds = [...new Set(touKeys.map((t) => t.meterId))];
       const peakCodes = [...new Set(touKeys.map((t) => t.peakCode))];
-
-      const registers = await this.prisma.meterRegister.findMany({
-        where: {
-          meterId: { in: meterIds },
-          utilityId: this.utilityId,
-          isActive: true,
-          peakCode: { in: peakCodes },
-        },
-        select: { meterId: true, peakCode: true, uom: { select: { code: true } } },
-      });
-      const mapped = new Map(registers.map((r) => [`${r.meterId}:${r.peakCode}`, r]));
 
       const touReads = await this.prisma.meterRead.findMany({
         where: {
@@ -239,13 +244,12 @@ export class MeterLoader implements Loader {
       }
 
       for (const { key, meterId, peakCode } of touKeys) {
-        const slot = `${meterId}:${peakCode}`;
-        const register = mapped.get(slot);
-        if (!register) continue; // Not a period this meter reports.
-        out.set(
-          key,
-          summed.get(slot) ?? { quantity: ZERO, unit: register.uom?.code ?? "HCF" },
-        );
+        const bucket = summed.get(`${meterId}:${peakCode}`);
+        // No row for this period: the meter has no register for it, so
+        // the key stays unset and rating raises rather than billing a
+        // zero for usage another register absorbed.
+        if (!bucket) continue;
+        out.set(key, bucket);
       }
     }
 

@@ -391,47 +391,88 @@ describe("MeterLoader - TOU buckets (spec 26, TOU-REG-1/2)", () => {
     expect(qty(out, `meter:tou:${fix.meterId}:off_peak`)).toBe("500");
   });
 
-  it("reports zero for a mapped period with no reads", async () => {
-    // The customer who used nothing on-peak. The register says the
-    // meter counts that period, so the answer is zero rather than
-    // absent.
+  it("reports zero for a period the meter read as zero", async () => {
+    /*
+     * The customer who used nothing on-peak. A register meter is read
+     * once and the event captures every register, so the on-peak dial
+     * produced a row too - reading the same as its prior reading, so
+     * consumption zero. The row is what makes zero the answer rather
+     * than "absent".
+     */
     const { fix, saId } = await makeMeterFixture({});
     await mapRegisters(fix, fix.meterId, ["peak", "off_peak"]);
-    await seedRead({
-      meterId: fix.meterId, saId, uomId: fix.uomId, utilityId: fix.utilityId,
-      readDate: new Date("2026-01-20"), consumption: "500", peakCode: "off_peak",
-    });
+    const common = { meterId: fix.meterId, saId, uomId: fix.uomId, utilityId: fix.utilityId };
+    await seedRead({ ...common, readDate: new Date("2026-01-20"), reading: "40", priorReading: "40", consumption: "0", peakCode: "peak" });
+    await seedRead({ ...common, readDate: new Date("2026-01-20"), consumption: "500", peakCode: "off_peak" });
 
     const loader = new MeterLoader(prismaImports.prisma, TENANT_A, PERIOD);
     const out = await scoped(TENANT_A, () => loader.load([`meter:tou:${fix.meterId}:peak`]));
     expect(qty(out, `meter:tou:${fix.meterId}:peak`)).toBe("0");
   });
 
-  it("gives nothing for a period no register is mapped to", async () => {
+  it("gives nothing for a period the meter never reported", async () => {
     /*
      * The failure this closes. A two-register meter cannot report
      * mid-peak, so a three-period tariff must not receive a zero for it
      * - that would bill nothing for mid-peak usage the meter rolled
-     * into one of its two registers. No bucket means the component
-     * raises.
+     * into one of its two registers. No row means no bucket, and the
+     * component pricing it raises.
      */
     const { fix, saId } = await makeMeterFixture({});
-    await mapRegisters(fix, fix.meterId, ["peak", "off_peak"]);
-    await seedRead({
-      meterId: fix.meterId, saId, uomId: fix.uomId, utilityId: fix.utilityId,
-      readDate: new Date("2026-01-20"), consumption: "500", peakCode: "off_peak",
-    });
+    const common = { meterId: fix.meterId, saId, uomId: fix.uomId, utilityId: fix.utilityId };
+    await seedRead({ ...common, readDate: new Date("2026-01-20"), consumption: "100", peakCode: "peak" });
+    await seedRead({ ...common, readDate: new Date("2026-01-20"), consumption: "500", peakCode: "off_peak" });
 
     const loader = new MeterLoader(prismaImports.prisma, TENANT_A, PERIOD);
     const out = await scoped(TENANT_A, () => loader.load([`meter:tou:${fix.meterId}:mid_peak`]));
     expect(out.has(`meter:tou:${fix.meterId}:mid_peak`)).toBe(false);
   });
 
-  it("ignores an inactive register's period", async () => {
-    // A retired register is not a declaration of what the meter now
-    // reports.
-    const { fix } = await makeMeterFixture({});
+  it("answers from the reads after a register is remapped", async () => {
+    /*
+     * **Why the gate is the reads and not the register mapping** (Rao,
+     * 2026-11-03): a peak code on a register is the utility's
+     * assignment of meaning to a dial, not something the device
+     * reports, and it is neither versioned nor effective-dated.
+     *
+     * Here register 2 counted on-peak when the month was read, and has
+     * since been remapped to mid-peak. Re-rating that month must still
+     * find its on-peak usage - the reads were stamped at import and do
+     * not change. Gating on the mapping instead answered about today's
+     * periods and so failed to reproduce the bill.
+     */
+    const { fix, saId } = await makeMeterFixture({});
     await mapRegisters(fix, fix.meterId, ["peak"]);
+    await seedRead({
+      meterId: fix.meterId, saId, uomId: fix.uomId, utilityId: fix.utilityId,
+      readDate: new Date("2026-01-20"), consumption: "100", peakCode: "peak",
+    });
+
+    // The remap, after the fact.
+    await seedAsPlatform(async () => {
+      await prismaImports.prisma.meterRegister.updateMany({
+        where: { meterId: fix.meterId, peakCode: "peak" },
+        data: { peakCode: "mid_peak" },
+      });
+    });
+
+    const loader = new MeterLoader(prismaImports.prisma, TENANT_A, PERIOD);
+    const out = await scoped(TENANT_A, () => loader.load([`meter:tou:${fix.meterId}:peak`]));
+    expect(qty(out, `meter:tou:${fix.meterId}:peak`)).toBe("100");
+  });
+
+  it("still answers for a period whose register has been retired", async () => {
+    /*
+     * The same reasoning as the remap case, from the other side.
+     * Retiring a register says nothing about the month it was read in,
+     * and a bill for that month must still be reproducible.
+     */
+    const { fix, saId } = await makeMeterFixture({});
+    await mapRegisters(fix, fix.meterId, ["peak"]);
+    await seedRead({
+      meterId: fix.meterId, saId, uomId: fix.uomId, utilityId: fix.utilityId,
+      readDate: new Date("2026-01-20"), consumption: "100", peakCode: "peak",
+    });
     await seedAsPlatform(async () => {
       await prismaImports.prisma.meterRegister.updateMany({
         where: { meterId: fix.meterId, peakCode: "peak" },
@@ -441,7 +482,7 @@ describe("MeterLoader - TOU buckets (spec 26, TOU-REG-1/2)", () => {
 
     const loader = new MeterLoader(prismaImports.prisma, TENANT_A, PERIOD);
     const out = await scoped(TENANT_A, () => loader.load([`meter:tou:${fix.meterId}:peak`]));
-    expect(out.has(`meter:tou:${fix.meterId}:peak`)).toBe(false);
+    expect(qty(out, `meter:tou:${fix.meterId}:peak`)).toBe("100");
   });
 
   it("keeps two meters' buckets apart", async () => {

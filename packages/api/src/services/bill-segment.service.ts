@@ -330,30 +330,21 @@ export async function createBillSegmentForServiceAgreement(
       /*
        * 4a. TOU buckets (spec 26, TOU-REG-1).
        *
-       * Asked for by (meter, period) from the **registers**, because a
-       * register carrying a peak code is the meter's declaration that
-       * it counts that period. Not from the calendar's periods: a
-       * two-register meter cannot report mid-peak, and asking for a
-       * bucket it has no register for would get a zero back and bill
-       * nothing for usage the meter rolled into another register.
+       * Asked for by **what the tariff prices**, crossed with the SA's
+       * meters — not by the meter's current register mapping. A rate
+       * schedule is versioned and effective-dated; a register mapping is
+       * neither, so deriving the keys from it made re-rating a period
+       * from before a remap ask about today's periods and fail rather
+       * than reproduce the original bill.
        *
-       * Asking only for what the meter reports leaves the key unset
-       * instead, which makes the `tou_period` quantity source raise and
-       * names the period. A non-TOU meter has no mapped registers, so
-       * this adds no keys and costs one indexed query.
+       * Whether a period is *answerable* is then the loader's business,
+       * and it reads that off the reads themselves, which carry the code
+       * they were stamped with at import. A non-TOU schedule prices no
+       * TOU period, so this adds no keys and costs no query.
        */
-      const touRegisters = meterIds.length
-        ? await tx.meterRegister.findMany({
-            where: {
-              meterId: { in: meterIds },
-              utilityId,
-              isActive: true,
-              peakCode: { not: null },
-            },
-            select: { meterId: true, peakCode: true },
-          })
-        : [];
-      const touKeys = touRegisters.map((r) => `meter:tou:${r.meterId}:${r.peakCode}`);
+      const touKeys = engine
+        .touPeakCodes(base)
+        .flatMap((peakCode) => meterIds.map((id) => `meter:tou:${id}:${peakCode}`));
 
       // 5. registry + loadVariables
       const registry = buildRegistry(tx as unknown as typeof prisma, {

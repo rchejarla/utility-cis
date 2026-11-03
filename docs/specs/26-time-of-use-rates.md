@@ -447,12 +447,41 @@ raw intervals from the same meters. Compression is therefore entirely a
   every row of a hypertable that will take tens of millions of rows a
   month at TOU granularity.
 
-  **The mapped registers are the declaration of which periods a meter
-  can report**, and that is what makes the loader safe. It answers for a
-  mapped period, zero included; it answers *not at all* for a period no
-  register covers. A two-register meter cannot report mid-peak, and a
-  zero there would bill nothing for mid-peak usage the meter rolled into
-  one of its two registers. The absent key makes rating raise instead.
+  **A register does not report a peak code** (Rao, 2026-11-03). It
+  reports a *number* — a dial count. The meter's own clock routes
+  consumption into one register or another by its programmed switch
+  times, and "register 2 means on-peak" is the **utility's assignment of
+  meaning to a dial**, not something the device says. Two things follow.
+
+  First, this is why register meters need the mapping at all while
+  interval meters do not: a TOU register meter is read once and every
+  register is captured at that single moment, so the read time says
+  nothing about when the usage happened — the device already did the
+  bucketing. An interval meter gives one value per interval, each with
+  its own timestamp, and *we* classify from the calendar. Same stored
+  shape, different author of the classification.
+
+  Second, an assignment can be changed, and this one is neither
+  versioned nor effective-dated. So **the mapping is not the declaration
+  of which periods are answerable** — the *reads* are. A register meter
+  read produces a row per register including a zero one, so a period
+  with a row answers (zero included) and a period with no row is one the
+  meter has no register for, which leaves the key unset and makes rating
+  raise. That also makes a re-rate exact, where gating on the current
+  mapping asked about today's periods and failed to reproduce a bill
+  from before a remap.
+
+  **The contract this puts on the importer:** write a row per TOU
+  register on every read event, zero consumption included. Writing only
+  the non-zero ones would make an unused period indistinguishable from an
+  absent register and stop a bill that should have shown a zero.
+
+  **And which buckets get asked for comes from the tariff**, not the
+  registers (`touPeakCodes`): a rate schedule is versioned and
+  effective-dated, so asking for what it prices is reproducible where
+  asking the registers is not. `meter_register.peak_code` therefore has
+  exactly one job — the import-time mapping that stamps a read — and
+  that importer is still to be built.
 
   **`meter_read.reading` and `prior_reading` became nullable**, paired by
   a CHECK. A register-based bucket has a dial reading; an

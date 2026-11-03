@@ -121,3 +121,32 @@ function resolvePeriod(
       return "";
   }
 }
+
+/**
+ * The TOU periods this schedule's components actually price.
+ *
+ * Separate from `manifest()` because the variable key needs a meter id,
+ * which only the caller knows — the same reason `meter:reads:*` is not
+ * collected there. The caller crosses these codes with the SA's meters.
+ *
+ * **Driven by the components, not by the meter's registers.** A rate
+ * schedule is versioned and effective-dated; a register mapping is
+ * neither, so deriving the keys from the registers made re-rating a
+ * period from before a remap ask for periods the tariff never priced —
+ * which failed rather than reproducing the original bill. Asking for
+ * what the tariff prices makes a re-rate exact.
+ */
+export function touPeakCodes(base: BaseContext): string[] {
+  const codes = new Set<string>();
+  for (const a of base.assignments) {
+    for (const c of a.schedule.components) {
+      const qs = c.quantitySource as Record<string, unknown> | null | undefined;
+      if (qs && typeof qs === "object" && qs.base === "tou_period") {
+        if (typeof qs.peak_code === "string" && qs.peak_code.length > 0) {
+          codes.add(qs.peak_code);
+        }
+      }
+    }
+  }
+  return [...codes].sort();
+}
