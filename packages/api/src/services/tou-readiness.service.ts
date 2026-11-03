@@ -100,31 +100,52 @@ export function describeTouProblem(p: TouReadinessProblem): string {
   }
 }
 
+/** The peak codes a component set prices. */
+function pricedCodesOf(components: Array<{ quantitySource: unknown }>): string[] {
+  return components.flatMap((c) => {
+    const qs = c.quantitySource as Record<string, unknown> | null;
+    if (!qs || typeof qs !== "object" || qs.base !== "tou_period") return [];
+    return typeof qs.peak_code === "string" && qs.peak_code.length > 0 ? [qs.peak_code] : [];
+  });
+}
+
 /**
- * The TOU problems on one service agreement for one period.
+ * The TOU problems on many service agreements at once.
  *
- * Empty for a non-TOU service, and it costs two indexed reads to find
- * that out — the pre-run check runs over every account in a cycle, so
- * the non-TOU path has to be cheap.
+ * **Batched because the caller is a billing run's preview**, which runs
+ * over every account in a cycle. Called once per agreement this would be
+ * six queries times tens of thousands of agreements; here it is five
+ * queries in total, and the first one answers "none of these is a TOU
+ * service" for the great majority of cycles and returns.
+ *
+ * Returns a map keyed by agreement id, carrying only the agreements that
+ * have a problem — an empty map means nothing to report, not nothing
+ * checked.
  */
-export async function checkTouReadiness(
+export async function checkTouReadinessForAgreements(
   utilityId: string,
-  saId: string,
+  saIds: readonly string[],
   period: { startDate: Date; endDate: Date },
-): Promise<TouReadinessProblem[]> {
+): Promise<Map<string, TouReadinessProblem[]>> {
+  const out = new Map<string, TouReadinessProblem[]>();
+  if (saIds.length === 0) return out;
+
   /*
-   * The schedules in force for the period, the same window
-   * `loadBase` uses: effective on or before the period end, and not
-   * expired before the period start.
+   * 1. Which of these are TOU services at all?
+   *
+   * The in-force window is the one `loadBase` uses — effective on or
+   * before the period end, not expired before its start — so this
+   * checks the schedules that would actually rate.
    */
   const assignments = await prisma.sAScheduleAssignment.findMany({
     where: {
-      serviceAgreementId: saId,
+      serviceAgreementId: { in: [...saIds] },
       utilityId,
       effectiveDate: { lte: period.endDate },
       OR: [{ expirationDate: null }, { expirationDate: { gte: period.startDate } }],
     },
     select: {
+      serviceAgreementId: true,
       rateSchedule: {
         select: {
           touCalendarId: true,
@@ -134,132 +155,178 @@ export async function checkTouReadiness(
     },
   });
 
-  const touSchedules = assignments
-    .map((a) => a.rateSchedule)
-    .filter((s): s is NonNullable<typeof s> => Boolean(s?.touCalendarId));
-  if (touSchedules.length === 0) return [];
+  interface TouService {
+    calendarId: string;
+    pricedCodes: Set<string>;
+  }
+  const touBySa = new Map<string, TouService>();
+  for (const a of assignments) {
+    const schedule = a.rateSchedule;
+    if (!schedule?.touCalendarId) continue;
+    const existing = touBySa.get(a.serviceAgreementId);
+    const pricedCodes = existing?.pricedCodes ?? new Set<string>();
+    for (const code of pricedCodesOf(schedule.components)) pricedCodes.add(code);
+    // The first TOU schedule's calendar wins. Two TOU schedules on one
+    // agreement would be two tariffs pricing the same hours, which has
+    // no coherent meaning and which the publish check cannot see; this
+    // does not try to adjudicate it.
+    touBySa.set(a.serviceAgreementId, {
+      calendarId: existing?.calendarId ?? schedule.touCalendarId,
+      pricedCodes,
+    });
+  }
+  if (touBySa.size === 0) return out;
 
-  // One calendar per schedule, and in practice one TOU schedule per
-  // agreement; a second would be two tariffs pricing the same hours,
-  // which the publish check cannot see and this does not try to.
-  const calendarId = touSchedules[0]!.touCalendarId!;
-  const pricedCodes = new Set(
-    touSchedules.flatMap((s) =>
-      s.components.flatMap((c) => {
-        const qs = c.quantitySource as Record<string, unknown> | null;
-        if (!qs || typeof qs !== "object" || qs.base !== "tou_period") return [];
-        return typeof qs.peak_code === "string" && qs.peak_code.length > 0 ? [qs.peak_code] : [];
-      }),
-    ),
-  );
+  const touSaIds = [...touBySa.keys()];
 
-  const [calendar, config, meters] = await Promise.all([
-    prisma.touCalendar.findFirst({
-      where: { id: calendarId, utilityId },
-      select: { name: true },
-    }),
-    prisma.utilityConfig.findFirst({ where: { utilityId }, select: { settings: true } }),
+  // 2. The meters on those agreements, and 3. the tenant's tolerance.
+  const [servicePoints, config] = await Promise.all([
     prisma.servicePoint.findMany({
-      where: { serviceAgreementId: saId, utilityId, endDate: null },
+      where: { serviceAgreementId: { in: touSaIds }, utilityId, endDate: null },
       select: {
+        serviceAgreementId: true,
         meters: {
           where: { removedDate: null },
-          select: {
-            meter: {
-              select: { id: true, meterNumber: true, touCalendarId: true },
-            },
-          },
+          select: { meter: { select: { id: true, meterNumber: true, touCalendarId: true } } },
         },
       },
     }),
+    prisma.utilityConfig.findFirst({ where: { utilityId }, select: { settings: true } }),
   ]);
 
-  const scheduleCalendarName = calendar?.name ?? "(missing)";
   const tolerance = toleranceFrom(
-    ((config?.settings as Record<string, unknown> | null)?.tou as TouSettings | undefined),
+    (config?.settings as Record<string, unknown> | null)?.tou as TouSettings | undefined,
   );
 
-  const meterRows = meters.flatMap((sp) => sp.meters.map((m) => m.meter));
-  if (meterRows.length === 0) return [];
+  const metersBySa = new Map<string, Array<{ id: string; meterNumber: string; touCalendarId: string | null }>>();
+  for (const sp of servicePoints) {
+    const list = metersBySa.get(sp.serviceAgreementId) ?? [];
+    for (const m of sp.meters) list.push(m.meter);
+    metersBySa.set(sp.serviceAgreementId, list);
+  }
 
-  // The meters' own calendars, for the name comparison. Names, not
-  // versions: republishing a calendar must not flag every TOU meter in
-  // the territory (TOU-REG-2).
-  const meterCalendarIds = [
-    ...new Set(meterRows.map((m) => m.touCalendarId).filter((id): id is string => id !== null)),
-  ];
-  const meterCalendars = meterCalendarIds.length
-    ? await prisma.touCalendar.findMany({
-        where: { id: { in: meterCalendarIds }, utilityId },
-        select: { id: true, name: true },
+  /*
+   * 4. Every calendar named by either side, in one query.
+   *
+   * Names, not versions: the comparison is by name (TOU-REG-2) so
+   * republishing a calendar does not flag every TOU meter in the
+   * territory.
+   */
+  const calendarIds = new Set<string>();
+  for (const svc of touBySa.values()) calendarIds.add(svc.calendarId);
+  for (const meters of metersBySa.values()) {
+    for (const m of meters) if (m.touCalendarId) calendarIds.add(m.touCalendarId);
+  }
+  const calendars = await prisma.touCalendar.findMany({
+    where: { id: { in: [...calendarIds] }, utilityId },
+    select: { id: true, name: true },
+  });
+  const calendarNameById = new Map(calendars.map((c) => [c.id, c.name]));
+
+  /*
+   * 5. The reads, by meter and period.
+   *
+   * Filtered by meter and not by agreement, deliberately: `MeterLoader`
+   * does the same, and this check has to see what rating will see. A
+   * meter that moved between agreements mid-period would otherwise be
+   * reported as reconciling here and rate differently.
+   */
+  const allMeterIds = [...new Set([...metersBySa.values()].flat().map((m) => m.id))];
+  const reads = allMeterIds.length
+    ? await prisma.meterRead.findMany({
+        where: {
+          meterId: { in: allMeterIds },
+          utilityId,
+          readDate: { gte: period.startDate, lte: period.endDate },
+        },
+        select: { meterId: true, peakCode: true, consumption: true },
       })
     : [];
-  const calendarNameById = new Map(meterCalendars.map((c) => [c.id, c.name]));
 
-  const reads = await prisma.meterRead.findMany({
-    where: {
-      meterId: { in: meterRows.map((m) => m.id) },
-      utilityId,
-      readDate: { gte: period.startDate, lte: period.endDate },
-    },
-    select: { meterId: true, peakCode: true, consumption: true },
-  });
+  const readsByMeter = new Map<string, typeof reads>();
+  for (const r of reads) {
+    const list = readsByMeter.get(r.meterId) ?? [];
+    list.push(r);
+    readsByMeter.set(r.meterId, list);
+  }
 
-  const problems: TouReadinessProblem[] = [];
+  for (const [saId, svc] of touBySa) {
+    const problems: TouReadinessProblem[] = [];
+    const scheduleCalendarName = calendarNameById.get(svc.calendarId) ?? "(missing)";
 
-  for (const meter of meterRows) {
-    const where = { meterId: meter.id, meterNumber: meter.meterNumber };
+    for (const meter of metersBySa.get(saId) ?? []) {
+      const where = { meterId: meter.id, meterNumber: meter.meterNumber };
 
-    if (meter.touCalendarId === null) {
-      problems.push({ kind: "CALENDAR_UNKNOWN", ...where });
-    } else {
-      const meterCalendar = calendarNameById.get(meter.touCalendarId) ?? "(missing)";
-      if (meterCalendar !== scheduleCalendarName) {
+      if (meter.touCalendarId === null) {
+        problems.push({ kind: "CALENDAR_UNKNOWN", ...where });
+      } else {
+        const meterCalendar = calendarNameById.get(meter.touCalendarId) ?? "(missing)";
+        if (meterCalendar !== scheduleCalendarName) {
+          problems.push({
+            kind: "CALENDAR_MISMATCH",
+            ...where,
+            meterCalendar,
+            scheduleCalendar: scheduleCalendarName,
+          });
+        }
+      }
+
+      const buckets = new Map<string, Decimal>();
+      let total: Decimal | null = null;
+      for (const r of readsByMeter.get(meter.id) ?? []) {
+        const c = toDecimal(r.consumption.toString());
+        if (r.peakCode === null) {
+          total = (total ?? ZERO).plus(c);
+        } else {
+          buckets.set(r.peakCode, (buckets.get(r.peakCode) ?? ZERO).plus(c));
+        }
+      }
+
+      if (buckets.size === 0) {
+        // Nothing to reconcile or to miss a period from. Reporting the
+        // absent periods on top would read as several faults where there
+        // is one cause.
+        problems.push({ kind: "NO_TOU_READS", ...where });
+        continue;
+      }
+
+      for (const peakCode of [...svc.pricedCodes].sort()) {
+        if (!buckets.has(peakCode)) {
+          problems.push({ kind: "PERIOD_NOT_REPORTED", ...where, peakCode });
+        }
+      }
+
+      const bucketSum = [...buckets.values()].reduce((a, b) => a.plus(b), ZERO);
+      const off = reconcileRegisters(total, bucketSum, tolerance);
+      if (off) {
         problems.push({
-          kind: "CALENDAR_MISMATCH",
+          kind: "REGISTERS_UNRECONCILED",
           ...where,
-          meterCalendar,
-          scheduleCalendar: scheduleCalendarName,
+          total: (total ?? ZERO).toString(),
+          bucketSum: bucketSum.toString(),
+          difference: off.difference.toString(),
+          allowed: off.allowed.toString(),
         });
       }
     }
 
-    const mine = reads.filter((r) => r.meterId === meter.id);
-    const buckets = new Map<string, Decimal>();
-    let total: Decimal | null = null;
-    for (const r of mine) {
-      const c = toDecimal(r.consumption.toString());
-      if (r.peakCode === null) {
-        total = (total ?? ZERO).plus(c);
-      } else {
-        buckets.set(r.peakCode, (buckets.get(r.peakCode) ?? ZERO).plus(c));
-      }
-    }
-
-    if (buckets.size === 0) {
-      problems.push({ kind: "NO_TOU_READS", ...where });
-      continue; // Nothing to reconcile or compare against.
-    }
-
-    for (const peakCode of [...pricedCodes].sort()) {
-      if (!buckets.has(peakCode)) {
-        problems.push({ kind: "PERIOD_NOT_REPORTED", ...where, peakCode });
-      }
-    }
-
-    const bucketSum = [...buckets.values()].reduce((a, b) => a.plus(b), ZERO);
-    const off = reconcileRegisters(total, bucketSum, tolerance);
-    if (off) {
-      problems.push({
-        kind: "REGISTERS_UNRECONCILED",
-        ...where,
-        total: (total ?? ZERO).toString(),
-        bucketSum: bucketSum.toString(),
-        difference: off.difference.toString(),
-        allowed: off.allowed.toString(),
-      });
-    }
+    if (problems.length > 0) out.set(saId, problems);
   }
 
-  return problems;
+  return out;
+}
+
+/**
+ * The TOU problems on one service agreement.
+ *
+ * A thin wrapper, for the single-agreement callers — an agreement's
+ * detail page, and a test. The run's preview uses the batched form.
+ */
+export async function checkTouReadiness(
+  utilityId: string,
+  saId: string,
+  period: { startDate: Date; endDate: Date },
+): Promise<TouReadinessProblem[]> {
+  const byAgreement = await checkTouReadinessForAgreements(utilityId, [saId], period);
+  return byAgreement.get(saId) ?? [];
 }

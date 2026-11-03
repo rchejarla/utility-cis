@@ -72,22 +72,74 @@ export interface BillingRunPreview {
    * or one assignment usually clears a whole group.
    */
   blockers: RunBlocker[];
+  /**
+   * Accounts that **will** bill, and bill wrongly — a separate list
+   * because the instruction is different. Putting these among the
+   * blockers would make "N of M cannot be billed yet" overstate itself
+   * and hold a run that should go ahead.
+   */
+  warnings?: RunWarning[];
   existingRun: { id: string; status: string } | null;
 }
 
 export interface RunBlocker {
-  code: "NO_ACTIVE_ASSIGNMENTS" | "SCHEDULE_NOT_PUBLISHED";
+  code:
+    | "NO_ACTIVE_ASSIGNMENTS"
+    | "SCHEDULE_NOT_PUBLISHED"
+    /* TOU, and blockers because rating raises: no bucket, no bill. */
+    | "TOU_PERIOD_NOT_REPORTED"
+    | "TOU_NO_READS";
   accountCount: number;
   detail: string;
   sampleAccounts: string[];
 }
 
+export interface RunWarning {
+  code: "TOU_CALENDAR_MISMATCH" | "TOU_CALENDAR_UNKNOWN" | "TOU_REGISTERS_UNRECONCILED";
+  accountCount: number;
+  detail: string;
+  sampleAccounts: string[];
+}
+
+const plural = (n: number) => `${n.toLocaleString()} account${n === 1 ? "" : "s"}`;
+
 /** What to do about a blocker, in the operator's terms. */
 export function describeBlocker(b: RunBlocker): string {
-  const accounts = `${b.accountCount.toLocaleString()} account${b.accountCount === 1 ? "" : "s"}`;
-  return b.code === "SCHEDULE_NOT_PUBLISHED"
-    ? `${accounts}: rate schedule not published — ${b.detail}. Publish it and these will bill.`
-    : `${accounts}: no rate schedule assigned — ${b.detail}. Assign one on the agreement.`;
+  const accounts = plural(b.accountCount);
+  switch (b.code) {
+    case "SCHEDULE_NOT_PUBLISHED":
+      return `${accounts}: rate schedule not published — ${b.detail}. Publish it and these will bill.`;
+    case "NO_ACTIVE_ASSIGNMENTS":
+      return `${accounts}: no rate schedule assigned — ${b.detail}. Assign one on the agreement.`;
+    /*
+     * The TOU details already arrive as whole sentences from the
+     * readiness service, so these do not re-explain them — one place
+     * writes the wording, and the agreement's own page says the same.
+     */
+    case "TOU_PERIOD_NOT_REPORTED":
+      return `${accounts}: a TOU period the tariff prices was never reported — ${b.detail}`;
+    case "TOU_NO_READS":
+      return `${accounts}: no TOU usage for this period — ${b.detail}`;
+  }
+}
+
+/**
+ * What a warning means, in the operator's terms.
+ *
+ * Each says the bill *will* be produced, because that is the decision
+ * in front of them: these do not stop a run, and running anyway is
+ * sometimes the right call mid-migration.
+ */
+export function describeWarning(w: RunWarning): string {
+  const accounts = plural(w.accountCount);
+  switch (w.code) {
+    case "TOU_CALENDAR_MISMATCH":
+      return `${accounts}: will bill against hours the meter was not counting by — ${w.detail}`;
+    case "TOU_CALENDAR_UNKNOWN":
+      return `${accounts}: the meter's TOU programming is not recorded, so a mismatch cannot be ruled out — ${w.detail}`;
+    case "TOU_REGISTERS_UNRECONCILED":
+      return `${accounts}: the TOU registers do not sum to the total register — ${w.detail}`;
+  }
 }
 
 /**

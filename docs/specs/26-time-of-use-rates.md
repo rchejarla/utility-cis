@@ -813,6 +813,31 @@ it is wrong.
   tenant mid-migration may knowingly bill a service whose meter
   programming is not yet recorded.
 
+  **Wired into the run's preview on 2026-11-03, and split in two there
+  on an observable test: does a bill come out?** `PERIOD_NOT_REPORTED`
+  and `NO_TOU_READS` make the `tou_period` quantity source raise, so
+  those accounts genuinely cannot be billed and they join the existing
+  `blockers`, counting against `billableCount`. The other three produce
+  a bill — a wrong one — so they are a separate `warnings` list.
+
+  Mixing them would make the preview's own headline lie: it reads "N of
+  M cannot be billed yet", and three of the five can be. An operator
+  would hold a run that should go ahead, or stop trusting the number.
+  The warnings block is rendered muted rather than in the warning
+  colour, so the block that stops the run stays the one that looks
+  urgent, and it says plainly that these are not stopped — because
+  running anyway is sometimes right mid-migration.
+
+  **The batched form is what the preview calls**
+  (`checkTouReadinessForAgreements`). Per agreement it would be six
+  queries times tens of thousands; batched it is five in total, and the
+  first answers "no TOU services here" for most cycles and returns. A
+  non-TOU utility pays two queries for the whole feature.
+
+  The problem *wording* lives in one place (`describeTouProblem`), so
+  the preview and an agreement's own page cannot describe the same
+  problem two ways.
+
   **The mismatch compares calendar *names*, not versions** (TOU-REG-2),
   so republishing a calendar does not flag every TOU meter in the
   territory. The version on the meter is the audit trail of what we

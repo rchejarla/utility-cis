@@ -88,6 +88,17 @@ function blocker(over: Record<string, unknown> = {}) {
   };
 }
 
+function touWarning(over: Record<string, unknown> = {}) {
+  return {
+    code: "TOU_CALENDAR_MISMATCH",
+    accountCount: 7,
+    detail:
+      'Meter M-1 is programmed with TOU calendar "Legacy 4-9pm", but the rate schedule prices against "TOD 5-8pm".',
+    sampleAccounts: ["0002000-00", "0002001-00"],
+    ...over,
+  };
+}
+
 function renderPage() {
   return render(
     <ToastProvider>
@@ -394,5 +405,90 @@ describe("Starting a run", () => {
     renderPage();
 
     expect(await screen.findByText(/scheduled/i)).toBeInTheDocument();
+  });
+});
+
+describe("Starting a run — accounts that will bill wrongly", () => {
+  /**
+   * A separate block from the blockers, because the decision is
+   * different. These accounts *will* be billed, and nothing about the
+   * resulting bill reveals the problem — a TOU calendar mismatch
+   * produces a bill where every figure reconciles against the wrong
+   * hours (spec 26, TOU-BIL-1).
+   */
+
+  it("lists them, with the count and the cause", async () => {
+    routeGets({
+      runs: [],
+      preview: preview({ warnings: [touWarning()] }),
+    });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Start a run" }));
+    await userEvent.selectOptions(screen.getByLabelText("Billing cycle"), "cyc-1");
+
+    const block = await screen.findByTestId("run-warnings");
+    expect(block.textContent).toMatch(/7 will bill with something wrong/);
+    expect(block.textContent).toMatch(/hours the meter was not counting by/i);
+    expect(block.textContent).toMatch(/Legacy 4-9pm/);
+    expect(block.textContent).toMatch(/0002000-00/);
+  });
+
+  it("says they are not stopped, so the operator knows it is their call", async () => {
+    routeGets({ runs: [], preview: preview({ warnings: [touWarning()] }) });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Start a run" }));
+    await userEvent.selectOptions(screen.getByLabelText("Billing cycle"), "cyc-1");
+
+    const block = await screen.findByTestId("run-warnings");
+    expect(block.textContent).toMatch(/not stopped/i);
+  });
+
+  it("does not count them against the billable total", async () => {
+    // The headline is "cannot be billed"; these can. Counting them
+    // there would hold a run that should go ahead.
+    routeGets({
+      runs: [],
+      preview: preview({ billableCount: 120, warnings: [touWarning()] }),
+    });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Start a run" }));
+    await userEvent.selectOptions(screen.getByLabelText("Billing cycle"), "cyc-1");
+
+    await screen.findByTestId("run-warnings");
+    expect(screen.queryByTestId("run-blockers")).toBeNull();
+  });
+
+  it("shows nothing when there are none", async () => {
+    routeGets({ runs: [], preview: preview({ warnings: [] }) });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Start a run" }));
+    await userEvent.selectOptions(screen.getByLabelText("Billing cycle"), "cyc-1");
+
+    await waitFor(() => expect(screen.getByText("120")).toBeInTheDocument());
+    expect(screen.queryByTestId("run-warnings")).toBeNull();
+  });
+
+  it("renders the rest of the dialog when the field is absent entirely", async () => {
+    /*
+     * A response from an older API. A missing list has to drop the
+     * block, not blank the dialog — which is what it did before
+     * `warnings` was made optional, and how the existing tests caught
+     * it: every assertion in the file failed at once because nothing
+     * rendered.
+     */
+    routeGets({ runs: [], preview: preview() });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Start a run" }));
+    await userEvent.selectOptions(screen.getByLabelText("Billing cycle"), "cyc-1");
+
+    // The account count is what proves the dialog resolved its preview;
+    // the cycle name is not rendered here.
+    await waitFor(() => expect(screen.getByText("120")).toBeInTheDocument());
+    expect(screen.queryByTestId("run-warnings")).toBeNull();
   });
 });

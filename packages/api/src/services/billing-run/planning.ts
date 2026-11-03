@@ -11,6 +11,11 @@ import { auditCreate } from "../../lib/audit-wrap.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
 import { BILLABLE_ACCOUNT_STATUSES } from "./statuses.js";
 import { RUN_CYCLE_SELECT, toSummary, type BillingRunSummary } from "./summary.js";
+import {
+  checkTouReadinessForAgreements,
+  describeTouProblem,
+  type TouReadinessProblem,
+} from "../tou-readiness.service.js";
 
 export interface CreateBillingRunArgs {
   billingCycleId: string;
@@ -155,11 +160,42 @@ async function resolveRunPlan(
  * one assignment usually clears the whole group.
  */
 export interface RunBlocker {
-  code: "NO_ACTIVE_ASSIGNMENTS" | "SCHEDULE_NOT_PUBLISHED";
+  code:
+    | "NO_ACTIVE_ASSIGNMENTS"
+    | "SCHEDULE_NOT_PUBLISHED"
+    /*
+     * Both TOU codes are blockers rather than warnings on an observable
+     * test: does a bill come out? The `tou_period` quantity source
+     * raises when a period it prices has no bucket, so these two stop
+     * rating and the account genuinely cannot be billed (spec 26,
+     * TOU-BIL-1).
+     */
+    | "TOU_PERIOD_NOT_REPORTED"
+    | "TOU_NO_READS";
   accountCount: number;
   /** The thing to go and fix — schedule codes, or the agreements. */
   detail: string;
   /** A few account numbers, so the group is recognisable. */
+  sampleAccounts: string[];
+}
+
+/**
+ * Something wrong with an account that **will still be billed**.
+ *
+ * A separate list from `RunBlocker` because the instruction is
+ * different, and mixing them would make the preview's headline lie: it
+ * reads "N of M cannot be billed yet", and these all can be. They will
+ * simply be billed **wrongly**, in ways nothing about the resulting bill
+ * reveals — a TOU calendar mismatch bills against hours the meter was
+ * not counting by and every figure reconciles.
+ *
+ * Same shape as a blocker, grouped by cause for the same reason: one
+ * fix usually clears the whole group.
+ */
+export interface RunWarning {
+  code: "TOU_CALENDAR_MISMATCH" | "TOU_CALENDAR_UNKNOWN" | "TOU_REGISTERS_UNRECONCILED";
+  accountCount: number;
+  detail: string;
   sampleAccounts: string[];
 }
 
@@ -266,6 +302,109 @@ async function findRunBlockers(
 }
 
 /**
+ * The TOU problems across a run's accounts, grouped by cause (spec 26,
+ * TOU-BIL-1).
+ *
+ * Two of the five stop a bill coming out and so are blockers; the other
+ * three produce a bill that is wrong in a way nothing about it reveals,
+ * and are warnings. The split is on an observable test — does the
+ * `tou_period` quantity source find its bucket — not on how serious each
+ * one feels.
+ *
+ * Costs one query to find the agreements plus the check's five, and the
+ * first of those answers "no TOU services here" for most cycles and
+ * returns. A non-TOU utility pays two queries for the whole feature.
+ */
+async function findTouProblems(
+  utilityId: string,
+  accountIds: string[],
+  window: { periodStart: Date; periodEnd: Date },
+): Promise<{ blockers: RunBlocker[]; warnings: RunWarning[]; blockedAccountIds: Set<string> }> {
+  const empty = { blockers: [], warnings: [], blockedAccountIds: new Set<string>() };
+  if (accountIds.length === 0) return empty;
+
+  const agreements = await prisma.serviceAgreement.findMany({
+    where: {
+      utilityId,
+      accountId: { in: accountIds },
+      startDate: { lte: window.periodEnd },
+      OR: [{ endDate: null }, { endDate: { gte: window.periodStart } }],
+    },
+    select: { id: true, account: { select: { id: true, accountNumber: true } } },
+  });
+  if (agreements.length === 0) return empty;
+
+  const byAgreement = await checkTouReadinessForAgreements(
+    utilityId,
+    agreements.map((a) => a.id),
+    { startDate: window.periodStart, endDate: window.periodEnd },
+  );
+  if (byAgreement.size === 0) return empty;
+
+  const accountOf = new Map(agreements.map((a) => [a.id, a.account]));
+
+  /** Per cause: which accounts, and what to go and fix. */
+  interface Group {
+    accounts: Map<string, string>;
+    detail: Set<string>;
+  }
+  const groups = new Map<string, Group>();
+  const blockedAccountIds = new Set<string>();
+
+  const BLOCKING: Record<TouReadinessProblem["kind"], boolean> = {
+    PERIOD_NOT_REPORTED: true,
+    NO_TOU_READS: true,
+    CALENDAR_MISMATCH: false,
+    CALENDAR_UNKNOWN: false,
+    REGISTERS_UNRECONCILED: false,
+  };
+
+  for (const [saId, problems] of byAgreement) {
+    const account = accountOf.get(saId);
+    if (!account) continue;
+    for (const problem of problems) {
+      const group = groups.get(problem.kind) ?? { accounts: new Map(), detail: new Set() };
+      group.accounts.set(account.id, account.accountNumber);
+      // The sentence the service already writes, so the preview and an
+      // agreement's own page describe a problem the same way.
+      group.detail.add(describeTouProblem(problem));
+      groups.set(problem.kind, group);
+      if (BLOCKING[problem.kind]) blockedAccountIds.add(account.id);
+    }
+  }
+
+  const describe = (items: Set<string>, max = 3) => {
+    const all = [...items].sort();
+    return all.length <= max
+      ? all.join(" ")
+      : `${all.slice(0, max).join(" ")} (and ${all.length - max} more)`;
+  };
+
+  const blockers: RunBlocker[] = [];
+  const warnings: RunWarning[] = [];
+  for (const [kind, group] of groups) {
+    const row = {
+      accountCount: group.accounts.size,
+      detail: describe(group.detail),
+      sampleAccounts: [...group.accounts.values()].sort().slice(0, 5),
+    };
+    if (kind === "PERIOD_NOT_REPORTED") {
+      blockers.push({ code: "TOU_PERIOD_NOT_REPORTED", ...row });
+    } else if (kind === "NO_TOU_READS") {
+      blockers.push({ code: "TOU_NO_READS", ...row });
+    } else if (kind === "CALENDAR_MISMATCH") {
+      warnings.push({ code: "TOU_CALENDAR_MISMATCH", ...row });
+    } else if (kind === "CALENDAR_UNKNOWN") {
+      warnings.push({ code: "TOU_CALENDAR_UNKNOWN", ...row });
+    } else {
+      warnings.push({ code: "TOU_REGISTERS_UNRECONCILED", ...row });
+    }
+  }
+
+  return { blockers, warnings, blockedAccountIds };
+}
+
+/**
  * Describe the run a cycle would produce right now.
  *
  * Exists because the window and both dates are computed from the
@@ -283,20 +422,34 @@ export async function previewBillingRun(
     /** Of those, how many are actually billable as configured. */
     billableCount: number;
     blockers: RunBlocker[];
+    /** Accounts that will bill, and bill wrongly. See `RunWarning`. */
+    warnings: RunWarning[];
   }
 > {
   const { accountIds, ...rest } = await resolveRunPlan(utilityId, args);
-  const { blockers, blockedAccountIds } = await findRunBlockers(utilityId, accountIds, {
-    periodStart: rest.windowStart,
-    periodEnd: rest.windowEnd,
-  });
+  const window = { periodStart: rest.windowStart, periodEnd: rest.windowEnd };
+
+  const [config, tou] = await Promise.all([
+    findRunBlockers(utilityId, accountIds, window),
+    findTouProblems(utilityId, accountIds, window),
+  ]);
+
+  /*
+   * One blocker list, both sources. An account blocked for either
+   * reason is not billable, so the headline count has to see both —
+   * reporting TOU blockers separately would leave "240 of 12,000 cannot
+   * be billed" understating itself.
+   */
+  const blockedAccountIds = new Set([...config.blockedAccountIds, ...tou.blockedAccountIds]);
+
   return {
     ...rest,
     accountCount: accountIds.length,
     // Both numbers, not one: "240 of 12,000 cannot be billed" is a
     // different instruction from either figure alone.
     billableCount: accountIds.filter((id) => !blockedAccountIds.has(id)).length,
-    blockers,
+    blockers: [...config.blockers, ...tou.blockers],
+    warnings: tou.warnings,
   };
 }
 

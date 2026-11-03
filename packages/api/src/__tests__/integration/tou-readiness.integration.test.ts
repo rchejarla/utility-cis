@@ -107,13 +107,24 @@ async function makeScene(opts: {
   pricedCodes: string[];
   scheduleCalendarId: string;
   meterCalendarId: string | null;
+  /*
+   * A fixture to build on, so two scenes can share one tenant.
+   * `makeTenantFixture` creates the tenant's `utility_config` row and is
+   * not idempotent, so calling it twice in one test collides on
+   * `utility_config_utility_id_key` — which is how the batched test
+   * first failed.
+   */
+  fix?: TenantFixture;
+  /** Which of the fixture's two meters this scene uses. */
+  meterId?: string;
 }): Promise<Scene> {
   return seedAsPlatform(async () => {
     const { prisma } = prismaImports;
-    const fix = await makeTenantFixture(prisma, TENANT_A);
+    const fix = opts.fix ?? (await makeTenantFixture(prisma, TENANT_A));
+    const meterId = opts.meterId ?? fix.meterId;
 
     await prisma.meter.update({
-      where: { id: fix.meterId },
+      where: { id: meterId },
       data: { touCalendarId: opts.meterCalendarId },
     });
 
@@ -177,12 +188,12 @@ async function makeScene(opts: {
       data: {
         utilityId: TENANT_A,
         servicePointId: sp.id,
-        meterId: fix.meterId,
+        meterId,
         addedDate: new Date("2026-01-01"),
       },
     });
 
-    return { fix, saId: sa.id, meterId: fix.meterId };
+    return { fix, saId: sa.id, meterId };
   });
 }
 
@@ -434,5 +445,80 @@ describe("the tenant's tolerance", () => {
 
     // 20% of 600 is 120, so 50 is inside it now.
     expect(await check(scene)).toEqual([]);
+  });
+});
+
+describe("checking many agreements at once", () => {
+  /**
+   * The form the run's preview uses. Batched because the preview runs
+   * over every account in a cycle: per agreement it would be six
+   * queries times tens of thousands, and here it is five in total.
+   *
+   * The map carries only agreements with a problem, so an empty map
+   * means nothing to report rather than nothing checked.
+   */
+  it("keeps each agreement's problems to itself", async () => {
+    const good = await seedAsPlatform(() => makeCalendar("TOD 5-8pm", ["peak", "off_peak"]));
+    const legacy = await seedAsPlatform(() => makeCalendar("Legacy 4-9pm", ["peak", "off_peak"]));
+
+    // One tenant fixture, two agreements on its two meters.
+    const fix = await seedAsPlatform(() => makeTenantFixture(prismaImports.prisma, TENANT_A));
+
+    const clean = await makeScene({
+      pricedCodes: ["peak", "off_peak"],
+      scheduleCalendarId: good,
+      meterCalendarId: good,
+      fix,
+      meterId: fix.meterId,
+    });
+    await seedRead(clean, "100", "peak");
+    await seedRead(clean, "500", "off_peak");
+
+    const broken = await makeScene({
+      pricedCodes: ["peak", "off_peak"],
+      scheduleCalendarId: good,
+      meterCalendarId: legacy,
+      fix,
+      meterId: fix.meterId2,
+    });
+    await seedRead(broken, "100", "peak");
+    await seedRead(broken, "500", "off_peak");
+
+    const byAgreement = await runAsTenant(TENANT_A, () =>
+      svc.checkTouReadinessForAgreements(TENANT_A, [clean.saId, broken.saId], PERIOD),
+    );
+
+    // Only the broken one is listed at all.
+    expect([...byAgreement.keys()]).toEqual([broken.saId]);
+    expect(byAgreement.get(broken.saId)?.[0]).toMatchObject({ kind: "CALENDAR_MISMATCH" });
+  });
+
+  it("returns an empty map when none of them is a TOU service", async () => {
+    // The common cycle, and the one that must stay cheap: the first
+    // query answers it and the rest are never issued.
+    const cal = await seedAsPlatform(() => makeCalendar("TOD 5-8pm", ["peak", "off_peak"]));
+    const scene = await makeScene({
+      pricedCodes: [],
+      scheduleCalendarId: cal,
+      meterCalendarId: null,
+    });
+    await seedAsPlatform(async () => {
+      await prismaImports.prisma.rateSchedule.updateMany({
+        where: { utilityId: TENANT_A },
+        data: { touCalendarId: null },
+      });
+    });
+
+    const byAgreement = await runAsTenant(TENANT_A, () =>
+      svc.checkTouReadinessForAgreements(TENANT_A, [scene.saId], PERIOD),
+    );
+    expect(byAgreement.size).toBe(0);
+  });
+
+  it("asks nothing of the database for an empty list", async () => {
+    const byAgreement = await runAsTenant(TENANT_A, () =>
+      svc.checkTouReadinessForAgreements(TENANT_A, [], PERIOD),
+    );
+    expect(byAgreement.size).toBe(0);
   });
 });

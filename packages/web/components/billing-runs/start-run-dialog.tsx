@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { apiClient } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast";
-import { fmtDate, daysInclusive, describeBlocker } from "./run-format";
+import { fmtDate, daysInclusive, describeBlocker, describeWarning } from "./run-format";
 import type { BillingRunPreview, BillingRunRow } from "./run-format";
 
 /**
@@ -306,6 +306,55 @@ export function StartRunDialog({
                     exceptions — or fix them first and start with a clean run.
                   </p>
                 )}
+              </div>
+            )}
+            {/*
+              Warnings are their own block, below the blockers, because
+              the decision is different: these accounts *will* bill, and
+              bill wrongly, in ways the resulting bill does not reveal —
+              a TOU calendar mismatch produces a bill where every figure
+              reconciles against the wrong hours. Folding them into the
+              blockers would overstate "cannot be billed" and hold a run
+              that should go ahead.
+
+              Muted rather than warning-coloured, so the block that
+              stops the run stays the one that looks urgent.
+            */}
+            {(preview.warnings?.length ?? 0) > 0 && (
+              <div
+                data-testid="run-warnings"
+                style={{
+                  margin: "6px 0 0",
+                  padding: "8px 10px",
+                  borderRadius: "var(--radius)",
+                  color: "var(--text-secondary)",
+                  background: "var(--bg-deep)",
+                  border: "1px solid var(--border-subtle)",
+                }}
+              >
+                <strong style={{ color: "var(--text-primary)" }}>
+                  {(preview.warnings ?? [])
+                    .reduce((n, w) => n + w.accountCount, 0)
+                    .toLocaleString()}{" "}
+                  will bill with something wrong
+                </strong>
+                <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                  {(preview.warnings ?? []).map((w) => (
+                    <li key={w.code} style={{ marginBottom: 2 }}>
+                      {describeWarning(w)}
+                      {w.sampleAccounts.length > 0 && (
+                        <span style={{ color: "var(--text-muted)" }}>
+                          {" "}
+                          e.g. {w.sampleAccounts.slice(0, 3).join(", ")}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <p style={{ margin: "6px 0 0" }}>
+                  These are not stopped. Nothing on the resulting bill would show the
+                  problem, so fix them first unless you know why they are like this.
+                </p>
               </div>
             )}
             {preview.existingRun && (
