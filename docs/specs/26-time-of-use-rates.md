@@ -664,10 +664,13 @@ raw intervals from the same meters. Compression is therefore entirely a
   proration, minimum bills (`floor`), `percent_of` taxes and riders over
   TOU lines, and `indexed` adders (e.g. a fuel adjustment per kWh across
   all periods).
-- **TOU-ENG-7 (Must).** A rate change mid-period follows the same rule
-  the engine uses today for non-TOU schedules, applied per interval when
-  intervals exist. If the current rule is per-period, this spec adopts
-  per-interval for TOU and records the decision in 07b.
+- **TOU-ENG-7 (Must).** At most one assignment per role applies at any
+  instant, and where two windows meet inside a bill period each prices
+  only the part of the period inside its own window — the days for a
+  register meter, the intervals themselves where intervals exist. This
+  states the rule rather than inheriting the engine's current one, which
+  open question 5 found to be double-charging: both tariffs fire in
+  full. TOU does not adopt that, and the general fix is spec 07's.
 - **TOU-ENG-8 (Must).** Bill lines: one line per (TOU period, season,
   price) actually used, carrying quantity, unit and price, labelled with
   the period's display label ("On-peak, summer: 312.4 kWh × $0.2410").
@@ -1009,14 +1012,41 @@ value.
 
    *Built with TOU-ENG-5, not before.*
 
-5. **Mid-period rate change — mine to answer, and not yet answered.**
-   `load-base.ts` loads *every* rate-schedule assignment overlapping the
-   period and does not pick one, and spec 09 documents proration only
-   for an agreement starting or ending mid-cycle, not for a schedule
-   change. So "what happens today" is still unknown, and TOU-ENG-7
-   cannot be fixed against an unknown. This is a code investigation
-   rather than a customer question, and its answer belongs in spec 07 or
-   09 once found.
+5. **Mid-period rate change — answered on 2026-11-03, and the answer is
+   a defect.** Not a TOU defect: the general rate engine bills a
+   mid-cycle tariff change wrongly today, for any utility. Four places
+   agree, and one of them says so on purpose:
+
+   - `load-base.ts:52` loads *every* assignment overlapping the period
+     and does not pick one.
+   - `rate.ts:17` keeps all of them and concatenates the components of
+     each, so every schedule's components fire in full.
+   - `schema.prisma:757`, on `SAScheduleAssignment`: "Overlap exclusion
+     is deferred to slice 2/3." Nothing in the database or the service
+     layer refuses two overlapping assignments.
+   - `topo-sort.ts` does not deduplicate; it orders and returns all.
+
+   So an agreement whose tariff changes mid-period is billed under
+   **both tariffs in full** — two fixed charges, and the period's usage
+   priced twice. `roleCode` is loaded (`types.ts:46`) and never read by
+   the engine, so it cannot tell "delivery plus a rider", which is the
+   legitimate case, from "the old tariff and its replacement".
+   `selectors.ts:29` and `topo-sort.ts`'s `source_schedule_role` both
+   record the same blind spot. The pre-run check does not catch it
+   either: `planning.ts:259` blocks an agreement with *no* assignment
+   and one naming a draft schedule, and two published overlapping ones
+   look healthy. Spec 09 lists it as outstanding already (Req 62,
+   "proration logic in rate engine").
+
+   **What this does to TOU-ENG-7:** its original wording — follow "the
+   same rule the engine uses today" — cannot be honoured, because the
+   rule today is double-charging. TOU-ENG-7 now states the rule
+   directly instead of inheriting it.
+
+   *Not spec 26's to fix.* The fix is an exclusion constraint on
+   `(utility_id, service_agreement_id, role_code, daterange)` plus a
+   per-window split in `rate()`, and it belongs in spec 07 beside the
+   assignment model. Recorded here because OQ5 asked.
 
 6. **Missing-data default — an exception, as this spec already says.**
    Estimation is deferred until a tariff mandates a method, because the
