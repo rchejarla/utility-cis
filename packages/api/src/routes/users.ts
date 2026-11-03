@@ -6,7 +6,7 @@ import { registerCrudRoutes } from "../lib/crud-routes.js";
 export async function userRoutes(app: FastifyInstance) {
   registerCrudRoutes(app, {
     basePath: "/api/v1/users",
-    module: "settings",
+    module: "tenant_users",
     list: {
       querySchema: userQuerySchema,
       service: (utilityId, query) => userService.listUsers(utilityId, query as never),

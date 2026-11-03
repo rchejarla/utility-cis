@@ -4,10 +4,16 @@ import { createTestApp, createTestToken } from "../setup.js";
 import { prisma } from "../../lib/prisma.js";
 
 /**
- * Bill message CRUD. Gated on the `settings` module like the other
- * reference-data catalogues a tenant edits, not on `accounts` — a
- * message is tenant configuration, and nobody should need the authority
- * to see every account in order to edit the text printed on bills.
+ * Bill message CRUD. Gated on **`tenant_profile`** — a message is the
+ * tenant's own configuration, and nobody should need the authority to
+ * see every account in order to edit the text printed on bills.
+ *
+ * It was on `accounts` once, and on `settings` until 2026-11-03. The
+ * second move finishes the reasoning of the first: `settings` is the one
+ * key that separates Utility Admin from System Admin, so leaving bill
+ * messages there made "full access except system settings" mean "cannot
+ * edit the small print on a bill". `tenant_profile` is where the rest of
+ * the tenant's own configuration already lives.
  */
 
 describe("/api/v1/bill-messages", () => {
@@ -43,7 +49,7 @@ describe("/api/v1/bill-messages", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    grant({ settings: ["VIEW", "CREATE", "EDIT", "DELETE"] });
+    grant({ tenant_profile: ["VIEW", "CREATE", "EDIT", "DELETE"] });
   });
 
   it("lists the tenant's messages in print order", async () => {
@@ -258,8 +264,8 @@ describe("/api/v1/bill-messages", () => {
     expect(audit.data.beforeState).toMatchObject({ id: MESSAGE_ID });
   });
 
-  it("refuses a caller without settings:EDIT", async () => {
-    grant({ settings: ["VIEW"] });
+  it("refuses a caller without tenant_profile:EDIT", async () => {
+    grant({ tenant_profile: ["VIEW"] });
 
     const app = await createTestApp();
     const res = await app.inject({

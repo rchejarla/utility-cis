@@ -167,7 +167,7 @@ export async function billDocumentRoutes(app: FastifyInstance) {
    */
   app.post(
     "/api/v1/bills/:id/document",
-    { config: { module: "accounts", permission: "EDIT" } },
+    { config: { module: "billing", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const billId = parseIdParam(request.params);
@@ -188,7 +188,7 @@ export async function billDocumentRoutes(app: FastifyInstance) {
 
   app.get(
     "/api/v1/bills/:id/document",
-    { config: { module: "accounts", permission: "VIEW" } },
+    { config: { module: "billing", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const billId = parseIdParam(request.params);

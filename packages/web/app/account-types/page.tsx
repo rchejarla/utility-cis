@@ -36,7 +36,7 @@ const EMPTY: Form = {
 
 export default function AccountTypesPage() {
   const { toast } = useToast();
-  const { canView, canCreate, canEdit } = usePermission("accounts");
+  const { canView, canCreate, canEdit } = usePermission("tenant_profile");
   const [rows, setRows] = useState<TypeDef[]>([]);
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);

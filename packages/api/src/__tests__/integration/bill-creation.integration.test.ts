@@ -134,7 +134,7 @@ beforeAll(() =>
 
   // Enable agreements + accounts modules so the bill routes' permission
   // gates pass. The seed enables agreements; accounts may need it too.
-  for (const moduleKey of ["agreements", "accounts"]) {
+  for (const moduleKey of ["agreements", "accounts", "billing"]) {
     const existing = await prisma.utilityModule.findFirst({
       where: { utilityId, moduleKey },
     });

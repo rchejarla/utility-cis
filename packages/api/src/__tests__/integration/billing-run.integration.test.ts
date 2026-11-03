@@ -143,7 +143,7 @@ beforeAll(() =>
    * cached in Redis across forks, so it has to be invalidated as well.
    * Both halves are the convention the other seed-based suites follow.
    */
-  for (const moduleKey of ["accounts", "agreements"]) {
+  for (const moduleKey of ["accounts", "agreements", "billing"]) {
     const existing = await prisma.utilityModule.findFirst({ where: { utilityId, moduleKey } });
     if (!existing) await prisma.utilityModule.create({ data: { utilityId, moduleKey } });
   }

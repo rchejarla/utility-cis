@@ -6,7 +6,7 @@ import { registerCrudRoutes } from "../lib/crud-routes.js";
 export async function roleRoutes(app: FastifyInstance) {
   registerCrudRoutes(app, {
     basePath: "/api/v1/roles",
-    module: "settings",
+    module: "tenant_users",
     list: { service: roleService.listRoles },
     get: roleService.getRole,
     create: {

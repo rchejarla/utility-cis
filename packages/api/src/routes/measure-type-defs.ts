@@ -32,12 +32,21 @@ export async function measureTypeDefRoutes(app: FastifyInstance) {
     return reply.send({ data: types });
   });
 
-  // Mutations are admin-only via the commodities module — measure
-  // types are operational catalog data (alongside commodities and
-  // UOMs), not tenant chrome/system settings.
+  /*
+   * Maintaining the list answers to `tenant_profile`, which is where
+   * Custom Fields already sits. Reading it, above, stays open to any
+   * authenticated user, because every form that offers these types
+   * needs them.
+   *
+   * Reads and writes were one key until 2026-11-03, so a Field
+   * Technician holding `premises:EDIT` for field work could rewrite the
+   * premise type list, and a CSR holding `accounts:EDIT` could rewrite
+   * the account type list. Neither is their job, and neither showed up
+   * as a grant — it arrived with the operational verb.
+   */
   app.post(
     "/api/v1/measure-types",
-    { config: { module: "commodities", permission: "CREATE" } },
+    { config: { module: "tenant_profile", permission: "CREATE" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const data = createMeasureTypeDefSchema.parse(request.body);
@@ -48,7 +57,7 @@ export async function measureTypeDefRoutes(app: FastifyInstance) {
 
   app.patch(
     "/api/v1/measure-types/:id",
-    { config: { module: "commodities", permission: "EDIT" } },
+    { config: { module: "tenant_profile", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);

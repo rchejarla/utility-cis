@@ -114,7 +114,9 @@ export const MODULES = [
   "audit_log",       // AuditLog (VIEW only)
   "attachments",     // Attachment (cross-entity)
   "theme",           // UtilityTheme, UserPreference
-  "settings",        // User management, Role management, system config
+  "settings",        // System config. NOT user/role management — see below
+  "tenant_users",    // User management, Role management
+  "billing",         // Billing runs, posting, delivery; the cross-account bill list
 ] as const;
 ```
 
@@ -350,20 +352,20 @@ answer arrives.
 
 ### Settings Page (`/settings`)
 
-Two tabs: **Users** and **Roles**. Only visible to users with `settings:VIEW`.
+Two tabs: **Users** and **Roles**. Only visible to users with `tenant_users:VIEW`.
 
 ### Users Tab
 
 - DataTable: Name, Email, Role (badge), Status (Active/Inactive), Last Login
-- "Add User" button (settings:CREATE): inline form — email, name, role dropdown, isActive
-- Inline edit (settings:EDIT): change role, toggle active status
+- "Add User" button (tenant_users:CREATE): inline form — email, name, role dropdown, isActive
+- Inline edit (tenant_users:EDIT): change role, toggle active status
 - Search by name/email
 - No password management — SSO handles authentication
 
 ### Roles Tab
 
 - DataTable: Name, Description, System (badge), Users Count
-- "Add Role" button (settings:CREATE): opens role editor
+- "Add Role" button (tenant_users:CREATE): opens role editor
 - System roles: viewable but not deletable
 - Custom roles: full CRUD
 
@@ -428,16 +430,53 @@ migration.
 | Method | Path | Permission | Description |
 |--------|------|------------|-------------|
 | GET | /api/v1/auth/me | (authenticated) | Get current user permissions + modules, and which tenant this is |
-| GET | /api/v1/users | settings:VIEW | List users |
-| POST | /api/v1/users | settings:CREATE | Create user |
-| GET | /api/v1/users/:id | settings:VIEW | Get user detail |
-| PATCH | /api/v1/users/:id | settings:EDIT | Update user (role, active) |
-| GET | /api/v1/roles | settings:VIEW | List roles |
-| POST | /api/v1/roles | settings:CREATE | Create role |
-| GET | /api/v1/roles/:id | settings:VIEW | Get role detail |
-| PATCH | /api/v1/roles/:id | settings:EDIT | Update role permissions |
-| DELETE | /api/v1/roles/:id | settings:DELETE | Delete custom role |
+| GET | /api/v1/users | tenant_users:VIEW | List users |
+| POST | /api/v1/users | tenant_users:CREATE | Create user |
+| GET | /api/v1/users/:id | tenant_users:VIEW | Get user detail |
+| PATCH | /api/v1/users/:id | tenant_users:EDIT | Update user (role, active) |
+| GET | /api/v1/roles | tenant_users:VIEW | List roles |
+| POST | /api/v1/roles | tenant_users:CREATE | Create role |
+| GET | /api/v1/roles/:id | tenant_users:VIEW | Get role detail |
+| PATCH | /api/v1/roles/:id | tenant_users:EDIT | Update role permissions |
+| DELETE | /api/v1/roles/:id | tenant_users:DELETE | Delete custom role |
 | GET | /api/v1/tenant-modules | settings:VIEW | List enabled modules |
+
+---
+
+## Two keys that moved (2026-11-03)
+
+A menu review measured what each preset role can actually reach and
+found two grants that were not what their names said.
+
+**`users` and `roles` answered to `settings`, not `tenant_users`.**
+`settings` is the single key that separates Utility Admin from System
+Admin — Utility Admin holds `settings: ["VIEW"]` — so a Utility Admin,
+whose description is "full access except system settings modification",
+**could not create a staff user or a role**. The page and the sidebar
+already gated on `tenant_users`, so Read-Only (which holds it) was shown
+a Users & Roles entry whose API answered 403. Both routes now use
+`tenant_users`: Utility Admin administers users, Read-Only reads the
+list, CSR and Field Technician reach neither.
+
+**Billing work answered to `accounts`.** `POST /billing-runs`,
+`/:id/post` and `/:id/send` required `accounts:EDIT`, the same verb that
+lets a CSR correct a mailing address — so every CSR could bill a whole
+cycle and send the bills. The new **`billing`** key covers the
+cross-account bill list, posting, delivery, documents and runs; CSR
+holds `billing:["VIEW"]`. An account's *own* bills stay on `accounts`,
+which is the record in front of the clerk — the same scope rule the
+audit log already uses for one entity's history.
+
+The maintenance routes for the three type-definition lists (premise,
+account, measure) moved from their operational keys to
+`tenant_profile`, where Custom Fields already sits. Reading them stays
+open, because every form that offers those types needs them; writing
+them was reachable with `premises:EDIT`, which a Field Technician holds
+for field work.
+
+**Adding a key costs a `utility_module` row per tenant and a place in
+each preset.** Nothing is backfilled: a tenant is reprovisioned or
+reseeded, and `presetDrift` leaves an edited role alone on purpose.
 
 ---
 

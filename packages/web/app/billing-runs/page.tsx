@@ -29,7 +29,7 @@ import type { BillingRunRow } from "@/components/billing-runs/run-format";
  */
 
 export default function BillingRunsPage() {
-  const { canView, canEdit } = usePermission("accounts");
+  const { canView, canEdit } = usePermission("billing");
   const { toast } = useToast();
 
   const [runs, setRuns] = useState<BillingRunRow[]>([]);

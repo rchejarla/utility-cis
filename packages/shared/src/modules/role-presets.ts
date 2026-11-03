@@ -63,6 +63,13 @@ export const PRESET_ROLES: readonly PresetRole[] = [
       meters: ["VIEW"],
       meter_reads: ["VIEW", "CREATE"],
       accounts: ["VIEW", "CREATE", "EDIT"],
+      /*
+       * Reading bills is counter work — "what did I owe in March" is the
+       * commonest question at the window. Billing a cycle, posting it
+       * and sending it are not, and until `billing` existed they were
+       * the same grant as editing an address.
+       */
+      billing: ["VIEW"],
       // A CSR is who takes a payment at the counter and reverses an NSF.
       payments: ["VIEW", "CREATE", "EDIT"],
       // Raising a charge and forgiving one are different authority
@@ -116,7 +123,14 @@ export const PRESET_ROLES: readonly PresetRole[] = [
   },
   {
     name: "Read-Only",
-    description: "View access to all operational data",
+    /*
+     * Reworded 2026-11-03. "All operational data" was not what it
+     * grants: it holds `tenant_profile` and `tenant_users`, so it sees
+     * the Settings section and the staff list too. The permissions are
+     * right for an auditor — read everything, change nothing — so the
+     * description moved rather than the grant.
+     */
+    description: "View access to operational data, tenant settings and the staff list",
     isSystem: true,
     permissions: Object.fromEntries(
       MODULES.filter(

@@ -848,7 +848,7 @@ The tenant itself, as a row (2026-10-18). `utility_id` on all 61 tables that car
 
 **RLS:** non-standard, because the predicate is on the primary key rather than on a `utility_id` column: `id = current_setting('app.current_utility_id')::uuid`. A tenant can see its own row and no other.
 
-**Written by** `provisionTenant` (`scripts/provision-tenant.ts`, `POST /api/v1/platform/utilities`), which also creates all 32 `UtilityModule` rows, the six preset roles and optionally a first admin — in one transaction, idempotent on the **id**, with a dry-run mode that meets the same constraints and rolls back. Suspension and reactivation are the platform actor's (spec 25); there is no delete.
+**Written by** `provisionTenant` (`scripts/provision-tenant.ts`, `POST /api/v1/platform/utilities`), which also creates a `UtilityModule` row for every key in `MODULES` (33 since `billing` landed on 2026-11-03), the six preset roles and optionally a first admin — in one transaction, idempotent on the **id**, with a dry-run mode that meets the same constraints and rolls back. Suspension and reactivation are the platform actor's (spec 25); there is no delete.
 
 ### 4.24 Database Invariants (CHECK constraints)
 

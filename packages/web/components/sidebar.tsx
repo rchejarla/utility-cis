@@ -19,6 +19,8 @@ import {
   faMoneyBillTransfer,
   faCalendarDays,
   faClock,
+  faCloudSunRain,
+  faTags,
   faDroplet,
   faClipboardList,
   faClipboardCheck,
@@ -263,14 +265,14 @@ export const navSections: NavSection[] = [
         href: "/bills",
         label: "Bills",
         icon: faFileInvoiceDollar,
-        module: "accounts",
+        module: "billing",
         tooltip: "Every bill across all accounts, searchable by bill number, with posting",
       },
       {
         href: "/billing-runs",
         label: "Billing Runs",
         icon: faPlay,
-        module: "accounts",
+        module: "billing",
         // Under Billing rather than Configuration, where the cycle
         // lives: a cycle is a setting somebody edits twice a year, a run
         // is work somebody does every month.
@@ -313,13 +315,24 @@ export const navSections: NavSection[] = [
     ],
   },
   {
-    title: "Configuration",
-    icon: faSliders,
+    /*
+     * Tariffs, not Configuration.
+     *
+     * By the rule above these are "lists the business maintains" and
+     * Configuration is where they sat. But the rule separates sections
+     * by subject, and these three share one that nothing else in
+     * Configuration touches: **what we charge**. They are also the only
+     * entries there that are versioned and published, read by a
+     * regulator, and owned by whoever designs rates rather than by a
+     * clerk keeping a list tidy.
+     *
+     * Configuration held thirteen entries spanning four unrelated kinds,
+     * which is the state Settings was in before it was split. Lifting
+     * these out leaves both sections answering one question again.
+     */
+    title: "Tariffs",
+    icon: faTags,
     items: [
-      { href: "/commodities", label: "Commodities & UOM", icon: faDroplet, module: "commodities" },
-      { href: "/measure-types", label: "Measure Types", icon: faRulerHorizontal, module: "commodities" },
-      { href: "/premise-types", label: "Premise Types", icon: faHouse, module: "premises" },
-      { href: "/account-types", label: "Account Types", icon: faIdCard, module: "accounts" },
       { href: "/rate-schedules", label: "Rate Schedules", icon: faMoneyBill, module: "rate_schedules" },
       /*
        * Beside Rate Schedules and under the same module, because that is
@@ -329,15 +342,24 @@ export const navSections: NavSection[] = [
        */
       { href: "/tou-calendars", label: "TOU Calendars", icon: faClock, module: "rate_schedules" },
       /*
-       * Seasons sit under a calendar rather than above it in the list,
-       * even though a calendar depends on a set, because a tenant meets
-       * them in that order: they come looking for time-of-use and find
-       * out seasons exist.
+       * Last of the three although a calendar depends on a set, because
+       * a tenant meets them in that order: they come looking for
+       * time-of-use pricing and find out seasons exist.
        */
-      { href: "/season-sets", label: "Seasons", icon: faCalendarDays, module: "rate_schedules" },
+      { href: "/season-sets", label: "Seasons", icon: faCloudSunRain, module: "rate_schedules" },
+    ],
+  },
+  {
+    title: "Configuration",
+    icon: faSliders,
+    items: [
+      { href: "/commodities", label: "Commodities & UOM", icon: faDroplet, module: "commodities" },
+      { href: "/measure-types", label: "Measure Types", icon: faRulerHorizontal, module: "tenant_profile" },
+      { href: "/premise-types", label: "Premise Types", icon: faHouse, module: "tenant_profile" },
+      { href: "/account-types", label: "Account Types", icon: faIdCard, module: "tenant_profile" },
       { href: "/billing-cycles", label: "Billing Cycles", icon: faCalendarDays, module: "billing_cycles" },
       { href: "/settings/custom-fields", label: "Custom Fields", icon: faListCheck, module: "tenant_profile" },
-      { href: "/settings/bill-messages", label: "Bill Messages", icon: faCommentDots, module: "settings" },
+      { href: "/settings/bill-messages", label: "Bill Messages", icon: faCommentDots, module: "tenant_profile" },
       { href: "/settings/slas", label: "Service Request SLAs", icon: faStopwatch, module: "service_request_slas" },
       {
         href: "/delinquency/rules",

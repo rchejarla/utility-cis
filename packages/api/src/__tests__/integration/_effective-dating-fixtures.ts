@@ -225,6 +225,26 @@ function utilityInsertSql(ids: readonly string[]): string {
 }
 
 /**
+ * Enable modules for each tenant.
+ *
+ * `ON CONFLICT DO NOTHING` because several files still enable their own
+ * by hand; those loops are now redundant rather than wrong, and a file
+ * may keep one without breaking.
+ */
+function moduleInsertSql(ids: readonly string[], moduleKeys: readonly string[]): string {
+  return ids
+    .flatMap((id) =>
+      moduleKeys.map(
+        (key) =>
+          `INSERT INTO utility_module (id, utility_id, module_key, is_enabled, enabled_at) ` +
+          `VALUES (gen_random_uuid(), '${id}', '${key}', true, now()) ` +
+          `ON CONFLICT (utility_id, module_key) DO NOTHING;`,
+      ),
+    )
+    .join("\n");
+}
+
+/**
  * Create the utility rows a test's tenant ids refer to.
  *
  * For the files that boot their own container rather than calling
@@ -272,7 +292,31 @@ export async function ensureUtilities(prisma: any, ids: readonly string[]): Prom
  * uses rather than a parallel one that can drift from it.
  */
 export async function bootPostgres(
-  opts: { utilities?: readonly string[] } = {},
+  opts: {
+    utilities?: readonly string[];
+    /**
+     * Modules to enable for those tenants. **Defaults to none**, which
+     * is not the default it should have.
+     *
+     * `provisionTenant` enables every key for a real tenant, and this
+     * ought to match it — then adding a key to `MODULES` could not
+     * break a fixture. It broke 72 tests across two files when
+     * `billing` landed on 2026-11-03, as 403s that read like a product
+     * fault; the symptom is `MODULE_DISABLED` naming the key, which is
+     * worth knowing before diagnosing anything else.
+     *
+     * Defaulting to all was tried and reverted the same day: 33 files
+     * create their own `utility_module` rows and over half do it with
+     * an unguarded `create`, so the default made them fail on the
+     * unique constraint instead. Fixing that is a sweep of those files
+     * plus a full integration run to prove it, which is why this is a
+     * knob and not yet the default.
+     *
+     * Until then: a file that gates on a module must enable it, and a
+     * new key means grepping for the narrow lists that predate it.
+     */
+    modules?: readonly string[];
+  } = {},
 ): Promise<BootedContainer> {
   const container = await new PostgreSqlContainer("timescale/timescaledb:latest-pg16")
     .withDatabase("utility_cis_test")
@@ -325,12 +369,14 @@ export async function bootPostgres(
   // only just set DATABASE_URL, and the caller imports `lib/prisma.js`
   // afterwards precisely so the singleton reads it.
   if (opts.utilities && opts.utilities.length > 0) {
+    const moduleKeys = opts.modules ?? [];
     // No `--schema`: Prisma 7 removed the flag from `db execute`, which
     // now takes the schema path from prisma.config.ts.
     execSync("pnpm prisma db execute --stdin", {
       cwd: SHARED_DIR,
       env: { ...process.env, DATABASE_URL: dbUrl },
-      input: utilityInsertSql(opts.utilities),
+      input:
+        utilityInsertSql(opts.utilities) + "\n" + moduleInsertSql(opts.utilities, moduleKeys),
       stdio: ["pipe", "pipe", "pipe"],
     });
   }

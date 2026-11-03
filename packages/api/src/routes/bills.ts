@@ -25,7 +25,7 @@ export async function billRoutes(app: FastifyInstance) {
    */
   app.get(
     "/api/v1/bills",
-    { config: { module: "accounts", permission: "VIEW" } },
+    { config: { module: "billing", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const query = billQuerySchema.parse(request.query ?? {});
@@ -35,7 +35,7 @@ export async function billRoutes(app: FastifyInstance) {
 
   app.get(
     "/api/v1/bills/:id",
-    { config: { module: "accounts", permission: "VIEW" } },
+    { config: { module: "billing", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -64,7 +64,7 @@ export async function billRoutes(app: FastifyInstance) {
    */
   app.get(
     "/api/v1/bills/:id/presentation",
-    { config: { module: "accounts", permission: "VIEW" } },
+    { config: { module: "billing", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -85,7 +85,7 @@ export async function billRoutes(app: FastifyInstance) {
    */
   app.post(
     "/api/v1/bills/:id/deliver",
-    { config: { module: "accounts", permission: "EDIT" , refusedInOverlay: true } },
+    { config: { module: "billing", permission: "EDIT" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -104,7 +104,7 @@ export async function billRoutes(app: FastifyInstance) {
    */
   app.post(
     "/api/v1/bills/:id/hold",
-    { config: { module: "accounts", permission: "EDIT" } },
+    { config: { module: "billing", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -119,7 +119,7 @@ export async function billRoutes(app: FastifyInstance) {
 
   app.post(
     "/api/v1/bills/:id/release",
-    { config: { module: "accounts", permission: "EDIT" } },
+    { config: { module: "billing", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -131,7 +131,7 @@ export async function billRoutes(app: FastifyInstance) {
   /** The worklist, and the "bills on hold" figure spec 09 describes. */
   app.get(
     "/api/v1/bills/held",
-    { config: { module: "accounts", permission: "VIEW" } },
+    { config: { module: "billing", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       return reply.send(await listHeldBills(utilityId));
@@ -144,7 +144,7 @@ export async function billRoutes(app: FastifyInstance) {
    */
   app.post(
     "/api/v1/accounts/:id/billing-hold",
-    { config: { module: "accounts", permission: "EDIT" } },
+    { config: { module: "billing", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -158,7 +158,7 @@ export async function billRoutes(app: FastifyInstance) {
 
   app.post(
     "/api/v1/accounts/:id/billing-release",
-    { config: { module: "accounts", permission: "EDIT" } },
+    { config: { module: "billing", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -169,7 +169,7 @@ export async function billRoutes(app: FastifyInstance) {
   /** Every attempt to deliver this bill, newest first. */
   app.get(
     "/api/v1/bills/:id/deliveries",
-    { config: { module: "accounts", permission: "VIEW" } },
+    { config: { module: "billing", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);

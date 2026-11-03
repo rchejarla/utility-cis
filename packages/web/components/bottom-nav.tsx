@@ -3,60 +3,83 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { usePermission } from "@/lib/use-permission";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import {
-  faUsers,
-  faLocationDot,
-  faGauge,
-  faFileContract,
-  faBars,
-  faUser,
-  faMoneyBill,
-  faCalendarDays,
-  faDroplet,
-  faClipboardList,
-  faGear,
-  faUserShield,
-  faXmark,
-} from "@fortawesome/pro-solid-svg-icons";
+import { faBars, faXmark } from "@fortawesome/pro-solid-svg-icons";
+import { useAuth } from "@/lib/auth-context";
+import { visibleNavItems } from "@/lib/nav-visibility";
+import { navSections, type NavItem } from "./sidebar";
 
-const primaryNav = [
-  { href: "/customers", label: "Customers", icon: faUsers, module: "customers" },
-  { href: "/premises", label: "Premises", icon: faLocationDot, module: "premises" },
-  { href: "/meters", label: "Meters", icon: faGauge, module: "meters" },
-  { href: "/service-agreements", label: "Agreements", icon: faFileContract, module: "agreements" },
-];
+/**
+ * The mobile navigation, derived from `navSections` — the same
+ * declaration the sidebar renders.
+ *
+ * It used to hold its own list of eleven entries against the sidebar's
+ * forty-eight, and had drifted into a different product: no Meter
+ * Reads, no Meter Events, no Service Requests, no Containers, which is
+ * the entire job of a Field Technician — the role most likely to be
+ * holding a phone. Nothing added in the year since appeared here
+ * either. It also gated two destinations on different keys from the
+ * sidebar, so Audit Log showed on a phone and not on a desktop.
+ *
+ * Deriving removes the possibility rather than fixing the instances: a
+ * nav entry added anywhere now reaches both.
+ *
+ * **Primary tabs are the first four visible Operations entries**, which
+ * makes the bar answer to the role rather than to a hard-coded four.
+ * Everything else the operator may see goes in the More sheet, under its
+ * section heading, in sidebar order — so the grouping that teaches a
+ * desktop user where things live teaches a mobile user the same thing.
+ */
 
-const moreNav = [
-  { href: "/accounts", label: "Accounts", icon: faUser, module: "accounts" },
-  { href: "/rate-schedules", label: "Rate Schedules", icon: faMoneyBill, module: "rate_schedules" },
-  { href: "/billing-cycles", label: "Billing Cycles", icon: faCalendarDays, module: "billing_cycles" },
-  { href: "/commodities", label: "Commodities", icon: faDroplet, module: "commodities" },
-  { href: "/audit-log", label: "Audit Log", icon: faClipboardList, module: "audit_log" },
-  { href: "/users-roles", label: "Users & Roles", icon: faUserShield, module: "settings" },
-  { href: "/settings", label: "Settings", icon: faGear, module: "settings" },
-];
+const PRIMARY_TABS = 4;
 
-function BottomNavItem({ item, isActive }: { item: typeof primaryNav[number]; isActive: boolean }) {
-  const { canView } = usePermission(item.module);
-  if (!canView) return null;
-
+function TabLink({ item, isActive }: { item: NavItem; isActive: boolean }) {
   return (
-    <Link href={item.href} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "2px", textDecoration: "none", color: isActive ? "var(--accent-primary)" : "var(--text-muted)", fontSize: "10px", fontWeight: isActive ? 600 : 400, transition: "color 0.15s" }}>
+    <Link
+      href={item.href}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: "2px",
+        textDecoration: "none",
+        color: isActive ? "var(--accent-primary)" : "var(--text-muted)",
+        fontSize: "10px",
+        fontWeight: isActive ? 600 : 400,
+        transition: "color 0.15s",
+      }}
+    >
       <FontAwesomeIcon icon={item.icon} style={{ width: 18, height: 18 }} />
       <span>{item.label}</span>
     </Link>
   );
 }
 
-function MoreNavItem({ item, isActive, onClick }: { item: typeof moreNav[number]; isActive: boolean; onClick: () => void }) {
-  const { canView } = usePermission(item.module);
-  if (!canView) return null;
-
+function SheetLink({
+  item,
+  isActive,
+  onClick,
+}: {
+  item: NavItem;
+  isActive: boolean;
+  onClick: () => void;
+}) {
   return (
-    <Link href={item.href} onClick={onClick} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 20px", textDecoration: "none", color: isActive ? "var(--accent-primary)" : "var(--text-secondary)", fontSize: 14, fontWeight: isActive ? 500 : 400 }}>
-      <FontAwesomeIcon icon={item.icon} style={{ width: 16, height: 16, opacity: 0.7 }} />
+    <Link
+      href={item.href}
+      onClick={onClick}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        padding: "12px 20px",
+        textDecoration: "none",
+        color: isActive ? "var(--accent-primary)" : "var(--text-secondary)",
+        fontSize: 14,
+        fontWeight: isActive ? 500 : 400,
+      }}
+    >
+      <FontAwesomeIcon icon={item.icon} style={{ width: 16, height: 16 }} />
       {item.label}
     </Link>
   );
@@ -64,17 +87,40 @@ function MoreNavItem({ item, isActive, onClick }: { item: typeof moreNav[number]
 
 export function BottomNav() {
   const pathname = usePathname();
+  const { permissions, enabledModules } = useAuth();
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const isActive = (href: string) =>
     pathname === href || (href !== "/" && pathname.startsWith(href));
 
-  const moreIsActive = moreNav.some((item) => isActive(item.href));
+  /*
+   * One pass over the sidebar's sections, filtered by the same rule the
+   * sidebar applies. A section whose every entry is hidden contributes
+   * nothing and its heading never appears.
+   */
+  const sections = navSections
+    .map((section) => ({
+      title: section.title,
+      items: visibleNavItems(section.items, permissions, enabledModules),
+    }))
+    .filter((section) => section.items.length > 0);
+
+  const operations = sections[0]?.items ?? [];
+  const tabs = operations.slice(0, PRIMARY_TABS);
+  const tabHrefs = new Set(tabs.map((item) => item.href));
+  const sheet = sections
+    .map((section) => ({
+      title: section.title,
+      items: section.items.filter((item) => !tabHrefs.has(item.href)),
+    }))
+    .filter((section) => section.items.length > 0);
+
+  const moreIsActive = sheet.some((s) => s.items.some((item) => isActive(item.href)));
 
   return (
     <>
-      {/* Bottom Nav Bar */}
       <nav
+        data-testid="bottom-nav"
         style={{
           position: "fixed",
           bottom: 0,
@@ -88,15 +134,15 @@ export function BottomNav() {
           zIndex: 100,
         }}
       >
-        {primaryNav.map((item) => (
+        {tabs.map((item) => (
           <div key={item.href} style={{ flex: 1, display: "flex", justifyContent: "center" }}>
-            <BottomNavItem item={item} isActive={isActive(item.href)} />
+            <TabLink item={item} isActive={isActive(item.href)} />
           </div>
         ))}
 
-        {/* More button */}
         <button
           onClick={() => setSheetOpen(true)}
+          aria-label="More"
           style={{
             flex: 1,
             display: "flex",
@@ -119,27 +165,22 @@ export function BottomNav() {
         </button>
       </nav>
 
-      {/* Sheet overlay */}
       {sheetOpen && (
         <>
-          {/* Backdrop */}
           <div
             onClick={() => setSheetOpen(false)}
-            style={{
-              position: "fixed",
-              inset: 0,
-              background: "rgba(0,0,0,0.5)",
-              zIndex: 200,
-            }}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200 }}
           />
 
-          {/* Slide-up sheet */}
           <div
+            data-testid="bottom-nav-sheet"
             style={{
               position: "fixed",
               bottom: 0,
               left: 0,
               right: 0,
+              maxHeight: "80vh",
+              overflowY: "auto",
               background: "var(--sidebar-bg)",
               borderTop: "1px solid var(--border)",
               borderRadius: "16px 16px 0 0",
@@ -147,9 +188,11 @@ export function BottomNav() {
               padding: "0 0 80px 0",
             }}
           >
-            {/* Sheet header */}
             <div
               style={{
+                position: "sticky",
+                top: 0,
+                background: "var(--sidebar-bg)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
@@ -157,17 +200,12 @@ export function BottomNav() {
                 borderBottom: "1px solid var(--border)",
               }}
             >
-              <span
-                style={{
-                  color: "var(--text-primary)",
-                  fontWeight: 600,
-                  fontSize: "15px",
-                }}
-              >
+              <span style={{ color: "var(--text-primary)", fontWeight: 600, fontSize: "15px" }}>
                 More
               </span>
               <button
                 onClick={() => setSheetOpen(false)}
+                aria-label="Close"
                 style={{
                   width: 32,
                   height: 32,
@@ -185,15 +223,29 @@ export function BottomNav() {
               </button>
             </div>
 
-            {/* Sheet items */}
             <div style={{ padding: "8px 0" }}>
-              {moreNav.map((item) => (
-                <MoreNavItem
-                  key={item.href}
-                  item={item}
-                  isActive={isActive(item.href)}
-                  onClick={() => setSheetOpen(false)}
-                />
+              {sheet.map((section) => (
+                <div key={section.title}>
+                  <div
+                    style={{
+                      padding: "10px 20px 4px",
+                      fontSize: "11px",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.04em",
+                      color: "var(--text-muted)",
+                    }}
+                  >
+                    {section.title}
+                  </div>
+                  {section.items.map((item) => (
+                    <SheetLink
+                      key={item.href}
+                      item={item}
+                      isActive={isActive(item.href)}
+                      onClick={() => setSheetOpen(false)}
+                    />
+                  ))}
+                </div>
               ))}
             </div>
           </div>
