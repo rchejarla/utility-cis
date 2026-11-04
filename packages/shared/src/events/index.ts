@@ -79,6 +79,13 @@ export const EVENT_TYPES = {
   SEASON_SET_UPDATED: "season_set.updated",
   SEASON_SET_PUBLISHED: "season_set.published",
   SEASON_SET_SEASONS_SET: "season_set.seasons_set",
+  /**
+   * A holiday moves which hours a day is priced at, so changing the
+   * list changes bills — audited like the calendar that names it.
+   */
+  TOU_HOLIDAY_LIST_CREATED: "tou_holiday_list.created",
+  TOU_HOLIDAY_LIST_UPDATED: "tou_holiday_list.updated",
+  TOU_HOLIDAY_RULES_SET: "tou_holiday_list.rules_set",
   BILLING_CYCLE_CREATED: "billing_cycle.created",
   BILLING_CYCLE_UPDATED: "billing_cycle.updated",
   BILL_SEGMENT_CREATED: "bill_segment.created",
