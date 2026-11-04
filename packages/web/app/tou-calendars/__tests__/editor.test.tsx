@@ -425,7 +425,15 @@ describe("publishing", () => {
       }),
     );
     renderPage();
-    expect(await screen.findByText(/Draft seasons \(still a draft\)/)).toBeInTheDocument();
+    /*
+     * The set's name sits in the picker and the warning beside it, so
+     * this reads the control's whole label rather than one text node —
+     * but asserts both halves, so losing either fails.
+     */
+    const picker = await screen.findByLabelText("Season set");
+    const line = picker.closest("label");
+    expect(line?.textContent).toMatch(/Draft seasons/);
+    expect(line?.textContent).toMatch(/still a draft/);
   });
 });
 
@@ -506,5 +514,89 @@ describe("rows nobody has filled in", () => {
     await userEvent.type(codes[codes.length - 1], "   ");
 
     expect(screen.getByRole("button", { name: "Save periods" })).toBeDisabled();
+  });
+});
+
+describe("the season set, while the calendar is a draft", () => {
+  it("can be changed", async () => {
+    get.mockImplementation((url: string) =>
+      url === "/api/v1/season-sets"
+        ? Promise.resolve({
+            data: [
+              { id: "set-1", name: "Published seasons", publishedAt: "2026-01-01T00:00:00.000Z" },
+              { id: "set-2", name: "Newer seasons", publishedAt: "2026-02-01T00:00:00.000Z" },
+            ],
+          })
+        : Promise.resolve(calendar()),
+    );
+    const patch = apiClient.patch as unknown as ReturnType<typeof vi.fn>;
+    patch.mockResolvedValue({});
+
+    renderPage();
+    const picker = await screen.findByLabelText("Season set");
+    await userEvent.selectOptions(picker, "set-2");
+
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith("/api/v1/tou-calendars/cal-1", {
+        seasonSetId: "set-2",
+      }),
+    );
+  });
+
+  it("is read-only once published", async () => {
+    get.mockResolvedValue(calendar({ publishedAt: "2026-05-01T12:00:00.000Z" }));
+    renderPage();
+    await screen.findByTestId("published-notice");
+    expect(screen.queryByLabelText("Season set")).toBeNull();
+    expect(screen.getByText(/Seasons: Published seasons/)).toBeInTheDocument();
+  });
+
+  it("shows the server's refusal when hours are keyed on a season the new set lacks", async () => {
+    get.mockImplementation((url: string) =>
+      url === "/api/v1/season-sets"
+        ? Promise.resolve({
+            data: [
+              { id: "set-1", name: "Published seasons", publishedAt: "2026-01-01T00:00:00.000Z" },
+              { id: "set-2", name: "Newer seasons", publishedAt: "2026-02-01T00:00:00.000Z" },
+            ],
+          })
+        : Promise.resolve(calendar()),
+    );
+    const patch = apiClient.patch as unknown as ReturnType<typeof vi.fn>;
+    patch.mockRejectedValue(
+      new Error('This calendar has hours assigned to "summer", which "Newer seasons" does not define.'),
+    );
+
+    renderPage();
+    await userEvent.selectOptions(await screen.findByLabelText("Season set"), "set-2");
+
+    expect(await screen.findByTestId("action-error")).toHaveTextContent(/does not define/);
+  });
+});
+
+describe("the spot check", () => {
+  it("is not offered before there are any hours to check", async () => {
+    /*
+     * It answers "what period would a bill use, and why". On a calendar
+     * with no hours it answers nothing, and at the top of the page it
+     * read as a step somebody was meant to complete first.
+     */
+    get.mockResolvedValue(
+      calendar({
+        spanGroups: [
+          { seasonCode: "summer", dayTypeCode: "weekday", spans: [] },
+          { seasonCode: "summer", dayTypeCode: "weekend", spans: [] },
+        ],
+        validation: { ok: false, problems: ["Summer, weekday: 00:00–24:00 is assigned to no period"] },
+      }),
+    );
+    renderPage();
+    await screen.findByTestId("span-editor-summer-weekday");
+    expect(screen.queryByTestId("spot-check")).toBeNull();
+  });
+
+  it("appears once some hours exist", async () => {
+    renderPage();
+    expect(await screen.findByTestId("spot-check")).toBeInTheDocument();
   });
 });

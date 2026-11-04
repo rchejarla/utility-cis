@@ -758,6 +758,107 @@ describe("what period a version applies for", () => {
   });
 });
 
+describe("what a new calendar starts with", () => {
+  /*
+   * Starting from nothing made the first screen a blank form over a
+   * vocabulary nobody has met: a "period code" and a "day type code"
+   * with no indication of what either should say. These are real rows,
+   * editable and deletable like any other — not placeholder text, which
+   * is what made the empty rows look filled in.
+   */
+  it("has the three periods nearly every TOU tariff has", async () => {
+    const created = await createCalendar();
+    const res = await inject("GET", `/api/v1/tou-calendars/${created.id}`);
+    expect(body(res).periods.map((p: { peakCode: string }) => p.peakCode)).toEqual([
+      "off_peak",
+      "mid_peak",
+      "peak",
+    ]);
+  });
+
+  it("has weekday and weekend, between them claiming all seven days", async () => {
+    const created = await createCalendar();
+    const res = await inject("GET", `/api/v1/tou-calendars/${created.id}`);
+    const dayTypes = body(res).dayTypes as Array<{ dayTypeCode: string; weekdays: number[] }>;
+    expect(dayTypes.map((d) => d.dayTypeCode)).toEqual(["weekday", "weekend"]);
+    expect(dayTypes.flatMap((d) => d.weekdays).sort()).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it("names no holiday day type, which is a tariff shape and not an omission", async () => {
+    // A calendar with a holiday list and no holiday day type classifies
+    // holidays by their weekday. Real, and not ours to decide.
+    const created = await createCalendar();
+    const res = await inject("GET", `/api/v1/tou-calendars/${created.id}`);
+    expect(body(res).dayTypes.some((d: { isHoliday: boolean }) => d.isHoliday)).toBe(false);
+  });
+
+  it("leaves the defaults editable like anything else", async () => {
+    const created = await createCalendar();
+    const res = await inject("PUT", `/api/v1/tou-calendars/${created.id}/periods`, {
+      periods: [{ peakCode: "flat", label: "All hours" }],
+    });
+    expect(res.statusCode).toBe(200);
+    expect(body(res).periods.map((p: { peakCode: string }) => p.peakCode)).toEqual(["flat"]);
+  });
+
+  it("starts with no hours, so nothing is priced by assumption", async () => {
+    const created = await createCalendar();
+    const res = await inject("GET", `/api/v1/tou-calendars/${created.id}`);
+    expect(body(res).spanGroups.every((g: { spans: unknown[] }) => g.spans.length === 0)).toBe(true);
+    expect(body(res).validation.ok).toBe(false);
+  });
+});
+
+describe("changing the season set on a draft", () => {
+  it("is allowed while no hours reference the old seasons", async () => {
+    const created = await createCalendar();
+    const res = await inject("PATCH", `/api/v1/tou-calendars/${created.id}`, {
+      seasonSetId: draftSeasonSetId,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const after = await inject("GET", `/api/v1/tou-calendars/${created.id}`);
+    expect(body(after).seasonSet.id).toBe(draftSeasonSetId);
+  });
+
+  it("is refused when hours are keyed on a season the new set does not define", async () => {
+    /*
+     * `tou_slot.season_code` is a string with no foreign key — it cannot
+     * have one, since a season belongs to a set and a slot to a
+     * calendar — so the hours would survive pointing at nothing and
+     * `resolvePeak` would answer "no period covers 17:15" on every bill.
+     */
+    const id = await completeCalendar();
+    const res = await inject("PATCH", `/api/v1/tou-calendars/${id}`, {
+      seasonSetId: draftSeasonSetId,
+    });
+    expect(res.statusCode).toBe(409);
+    expect(body(res).error.code).toBe("SEASON_CODE_IN_USE");
+    expect(body(res).error.message).toMatch(/summer|non_summer/);
+    expect(body(res).error.message).toMatch(/Draft seasons/);
+  });
+
+  it("does not delete the hours to make the change succeed", async () => {
+    const id = await completeCalendar();
+    await inject("PATCH", `/api/v1/tou-calendars/${id}`, { seasonSetId: draftSeasonSetId });
+
+    const after = await inject("GET", `/api/v1/tou-calendars/${id}`);
+    expect(after.statusCode).toBe(200);
+    expect(body(after).seasonSet.name).toBe("Published seasons");
+    expect(body(after).spanGroups.some((g: { spans: unknown[] }) => g.spans.length > 0)).toBe(true);
+  });
+
+  it("is refused once published", async () => {
+    const id = await completeCalendar();
+    await inject("POST", `/api/v1/tou-calendars/${id}/publish`);
+    const res = await inject("PATCH", `/api/v1/tou-calendars/${id}`, {
+      seasonSetId: draftSeasonSetId,
+    });
+    expect(res.statusCode).toBe(409);
+    expect(body(res).error.code).toBe("TOU_CALENDAR_PUBLISHED");
+  });
+});
+
 describe("deleting", () => {
   it("deletes a draft", async () => {
     const calendar = await createCalendar();

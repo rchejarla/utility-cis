@@ -311,6 +311,34 @@ function toEditorPayload(row: EditorCalendar) {
   };
 }
 
+/**
+ * What a new calendar starts with.
+ *
+ * Starting from nothing made the first screen a blank form over a
+ * vocabulary nobody has met yet: a period code, a day type code, and no
+ * indication of what either should say. These are the three periods and
+ * two day types almost every time-of-use tariff has, written as real
+ * rows so they can be renamed, re-coded or deleted like any other —
+ * not as placeholder text, which is what made the empty rows look
+ * filled in.
+ *
+ * **No holiday day type.** A calendar that names a holiday list and has
+ * no holiday day type classifies holidays by their weekday, which is a
+ * real tariff shape and not an error, so inventing one would be
+ * deciding something the tenant has not said. The validator names the
+ * gap if they do name a list and want one.
+ */
+const DEFAULT_PERIODS = [
+  { peakCode: "off_peak", label: "Off-peak" },
+  { peakCode: "mid_peak", label: "Mid-peak" },
+  { peakCode: "peak", label: "On-peak" },
+];
+
+const DEFAULT_DAY_TYPES = [
+  { dayTypeCode: "weekday", label: "Weekday", weekdays: [1, 2, 3, 4, 5] },
+  { dayTypeCode: "weekend", label: "Weekend", weekdays: [6, 7] },
+];
+
 export async function createTouCalendar(
   utilityId: string,
   actorId: string,
@@ -356,6 +384,38 @@ export async function createTouCalendar(
           clockBasis: data.clockBasis,
         },
       });
+
+      await tx.touPeriod.createMany({
+        data: DEFAULT_PERIODS.map((period, index) => ({
+          utilityId,
+          touCalendarId: created.id,
+          peakCode: period.peakCode,
+          label: period.label,
+          sortOrder: index,
+        })),
+      });
+
+      for (const [index, dayType] of DEFAULT_DAY_TYPES.entries()) {
+        const row = await tx.touDayType.create({
+          data: {
+            utilityId,
+            touCalendarId: created.id,
+            dayTypeCode: dayType.dayTypeCode,
+            label: dayType.label,
+            isHoliday: false,
+            sortOrder: index,
+          },
+        });
+        await tx.touDayTypeWeekday.createMany({
+          data: dayType.weekdays.map((isoWeekday) => ({
+            utilityId,
+            touCalendarId: created.id,
+            touDayTypeId: row.id,
+            isoWeekday,
+          })),
+        });
+      }
+
       return created;
     },
   );
@@ -386,6 +446,43 @@ export async function updateTouCalendar(
   }
   assertDraft(existing);
   if (data.timeZone) assertKnownTimeZone(data.timeZone);
+
+  /*
+   * Changing the season set while hours reference its codes.
+   *
+   * `tou_slot.season_code` is a string with no foreign key — it cannot
+   * have one, because a season belongs to a set and a slot belongs to a
+   * calendar — so moving the calendar to a set that lacks a code leaves
+   * those hours pointing at nothing. They would survive the save and
+   * `resolvePeak` would answer "no period covers 17:15" on every bill
+   * the calendar priced.
+   *
+   * Refused rather than cascaded: deleting somebody's hours to make a
+   * dropdown change succeed is not a trade a screen may make silently.
+   */
+  if (data.seasonSetId && data.seasonSetId !== existing.seasonSetId) {
+    const target = await prisma.seasonSet.findFirst({
+      where: { id: data.seasonSetId, utilityId },
+      include: { seasons: { select: { seasonCode: true } } },
+    });
+    if (!target) {
+      throw badRequest("That season set does not exist.", "SEASON_SET_MISSING");
+    }
+
+    const codes = new Set(target.seasons.map((season) => season.seasonCode));
+    const orphaned = await prisma.touSlot.findMany({
+      where: { utilityId, touCalendarId: id, seasonCode: { notIn: [...codes] } },
+      select: { seasonCode: true },
+      distinct: ["seasonCode"],
+    });
+    if (orphaned.length > 0) {
+      const lost = orphaned.map((slot) => `"${slot.seasonCode}"`).join(", ");
+      throw conflict(
+        `This calendar has hours assigned to ${lost}, which "${target.name}" does not define. Clear those hours first, or pick a set that has ${orphaned.length === 1 ? "that season" : "those seasons"}.`,
+        "SEASON_CODE_IN_USE",
+      );
+    }
+  }
 
   return auditUpdate(
     { utilityId, actorId, actorName, entityType: "TouCalendar" },
