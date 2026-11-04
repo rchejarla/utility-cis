@@ -511,21 +511,46 @@ describe("the reserved holiday day type", () => {
     );
   });
 
-  it("can be removed once no set is named, which is what detaching means", async () => {
+  it("goes when the set is detached, because nothing can reach it any more", async () => {
+    /*
+     * Detaching says this tariff does not distinguish holidays, and a
+     * holiday day type with no set is a day type nothing resolves to —
+     * while still demanding hours for every season before the calendar
+     * can be published. It is not left behind for somebody to find:
+     * the day types list does not show it, so nobody would.
+     */
     const created = await createCalendar();
-    await inject("PATCH", `/api/v1/tou-calendars/${created.id}`, { touHolidaySetId: null });
-
-    const res = await inject("PUT", `/api/v1/tou-calendars/${created.id}/day-types`, {
-      dayTypes: [
-        { dayTypeCode: "weekday", label: "Weekday", weekdays: [1, 2, 3, 4, 5] },
-        { dayTypeCode: "weekend", label: "Weekend", weekdays: [6, 7] },
-      ],
+    const res = await inject("PATCH", `/api/v1/tou-calendars/${created.id}`, {
+      touHolidaySetId: null,
     });
     expect(res.statusCode).toBe(200);
-    expect(body(res).dayTypes.map((d: { dayTypeCode: string }) => d.dayTypeCode)).toEqual([
+
+    const after = await inject("GET", `/api/v1/tou-calendars/${created.id}`);
+    expect(body(after).dayTypes.map((d: { dayTypeCode: string }) => d.dayTypeCode)).toEqual([
       "weekday",
       "weekend",
     ]);
+    expect(body(after).spanGroups).toHaveLength(4);
+  });
+
+  it("refuses the detach rather than deleting holiday hours somebody typed", async () => {
+    /*
+     * Same rule `putTouDayTypes` applies to any day type with spans:
+     * `tou_slot_day_type_id_fkey` cascades, so removing the row would
+     * discard an afternoon's work to make a dropdown change succeed.
+     */
+    const id = await completeCalendar();
+    const res = await inject("PATCH", `/api/v1/tou-calendars/${id}`, { touHolidaySetId: null });
+    expect(res.statusCode).toBe(409);
+    expect(body(res).error.code).toBe("TOU_DAY_TYPE_HAS_SPANS");
+    expect(body(res).error.message).toMatch(/Holiday/);
+
+    // And nothing moved: the set is still named and the hours are intact.
+    const after = await inject("GET", `/api/v1/tou-calendars/${id}`);
+    expect(body(after).touHolidaySetId).toBe(holidaySetId);
+    expect(body(after).dayTypes.map((d: { dayTypeCode: string }) => d.dayTypeCode)).toContain(
+      "holiday",
+    );
   });
 });
 

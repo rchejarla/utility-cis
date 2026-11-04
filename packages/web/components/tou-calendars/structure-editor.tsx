@@ -336,9 +336,26 @@ export function DayTypesEditor({
   const claimed = new Set(rows.flatMap((r) => r.weekdays));
   const unclaimed = WEEKDAYS.filter((d) => !claimed.has(d.iso));
 
-  /** Rows that would be refused, by position. See `isBlank`. */
-  const incomplete = rows
+  /**
+   * The rows a tenant defines, which is what this list is for.
+   *
+   * The reserved `holiday` row is not one of them: nothing about it is
+   * the operator's to decide — the system creates it with the holiday
+   * set, the engine finds it by its code, and it claims no weekday. It
+   * stayed in `rows` and out of the table, because the save replaces
+   * the whole collection and a list submitted without it is refused.
+   *
+   * Absolute indices, so the edit handlers keep addressing `rows`; the
+   * number in the "needs a code" message counts visible rows, since
+   * that is what somebody is looking at.
+   */
+  const visible = rows
     .map((row, index) => ({ row, index }))
+    .filter(({ row }) => row.isHolidayDayType !== true);
+
+  /** Rows that would be refused, by the position shown. See `isBlank`. */
+  const incomplete = visible
+    .map((entry, position) => ({ ...entry, position }))
     .filter(({ row }) => isBlank(row.dayTypeCode) || isBlank(row.label));
 
   const save = async () => {
@@ -358,11 +375,7 @@ export function DayTypesEditor({
     <Card
       testId="day-types-editor"
       title="Day types"
-      hint={
-        holidaySetName
-          ? `Which kinds of day this calendar distinguishes. Every weekday has to belong to exactly one of them, and the dates in "${holidaySetName}" take the holiday row's hours whatever weekday they fall on.`
-          : "Which kinds of day this calendar distinguishes. Every weekday has to belong to exactly one of them."
-      }
+      hint="Which kinds of day this calendar distinguishes. Every weekday has to belong to exactly one of them."
     >
       <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
         <thead>
@@ -374,22 +387,12 @@ export function DayTypesEditor({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, index) => {
-            /*
-             * The holiday row is the system's. Its code is what the
-             * engine matches to find it, so retyping it is how a tariff
-             * silently stops observing holidays — the server refuses
-             * that, and a locked box is the same answer given before
-             * somebody types.
-             */
-            const reserved = row.isHolidayDayType === true;
-            return (
+          {visible.map(({ row, index }) => (
             <tr key={index}>
               <td style={{ padding: "2px 4px 2px 0", width: "18%" }}>
                 <input
                   aria-label="Day type code"
-                  disabled={readOnly || reserved}
-                  title={reserved ? "The holiday set's dates resolve to this code." : undefined}
+                  disabled={readOnly}
                   style={{
                     ...inputStyle,
                     fontFamily: "monospace",
@@ -419,19 +422,6 @@ export function DayTypesEditor({
                 />
               </td>
               <td style={{ padding: "2px 4px" }}>
-                {reserved ? (
-                  /*
-                   * No weekday buttons. A weekday ticked here would
-                   * hand that whole weekday to the holiday row — every
-                   * Friday off-peak, not the four Fridays the utility
-                   * closes — and nothing in the schema refuses it.
-                   */
-                  <span data-testid="holiday-days" style={{ color: "var(--text-muted)" }}>
-                    {holidaySetName
-                      ? `The dates in "${holidaySetName}"`
-                      : "No holiday set is named, so no date reaches this row"}
-                  </span>
-                ) : (
                 <div style={{ display: "flex", gap: "2px", flexWrap: "wrap" }}>
                   {WEEKDAYS.map((day) => {
                     const on = row.weekdays.includes(day.iso);
@@ -459,16 +449,9 @@ export function DayTypesEditor({
                     );
                   })}
                 </div>
-                )}
               </td>
               <td style={{ padding: "2px 0 2px 4px", textAlign: "right" }}>
-                {/*
-                  Removable only once no set is named, which is the
-                  server's rule too: the holiday row is where those
-                  dates get their hours, so removing it while they point
-                  here would price every one of them as a weekday.
-                */}
-                {!readOnly && !(reserved && holidaySetName !== null) && (
+                {!readOnly && (
                   <button
                     type="button"
                     aria-label="Remove this day type"
@@ -486,10 +469,22 @@ export function DayTypesEditor({
                 )}
               </td>
             </tr>
-            );
-          })}
+          ))}
         </tbody>
       </table>
+
+      {/*
+        Said in a line rather than as a row in the table above. Without
+        it the Hours section further down grows a "Holiday" block out of
+        nowhere; with it as a row, every cell was disabled and the list
+        read as though holidays were something to configure here.
+      */}
+      {holidaySetName && (
+        <div data-testid="holiday-day-type-note" style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+          Holidays are the dates in &ldquo;{holidaySetName}&rdquo;, and take their own hours
+          below &mdash; whatever weekday they fall on.
+        </div>
+      )}
 
       {unclaimed.length > 0 && (
         <div data-testid="unclaimed-weekdays" style={{ fontSize: "12px", color: "var(--warning)" }}>
@@ -508,7 +503,7 @@ export function DayTypesEditor({
       {incomplete.length > 0 && (
         <div data-testid="day-types-incomplete" style={{ fontSize: "12px", color: "var(--warning)" }}>
           {incomplete.length === 1 ? "Row" : "Rows"}{" "}
-          {incomplete.map(({ index }) => index + 1).join(", ")} still{" "}
+          {incomplete.map(({ position }) => position + 1).join(", ")} still{" "}
           {incomplete.length === 1 ? "needs" : "need"} a code and a label. The greyed text is an
           example, not a value.
         </div>

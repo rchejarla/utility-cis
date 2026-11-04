@@ -567,6 +567,37 @@ export async function updateTouCalendar(
     createHolidayDayType = !already;
   }
 
+  /*
+   * ...and detaching takes it away again.
+   *
+   * Left behind it is a day type nothing resolves to — no date can
+   * reach it without a set — which still has to be given hours for
+   * every season before the calendar may be published. The day types
+   * list does not show the reserved row at all, so nobody would find
+   * the thing blocking them.
+   *
+   * Its hours are the one reason to refuse instead: `tou_slot` cascades
+   * from the day type, so removing it would discard an afternoon's work
+   * to make a dropdown change succeed. Same rule, and the same code, as
+   * dropping any other day type that still has spans.
+   */
+  let removeHolidayDayTypeId: string | null = null;
+  if (data.touHolidaySetId === null && existing.touHolidaySetId !== null) {
+    const holiday = await prisma.touDayType.findFirst({
+      where: { utilityId, touCalendarId: id, dayTypeCode: HOLIDAY_DAY_TYPE_CODE },
+      select: { id: true, label: true, _count: { select: { slots: true } } },
+    });
+    if (holiday) {
+      if (holiday._count.slots > 0) {
+        throw conflict(
+          `"${holiday.label}" has ${holiday._count.slots} span${holiday._count.slots === 1 ? "" : "s"} of hours assigned, which detaching the holiday set would delete. Clear those hours first if this tariff does not price holidays separately.`,
+          "TOU_DAY_TYPE_HAS_SPANS",
+        );
+      }
+      removeHolidayDayTypeId = holiday.id;
+    }
+  }
+
   return auditUpdate(
     { utilityId, actorId, actorName, entityType: "TouCalendar" },
     EVENT_TYPES.TOU_CALENDAR_UPDATED,
@@ -583,6 +614,9 @@ export async function updateTouCalendar(
             sortOrder: count,
           },
         });
+      }
+      if (removeHolidayDayTypeId) {
+        await tx.touDayType.delete({ where: { id: removeHolidayDayTypeId } });
       }
       return tx.touCalendar.update({
         where: { id },

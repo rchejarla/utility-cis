@@ -93,6 +93,16 @@ function calendar(over: Record<string, unknown> = {}) {
   };
 }
 
+/** The same calendar, naming a holiday set and carrying its day type. */
+function withHolidaySet(over: Record<string, unknown> = {}) {
+  return calendar({
+    touHolidaySetId: HOLIDAY_SET.id,
+    holidaySet: HOLIDAY_SET,
+    dayTypes: [...DAY_TYPES, HOLIDAY_DAY_TYPE],
+    ...over,
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   get.mockResolvedValue(calendar());
@@ -316,70 +326,96 @@ describe("day types", () => {
    * row now arrives with the holiday set, and its code is the system's.
    */
   it("offers no way to nominate a day type as the holiday one", async () => {
-    get.mockResolvedValue(
-      calendar({
-        touHolidaySetId: HOLIDAY_SET.id,
-        holidaySet: HOLIDAY_SET,
-        dayTypes: [...DAY_TYPES, HOLIDAY_DAY_TYPE],
-      }),
-    );
+    get.mockResolvedValue(withHolidaySet());
     renderPage();
     await screen.findByTestId("day-types-editor");
 
     expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
   });
 
-  it("locks the holiday row's code, because the engine finds it by that code", async () => {
-    get.mockResolvedValue(
-      calendar({
-        touHolidaySetId: HOLIDAY_SET.id,
-        holidaySet: HOLIDAY_SET,
-        dayTypes: [...DAY_TYPES, HOLIDAY_DAY_TYPE],
-      }),
-    );
+  it("leaves the reserved holiday row out of the list entirely", async () => {
+    /*
+     * Nothing about it is the operator's to decide: the system creates
+     * it with the set, the engine finds it by its code and it claims no
+     * weekday. Shown as a row, every cell was disabled and the list
+     * read as though holidays were configured here.
+     */
+    get.mockResolvedValue(withHolidaySet());
     renderPage();
     await screen.findByTestId("day-types-editor");
 
     const codes = screen.getAllByLabelText("Day type code") as HTMLInputElement[];
-    expect(codes[0]).toBeEnabled();
-    expect(codes[2]).toBeDisabled();
-    expect(codes[2].value).toBe("holiday");
-  });
-
-  it("will not let the holiday row be removed while a set is named", async () => {
-    // Removing it is how a tariff silently stops observing holidays:
-    // every date in the set would then bill as an ordinary weekday.
-    get.mockResolvedValue(
-      calendar({
-        touHolidaySetId: HOLIDAY_SET.id,
-        holidaySet: HOLIDAY_SET,
-        dayTypes: [...DAY_TYPES, HOLIDAY_DAY_TYPE],
-      }),
-    );
-    renderPage();
-    await screen.findByTestId("day-types-editor");
-
+    expect(codes.map((c) => c.value)).toEqual(["weekday", "weekend"]);
     expect(screen.getAllByRole("button", { name: "Remove this day type" })).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Mon on holiday" })).toBeNull();
   });
 
-  it("says which set reaches the holiday row, instead of offering weekdays for it", async () => {
-    /*
-     * A weekday ticked on the holiday row would hand that whole weekday
-     * to it — every Friday off-peak, not the four the utility closes —
-     * and nothing in the schema refuses that.
-     */
+  it("says in a line where the holiday hours below come from", async () => {
+    // Without it the Hours section grows a "Holiday" block out of
+    // nowhere, now that no row in this list mentions one.
+    get.mockResolvedValue(withHolidaySet());
+    renderPage();
+    const note = await screen.findByTestId("holiday-day-type-note");
+    expect(note.textContent).toMatch(/Observed holidays/);
+    expect(note.textContent).toMatch(/whatever weekday they fall on/);
+  });
+
+  it("says nothing about holidays when the calendar names no set", async () => {
+    renderPage();
+    await screen.findByTestId("day-types-editor");
+    expect(screen.queryByTestId("holiday-day-type-note")).toBeNull();
+  });
+
+  it("still prices the holiday hours, which is what the row was for", async () => {
+    // Hidden from the vocabulary list, not from the hours: a strip per
+    // (season, day type) still includes it.
     get.mockResolvedValue(
-      calendar({
-        touHolidaySetId: HOLIDAY_SET.id,
-        holidaySet: HOLIDAY_SET,
-        dayTypes: [...DAY_TYPES, HOLIDAY_DAY_TYPE],
+      withHolidaySet({
+        spanGroups: [
+          ...calendar().spanGroups,
+          {
+            seasonCode: "summer",
+            dayTypeCode: "holiday",
+            spans: [{ startMinute: 0, endMinute: 1440, peakCode: "off_peak" }],
+          },
+        ],
       }),
     );
     renderPage();
+    expect(await screen.findByTestId("span-editor-summer-holiday")).toBeInTheDocument();
+  });
+
+  it("keeps the hidden holiday row in the saved list, which the server requires", async () => {
+    /*
+     * The save replaces the whole collection, and a list submitted
+     * without the reserved row while a set is named is refused — so
+     * hiding it from the table must not drop it from the payload.
+     */
+    put.mockResolvedValue(withHolidaySet());
+    get.mockResolvedValue(withHolidaySet());
+    renderPage();
     await screen.findByTestId("day-types-editor");
 
-    expect(screen.getByTestId("holiday-days").textContent).toMatch(/Observed holidays/);
-    expect(screen.queryByRole("button", { name: "Mon on holiday" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Sat on weekday" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save day types" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalled());
+    const [, payload] = put.mock.calls[0];
+    const sent = payload as { dayTypes: Array<{ dayTypeCode: string }> };
+    expect(sent.dayTypes.map((d) => d.dayTypeCode)).toEqual(["weekday", "weekend", "holiday"]);
+  });
+
+  it("numbers an unfilled row by what is on screen, not by its place in the list", async () => {
+    // The reserved row sits in the list and not in the table, so a row
+    // added after it is the third thing somebody can see, not the
+    // fourth thing stored.
+    get.mockResolvedValue(withHolidaySet());
+    renderPage();
+    await screen.findByTestId("day-types-editor");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a day type" }));
+
+    expect(screen.getByTestId("day-types-incomplete").textContent).toMatch(/Row 3\b/);
   });
 
   it("sends no holiday flag when the list is saved", async () => {
