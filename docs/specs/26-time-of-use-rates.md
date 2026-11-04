@@ -856,6 +856,22 @@ it is wrong.
   the validation verdict and Publish. A tab that hid "2 problems to fix"
   would let somebody believe the hours were finished.
 
+  **Publish is disabled while the verdict lists anything**, because then
+  it can only fail, and a button like that is what teaches an operator
+  not to believe the screen. The verdict is the server's own — the
+  browser computes no notion of validity, since a second validator
+  would eventually disagree with the one publishing applies.
+
+  That required the verdict to list **everything publishing refuses**.
+  Two conditions used to be known only to the publish path — a season
+  set or holiday set still in draft (TOU-CAL-10) — so the editor called
+  such a calendar ready while the button could only fail.
+  `draftInputProblems` now states each one once and is read by both the
+  editor's verdict and `publishTouCalendar`, which still answers with
+  the specific code: "publish the season set" is a different
+  instruction from "these hours have a gap", and an operator acts on
+  them in different places.
+
   **Changing either set is pick-then-Apply**, with what it will do
   stated above the Apply. They were the only controls on the page that
   committed the moment they were touched while everything else was a

@@ -696,6 +696,56 @@ describe("publishing", () => {
     expect(body(res).error.message).toMatch(/uncharged|charged twice/);
   });
 
+  /*
+   * The editor's verdict has to list everything publishing would
+   * refuse, because the screen disables Publish on it. A condition that
+   * only publishing knew about left the button enabled and able only to
+   * fail, which is what teaches an operator not to believe the screen.
+   */
+  it("reports a draft season set in the verdict, not only when publishing", async () => {
+    const calendar = await createCalendar({ seasonSetId: draftSeasonSetId });
+    const res = await inject("GET", `/api/v1/tou-calendars/${calendar.id}`);
+    expect(res.statusCode).toBe(200);
+    expect(body(res).validation.ok).toBe(false);
+    expect(body(res).validation.problems.join("\n")).toMatch(/"Draft seasons" is still a draft/);
+  });
+
+  it("reports a draft holiday set in the verdict too", async () => {
+    const { prisma } = prismaImports;
+    const draftSet = await seedAsPlatform(async () => {
+      const set = await prisma.touHolidaySet.create({
+        data: {
+          utilityId: TENANT_A,
+          name: "Next year, in progress",
+          effectiveDate: new Date(Date.UTC(2027, 0, 1)),
+        },
+      });
+      await prisma.touHoliday.create({
+        data: {
+          utilityId: TENANT_A,
+          touHolidaySetId: set.id,
+          holidayDate: new Date(Date.UTC(2027, 6, 5)),
+          name: "Independence Day (observed)",
+        },
+      });
+      return set;
+    });
+
+    const calendar = await createCalendar({ touHolidaySetId: draftSet.id });
+    const res = await inject("GET", `/api/v1/tou-calendars/${calendar.id}`);
+    expect(body(res).validation.problems.join("\n")).toMatch(
+      /"Next year, in progress" is still a draft/,
+    );
+  });
+
+  it("says nothing of the sort once both sets are published", async () => {
+    // The control: without it the two above would pass on a service
+    // that reported "still a draft" about everything.
+    const id = await completeCalendar();
+    const res = await inject("GET", `/api/v1/tou-calendars/${id}`);
+    expect(body(res).validation.ok).toBe(true);
+  });
+
   it("refuses a calendar whose season set is still a draft", async () => {
     /*
      * TOU-CAL-10: the spans are keyed on the set's codes, and a draft

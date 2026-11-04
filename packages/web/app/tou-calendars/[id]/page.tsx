@@ -599,10 +599,27 @@ export default function TouCalendarEditorPage() {
           )}
         </span>
         {!published && canEdit && (
+          /*
+           * Disabled while the verdict lists anything, because then it
+           * can only fail — and the verdict is the server's own, not a
+           * second opinion computed here. A browser-side notion of
+           * validity would eventually disagree with the one publishing
+           * applies, and the wrapped season is where it would start.
+           *
+           * Never a dead end: the panel immediately above names every
+           * problem, and the title repeats why for anyone hovering.
+           */
           <button
             type="button"
             onClick={publish}
-            disabled={publishing}
+            disabled={publishing || !calendar.validation.ok}
+            title={
+              calendar.validation.ok
+                ? undefined
+                : `${calendar.validation.problems.length} problem${
+                    calendar.validation.problems.length === 1 ? "" : "s"
+                  } to fix first — listed above.`
+            }
             style={{
               marginLeft: "auto",
               padding: "7px 16px",
@@ -612,8 +629,8 @@ export default function TouCalendarEditorPage() {
               color: "#fff",
               fontSize: "13px",
               fontWeight: 500,
-              cursor: publishing ? "not-allowed" : "pointer",
-              opacity: publishing ? 0.7 : 1,
+              cursor: publishing || !calendar.validation.ok ? "not-allowed" : "pointer",
+              opacity: publishing || !calendar.validation.ok ? 0.5 : 1,
               fontFamily: "inherit",
             }}
           >

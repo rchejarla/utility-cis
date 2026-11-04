@@ -608,6 +608,66 @@ describe("the spot check", () => {
 });
 
 describe("publishing", () => {
+  it("is not offered while the verdict lists anything", async () => {
+    /*
+     * A button that can only fail is what teaches somebody not to
+     * believe the screen: the panel above already names every problem,
+     * and clicking Publish returned the same list from the server.
+     */
+    get.mockResolvedValue(
+      calendar({
+        validation: {
+          ok: false,
+          problems: ["Summer, weekday: 21:00–22:00 is assigned to no period"],
+        },
+      }),
+    );
+    renderPage();
+    const button = await screen.findByRole("button", { name: "Publish" });
+
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", expect.stringMatching(/1 problem to fix first/));
+  });
+
+  it("is offered once the verdict is clean", async () => {
+    renderPage();
+    expect(await screen.findByRole("button", { name: "Publish" })).toBeEnabled();
+  });
+
+  it("is not offered while an input the calendar names is still a draft", async () => {
+    /*
+     * The server reports a draft season set in the same verdict as a
+     * gap in the hours, which is what lets one rule drive the button.
+     * It used to refuse at publish time only, so the screen called the
+     * calendar ready and the button could only fail.
+     */
+    get.mockResolvedValue(
+      calendar({
+        seasonSet: {
+          id: "set-1",
+          name: "Draft seasons",
+          publishedAt: null,
+          seasons: [
+            {
+              seasonCode: "summer",
+              label: "Summer",
+              startMonth: 5,
+              startDay: 1,
+              endMonth: 10,
+              endDay: 31,
+            },
+          ],
+        },
+        validation: {
+          ok: false,
+          problems: ['The season set "Draft seasons" is still a draft. Publish it first.'],
+        },
+      }),
+    );
+    renderPage();
+    expect(await screen.findByRole("button", { name: "Publish" })).toBeDisabled();
+  });
+
   it("publishes and reloads", async () => {
     post.mockResolvedValue({ id: "cal-1", publishedAt: "2026-05-01T12:00:00.000Z" });
     renderPage();

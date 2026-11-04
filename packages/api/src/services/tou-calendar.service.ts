@@ -195,6 +195,58 @@ async function supersessionOf(
  * Measured from the calendar's own effective date, since dates before
  * it belong to whichever version was in force then.
  */
+/**
+ * The inputs this calendar names that are themselves still drafts.
+ *
+ * Stated once and read by two callers — the editor's verdict and
+ * `publishTouCalendar` — because they used to disagree. Publishing
+ * refused a calendar whose season set was a draft while the editor
+ * reported the calendar as ready, so the Publish button was enabled and
+ * could only fail. A button like that is what teaches an operator not
+ * to believe the screen.
+ *
+ * Each carries its own code: "publish the season set" and "publish the
+ * holiday set" are two different things to go and do, and collapsing
+ * them into one validation message would lose that.
+ */
+async function draftInputProblems(
+  utilityId: string,
+  row: {
+    seasonSet: { name: string; publishedAt: Date | null };
+    touHolidaySetId: string | null;
+  },
+): Promise<Array<{ code: string; message: string }>> {
+  const problems: Array<{ code: string; message: string }> = [];
+
+  /*
+   * TOU-CAL-10: the calendar's spans are keyed on its season set's
+   * codes, so a published calendar whose set is still a draft could
+   * have the ground move under it.
+   */
+  if (!row.seasonSet.publishedAt) {
+    problems.push({
+      code: "SEASON_SET_NOT_PUBLISHED",
+      message: `The season set "${row.seasonSet.name}" is still a draft. Publish it first — this calendar's hours are keyed on its season codes, and a draft set can still rename them.`,
+    });
+  }
+
+  /* The same argument for holidays: a draft set's dates can still move. */
+  if (row.touHolidaySetId) {
+    const set = await prisma.touHolidaySet.findFirst({
+      where: { id: row.touHolidaySetId, utilityId },
+      select: { name: true, publishedAt: true },
+    });
+    if (set && !set.publishedAt) {
+      problems.push({
+        code: "HOLIDAY_SET_NOT_PUBLISHED",
+        message: `The holiday set "${set.name}" is still a draft. Publish it first — a draft set's dates can still change, and these hours would then price different days than the ones you checked.`,
+      });
+    }
+  }
+
+  return problems;
+}
+
 async function holidayHorizonProblems(
   utilityId: string,
   row: { effectiveDate: Date; touHolidaySetId: string | null },
@@ -281,9 +333,10 @@ export async function listTouCalendars(utilityId: string, query: TouCalendarQuer
 
 export async function getTouCalendar(id: string, utilityId: string) {
   const row = await loadEditorCalendar(utilityId, id);
-  const [supersession, horizon, holidaySet] = await Promise.all([
+  const [supersession, horizon, drafts, holidaySet] = await Promise.all([
     supersessionOf(utilityId, row),
     holidayHorizonProblems(utilityId, row),
+    draftInputProblems(utilityId, row),
     row.touHolidaySetId
       ? prisma.touHolidaySet.findFirst({
           where: { id: row.touHolidaySetId, utilityId },
@@ -296,7 +349,13 @@ export async function getTouCalendar(id: string, utilityId: string) {
         })
       : Promise.resolve(null),
   ]);
-  return { ...toEditorPayload(row, horizon), ...supersession, holidaySet };
+  /*
+   * Everything publishing would refuse, in one verdict. The screen
+   * disables Publish on it, so anything missing here is a button that
+   * is enabled only to fail.
+   */
+  const problems = [...horizon, ...drafts.map((d) => d.message)];
+  return { ...toEditorPayload(row, problems), ...supersession, holidaySet };
 }
 
 /**
@@ -697,30 +756,12 @@ export async function publishTouCalendar(
   }
 
   /*
-   * TOU-CAL-10: the calendar's spans are keyed on its season set's
-   * codes, so a published calendar whose set is still a draft could
-   * have the ground move under it.
+   * The draft inputs first, each with its own code, because "publish
+   * the season set" is a different instruction from "these hours have a
+   * gap" and an operator acts on them in different places.
    */
-  if (!row.seasonSet.publishedAt) {
-    throw conflict(
-      `The season set "${row.seasonSet.name}" is still a draft. Publish it first — this calendar's hours are keyed on its season codes, and a draft set can still rename them.`,
-      "SEASON_SET_NOT_PUBLISHED",
-    );
-  }
-
-  /* The same argument for holidays: a draft set's dates can still move. */
-  if (row.touHolidaySetId) {
-    const set = await prisma.touHolidaySet.findFirst({
-      where: { id: row.touHolidaySetId, utilityId },
-      select: { name: true, publishedAt: true },
-    });
-    if (set && !set.publishedAt) {
-      throw conflict(
-        `The holiday set "${set.name}" is still a draft. Publish it first — a draft set's dates can still change, and these hours would then price different days than the ones you checked.`,
-        "HOLIDAY_SET_NOT_PUBLISHED",
-      );
-    }
-  }
+  const [draft] = await draftInputProblems(utilityId, row);
+  if (draft) throw conflict(draft.message, draft.code);
 
   const engineValidation = validateCalendar(toTouCalendarDefinition(row), row.seasonSet.seasons);
   const problems = [
@@ -1072,9 +1113,14 @@ export async function validateTouCalendar(
 ): Promise<CalendarValidation> {
   const row = await loadEditorCalendar(utilityId, id);
   const engineValidation = validateCalendar(toTouCalendarDefinition(row), row.seasonSet.seasons);
+  const [horizon, drafts] = await Promise.all([
+    holidayHorizonProblems(utilityId, row),
+    draftInputProblems(utilityId, row),
+  ]);
   const problems = [
     ...(engineValidation.ok ? [] : engineValidation.problems),
-    ...(await holidayHorizonProblems(utilityId, row)),
+    ...horizon,
+    ...drafts.map((d) => d.message),
   ];
   return problems.length === 0 ? { ok: true } : { ok: false, problems };
 }
