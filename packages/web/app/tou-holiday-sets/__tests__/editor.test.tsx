@@ -255,6 +255,55 @@ describe("the calendars naming the set", () => {
 });
 
 describe("publishing", () => {
+  it("is not offered while the set has no dates", async () => {
+    // The server refuses an empty set, so the button could only fail.
+    get.mockResolvedValue(holidaySet({ holidays: [] }));
+    renderPage();
+    const button = await screen.findByRole("button", { name: "Publish" });
+
+    expect(button).toBeDisabled();
+    expect(screen.getByTestId("publish-blocked").textContent).toMatch(/Add at least one date/);
+  });
+
+  it("is not offered while dates are unsaved, which publishing would drop", async () => {
+    /*
+     * The worse of the two: publishing would succeed, freeze the stored
+     * set without the unsaved rows, and a published set is immutable —
+     * so they could never be added.
+     */
+    renderPage();
+    await screen.findByText("Observed holidays");
+    expect(screen.getByRole("button", { name: "Publish" })).toBeEnabled();
+
+    await userEvent.click(screen.getAllByRole("button", { name: "Remove this date" })[0]);
+
+    expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
+    expect(screen.getByTestId("publish-blocked").textContent).toMatch(/Save the dates first/);
+  });
+
+  it("judges that on what is stored, not on the rows on screen", async () => {
+    /*
+     * Removing every row leaves the screen empty while the server still
+     * holds four dates — and it is the stored set that would publish.
+     * So the reason has to be "save first", not "add a date".
+     */
+    renderPage();
+    await screen.findByText("Observed holidays");
+    for (const remove of screen.getAllByRole("button", { name: "Remove this date" })) {
+      await userEvent.click(remove);
+    }
+
+    expect(screen.getByTestId("no-dates")).toBeInTheDocument();
+    expect(screen.getByTestId("publish-blocked").textContent).toMatch(/Save the dates first/);
+  });
+
+  it("is offered once the stored set has dates and nothing is unsaved", async () => {
+    renderPage();
+    await screen.findByText("Observed holidays");
+    expect(screen.getByRole("button", { name: "Publish" })).toBeEnabled();
+    expect(screen.queryByTestId("publish-blocked")).toBeNull();
+  });
+
   it("publishes and reloads", async () => {
     post.mockResolvedValue({ id: "hset-1", publishedAt: "2026-01-02T00:00:00.000Z" });
     renderPage();
@@ -267,20 +316,18 @@ describe("publishing", () => {
     );
   });
 
-  it("shows the refusal when the set is empty", async () => {
-    get.mockResolvedValue(holidaySet({ holidays: [] }));
-    post.mockRejectedValue(
-      new Error(
-        '"Observed holidays" has no dates in it. A calendar naming it would price every day by its weekday while appearing to observe holidays.',
-      ),
-    );
-    renderPage();
-    await screen.findByText("Observed holidays");
-
-    await userEvent.click(screen.getByRole("button", { name: "Publish" }));
-
-    expect(await screen.findByTestId("action-error")).toHaveTextContent(/no dates in it/);
-  });
+  /*
+   * There was a test here for the refusal an empty set comes back with.
+   * It is gone rather than repaired: the button is now disabled in
+   * exactly that case, so the test could only pass by clicking
+   * something a person cannot click, and it would have gone on
+   * reporting coverage of a path the screen no longer has.
+   *
+   * The refusal itself still matters and is still tested, server-side,
+   * by `tou-holiday-set.integration.test.ts` — "refuses to publish an
+   * empty one, naming the consequence". The gate here is tested above.
+   * How this page shows a server refusal is covered by the save tests.
+   */
 });
 
 describe("when the set cannot be loaded", () => {

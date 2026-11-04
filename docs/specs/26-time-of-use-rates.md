@@ -953,6 +953,15 @@ it is wrong.
   makes entering next year's dates a visible chore instead of a silent
   misprice.
 
+  **Publish is disabled on a set with no dates**, which the server
+  refuses anyway, **and on one with unsaved dates**, which it would not:
+  publishing freezes the set as *stored*, and a published set is
+  immutable, so anything unsaved could never be added afterwards. That
+  is the worse of the two, because it succeeds. Both are judged on the
+  stored set rather than the rows on screen, and the reason is stated
+  beside the button instead of only in its tooltip. The same unsaved
+  guard is on the calendar's Publish, for the same reason.
+
 - **TOU-UI-2a (Should).** *Built 2026-11-04.* A holiday set is **shared
   across calendars** of the tenant, since a utility's holidays do not
   vary by tariff, with each calendar naming the set it uses. TOU-CAL-4

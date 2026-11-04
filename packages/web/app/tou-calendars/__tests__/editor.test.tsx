@@ -634,6 +634,25 @@ describe("publishing", () => {
     expect(await screen.findByRole("button", { name: "Publish" })).toBeEnabled();
   });
 
+  it("is not offered while an edit is unsaved, which publishing would drop", async () => {
+    /*
+     * Worse than a refusal, because it succeeds: the verdict describes
+     * what is stored, which is also what publishing freezes, and a
+     * published calendar is immutable — so an unsaved edit could never
+     * be added afterwards.
+     */
+    renderPage();
+    await openTab("Periods");
+    await screen.findByTestId("periods-editor");
+    expect(screen.getByRole("button", { name: "Publish" })).toBeEnabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
+
+    const button = screen.getByRole("button", { name: "Publish" });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", expect.stringMatching(/Save your changes first/));
+  });
+
   it("is not offered while an input the calendar names is still a draft", async () => {
     /*
      * The server reports a draft season set in the same verdict as a

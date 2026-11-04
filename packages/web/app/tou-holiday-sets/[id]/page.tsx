@@ -191,6 +191,25 @@ export default function TouHolidaySetEditorPage() {
   const lastDate = rows.length === 0 ? null : rows.map((r) => r.date).sort().slice(-1)[0];
   const ahead = rows.filter((r) => r.date >= today).length;
 
+  /**
+   * Why Publish cannot be pressed yet, or null.
+   *
+   * Judged on **what is stored**, never on the rows on screen, because
+   * publishing freezes the set the server holds. Both conditions are
+   * things publishing would do wrong rather than refuse:
+   *
+   * - No dates: the server refuses it, so the button could only fail.
+   * - Unsaved dates: the server would publish without them, and a
+   *   published set is immutable — so they could never be added. That
+   *   is worse than a refusal, because it succeeds.
+   */
+  const publishBlockedBecause: string | null =
+    set.holidays.length === 0
+      ? "Add at least one date first. A set with none cannot be published."
+      : dirty
+        ? "Save the dates first. Publishing freezes the set as it is stored, and a published set cannot be changed afterwards — so anything unsaved could never be added."
+        : null;
+
   return (
     <div style={{ maxWidth: "880px", display: "flex", flexDirection: "column", gap: "16px" }}>
       <PageHeader
@@ -203,26 +222,42 @@ export default function TouHolidaySetEditorPage() {
       <div style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" }}>
         <StatusBadge status={published ? "published" : "draft"} />
         {!published && canEdit && (
-          <button
-            type="button"
-            onClick={publish}
-            disabled={busy}
-            style={{
-              marginLeft: "auto",
-              padding: "7px 16px",
-              borderRadius: "var(--radius)",
-              border: "none",
-              background: "var(--accent-primary)",
-              color: "#fff",
-              fontSize: "13px",
-              fontWeight: 500,
-              cursor: busy ? "not-allowed" : "pointer",
-              opacity: busy ? 0.7 : 1,
-              fontFamily: "inherit",
-            }}
-          >
-            {busy ? "Working…" : "Publish"}
-          </button>
+          <>
+            {/*
+              Beside the button and not only in its tooltip: a disabled
+              control with no stated reason is a dead end, and the one
+              thing somebody needs here is which of the two it is.
+            */}
+            {publishBlockedBecause && (
+              <span
+                data-testid="publish-blocked"
+                style={{ fontSize: "12px", color: "var(--text-muted)", marginLeft: "auto" }}
+              >
+                {publishBlockedBecause}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={publish}
+              disabled={busy || publishBlockedBecause !== null}
+              title={publishBlockedBecause ?? undefined}
+              style={{
+                marginLeft: publishBlockedBecause ? undefined : "auto",
+                padding: "7px 16px",
+                borderRadius: "var(--radius)",
+                border: "none",
+                background: "var(--accent-primary)",
+                color: "#fff",
+                fontSize: "13px",
+                fontWeight: 500,
+                cursor: busy || publishBlockedBecause ? "not-allowed" : "pointer",
+                opacity: busy || publishBlockedBecause ? 0.5 : 1,
+                fontFamily: "inherit",
+              }}
+            >
+              {busy ? "Working…" : "Publish"}
+            </button>
+          </>
         )}
       </div>
 

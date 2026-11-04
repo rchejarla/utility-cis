@@ -435,6 +435,23 @@ export default function TouCalendarEditorPage() {
    * whose seasons changed under a draft could leave `season` naming one
    * that is gone.
    */
+  /**
+   * Why Publish cannot be pressed yet, or null.
+   *
+   * The verdict is the server's own, so it describes what is *stored* —
+   * which is also what publishing freezes. An unsaved edit is therefore
+   * the worse of the two cases: publishing would succeed, without it,
+   * and a published calendar is immutable, so it could never be added.
+   */
+  const unsaved =
+    dirty.periods || dirty.dayTypes || Object.values(dirty.spans).some(Boolean);
+  const publishBlockedBecause: string | null = !calendar.validation.ok
+    ? `${calendar.validation.problems.length} problem${
+        calendar.validation.problems.length === 1 ? "" : "s"
+      } to fix first — listed above.`
+    : unsaved
+      ? "Save your changes first. Publishing freezes the calendar as it is stored, and a published calendar cannot be changed afterwards."
+      : null;
   const showing: TabKey = tab ?? firstIncompleteTab(calendar);
   const showingSeason =
     calendar.seasonSet.seasons.find((s) => s.seasonCode === season)?.seasonCode ??
@@ -612,14 +629,8 @@ export default function TouCalendarEditorPage() {
           <button
             type="button"
             onClick={publish}
-            disabled={publishing || !calendar.validation.ok}
-            title={
-              calendar.validation.ok
-                ? undefined
-                : `${calendar.validation.problems.length} problem${
-                    calendar.validation.problems.length === 1 ? "" : "s"
-                  } to fix first — listed above.`
-            }
+            disabled={publishing || publishBlockedBecause !== null}
+            title={publishBlockedBecause ?? undefined}
             style={{
               marginLeft: "auto",
               padding: "7px 16px",
@@ -629,8 +640,8 @@ export default function TouCalendarEditorPage() {
               color: "#fff",
               fontSize: "13px",
               fontWeight: 500,
-              cursor: publishing || !calendar.validation.ok ? "not-allowed" : "pointer",
-              opacity: publishing || !calendar.validation.ok ? 0.5 : 1,
+              cursor: publishing || publishBlockedBecause ? "not-allowed" : "pointer",
+              opacity: publishing || publishBlockedBecause ? 0.5 : 1,
               fontFamily: "inherit",
             }}
           >
