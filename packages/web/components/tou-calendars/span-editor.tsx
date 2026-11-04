@@ -70,6 +70,7 @@ export function SpanEditor({
   periods,
   readOnly,
   otherGroups,
+  onDirtyChange,
   onSave,
 }: {
   group: SpanGroup;
@@ -77,6 +78,12 @@ export function SpanEditor({
   readOnly: boolean;
   /** For TOU-UI-1b — the groups this one can be copied from. */
   otherGroups: SpanGroup[];
+  /**
+   * Reported upwards so the season this group belongs to can be marked
+   * unsaved on its chip. Copying hours in leaves a group dirty without
+   * saving it, which is exactly the state worth a mark.
+   */
+  onDirtyChange?: (dirty: boolean) => void;
   onSave: (spans: StripSpan[]) => Promise<void>;
 }) {
   const [spans, setSpans] = useState<StripSpan[]>(group.spans);
@@ -87,6 +94,7 @@ export function SpanEditor({
   const change = (next: StripSpan[]) => {
     setSpans(next);
     setDirty(true);
+    onDirtyChange?.(true);
     setError(null);
   };
 
@@ -109,6 +117,7 @@ export function SpanEditor({
     try {
       await onSave(spans);
       setDirty(false);
+      onDirtyChange?.(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save these hours");
     } finally {

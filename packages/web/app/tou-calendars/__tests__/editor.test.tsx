@@ -110,6 +110,23 @@ beforeEach(() => {
 
 const renderPage = () => render(<TouCalendarEditorPage />);
 
+/**
+ * Switch tabs the way a person does.
+ *
+ * The page opens on the first section with nothing in it, and on a
+ * complete fixture that is Hours — so a test about the periods or the
+ * day types has to go there first. Clicking is deliberate rather than
+ * reaching into state: the inactive tabs are rendered and hidden, so a
+ * query that found a hidden input would pass while the control was
+ * unreachable.
+ */
+async function openTab(name: "Periods" | "Day Types" | "Hours") {
+  // `find`, not `get`: the tabs appear with the calendar, and these
+  // tests call this as their first act after rendering.
+  const tab = await screen.findByRole("tab", { name: new RegExp(`^${name}`) });
+  await userEvent.click(tab);
+}
+
 describe("reading a calendar", () => {
   it("shows its name, when it comes into force and the clock it runs on", async () => {
     renderPage();
@@ -304,6 +321,7 @@ describe("day types", () => {
      * never composes a list the server will refuse.
      */
     renderPage();
+    await openTab("Day Types");
     await screen.findByTestId("day-types-editor");
 
     await userEvent.click(screen.getByRole("button", { name: "Fri on weekend" }));
@@ -328,6 +346,7 @@ describe("day types", () => {
   it("offers no way to nominate a day type as the holiday one", async () => {
     get.mockResolvedValue(withHolidaySet());
     renderPage();
+    await openTab("Day Types");
     await screen.findByTestId("day-types-editor");
 
     expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
@@ -342,6 +361,7 @@ describe("day types", () => {
      */
     get.mockResolvedValue(withHolidaySet());
     renderPage();
+    await openTab("Day Types");
     await screen.findByTestId("day-types-editor");
 
     const codes = screen.getAllByLabelText("Day type code") as HTMLInputElement[];
@@ -362,6 +382,7 @@ describe("day types", () => {
 
   it("says nothing about holidays when the calendar names no set", async () => {
     renderPage();
+    await openTab("Day Types");
     await screen.findByTestId("day-types-editor");
     expect(screen.queryByTestId("holiday-day-type-note")).toBeNull();
   });
@@ -394,6 +415,7 @@ describe("day types", () => {
     put.mockResolvedValue(withHolidaySet());
     get.mockResolvedValue(withHolidaySet());
     renderPage();
+    await openTab("Day Types");
     await screen.findByTestId("day-types-editor");
 
     await userEvent.click(screen.getByRole("button", { name: "Sat on weekday" }));
@@ -411,6 +433,7 @@ describe("day types", () => {
     // fourth thing stored.
     get.mockResolvedValue(withHolidaySet());
     renderPage();
+    await openTab("Day Types");
     await screen.findByTestId("day-types-editor");
 
     await userEvent.click(screen.getByRole("button", { name: "Add a day type" }));
@@ -421,6 +444,7 @@ describe("day types", () => {
   it("sends no holiday flag when the list is saved", async () => {
     put.mockResolvedValue(calendar());
     renderPage();
+    await openTab("Day Types");
     await screen.findByTestId("day-types-editor");
 
     await userEvent.click(screen.getByRole("button", { name: "Sat on weekday" }));
@@ -652,6 +676,7 @@ describe("rows nobody has filled in", () => {
    */
   it("will not save a period with no code", async () => {
     renderPage();
+    await openTab("Periods");
     await screen.findByTestId("periods-editor");
 
     await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
@@ -663,6 +688,7 @@ describe("rows nobody has filled in", () => {
 
   it("will not save a day type with no code", async () => {
     renderPage();
+    await openTab("Day Types");
     await screen.findByTestId("day-types-editor");
 
     await userEvent.click(screen.getByRole("button", { name: "Add a day type" }));
@@ -673,6 +699,7 @@ describe("rows nobody has filled in", () => {
 
   it("says the greyed text is an example, because that is the trap", async () => {
     renderPage();
+    await openTab("Periods");
     await screen.findByTestId("periods-editor");
     await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
 
@@ -684,13 +711,23 @@ describe("rows nobody has filled in", () => {
   it("lets the save through once the row is filled in", async () => {
     put.mockResolvedValue(calendar());
     renderPage();
+    await openTab("Periods");
     await screen.findByTestId("periods-editor");
 
     await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
     const codes = screen.getAllByLabelText("Period code");
     const labels = screen.getAllByLabelText("Period label");
-    await userEvent.type(codes[codes.length - 1], "super_off_peak");
-    await userEvent.type(labels[labels.length - 1], "Super off-peak");
+    /*
+     * Pasted rather than typed. Twenty-eight characters is twenty-eight
+     * events, and with the tab click before them this test was the one
+     * that tipped over the five-second default when the whole suite ran
+     * at once — it passed on its own, which is the worst way for a test
+     * to fail. What it is about is a filled row, not the keystrokes.
+     */
+    await userEvent.click(codes[codes.length - 1]);
+    await userEvent.paste("super_off_peak");
+    await userEvent.click(labels[labels.length - 1]);
+    await userEvent.paste("Super off-peak");
 
     expect(screen.queryByTestId("periods-incomplete")).toBeNull();
     const save = screen.getByRole("button", { name: "Save periods" });
@@ -704,6 +741,7 @@ describe("rows nobody has filled in", () => {
 
   it("treats whitespace as empty, so a space is not a code", async () => {
     renderPage();
+    await openTab("Periods");
     await screen.findByTestId("periods-editor");
     await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
 
@@ -795,5 +833,248 @@ describe("the spot check", () => {
   it("appears once some hours exist", async () => {
     renderPage();
     expect(await screen.findByTestId("spot-check")).toBeInTheDocument();
+  });
+});
+
+/**
+ * Three tabs and one season at a time, because the whole calendar at
+ * once is a wall: two seasons and three day types is six span editors,
+ * each a strip and a table, under two more cards.
+ */
+describe("the tabs", () => {
+  /** A calendar with nothing in it, which is what a new one looks like. */
+  const empty = () =>
+    calendar({
+      periods: [],
+      dayTypes: [],
+      spanGroups: [],
+      validation: { ok: false, problems: ["This calendar has no periods."] },
+    });
+
+  it("opens on the first section with nothing in it", async () => {
+    // What a wizard's first step would have been. No wizard: the tab
+    // the page opens on does the same job for a new calendar, and an
+    // old one is reachable in one click.
+    get.mockResolvedValue(empty());
+    renderPage();
+    expect(await screen.findByTestId("tab-periods")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("opens on the hours when every section has something", async () => {
+    // Somebody coming back to a finished calendar came for the hours.
+    renderPage();
+    expect(await screen.findByTestId("tab-hours")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("marks a section that has nothing in it", async () => {
+    get.mockResolvedValue(empty());
+    renderPage();
+    await screen.findByTestId("tab-periods");
+    expect(screen.getByTestId("tab-day-types-incomplete")).toBeInTheDocument();
+    expect(screen.getByTestId("tab-hours-incomplete")).toBeInTheDocument();
+  });
+
+  it("marks a section holding edits nobody has saved", async () => {
+    renderPage();
+    await openTab("Periods");
+    await screen.findByTestId("periods-editor");
+    expect(screen.queryByTestId("tab-periods-unsaved")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
+
+    expect(screen.getByTestId("tab-periods-unsaved")).toBeInTheDocument();
+  });
+
+  it("keeps an unsaved edit when you look at another tab", async () => {
+    /*
+     * The one thing tabs add that a single page could not get wrong.
+     * Each tab stays mounted and hidden, so switching away is looking
+     * elsewhere rather than discarding.
+     */
+    renderPage();
+    await openTab("Periods");
+    await screen.findByTestId("periods-editor");
+
+    const codes = screen.getAllByLabelText("Period code");
+    await userEvent.type(codes[0], "_edited");
+
+    await openTab("Hours");
+    await openTab("Periods");
+
+    expect((screen.getAllByLabelText("Period code")[0] as HTMLInputElement).value).toBe(
+      "off_peak_edited",
+    );
+  });
+
+  it("does not discard one tab's edit when another tab saves", async () => {
+    /*
+     * Every save returns the whole calendar, and the sections used to
+     * share one remount counter — so saving the day types threw away a
+     * half-typed period on the tab next door.
+     */
+    put.mockResolvedValue(calendar());
+    renderPage();
+    await openTab("Periods");
+    await screen.findByTestId("periods-editor");
+    await userEvent.type(screen.getAllByLabelText("Period code")[0], "_edited");
+
+    await openTab("Day Types");
+    await userEvent.click(screen.getByRole("button", { name: "Sat on weekday" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save day types" }));
+    await waitFor(() => expect(put).toHaveBeenCalled());
+
+    await openTab("Periods");
+    expect((screen.getAllByLabelText("Period code")[0] as HTMLInputElement).value).toBe(
+      "off_peak_edited",
+    );
+  });
+
+  it("offers the next section rather than leaving somebody to find the tab", async () => {
+    get.mockResolvedValue(empty());
+    renderPage();
+    await screen.findByTestId("tab-periods");
+
+    await userEvent.click(screen.getByTestId("next-to-day-types"));
+
+    expect(screen.getByTestId("tab-day-types")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("keeps the verdict and Publish above the tabs, where no tab can hide them", async () => {
+    // A tab that hid "2 problems to fix" would let somebody believe the
+    // hours were finished.
+    get.mockResolvedValue(
+      calendar({
+        validation: { ok: false, problems: ["Summer, weekday: 21:00–22:00 is assigned to no period"] },
+      }),
+    );
+    renderPage();
+    await screen.findByTestId("tab-hours");
+
+    expect(screen.getByTestId("calendar-problems")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Publish" })).toBeInTheDocument();
+
+    await openTab("Periods");
+
+    expect(screen.getByTestId("calendar-problems")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Publish" })).toBeInTheDocument();
+  });
+});
+
+describe("the season chips on the Hours tab", () => {
+  const twoSeasons = (over: Record<string, unknown> = {}) =>
+    calendar({
+      seasonSet: {
+        id: "set-1",
+        name: "Published seasons",
+        publishedAt: "2026-01-01T00:00:00.000Z",
+        seasons: [
+          {
+            seasonCode: "summer",
+            label: "Summer",
+            startMonth: 5,
+            startDay: 1,
+            endMonth: 10,
+            endDay: 31,
+          },
+          {
+            seasonCode: "winter",
+            label: "Winter",
+            startMonth: 11,
+            startDay: 1,
+            endMonth: 4,
+            endDay: 30,
+          },
+        ],
+      },
+      ...over,
+    });
+
+  it("shows one season's hours at a time", async () => {
+    get.mockResolvedValue(
+      twoSeasons({
+        spanGroups: [
+          ...calendar().spanGroups,
+          { seasonCode: "winter", dayTypeCode: "weekday", spans: [] },
+          { seasonCode: "winter", dayTypeCode: "weekend", spans: [] },
+        ],
+      }),
+    );
+    renderPage();
+    await screen.findByTestId("season-chip-summer");
+
+    // Both are rendered so an unsaved edit survives a chip click; only
+    // the chosen one is shown.
+    expect(screen.getByTestId("season-hours-winter")).toHaveStyle({ display: "flex" });
+    expect(screen.getByTestId("season-hours-summer")).toHaveStyle({ display: "none" });
+  });
+
+  it("opens on a season that is missing hours, not just the first one", async () => {
+    // Summer is complete, winter is not: winter is the work left.
+    get.mockResolvedValue(
+      twoSeasons({
+        spanGroups: [
+          ...calendar().spanGroups,
+          { seasonCode: "winter", dayTypeCode: "weekday", spans: [] },
+          { seasonCode: "winter", dayTypeCode: "weekend", spans: [] },
+        ],
+      }),
+    );
+    renderPage();
+    expect(await screen.findByTestId("season-chip-winter")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("marks which seasons still need hours, without being opened", async () => {
+    /*
+     * The reason these are chips and not a dropdown. Publishing needs
+     * every (season, day type) covered, and a dropdown can only say
+     * which season is empty once somebody has opened it.
+     */
+    get.mockResolvedValue(
+      twoSeasons({
+        spanGroups: [
+          ...calendar().spanGroups,
+          { seasonCode: "winter", dayTypeCode: "weekday", spans: [] },
+          { seasonCode: "winter", dayTypeCode: "weekend", spans: [] },
+        ],
+      }),
+    );
+    renderPage();
+    await screen.findByTestId("season-chip-summer");
+
+    expect(screen.getByTestId("season-chip-summer-complete")).toBeInTheDocument();
+    expect(screen.getByTestId("season-chip-winter-incomplete")).toBeInTheDocument();
+  });
+
+  it("prints the months a season covers beside its name", async () => {
+    // A season code is the tenant's word and says nothing about when it
+    // runs — least of all when it wraps the year end, as winter does
+    // here.
+    get.mockResolvedValue(twoSeasons());
+    renderPage();
+    await screen.findByTestId("season-chip-winter");
+
+    await userEvent.click(screen.getByTestId("season-chip-winter"));
+
+    expect(screen.getByTestId("season-hours-winter").textContent).toMatch(
+      /Winter · 1 Nov – 30 Apr/,
+    );
+  });
+
+  it("keeps unsaved hours when another season is looked at", async () => {
+    get.mockResolvedValue(twoSeasons());
+    renderPage();
+    const group = await screen.findByTestId("span-editor-summer-weekend");
+    await userEvent.selectOptions(group.querySelectorAll("select")[2] as HTMLSelectElement, "peak");
+
+    await userEvent.click(screen.getByTestId("season-chip-winter"));
+    await userEvent.click(screen.getByTestId("season-chip-summer"));
+
+    const after = screen.getByTestId("span-editor-summer-weekend");
+    const periodSelect = after.querySelectorAll("select")[2] as HTMLSelectElement;
+    expect(periodSelect.value).toBe("peak");
+    expect(screen.getByTestId("season-chip-summer-unsaved")).toBeInTheDocument();
   });
 });

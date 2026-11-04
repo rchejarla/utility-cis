@@ -832,6 +832,43 @@ it is wrong.
   bitmap. The grid still earns its place as the thing that shows a gap
   or an overlap at a glance, which a list cannot.
 
+- **TOU-UI-1f (Must).** *Built 2026-11-04.* **Three tabs — Periods, Day
+  Types, Hours — and one season at a time.** All of it on one page is a
+  wall: two seasons and three day types is six span editors, each a
+  strip and a table, under two more cards; three seasons is nine.
+
+  One tab per collection, because that is where the save boundary
+  already is — each is its own `PUT` with its own invariants and its own
+  refusals. Two collections on one tab would mean two Save buttons
+  saving half a tab each, or one button issuing two writes with no way
+  to be atomic about them.
+
+  **Not a wizard**, although the page walks a new calendar through the
+  same order: it opens on the first tab with nothing in it and offers
+  "Next". A separate create flow would be a second screen over the same
+  data with its own idea of what makes a calendar valid, and nothing
+  here needs an order enforced — every part of a draft is editable, and
+  a new calendar already arrives with its periods and day types filled
+  in.
+
+  What stays **outside** the tabs: the status, the season set and
+  holiday set the calendar names (with links through to those editors),
+  the validation verdict and Publish. A tab that hid "2 problems to fix"
+  would let somebody believe the hours were finished.
+
+  The Hours tab scopes to one season, chosen by **chips rather than a
+  dropdown**, each marked complete or incomplete: publishing needs every
+  (season, day type) covered exactly once, and a dropdown can only say
+  which season is empty once somebody has opened it and gone looking.
+  Each season's name carries the months it covers ("Summer · 1 May –
+  31 Oct"), since a season code is the tenant's word and says nothing
+  about when it runs — least of all when it wraps the year end.
+
+  Every tab stays mounted and hidden rather than unmounted, and each
+  section remounts on **its own** counter after saving, so switching tab
+  or season does not discard a half-typed list and neither does saving
+  the one next door. A tab or chip holding unsaved edits is marked.
+
 - **TOU-UI-1a (Must).** Validation is **inline and positional**: an
   uncovered or doubly-covered span is highlighted on the grid *and*
   named in words ("Summer, weekday: 21:00–22:00 is assigned to no

@@ -20,6 +20,7 @@ import {
   type DayTypeRow,
   type PeriodRow,
 } from "@/components/tou-calendars/structure-editor";
+import { SeasonChips, TabStrip, seasonDates } from "@/components/tou-calendars/tab-strip";
 
 /**
  * The TOU calendar editor (spec 26, §5).
@@ -29,11 +30,112 @@ import {
  * change is a new version with its own effective date, never an edit to
  * the one that billed.
  *
- * Every save returns the whole calendar, which is why the sections
- * re-key off a counter: saving one (season, day type) changes the
- * verdict on the calendar as a whole, and a screen that kept its old
- * verdict would offer Publish on a calendar the server will refuse.
+ * **Three tabs and one season at a time**, because the whole thing at
+ * once is a wall: two seasons and three day types is six span editors,
+ * each a strip and a table, under two more cards — and three seasons is
+ * nine. One tab per collection puts the tab boundary where the save
+ * boundary already is (each is its own `PUT`), and the Hours tab shows
+ * the day types of one season.
+ *
+ * It is **not a wizard**, although it walks a new calendar through the
+ * same order. The page opens on the first tab with nothing in it and
+ * offers "Next", which is what a wizard would buy; a separate create
+ * flow would be a second screen over the same data, with its own idea
+ * of what makes a calendar valid. Everything here is editable while the
+ * calendar is a draft, so nothing needs an order enforced.
+ *
+ * Every save returns the whole calendar, and the saved section re-keys
+ * off its *own* counter rather than a shared one: saving the day types
+ * must refresh the verdict without discarding a half-finished edit
+ * sitting on the Periods tab.
  */
+
+type TabKey = "periods" | "day-types" | "hours";
+
+const TAB_LABELS: Record<TabKey, string> = {
+  periods: "Periods",
+  "day-types": "Day Types",
+  hours: "Hours",
+};
+
+const TAB_ORDER: TabKey[] = ["periods", "day-types", "hours"];
+
+/** Nothing in it yet, which is what the tab's mark means. */
+function isTabIncomplete(calendar: Calendar, key: TabKey): boolean {
+  if (key === "periods") return calendar.periods.length === 0;
+  if (key === "day-types") return calendar.dayTypes.length === 0;
+  /*
+   * The hours are incomplete while any (season, day type) has none —
+   * and while there are no groups at all, which is a new calendar. The
+   * server builds a group per (season, day type), so a calendar with no
+   * day types has none, and "no group is empty" was true of it.
+   *
+   * Not the same question as `validation.ok`, which a calendar can fail
+   * with hours everywhere — a gap inside one day. The verdict above the
+   * tabs keeps saying that.
+   */
+  return (
+    calendar.spanGroups.length === 0 || calendar.spanGroups.some((group) => group.spans.length === 0)
+  );
+}
+
+/**
+ * Where the page opens. The first tab with nothing in it, or the hours
+ * when everything has something, since that is the substance of a
+ * calendar somebody has come back to read.
+ */
+function firstIncompleteTab(calendar: Calendar): TabKey {
+  return TAB_ORDER.find((key) => isTabIncomplete(calendar, key)) ?? "hours";
+}
+
+function firstSeasonNeedingHours(calendar: Calendar): string | null {
+  const empty = calendar.seasonSet.seasons.find((s) =>
+    calendar.spanGroups.some((g) => g.seasonCode === s.seasonCode && g.spans.length === 0),
+  );
+  return (empty ?? calendar.seasonSet.seasons[0])?.seasonCode ?? null;
+}
+
+const spanKey = (seasonCode: string, dayTypeCode: string) => `${seasonCode}|${dayTypeCode}`;
+
+/**
+ * What a wizard's Next button would have been, without the wizard.
+ *
+ * Building a calendar does have an order — the hours are assigned to
+ * periods and day types, so those have to exist first — and this is
+ * where that order is stated. It moves nothing and saves nothing: each
+ * section's own Save has already done that, or has not.
+ */
+function NextTab({
+  to,
+  label,
+  onSelect,
+}: {
+  to: TabKey;
+  label: string;
+  onSelect: (key: TabKey) => void;
+}) {
+  return (
+    <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "10px" }}>
+      <button
+        type="button"
+        data-testid={`next-to-${to}`}
+        onClick={() => onSelect(to)}
+        style={{
+          padding: "6px 14px",
+          borderRadius: "var(--radius)",
+          border: "1px solid var(--border)",
+          background: "transparent",
+          color: "var(--text-secondary)",
+          fontSize: "12px",
+          cursor: "pointer",
+          fontFamily: "inherit",
+        }}
+      >
+        Next: {label} →
+      </button>
+    </div>
+  );
+}
 
 const selectStyle = {
   padding: "3px 6px",
@@ -56,7 +158,20 @@ interface Calendar {
     id: string;
     name: string;
     publishedAt: string | null;
-    seasons: Array<{ seasonCode: string; label: string }>;
+    /**
+     * The month/day bounds come with them, and the Hours tab prints
+     * them beside each season: a season code is the tenant's word and
+     * says nothing about which months it covers — least of all when it
+     * wraps the year end.
+     */
+    seasons: Array<{
+      seasonCode: string;
+      label: string;
+      startMonth: number;
+      startDay: number;
+      endMonth: number;
+      endDay: number;
+    }>;
   };
   touHolidaySetId: string | null;
   /**
@@ -90,8 +205,28 @@ export default function TouCalendarEditorPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
-  /** Bumped on every save, so the section editors remount with fresh props. */
-  const [revision, setRevision] = useState(0);
+  /**
+   * One counter per section, bumped when that section saves, so its
+   * editor remounts with the server's rows. Separate counters because a
+   * single one remounted *every* editor on every save — which with
+   * tabs means saving the day types silently discards a half-typed
+   * period on the tab next door.
+   */
+  const [revision, setRevision] = useState({ periods: 0, dayTypes: 0, spans: 0 });
+  /** Which tab is showing, decided once the calendar has loaded. */
+  const [tab, setTab] = useState<TabKey | null>(null);
+  /** Which season the Hours tab is showing. */
+  const [season, setSeason] = useState<string | null>(null);
+  /**
+   * Sections holding edits nobody has saved, for the mark on the tab.
+   * Spans are keyed by `season|dayType`, so a season's chip can carry
+   * the same mark.
+   */
+  const [dirty, setDirty] = useState<{
+    periods: boolean;
+    dayTypes: boolean;
+    spans: Record<string, boolean>;
+  }>({ periods: false, dayTypes: false, spans: {} });
   /** Offered only while the calendar is a draft, so loaded lazily. */
   const [seasonSets, setSeasonSets] = useState<
     Array<{ id: string; name: string; publishedAt: string | null }>
@@ -102,7 +237,16 @@ export default function TouCalendarEditorPage() {
 
   const load = useCallback(async () => {
     try {
-      setCalendar(await apiClient.get<Calendar>(`/api/v1/tou-calendars/${id}`));
+      const loaded = await apiClient.get<Calendar>(`/api/v1/tou-calendars/${id}`);
+      setCalendar(loaded);
+      /*
+       * The opening tab is the first one with nothing in it, which is
+       * what makes a new calendar walk itself without a wizard. Decided
+       * once: recomputing it on every load would move the tab under
+       * somebody the moment they filled the one they were on.
+       */
+      setTab((current) => current ?? firstIncompleteTab(loaded));
+      setSeason((current) => current ?? firstSeasonNeedingHours(loaded));
       setLoadError(null);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Could not load this calendar");
@@ -134,22 +278,45 @@ export default function TouCalendarEditorPage() {
       .catch(() => setHolidaySets([]));
   }, [calendar?.publishedAt]);
 
-  /** PATCH one field of the header and reload. The two selects share it. */
+  /**
+   * PATCH one field of the header and reload. The two selects share it.
+   *
+   * Everything remounts here, unlike a section save: changing the
+   * season set changes which seasons the hours are keyed on, and
+   * attaching a holiday set adds a day type.
+   */
   const patch = async (body: Record<string, unknown>, whenItFails: string) => {
     setActionError(null);
     try {
       await apiClient.patch(`/api/v1/tou-calendars/${id}`, body);
       await load();
-      setRevision((n) => n + 1);
+      setRevision((r) => ({ periods: r.periods + 1, dayTypes: r.dayTypes + 1, spans: r.spans + 1 }));
+      setDirty({ periods: false, dayTypes: false, spans: {} });
     } catch (err) {
       setActionError(err instanceof Error ? err.message : whenItFails);
     }
   };
 
-  const afterSave = (updated: Calendar) => {
+  /**
+   * One section saved. Its own editor remounts on the server's rows;
+   * the others keep whatever is being typed in them.
+   */
+  const afterSave = (section: "periods" | "dayTypes" | "spans", updated: Calendar) => {
     setCalendar(updated);
-    setRevision((n) => n + 1);
+    setRevision((r) => ({ ...r, [section]: r[section] + 1 }));
+    if (section === "spans") {
+      // Every span editor remounted, so none of them holds an edit.
+      setDirty((d) => ({ ...d, spans: {} }));
+    } else {
+      setDirty((d) => ({ ...d, [section]: false }));
+    }
   };
+
+  const markSpanDirty = (seasonCode: string, dayTypeCode: string, isDirty: boolean) =>
+    setDirty((d) => ({
+      ...d,
+      spans: { ...d.spans, [spanKey(seasonCode, dayTypeCode)]: isDirty },
+    }));
 
   const publish = async () => {
     if (!calendar) return;
@@ -177,6 +344,17 @@ export default function TouCalendarEditorPage() {
 
   const published = calendar.publishedAt !== null;
   const readOnly = published || !canEdit;
+  /*
+   * `tab` and `season` are null until the calendar has loaded, which it
+   * now has. Falling back rather than asserting, because a season set
+   * whose seasons changed under a draft could leave `season` naming one
+   * that is gone.
+   */
+  const showing: TabKey = tab ?? firstIncompleteTab(calendar);
+  const showingSeason =
+    calendar.seasonSet.seasons.find((s) => s.seasonCode === season)?.seasonCode ??
+    calendar.seasonSet.seasons[0]?.seasonCode ??
+    null;
 
   return (
     <div style={{ maxWidth: "1100px", display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -248,9 +426,9 @@ export default function TouCalendarEditorPage() {
               Changeable while the calendar is a draft, like the season
               set. Attaching one creates the reserved `holiday` day type
               with it, so the hours for those dates are prompted without
-              a setup step; detaching leaves the day type behind for the
-              operator to remove, since deleting hours somebody typed is
-              not a trade a dropdown may make.
+              a setup step; detaching removes it again, and is refused
+              if it has hours, since deleting what somebody typed is not
+              a trade a dropdown may make.
             */}
             <label style={{ fontSize: "12px", color: "var(--text-muted)" }}>
               Holidays:{" "}
@@ -284,6 +462,29 @@ export default function TouCalendarEditorPage() {
             </label>
           </>
         )}
+        {/*
+          Through to the sets themselves, which is a different job from
+          picking one: the boundary between summer and winter, or the
+          date a holiday is observed on, lives in the set and reaches
+          every calendar naming it. Shown whatever the calendar's state,
+          since a published calendar's set is still worth reading.
+        */}
+        <span style={{ display: "flex", gap: "10px", fontSize: "12px" }}>
+          <a
+            href={`/season-sets/${calendar.seasonSet.id}`}
+            style={{ color: "var(--accent-primary)" }}
+          >
+            Edit seasons
+          </a>
+          {calendar.holidaySet && (
+            <a
+              href={`/tou-holiday-sets/${calendar.holidaySet.id}`}
+              style={{ color: "var(--accent-primary)" }}
+            >
+              Edit holidays
+            </a>
+          )}
+        </span>
         {!published && canEdit && (
           <button
             type="button"
@@ -379,27 +580,56 @@ export default function TouCalendarEditorPage() {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "16px" }}>
+      <TabStrip
+        tabs={TAB_ORDER.map((key) => ({
+          key,
+          label: TAB_LABELS[key],
+          incomplete: isTabIncomplete(calendar, key),
+          dirty:
+            key === "periods"
+              ? dirty.periods
+              : key === "day-types"
+                ? dirty.dayTypes
+                : Object.values(dirty.spans).some(Boolean),
+        }))}
+        active={showing}
+        onSelect={setTab}
+      />
+
+      {/*
+        Every tab stays mounted and the inactive ones are hidden, so
+        switching away from a half-typed list does not throw it away.
+        That is the whole reason this is tabs rather than a wizard:
+        there is no step to be "on", only a section to be looking at.
+      */}
+      <div style={{ display: showing === "periods" ? "block" : "none" }}>
         <PeriodsEditor
-          key={`periods-${revision}`}
+          key={`periods-${revision.periods}`}
           periods={calendar.periods}
           readOnly={readOnly}
+          onDirtyChange={(isDirty) => setDirty((d) => ({ ...d, periods: isDirty }))}
           onSave={async (rows) =>
             afterSave(
+              "periods",
               await apiClient.put<Calendar>(`/api/v1/tou-calendars/${id}/periods`, {
                 periods: rows.map((r) => ({ peakCode: r.peakCode, label: r.label })),
               }),
             )
           }
         />
+        <NextTab to="day-types" label={TAB_LABELS["day-types"]} onSelect={setTab} />
+      </div>
 
+      <div style={{ display: showing === "day-types" ? "block" : "none" }}>
         <DayTypesEditor
-          key={`day-types-${revision}`}
+          key={`day-types-${revision.dayTypes}`}
           dayTypes={calendar.dayTypes}
           readOnly={readOnly}
           holidaySetName={calendar.holidaySet?.name ?? null}
+          onDirtyChange={(isDirty) => setDirty((d) => ({ ...d, dayTypes: isDirty }))}
           onSave={async (rows) =>
             afterSave(
+              "dayTypes",
               await apiClient.put<Calendar>(`/api/v1/tou-calendars/${id}/day-types`, {
                 dayTypes: rows.map((r) => ({
                   dayTypeCode: r.dayTypeCode,
@@ -410,80 +640,125 @@ export default function TouCalendarEditorPage() {
             )
           }
         />
+        <NextTab to="hours" label={TAB_LABELS.hours} onSelect={setTab} />
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-        <div style={{ fontWeight: 500, fontSize: "13px" }}>Hours</div>
-        <PeriodLegend periods={calendar.periods} />
-
+      <div
+        style={{
+          display: showing === "hours" ? "flex" : "none",
+          flexDirection: "column",
+          gap: "10px",
+        }}
+      >
         {calendar.periods.length === 0 || calendar.dayTypes.length === 0 ? (
           <div data-testid="hours-blocked" style={{ fontSize: "12px", color: "var(--text-muted)" }}>
             Name the periods and the day types first — the hours are assigned to them.
           </div>
         ) : (
-          calendar.seasonSet.seasons.map((season) => (
-            <div key={season.seasonCode} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "6px" }}>
-                {season.label}
+          <>
+            {/*
+              One season at a time. Chips rather than a dropdown
+              because publishing needs every (season, day type) covered
+              and a dropdown can only say which season is empty once
+              somebody has opened it and gone looking.
+            */}
+            <SeasonChips
+              seasons={calendar.seasonSet.seasons.map((s) => ({
+                seasonCode: s.seasonCode,
+                label: s.label,
+                complete: !calendar.spanGroups.some(
+                  (g) => g.seasonCode === s.seasonCode && g.spans.length === 0,
+                ),
+                dirty: calendar.dayTypes.some(
+                  (d) => dirty.spans[spanKey(s.seasonCode, d.dayTypeCode)],
+                ),
+              }))}
+              active={showingSeason ?? ""}
+              onSelect={setSeason}
+            />
+            <PeriodLegend periods={calendar.periods} />
+
+            {calendar.seasonSet.seasons.map((s) => (
+              <div
+                key={s.seasonCode}
+                data-testid={`season-hours-${s.seasonCode}`}
+                style={{
+                  display: s.seasonCode === showingSeason ? "flex" : "none",
+                  flexDirection: "column",
+                  gap: "8px",
+                }}
+              >
+                <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "6px" }}>
+                  {s.label} · {seasonDates(s)}
+                </div>
+                {calendar.dayTypes.map((dayType) => {
+                  const group =
+                    calendar.spanGroups.find(
+                      (g) => g.seasonCode === s.seasonCode && g.dayTypeCode === dayType.dayTypeCode,
+                    ) ?? {
+                      seasonCode: s.seasonCode,
+                      dayTypeCode: dayType.dayTypeCode,
+                      spans: [],
+                    };
+                  return (
+                    <div key={dayType.dayTypeCode}>
+                      <div style={{ fontSize: "12px", marginBottom: "4px" }}>{dayType.label}</div>
+                      <SpanEditor
+                        key={`${s.seasonCode}-${dayType.dayTypeCode}-${revision.spans}`}
+                        group={group}
+                        periods={calendar.periods}
+                        readOnly={readOnly}
+                        /*
+                         * Still every other group, including the other
+                         * seasons' — "winter is summer with a shorter
+                         * peak" is the common edit, and it is the one
+                         * reason to reach across the chips.
+                         */
+                        otherGroups={calendar.spanGroups.filter(
+                          (g) =>
+                            g.spans.length > 0 &&
+                            !(
+                              g.seasonCode === s.seasonCode &&
+                              g.dayTypeCode === dayType.dayTypeCode
+                            ),
+                        )}
+                        onDirtyChange={(isDirty) =>
+                          markSpanDirty(s.seasonCode, dayType.dayTypeCode, isDirty)
+                        }
+                        onSave={async (spans) =>
+                          afterSave(
+                            "spans",
+                            await apiClient.put<Calendar>(`/api/v1/tou-calendars/${id}/spans`, {
+                              seasonCode: s.seasonCode,
+                              dayTypeCode: dayType.dayTypeCode,
+                              spans,
+                            }),
+                          )
+                        }
+                      />
+                    </div>
+                  );
+                })}
               </div>
-              {calendar.dayTypes.map((dayType) => {
-                const group =
-                  calendar.spanGroups.find(
-                    (g) =>
-                      g.seasonCode === season.seasonCode && g.dayTypeCode === dayType.dayTypeCode,
-                  ) ?? {
-                    seasonCode: season.seasonCode,
-                    dayTypeCode: dayType.dayTypeCode,
-                    spans: [],
-                  };
-                return (
-                  <div key={dayType.dayTypeCode}>
-                    <div style={{ fontSize: "12px", marginBottom: "4px" }}>{dayType.label}</div>
-                    <SpanEditor
-                      key={`${season.seasonCode}-${dayType.dayTypeCode}-${revision}`}
-                      group={group}
-                      periods={calendar.periods}
-                      readOnly={readOnly}
-                      otherGroups={calendar.spanGroups.filter(
-                        (g) =>
-                          g.spans.length > 0 &&
-                          !(
-                            g.seasonCode === season.seasonCode &&
-                            g.dayTypeCode === dayType.dayTypeCode
-                          ),
-                      )}
-                      onSave={async (spans) =>
-                        afterSave(
-                          await apiClient.put<Calendar>(`/api/v1/tou-calendars/${id}/spans`, {
-                            seasonCode: season.seasonCode,
-                            dayTypeCode: dayType.dayTypeCode,
-                            spans,
-                          }),
-                        )
-                      }
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          ))
+            ))}
+
+            {/*
+              After the hours, not before them.
+
+              This answers "what period would a bill use for Friday 3
+              July at 5:15 pm, and why" — a check somebody makes
+              *before publishing*, which is the last thing they do. At
+              the top of a half-built calendar it was the first thing a
+              person met: a date box over a calendar with no periods,
+              no day types and no hours, which answers nothing and
+              reads as a step they were supposed to complete.
+            */}
+            {calendar.spanGroups.some((group) => group.spans.length > 0) && (
+              <SpotCheck calendarId={id} />
+            )}
+          </>
         )}
       </div>
-
-      {/*
-        After the hours, not before them.
-        
-        This answers "what period would a bill use for Tuesday 3 July at
-        5:15 pm, and why" — a check somebody makes *before publishing*,
-        which is the last thing they do. At the top of a half-built
-        calendar it was the first thing a person met: a date box over a
-        calendar with no periods, no day types and no hours, which
-        answers nothing and reads as a step they were supposed to
-        complete.
-      */}
-      {calendar.spanGroups.some((group) => group.spans.length > 0) && (
-        <SpotCheck calendarId={id} />
-      )}
 
       {!published && canEdit && (
         <div>

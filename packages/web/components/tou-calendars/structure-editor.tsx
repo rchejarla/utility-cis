@@ -138,10 +138,17 @@ function Card({
 export function PeriodsEditor({
   periods,
   readOnly,
+  onDirtyChange,
   onSave,
 }: {
   periods: PeriodRow[];
   readOnly: boolean;
+  /**
+   * Reported upwards so the tab holding this editor can mark itself
+   * unsaved. The editor keeps owning the state — the tab only needs to
+   * know there is some.
+   */
+  onDirtyChange?: (dirty: boolean) => void;
   onSave: (rows: PeriodRow[]) => Promise<void>;
 }) {
   const [rows, setRows] = useState<PeriodRow[]>(periods);
@@ -152,6 +159,7 @@ export function PeriodsEditor({
   const change = (next: PeriodRow[]) => {
     setRows(next);
     setDirty(true);
+    onDirtyChange?.(true);
     setError(null);
   };
 
@@ -166,6 +174,7 @@ export function PeriodsEditor({
     try {
       await onSave(rows);
       setDirty(false);
+      onDirtyChange?.(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save the periods");
     } finally {
@@ -295,12 +304,15 @@ export function DayTypesEditor({
   dayTypes,
   readOnly,
   holidaySetName,
+  onDirtyChange,
   onSave,
 }: {
   dayTypes: DayTypeRow[];
   readOnly: boolean;
   /** The set whose dates reach the holiday row, or null if none is named. */
   holidaySetName: string | null;
+  /** See `PeriodsEditor`. */
+  onDirtyChange?: (dirty: boolean) => void;
   onSave: (rows: DayTypeRow[]) => Promise<void>;
 }) {
   const [rows, setRows] = useState<DayTypeRow[]>(dayTypes);
@@ -311,6 +323,7 @@ export function DayTypesEditor({
   const change = (next: DayTypeRow[]) => {
     setRows(next);
     setDirty(true);
+    onDirtyChange?.(true);
     setError(null);
   };
 
@@ -364,6 +377,7 @@ export function DayTypesEditor({
     try {
       await onSave(rows);
       setDirty(false);
+      onDirtyChange?.(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save the day types");
     } finally {
