@@ -28,11 +28,18 @@ export const createTouHolidaySetSchema = z
 /** Drafts only. A published set is immutable. */
 export const updateTouHolidaySetSchema = createTouHolidaySetSchema.partial().strict();
 
+/**
+ * Named rather than inline, so the service's `allowedSorts` and this
+ * schema cannot drift: an `orderBy` key outside the list would reach
+ * Prisma from the query string.
+ */
+export const touHolidaySetSortFields = ["name", "effectiveDate", "createdAt"] as const;
+
 export const touHolidaySetQuerySchema = z
   .object({
     page: z.coerce.number().int().positive().default(1),
     limit: z.coerce.number().int().positive().max(500).default(100),
-    sort: z.enum(["name", "effectiveDate", "createdAt"]).default("effectiveDate"),
+    sort: z.enum(touHolidaySetSortFields).default("effectiveDate"),
     order: z.enum(["asc", "desc"]).default("desc"),
     status: z.enum(["draft", "published"]).optional(),
   })

@@ -939,6 +939,19 @@ describe("season sets, for the calendar form", () => {
     const res = await inject("GET", "/api/v1/season-sets?status=draft");
     expect(body(res).data.map((s: { name: string }) => s.name)).toEqual(["Draft seasons"]);
   });
+
+  it("reports a real total, not zero above a visible row", async () => {
+    /*
+     * The list shell reads `meta`, and this service hand-rolled a
+     * `pagination` key instead — so the page printed "0 total season
+     * sets" above two of them. Pinned here because the shape is a
+     * contract between every list service and one component, and
+     * nothing else was checking it.
+     */
+    const res = await inject("GET", "/api/v1/season-sets");
+    expect(body(res).data).toHaveLength(2);
+    expect(body(res).meta).toMatchObject({ total: 2, page: 1, pages: 1 });
+  });
 });
 
 describe("what period a version applies for", () => {

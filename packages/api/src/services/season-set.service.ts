@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma.js";
-import { EVENT_TYPES } from "@utility-cis/shared";
+import { EVENT_TYPES, seasonSetSortFields } from "@utility-cis/shared";
 import type {
   CreateSeasonSetInput,
   PutSeasonsInput,
@@ -7,6 +7,7 @@ import type {
   UpdateSeasonSetInput,
 } from "@utility-cis/shared";
 import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
+import { paginatedTenantList } from "../lib/pagination.js";
 import { ordinalDate, seasonCoverage, validateSeasons } from "../lib/rate-engine/seasons.js";
 
 /**
@@ -95,17 +96,20 @@ export async function listSeasonSets(utilityId: string, query: SeasonSetQuery) {
   if (query.status === "draft") where.publishedAt = null;
   if (query.status === "published") where.publishedAt = { not: null };
 
-  const [rows, total] = await Promise.all([
-    prisma.seasonSet.findMany({
-      where,
-      include: { seasons: { orderBy: SEASON_ORDER }, _count: { select: { touCalendars: true } } },
-      orderBy: { [query.sort]: query.order },
-      skip: (query.page - 1) * query.limit,
-      take: query.limit,
-    }),
-    prisma.seasonSet.count({ where }),
-  ]);
-  return { data: rows, pagination: { page: query.page, limit: query.limit, total } };
+  /*
+   * Through the shared helper, not hand-rolled.
+   *
+   * This was its own `findMany` + `count` returning
+   * `{ data, pagination: { … } }`, and the list shell reads `meta` — so
+   * the page printed "0 total season sets" above two of them. The
+   * envelope is a contract between every list service and one
+   * component, so the service that states it itself is the one that
+   * gets it wrong.
+   */
+  return paginatedTenantList(prisma.seasonSet, where, query, {
+    include: { seasons: { orderBy: SEASON_ORDER }, _count: { select: { touCalendars: true } } },
+    allowedSorts: seasonSetSortFields,
+  });
 }
 
 export async function getSeasonSet(id: string, utilityId: string) {

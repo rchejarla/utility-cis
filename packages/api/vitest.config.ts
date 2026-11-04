@@ -18,6 +18,28 @@ export default defineConfig({
       "**/node_modules/**",
     ],
     setupFiles: ["src/__tests__/vitest.setup.ts"],
+    /*
+     * Both raised from the 5s/10s defaults, because what these hooks do
+     * is load modules, not wait on anything.
+     *
+     * `schedulers.test.ts` is the one that proved it: its `beforeEach`
+     * does `await import("../../lib/schedulers.js")`, which pulls in the
+     * six worker modules and the service layer behind them. That import
+     * was already within a hair of 10 seconds on a machine running a dev
+     * stack, so adding one small module to an unrelated service — a
+     * shared pagination helper — tipped it over and failed a test that
+     * has nothing to do with pagination. Several route suites build a
+     * Fastify app per test and sit close to the 5s test default for the
+     * same reason.
+     *
+     * A genuine hang is still caught: nothing here legitimately takes
+     * thirty seconds. The weight itself is the real problem — CLAUDE.md
+     * records why `lib/schedulers.ts` drags the worker layer in — and a
+     * stopwatch measuring the machine's spare capacity is the wrong
+     * place to find out.
+     */
+    testTimeout: 20_000,
+    hookTimeout: 30_000,
     // Tell Vitest to look for modules in the monorepo root node_modules as well
     // This is needed for pnpm workspaces where hoisted deps live in the root
     server: {

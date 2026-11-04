@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma.js";
-import { EVENT_TYPES } from "@utility-cis/shared";
+import { EVENT_TYPES, touHolidaySetSortFields } from "@utility-cis/shared";
 import type {
   CreateTouHolidaySetInput,
   PutTouHolidaysInput,
@@ -7,6 +7,7 @@ import type {
   UpdateTouHolidaySetInput,
 } from "@utility-cis/shared";
 import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
+import { paginatedTenantList } from "../lib/pagination.js";
 
 /**
  * Holiday sets: which dates are holidays (spec 26, TOU-CAL-4).
@@ -72,16 +73,21 @@ export async function listTouHolidaySets(utilityId: string, query: TouHolidaySet
   if (query.status === "draft") where.publishedAt = null;
   if (query.status === "published") where.publishedAt = { not: null };
 
-  const [rows, total] = await Promise.all([
-    prisma.touHolidaySet.findMany({
-      where,
-      include: { _count: { select: { holidays: true } } },
-      orderBy: { [query.sort]: query.order },
-      skip: (query.page - 1) * query.limit,
-      take: query.limit,
-    }),
-    prisma.touHolidaySet.count({ where }),
-  ]);
+  /*
+   * Through the shared helper like every other list, so the envelope
+   * is stated in exactly one place. This hand-rolled it, correctly —
+   * and the season-set list hand-rolled it with `pagination` instead of
+   * `meta`, which made its page read "0 total season sets" above two of
+   * them. A service that writes its own envelope is a service that can
+   * get it wrong.
+   */
+  const page = await paginatedTenantList<
+    { id: string; _count: { holidays: number } } & Record<string, unknown>
+  >(prisma.touHolidaySet, where, query, {
+    include: { _count: { select: { holidays: true } } },
+    allowedSorts: touHolidaySetSortFields,
+  });
+  const rows = page.data;
 
   /*
    * How many calendars name each set, and the span of dates it covers.
@@ -110,20 +116,13 @@ export async function listTouHolidaySets(utilityId: string, query: TouHolidaySet
   const span = new Map(bounds.map((b) => [b.touHolidaySetId, b]));
 
   return {
+    ...page,
     data: rows.map((row) => ({
       ...row,
       calendarCount: usedBy.get(row.id) ?? 0,
       firstDate: span.get(row.id)?._min.holidayDate ?? null,
       lastDate: span.get(row.id)?._max.holidayDate ?? null,
     })),
-    // The standard envelope. A hand-rolled `pagination` key is what made
-    // the season-set list read "0 total" above a visible row.
-    meta: {
-      total,
-      page: query.page,
-      limit: query.limit,
-      pages: Math.ceil(total / query.limit),
-    },
   };
 }
 
