@@ -98,6 +98,53 @@ function firstSeasonNeedingHours(calendar: Calendar): string | null {
 const spanKey = (seasonCode: string, dayTypeCode: string) => `${seasonCode}|${dayTypeCode}`;
 
 /**
+ * A change to one of the sets the calendar names, picked but not yet
+ * applied.
+ *
+ * These two are the only controls here that are not a list with a Save,
+ * and that difference was confusing in the dangerous direction:
+ * somebody who had just used the Periods tab looked for a Save, found
+ * none, and left assuming their choice was discarded — when picking it
+ * had already applied it.
+ *
+ * So picking is picking, and Apply is the save. It also gives the side
+ * effects somewhere to be said *before* they happen: attaching a
+ * holiday set adds a day type, detaching removes it, and a season set
+ * that does not define a season the hours use is refused. All three
+ * were correct and all three arrived as a surprise.
+ */
+type PendingChange =
+  | { field: "seasonSetId"; value: string; toName: string }
+  | {
+      field: "touHolidaySetId";
+      value: string | null;
+      toName: string | null;
+      /** Whether a set was already named, which decides what changes. */
+      hadSet: boolean;
+    };
+
+/** What applying it will do, in one sentence. */
+function consequenceOf(change: PendingChange): string {
+  if (change.field === "seasonSetId") {
+    return `The hours stay as they are. If any of them are keyed on a season that "${change.toName}" does not define, the change is refused rather than deleting them.`;
+  }
+  if (change.value === null) {
+    return "Removes the Holiday day type from this calendar, so every day is classified by its weekday alone. Refused if you have given it hours, rather than deleting them.";
+  }
+  if (!change.hadSet) {
+    return `Adds a Holiday day type. You give it hours on the Hours tab, and the dates in "${change.toName}" take them whatever weekday they fall on.`;
+  }
+  return `The days that take holiday hours become the dates in "${change.toName}". The hours themselves do not move.`;
+}
+
+/** What to say once it has been applied, since nothing else would. */
+function appliedNote(change: PendingChange): string {
+  if (change.field === "seasonSetId") return `Season set changed to "${change.toName}".`;
+  if (change.value === null) return "Holiday set removed.";
+  return `Holiday set changed to "${change.toName}".`;
+}
+
+/**
  * What a wizard's Next button would have been, without the wizard.
  *
  * Building a calendar does have an order — the hours are assigned to
@@ -227,6 +274,11 @@ export default function TouCalendarEditorPage() {
     dayTypes: boolean;
     spans: Record<string, boolean>;
   }>({ periods: false, dayTypes: false, spans: {} });
+  /** A set picked but not applied — see `PendingChange`. */
+  const [pending, setPending] = useState<PendingChange | null>(null);
+  const [applying, setApplying] = useState(false);
+  /** What the last applied change did, because nothing else would say. */
+  const [applied, setApplied] = useState<string | null>(null);
   /** Offered only while the calendar is a draft, so loaded lazily. */
   const [seasonSets, setSeasonSets] = useState<
     Array<{ id: string; name: string; publishedAt: string | null }>
@@ -285,16 +337,49 @@ export default function TouCalendarEditorPage() {
    * season set changes which seasons the hours are keyed on, and
    * attaching a holiday set adds a day type.
    */
-  const patch = async (body: Record<string, unknown>, whenItFails: string) => {
+  const patch = async (body: Record<string, unknown>, whenItFails: string): Promise<boolean> => {
     setActionError(null);
     try {
       await apiClient.patch(`/api/v1/tou-calendars/${id}`, body);
       await load();
       setRevision((r) => ({ periods: r.periods + 1, dayTypes: r.dayTypes + 1, spans: r.spans + 1 }));
       setDirty({ periods: false, dayTypes: false, spans: {} });
+      return true;
     } catch (err) {
       setActionError(err instanceof Error ? err.message : whenItFails);
+      return false;
     }
+  };
+
+  /**
+   * Apply the picked set. On a refusal the choice is kept in the select
+   * and the server's sentence appears below, so the operator can read
+   * why and either fix it or cancel — rather than finding their
+   * selection silently snapped back.
+   */
+  const applyPending = async () => {
+    if (!pending) return;
+    setApplying(true);
+    const ok = await patch(
+      pending.field === "seasonSetId"
+        ? { seasonSetId: pending.value }
+        : { touHolidaySetId: pending.value },
+      pending.field === "seasonSetId"
+        ? "Could not change the season set"
+        : "Could not change the holiday set",
+    );
+    setApplying(false);
+    if (ok) {
+      setApplied(appliedNote(pending));
+      setPending(null);
+    }
+  };
+
+  /** Picking something. The same value as now is not a change. */
+  const pick = (next: PendingChange, unchanged: boolean) => {
+    setApplied(null);
+    setActionError(null);
+    setPending(unchanged ? null : next);
   };
 
   /**
@@ -397,9 +482,23 @@ export default function TouCalendarEditorPage() {
               Seasons:{" "}
               <select
                 aria-label="Season set"
-                value={calendar.seasonSet.id}
+                /*
+                 * Shows what has been picked, not what is stored, so a
+                 * pending choice stays visible while its consequence is
+                 * being read.
+                 */
+                value={pending?.field === "seasonSetId" ? pending.value : calendar.seasonSet.id}
+                disabled={applying || pending?.field === "touHolidaySetId"}
                 onChange={(e) =>
-                  patch({ seasonSetId: e.target.value }, "Could not change the season set")
+                  pick(
+                    {
+                      field: "seasonSetId",
+                      value: e.target.value,
+                      toName:
+                        seasonSets.find((s) => s.id === e.target.value)?.name ?? e.target.value,
+                    },
+                    e.target.value === calendar.seasonSet.id,
+                  )
                 }
                 style={selectStyle}
               >
@@ -434,13 +533,27 @@ export default function TouCalendarEditorPage() {
               Holidays:{" "}
               <select
                 aria-label="Holiday set"
-                value={calendar.touHolidaySetId ?? ""}
-                onChange={(e) =>
-                  patch(
-                    { touHolidaySetId: e.target.value === "" ? null : e.target.value },
-                    "Could not change the holiday set",
-                  )
+                value={
+                  pending?.field === "touHolidaySetId"
+                    ? (pending.value ?? "")
+                    : (calendar.touHolidaySetId ?? "")
                 }
+                disabled={applying || pending?.field === "seasonSetId"}
+                onChange={(e) => {
+                  const value = e.target.value === "" ? null : e.target.value;
+                  pick(
+                    {
+                      field: "touHolidaySetId",
+                      value,
+                      toName:
+                        value === null
+                          ? null
+                          : (holidaySets.find((s) => s.id === value)?.name ?? value),
+                      hadSet: calendar.touHolidaySetId !== null,
+                    },
+                    value === (calendar.touHolidaySetId ?? null),
+                  );
+                }}
                 style={selectStyle}
               >
                 <option value="">None — weekday alone</option>
@@ -508,6 +621,82 @@ export default function TouCalendarEditorPage() {
           </button>
         )}
       </div>
+
+      {/*
+        Picked, not yet applied. Apply is the save these two controls
+        were missing, and it sits where the change was made rather than
+        at the bottom of a form — the consequence above it is the part
+        that was arriving afterwards, as a refusal or a day type nobody
+        asked for.
+      */}
+      {pending && (
+        <div
+          data-testid="pending-change"
+          style={{
+            border: "1px solid var(--warning)",
+            borderRadius: "var(--radius)",
+            padding: "10px 12px",
+            background: "var(--bg-card)",
+            display: "flex",
+            gap: "12px",
+            alignItems: "center",
+            flexWrap: "wrap",
+            fontSize: "12px",
+          }}
+        >
+          <span style={{ color: "var(--text-secondary)" }}>{consequenceOf(pending)}</span>
+          <span style={{ display: "flex", gap: "8px", marginLeft: "auto" }}>
+            <button
+              type="button"
+              onClick={() => setPending(null)}
+              disabled={applying}
+              style={{
+                padding: "5px 12px",
+                borderRadius: "var(--radius)",
+                border: "1px solid var(--border)",
+                background: "transparent",
+                color: "var(--text-secondary)",
+                fontSize: "12px",
+                cursor: applying ? "not-allowed" : "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={applyPending}
+              disabled={applying}
+              style={{
+                padding: "5px 12px",
+                borderRadius: "var(--radius)",
+                border: "none",
+                background: "var(--accent-primary)",
+                color: "#fff",
+                fontSize: "12px",
+                fontWeight: 500,
+                cursor: applying ? "not-allowed" : "pointer",
+                opacity: applying ? 0.7 : 1,
+                fontFamily: "inherit",
+              }}
+            >
+              {applying ? "Applying…" : "Apply"}
+            </button>
+          </span>
+        </div>
+      )}
+
+      {/*
+        Said because nothing else would. Switching between two holiday
+        sets with the same day types changes nothing visible, so without
+        this the page looked exactly as it had and the only way to know
+        was to reload.
+      */}
+      {applied && !pending && (
+        <div data-testid="change-applied" style={{ fontSize: "12px", color: "var(--success)" }}>
+          {applied}
+        </div>
+      )}
 
       {published && (
         <div

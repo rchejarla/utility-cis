@@ -856,6 +856,25 @@ it is wrong.
   the validation verdict and Publish. A tab that hid "2 problems to fix"
   would let somebody believe the hours were finished.
 
+  **Changing either set is pick-then-Apply**, with what it will do
+  stated above the Apply. They were the only controls on the page that
+  committed the moment they were touched while everything else was a
+  list with a Save, and the confusion ran the dangerous way: somebody
+  who had just used the Periods tab looked for a Save, found none, and
+  left assuming their choice had been discarded. Apply *is* that Save,
+  and it sits where the change was made. It also gives the three side
+  effects somewhere to be said *before* they happen rather than as a
+  refusal afterwards — attaching adds a day type, detaching removes it,
+  and a season set that does not define a season the hours use is
+  refused. A refusal keeps the choice on screen, so the message is
+  read against the set it is about. The other picker locks while one is
+  waiting, since applying either reloads the whole calendar.
+
+  Not a Save button on the header: attaching a set *adds a day type*,
+  so a pending header selection plus an unsaved day-type list would
+  make whichever Save came second wrong, and leave the operator
+  sequencing two writes that interact.
+
   The Hours tab scopes to one season, chosen by **chips rather than a
   dropdown**, each marked complete or incomplete: publishing needs every
   (season, day type) covered exactly once, and a dropdown can only say

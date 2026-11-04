@@ -481,6 +481,8 @@ describe("the holiday set", () => {
 
     renderPage();
     await userEvent.selectOptions(await screen.findByLabelText("Holiday set"), "hset-1");
+    // Picking is picking; Apply is the save.
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     await waitFor(() =>
       expect(patch).toHaveBeenCalledWith("/api/v1/tou-calendars/cal-1", {
@@ -498,6 +500,7 @@ describe("the holiday set", () => {
 
     renderPage();
     await userEvent.selectOptions(await screen.findByLabelText("Holiday set"), "");
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     await waitFor(() =>
       expect(patch).toHaveBeenCalledWith("/api/v1/tou-calendars/cal-1", {
@@ -770,6 +773,7 @@ describe("the season set, while the calendar is a draft", () => {
     renderPage();
     const picker = await screen.findByLabelText("Season set");
     await userEvent.selectOptions(picker, "set-2");
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     await waitFor(() =>
       expect(patch).toHaveBeenCalledWith("/api/v1/tou-calendars/cal-1", {
@@ -804,8 +808,160 @@ describe("the season set, while the calendar is a draft", () => {
 
     renderPage();
     await userEvent.selectOptions(await screen.findByLabelText("Season set"), "set-2");
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     expect(await screen.findByTestId("action-error")).toHaveTextContent(/does not define/);
+  });
+
+  it("keeps the refused choice on screen so the reason can be read against it", async () => {
+    /*
+     * A selection that snapped back to the old value would leave the
+     * refusal talking about a set the screen no longer shows.
+     */
+    get.mockImplementation((url: string) =>
+      url === "/api/v1/season-sets"
+        ? Promise.resolve({
+            data: [
+              { id: "set-1", name: "Published seasons", publishedAt: "2026-01-01T00:00:00.000Z" },
+              { id: "set-2", name: "Newer seasons", publishedAt: "2026-02-01T00:00:00.000Z" },
+            ],
+          })
+        : Promise.resolve(calendar()),
+    );
+    const patch = apiClient.patch as unknown as ReturnType<typeof vi.fn>;
+    patch.mockRejectedValue(new Error('"Newer seasons" does not define "summer".'));
+
+    renderPage();
+    const picker = (await screen.findByLabelText("Season set")) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "set-2");
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await screen.findByTestId("action-error");
+
+    expect(picker.value).toBe("set-2");
+    expect(screen.getByTestId("pending-change")).toBeInTheDocument();
+  });
+});
+
+/**
+ * These two were the only controls on the page that applied the moment
+ * they were touched, while everything else was a list with a Save. The
+ * confusion ran the dangerous way: somebody who had just used the
+ * Periods tab looked for a Save, found none, and left assuming their
+ * choice had been discarded.
+ */
+describe("changing a set the calendar names", () => {
+  const twoSeasonSets = () =>
+    get.mockImplementation((url: string) =>
+      url === "/api/v1/season-sets"
+        ? Promise.resolve({
+            data: [
+              { id: "set-1", name: "Published seasons", publishedAt: "2026-01-01T00:00:00.000Z" },
+              { id: "set-2", name: "Newer seasons", publishedAt: "2026-02-01T00:00:00.000Z" },
+            ],
+          })
+        : Promise.resolve(calendar()),
+    );
+
+  it("writes nothing until Apply", async () => {
+    twoSeasonSets();
+    const patch = apiClient.patch as unknown as ReturnType<typeof vi.fn>;
+    patch.mockResolvedValue({});
+
+    renderPage();
+    await userEvent.selectOptions(await screen.findByLabelText("Season set"), "set-2");
+
+    expect(screen.getByTestId("pending-change")).toBeInTheDocument();
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it("says what attaching a holiday set will do, before it does it", async () => {
+    get.mockImplementation((url: string) =>
+      url === "/api/v1/tou-holiday-sets"
+        ? Promise.resolve({
+            data: [{ id: "hset-1", name: "Observed holidays", publishedAt: "x", lastDate: null }],
+          })
+        : url === "/api/v1/season-sets"
+          ? Promise.resolve({ data: [] })
+          : Promise.resolve(calendar()),
+    );
+    renderPage();
+    await userEvent.selectOptions(await screen.findByLabelText("Holiday set"), "hset-1");
+
+    const row = screen.getByTestId("pending-change");
+    expect(row.textContent).toMatch(/Adds a Holiday day type/);
+    expect(row.textContent).toMatch(/Observed holidays/);
+  });
+
+  it("says detaching removes the day type, rather than refusing afterwards", async () => {
+    get.mockResolvedValue(calendar({ touHolidaySetId: HOLIDAY_SET.id, holidaySet: HOLIDAY_SET }));
+    renderPage();
+    await userEvent.selectOptions(await screen.findByLabelText("Holiday set"), "");
+
+    const row = screen.getByTestId("pending-change");
+    expect(row.textContent).toMatch(/Removes the Holiday day type/);
+    expect(row.textContent).toMatch(/Refused if you have given it hours/);
+  });
+
+  it("says a season-set change is refused rather than dropping hours", async () => {
+    twoSeasonSets();
+    renderPage();
+    await userEvent.selectOptions(await screen.findByLabelText("Season set"), "set-2");
+
+    expect(screen.getByTestId("pending-change").textContent).toMatch(
+      /refused rather than deleting them/,
+    );
+  });
+
+  it("puts the choice back when cancelled, and writes nothing", async () => {
+    twoSeasonSets();
+    const patch = apiClient.patch as unknown as ReturnType<typeof vi.fn>;
+
+    renderPage();
+    const picker = (await screen.findByLabelText("Season set")) as HTMLSelectElement;
+    await userEvent.selectOptions(picker, "set-2");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(picker.value).toBe("set-1");
+    expect(screen.queryByTestId("pending-change")).toBeNull();
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it("treats picking what is already chosen as no change at all", async () => {
+    twoSeasonSets();
+    renderPage();
+    await userEvent.selectOptions(await screen.findByLabelText("Season set"), "set-1");
+    expect(screen.queryByTestId("pending-change")).toBeNull();
+  });
+
+  it("says it saved, because nothing else would", async () => {
+    /*
+     * Switching between two holiday sets with the same day types
+     * changes nothing visible, so without this the page looked exactly
+     * as it had and the only way to know was to reload.
+     */
+    twoSeasonSets();
+    const patch = apiClient.patch as unknown as ReturnType<typeof vi.fn>;
+    patch.mockResolvedValue({});
+
+    renderPage();
+    await userEvent.selectOptions(await screen.findByLabelText("Season set"), "set-2");
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(await screen.findByTestId("change-applied")).toHaveTextContent(
+      /Season set changed to "Newer seasons"/,
+    );
+    expect(screen.queryByTestId("pending-change")).toBeNull();
+  });
+
+  it("locks the other picker while a change is waiting, so two cannot race", async () => {
+    // Applying one reloads the whole calendar, which would land on top
+    // of the other's pending selection.
+    twoSeasonSets();
+    renderPage();
+    await userEvent.selectOptions(await screen.findByLabelText("Season set"), "set-2");
+
+    expect(screen.getByLabelText("Holiday set")).toBeDisabled();
+    expect(screen.getByLabelText("Season set")).toBeEnabled();
   });
 });
 
