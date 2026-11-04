@@ -868,6 +868,20 @@ describe("deleting", () => {
     expect(after.statusCode).toBe(404);
   });
 
+  it("deletes a draft that has hours in it", async () => {
+    /*
+     * Deleting a calendar cascades to its periods, day types and slots
+     * — but `tou_slot_period_id_fkey` is RESTRICT, so if Postgres
+     * removed the periods before the slots that reference them the
+     * delete would fail on a foreign key. The empty-draft case above
+     * cannot show that; this one has three spans per group.
+     */
+    const id = await completeCalendar();
+    const res = await inject("DELETE", `/api/v1/tou-calendars/${id}`);
+    expect(res.statusCode).toBeLessThan(300);
+    expect((await inject("GET", `/api/v1/tou-calendars/${id}`)).statusCode).toBe(404);
+  });
+
   it("refuses to delete a published one", async () => {
     const id = await completeCalendar();
     await inject("POST", `/api/v1/tou-calendars/${id}/publish`);
