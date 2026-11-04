@@ -434,7 +434,7 @@ export default function SeasonSetEditorPage() {
                     style={{
                       ...inputStyle,
                       fontFamily: "monospace",
-                      ...(row.seasonCode.trim() === "" ? { borderColor: "var(--danger)" } : {}),
+                      ...(row.seasonCode.trim() === "" ? { border: "1px solid var(--danger)" } : {}),
                     }}
                     value={row.seasonCode}
                     placeholder="summer"
@@ -451,7 +451,7 @@ export default function SeasonSetEditorPage() {
                     disabled={readOnly}
                     style={{
                       ...inputStyle,
-                      ...(row.label.trim() === "" ? { borderColor: "var(--danger)" } : {}),
+                      ...(row.label.trim() === "" ? { border: "1px solid var(--danger)" } : {}),
                     }}
                     value={row.label}
                     placeholder="Summer"

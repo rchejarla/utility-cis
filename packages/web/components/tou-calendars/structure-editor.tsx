@@ -86,8 +86,17 @@ function isBlank(value: string): boolean {
   return value.trim() === "";
 }
 
+/*
+ * The whole `border` shorthand, not just `borderColor`.
+ *
+ * `inputStyle` sets `border`, and overriding only the colour mixes a
+ * shorthand with a longhand for the same value — React warns that the
+ * one it removes on rerender can leave the border in a state neither
+ * style asked for, which here means a red outline that does not clear
+ * when the field is filled in.
+ */
 const blankInput = {
-  borderColor: "var(--danger)",
+  border: "1px solid var(--danger)",
 };
 
 function Card({
