@@ -4,12 +4,19 @@ import { EntityListPage } from "@/components/ui/entity-list-page";
 import { PageDescription } from "@/components/ui/page-description";
 import { StatusBadge } from "@/components/ui/status-badge";
 import type { Column } from "@/components/ui/data-table";
+import {
+  touCalendarLifecycle,
+  touCalendarPeriod,
+} from "@/lib/tou-calendar-lifecycle";
 
 interface TouCalendar {
   id: string;
   name: string;
   effectiveDate: string;
   publishedAt?: string | null;
+  /** Derived server-side from the next published version of this name. */
+  inForceUntil?: string | null;
+  supersededById?: string | null;
   timeZone: string;
   clockBasis: string;
   seasonSet?: { name: string };
@@ -39,17 +46,20 @@ const columns: Column<TouCalendar>[] = [
   {
     key: "status",
     header: "Status",
-    render: (row) => <StatusBadge status={row.publishedAt ? "published" : "draft"} />,
+    render: (row) => <StatusBadge status={touCalendarLifecycle(row).toLowerCase()} />,
   },
   {
     key: "effectiveDate",
-    header: "In force from",
+    header: "Applies",
     /*
-     * A version IS a (name, effective date): there is no version
-     * column, because a calendar is never edited once it has priced a
-     * bill. Two rows with one name and two dates are the two versions.
+     * The period, not just its start. A version IS a (name, effective
+     * date) — there is no version column, because a calendar is never
+     * edited once it has priced a bill — so its last day is the day
+     * before the next published version of the same name, which the
+     * server derives. Showing only the start left a replaced version
+     * looking open-ended and current.
      */
-    render: (row) => <span style={{ fontSize: "12px" }}>{row.effectiveDate?.slice(0, 10)}</span>,
+    render: (row) => <span style={{ fontSize: "12px" }}>{touCalendarPeriod(row)}</span>,
   },
   {
     key: "timeZone",

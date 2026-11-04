@@ -149,13 +149,51 @@ function utcDate(isoDate: string): Date {
   return new Date(`${isoDate}T00:00:00.000Z`);
 }
 
+/**
+ * When a calendar stops applying, and what replaced it.
+ *
+ * **Derived, never stored.** `load-tou-calendar.ts` picks the newest
+ * published version whose effective date is on or before the period's
+ * start, so a version's last day *is* the day before the next published
+ * version of the same name — there is nothing else it could be. A
+ * `superseded_by_id` column like the one on `rate_schedule` would be a
+ * second answer to a question the loader settles by date, and the two
+ * could disagree about which version priced a bill.
+ *
+ * A draft successor does not end anything: it can still be edited, have
+ * its effective date moved, or be deleted, and until it is published
+ * rating will not reach it.
+ */
+async function supersessionOf(
+  utilityId: string,
+  calendar: { id: string; name: string; effectiveDate: Date },
+): Promise<{ supersededBy: { id: string; effectiveDate: Date } | null; inForceUntil: Date | null }> {
+  const next = await prisma.touCalendar.findFirst({
+    where: {
+      utilityId,
+      name: calendar.name,
+      publishedAt: { not: null },
+      effectiveDate: { gt: calendar.effectiveDate },
+    },
+    orderBy: { effectiveDate: "asc" },
+    select: { id: true, effectiveDate: true },
+  });
+  if (!next) return { supersededBy: null, inForceUntil: null };
+  return {
+    supersededBy: next,
+    // The day before the successor takes over. Inclusive, because that
+    // is how a person reads "in force until".
+    inForceUntil: new Date(next.effectiveDate.getTime() - 86_400_000),
+  };
+}
+
 export async function listTouCalendars(utilityId: string, query: TouCalendarQuery) {
   const where: Record<string, unknown> = { utilityId };
   if (query.name) where.name = query.name;
   if (query.status === "draft") where.publishedAt = null;
   if (query.status === "published") where.publishedAt = { not: null };
 
-  return paginatedTenantList(prisma.touCalendar, where, query, {
+  const page = await paginatedTenantList(prisma.touCalendar, where, query, {
     include: {
       seasonSet: { select: { id: true, name: true } },
       /*
@@ -166,11 +204,45 @@ export async function listTouCalendars(utilityId: string, query: TouCalendarQuer
       _count: { select: { periods: true, dayTypes: true, slots: true } },
     },
   });
+
+  /*
+   * Which rows have been replaced, in one query for the whole page
+   * rather than one each. Without it a retired version shows as
+   * "Published" with an open-ended start date, which is the state most
+   * likely to send somebody to read the wrong hours.
+   */
+  const rows = page.data as Array<{
+    id: string;
+    name: string;
+    effectiveDate: Date;
+    publishedAt: Date | null;
+    inForceUntil?: Date | null;
+    supersededById?: string | null;
+  }>;
+  const names = [...new Set(rows.map((r) => r.name))];
+  const published =
+    names.length === 0
+      ? []
+      : await prisma.touCalendar.findMany({
+          where: { utilityId, name: { in: names }, publishedAt: { not: null } },
+          select: { id: true, name: true, effectiveDate: true },
+          orderBy: { effectiveDate: "asc" },
+        });
+
+  for (const row of rows) {
+    const next = published.find(
+      (p) => p.name === row.name && p.effectiveDate.getTime() > row.effectiveDate.getTime(),
+    );
+    row.supersededById = next?.id ?? null;
+    row.inForceUntil = next ? new Date(next.effectiveDate.getTime() - 86_400_000) : null;
+  }
+
+  return page;
 }
 
 export async function getTouCalendar(id: string, utilityId: string) {
   const row = await loadEditorCalendar(utilityId, id);
-  return toEditorPayload(row);
+  return { ...toEditorPayload(row), ...(await supersessionOf(utilityId, row)) };
 }
 
 /**

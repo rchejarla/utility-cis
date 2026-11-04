@@ -7,6 +7,10 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
+import {
+  touCalendarLifecycle,
+  touCalendarPeriod,
+} from "@/lib/tou-calendar-lifecycle";
 import { PeriodLegend } from "@/components/tou-calendars/day-strip";
 import { SpanEditor, type SpanGroup } from "@/components/tou-calendars/span-editor";
 import { SpotCheck } from "@/components/tou-calendars/spot-check";
@@ -50,6 +54,9 @@ interface Calendar {
   spanGroups: SpanGroup[];
   overrides: Array<{ id: string; date: string; dayTypeCode: string; reason: string | null }>;
   validation: { ok: true } | { ok: false; problems: string[] };
+  /** Derived, not stored — see `tou-calendar.service.ts`. */
+  inForceUntil: string | null;
+  supersededBy: { id: string; effectiveDate: string } | null;
 }
 
 export default function TouCalendarEditorPage() {
@@ -114,13 +121,18 @@ export default function TouCalendarEditorPage() {
     <div style={{ maxWidth: "1100px", display: "flex", flexDirection: "column", gap: "16px" }}>
       <PageHeader
         title={calendar.name}
-        subtitle={`In force from ${calendar.effectiveDate.slice(0, 10)} · ${calendar.timeZone} · ${
+        subtitle={`${touCalendarPeriod(calendar)} · ${calendar.timeZone} · ${
           calendar.clockBasis === "standard" ? "standard time all year" : "follows daylight saving"
         }`}
       />
 
       <div style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" }}>
-        <StatusBadge status={published ? "published" : "draft"} />
+        <StatusBadge
+          status={touCalendarLifecycle({
+            ...calendar,
+            supersededById: calendar.supersededBy?.id ?? null,
+          }).toLowerCase()}
+        />
         <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
           Seasons: {calendar.seasonSet.name}
           {calendar.seasonSet.publishedAt === null && " (still a draft)"}

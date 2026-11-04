@@ -675,6 +675,89 @@ describe("season sets, for the calendar form", () => {
   });
 });
 
+describe("what period a version applies for", () => {
+  /*
+   * A calendar has no end date column and should not have one.
+   * `load-tou-calendar.ts` picks the newest published version whose
+   * effective date is on or before the period start, so a version's
+   * last day *is* the day before the next published version of the same
+   * name. A `superseded_by_id` column would be a second answer to a
+   * question the loader settles by date, and the two could disagree
+   * about which version priced a bill.
+   */
+  it("is open-ended while nothing has replaced it", async () => {
+    const id = await completeCalendar();
+    await inject("POST", `/api/v1/tou-calendars/${id}/publish`);
+
+    const res = await inject("GET", `/api/v1/tou-calendars/${id}`);
+    expect(body(res).inForceUntil).toBeNull();
+    expect(body(res).supersededBy).toBeNull();
+  });
+
+  it("ends the day before the next published version takes over", async () => {
+    const first = await completeCalendar();
+    await inject("POST", `/api/v1/tou-calendars/${first}/publish`);
+
+    // Same name, later date — that pair *is* the version.
+    const second = await createCalendar({ effectiveDate: "2027-06-01" });
+    await inject("PUT", `/api/v1/tou-calendars/${second.id}/periods`, PERIODS);
+    await inject("PUT", `/api/v1/tou-calendars/${second.id}/day-types`, DAY_TYPES);
+    await fillSpans(second.id);
+    await inject("POST", `/api/v1/tou-calendars/${second.id}/publish`);
+
+    const res = await inject("GET", `/api/v1/tou-calendars/${first}`);
+    expect(body(res).inForceUntil.slice(0, 10)).toBe("2027-05-31");
+    expect(body(res).supersededBy.id).toBe(second.id);
+  });
+
+  it("is not ended by a draft successor", async () => {
+    /*
+     * A draft can still be edited, have its date moved or be deleted,
+     * and rating will not reach it. Treating it as an end would retire
+     * the version that is actually pricing bills.
+     */
+    const first = await completeCalendar();
+    await inject("POST", `/api/v1/tou-calendars/${first}/publish`);
+    await createCalendar({ effectiveDate: "2027-06-01" });
+
+    const res = await inject("GET", `/api/v1/tou-calendars/${first}`);
+    expect(body(res).inForceUntil).toBeNull();
+    expect(body(res).supersededBy).toBeNull();
+  });
+
+  it("is not ended by a later version of a different calendar", async () => {
+    const first = await completeCalendar();
+    await inject("POST", `/api/v1/tou-calendars/${first}/publish`);
+
+    const other = await createCalendar({ name: "Some other tariff", effectiveDate: "2027-06-01" });
+    await inject("PUT", `/api/v1/tou-calendars/${other.id}/periods`, PERIODS);
+    await inject("PUT", `/api/v1/tou-calendars/${other.id}/day-types`, DAY_TYPES);
+    await fillSpans(other.id);
+    await inject("POST", `/api/v1/tou-calendars/${other.id}/publish`);
+
+    const res = await inject("GET", `/api/v1/tou-calendars/${first}`);
+    expect(body(res).supersededBy).toBeNull();
+  });
+
+  it("marks the replaced version on the list too", async () => {
+    // The row is where somebody picks which version to open, so a
+    // retired one reading "published" with an open-ended start is the
+    // state most likely to send them to the wrong hours.
+    const first = await completeCalendar();
+    await inject("POST", `/api/v1/tou-calendars/${first}/publish`);
+    const second = await createCalendar({ effectiveDate: "2027-06-01" });
+    await inject("PUT", `/api/v1/tou-calendars/${second.id}/periods`, PERIODS);
+    await inject("PUT", `/api/v1/tou-calendars/${second.id}/day-types`, DAY_TYPES);
+    await fillSpans(second.id);
+    await inject("POST", `/api/v1/tou-calendars/${second.id}/publish`);
+
+    const res = await inject("GET", "/api/v1/tou-calendars?name=TOD%205-8pm");
+    const rows = body(res).data as Array<{ id: string; supersededById: string | null }>;
+    expect(rows.find((r) => r.id === first)?.supersededById).toBe(second.id);
+    expect(rows.find((r) => r.id === second.id)?.supersededById).toBeNull();
+  });
+});
+
 describe("deleting", () => {
   it("deletes a draft", async () => {
     const calendar = await createCalendar();
