@@ -739,6 +739,16 @@ raw intervals from the same meters. Compression is therefore entirely a
 > the browser would eventually bless a calendar the engine reads
 > differently, and the wrapped season is exactly where it would start.
 >
+> **Dev seed:** `seed/tou-calendar.js` creates a published "Time of Day
+> 5-8pm" calendar and an "Observed holidays" list, so the screens open on
+> something and the spot check can be used. It keys its spans on the
+> season set the tenant already has — the `season_sets` migration seeds
+> every tenant a published "Default" — rather than creating a second set,
+> because a published calendar naming one set while another is in force
+> is the divergence TOU-SEA-6 warns about, and a fresh database should
+> not open on a warning about a state nobody caused. Nothing prices it
+> yet; a TOU rate schedule is not seeded.
+>
 > **Still to build:** TOU-UI-1d (the published-version diff), the
 > holiday *editor* (TOU-UI-2's write half — rules are still inserted by
 > hand), TOU-UI-3's editor half, TOU-UI-4 and TOU-UI-5.

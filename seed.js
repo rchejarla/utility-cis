@@ -5,6 +5,7 @@ const { createRequire } = require("node:module");
 const { PrismaClient } = require("./packages/shared/src/generated/prisma");
 const { seedDelinquencyLadder } = require("./seed/delinquency-ladder.js");
 const { seedPaymentPlan } = require("./seed/payment-plan.js");
+const { seedTouCalendar } = require("./seed/tou-calendar.js");
 
 /*
  * `@prisma/adapter-pg` and `pg` are declared by `packages/shared`, and
@@ -2091,6 +2092,29 @@ async function main() {
         ", $" + plan.downPayment + " down (paid)",
     );
     console.log("       covering " + plan.covered.join(", "));
+  }
+
+  /*
+   * A published TOU calendar, so the time-of-use screens open on
+   * something and the spot check can be used. After the rate
+   * schedules, because a calendar is only meaningful as the hours a
+   * schedule prices against — though nothing here prices it yet, which
+   * the log line says.
+   */
+  const tou = await seedTouCalendar({ p, utilityId: UID });
+  if (tou.skipped) {
+    console.log("  [skip] TOU calendar: " + tou.skipped);
+  } else {
+    console.log(
+      '  TOU calendar "' + tou.name + '" (published, ' + tou.timeZone + "): " +
+        tou.periods + " periods x " + tou.dayTypes + " day types x " +
+        tou.seasonCodes.length + " seasons = " + tou.spans + " spans, " +
+        tou.holidayRules + " holiday rules",
+    );
+    console.log(
+      "       keyed on season set \"" + tou.seasonSetName + "\" (" +
+        tou.seasonCodes.join(", ") + "); no rate schedule prices it yet",
+    );
   }
 
   const portalUsers = [
