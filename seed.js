@@ -2108,12 +2108,15 @@ async function main() {
     console.log(
       '  TOU calendar "' + tou.name + '" (published, ' + tou.timeZone + "): " +
         tou.periods + " periods x " + tou.dayTypes + " day types x " +
-        tou.seasonCodes.length + " seasons = " + tou.spans + " spans, " +
-        tou.holidayRules + " holiday rules",
+        tou.seasonCodes.length + " seasons = " + tou.spans + " spans",
     );
     console.log(
       "       keyed on season set \"" + tou.seasonSetName + "\" (" +
         tou.seasonCodes.join(", ") + "); no rate schedule prices it yet",
+    );
+    console.log(
+      "       holidays: \"" + tou.holidaySetName + "\" (" + tou.holidayDates +
+        " dates" + (tou.holidaySetReused ? ", reused" : "") + ")",
     );
   }
 

@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { validateSeasons } from "../../seasons.js";
-import { observedDays, resolveHolidays } from "../../holidays.js";
 import { resolvePeak, validateCalendar, type TouPeakLookup } from "../../tou-calendar.js";
 import { toLocalMoment } from "../../tou-clock.js";
 import {
   SMUD_CALENDAR,
   SMUD_ENERGY_RATES,
-  SMUD_HOLIDAY_RULES,
+  SMUD_HOLIDAYS_2026,
+  SMUD_OBSERVED_2026,
   SMUD_SEASONS,
   SMUD_TIME_ZONE,
 } from "./_smud-time-of-day-fixtures.js";
@@ -29,7 +29,7 @@ import {
 const utc = (y: number, mo: number, d: number, h: number, mi = 0) =>
   new Date(Date.UTC(y, mo - 1, d, h, mi));
 
-const holidays2026 = observedDays(SMUD_HOLIDAY_RULES, 2026);
+const holidays2026 = SMUD_OBSERVED_2026;
 
 /** Local wall-clock time in Sacramento, then the period at it. */
 function classifyLocal(
@@ -44,7 +44,7 @@ function classifyLocal(
     minuteOfDay: hour * 60 + minute,
     calendar: SMUD_CALENDAR,
     seasons: SMUD_SEASONS,
-    observedHolidays: observedDays(SMUD_HOLIDAY_RULES, year),
+    observedHolidays: SMUD_OBSERVED_2026,
   });
 }
 
@@ -56,7 +56,7 @@ function classifyInstant(instant: Date): TouPeakLookup {
     minuteOfDay: local.minuteOfDay,
     calendar: SMUD_CALENDAR,
     seasons: SMUD_SEASONS,
-    observedHolidays: observedDays(SMUD_HOLIDAY_RULES, local.date.getUTCFullYear()),
+    observedHolidays: SMUD_OBSERVED_2026,
   });
 }
 
@@ -85,10 +85,12 @@ describe("the tariff as published is a calendar this model accepts", () => {
     expect(validateCalendar(SMUD_CALENDAR, SMUD_SEASONS)).toEqual({ ok: true });
   });
 
-  it("resolves eleven holidays a year, none of them sharing a date", () => {
-    const resolved = resolveHolidays(SMUD_HOLIDAY_RULES, 2026, 2026);
-    expect(resolved).toHaveLength(11);
-    expect(resolved.some((r) => r.sharesObservedDate)).toBe(false);
+  it("observes eleven days a year, each on its own date", () => {
+    // The set is the fact now, so this checks the fixture is a set and
+    // not an accidental list with a day repeated — which would make
+    // "is this a holiday" answerable twice.
+    expect(SMUD_HOLIDAYS_2026).toHaveLength(11);
+    expect(SMUD_OBSERVED_2026.size).toBe(11);
   });
 });
 
@@ -154,7 +156,7 @@ describe("weekends and holidays are always off-peak", () => {
     /*
      * 26 November 2026, the fourth Thursday. This is the single most
      * valuable assertion in the file: it is the one case where getting
-     * the holiday rule wrong charges the peak rate on a day the tariff
+     * the holiday date wrong charges the peak rate on a day the tariff
      * says is off-peak, to every TOU customer, on a bill that looks
      * entirely ordinary.
      */
@@ -174,24 +176,25 @@ describe("weekends and holidays are always off-peak", () => {
     expect(priceOf(r)).toBe(0.1550);
   });
 
-  it("resolves the last-Monday rule to the right Monday", () => {
-    // Memorial Day 2026 is 25 May — still non-summer, since summer
-    // starts on 1 June.
+  it("prices Memorial Day off-peak while it is still non-summer", () => {
+    // 25 May 2026 — before 1 June, so the holiday lands in the cheaper
+    // season and the two rules interact.
     expect(holidays2026.has("2026-05-25")).toBe(true);
     const r = classifyLocal(2026, 5, 25, 18);
     expect(r).toMatchObject({ seasonCode: "non_summer", dayTypeReason: "HOLIDAY" });
   });
 
-  it("does not shift a fixed-date holiday that falls on a weekend", () => {
+  it("leaves the Friday before a Saturday holiday at full peak", () => {
     /*
-     * SMUD's stated rule, and not the one a textbook assumes: 4 July
-     * 2026 is a Saturday, and the Friday before is **not** given the
-     * holiday's off-peak treatment. So 3 July is an ordinary summer
-     * weekday and 6 pm on it is peak — the most expensive rate in the
-     * tariff, on the day many utilities would have made cheapest.
+     * SMUD's actual practice, and not the one a textbook assumes: 4
+     * July 2026 is a Saturday and they do **not** move the holiday to
+     * the Friday. So 3 July is an ordinary summer weekday and 6 pm on
+     * it is peak — the most expensive rate in the tariff, on the day
+     * many utilities would have made the cheapest.
      *
-     * This is what `observance: "NONE"` means, and the reason the field
-     * is configurable rather than assumed.
+     * This used to be `observance: "NONE"` on a rule, a field easy to
+     * mis-set and invisible once set. As dates it is just the day
+     * somebody typed: 4 July is in the set and 3 July is not.
      */
     expect(holidays2026.has("2026-07-03")).toBe(false);
     expect(priceOf(classifyLocal(2026, 7, 3, 18))).toBe(0.3765);

@@ -58,8 +58,8 @@ model Utility {
   touDayTypeWeekdays     TouDayTypeWeekday[]
   touSlots               TouSlot[]
   touDayOverrides        TouDayOverride[]
-  touHolidayLists        TouHolidayList[]
-  touHolidayRules        TouHolidayRule[]
+  touHolidaySets         TouHolidaySet[]
+  touHolidays            TouHoliday[]
   billDocuments          BillDocument[]
   billMessages           BillMessage[]
   billSegmentLines       BillSegmentLine[]
@@ -2885,12 +2885,12 @@ model TouCalendar {
   publishedAt   DateTime? @map("published_at") @db.Timestamptz
   seasonSetId   String    @map("season_set_id") @db.Uuid
   seasonSet     SeasonSet @relation(fields: [utilityId, seasonSetId], references: [utilityId, id], onDelete: Restrict)
-  /// Null for a tenant whose tariff does not distinguish holidays;
-  /// `resolveDayType` then answers from the weekday coverage. The key
-  /// itself is in the `tou_calendar` migration — Prisma requires every
-  /// referencing field of an optional composite relation to be optional,
-  /// and `utility_id` is not.
-  touHolidayListId String? @map("tou_holiday_list_id") @db.Uuid
+  /// Null for a tariff that does not distinguish holidays, which is then
+  /// never asked for holiday hours. The key itself is in the
+  /// `tou_holiday_sets` migration — Prisma requires every referencing
+  /// field of an optional composite relation to be optional, and
+  /// `utility_id` is not.
+  touHolidaySetId String? @map("tou_holiday_set_id") @db.Uuid
   /// IANA name, e.g. `America/Denver` (TOU-CAL-6). Belongs to the
   /// tariff, not the customer: where someone lives never changes which
   /// hours are on-peak.
@@ -2941,17 +2941,20 @@ model TouPeriod {
 
 /// A kind of day, which decides which hours are on-peak (TOU-CAL-2).
 ///
-/// `dayTypeCode` is the tenant's own string and the vocabulary is
-/// **open** — at least weekday, weekend and holiday, and a tenant may
-/// add Saturday — so nothing in code may match a literal value. That is
-/// what `isHoliday` is for: a tenant coding theirs `observed_holiday`
-/// would otherwise have every holiday classified as an ordinary weekday
-/// with nothing raised.
+/// `dayTypeCode` is the tenant's own string and the vocabulary stays
+/// **open** — Saturday priced apart from Sunday is a real tariff and a
+/// fixed set of three could not express it.
 ///
-/// One per calendar may set it, enforced by a partial unique index that
-/// exists only in the `tou_calendar` migration — Prisma cannot express
-/// the predicate, so this declaration exists so `migrate dev` is not
-/// tempted to add a second.
+/// **`holiday` is the one reserved code.** The system creates that day
+/// type when a calendar names a holiday set, and `resolveDayType`
+/// matches it directly. It replaced an `is_holiday` boolean, which
+/// existed only because every code was the tenant's own and so none
+/// could be matched — and which needed a partial unique index and a
+/// validator rule to enforce "at most one". Reserving one code settles
+/// all three: `tou_day_type_code_per_calendar` already makes it unique.
+///
+/// The reservation is enforced in `tou-calendar.service.ts`, not by a
+/// CHECK: a constraint cannot tell the system's row from a tenant's.
 model TouDayType {
   id            String      @id @default(uuid()) @db.Uuid
   utilityId     String      @map("utility_id") @db.Uuid
@@ -2960,7 +2963,6 @@ model TouDayType {
   calendar      TouCalendar @relation(fields: [utilityId, touCalendarId], references: [utilityId, id], onDelete: Cascade)
   dayTypeCode   String      @map("day_type_code") @db.VarChar(50)
   label         String      @db.VarChar(100)
-  isHoliday     Boolean     @default(false) @map("is_holiday")
   sortOrder     Int         @default(0) @map("sort_order") @db.SmallInt
   createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz
   updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz
@@ -3066,62 +3068,55 @@ model TouDayOverride {
 
 /// A named set of holiday rules, shared across the tenant's calendars
 /// (TOU-UI-2a), each calendar naming the list it uses — so adding a
-/// holiday does not mean editing three calendars and missing one.
-model TouHolidayList {
-  id        String   @id @default(uuid()) @db.Uuid
-  utilityId String   @map("utility_id") @db.Uuid
-  utility   Utility  @relation(fields: [utilityId], references: [id], onDelete: Restrict)
-  name      String   @db.VarChar(100)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+/// Which dates are holidays (spec 26, TOU-CAL-4).
+///
+/// **Explicit dates, not rules.** A rule — "4 July, nearest weekday" —
+/// is a computation nobody checked: it does not tell anybody that 2026
+/// lands on a Saturday and moves the holiday to Friday the 3rd, a
+/// weekday whose peak hours disappear. A date is the fact itself, and
+/// the observance is applied by the person who knows it.
+///
+/// **Versioned and published like a season set**, and for the same
+/// reason: a published calendar names a published version, so editing
+/// a set cannot change which days got holiday hours on bills already
+/// issued (TOU-CAL-10 argues this for seasons).
+///
+/// A set covers a horizon and runs out. `validateCalendar` reports a
+/// year the calendar covers with no dates in its set, because the
+/// alternative is every holiday that year quietly billing as an
+/// ordinary weekday.
+model TouHolidaySet {
+  id            String    @id @default(uuid()) @db.Uuid
+  utilityId     String    @map("utility_id") @db.Uuid
+  utility       Utility   @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  name          String    @db.VarChar(100)
+  effectiveDate DateTime  @map("effective_date") @db.Date
+  /// Null until published. A published set is immutable.
+  publishedAt   DateTime? @map("published_at") @db.Timestamptz
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz
 
-  rules TouHolidayRule[]
+  holidays TouHoliday[]
 
-  @@unique([utilityId, name], map: "tou_holiday_list_name_per_tenant")
-  @@unique([utilityId, id], map: "tou_holiday_list_tenant_id_key")
-  @@map("tou_holiday_list")
+  @@unique([utilityId, name, effectiveDate], map: "tou_holiday_set_version_per_tenant")
+  @@unique([utilityId, id], map: "tou_holiday_set_tenant_id_key")
+  @@map("tou_holiday_set")
 }
 
-/// A holiday, stated as a rule (TOU-CAL-4).
-///
-/// Rules rather than a list of dates, because a published calendar is
-/// immutable and a list of dates expires: a calendar published in 2026
-/// would hold no holidays for 2029, so either somebody re-enters dates
-/// every year forever or the dates live outside the version and
-/// publishing stops fixing what the calendar means. A missed year does
-/// not raise — the holiday day type silently stops applying and every
-/// TOU bill for those days misprices.
-///
-/// `lib/rate-engine/holidays.ts` resolves these, observance included. A
-/// CHECK keeps each kind's columns and not the other's, since a FIXED
-/// rule with a stray `nth` would look configured and resolve elsewhere.
-model TouHolidayRule {
-  id               String         @id @default(uuid()) @db.Uuid
-  utilityId        String         @map("utility_id") @db.Uuid
-  utility          Utility        @relation(fields: [utilityId], references: [id], onDelete: Restrict)
-  touHolidayListId String         @map("tou_holiday_list_id") @db.Uuid
-  list             TouHolidayList @relation(fields: [utilityId, touHolidayListId], references: [utilityId, id], onDelete: Cascade)
-  code             String         @db.VarChar(50)
-  label            String         @db.VarChar(100)
-  /// `FIXED` is a date (4 July); `NTH_WEEKDAY` is a count (fourth
-  /// Thursday of November, last Monday of May).
-  kind             String         @db.VarChar(20)
-  month            Int            @db.SmallInt
-  /// `FIXED` only.
-  day              Int?           @db.SmallInt
-  /// `NTH_WEEKDAY` only. ISO weekday: Monday is 1.
-  weekday          Int?           @db.SmallInt
-  /// `NTH_WEEKDAY` only. 1–5, or -1 for the last in the month. A rule
-  /// naming an nth the month has not got resolves to nothing that year
-  /// rather than shifting to the previous one.
-  nth              Int?           @db.SmallInt
-  /// `NONE`, `NEAREST_WEEKDAY` or `FOLLOWING_MONDAY`. This is where the
-  /// surprises live: a Saturday holiday observed on the Friday moves
-  /// which day is off-peak.
-  observance       String         @default("NONE") @db.VarChar(20)
-  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+/// One date in a set. A real date with a year, which is the whole point
+/// of leaving rules behind.
+model TouHoliday {
+  id              String        @id @default(uuid()) @db.Uuid
+  utilityId       String        @map("utility_id") @db.Uuid
+  utility         Utility       @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  touHolidaySetId String        @map("tou_holiday_set_id") @db.Uuid
+  set             TouHolidaySet @relation(fields: [utilityId, touHolidaySetId], references: [utilityId, id], onDelete: Cascade)
+  holidayDate     DateTime      @map("holiday_date") @db.Date
+  name            String        @db.VarChar(100)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz
 
-  @@unique([utilityId, touHolidayListId, code], map: "tou_holiday_rule_code_per_list")
-  @@map("tou_holiday_rule")
+  @@unique([utilityId, touHolidaySetId, holidayDate], map: "tou_holiday_date_per_set")
+  @@index([utilityId, touHolidaySetId, holidayDate], map: "tou_holiday_set_date_idx")
+  @@map("tou_holiday")
 }

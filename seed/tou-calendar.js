@@ -1,8 +1,8 @@
 /**
- * A published time-of-use calendar, and the holiday list it names.
+ * A published time-of-use calendar, and the holiday set it names.
  *
  * Without it every TOU screen opens empty on a fresh database, and the
- * one control worth having — the spot check, "what period is Tuesday 3
+ * one control worth having — the spot check, "what period is Friday 3
  * July at 5:15 pm, and why" — cannot be used at all, because it needs a
  * calendar with hours in it. The same reason the delinquency ladder and
  * the payment plan got modules of their own.
@@ -32,7 +32,11 @@
  *
  * Written with Prisma rather than by calling the services, like every
  * other section of the seed: `seed.js` runs as plain `node seed.js` and
- * cannot import the TypeScript.
+ * cannot import the TypeScript. One consequence worth naming — the
+ * `holiday` day type is created here by hand. `createTouCalendar` adds
+ * it for a calendar built through the API; a seed writing rows directly
+ * gets no such help, and a holiday set with no day type to resolve to
+ * would price every holiday by its weekday.
  */
 
 /*
@@ -53,7 +57,7 @@
  * construction.
  */
 const CALENDAR_NAME = "Residential time-of-use";
-const HOLIDAY_LIST_NAME = "Observed holidays";
+const HOLIDAY_SET_NAME = "Observed holidays";
 
 /** Bozeman. The tariff's zone, not any customer's (TOU-CAL-6). */
 const TIME_ZONE = "America/Denver";
@@ -61,20 +65,48 @@ const TIME_ZONE = "America/Denver";
 const EFFECTIVE_DATE = new Date(Date.UTC(2026, 0, 1));
 
 /**
- * Real rules, with the observances that make them interesting.
+ * The dates, observed — not the dates on the wall calendar.
  *
- * `NEAREST_WEEKDAY` is the one that catches people out: 4 July 2026 is a
- * Saturday, so it is observed on Friday 3 July — a weekday whose peak
- * hours disappear. A list of fixed dates could not express that, which
- * is why the model holds rules (TOU-CAL-4).
+ * Every row here is the day the utility actually prices as a holiday,
+ * which is the whole argument for holding dates instead of rules
+ * (TOU-CAL-4). Three of them show why:
+ *
+ * - **3 July 2026** — Independence Day falls on the Saturday, so it is
+ *   taken on the Friday before. A weekday whose peak hours disappear.
+ * - **5 July 2027** — the same holiday falls on the Sunday, so it moves
+ *   the other way, to the Monday after.
+ * - **24 December 2027** — Christmas on a Saturday, taken on Friday the
+ *   24th; the 25th itself is a Saturday and already off-peak.
+ *
+ * A rule saying "4 July, nearest weekday" produces all three, and says
+ * none of them. Nobody reviewing the tariff could see which day their
+ * bill will be cheap.
+ *
+ * Two years, because a set covers a horizon and runs out: a calendar
+ * naming a set whose last date is behind it prices no holidays at all,
+ * which `holidayHorizonProblems` reports and `publishTouCalendar`
+ * refuses. Two years is what the editor is for — the third is typed by
+ * whoever is here in 2028.
  */
-const HOLIDAY_RULES = [
-  { code: "new_year", label: "New Year's Day", kind: "FIXED", month: 1, day: 1, observance: "NEAREST_WEEKDAY" },
-  { code: "memorial_day", label: "Memorial Day", kind: "NTH_WEEKDAY", month: 5, weekday: 1, nth: -1, observance: "NONE" },
-  { code: "independence_day", label: "Independence Day", kind: "FIXED", month: 7, day: 4, observance: "NEAREST_WEEKDAY" },
-  { code: "labor_day", label: "Labor Day", kind: "NTH_WEEKDAY", month: 9, weekday: 1, nth: 1, observance: "NONE" },
-  { code: "thanksgiving", label: "Thanksgiving", kind: "NTH_WEEKDAY", month: 11, weekday: 4, nth: 4, observance: "NONE" },
-  { code: "christmas", label: "Christmas Day", kind: "FIXED", month: 12, day: 25, observance: "NEAREST_WEEKDAY" },
+const HOLIDAYS = [
+  { date: "2026-01-01", name: "New Year's Day" },
+  { date: "2026-05-25", name: "Memorial Day" },
+  { date: "2026-06-19", name: "Juneteenth" },
+  { date: "2026-07-03", name: "Independence Day (observed)" },
+  { date: "2026-09-07", name: "Labor Day" },
+  { date: "2026-11-11", name: "Veterans Day" },
+  { date: "2026-11-26", name: "Thanksgiving Day" },
+  { date: "2026-11-27", name: "Day after Thanksgiving" },
+  { date: "2026-12-25", name: "Christmas Day" },
+  { date: "2027-01-01", name: "New Year's Day" },
+  { date: "2027-05-31", name: "Memorial Day" },
+  { date: "2027-06-18", name: "Juneteenth (observed)" },
+  { date: "2027-07-05", name: "Independence Day (observed)" },
+  { date: "2027-09-06", name: "Labor Day" },
+  { date: "2027-11-11", name: "Veterans Day" },
+  { date: "2027-11-25", name: "Thanksgiving Day" },
+  { date: "2027-11-26", name: "Day after Thanksgiving" },
+  { date: "2027-12-24", name: "Christmas Day (observed)" },
 ];
 
 const PERIODS = [
@@ -83,12 +115,17 @@ const PERIODS = [
   { peakCode: "peak", label: "On-peak" },
 ];
 
+/*
+ * `holiday` is the one code the engine knows by name: `resolveDayType`
+ * matches it before any weekday mapping, so a date in the set named
+ * above gets these hours whatever day of the week it lands on. The other
+ * two codes are the tenant's own and mean nothing to the engine — the
+ * weekday rows are what give them effect.
+ */
 const DAY_TYPES = [
-  { dayTypeCode: "weekday", label: "Weekday", isHoliday: false, weekdays: [1, 2, 3, 4, 5] },
-  { dayTypeCode: "weekend", label: "Weekend", isHoliday: false, weekdays: [6, 7] },
-  // The flag, not the code: TOU-CAL-2 leaves the vocabulary open, so
-  // nothing in the engine may match a literal "holiday".
-  { dayTypeCode: "holiday", label: "Holiday", isHoliday: true, weekdays: [] },
+  { dayTypeCode: "weekday", label: "Weekday", weekdays: [1, 2, 3, 4, 5] },
+  { dayTypeCode: "weekend", label: "Weekend", weekdays: [6, 7] },
+  { dayTypeCode: "holiday", label: "Holiday", weekdays: [] },
 ];
 
 const HOUR = 60;
@@ -123,6 +160,46 @@ function spansFor(seasonIndex, dayTypeCode) {
   ];
 }
 
+/**
+ * The published holiday set, created if this tenant has none by that
+ * name.
+ *
+ * Seeded published, like the calendar: a published calendar may only
+ * name a published set, because a draft set's dates can still change
+ * and the calendar's bills cannot. Re-running the seed reuses whatever
+ * is there rather than adding dates to it — a published set is
+ * immutable, and `putTouHolidays` would refuse the same write from the
+ * API.
+ */
+async function ensureHolidaySet({ p, utilityId }) {
+  const existing = await p.touHolidaySet.findFirst({
+    where: { utilityId, name: HOLIDAY_SET_NAME },
+    orderBy: { effectiveDate: "desc" },
+    select: { id: true, name: true, publishedAt: true, _count: { select: { holidays: true } } },
+  });
+  if (existing) {
+    return { id: existing.id, dates: existing._count.holidays, created: false };
+  }
+
+  const set = await p.touHolidaySet.create({
+    data: {
+      utilityId,
+      name: HOLIDAY_SET_NAME,
+      effectiveDate: EFFECTIVE_DATE,
+      publishedAt: new Date(),
+    },
+  });
+  await p.touHoliday.createMany({
+    data: HOLIDAYS.map((h) => ({
+      utilityId,
+      touHolidaySetId: set.id,
+      holidayDate: new Date(`${h.date}T00:00:00.000Z`),
+      name: h.name,
+    })),
+  });
+  return { id: set.id, dates: HOLIDAYS.length, created: true };
+}
+
 async function seedTouCalendar({ p, utilityId }) {
   const existing = await p.touCalendar.findFirst({
     where: { utilityId, name: CALENDAR_NAME, effectiveDate: EFFECTIVE_DATE },
@@ -151,35 +228,7 @@ async function seedTouCalendar({ p, utilityId }) {
     return { skipped: `season set "${seasonSet.name}" declares no seasons` };
   }
 
-  const holidayList = await p.touHolidayList.upsert({
-    where: { utilityId_name: { utilityId, name: HOLIDAY_LIST_NAME } },
-    update: {},
-    create: { utilityId, name: HOLIDAY_LIST_NAME },
-  });
-  for (const rule of HOLIDAY_RULES) {
-    await p.touHolidayRule.upsert({
-      where: {
-        utilityId_touHolidayListId_code: {
-          utilityId,
-          touHolidayListId: holidayList.id,
-          code: rule.code,
-        },
-      },
-      update: {},
-      create: {
-        utilityId,
-        touHolidayListId: holidayList.id,
-        code: rule.code,
-        label: rule.label,
-        kind: rule.kind,
-        month: rule.month,
-        day: rule.day ?? null,
-        weekday: rule.weekday ?? null,
-        nth: rule.nth ?? null,
-        observance: rule.observance,
-      },
-    });
-  }
+  const holidaySet = await ensureHolidaySet({ p, utilityId });
 
   const calendar = await p.touCalendar.create({
     data: {
@@ -190,7 +239,7 @@ async function seedTouCalendar({ p, utilityId }) {
       // refuses a published schedule pointing at a draft calendar.
       publishedAt: new Date(),
       seasonSetId: seasonSet.id,
-      touHolidayListId: holidayList.id,
+      touHolidaySetId: holidaySet.id,
       timeZone: TIME_ZONE,
       clockBasis: "prevailing",
     },
@@ -218,7 +267,6 @@ async function seedTouCalendar({ p, utilityId }) {
         touCalendarId: calendar.id,
         dayTypeCode: dayType.dayTypeCode,
         label: dayType.label,
-        isHoliday: dayType.isHoliday,
         sortOrder: index,
       },
     });
@@ -262,7 +310,9 @@ async function seedTouCalendar({ p, utilityId }) {
     periods: PERIODS.length,
     dayTypes: DAY_TYPES.length,
     spans: spanCount,
-    holidayRules: HOLIDAY_RULES.length,
+    holidaySetName: HOLIDAY_SET_NAME,
+    holidayDates: holidaySet.dates,
+    holidaySetReused: !holidaySet.created,
     timeZone: TIME_ZONE,
   };
 }

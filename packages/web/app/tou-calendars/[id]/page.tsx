@@ -35,6 +35,16 @@ import {
  * verdict would offer Publish on a calendar the server will refuse.
  */
 
+const selectStyle = {
+  padding: "3px 6px",
+  borderRadius: "var(--radius)",
+  border: "1px solid var(--border)",
+  background: "var(--bg-elevated)",
+  color: "var(--text-primary)",
+  fontSize: "12px",
+  fontFamily: "inherit",
+};
+
 interface Calendar {
   id: string;
   name: string;
@@ -48,7 +58,18 @@ interface Calendar {
     publishedAt: string | null;
     seasons: Array<{ seasonCode: string; label: string }>;
   };
-  touHolidayListId: string | null;
+  touHolidaySetId: string | null;
+  /**
+   * The set itself, when one is named. Its date count is the thing worth
+   * seeing from here: a set that has run out prices no holidays at all,
+   * and the calendar's own validation says so in words.
+   */
+  holidaySet: {
+    id: string;
+    name: string;
+    publishedAt: string | null;
+    _count: { holidays: number };
+  } | null;
   periods: PeriodRow[];
   dayTypes: DayTypeRow[];
   spanGroups: SpanGroup[];
@@ -75,6 +96,9 @@ export default function TouCalendarEditorPage() {
   const [seasonSets, setSeasonSets] = useState<
     Array<{ id: string; name: string; publishedAt: string | null }>
   >([]);
+  const [holidaySets, setHolidaySets] = useState<
+    Array<{ id: string; name: string; publishedAt: string | null; lastDate: string | null }>
+  >([]);
 
   const load = useCallback(async () => {
     try {
@@ -97,7 +121,30 @@ export default function TouCalendarEditorPage() {
       )
       .then((res) => setSeasonSets(res.data ?? []))
       .catch(() => setSeasonSets([]));
+    apiClient
+      .get<{
+        data: Array<{
+          id: string;
+          name: string;
+          publishedAt: string | null;
+          lastDate: string | null;
+        }>;
+      }>("/api/v1/tou-holiday-sets")
+      .then((res) => setHolidaySets(res.data ?? []))
+      .catch(() => setHolidaySets([]));
   }, [calendar?.publishedAt]);
+
+  /** PATCH one field of the header and reload. The two selects share it. */
+  const patch = async (body: Record<string, unknown>, whenItFails: string) => {
+    setActionError(null);
+    try {
+      await apiClient.patch(`/api/v1/tou-calendars/${id}`, body);
+      await load();
+      setRevision((n) => n + 1);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : whenItFails);
+    }
+  };
 
   const afterSave = (updated: Calendar) => {
     setCalendar(updated);
@@ -148,10 +195,18 @@ export default function TouCalendarEditorPage() {
           }).toLowerCase()}
         />
         {published || !canEdit ? (
-          <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-            Seasons: {calendar.seasonSet.name}
-            {calendar.seasonSet.publishedAt === null && " (still a draft)"}
-          </span>
+          <>
+            <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+              Seasons: {calendar.seasonSet.name}
+              {calendar.seasonSet.publishedAt === null && " (still a draft)"}
+            </span>
+            <span data-testid="holiday-set" style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+              Holidays:{" "}
+              {calendar.holidaySet
+                ? `${calendar.holidaySet.name} (${calendar.holidaySet._count.holidays} dates)`
+                : "none — days are classified by weekday alone"}
+            </span>
+          </>
         ) : (
           /*
            * Changeable while the calendar is a draft, which is what a
@@ -159,54 +214,75 @@ export default function TouCalendarEditorPage() {
            * a season the hours are already keyed on, rather than
            * deleting those hours to make the change succeed.
            */
-          <label style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-            Seasons:{" "}
-            <select
-              aria-label="Season set"
-              value={calendar.seasonSet.id}
-              onChange={async (e) => {
-                setActionError(null);
-                try {
-                  await apiClient.patch(`/api/v1/tou-calendars/${id}`, {
-                    seasonSetId: e.target.value,
-                  });
-                  await load();
-                  setRevision((n) => n + 1);
-                } catch (err) {
-                  setActionError(
-                    err instanceof Error ? err.message : "Could not change the season set",
-                  );
+          <>
+            <label style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+              Seasons:{" "}
+              <select
+                aria-label="Season set"
+                value={calendar.seasonSet.id}
+                onChange={(e) =>
+                  patch({ seasonSetId: e.target.value }, "Could not change the season set")
                 }
-              }}
-              style={{
-                padding: "3px 6px",
-                borderRadius: "var(--radius)",
-                border: "1px solid var(--border)",
-                background: "var(--bg-elevated)",
-                color: "var(--text-primary)",
-                fontSize: "12px",
-                fontFamily: "inherit",
-              }}
-            >
-              {seasonSets.length === 0 && (
-                <option value={calendar.seasonSet.id}>{calendar.seasonSet.name}</option>
-              )}
-              {seasonSets.map((set) => (
-                <option key={set.id} value={set.id}>
-                  {set.name}
-                  {set.publishedAt === null ? " (draft)" : ""}
-                </option>
-              ))}
-            </select>
+                style={selectStyle}
+              >
+                {seasonSets.length === 0 && (
+                  <option value={calendar.seasonSet.id}>{calendar.seasonSet.name}</option>
+                )}
+                {seasonSets.map((set) => (
+                  <option key={set.id} value={set.id}>
+                    {set.name}
+                    {set.publishedAt === null ? " (draft)" : ""}
+                  </option>
+                ))}
+              </select>
+              {/*
+                Said beside the control, not only inside it. Publishing
+                refuses a calendar whose set is still a draft (TOU-CAL-10),
+                and an option suffix disappears the moment the list has
+                not loaded — leaving the one warning that explains the
+                refusal invisible.
+              */}
+              {calendar.seasonSet.publishedAt === null && " (still a draft)"}
+            </label>
             {/*
-              Said beside the control, not only inside it. Publishing
-              refuses a calendar whose set is still a draft (TOU-CAL-10),
-              and an option suffix disappears the moment the list has
-              not loaded — leaving the one warning that explains the
-              refusal invisible.
+              Changeable while the calendar is a draft, like the season
+              set. Attaching one creates the reserved `holiday` day type
+              with it, so the hours for those dates are prompted without
+              a setup step; detaching leaves the day type behind for the
+              operator to remove, since deleting hours somebody typed is
+              not a trade a dropdown may make.
             */}
-            {calendar.seasonSet.publishedAt === null && " (still a draft)"}
-          </label>
+            <label style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+              Holidays:{" "}
+              <select
+                aria-label="Holiday set"
+                value={calendar.touHolidaySetId ?? ""}
+                onChange={(e) =>
+                  patch(
+                    { touHolidaySetId: e.target.value === "" ? null : e.target.value },
+                    "Could not change the holiday set",
+                  )
+                }
+                style={selectStyle}
+              >
+                <option value="">None — weekday alone</option>
+                {holidaySets.length === 0 && calendar.holidaySet && (
+                  <option value={calendar.holidaySet.id}>{calendar.holidaySet.name}</option>
+                )}
+                {holidaySets.map((set) => (
+                  <option key={set.id} value={set.id}>
+                    {set.name}
+                    {set.publishedAt === null
+                      ? " (draft)"
+                      : set.lastDate
+                        ? ` (through ${set.lastDate.slice(0, 10)})`
+                        : " (no dates)"}
+                  </option>
+                ))}
+              </select>
+              {calendar.holidaySet?.publishedAt === null && " (still a draft)"}
+            </label>
+          </>
         )}
         {!published && canEdit && (
           <button
@@ -321,13 +397,13 @@ export default function TouCalendarEditorPage() {
           key={`day-types-${revision}`}
           dayTypes={calendar.dayTypes}
           readOnly={readOnly}
+          holidaySetName={calendar.holidaySet?.name ?? null}
           onSave={async (rows) =>
             afterSave(
               await apiClient.put<Calendar>(`/api/v1/tou-calendars/${id}/day-types`, {
                 dayTypes: rows.map((r) => ({
                   dayTypeCode: r.dayTypeCode,
                   label: r.label,
-                  isHoliday: r.isHoliday,
                   weekdays: r.weekdays,
                 })),
               }),

@@ -17,12 +17,17 @@ import {
  * a status code and a sentence they can act on.
  *
  * The holiday case is the centre of the file. **4 July 2026 is a
- * Saturday**, so a `NEAREST_WEEKDAY` rule observes it on Friday 3 July —
- * a date whose weekday says "weekday day type" and whose holiday list
- * says otherwise. That is the interaction the spec calls the part people
- * get wrong (TOU-UI-1c), and a calendar that resolved it the other way
- * would price a peak afternoon at peak on a day the tariff calls
- * off-peak, with nothing raised.
+ * Saturday**, and this utility takes the Friday — so the set holds
+ * Friday 3 July, a date whose weekday says "weekday day type" and whose
+ * holiday set says otherwise. That is the interaction the spec calls the
+ * part people get wrong (TOU-UI-1c), and a calendar that resolved it the
+ * other way would price a peak afternoon at peak on a day the tariff
+ * calls off-peak, with nothing raised.
+ *
+ * The observance is typed into the set, not computed from a rule. What
+ * is tested here is therefore the resolution — does an explicit date
+ * outrank a weekday — and not an observance calculation, which no longer
+ * exists.
  */
 
 let pgContainer: StartedPostgreSqlContainer;
@@ -73,7 +78,7 @@ afterAll(async () => {
 
 let publishedSeasonSetId: string;
 let draftSeasonSetId: string;
-let holidayListId: string;
+let holidaySetId: string;
 
 beforeEach(() =>
   seedAsPlatform(async () => {
@@ -85,8 +90,10 @@ beforeEach(() =>
     await prisma.$executeRawUnsafe("DELETE FROM tou_period");
     await prisma.$executeRawUnsafe("UPDATE rate_schedule SET tou_calendar_id = NULL");
     await prisma.$executeRawUnsafe("DELETE FROM tou_calendar");
-    await prisma.$executeRawUnsafe("DELETE FROM tou_holiday_rule");
-    await prisma.$executeRawUnsafe("DELETE FROM tou_holiday_list");
+    // After the calendars: `tou_calendar_holiday_set_id_fkey` is
+    // RESTRICT, so a set with a calendar still naming it cannot go.
+    await prisma.$executeRawUnsafe("DELETE FROM tou_holiday");
+    await prisma.$executeRawUnsafe("DELETE FROM tou_holiday_set");
     await prisma.$executeRawUnsafe("DELETE FROM season");
     await prisma.$executeRawUnsafe("DELETE FROM season_set");
 
@@ -160,35 +167,56 @@ beforeEach(() =>
     });
     draftSeasonSetId = draft.id;
 
-    const list = await prisma.touHolidayList.create({
-      data: { utilityId: TENANT_A, name: "Utility holidays" },
+    /*
+     * Explicit dates, which is what a holiday is now. 4 July 2026 falls
+     * on a Saturday and this utility observes it on the Friday — the
+     * observance is applied here, by whoever knows it, rather than by a
+     * rule nobody checked.
+     */
+    const set = await prisma.touHolidaySet.create({
+      data: {
+        utilityId: TENANT_A,
+        name: "Observed holidays",
+        effectiveDate: new Date(Date.UTC(2026, 0, 1)),
+        publishedAt: new Date(),
+      },
     });
-    await prisma.touHolidayRule.createMany({
+    await prisma.touHoliday.createMany({
       data: [
         {
           utilityId: TENANT_A,
-          touHolidayListId: list.id,
-          code: "independence_day",
-          label: "Independence Day",
-          kind: "FIXED",
-          month: 7,
-          day: 4,
-          observance: "NEAREST_WEEKDAY",
+          touHolidaySetId: set.id,
+          holidayDate: new Date(Date.UTC(2026, 6, 3)),
+          name: "Independence Day (observed)",
         },
         {
           utilityId: TENANT_A,
-          touHolidayListId: list.id,
-          code: "thanksgiving",
-          label: "Thanksgiving",
-          kind: "NTH_WEEKDAY",
-          month: 11,
-          weekday: 4,
-          nth: 4,
-          observance: "NONE",
+          touHolidaySetId: set.id,
+          holidayDate: new Date(Date.UTC(2026, 10, 26)),
+          name: "Thanksgiving",
+        },
+        /*
+         * Next year as well, because several tests here publish a 2027
+         * version of the calendar and a set is refused once its last
+         * date is behind the calendar's start. That refusal is the
+         * point of the horizon — a fixture covering one year would make
+         * every version test fail for a reason that is not theirs.
+         */
+        {
+          utilityId: TENANT_A,
+          touHolidaySetId: set.id,
+          holidayDate: new Date(Date.UTC(2027, 6, 5)),
+          name: "Independence Day (observed)",
+        },
+        {
+          utilityId: TENANT_A,
+          touHolidaySetId: set.id,
+          holidayDate: new Date(Date.UTC(2027, 10, 25)),
+          name: "Thanksgiving",
         },
       ],
     });
-    holidayListId = list.id;
+    holidaySetId = set.id;
   }),
 );
 
@@ -198,7 +226,7 @@ async function createCalendar(over: Record<string, unknown> = {}) {
     name: "TOD 5-8pm",
     effectiveDate: "2026-06-01",
     seasonSetId: publishedSeasonSetId,
-    touHolidayListId: holidayListId,
+    touHolidaySetId: holidaySetId,
     timeZone: "America/Los_Angeles",
     ...over,
   });
@@ -211,10 +239,16 @@ const PERIODS = { periods: [
   { peakCode: "peak", label: "Peak" },
 ] };
 
+/*
+ * The three the calendar already has, resubmitted. `holiday` is the
+ * reserved code and `createCalendar` names a holiday set, so the row
+ * exists before this is sent — submitting it is keeping it, not creating
+ * it, which is the only way a tenant may have it.
+ */
 const DAY_TYPES = { dayTypes: [
-  { dayTypeCode: "weekday", label: "Weekday", isHoliday: false, weekdays: [1, 2, 3, 4, 5] },
-  { dayTypeCode: "weekend", label: "Weekend", isHoliday: false, weekdays: [6, 7] },
-  { dayTypeCode: "holiday", label: "Holiday", isHoliday: true, weekdays: [] },
+  { dayTypeCode: "weekday", label: "Weekday", weekdays: [1, 2, 3, 4, 5] },
+  { dayTypeCode: "weekend", label: "Weekend", weekdays: [6, 7] },
+  { dayTypeCode: "holiday", label: "Holiday", weekdays: [] },
 ] };
 
 /** Every (season, day type) covered — a calendar that can be published. */
@@ -346,17 +380,21 @@ describe("the collections that cannot be edited row by row", () => {
      * `tou_slot_day_type_id_fkey` cascades, which is right for deleting
      * a calendar and wrong for a typo in a code — it would discard an
      * afternoon's work with no warning.
+     *
+     * Weekend is the one dropped, not holiday: holiday is refused a step
+     * earlier for being the reserved row, which would prove nothing
+     * about the spans.
      */
     const id = await completeCalendar();
     const res = await inject("PUT", `/api/v1/tou-calendars/${id}/day-types`, {
       dayTypes: [
-        { dayTypeCode: "weekday", label: "Weekday", isHoliday: false, weekdays: [1, 2, 3, 4, 5] },
-        { dayTypeCode: "weekend", label: "Weekend", isHoliday: false, weekdays: [6, 7] },
+        { dayTypeCode: "weekday", label: "Weekday", weekdays: [1, 2, 3, 4, 5, 6, 7] },
+        { dayTypeCode: "holiday", label: "Holiday", weekdays: [] },
       ],
     });
     expect(res.statusCode).toBe(409);
     expect(body(res).error.code).toBe("TOU_DAY_TYPE_HAS_SPANS");
-    expect(body(res).error.message).toMatch(/Holiday/);
+    expect(body(res).error.message).toMatch(/Weekend/);
   });
 
   it("moves a weekday from one day type to another", async () => {
@@ -369,27 +407,125 @@ describe("the collections that cannot be edited row by row", () => {
     const id = await completeCalendar();
     const res = await inject("PUT", `/api/v1/tou-calendars/${id}/day-types`, {
       dayTypes: [
-        { dayTypeCode: "weekday", label: "Weekday", isHoliday: false, weekdays: [1, 2, 3, 4] },
-        { dayTypeCode: "weekend", label: "Weekend", isHoliday: false, weekdays: [5, 6, 7] },
-        { dayTypeCode: "holiday", label: "Holiday", isHoliday: true, weekdays: [] },
+        { dayTypeCode: "weekday", label: "Weekday", weekdays: [1, 2, 3, 4] },
+        { dayTypeCode: "weekend", label: "Weekend", weekdays: [5, 6, 7] },
+        { dayTypeCode: "holiday", label: "Holiday", weekdays: [] },
       ],
     });
     expect(res.statusCode).toBe(200);
     const weekend = body(res).dayTypes.find((d: { dayTypeCode: string }) => d.dayTypeCode === "weekend");
     expect(weekend.weekdays).toEqual([5, 6, 7]);
   });
+});
 
-  it("refuses a second holiday day type", async () => {
-    const id = await completeCalendar();
-    const res = await inject("PUT", `/api/v1/tou-calendars/${id}/day-types`, {
+/**
+ * `holiday` is the one code the system owns, and the engine finds that
+ * day type by matching it. These are the three ways that could go wrong,
+ * and the reason all three are refused rather than just the first: a
+ * renamed or removed holiday day type stops being found, and then every
+ * date in the set bills as an ordinary weekday with nothing raised.
+ *
+ * There is no constraint for this. A CHECK cannot tell the system's row
+ * from a tenant's — both are `tou_day_type` rows with the same code —
+ * so the reservation lives where the intent is known.
+ */
+describe("the reserved holiday day type", () => {
+  it("refuses a tenant creating one, because it is created with the set", async () => {
+    const created = await createCalendar({ touHolidaySetId: null });
+    const res = await inject("PUT", `/api/v1/tou-calendars/${created.id}/day-types`, {
       dayTypes: [
-        { dayTypeCode: "weekday", label: "Weekday", isHoliday: false, weekdays: [1, 2, 3, 4, 5] },
-        { dayTypeCode: "weekend", label: "Weekend", isHoliday: true, weekdays: [6, 7] },
-        { dayTypeCode: "holiday", label: "Holiday", isHoliday: true, weekdays: [] },
+        { dayTypeCode: "weekday", label: "Weekday", weekdays: [1, 2, 3, 4, 5] },
+        { dayTypeCode: "weekend", label: "Weekend", weekdays: [6, 7] },
+        { dayTypeCode: "holiday", label: "Public holiday", weekdays: [] },
       ],
     });
     expect(res.statusCode).toBe(400);
-    expect(body(res).error.code).toBe("MULTIPLE_HOLIDAY_DAY_TYPES");
+    expect(body(res).error.code).toBe("RESERVED_DAY_TYPE_CODE");
+    // The message says where it comes from, since the operator wants
+    // the thing they were trying to build.
+    expect(body(res).error.message).toMatch(/names a holiday set/);
+  });
+
+  it("refuses renaming its code while a holiday set is named", async () => {
+    // Retyping the code is the quiet one: the row survives, the hours
+    // survive, and nothing resolves to it ever again.
+    const id = await completeCalendar();
+    const res = await inject("PUT", `/api/v1/tou-calendars/${id}/day-types`, {
+      dayTypes: [
+        { dayTypeCode: "weekday", label: "Weekday", weekdays: [1, 2, 3, 4, 5] },
+        { dayTypeCode: "weekend", label: "Weekend", weekdays: [6, 7] },
+        { dayTypeCode: "observed_holiday", label: "Holiday", weekdays: [] },
+      ],
+    });
+    expect(res.statusCode).toBe(409);
+    expect(body(res).error.code).toBe("RESERVED_DAY_TYPE_REQUIRED");
+    expect(body(res).error.message).toMatch(/Detach the set first/);
+  });
+
+  it("allows its label to change, which carries no meaning to the engine", async () => {
+    const id = await completeCalendar();
+    const res = await inject("PUT", `/api/v1/tou-calendars/${id}/day-types`, {
+      dayTypes: [
+        { dayTypeCode: "weekday", label: "Weekday", weekdays: [1, 2, 3, 4, 5] },
+        { dayTypeCode: "weekend", label: "Weekend", weekdays: [6, 7] },
+        { dayTypeCode: "holiday", label: "Observed holiday", weekdays: [] },
+      ],
+    });
+    expect(res.statusCode).toBe(200);
+    const holiday = body(res).dayTypes.find(
+      (d: { dayTypeCode: string }) => d.dayTypeCode === "holiday",
+    );
+    expect(holiday.label).toBe("Observed holiday");
+  });
+
+  it("arrives with the holiday set, so no setup step asks for it", async () => {
+    /*
+     * The flag this replaced had to be set before anything could say
+     * what the holidays were: nominate a day type as "the holiday one",
+     * a question that meant nothing to the person being asked.
+     */
+    const created = await createCalendar();
+    const res = await inject("GET", `/api/v1/tou-calendars/${created.id}`);
+    const holiday = body(res).dayTypes.find(
+      (d: { dayTypeCode: string }) => d.dayTypeCode === "holiday",
+    );
+    expect(holiday).toMatchObject({ label: "Holiday", weekdays: [], isHolidayDayType: true });
+  });
+
+  it("arrives when a set is attached to a calendar that had none", async () => {
+    const created = await createCalendar({ touHolidaySetId: null });
+    const before = await inject("GET", `/api/v1/tou-calendars/${created.id}`);
+    expect(body(before).dayTypes.map((d: { dayTypeCode: string }) => d.dayTypeCode)).toEqual([
+      "weekday",
+      "weekend",
+    ]);
+
+    const patched = await inject("PATCH", `/api/v1/tou-calendars/${created.id}`, {
+      touHolidaySetId: holidaySetId,
+    });
+    expect(patched.statusCode).toBe(200);
+
+    const after = await inject("GET", `/api/v1/tou-calendars/${created.id}`);
+    expect(body(after).dayTypes.map((d: { dayTypeCode: string }) => d.dayTypeCode)).toContain(
+      "holiday",
+    );
+  });
+
+  it("can be removed once no set is named, which is what detaching means", async () => {
+    const created = await createCalendar();
+    await inject("PATCH", `/api/v1/tou-calendars/${created.id}`, { touHolidaySetId: null });
+
+    const res = await inject("PUT", `/api/v1/tou-calendars/${created.id}/day-types`, {
+      dayTypes: [
+        { dayTypeCode: "weekday", label: "Weekday", weekdays: [1, 2, 3, 4, 5] },
+        { dayTypeCode: "weekend", label: "Weekend", weekdays: [6, 7] },
+      ],
+    });
+    expect(res.statusCode).toBe(200);
+    expect(body(res).dayTypes.map((d: { dayTypeCode: string }) => d.dayTypeCode)).toEqual([
+      "weekday",
+      "weekend",
+    ]);
   });
 });
 
@@ -413,10 +549,16 @@ describe("the spot check (TOU-UI-1c)", () => {
 
   it("applies the holiday day type on the day a Saturday holiday is observed", async () => {
     /*
-     * 4 July 2026 is a Saturday, so NEAREST_WEEKDAY observes it on
-     * Friday 3 July. A Friday afternoon that would otherwise be peak is
-     * off-peak, and the sentence has to say why — this is the
+     * 4 July 2026 is a Saturday and this utility takes the Friday, so
+     * the set holds 3 July. A Friday afternoon that would otherwise be
+     * peak is off-peak, and the sentence has to say why — this is the
      * interaction the spec says people get wrong.
+     *
+     * The sentence names the date's own holiday and the weekday it
+     * outranks. It no longer mentions a nominal 4 July, because there
+     * is no longer a rule that produced the 3rd from the 4th: the row
+     * says the 3rd, and what a reader needs is which day type won and
+     * over what.
      */
     const id = await completeCalendar();
     const res = await inject(
@@ -427,8 +569,12 @@ describe("the spot check (TOU-UI-1c)", () => {
     expect(answer.ok).toBe(true);
     expect(answer.dayTypeCode).toBe("holiday");
     expect(answer.peakCode).toBe("off_peak");
-    expect(answer.why).toMatch(/Independence Day/);
-    expect(answer.why).toMatch(/2026-07-04/);
+    // The reason is in the sentence, not in a parallel enum field: the
+    // sentence is what the screen shows and nothing else reads it.
+    expect(answer.why).toMatch(/Independence Day \(observed\)/);
+    expect(answer.why).toMatch(/holiday set/);
+    // The weekday it beat, which is the whole surprise.
+    expect(answer.why).toMatch(/Friday/);
   });
 
   it("reports the hour it cannot classify rather than guessing one", async () => {
@@ -598,63 +744,108 @@ describe("publishing", () => {
   });
 });
 
-describe("the holiday list's resolved dates (TOU-UI-2)", () => {
-  /*
-   * A rule nobody can see the output of is a rule nobody will trust,
-   * and the observance rules are where the surprises live: "4 July,
-   * nearest weekday" does not tell anybody that 2026 lands on a
-   * Saturday and moves the holiday to the Friday — which moves a peak
-   * weekday to off-peak.
-   */
-  it("resolves three years and marks the dates an observance rule moved", async () => {
-    const res = await inject(
-      "GET",
-      `/api/v1/tou-holiday-lists/${holidayListId}/resolved?fromYear=2026`,
-    );
-    expect(res.statusCode).toBe(200);
-    const payload = body(res);
-    expect(payload.fromYear).toBe(2026);
-    expect(payload.toYear).toBe(2028);
-
-    const independence = payload.resolved.filter(
-      (r: { code: string }) => r.code === "independence_day",
-    );
-    expect(independence).toHaveLength(3);
-
-    // 2026: 4 July is a Saturday, so it is observed on Friday the 3rd.
-    const y2026 = independence.find((r: { year: number }) => r.year === 2026);
-    expect(y2026).toMatchObject({ actual: "2026-07-04", observed: "2026-07-03", moved: true });
-
-    // 2027: 4 July is a Sunday → the Monday after.
-    const y2027 = independence.find((r: { year: number }) => r.year === 2027);
-    expect(y2027).toMatchObject({ actual: "2027-07-04", observed: "2027-07-05", moved: true });
-
-    // 2028: a Tuesday, so nothing moves and `moved` must say so.
-    const y2028 = independence.find((r: { year: number }) => r.year === 2028);
-    expect(y2028).toMatchObject({ actual: "2028-07-04", observed: "2028-07-04", moved: false });
+/**
+ * What the calendar says about the set it names.
+ *
+ * Explicit dates cost one thing a rule did not: a set covers a horizon
+ * and ends. A calendar in force past its set's last date prices every
+ * holiday after that as an ordinary weekday, with nothing raised — so
+ * the editor reports it and publishing refuses it.
+ */
+describe("the holiday set a calendar names", () => {
+  it("is reported on the editor payload, with its date count", async () => {
+    const created = await createCalendar();
+    const res = await inject("GET", `/api/v1/tou-calendars/${created.id}`);
+    expect(body(res).holidaySet).toMatchObject({
+      id: holidaySetId,
+      name: "Observed holidays",
+      _count: { holidays: 4 },
+    });
   });
 
-  it("resolves an nth-weekday rule to the right date", async () => {
-    const res = await inject(
-      "GET",
-      `/api/v1/tou-holiday-lists/${holidayListId}/resolved?fromYear=2026`,
-    );
-    const thanksgiving = body(res).resolved.find(
-      (r: { code: string; year: number }) => r.code === "thanksgiving" && r.year === 2026,
-    );
-    // The fourth Thursday of November 2026 is the 26th.
-    expect(thanksgiving).toMatchObject({ observed: "2026-11-26", moved: false });
+  it("is null when none is named, not absent", async () => {
+    // A tariff that does not distinguish holidays is a real shape, and
+    // not ours to decide. The screen has to be able to say so.
+    const created = await createCalendar({ touHolidaySetId: null });
+    const res = await inject("GET", `/api/v1/tou-calendars/${created.id}`);
+    expect(body(res).holidaySet).toBeNull();
+    expect(body(res).touHolidaySetId).toBeNull();
   });
 
-  it("lists the rules beside their output", async () => {
-    const res = await inject(
-      "GET",
-      `/api/v1/tou-holiday-lists/${holidayListId}/resolved?fromYear=2026`,
-    );
-    expect(body(res).rules.map((r: { code: string }) => r.code).sort()).toEqual([
-      "independence_day",
-      "thanksgiving",
-    ]);
+  it("refuses a set that does not exist", async () => {
+    const res = await inject("POST", "/api/v1/tou-calendars", {
+      name: "Typo",
+      effectiveDate: "2026-06-01",
+      seasonSetId: publishedSeasonSetId,
+      touHolidaySetId: "00000000-0000-4000-8000-0000000000ff",
+      timeZone: "America/Los_Angeles",
+    });
+    expect(res.statusCode).toBe(400);
+    expect(body(res).error.code).toBe("HOLIDAY_SET_MISSING");
+  });
+
+  it("reports a set whose dates all fall before the calendar takes effect", async () => {
+    /*
+     * The horizon, stated as a problem rather than left to be noticed
+     * on a bill. The set runs to 2027 and the calendar takes effect in
+     * 2030, so nothing it prices would ever be a holiday.
+     */
+    const created = await createCalendar({ effectiveDate: "2030-06-01" });
+    const res = await inject("GET", `/api/v1/tou-calendars/${created.id}/validation`);
+    expect(body(res).problems.join("\n")).toMatch(/2027-11-25/);
+    expect(body(res).problems.join("\n")).toMatch(/no day it prices would be a holiday/);
+  });
+
+  it("refuses to publish a calendar whose set has run out", async () => {
+    const created = await createCalendar({ effectiveDate: "2030-06-01" });
+    await inject("PUT", `/api/v1/tou-calendars/${created.id}/periods`, PERIODS);
+    await inject("PUT", `/api/v1/tou-calendars/${created.id}/day-types`, DAY_TYPES);
+    await fillSpans(created.id);
+
+    const res = await inject("POST", `/api/v1/tou-calendars/${created.id}/publish`);
+    expect(res.statusCode).toBe(409);
+    expect(body(res).error.message).toMatch(/would be a holiday/);
+  });
+
+  it("refuses to publish a calendar whose set is still a draft", async () => {
+    /*
+     * Same argument as the season set: a draft set's dates can still
+     * change, so the hours would price different days than the ones
+     * somebody checked.
+     */
+    const { prisma } = prismaImports;
+    /*
+     * Awaited inside the scope, not returned out of it. A
+     * `PrismaPromise` is lazy, so `seedAsPlatform(() => prisma.x.create())`
+     * executes after the platform scope has already exited.
+     */
+    const draftSet = await seedAsPlatform(async () => {
+      const set = await prisma.touHolidaySet.create({
+        data: {
+          utilityId: TENANT_A,
+          name: "Next year, in progress",
+          effectiveDate: new Date(Date.UTC(2027, 0, 1)),
+        },
+      });
+      await prisma.touHoliday.create({
+        data: {
+          utilityId: TENANT_A,
+          touHolidaySetId: set.id,
+          holidayDate: new Date(Date.UTC(2027, 6, 5)),
+          name: "Independence Day (observed)",
+        },
+      });
+      return set;
+    });
+
+    const created = await createCalendar({ touHolidaySetId: draftSet.id });
+    await inject("PUT", `/api/v1/tou-calendars/${created.id}/periods`, PERIODS);
+    await inject("PUT", `/api/v1/tou-calendars/${created.id}/day-types`, DAY_TYPES);
+    await fillSpans(created.id);
+
+    const res = await inject("POST", `/api/v1/tou-calendars/${created.id}/publish`);
+    expect(res.statusCode).toBe(409);
+    expect(body(res).error.code).toBe("HOLIDAY_SET_NOT_PUBLISHED");
   });
 });
 
@@ -780,16 +971,20 @@ describe("what a new calendar starts with", () => {
     const created = await createCalendar();
     const res = await inject("GET", `/api/v1/tou-calendars/${created.id}`);
     const dayTypes = body(res).dayTypes as Array<{ dayTypeCode: string; weekdays: number[] }>;
-    expect(dayTypes.map((d) => d.dayTypeCode)).toEqual(["weekday", "weekend"]);
+    expect(dayTypes.map((d) => d.dayTypeCode)).toEqual(["weekday", "weekend", "holiday"]);
     expect(dayTypes.flatMap((d) => d.weekdays).sort()).toEqual([1, 2, 3, 4, 5, 6, 7]);
   });
 
-  it("names no holiday day type, which is a tariff shape and not an omission", async () => {
-    // A calendar with a holiday list and no holiday day type classifies
-    // holidays by their weekday. Real, and not ours to decide.
-    const created = await createCalendar();
+  it("has no holiday day type when it names no set, which is a tariff shape", async () => {
+    // A tariff that does not distinguish holidays is real, and not ours
+    // to decide. It is then never asked for holiday hours either.
+    const created = await createCalendar({ touHolidaySetId: null });
     const res = await inject("GET", `/api/v1/tou-calendars/${created.id}`);
-    expect(body(res).dayTypes.some((d: { isHoliday: boolean }) => d.isHoliday)).toBe(false);
+    expect(body(res).dayTypes.map((d: { dayTypeCode: string }) => d.dayTypeCode)).toEqual([
+      "weekday",
+      "weekend",
+    ]);
+    expect(body(res).spanGroups).toHaveLength(4);
   });
 
   it("leaves the defaults editable like anything else", async () => {

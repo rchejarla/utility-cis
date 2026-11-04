@@ -8,9 +8,9 @@ import { periodColour } from "./day-strip";
  * (spec 26, TOU-CAL-1 and TOU-CAL-2).
  *
  * Both are saved as whole lists, because both carry invariants the row
- * cannot see — exactly one holiday day type, and the seven weekdays
- * claimed exactly once between them. Moving Saturday from weekday to
- * weekend is not expressible as two row edits at all.
+ * cannot see — the seven weekdays claimed exactly once between them, and
+ * the periods tiling each day exactly once. Moving Saturday from weekday
+ * to weekend is not expressible as two row edits at all.
  */
 
 export interface PeriodRow {
@@ -21,7 +21,12 @@ export interface PeriodRow {
 export interface DayTypeRow {
   dayTypeCode: string;
   label: string;
-  isHoliday: boolean;
+  /**
+   * `holiday`, the one code the system owns. Derived by the server from
+   * the code itself and sent back so the screen does not have to know
+   * the literal; a row added here is never one.
+   */
+  isHolidayDayType?: boolean;
   weekdays: number[];
 }
 
@@ -289,10 +294,13 @@ export function PeriodsEditor({
 export function DayTypesEditor({
   dayTypes,
   readOnly,
+  holidaySetName,
   onSave,
 }: {
   dayTypes: DayTypeRow[];
   readOnly: boolean;
+  /** The set whose dates reach the holiday row, or null if none is named. */
+  holidaySetName: string | null;
   onSave: (rows: DayTypeRow[]) => Promise<void>;
 }) {
   const [rows, setRows] = useState<DayTypeRow[]>(dayTypes);
@@ -350,7 +358,11 @@ export function DayTypesEditor({
     <Card
       testId="day-types-editor"
       title="Day types"
-      hint="Which kinds of day this calendar distinguishes. Every weekday has to belong to exactly one of them, and at most one can be the holiday type."
+      hint={
+        holidaySetName
+          ? `Which kinds of day this calendar distinguishes. Every weekday has to belong to exactly one of them, and the dates in "${holidaySetName}" take the holiday row's hours whatever weekday they fall on.`
+          : "Which kinds of day this calendar distinguishes. Every weekday has to belong to exactly one of them."
+      }
     >
       <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
         <thead>
@@ -358,17 +370,26 @@ export function DayTypesEditor({
             <th style={{ padding: "2px 4px 6px 0", fontWeight: 400 }}>Code</th>
             <th style={{ padding: "2px 4px 6px", fontWeight: 400 }}>Label</th>
             <th style={{ padding: "2px 4px 6px", fontWeight: 400 }}>Days</th>
-            <th style={{ padding: "2px 4px 6px", fontWeight: 400 }}>Holiday</th>
             <th />
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, index) => (
+          {rows.map((row, index) => {
+            /*
+             * The holiday row is the system's. Its code is what the
+             * engine matches to find it, so retyping it is how a tariff
+             * silently stops observing holidays — the server refuses
+             * that, and a locked box is the same answer given before
+             * somebody types.
+             */
+            const reserved = row.isHolidayDayType === true;
+            return (
             <tr key={index}>
               <td style={{ padding: "2px 4px 2px 0", width: "18%" }}>
                 <input
                   aria-label="Day type code"
-                  disabled={readOnly}
+                  disabled={readOnly || reserved}
+                  title={reserved ? "The holiday set's dates resolve to this code." : undefined}
                   style={{
                     ...inputStyle,
                     fontFamily: "monospace",
@@ -398,6 +419,19 @@ export function DayTypesEditor({
                 />
               </td>
               <td style={{ padding: "2px 4px" }}>
+                {reserved ? (
+                  /*
+                   * No weekday buttons. A weekday ticked here would
+                   * hand that whole weekday to the holiday row — every
+                   * Friday off-peak, not the four Fridays the utility
+                   * closes — and nothing in the schema refuses it.
+                   */
+                  <span data-testid="holiday-days" style={{ color: "var(--text-muted)" }}>
+                    {holidaySetName
+                      ? `The dates in "${holidaySetName}"`
+                      : "No holiday set is named, so no date reaches this row"}
+                  </span>
+                ) : (
                 <div style={{ display: "flex", gap: "2px", flexWrap: "wrap" }}>
                   {WEEKDAYS.map((day) => {
                     const on = row.weekdays.includes(day.iso);
@@ -425,36 +459,16 @@ export function DayTypesEditor({
                     );
                   })}
                 </div>
-              </td>
-              <td style={{ padding: "2px 4px", textAlign: "center" }}>
-                {/*
-                  A flag and not a code, because TOU-CAL-2 leaves the
-                  day-type vocabulary open — a tenant may call theirs
-                  `observed_holiday` or add a Saturday type — so nothing
-                  may match a literal "holiday". Without the flag, every
-                  holiday would classify as an ordinary weekday and
-                  nothing would say so.
-                */}
-                <input
-                  type="checkbox"
-                  aria-label={`${row.dayTypeCode || "This day type"} is the holiday type`}
-                  disabled={readOnly}
-                  checked={row.isHoliday}
-                  onChange={(e) =>
-                    change(
-                      rows.map((r, i) =>
-                        i === index
-                          ? { ...r, isHoliday: e.target.checked }
-                          : e.target.checked
-                            ? { ...r, isHoliday: false }
-                            : r,
-                      ),
-                    )
-                  }
-                />
+                )}
               </td>
               <td style={{ padding: "2px 0 2px 4px", textAlign: "right" }}>
-                {!readOnly && (
+                {/*
+                  Removable only once no set is named, which is the
+                  server's rule too: the holiday row is where those
+                  dates get their hours, so removing it while they point
+                  here would price every one of them as a weekday.
+                */}
+                {!readOnly && !(reserved && holidaySetName !== null) && (
                   <button
                     type="button"
                     aria-label="Remove this day type"
@@ -472,7 +486,8 @@ export function DayTypesEditor({
                 )}
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
 
@@ -504,9 +519,7 @@ export function DayTypesEditor({
           <button
             type="button"
             style={secondaryButton}
-            onClick={() =>
-              change([...rows, { dayTypeCode: "", label: "", isHoliday: false, weekdays: [] }])
-            }
+            onClick={() => change([...rows, { dayTypeCode: "", label: "", weekdays: [] }])}
           >
             Add a day type
           </button>

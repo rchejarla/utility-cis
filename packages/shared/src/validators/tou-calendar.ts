@@ -3,6 +3,12 @@ import { z } from "zod";
 /**
  * Time-of-use calendars (spec 26, §2 and §5).
  *
+ * `holiday` is the one reserved day-type code: the system creates it
+ * when a calendar names a holiday set, and the engine resolves a
+ * holiday date to it. Every other code is the tenant's own — Saturday
+ * priced apart from Sunday is a real tariff. The reservation is
+ * enforced in the service, which knows whose row is whose.
+ *
  * A calendar is versioned and published the way a rate schedule is, and
  * for the same reason: changing which hours are on-peak changes what a
  * bill costs. A draft is editable; a published version is not. There is
@@ -35,8 +41,13 @@ export const createTouCalendarSchema = z
     name: z.string().min(1).max(100),
     effectiveDate: z.string().date(),
     seasonSetId: z.string().uuid(),
-    /** Omitted by a tenant whose tariff does not distinguish holidays. */
-    touHolidayListId: z.string().uuid().nullish(),
+    /**
+     * Omitted by a tariff that does not distinguish holidays, which is
+     * then never asked for holiday hours. Naming a set also creates the
+     * reserved `holiday` day type, so the hours are prompted without a
+     * setup step.
+     */
+    touHolidaySetId: z.string().uuid().nullish(),
     /**
      * An IANA name. Not validated against a list here — the database
      * checks the shape and the service resolves the name through `Intl`,
@@ -98,15 +109,6 @@ export const putTouDayTypesSchema = z
           .object({
             dayTypeCode: z.string().min(1).max(50),
             label: z.string().min(1).max(100),
-            /**
-             * Why this is a flag and not the code: TOU-CAL-2 leaves the
-             * vocabulary open ("at least weekday, weekend and holiday. A
-             * tenant may define more"), so no code may be matched in
-             * code. A tenant coding theirs `observed_holiday` would
-             * otherwise have every holiday classified as an ordinary
-             * weekday with nothing raised.
-             */
-            isHoliday: z.boolean().default(false),
             /** Empty for a holiday day type, which no weekday claims. */
             weekdays: z.array(isoWeekday).default([]),
           })
@@ -142,7 +144,7 @@ export const putTouSpansSchema = z
 
 /**
  * Days that take a day type other than the one their weekday and the
- * holiday list would give them — a one-off closure, a local event.
+ * holiday set would give them — a one-off closure, a local event.
  * `resolveDayType` already reads these; this is what puts them there.
  */
 export const putTouDayOverridesSchema = z

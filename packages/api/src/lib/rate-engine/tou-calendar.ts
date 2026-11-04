@@ -20,7 +20,6 @@
  */
 
 import { resolveSeason, type SeasonDefinition } from "./seasons.js";
-import type { IsoWeekday } from "./holidays.js";
 
 /** Minutes in a day; also the exclusive end of the last span. */
 const DAY_MINUTES = 1440;
@@ -37,27 +36,35 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
+/**
+ * The one day-type code the system owns.
+ *
+ * Every other code is the tenant's own and the vocabulary stays open —
+ * Saturday priced apart from Sunday is a real tariff. Reserving exactly
+ * one lets a holiday date resolve to a day type by name, which is what
+ * the `isHoliday` boolean used to do with a partial unique index and a
+ * validator rule behind it.
+ */
+export const HOLIDAY_DAY_TYPE_CODE = "holiday";
+
+/**
+ * 1 = Monday … 7 = Sunday.
+ *
+ * Declared here now that the holiday rules are gone: a day type's
+ * weekday coverage is the only thing left that uses it, and this is
+ * where day types are defined.
+ */
+export type IsoWeekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+
 export interface TouDayTypeDefinition {
   /**
-   * The tenant's own name for a kind of day. **Not a registered code**:
-   * TOU-CAL-2 requires at least weekday, weekend and holiday and lets a
-   * tenant define more (Saturday, Sunday), so the set is open and
-   * nothing in code may match on a literal value.
+   * The tenant's own code, except for `holiday` — see
+   * `HOLIDAY_DAY_TYPE_CODE`. The vocabulary stays open because Saturday
+   * priced apart from Sunday is a real tariff.
    */
   dayTypeCode: string;
-  /** The ISO weekdays this day type covers. Empty is legal — see `isHoliday`. */
+  /** Empty for the holiday day type, which no weekday claims. */
   weekdays: IsoWeekday[];
-  /**
-   * The day type a resolved holiday takes.
-   *
-   * This flag exists *because* `dayTypeCode` is open. A tenant may code
-   * theirs `observed_holiday` or `public_holiday`, so matching the
-   * string `"holiday"` would classify every holiday as an ordinary
-   * weekday and raise nothing. At most one day type per calendar sets
-   * it; the database enforces that with a partial unique index and
-   * `validateCalendar` reports it before the save is attempted.
-   */
-  isHoliday: boolean;
 }
 
 /**
@@ -83,7 +90,7 @@ export interface TouSlotDefinition {
  * One named date taking a different day type (TOU-CAL-9).
  *
  * The narrowest statement a tenant can make, so it outranks both the
- * holiday list and the weekday coverage. This is the shape a critical
+ * holiday set and the weekday coverage. This is the shape a critical
  * peak event day will use, with no schema change.
  */
 export interface TouDayOverride {
@@ -183,15 +190,6 @@ export function validateCalendar(
   const overrides = calendar.overrides ?? [];
 
   // Day types.
-  const holidayTypes = calendar.dayTypes.filter((d) => d.isHoliday);
-  if (holidayTypes.length > 1) {
-    problems.push(
-      `Only one day type can be the holiday day type; ${holidayTypes
-        .map((d) => d.dayTypeCode)
-        .join(" and ")} are both flagged.`,
-    );
-  }
-
   const seenDayType = new Set<string>();
   for (const d of calendar.dayTypes) {
     if (seenDayType.has(d.dayTypeCode)) {
@@ -210,7 +208,7 @@ export function validateCalendar(
     // calendar.
     const selectable =
       d.weekdays.length > 0 ||
-      d.isHoliday ||
+      d.dayTypeCode === HOLIDAY_DAY_TYPE_CODE ||
       overrides.some((o) => o.dayTypeCode === d.dayTypeCode);
     if (!selectable) {
       problems.push(
@@ -343,7 +341,7 @@ function coverageProblems(where: string, claimedBy: string[][]): string[] {
  * What kind of day this is, and why.
  *
  * Precedence is narrowest-first: a dated override names one day, the
- * holiday list names a set of days, and the weekday coverage names a
+ * holiday set names a set of days, and the weekday coverage names a
  * seventh of the year. Each outranks the next, so the more specific
  * statement a tenant made is the one that applies.
  *
@@ -375,10 +373,11 @@ export function resolveDayType(
   }
 
   if (observedHolidays.has(iso)) {
-    const holiday = calendar.dayTypes.find((d) => d.isHoliday);
-    // A calendar with no holiday day type is a tenant whose tariff does
-    // not distinguish them: the date is still a holiday to the list,
-    // and the weekday coverage answers.
+    const holiday = calendar.dayTypes.find((d) => d.dayTypeCode === HOLIDAY_DAY_TYPE_CODE);
+    // A calendar with no holiday day type names no holiday set either,
+    // so this cannot normally be reached — but a set can be detached
+    // after the fact, and then the date is still a holiday to whoever
+    // supplied the set while the weekday coverage answers.
     if (holiday) return { dayTypeCode: holiday.dayTypeCode, reason: "HOLIDAY" };
   }
 

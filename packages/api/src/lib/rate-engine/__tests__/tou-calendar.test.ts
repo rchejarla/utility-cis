@@ -27,10 +27,9 @@ import type { SeasonDefinition } from "../seasons.js";
  * offsets at all.
  */
 
-const day = (code: string, weekdays: number[], isHoliday = false): TouDayTypeDefinition => ({
+const day = (code: string, weekdays: number[]): TouDayTypeDefinition => ({
   dayTypeCode: code,
   weekdays: weekdays as TouDayTypeDefinition["weekdays"],
-  isHoliday,
 });
 
 /** A whole day of one peak, for the (season, day type) given. */
@@ -61,7 +60,7 @@ const SEASONS: SeasonDefinition[] = [
  * holidays are off-peak all day, and winter is flat.
  */
 const CALENDAR: TouCalendarDefinition = {
-  dayTypes: [day("weekday", [1, 2, 3, 4, 5]), day("weekend", [6, 7]), day("holiday", [], true)],
+  dayTypes: [day("weekday", [1, 2, 3, 4, 5]), day("weekend", [6, 7]), day("holiday", [])],
   peakCodes: ["on_peak", "off_peak"],
   slots: [
     span("summer", "weekday", 0, 960, "off_peak"),
@@ -166,7 +165,7 @@ describe("validateCalendar", () => {
      * failure that looks like a working calendar.
      */
     const gap = validateCalendar(
-      { ...CALENDAR, dayTypes: [day("weekday", [1, 2, 3, 4, 5]), day("holiday", [], true)] },
+      { ...CALENDAR, dayTypes: [day("weekday", [1, 2, 3, 4, 5]), day("holiday", [])] },
       SEASONS,
     );
     expect(gap.ok).toBe(false);
@@ -175,7 +174,7 @@ describe("validateCalendar", () => {
     const overlap = validateCalendar(
       {
         ...CALENDAR,
-        dayTypes: [day("weekday", [1, 2, 3, 4, 5, 6]), day("weekend", [6, 7]), day("holiday", [], true)],
+        dayTypes: [day("weekday", [1, 2, 3, 4, 5, 6]), day("weekend", [6, 7]), day("holiday", [])],
       },
       SEASONS,
     );
@@ -183,26 +182,14 @@ describe("validateCalendar", () => {
     if (!overlap.ok) expect(overlap.problems.join(" ")).toMatch(/Saturday/);
   });
 
-  it("refuses two day types flagged as the holiday day type", () => {
-    // The flag is what tells the resolver which day type a resolved
-    // holiday takes, so two of them makes that answer arbitrary. The
-    // database enforces it with a partial unique index; this is the
-    // message the editor shows before the save is attempted.
-    const result = validateCalendar(
-      {
-        ...CALENDAR,
-        dayTypes: [
-          day("weekday", [1, 2, 3, 4, 5]),
-          day("weekend", [6, 7]),
-          day("holiday", [], true),
-          day("holiday_observed", [], true),
-        ],
-      },
-      SEASONS,
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.problems.join(" ")).toMatch(/holiday_observed/);
-  });
+  /*
+   * "refuses two day types flagged as the holiday day type" was here
+   * and is deleted, not repaired. The flag it guarded is gone: `holiday`
+   * is a reserved code now and `tou_day_type_code_per_calendar` already
+   * makes a code unique within a calendar, so two of them cannot exist
+   * for the validator to catch. Rewritten to pass, it would have
+   * validated an ordinary calendar while claiming to refuse something.
+   */
 
   it("refuses a day type that nothing can ever select", () => {
     // No weekdays and not the holiday day type: every slot under it is
@@ -276,7 +263,7 @@ describe("resolveDayType", () => {
   it("lets a dated override win over a holiday", () => {
     /*
      * TOU-CAL-9. The override is the narrowest statement a tenant can
-     * make — one named date — so it outranks both the holiday rules and
+     * make — one named date — so it outranks both the holiday set and
      * the weekday coverage. A critical peak event called on a holiday
      * is the case: the event is why the day is priced as it is.
      */
@@ -287,7 +274,7 @@ describe("resolveDayType", () => {
 
   it("falls back to the weekday when a calendar has no holiday day type", () => {
     // A tenant whose tariff does not distinguish holidays. The date is
-    // still a holiday to the holiday list; no day type claims it, so the
+    // still a holiday to the holiday set; no day type claims it, so the
     // weekday coverage answers.
     const noHolidayType: TouCalendarDefinition = {
       ...CALENDAR,

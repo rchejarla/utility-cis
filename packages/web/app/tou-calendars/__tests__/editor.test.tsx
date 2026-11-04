@@ -30,9 +30,28 @@ const PERIODS = [
 ];
 
 const DAY_TYPES = [
-  { dayTypeCode: "weekday", label: "Weekday", isHoliday: false, weekdays: [1, 2, 3, 4, 5] },
-  { dayTypeCode: "weekend", label: "Weekend", isHoliday: false, weekdays: [6, 7] },
+  { dayTypeCode: "weekday", label: "Weekday", weekdays: [1, 2, 3, 4, 5] },
+  { dayTypeCode: "weekend", label: "Weekend", weekdays: [6, 7] },
 ];
+
+/**
+ * The reserved row, as the server sends it: `isHolidayDayType` is
+ * derived from the code and not stored, so a fixture that sets one
+ * without the other is describing a calendar the API cannot produce.
+ */
+const HOLIDAY_DAY_TYPE = {
+  dayTypeCode: "holiday",
+  label: "Holiday",
+  isHolidayDayType: true,
+  weekdays: [] as number[],
+};
+
+const HOLIDAY_SET = {
+  id: "hset-1",
+  name: "Observed holidays",
+  publishedAt: "2026-01-01T00:00:00.000Z",
+  _count: { holidays: 9 },
+};
 
 function calendar(over: Record<string, unknown> = {}) {
   return {
@@ -48,7 +67,8 @@ function calendar(over: Record<string, unknown> = {}) {
       publishedAt: "2026-01-01T00:00:00.000Z",
       seasons: [{ seasonCode: "summer", label: "Summer" }],
     },
-    touHolidayListId: "list-1",
+    touHolidaySetId: null,
+    holidaySet: null,
     periods: PERIODS,
     dayTypes: DAY_TYPES,
     spanGroups: [
@@ -157,8 +177,8 @@ describe("validation", () => {
     get.mockResolvedValue(
       calendar({
         dayTypes: [
-          { dayTypeCode: "weekday", label: "Weekday", isHoliday: false, weekdays: [1, 2, 3, 4, 5] },
-          { dayTypeCode: "weekend", label: "Weekend", isHoliday: false, weekdays: [7] },
+          { dayTypeCode: "weekday", label: "Weekday", weekdays: [1, 2, 3, 4, 5] },
+          { dayTypeCode: "weekend", label: "Weekend", weekdays: [7] },
         ],
       }),
     );
@@ -288,24 +308,165 @@ describe("day types", () => {
     );
   });
 
-  it("allows only one holiday day type", async () => {
+  /*
+   * There is no "is this the holiday one?" control any more, and that is
+   * the point of the change. Nominating a day type as the holiday type
+   * was a setup step asked before anything could say what the holidays
+   * were, and it meant nothing to the person being asked. The holiday
+   * row now arrives with the holiday set, and its code is the system's.
+   */
+  it("offers no way to nominate a day type as the holiday one", async () => {
     get.mockResolvedValue(
       calendar({
-        dayTypes: [
-          ...DAY_TYPES,
-          { dayTypeCode: "holiday", label: "Holiday", isHoliday: true, weekdays: [] },
-        ],
+        touHolidaySetId: HOLIDAY_SET.id,
+        holidaySet: HOLIDAY_SET,
+        dayTypes: [...DAY_TYPES, HOLIDAY_DAY_TYPE],
       }),
     );
     renderPage();
     await screen.findByTestId("day-types-editor");
 
-    await userEvent.click(
-      screen.getByRole("checkbox", { name: /weekend is the holiday type/ }),
-    );
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+  });
 
-    expect(screen.getByRole("checkbox", { name: /weekend is the holiday type/ })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: /holiday is the holiday type/ })).not.toBeChecked();
+  it("locks the holiday row's code, because the engine finds it by that code", async () => {
+    get.mockResolvedValue(
+      calendar({
+        touHolidaySetId: HOLIDAY_SET.id,
+        holidaySet: HOLIDAY_SET,
+        dayTypes: [...DAY_TYPES, HOLIDAY_DAY_TYPE],
+      }),
+    );
+    renderPage();
+    await screen.findByTestId("day-types-editor");
+
+    const codes = screen.getAllByLabelText("Day type code") as HTMLInputElement[];
+    expect(codes[0]).toBeEnabled();
+    expect(codes[2]).toBeDisabled();
+    expect(codes[2].value).toBe("holiday");
+  });
+
+  it("will not let the holiday row be removed while a set is named", async () => {
+    // Removing it is how a tariff silently stops observing holidays:
+    // every date in the set would then bill as an ordinary weekday.
+    get.mockResolvedValue(
+      calendar({
+        touHolidaySetId: HOLIDAY_SET.id,
+        holidaySet: HOLIDAY_SET,
+        dayTypes: [...DAY_TYPES, HOLIDAY_DAY_TYPE],
+      }),
+    );
+    renderPage();
+    await screen.findByTestId("day-types-editor");
+
+    expect(screen.getAllByRole("button", { name: "Remove this day type" })).toHaveLength(2);
+  });
+
+  it("says which set reaches the holiday row, instead of offering weekdays for it", async () => {
+    /*
+     * A weekday ticked on the holiday row would hand that whole weekday
+     * to it — every Friday off-peak, not the four the utility closes —
+     * and nothing in the schema refuses that.
+     */
+    get.mockResolvedValue(
+      calendar({
+        touHolidaySetId: HOLIDAY_SET.id,
+        holidaySet: HOLIDAY_SET,
+        dayTypes: [...DAY_TYPES, HOLIDAY_DAY_TYPE],
+      }),
+    );
+    renderPage();
+    await screen.findByTestId("day-types-editor");
+
+    expect(screen.getByTestId("holiday-days").textContent).toMatch(/Observed holidays/);
+    expect(screen.queryByRole("button", { name: "Mon on holiday" })).toBeNull();
+  });
+
+  it("sends no holiday flag when the list is saved", async () => {
+    put.mockResolvedValue(calendar());
+    renderPage();
+    await screen.findByTestId("day-types-editor");
+
+    await userEvent.click(screen.getByRole("button", { name: "Sat on weekday" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save day types" }));
+
+    await waitFor(() => expect(put).toHaveBeenCalled());
+    const [url, payload] = put.mock.calls[0];
+    expect(url).toBe("/api/v1/tou-calendars/cal-1/day-types");
+    const [first] = (payload as { dayTypes: Array<Record<string, unknown>> }).dayTypes;
+    expect(Object.keys(first).sort()).toEqual(["dayTypeCode", "label", "weekdays"]);
+  });
+});
+
+describe("the holiday set", () => {
+  it("can be attached while the calendar is a draft", async () => {
+    get.mockImplementation((url: string) =>
+      url === "/api/v1/tou-holiday-sets"
+        ? Promise.resolve({
+            data: [
+              {
+                id: "hset-1",
+                name: "Observed holidays",
+                publishedAt: "2026-01-01T00:00:00.000Z",
+                lastDate: "2027-12-24",
+              },
+            ],
+          })
+        : url === "/api/v1/season-sets"
+          ? Promise.resolve({ data: [] })
+          : Promise.resolve(calendar()),
+    );
+    const patch = apiClient.patch as unknown as ReturnType<typeof vi.fn>;
+    patch.mockResolvedValue({});
+
+    renderPage();
+    await userEvent.selectOptions(await screen.findByLabelText("Holiday set"), "hset-1");
+
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith("/api/v1/tou-calendars/cal-1", {
+        touHolidaySetId: "hset-1",
+      }),
+    );
+  });
+
+  it("is detached with null, not with an empty string the server would reject", async () => {
+    get.mockResolvedValue(
+      calendar({ touHolidaySetId: HOLIDAY_SET.id, holidaySet: HOLIDAY_SET }),
+    );
+    const patch = apiClient.patch as unknown as ReturnType<typeof vi.fn>;
+    patch.mockResolvedValue({});
+
+    renderPage();
+    await userEvent.selectOptions(await screen.findByLabelText("Holiday set"), "");
+
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith("/api/v1/tou-calendars/cal-1", {
+        touHolidaySetId: null,
+      }),
+    );
+  });
+
+  it("names it with its date count once published, where nothing can be changed", async () => {
+    get.mockResolvedValue(
+      calendar({
+        publishedAt: "2026-05-01T12:00:00.000Z",
+        touHolidaySetId: HOLIDAY_SET.id,
+        holidaySet: HOLIDAY_SET,
+      }),
+    );
+    renderPage();
+    await screen.findByTestId("published-notice");
+
+    expect(screen.getByTestId("holiday-set").textContent).toMatch(/Observed holidays \(9 dates\)/);
+    expect(screen.queryByLabelText("Holiday set")).toBeNull();
+  });
+
+  it("says plainly when none is named, rather than leaving the row blank", async () => {
+    get.mockResolvedValue(calendar({ publishedAt: "2026-05-01T12:00:00.000Z" }));
+    renderPage();
+    await screen.findByTestId("published-notice");
+
+    expect(screen.getByTestId("holiday-set").textContent).toMatch(/classified by weekday alone/);
   });
 });
 

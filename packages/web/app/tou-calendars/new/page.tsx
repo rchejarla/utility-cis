@@ -21,10 +21,12 @@ interface SeasonSet {
   seasons: Array<{ seasonCode: string; label: string }>;
 }
 
-interface HolidayList {
+interface HolidaySet {
   id: string;
   name: string;
-  _count?: { rules: number };
+  publishedAt: string | null;
+  lastDate: string | null;
+  _count?: { holidays: number };
 }
 
 const inputStyle = {
@@ -63,7 +65,7 @@ export default function NewTouCalendarPage() {
   const { canCreate } = usePermission("rate_schedules");
 
   const [seasonSets, setSeasonSets] = useState<SeasonSet[]>([]);
-  const [holidayLists, setHolidayLists] = useState<HolidayList[]>([]);
+  const [holidaySets, setHolidaySets] = useState<HolidaySet[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +74,7 @@ export default function NewTouCalendarPage() {
     name: "",
     effectiveDate: "",
     seasonSetId: "",
-    touHolidayListId: "",
+    touHolidaySetId: "",
     timeZone: "America/Denver",
     clockBasis: "prevailing",
   });
@@ -80,11 +82,11 @@ export default function NewTouCalendarPage() {
   useEffect(() => {
     Promise.all([
       apiClient.get<{ data: SeasonSet[] }>("/api/v1/season-sets"),
-      apiClient.get<{ data: HolidayList[] }>("/api/v1/tou-holiday-lists"),
+      apiClient.get<{ data: HolidaySet[] }>("/api/v1/tou-holiday-sets"),
     ])
-      .then(([sets, lists]) => {
+      .then(([sets, holidays]) => {
         setSeasonSets(sets.data ?? []);
-        setHolidayLists(lists.data ?? []);
+        setHolidaySets(holidays.data ?? []);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Could not load season sets"))
       .finally(() => setLoaded(true));
@@ -101,7 +103,7 @@ export default function NewTouCalendarPage() {
         name: form.name,
         effectiveDate: form.effectiveDate,
         seasonSetId: form.seasonSetId,
-        ...(form.touHolidayListId ? { touHolidayListId: form.touHolidayListId } : {}),
+        ...(form.touHolidaySetId ? { touHolidaySetId: form.touHolidaySetId } : {}),
         timeZone: form.timeZone,
         clockBasis: form.clockBasis,
       });
@@ -132,11 +134,15 @@ export default function NewTouCalendarPage() {
           }}
         >
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-            <FormField label="Name" required>
+            <FormField
+              label="Name"
+              required
+              tooltip="Half the version key: a later calendar with this same name supersedes this one from its own date. So name what the hours are for, not what they currently say — &quot;Time of Day 5-8pm&quot; cannot survive the version that moves the peak."
+            >
               <input
                 style={inputStyle}
                 value={form.name}
-                placeholder="Time of Day 5-8pm"
+                placeholder="Residential time-of-use"
                 onChange={(e) => set("name", e.target.value)}
                 required
               />
@@ -185,23 +191,37 @@ export default function NewTouCalendarPage() {
           )}
 
           <FormField
-            label="Holiday list"
-            tooltip="Optional. A tariff that does not distinguish holidays names none, and days are then classified by their weekday alone. Lists are shared across calendars, because a utility's holidays do not vary by tariff."
+            label="Holiday set"
+            tooltip="Optional. A tariff that does not distinguish holidays names none, and days are then classified by their weekday alone. Naming one adds a holiday day type to the calendar, and the hours you give it are what those dates cost. Sets are shared across calendars, because a utility's holidays do not vary by tariff."
           >
             <select
               style={inputStyle}
-              value={form.touHolidayListId}
-              onChange={(e) => set("touHolidayListId", e.target.value)}
+              value={form.touHolidaySetId}
+              onChange={(e) => set("touHolidaySetId", e.target.value)}
             >
-              <option value="">No holiday list</option>
-              {holidayLists.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                  {l._count ? ` (${l._count.rules} rules)` : ""}
+              <option value="">No holiday set — weekday alone</option>
+              {holidaySets.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                  {s._count ? ` — ${s._count.holidays} dates` : ""}
+                  {s.lastDate ? ` through ${s.lastDate.slice(0, 10)}` : ""}
+                  {s.publishedAt ? "" : " (draft)"}
                 </option>
               ))}
             </select>
           </FormField>
+
+          {/*
+            Said here, because publishing is where it bites: a published
+            calendar may only name a published set, and the refusal
+            arrives after the hours have been typed.
+          */}
+          {loaded && holidaySets.length > 0 && holidaySets.every((s) => !s.publishedAt) && (
+            <div data-testid="no-published-holiday-sets" style={{ fontSize: "12px", color: "var(--warning)" }}>
+              Every holiday set is still a draft. A calendar naming one cannot be published until
+              that set is.
+            </div>
+          )}
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
             <FormField

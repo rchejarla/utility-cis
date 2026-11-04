@@ -67,8 +67,18 @@ describe("sidebar placement", () => {
  * pin the two groups that came out of it.
  */
 describe("sidebar grouping (2026-11-03)", () => {
-  it("gives the three tariff screens a section of their own", () => {
-    expect(labelsIn("Tariffs")).toEqual(["Rate Schedules", "TOU Calendars", "Seasons"]);
+  it("gives the tariff screens a section of their own", () => {
+    /*
+     * In the order a tenant meets them: they come for time-of-use
+     * pricing, find out seasons exist, and find out holidays do while
+     * giving a calendar its hours.
+     */
+    expect(labelsIn("Tariffs")).toEqual([
+      "Rate Schedules",
+      "TOU Calendars",
+      "Seasons",
+      "Holidays",
+    ]);
   });
 
   it("keeps the calendar next to the schedule that prices against it", () => {

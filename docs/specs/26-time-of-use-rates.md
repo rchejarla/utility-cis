@@ -170,19 +170,36 @@ anything outside this codebase read it.
   minutes) to exactly one named TOU period. Period names are the
   tenant's (`on_peak`, `mid_peak`, `off_peak`, `super_off_peak`, …), with
   a display label and a display order.
-- **TOU-CAL-2 (Must).** Day types are at least *weekday*, *weekend* and
-  *holiday*. A tenant may define more (e.g. *Saturday*) and say which
-  weekdays each covers.
+- **TOU-CAL-2 (Must).** Day types are at least *weekday* and *weekend*,
+  and *holiday* when the calendar names a holiday set. A tenant may
+  define more (e.g. *Saturday*) and say which weekdays each covers.
+  **`holiday` is the one reserved code**: the system creates that day
+  type when a holiday set is attached and the engine resolves a holiday
+  date to it by matching the code. A tenant may not create, rename or
+  remove it while a set is named, and every other code is theirs.
+  *(Revised 2026-11-04. It was an `is_holiday` boolean on the day type,
+  so that nothing matched a literal string while the vocabulary stayed
+  open. Reserving one code settles the same question with one mechanism
+  instead of three — the flag, a partial unique index and a validator
+  rule — and removes the setup step that asked an operator to nominate
+  a day type as "the holiday one" before anything could say what the
+  holidays were.)*
 - **TOU-CAL-3 (Must).** Validation at save: every 15-minute slot of every
   (season, day type) is assigned exactly once; every period referenced
   is defined; every period defined is used somewhere. Errors name the
   season, day type and time range.
-- **TOU-CAL-4 (Must).** Holidays: a tenant maintains a holiday list per
-  calendar, by fixed date (Jul 4), by rule (fourth Thursday of November,
-  last Monday of May), with an observed-date rule (a Saturday holiday
-  observed Friday, a Sunday holiday observed Monday — configurable,
-  including "not observed"). The system shows the resolved dates for the
-  current and next two years.
+- **TOU-CAL-4 (Must).** Holidays: a tenant maintains **holiday sets** of
+  explicit dates — `(date, name)` — each set versioned, effective-dated
+  and published like a season set, and shared across the tenant's
+  calendars. A calendar names at most one; naming none means days are
+  classified by their weekday alone, which is a real tariff shape. The
+  dates are the days **observed**: if the 4th falls on a Saturday and
+  the utility takes the Friday, the Friday is the row.
+  *(Revised 2026-11-04. It was rules — fixed date, nth weekday, plus an
+  observance rule — which is why the original also promised a
+  three-year preview of the resolved dates. See "Dates rather than
+  holiday rules" below for why that went the other way, and what it
+  costs.)*
 - **TOU-CAL-5 (Must).** Calendars are effective-dated, versioned and
   published. Only published calendars can be referenced by a published
   rate schedule. Changing peak hours means publishing a new version with
@@ -231,13 +248,14 @@ anything outside this codebase read it.
   days called for one region, TOU-CAL-9) is scoped by a service area that
   premises belong to, not by attaching calendars to premises.
 
-### Data model (built 2026-11-02)
+### Data model (built 2026-11-02, holidays revised 2026-11-04)
 
-Eight tables, by the `tou_calendar` migration.
+Eight tables: seven by the `tou_calendar` migration, with the two
+holiday tables replaced by the `tou_holiday_sets` migration.
 
 ```
 tou_calendar          utility_id, name, effective_date, published_at,
-                      season_set_id → season_set, tou_holiday_list_id?,
+                      season_set_id → season_set, tou_holiday_set_id?,
                       time_zone, clock_basis
                       unique (utility_id, name, effective_date)
 
@@ -245,9 +263,8 @@ tou_period            utility_id, tou_calendar_id, peak_code, label, sort_order
                       unique (utility_id, tou_calendar_id, peak_code)
 
 tou_day_type          utility_id, tou_calendar_id, day_type_code, label,
-                      is_holiday, sort_order
+                      sort_order
                       unique (utility_id, tou_calendar_id, day_type_code)
-                      partial unique (utility_id, tou_calendar_id) where is_holiday
 
 tou_day_type_weekday  utility_id, tou_calendar_id, tou_day_type_id, iso_weekday
                       unique (utility_id, tou_calendar_id, iso_weekday)
@@ -261,22 +278,34 @@ tou_day_override      utility_id, tou_calendar_id, override_date,
                       tou_day_type_id, reason
                       unique (utility_id, tou_calendar_id, override_date)
 
-tou_holiday_list      utility_id, name
-                      unique (utility_id, name)
+tou_holiday_set       utility_id, name, effective_date, published_at
+                      unique (utility_id, name, effective_date)
 
-tou_holiday_rule      utility_id, tou_holiday_list_id, code, label, kind,
-                      month, day?, weekday?, nth?, observance
-                      unique (utility_id, tou_holiday_list_id, code)
+tou_holiday           utility_id, tou_holiday_set_id, holiday_date, name
+                      unique (utility_id, tou_holiday_set_id, holiday_date)
 ```
 
-**`is_holiday` is a flag, not a code the resolver matches.** TOU-CAL-2
-makes the day-type vocabulary open — at least weekday, weekend and
-holiday, and a tenant may add Saturday — so `day_type_code` is the
-tenant's own string and no code path may compare it to a literal
-`'holiday'`. A tenant coding theirs `observed_holiday` would otherwise
-have every holiday classified as an ordinary weekday with nothing
-raised. One per calendar; `validateCalendar` reports a second before the
-save, the partial unique index refuses it.
+**`holiday` is a reserved code, and that is the only mechanism.** The
+day-type vocabulary stays open — a tenant may price Saturday apart from
+Sunday — but exactly one code belongs to the system, so the engine finds
+the holiday day type by matching `HOLIDAY_DAY_TYPE_CODE` and nothing
+else is needed. Three service refusals keep it honest: a tenant cannot
+create one (it arrives with the holiday set), cannot rename the
+system's, and cannot remove it while a set is named. Each failure is the
+same quiet one — a holiday day type nothing resolves to means every
+holiday bills as an ordinary weekday with nothing raised.
+
+There is **no CHECK constraint** for the reservation. A constraint
+cannot tell the system's row from a tenant's: both are `tou_day_type`
+rows with the same code, so it could only ban the code outright, which
+would ban the system's own row. The reservation lives in
+`tou-calendar.service.ts`, where the intent is known and the refusal can
+say why.
+
+*(Until 2026-11-04 this was an `is_holiday` boolean with a partial
+unique index and a validator rule behind it — three mechanisms for one
+fact, all of them existing only because nothing was allowed to match a
+literal string.)*
 
 **Weekday coverage is a child table, not seven booleans on the day
 type.** The relationship is one-to-many (TOU-CAL-2's "say which weekdays
@@ -313,11 +342,11 @@ still accepted. The other half — no *gaps* — is a property of the set
 and cannot be a constraint, so `validateCalendar` owns it. That is the
 same division `validateSeasons` draws for season tiling.
 
-Four things live only in SQL, and `migrate dev` would propose dropping
-each: the exclusion constraint, the partial unique index on
-`is_holiday`, the nullable composite key from a calendar to its holiday
-list, and the CHECK that keeps each holiday-rule kind's columns and not
-the other's.
+Two things live only in SQL, and `migrate dev` would propose dropping
+each: the exclusion constraint on `tou_slot`, and the nullable composite
+key from a calendar to its holiday set — Prisma requires every
+referencing field of an optional composite relation to be optional, and
+`utility_id` is not.
 
 ### How the engine reads it (built 2026-11-02)
 
@@ -333,10 +362,11 @@ Three rules it fixes:
   makes re-rating an old period reproducible: a calendar published since
   then has a later effective date and is not reached.
 - **Which seasons:** the set the calendar *names*, for the reason above.
-- **Which holidays:** resolved for **every year the period touches**, not
-  just its start year. A December-to-January period that resolved only
-  the first year would price New Year's Day as an ordinary weekday — at
-  peak, on a day the tariff calls off-peak, with nothing raised.
+- **Which holidays:** the dates in the named set that fall **inside the
+  period**, which is one date-range query and so covers a
+  December-to-January period without special-casing the year end. The
+  filter matters in the other direction too: a set gets longer every
+  year and a bill still covers a month.
 
 It does **not** re-validate. `validateCalendar` runs at save and
 publishing freezes the result, so re-checking 96 cells per (season, day
@@ -357,28 +387,54 @@ That proves the schema can hold a tariff nobody designed it around and
 that the loader does not reshape it on the way out — two things neither
 test proves alone.
 
-### Holiday rules rather than a list of dates (decided 2026-11-02)
+### Dates rather than holiday rules (decided 2026-11-04, reversing 2026-11-02)
 
-TOU-CAL-4 says "by fixed date, by rule", and the rules are kept even
-though a date list would need no resolution code. A published calendar
-is immutable, so a list of dates **expires**: a calendar published in
-2026 holds no holidays for 2029, and either somebody re-enters dates
-every year forever or the dates live outside the version, at which point
-publishing no longer fixes what the calendar means. A missed year raises
-nothing — the holiday day type silently stops applying and every TOU
-bill for those days misprices, which is the same failure shape as the
-interval timestamp basis (TOU-INT-2a).
+**A holiday set holds explicit dates.** The first design held rules —
+fixed date, nth weekday, plus an observance rule — and this reverses it.
 
-Three smaller consequences: TOU-CAL-4's three-year preview is a rule
-feature, since a list has no output to show; observance has to be
-computed, and with dates the person typing them applies it in their head
-and nothing records whether they did; and "fourth Thursday of November"
-survives a regulator's question where a bare `2027-11-25` does not.
+The argument for rules was that a list of dates **expires**: a set
+entered in 2026 holds nothing for 2029, and a missed year raises nothing
+while every holiday that year bills as an ordinary weekday. That failure
+is real and it is why `holidayHorizonProblems` exists — the editor
+reports a set whose last date is behind the calendar's effective date,
+and publishing refuses it. The horizon is now loud rather than absent,
+which is what the rules were buying.
 
-The honest limit: a fixed-date rule *is* a list entry with a leap-year
-guard, so the rules only earn their keep for the recurring-weekday and
-observance cases. Genuine one-offs are not forced into a rule —
-`tou_day_override` (TOU-CAL-9) is the mechanism for those.
+What the rules cost was worse. **A rule is a computation nobody
+checked.** "4 July, nearest weekday" does not say that 2026 lands on a
+Saturday and moves the holiday to Friday the 3rd — a weekday whose peak
+hours disappear. Nobody reading the tariff could see which day their
+bill would be cheap, which is why the original TOU-CAL-4 had to promise
+a three-year preview: a feature whose entire job was to show what the
+data already meant. And the observance itself was a guess about the
+tenant's own policy — SMUD keeps a Saturday holiday on the Saturday,
+some utilities take the Friday, and `observance: "NEAREST_WEEKDAY"` was
+easy to set wrongly and impossible to notice.
+
+With dates, the observance is applied by the person who knows it, at the
+moment they type the date, and the date is then the fact: auditable, and
+the same on every bill that priced against it.
+
+Three consequences:
+
+- **The three-year preview is gone**, because the rows *are* the answer.
+  The holiday-set editor shows each date's weekday beside it, which is
+  the one piece of arithmetic worth doing for somebody — "Sat" next to
+  4 July is what prompts them to enter the Friday instead.
+- **A set is versioned and published** like a season set, so a
+  correction is a new version and a published calendar's holidays cannot
+  move under bills already issued. That is what makes a date list safe
+  to share across calendars.
+- **Someone has to enter next year's dates.** The horizon warnings on
+  the set's own page and on the calendar's validation are what make that
+  a visible chore rather than a silent misprice. `tou_day_override`
+  (TOU-CAL-9) remains the mechanism for genuine one-offs.
+
+What this gave up: "fourth Thursday of November" survives a regulator's
+question in a way a bare `2027-11-25` does not. The answer is that the
+*name* travels with the date — `Thanksgiving Day` on `2027-11-25` — and
+a rule that produced the wrong Thursday would have survived the same
+question just as well.
 
 ## 3. Usage data
 
@@ -711,16 +767,18 @@ raw intervals from the same meters. Compression is therefore entirely a
 ## 5. Configuration UI
 
 > **Built 2026-11-03**, except where a requirement says otherwise below:
-> `/season-sets` and `/tou-calendars` with their editors, the API under
-> `/api/v1/season-sets` and `/api/v1/tou-calendars`, and a read-only
-> `/api/v1/tou-holiday-lists` carrying the resolved dates. All under the
+> `/season-sets` and `/tou-calendars` with their editors, and — added
+> 2026-11-04 — `/tou-holiday-sets` with its own list and editor. The API
+> under `/api/v1/season-sets`, `/api/v1/tou-calendars` and
+> `/api/v1/tou-holiday-sets`. All under the
 > **`rate_schedules`** module rather than one of their own — a calendar
 > is only ever the hours a schedule prices against, and a separate
 > module would have to be enabled per tenant, leaving someone with
 > `rate_schedules:EDIT` able to build a schedule they cannot publish.
 >
 > **The child collections are replaced whole** (`PUT …/periods`,
-> `…/day-types`, `…/spans`, `…/overrides`, `…/seasons`) rather than
+> `…/day-types`, `…/spans`, `…/overrides`, `…/seasons`, `…/holidays`)
+> rather than
 > edited row by row. Every invariant they carry belongs to the list: the
 > spans of a (season, day type) must tile the day exactly once, the
 > seven weekdays must be claimed exactly once, a set must cover the year
@@ -740,8 +798,10 @@ raw intervals from the same meters. Compression is therefore entirely a
 > differently, and the wrapped season is exactly where it would start.
 >
 > **Dev seed:** `seed/tou-calendar.js` creates a published "Residential
-> time-of-use" calendar and an "Observed holidays" list, so the screens open on
-> something and the spot check can be used. It keys its spans on the
+> time-of-use" calendar and a published "Observed holidays" set holding
+> **two years of observed dates** (2026–27, including 3 July 2026 and 5
+> July 2027 — the same holiday moved in both directions), so the screens
+> open on something and the spot check can be used. It keys its spans on the
 > season set the tenant already has — the `season_sets` migration seeds
 > every tenant a published "Default" — rather than creating a second set,
 > because a published calendar naming one set while another is in force
@@ -749,9 +809,8 @@ raw intervals from the same meters. Compression is therefore entirely a
 > not open on a warning about a state nobody caused. Nothing prices it
 > yet; a TOU rate schedule is not seeded.
 >
-> **Still to build:** TOU-UI-1d (the published-version diff), the
-> holiday *editor* (TOU-UI-2's write half — rules are still inserted by
-> hand), TOU-UI-3's editor half, TOU-UI-4 and TOU-UI-5.
+> **Still to build:** TOU-UI-1d (the published-version diff), TOU-UI-3's
+> editor half, TOU-UI-4 and TOU-UI-5.
 
 ### The calendar editor
 
@@ -804,26 +863,31 @@ it is wrong.
 - **TOU-UI-1e (Should).** **Preview a date.** Enter a date and see which
   day type and which season resolve for it, with the day's periods laid
   out — the same mechanism as TOU-UI-1c but for a whole day, which is
-  how a holiday-observance rule gets sanity-checked.
+  how an observed holiday gets sanity-checked against the hours it
+  changes.
 
-- **TOU-UI-2 (Must).** *The resolved dates are built
-  (`GET /api/v1/tou-holiday-lists/:id/resolved`, three years, each date
-  flagged `moved` where the observance rule shifted it and
-  `sharesObservedDate` where two rules land on one day); the editing
-  half is not, so rules are still inserted by hand.* A holiday editor:
-  fixed dates and rules ("fourth
-  Thursday of November"), each with its observance rule, and **the
-  resolved dates for the current and next two years shown beside the
-  rule that produced them**. A rule nobody can see the output of is a
-  rule nobody will trust — and the observance rules are where the
-  surprises live, since a Saturday holiday observed on the Friday moves
-  a peak day.
+- **TOU-UI-2 (Must).** *Built 2026-11-04, for dates rather than rules.*
+  A holiday-set editor: a list of `(date, name)` rows saved whole, with
+  **the weekday shown beside each date** and the set's span and status
+  on the list page. The weekday is the one piece of arithmetic worth
+  doing for the operator — "Sat" next to 4 July is what prompts them to
+  enter the Friday the utility actually takes.
+  *(Originally: rules with an observance rule each, and the resolved
+  dates for three years shown beside the rule that produced them,
+  because a rule nobody can see the output of is a rule nobody will
+  trust. With dates, the rows are the output.)*
+  The set's page also carries **the horizon** — "every date in this set
+  is in the past", or "only N dates are still ahead" — which is what
+  makes entering next year's dates a visible chore instead of a silent
+  misprice.
 
-- **TOU-UI-2a (Should).** A holiday list is **shared across calendars**
-  of the tenant, since a utility's holidays do not vary by tariff, with
-  each calendar naming the list it uses. TOU-CAL-4 says "per calendar";
-  this relaxes it to "named by the calendar" so that adding a holiday
-  does not mean editing three calendars and missing one.
+- **TOU-UI-2a (Should).** *Built 2026-11-04.* A holiday set is **shared
+  across calendars** of the tenant, since a utility's holidays do not
+  vary by tariff, with each calendar naming the set it uses. TOU-CAL-4
+  says "per calendar"; this relaxes it to "named by the calendar" so
+  that adding a holiday does not mean editing three calendars and
+  missing one. The set's page lists the calendars naming it, which is
+  what a new version has to be carried into.
 - **TOU-UI-3 (Must).** The rate schedule editor offers the TOU filter on
   consumption components, picking a published calendar and its periods,
   and refuses to publish a schedule whose periods do not cover every
@@ -1021,24 +1085,27 @@ The general rule the answers follow: where a question is about a
 *behaviour* the model declares the choice rather than hard-coding one.
 Three places already work that way — season codes, day-type codes and
 peak codes are all open sets, so nothing in code matches a literal
-value.
+value. *(One exception since 2026-11-04: `holiday` is a reserved
+day-type code the system owns. The open set stays open around it, and
+TOU-CAL-2 says what the reservation costs and buys.)*
 
 1. **Which tariff first? — SMUD residential Time-of-Day (5–8 p.m.).**
    Sacramento Municipal Utility District, a publicly owned utility,
    which is the market this system targets, and it publishes the whole
-   calendar on one page: seasons, windows, the holiday list and the
-   observance rule.
+   calendar on one page: seasons, windows and the holidays.
 
    Chosen because it exercises more of the model than a two-period
    tariff would: a season that **wraps the year end** (non-summer is
    1 Oct – 31 May), **three periods in summer and two in non-summer** so
    the calendar's shape is not constant across seasons, a period
    appearing **twice in one day** (summer mid-peak brackets the peak),
-   **eleven holidays** mixing fixed dates with nth-weekday rules
-   including a last-Monday, and an **observance rule that is not the one
-   a textbook assumes** — a fixed-date holiday falling on a weekend is
-   *not* shifted to an adjacent weekday, so all eleven rules are
-   `observance: "NONE"`.
+   **eleven holidays** including both fixed dates and floating ones, and
+   an **observance that is not the one a textbook assumes** — a
+   fixed-date holiday falling on a weekend is *not* shifted to an
+   adjacent weekday, so 4 July 2026 stays on the Saturday and 3 July is
+   an ordinary summer weekday at the tariff's peak rate. Under rules
+   that was eleven `observance: "NONE"` settings, each easy to set
+   wrongly; as dates it is the eleven days somebody typed.
 
    Fixture and golden test: `__tests__/tariff-golden/_smud-time-of-day-fixtures.ts`
    and `smud-time-of-day-calendar.test.ts`. The model accepted the

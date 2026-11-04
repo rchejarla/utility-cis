@@ -12,7 +12,7 @@ import { runAsTenant } from "../../lib/tenant-context.js";
 import { loadTouCalendar } from "../../lib/rate-engine-loaders/load-tou-calendar.js";
 import {
   SMUD_CALENDAR,
-  SMUD_HOLIDAY_RULES,
+  SMUD_HOLIDAYS,
   SMUD_SEASONS,
   SMUD_TIME_ZONE,
 } from "../../lib/rate-engine/__tests__/tariff-golden/_smud-time-of-day-fixtures.js";
@@ -106,26 +106,25 @@ async function seedSmud(
       })),
     });
 
-    let holidayListId: string | null = null;
+    let holidaySetId: string | null = null;
     if (withHolidays) {
-      const list = await prisma.touHolidayList.create({
-        data: { utilityId, name: `SMUD holidays ${suffix}` },
-      });
-      await prisma.touHolidayRule.createMany({
-        data: SMUD_HOLIDAY_RULES.map((r) => ({
+      const set = await prisma.touHolidaySet.create({
+        data: {
           utilityId,
-          touHolidayListId: list.id,
-          code: r.code,
-          label: r.label,
-          kind: r.kind,
-          month: r.month,
-          day: r.day ?? null,
-          weekday: r.weekday ?? null,
-          nth: r.nth ?? null,
-          observance: r.observance,
+          name: `SMUD holidays ${suffix}`,
+          effectiveDate: new Date(Date.UTC(2026, 0, 1)),
+          publishedAt: new Date(),
+        },
+      });
+      await prisma.touHoliday.createMany({
+        data: SMUD_HOLIDAYS.map((h) => ({
+          utilityId,
+          touHolidaySetId: set.id,
+          holidayDate: new Date(`${h.date}T00:00:00.000Z`),
+          name: h.name,
         })),
       });
-      holidayListId = list.id;
+      holidaySetId = set.id;
     }
 
     const calendar = await prisma.touCalendar.create({
@@ -135,7 +134,7 @@ async function seedSmud(
         effectiveDate,
         publishedAt: publish ? new Date() : null,
         seasonSetId: seasonSet.id,
-        touHolidayListId: holidayListId,
+        touHolidaySetId: holidaySetId,
         timeZone: SMUD_TIME_ZONE,
         clockBasis: "prevailing",
       },
@@ -157,7 +156,6 @@ async function seedSmud(
           touCalendarId: calendar.id,
           dayTypeCode: dt.dayTypeCode,
           label: dt.dayTypeCode,
-          isHoliday: dt.isHoliday,
           sortOrder: i,
         },
       });
@@ -247,7 +245,7 @@ describe("the schema holds the real tariff and gives it back unchanged", () => {
     });
   });
 
-  it("resolves the holiday rules to observed dates for the period's years", async () => {
+  it("loads the holiday dates that fall inside the billing period", async () => {
     await seedSmud(TENANT_A);
 
     const loaded = await runAsTenant(TENANT_A, async () =>
@@ -259,17 +257,43 @@ describe("the schema holds the real tariff and gives it back unchanged", () => {
     );
     if (!loaded.ok) throw new Error(loaded.problem);
 
-    // Eleven holidays, and the two the golden tests lean on.
-    expect(loaded.calendar.observedHolidays.size).toBe(11);
-    expect(loaded.calendar.observedHolidays.has("2026-11-26")).toBe(true); // Thanksgiving
-    expect(loaded.calendar.observedHolidays.has("2026-07-04")).toBe(true);
-    // SMUD does not shift a weekend holiday to the Friday before.
-    expect(loaded.calendar.observedHolidays.has("2026-07-03")).toBe(false);
+    /*
+     * One, out of the twenty-two in the set. The set covers two years
+     * and the period is June 2026, so Juneteenth is the only date in
+     * it — which is the filter doing its job: a set gets longer every
+     * year and a bill still covers a month.
+     */
+    expect([...loaded.calendar.observedHolidays]).toEqual(["2026-06-19"]);
+  });
+
+  it("keeps a Saturday holiday on the Saturday, because that is what the set says", async () => {
+    /*
+     * The case the old rule-based model made easy to get wrong. 4 July
+     * 2026 is a Saturday; SMUD does not move the holiday to the Friday,
+     * so the 3rd stays an ordinary summer weekday at the tariff's peak
+     * rate. Nothing computes that here — it is the date somebody typed.
+     */
+    await seedSmud(TENANT_A);
+
+    const loaded = await runAsTenant(TENANT_A, async () =>
+      loadTouCalendar(prismaImports.prisma, {
+        utilityId: TENANT_A,
+        name: "Time-of-Day 5-8pm",
+        period: {
+          startDate: new Date(Date.UTC(2026, 6, 1)),
+          endDate: new Date(Date.UTC(2026, 6, 31)),
+        },
+      }),
+    );
+    if (!loaded.ok) throw new Error(loaded.problem);
+
+    expect([...loaded.calendar.observedHolidays]).toEqual(["2026-07-04"]);
   });
 
   it("covers both years when the period crosses the year end", async () => {
-    // A December-to-January billing period needs both years' holidays,
-    // or New Year's Day prices as an ordinary weekday.
+    // A December-to-January billing period needs both years' dates, or
+    // New Year's Day prices as an ordinary weekday — and the two years
+    // are separate rows in the set, found by one date range.
     await seedSmud(TENANT_A);
 
     const loaded = await runAsTenant(TENANT_A, async () =>
@@ -284,12 +308,10 @@ describe("the schema holds the real tariff and gives it back unchanged", () => {
     );
     if (!loaded.ok) throw new Error(loaded.problem);
 
-    expect(loaded.calendar.observedHolidays.has("2026-12-25")).toBe(true);
-    expect(loaded.calendar.observedHolidays.has("2027-01-01")).toBe(true);
-    expect(loaded.calendar.observedHolidays.size).toBe(22);
+    expect([...loaded.calendar.observedHolidays].sort()).toEqual(["2026-12-25", "2027-01-01"]);
   });
 
-  it("gives an empty holiday set when a calendar names no list", async () => {
+  it("gives an empty holiday set when a calendar names no set", async () => {
     // A tenant whose tariff does not distinguish holidays. Not an
     // error, and the weekday coverage then answers for every date.
     await seedSmud(TENANT_A, { withHolidays: false });

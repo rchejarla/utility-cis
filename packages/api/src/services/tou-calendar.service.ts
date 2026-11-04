@@ -12,17 +12,12 @@ import type {
 import { paginatedTenantList } from "../lib/pagination.js";
 import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
 import {
+  HOLIDAY_DAY_TYPE_CODE,
   resolveDayType,
   resolvePeak,
   validateCalendar,
   type CalendarValidation,
 } from "../lib/rate-engine/tou-calendar.js";
-import {
-  resolveHolidays,
-  type HolidayObservance,
-  type HolidayRule,
-  type IsoWeekday,
-} from "../lib/rate-engine/holidays.js";
 import {
   loadObservedHolidays,
   toTouCalendarDefinition,
@@ -31,32 +26,37 @@ import {
 /**
  * The calendar editor's server side (spec 26, TOU-UI-1 and TOU-UI-2).
  *
- * Three rules shape every function here:
+ * Four rules shape every function here:
  *
- * 1. **A draft is editable; a published version is not.** Changing which
- *    hours are on-peak changes what a bill costs, so a change is a new
- *    version with its own effective date, never an edit to the one that
- *    billed. There is no `version` column: a version *is* a (name,
- *    effectiveDate) pair.
+ * 1. **A draft is editable; a published version is not.** Changing
+ *    which hours are on-peak changes what a bill costs, so a change is
+ *    a new version with its own effective date. There is no `version`
+ *    column: a version *is* a (name, effectiveDate) pair.
  *
  * 2. **The child collections are replaced whole.** Every invariant they
- *    carry belongs to the whole list — the spans of a (season, day type)
- *    must tile the day exactly once, the seven weekdays must be claimed
- *    exactly once — so row-at-a-time saving would make every
- *    intermediate state invalid and reduce validation to advice.
+ *    carry belongs to the whole list — the spans of a (season, day
+ *    type) must tile the day exactly once, the seven weekdays must be
+ *    claimed exactly once — so row-at-a-time saving would make every
+ *    intermediate state invalid.
  *
- * 3. **What the editor says, rating must say.** The validation, the spot
- *    check and the day preview all run the engine's own functions over
- *    the definition produced by the rating loader's mapper. A screen
- *    with its own copy of the classification rules is a screen that
- *    blesses a calendar the engine reads differently.
+ * 3. **What the editor says, rating must say.** Validation, the spot
+ *    check and the day preview run the engine's own functions over the
+ *    definition the *rating* loader's mapper produces.
+ *
+ * 4. **`holiday` is the system's day-type code.** The engine finds that
+ *    day type by matching it — the one literal string comparison in the
+ *    subsystem — so this service owns creating it and refuses a tenant
+ *    taking, renaming or removing it. It replaced an `is_holiday`
+ *    boolean that needed a partial unique index and a validator rule
+ *    behind it, and that asked an operator to nominate "the holiday
+ *    one" while giving them no way to say what their holidays were.
  */
 
 /*
  * One include, used by every read here. The engine needs codes; the
- * editor needs the ids, labels and sort orders as well, so this is a
- * superset of what `toTouCalendarDefinition` reads and satisfies its
- * structural type.
+ * editor needs ids, labels and sort orders too, so this is a superset
+ * of what `toTouCalendarDefinition` reads and satisfies its structural
+ * type.
  */
 const EDITOR_INCLUDE = {
   seasonSet: {
@@ -129,9 +129,7 @@ function assertDraft(row: { name: string; publishedAt: Date | null }): void {
  * Refuse a zone `Intl` does not know.
  *
  * Without this a typo falls back to the runtime's own zone rather than
- * raising, so every peak shifts by hours and nothing says so. The IANA
- * database is the authority and it changes, which is why neither this
- * nor the CHECK constraint holds a list of names.
+ * raising, so every peak shifts by hours and nothing says so.
  */
 function assertKnownTimeZone(timeZone: string): void {
   try {
@@ -149,20 +147,19 @@ function utcDate(isoDate: string): Date {
   return new Date(`${isoDate}T00:00:00.000Z`);
 }
 
+/** `17:15`, and `24:00` for the exclusive end of the day. */
+function timeLabel(minute: number): string {
+  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+}
+
 /**
  * When a calendar stops applying, and what replaced it.
  *
  * **Derived, never stored.** `load-tou-calendar.ts` picks the newest
  * published version whose effective date is on or before the period's
  * start, so a version's last day *is* the day before the next published
- * version of the same name — there is nothing else it could be. A
- * `superseded_by_id` column like the one on `rate_schedule` would be a
- * second answer to a question the loader settles by date, and the two
- * could disagree about which version priced a bill.
- *
- * A draft successor does not end anything: it can still be edited, have
- * its effective date moved, or be deleted, and until it is published
- * rating will not reach it.
+ * version of the same name. A `superseded_by_id` column would be a
+ * second answer to a question the loader settles by date.
  */
 async function supersessionOf(
   utilityId: string,
@@ -181,10 +178,53 @@ async function supersessionOf(
   if (!next) return { supersededBy: null, inForceUntil: null };
   return {
     supersededBy: next,
-    // The day before the successor takes over. Inclusive, because that
-    // is how a person reads "in force until".
     inForceUntil: new Date(next.effectiveDate.getTime() - 86_400_000),
   };
+}
+
+/**
+ * Has the holiday set run out?
+ *
+ * This is the cost of explicit dates instead of rules, and it is paid
+ * here rather than by a tenant: a set covers a horizon and ends. A
+ * calendar in force past the last date in its set prices every holiday
+ * after that as an ordinary weekday — peak hours on a day the tariff
+ * calls off-peak, with nothing raised. That is the quiet failure this
+ * subsystem refuses everywhere else.
+ *
+ * Measured from the calendar's own effective date, since dates before
+ * it belong to whichever version was in force then.
+ */
+async function holidayHorizonProblems(
+  utilityId: string,
+  row: { effectiveDate: Date; touHolidaySetId: string | null },
+): Promise<string[]> {
+  if (!row.touHolidaySetId) return [];
+
+  const [last, ahead] = await Promise.all([
+    prisma.touHoliday.findFirst({
+      where: { utilityId, touHolidaySetId: row.touHolidaySetId },
+      orderBy: { holidayDate: "desc" },
+      select: { holidayDate: true },
+    }),
+    prisma.touHoliday.count({
+      where: {
+        utilityId,
+        touHolidaySetId: row.touHolidaySetId,
+        holidayDate: { gte: row.effectiveDate },
+      },
+    }),
+  ]);
+
+  if (!last) {
+    return ["The holiday set this calendar names has no dates in it, so no day would be a holiday."];
+  }
+  if (ahead === 0) {
+    return [
+      `The holiday set's last date is ${last.holidayDate.toISOString().slice(0, 10)}, before this calendar takes effect, so no day it prices would be a holiday.`,
+    ];
+  }
+  return [];
 }
 
 export async function listTouCalendars(utilityId: string, query: TouCalendarQuery) {
@@ -208,8 +248,7 @@ export async function listTouCalendars(utilityId: string, query: TouCalendarQuer
   /*
    * Which rows have been replaced, in one query for the whole page
    * rather than one each. Without it a retired version shows as
-   * "Published" with an open-ended start date, which is the state most
-   * likely to send somebody to read the wrong hours.
+   * "Published" with an open-ended start date.
    */
   const rows = page.data as Array<{
     id: string;
@@ -242,19 +281,33 @@ export async function listTouCalendars(utilityId: string, query: TouCalendarQuer
 
 export async function getTouCalendar(id: string, utilityId: string) {
   const row = await loadEditorCalendar(utilityId, id);
-  return { ...toEditorPayload(row), ...(await supersessionOf(utilityId, row)) };
+  const [supersession, horizon, holidaySet] = await Promise.all([
+    supersessionOf(utilityId, row),
+    holidayHorizonProblems(utilityId, row),
+    row.touHolidaySetId
+      ? prisma.touHolidaySet.findFirst({
+          where: { id: row.touHolidaySetId, utilityId },
+          select: {
+            id: true,
+            name: true,
+            publishedAt: true,
+            _count: { select: { holidays: true } },
+          },
+        })
+      : Promise.resolve(null),
+  ]);
+  return { ...toEditorPayload(row, horizon), ...supersession, holidaySet };
 }
 
 /**
  * What the editor screen renders from.
  *
  * The spans are grouped by (season, day type) because that is the unit
- * the screen edits and the unit the validator reports against. Flat
- * rows would make the page do the grouping, and the grouping is where
- * an empty (season, day type) — the most common mistake — would go
- * missing: a group with no spans is rendered, and a missing key is not.
+ * the screen edits and the unit the validator reports against. A group
+ * with no spans is rendered; a missing key is not, and an empty
+ * (season, day type) is the most common mistake.
  */
-function toEditorPayload(row: EditorCalendar) {
+function toEditorPayload(row: EditorCalendar, extraProblems: string[]) {
   const seasonCodes = row.seasonSet.seasons.map((s) => s.seasonCode);
 
   const groups = seasonCodes.flatMap((seasonCode) =>
@@ -272,6 +325,12 @@ function toEditorPayload(row: EditorCalendar) {
     })),
   );
 
+  const engineValidation = validateCalendar(toTouCalendarDefinition(row), row.seasonSet.seasons);
+  const problems = [
+    ...(engineValidation.ok ? [] : engineValidation.problems),
+    ...extraProblems,
+  ];
+
   return {
     id: row.id,
     name: row.name,
@@ -285,7 +344,7 @@ function toEditorPayload(row: EditorCalendar) {
       publishedAt: row.seasonSet.publishedAt,
       seasons: row.seasonSet.seasons,
     },
-    touHolidayListId: row.touHolidayListId,
+    touHolidaySetId: row.touHolidaySetId,
     periods: row.periods.map((p) => ({
       id: p.id,
       peakCode: p.peakCode,
@@ -296,7 +355,8 @@ function toEditorPayload(row: EditorCalendar) {
       id: d.id,
       dayTypeCode: d.dayTypeCode,
       label: d.label,
-      isHoliday: d.isHoliday,
+      /** Not a stored flag any more — the reserved code is the fact. */
+      isHolidayDayType: d.dayTypeCode === HOLIDAY_DAY_TYPE_CODE,
       sortOrder: d.sortOrder,
       weekdays: d.weekdays.map((w) => w.isoWeekday),
     })),
@@ -307,7 +367,9 @@ function toEditorPayload(row: EditorCalendar) {
       dayTypeCode: o.dayType.dayTypeCode,
       reason: o.reason,
     })),
-    validation: validateCalendar(toTouCalendarDefinition(row), row.seasonSet.seasons),
+    validation: (problems.length === 0
+      ? { ok: true }
+      : { ok: false, problems }) as CalendarValidation,
   };
 }
 
@@ -315,18 +377,9 @@ function toEditorPayload(row: EditorCalendar) {
  * What a new calendar starts with.
  *
  * Starting from nothing made the first screen a blank form over a
- * vocabulary nobody has met yet: a period code, a day type code, and no
- * indication of what either should say. These are the three periods and
- * two day types almost every time-of-use tariff has, written as real
- * rows so they can be renamed, re-coded or deleted like any other —
- * not as placeholder text, which is what made the empty rows look
- * filled in.
- *
- * **No holiday day type.** A calendar that names a holiday list and has
- * no holiday day type classifies holidays by their weekday, which is a
- * real tariff shape and not an error, so inventing one would be
- * deciding something the tenant has not said. The validator names the
- * gap if they do name a list and want one.
+ * vocabulary nobody has met. These are real rows — renameable,
+ * re-codeable and deletable like any other — not placeholder text,
+ * which is what made the empty rows look filled in.
  */
 const DEFAULT_PERIODS = [
   { peakCode: "off_peak", label: "Off-peak" },
@@ -339,6 +392,21 @@ const DEFAULT_DAY_TYPES = [
   { dayTypeCode: "weekend", label: "Weekend", weekdays: [6, 7] },
 ];
 
+/**
+ * ...and the holiday one, when the calendar names a set.
+ *
+ * Created rather than asked for, because the alternative is the setup
+ * step that made the old flag absurd: nominate a day type as "the
+ * holiday one" before anything can tell you what the holidays are. A
+ * calendar naming a set gets the day type; the operator gives it hours
+ * like any other.
+ */
+const HOLIDAY_DAY_TYPE = {
+  dayTypeCode: HOLIDAY_DAY_TYPE_CODE,
+  label: "Holiday",
+  weekdays: [] as number[],
+};
+
 export async function createTouCalendar(
   utilityId: string,
   actorId: string,
@@ -349,25 +417,23 @@ export async function createTouCalendar(
 
   const seasonSet = await prisma.seasonSet.findFirst({
     where: { id: data.seasonSetId, utilityId },
-    select: { id: true, publishedAt: true, name: true },
+    select: { id: true },
   });
   if (!seasonSet) {
     throw badRequest("That season set does not exist.", "SEASON_SET_MISSING");
   }
-  /*
-   * A draft calendar may name a draft season set — the two are often
-   * built together — but publishing requires the set to be published
-   * too, and `publishTouCalendar` checks it there. Refusing here would
-   * force an order of work the tenant has no reason to follow.
-   */
 
-  if (data.touHolidayListId) {
-    const list = await prisma.touHolidayList.findFirst({
-      where: { id: data.touHolidayListId, utilityId },
+  if (data.touHolidaySetId) {
+    const set = await prisma.touHolidaySet.findFirst({
+      where: { id: data.touHolidaySetId, utilityId },
       select: { id: true },
     });
-    if (!list) throw badRequest("That holiday list does not exist.", "HOLIDAY_LIST_MISSING");
+    if (!set) throw badRequest("That holiday set does not exist.", "HOLIDAY_SET_MISSING");
   }
+
+  const dayTypes = data.touHolidaySetId
+    ? [...DEFAULT_DAY_TYPES, HOLIDAY_DAY_TYPE]
+    : DEFAULT_DAY_TYPES;
 
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "TouCalendar" },
@@ -379,7 +445,7 @@ export async function createTouCalendar(
           name: data.name,
           effectiveDate: utcDate(data.effectiveDate),
           seasonSetId: data.seasonSetId,
-          touHolidayListId: data.touHolidayListId ?? null,
+          touHolidaySetId: data.touHolidaySetId ?? null,
           timeZone: data.timeZone,
           clockBasis: data.clockBasis,
         },
@@ -395,25 +461,26 @@ export async function createTouCalendar(
         })),
       });
 
-      for (const [index, dayType] of DEFAULT_DAY_TYPES.entries()) {
-        const row = await tx.touDayType.create({
+      for (const [index, dayType] of dayTypes.entries()) {
+        const dayTypeRow = await tx.touDayType.create({
           data: {
             utilityId,
             touCalendarId: created.id,
             dayTypeCode: dayType.dayTypeCode,
             label: dayType.label,
-            isHoliday: false,
             sortOrder: index,
           },
         });
-        await tx.touDayTypeWeekday.createMany({
-          data: dayType.weekdays.map((isoWeekday) => ({
-            utilityId,
-            touCalendarId: created.id,
-            touDayTypeId: row.id,
-            isoWeekday,
-          })),
-        });
+        if (dayType.weekdays.length > 0) {
+          await tx.touDayTypeWeekday.createMany({
+            data: dayType.weekdays.map((isoWeekday) => ({
+              utilityId,
+              touCalendarId: created.id,
+              touDayTypeId: dayTypeRow.id,
+              isoWeekday,
+            })),
+          });
+        }
       }
 
       return created;
@@ -436,7 +503,7 @@ export async function updateTouCalendar(
       publishedAt: true,
       effectiveDate: true,
       seasonSetId: true,
-      touHolidayListId: true,
+      touHolidaySetId: true,
       timeZone: true,
       clockBasis: true,
     },
@@ -453,12 +520,10 @@ export async function updateTouCalendar(
    * `tou_slot.season_code` is a string with no foreign key — it cannot
    * have one, because a season belongs to a set and a slot belongs to a
    * calendar — so moving the calendar to a set that lacks a code leaves
-   * those hours pointing at nothing. They would survive the save and
-   * `resolvePeak` would answer "no period covers 17:15" on every bill
-   * the calendar priced.
-   *
-   * Refused rather than cascaded: deleting somebody's hours to make a
-   * dropdown change succeed is not a trade a screen may make silently.
+   * those hours pointing at nothing, and `resolvePeak` would answer "no
+   * period covers 17:15" on every bill. Refused rather than cascaded:
+   * deleting somebody's hours to make a dropdown change succeed is not
+   * a trade a screen may make silently.
    */
   if (data.seasonSetId && data.seasonSetId !== existing.seasonSetId) {
     const target = await prisma.seasonSet.findFirst({
@@ -484,22 +549,53 @@ export async function updateTouCalendar(
     }
   }
 
+  /*
+   * Attaching a holiday set brings the `holiday` day type with it, for
+   * the same reason creating one does.
+   */
+  let createHolidayDayType = false;
+  if (data.touHolidaySetId && data.touHolidaySetId !== existing.touHolidaySetId) {
+    const set = await prisma.touHolidaySet.findFirst({
+      where: { id: data.touHolidaySetId, utilityId },
+      select: { id: true },
+    });
+    if (!set) throw badRequest("That holiday set does not exist.", "HOLIDAY_SET_MISSING");
+    const already = await prisma.touDayType.findFirst({
+      where: { utilityId, touCalendarId: id, dayTypeCode: HOLIDAY_DAY_TYPE_CODE },
+      select: { id: true },
+    });
+    createHolidayDayType = !already;
+  }
+
   return auditUpdate(
     { utilityId, actorId, actorName, entityType: "TouCalendar" },
     EVENT_TYPES.TOU_CALENDAR_UPDATED,
     existing,
-    async (tx) =>
-      tx.touCalendar.update({
+    async (tx) => {
+      if (createHolidayDayType) {
+        const count = await tx.touDayType.count({ where: { utilityId, touCalendarId: id } });
+        await tx.touDayType.create({
+          data: {
+            utilityId,
+            touCalendarId: id,
+            dayTypeCode: HOLIDAY_DAY_TYPE_CODE,
+            label: "Holiday",
+            sortOrder: count,
+          },
+        });
+      }
+      return tx.touCalendar.update({
         where: { id },
         data: {
           name: data.name,
           effectiveDate: data.effectiveDate ? utcDate(data.effectiveDate) : undefined,
           seasonSetId: data.seasonSetId,
-          touHolidayListId: data.touHolidayListId,
+          touHolidaySetId: data.touHolidaySetId,
           timeZone: data.timeZone,
           clockBasis: data.clockBasis,
         },
-      }),
+      });
+    },
   );
 }
 
@@ -519,8 +615,8 @@ export async function deleteTouCalendar(
   /*
    * A rate schedule referencing it blocks the delete at the database
    * (`rate_schedule_tou_calendar_id_fkey` is RESTRICT), which would
-   * surface as a 500. Named here instead, because the operator needs to
-   * know which schedule to change.
+   * surface as a 500. Named here, because the operator needs to know
+   * which schedule to change.
    */
   const referencing = await prisma.rateSchedule.findMany({
     where: { utilityId: user.utilityId, touCalendarId: id },
@@ -550,11 +646,9 @@ export async function deleteTouCalendar(
 /**
  * Publish, which freezes the hours.
  *
- * Validation runs here rather than at every save for the reason a draft
- * exists at all: a half-written calendar is a normal state of work, and
- * refusing each save would mean building it in an order nobody would
- * choose. Publishing is the commitment, so it is where the whole thing
- * has to hold together.
+ * Validation runs here rather than at every save because a half-written
+ * calendar is a normal state of work. Publishing is the commitment, so
+ * it is where the whole thing has to hold together.
  */
 export async function publishTouCalendar(
   utilityId: string,
@@ -571,8 +665,7 @@ export async function publishTouCalendar(
   /*
    * TOU-CAL-10: the calendar's spans are keyed on its season set's
    * codes, so a published calendar whose set is still a draft could
-   * have the ground move under it — the set is editable, and an edited
-   * code leaves every span referencing nothing.
+   * have the ground move under it.
    */
   if (!row.seasonSet.publishedAt) {
     throw conflict(
@@ -581,14 +674,32 @@ export async function publishTouCalendar(
     );
   }
 
-  const validation = validateCalendar(toTouCalendarDefinition(row), row.seasonSet.seasons);
-  if (!validation.ok) {
+  /* The same argument for holidays: a draft set's dates can still move. */
+  if (row.touHolidaySetId) {
+    const set = await prisma.touHolidaySet.findFirst({
+      where: { id: row.touHolidaySetId, utilityId },
+      select: { name: true, publishedAt: true },
+    });
+    if (set && !set.publishedAt) {
+      throw conflict(
+        `The holiday set "${set.name}" is still a draft. Publish it first — a draft set's dates can still change, and these hours would then price different days than the ones you checked.`,
+        "HOLIDAY_SET_NOT_PUBLISHED",
+      );
+    }
+  }
+
+  const engineValidation = validateCalendar(toTouCalendarDefinition(row), row.seasonSet.seasons);
+  const problems = [
+    ...(engineValidation.ok ? [] : engineValidation.problems),
+    ...(await holidayHorizonProblems(utilityId, row)),
+  ];
+  if (problems.length > 0) {
     throw Object.assign(
       new Error(
-        `"${row.name}" does not yet price every hour exactly once, so publishing it would leave usage either uncharged or charged twice:\n` +
-          validation.problems.map((p) => `  • ${p}`).join("\n"),
+        `"${row.name}" is not ready to publish, and publishing it would leave usage either uncharged or charged twice:\n` +
+          problems.map((p) => `  • ${p}`).join("\n"),
       ),
-      { statusCode: 409, code: "TOU_CALENDAR_INVALID", problems: validation.problems },
+      { statusCode: 409, code: "TOU_CALENDAR_INVALID", problems },
     );
   }
 
@@ -619,8 +730,7 @@ export async function putTouPeriods(
   /*
    * A period a span still references cannot go. The database would
    * refuse it (`tou_slot_period_id_fkey` is RESTRICT) with a message
-   * naming a constraint; this names the hours instead, which is what
-   * the operator has to go and change.
+   * naming a constraint; this names the hours instead.
    */
   const removed = row.periods.filter((p) => !codes.includes(p.peakCode));
   const stillUsed = removed.filter((p) => row.slots.some((s) => s.period.id === p.id));
@@ -659,11 +769,10 @@ export async function putTouPeriods(
         }
       }
       /*
-       * The calendar is what the audit row is about: a span or a period
-       * is not separately addressable to anyone asking "who moved the
-       * peak hours", and `auditUpdate` needs an entity with an id. The
-       * empty update is also what moves `updatedAt`, so the list can
-       * show which calendar someone was last working on.
+       * The calendar is what the audit row is about: a period is not
+       * separately addressable to anyone asking "who moved the peak
+       * hours", and `auditUpdate` needs an entity with an id. The empty
+       * update also moves `updatedAt`.
        */
       return tx.touCalendar.update({ where: { id }, data: {} });
     },
@@ -686,19 +795,36 @@ export async function putTouDayTypes(
     throw badRequest(`"${duplicate}" is listed twice.`, "DUPLICATE_DAY_TYPE_CODE");
   }
 
-  const holidays = data.dayTypes.filter((d) => d.isHoliday);
-  if (holidays.length > 1) {
+  /*
+   * `holiday` is the system's code and the engine finds that day type
+   * by matching it. Two refusals, because blocking only the first would
+   * leave the second quiet: a renamed or removed holiday day type stops
+   * being found, and then every holiday bills as an ordinary weekday
+   * with nothing raised.
+   */
+  const existingHoliday = row.dayTypes.find((d) => d.dayTypeCode === HOLIDAY_DAY_TYPE_CODE);
+  const submittedHoliday = data.dayTypes.find(
+    (d) => d.dayTypeCode.trim().toLowerCase() === HOLIDAY_DAY_TYPE_CODE,
+  );
+
+  if (submittedHoliday && !existingHoliday) {
     throw badRequest(
-      `Only one day type can be the holiday one; ${holidays.map((d) => `"${d.label}"`).join(" and ")} are both marked.`,
-      "MULTIPLE_HOLIDAY_DAY_TYPES",
+      `"${HOLIDAY_DAY_TYPE_CODE}" is reserved. It is created for you when the calendar names a holiday set, and the hours you give it are what those dates cost.`,
+      "RESERVED_DAY_TYPE_CODE",
+    );
+  }
+
+  if (existingHoliday && !submittedHoliday && row.touHolidaySetId) {
+    throw conflict(
+      `The "${HOLIDAY_DAY_TYPE_CODE}" day type is what this calendar's holiday dates resolve to, so it cannot be renamed or removed while a holiday set is named. Detach the set first if the tariff does not price holidays separately.`,
+      "RESERVED_DAY_TYPE_REQUIRED",
     );
   }
 
   /*
    * Removing a day type deletes its hours, because
-   * `tou_slot_day_type_id_fkey` cascades — which is right for deleting
-   * a calendar and wrong for a typo in a code, where it would quietly
-   * discard an afternoon's work. Refused instead, naming what would go.
+   * `tou_slot_day_type_id_fkey` cascades — right for deleting a
+   * calendar, wrong for a typo in a code.
    */
   const removed = row.dayTypes.filter((d) => !codes.includes(d.dayTypeCode));
   const withSpans = removed
@@ -717,7 +843,6 @@ export async function putTouDayTypes(
     row.dayTypes.map((d) => ({
       dayTypeCode: d.dayTypeCode,
       label: d.label,
-      isHoliday: d.isHoliday,
       weekdays: d.weekdays.map((w) => w.isoWeekday),
     })),
     async (tx) => {
@@ -727,11 +852,9 @@ export async function putTouDayTypes(
 
       /*
        * Every weekday row for the calendar goes first, then they are
-       * written again. `tou_day_type_weekday_once_per_calendar` makes
-       * any weekday a single day type's property, so moving Saturday
-       * from one day type to another is only legal with the old row
-       * gone — and in one transaction the order inside it is all that
-       * matters.
+       * written again. `tou_day_type_weekday_once_per_calendar` makes a
+       * weekday one day type's property, so moving Saturday from one to
+       * another is only legal with the old row gone.
        */
       await tx.touDayTypeWeekday.deleteMany({ where: { utilityId, touCalendarId: id } });
 
@@ -741,7 +864,7 @@ export async function putTouDayTypes(
           ? (
               await tx.touDayType.update({
                 where: { id: existing.id },
-                data: { label: dayType.label, isHoliday: dayType.isHoliday, sortOrder: index },
+                data: { label: dayType.label, sortOrder: index },
               })
             ).id
           : (
@@ -751,7 +874,6 @@ export async function putTouDayTypes(
                   touCalendarId: id,
                   dayTypeCode: dayType.dayTypeCode,
                   label: dayType.label,
-                  isHoliday: dayType.isHoliday,
                   sortOrder: index,
                 },
               })
@@ -785,10 +907,7 @@ export async function putTouSpans(
 
   const dayType = row.dayTypes.find((d) => d.dayTypeCode === data.dayTypeCode);
   if (!dayType) {
-    throw badRequest(
-      `This calendar has no day type "${data.dayTypeCode}".`,
-      "TOU_DAY_TYPE_MISSING",
-    );
+    throw badRequest(`This calendar has no day type "${data.dayTypeCode}".`, "TOU_DAY_TYPE_MISSING");
   }
   if (!row.seasonSet.seasons.some((s) => s.seasonCode === data.seasonCode)) {
     throw badRequest(
@@ -800,20 +919,16 @@ export async function putTouSpans(
   const periodByCode = new Map(row.periods.map((p) => [p.peakCode, p.id]));
   for (const span of data.spans) {
     if (!periodByCode.has(span.peakCode)) {
-      throw badRequest(
-        `This calendar has no period "${span.peakCode}".`,
-        "TOU_PERIOD_MISSING",
-      );
+      throw badRequest(`This calendar has no period "${span.peakCode}".`, "TOU_PERIOD_MISSING");
     }
   }
 
   /*
    * Overlaps are caught here as well as by `tou_slot_no_overlap`,
    * because the exclusion constraint reports one pair and the editor
-   * has to show the operator every clash at once — and because a 23503
-   * from Postgres is not a sentence anybody can act on. Gaps are not
-   * refused: a half-filled day is a normal state of a draft, and
-   * `validateCalendar` names them on every read.
+   * has to show every clash at once — and a 23503 from Postgres is not
+   * a sentence anybody can act on. Gaps are not refused: a half-filled
+   * day is a normal state of a draft, and `validateCalendar` names them.
    */
   const sorted = [...data.spans].sort((a, b) => a.startMinute - b.startMinute);
   for (let i = 1; i < sorted.length; i++) {
@@ -917,39 +1032,17 @@ export async function putTouDayOverrides(
   );
 }
 
-/** `17:15`, and `24:00` for the exclusive end of the day. */
-function timeLabel(minute: number): string {
-  return `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
-}
-
 export async function validateTouCalendar(
   id: string,
   utilityId: string,
 ): Promise<CalendarValidation> {
   const row = await loadEditorCalendar(utilityId, id);
-  return validateCalendar(toTouCalendarDefinition(row), row.seasonSet.seasons);
-}
-
-/** The rules of the calendar's holiday list, as the resolver wants them. */
-async function holidayRulesFor(
-  utilityId: string,
-  touHolidayListId: string | null,
-): Promise<HolidayRule[]> {
-  if (!touHolidayListId) return [];
-  const rules = await prisma.touHolidayRule.findMany({
-    where: { utilityId, touHolidayListId },
-    orderBy: [{ month: "asc" }, { code: "asc" }],
-  });
-  return rules.map((r) => ({
-    code: r.code,
-    label: r.label,
-    kind: r.kind as HolidayRule["kind"],
-    month: r.month,
-    day: r.day ?? undefined,
-    weekday: (r.weekday ?? undefined) as IsoWeekday | undefined,
-    nth: r.nth ?? undefined,
-    observance: r.observance as HolidayObservance,
-  }));
+  const engineValidation = validateCalendar(toTouCalendarDefinition(row), row.seasonSet.seasons);
+  const problems = [
+    ...(engineValidation.ok ? [] : engineValidation.problems),
+    ...(await holidayHorizonProblems(utilityId, row)),
+  ];
+  return problems.length === 0 ? { ok: true } : { ok: false, problems };
 }
 
 const WEEKDAY_NAMES = [
@@ -965,50 +1058,53 @@ const WEEKDAY_NAMES = [
 /**
  * Why this date got this day type, in a sentence (TOU-UI-1c).
  *
- * The holiday interaction is the part people get wrong, so the holiday
- * case names the rule that produced the date rather than saying
- * "holiday" — a tenant checking 3 July wants to be told it is the
- * observed Independence Day, which is the fact they are unsure of.
+ * The holiday case names the holiday rather than saying "holiday",
+ * because the name is the fact somebody is checking — and it is a row
+ * now, not something a rule worked out.
  */
 function explainDayType(
   date: Date,
   isoDate: string,
   reason: "OVERRIDE" | "HOLIDAY" | "WEEKDAY",
   dayTypeLabel: string,
-  holidays: Array<{ label: string; observed: Date; actual: Date }>,
+  holidayName: string | null,
   override: { reason: string | null } | undefined,
 ): string {
   const weekday = WEEKDAY_NAMES[(date.getUTCDay() + 6) % 7];
 
   if (reason === "OVERRIDE") {
     const why = override?.reason ? ` (${override.reason})` : "";
-    return `${isoDate} is overridden to "${dayTypeLabel}"${why}, which takes precedence over its weekday and the holiday list.`;
+    return `${isoDate} is overridden to "${dayTypeLabel}"${why}, which takes precedence over its weekday and the holiday set.`;
   }
 
   if (reason === "HOLIDAY") {
-    const match = holidays.find((h) => h.observed.toISOString().slice(0, 10) === isoDate);
-    if (!match) {
-      return `${isoDate} is an observed holiday, so "${dayTypeLabel}" applies.`;
-    }
-    const actual = match.actual.toISOString().slice(0, 10);
-    const shifted =
-      actual === isoDate
-        ? ""
-        : ` — the holiday falls on ${actual} and is observed on this day instead`;
-    return `${isoDate} is observed as ${match.label}${shifted}, so "${dayTypeLabel}" applies rather than its ${weekday} day type.`;
+    const named = holidayName ? ` as ${holidayName}` : "";
+    return `${isoDate} is in this calendar's holiday set${named}, so "${dayTypeLabel}" applies rather than its ${weekday} hours.`;
   }
 
   return `${isoDate} is a ${weekday}, and ${weekday} belongs to "${dayTypeLabel}".`;
+}
+
+/** The holiday row for one date, for the sentence above. */
+async function holidayNameOn(
+  utilityId: string,
+  touHolidaySetId: string | null,
+  date: Date,
+): Promise<string | null> {
+  if (!touHolidaySetId) return null;
+  const row = await prisma.touHoliday.findFirst({
+    where: { utilityId, touHolidaySetId, holidayDate: date },
+    select: { name: true },
+  });
+  return row?.name ?? null;
 }
 
 /**
  * TOU-UI-1c — the spot check: one date and time, answered with the
  * period, the day type, the season and why.
  *
- * The single most valuable control on the screen, because it is how
- * somebody checks a calendar before publishing it, and it runs the
- * engine's own `resolvePeak` so that what it says is what a bill will
- * do.
+ * It runs the engine's own `resolvePeak`, so what it says is what a
+ * bill will do.
  */
 export async function spotCheckTouCalendar(
   id: string,
@@ -1021,13 +1117,13 @@ export async function spotCheckTouCalendar(
   const minuteOfDay = hours * 60 + minutes;
 
   const definition = toTouCalendarDefinition(row);
-  const observedHolidays = await loadObservedHolidays(prisma, utilityId, row.touHolidayListId, {
-    startDate: date,
-    endDate: date,
-  });
-  const rules = await holidayRulesFor(utilityId, row.touHolidayListId);
-  const year = date.getUTCFullYear();
-  const holidays = resolveHolidays(rules, year, year);
+  const [observedHolidays, holidayName] = await Promise.all([
+    loadObservedHolidays(prisma, utilityId, row.touHolidaySetId, {
+      startDate: date,
+      endDate: date,
+    }),
+    holidayNameOn(utilityId, row.touHolidaySetId, date),
+  ]);
 
   const lookup = resolvePeak({
     date,
@@ -1062,7 +1158,7 @@ export async function spotCheckTouCalendar(
             query.date,
             lookup.dayTypeReason,
             dayTypeRow?.label ?? lookup.dayTypeCode,
-            holidays,
+            holidayName,
             row.overrides.find((o) => o.overrideDate.toISOString().slice(0, 10) === query.date),
           ),
         }
@@ -1071,23 +1167,22 @@ export async function spotCheckTouCalendar(
 }
 
 /**
- * TOU-UI-1e — a whole day laid out: which day type and season resolve,
- * and the spans that apply. The same mechanism as the spot check, which
- * is the point: an observance rule is sanity-checked by looking at the
- * day it moves, not at one minute of it.
+ * TOU-UI-1e — a whole day laid out. The same mechanism as the spot
+ * check, which is the point: a holiday is checked by looking at the day
+ * it changes, not at one minute of it.
  */
 export async function previewTouDay(id: string, utilityId: string, query: { date: string }) {
   const row = await loadEditorCalendar(utilityId, id);
   const date = utcDate(query.date);
   const definition = toTouCalendarDefinition(row);
 
-  const observedHolidays = await loadObservedHolidays(prisma, utilityId, row.touHolidayListId, {
-    startDate: date,
-    endDate: date,
-  });
-  const rules = await holidayRulesFor(utilityId, row.touHolidayListId);
-  const year = date.getUTCFullYear();
-  const holidays = resolveHolidays(rules, year, year);
+  const [observedHolidays, holidayName] = await Promise.all([
+    loadObservedHolidays(prisma, utilityId, row.touHolidaySetId, {
+      startDate: date,
+      endDate: date,
+    }),
+    holidayNameOn(utilityId, row.touHolidaySetId, date),
+  ]);
 
   const dayType = resolveDayType(date, definition, observedHolidays);
   if (!dayType) {
@@ -1123,7 +1218,7 @@ export async function previewTouDay(id: string, utilityId: string, query: { date
       query.date,
       dayType.reason,
       dayTypeRow?.label ?? dayType.dayTypeCode,
-      holidays,
+      holidayName,
       row.overrides.find((o) => o.overrideDate.toISOString().slice(0, 10) === query.date),
     ),
     seasonCode,

@@ -30,7 +30,7 @@
 
 import type { PrismaClient } from "@utility-cis/shared/src/generated/prisma";
 import type { SeasonDefinition } from "../rate-engine/seasons.js";
-import { observedDays, type HolidayObservance, type HolidayRule, type IsoWeekday } from "../rate-engine/holidays.js";
+import type { IsoWeekday } from "../rate-engine/tou-calendar.js";
 import type { TouCalendarDefinition } from "../rate-engine/tou-calendar.js";
 import type { ClockBasis } from "../rate-engine/tou-clock.js";
 
@@ -46,7 +46,7 @@ export interface LoadedTouCalendar {
   definition: TouCalendarDefinition;
   /**
    * Observed holiday dates (`YYYY-MM-DD`) for every year the period
-   * touches. Empty when the calendar names no holiday list.
+   * touches. Empty when the calendar names no holiday set.
    */
   observedHolidays: Set<string>;
 }
@@ -73,7 +73,6 @@ export type TouCalendarLoad =
 export interface TouCalendarDefinitionRows {
   dayTypes: Array<{
     dayTypeCode: string;
-    isHoliday: boolean;
     weekdays: Array<{ isoWeekday: number }>;
   }>;
   periods: Array<{ peakCode: string }>;
@@ -93,7 +92,6 @@ export function toTouCalendarDefinition(row: TouCalendarDefinitionRows): TouCale
     dayTypes: row.dayTypes.map((d) => ({
       dayTypeCode: d.dayTypeCode,
       weekdays: d.weekdays.map((w) => w.isoWeekday as IsoWeekday),
-      isHoliday: d.isHoliday,
     })),
     peakCodes: row.periods.map((p) => p.peakCode),
     slots: row.slots.map((s) => ({
@@ -194,54 +192,44 @@ export async function loadTouCalendar(
         endDay: s.endDay,
       })),
       definition,
-      observedHolidays: await loadObservedHolidays(prisma, utilityId, row.touHolidayListId, period),
+      observedHolidays: await loadObservedHolidays(prisma, utilityId, row.touHolidaySetId, period),
     },
   };
 }
 
 /**
- * The holiday dates a period needs, resolved from the rules.
+ * The holiday dates a period touches.
  *
- * **Every year the period touches**, not just its start year: a
- * December-to-January billing period that resolved only 2026 would
- * price New Year's Day 2027 as an ordinary weekday — at peak, on a day
- * the tariff says is off-peak, with nothing raised.
+ * A read now, not a resolution. They were computed from rules — "4
+ * July, nearest weekday" — which meant the dates a bill priced against
+ * existed nowhere until something worked them out, and nobody could
+ * check them without a preview built for the purpose. They are rows.
  *
- * The list is read by id rather than through a relation because the key
- * from a calendar to its list is nullable and composite, which Prisma
+ * Filtered to the period rather than loaded whole: a set covers a
+ * horizon of years and a bill covers a month.
+ *
+ * The set is read by id rather than through a relation because the key
+ * from a calendar to its set is nullable and composite, which Prisma
  * cannot express; the foreign key itself is in the migration.
  */
 export async function loadObservedHolidays(
   prisma: PrismaClient,
   utilityId: string,
-  touHolidayListId: string | null,
+  touHolidaySetId: string | null,
   period: { startDate: Date; endDate: Date },
 ): Promise<Set<string>> {
-  if (!touHolidayListId) return new Set();
+  if (!touHolidaySetId) return new Set();
 
-  const rules = await prisma.touHolidayRule.findMany({
-    where: { utilityId, touHolidayListId },
-    orderBy: [{ month: "asc" }, { code: "asc" }],
+  const rows = await prisma.touHoliday.findMany({
+    where: {
+      utilityId,
+      touHolidaySetId,
+      holidayDate: { gte: period.startDate, lte: period.endDate },
+    },
+    select: { holidayDate: true },
   });
 
-  const asRules: HolidayRule[] = rules.map((r) => ({
-    code: r.code,
-    label: r.label,
-    kind: r.kind as HolidayRule["kind"],
-    month: r.month,
-    day: r.day ?? undefined,
-    weekday: (r.weekday ?? undefined) as IsoWeekday | undefined,
-    nth: r.nth ?? undefined,
-    observance: r.observance as HolidayObservance,
-  }));
-
-  const dates = new Set<string>();
-  for (
-    let year = period.startDate.getUTCFullYear();
-    year <= period.endDate.getUTCFullYear();
-    year++
-  ) {
-    for (const day of observedDays(asRules, year)) dates.add(day);
-  }
-  return dates;
+  // `@db.Date` comes back as UTC midnight, so the ISO date is the date
+  // — no local getters, which would shift it a day west of Greenwich.
+  return new Set(rows.map((r) => r.holidayDate.toISOString().slice(0, 10)));
 }

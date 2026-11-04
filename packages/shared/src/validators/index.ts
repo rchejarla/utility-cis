@@ -7,7 +7,7 @@ export * from "./service-agreement";
 export * from "./rate-schedule";
 export * from "./tou-calendar";
 export * from "./season-set";
-export * from "./tou-holiday-list";
+export * from "./tou-holiday-set";
 export * from "./billing-cycle";
 export * from "./bill-segment";
 export * from "./billing-run";

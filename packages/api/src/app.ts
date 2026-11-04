@@ -30,7 +30,7 @@ import { billDocumentRoutes } from "./routes/bill-documents.js";
 import { rateScheduleRoutes } from "./routes/rate-schedules.js";
 import { touCalendarRoutes } from "./routes/tou-calendars.js";
 import { seasonSetRoutes } from "./routes/season-sets.js";
-import { touHolidayListRoutes } from "./routes/tou-holiday-lists.js";
+import { touHolidaySetRoutes } from "./routes/tou-holiday-sets.js";
 import { themeRoutes } from "./routes/theme.js";
 import { auditLogRoutes } from "./routes/audit-log.js";
 import { customerRoutes } from "./routes/customers.js";
@@ -164,7 +164,7 @@ export async function buildApp() {
   await app.register(rateScheduleRoutes);
   await app.register(touCalendarRoutes);
   await app.register(seasonSetRoutes);
-  await app.register(touHolidayListRoutes);
+  await app.register(touHolidaySetRoutes);
   await app.register(themeRoutes);
   await app.register(auditLogRoutes);
   await app.register(customerRoutes);

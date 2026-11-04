@@ -18,6 +18,7 @@ import {
   faMoneyBill,
   faMoneyBillTransfer,
   faCalendarDays,
+  faCalendarStar,
   faClock,
   faCloudSunRain,
   faTags,
@@ -347,6 +348,15 @@ export const navSections: NavSection[] = [
        * time-of-use pricing and find out seasons exist.
        */
       { href: "/season-sets", label: "Seasons", icon: faCloudSunRain, module: "rate_schedules" },
+      /*
+       * After Seasons, for the same reason Seasons comes after
+       * Calendars: a holiday set is something a tenant discovers they
+       * need while giving a calendar its hours, not something they come
+       * looking for. Under `rate_schedules` because a holiday here is
+       * not a company holiday — it is a day a tariff prices differently,
+       * and whoever may set the hours may set which days get them.
+       */
+      { href: "/tou-holiday-sets", label: "Holidays", icon: faCalendarStar, module: "rate_schedules" },
     ],
   },
   {
