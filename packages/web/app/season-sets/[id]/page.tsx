@@ -208,6 +208,16 @@ export default function SeasonSetEditorPage() {
   const readOnly = published || !canEdit;
   const codes = rows.map((r) => r.seasonCode);
 
+  /*
+   * A row nobody has filled in yet. "Add a season" creates one whose
+   * placeholders look like values, so the obvious next click is Save —
+   * which sent an empty code to a schema demanding one and came back
+   * "Validation failed", naming neither the field nor the row.
+   */
+  const incomplete = rows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => row.seasonCode.trim() === "" || row.label.trim() === "");
+
   return (
     <div style={{ maxWidth: "1000px", display: "flex", flexDirection: "column", gap: "16px" }}>
       <PageHeader
@@ -421,7 +431,11 @@ export default function SeasonSetEditorPage() {
                   <input
                     aria-label="Season code"
                     disabled={readOnly}
-                    style={{ ...inputStyle, fontFamily: "monospace" }}
+                    style={{
+                      ...inputStyle,
+                      fontFamily: "monospace",
+                      ...(row.seasonCode.trim() === "" ? { borderColor: "var(--danger)" } : {}),
+                    }}
                     value={row.seasonCode}
                     placeholder="summer"
                     onChange={(e) =>
@@ -435,7 +449,10 @@ export default function SeasonSetEditorPage() {
                   <input
                     aria-label="Season label"
                     disabled={readOnly}
-                    style={inputStyle}
+                    style={{
+                      ...inputStyle,
+                      ...(row.label.trim() === "" ? { borderColor: "var(--danger)" } : {}),
+                    }}
                     value={row.label}
                     placeholder="Summer"
                     onChange={(e) =>
@@ -500,6 +517,15 @@ export default function SeasonSetEditorPage() {
           A season may wrap the year end — 1 November to 31 March is one season, not two.
         </div>
 
+        {incomplete.length > 0 && (
+          <div data-testid="seasons-incomplete" style={{ fontSize: "12px", color: "var(--warning)" }}>
+            {incomplete.length === 1 ? "Row" : "Rows"}{" "}
+            {incomplete.map(({ index }) => index + 1).join(", ")} still{" "}
+            {incomplete.length === 1 ? "needs" : "need"} a code and a label. The greyed text is an
+            example, not a value.
+          </div>
+        )}
+
         {!readOnly && (
           <div style={{ display: "flex", gap: "8px" }}>
             <button
@@ -533,7 +559,7 @@ export default function SeasonSetEditorPage() {
             <button
               type="button"
               onClick={saveSeasons}
-              disabled={!dirty || busy}
+              disabled={!dirty || busy || incomplete.length > 0}
               style={{
                 marginLeft: "auto",
                 padding: "5px 12px",
@@ -543,8 +569,8 @@ export default function SeasonSetEditorPage() {
                 color: "#fff",
                 fontSize: "12px",
                 fontWeight: 500,
-                cursor: !dirty || busy ? "not-allowed" : "pointer",
-                opacity: !dirty || busy ? 0.6 : 1,
+                cursor: !dirty || busy || incomplete.length > 0 ? "not-allowed" : "pointer",
+                opacity: !dirty || busy || incomplete.length > 0 ? 0.6 : 1,
                 fontFamily: "inherit",
               }}
             >

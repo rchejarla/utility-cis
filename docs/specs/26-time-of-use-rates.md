@@ -739,8 +739,8 @@ raw intervals from the same meters. Compression is therefore entirely a
 > the browser would eventually bless a calendar the engine reads
 > differently, and the wrapped season is exactly where it would start.
 >
-> **Dev seed:** `seed/tou-calendar.js` creates a published "Time of Day
-> 5-8pm" calendar and an "Observed holidays" list, so the screens open on
+> **Dev seed:** `seed/tou-calendar.js` creates a published "Residential
+> time-of-use" calendar and an "Observed holidays" list, so the screens open on
 > something and the spot check can be used. It keys its spans on the
 > season set the tenant already has — the `season_sets` migration seeds
 > every tenant a published "Default" — rather than creating a second set,

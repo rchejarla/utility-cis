@@ -436,3 +436,75 @@ describe("when the calendar cannot be loaded", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/no TOU calendar with that id/);
   });
 });
+
+describe("rows nobody has filled in", () => {
+  /*
+   * The bug this closes: "Add a period" creates a row whose
+   * placeholders — `peak`, `Peak` — look exactly like values, so the
+   * obvious next click is Save. That sent an empty code to a schema
+   * demanding at least one character and came back "API error 400:
+   * Validation failed", naming neither the field nor the row.
+   */
+  it("will not save a period with no code", async () => {
+    renderPage();
+    await screen.findByTestId("periods-editor");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
+
+    expect(screen.getByRole("button", { name: "Save periods" })).toBeDisabled();
+    expect(screen.getByTestId("periods-incomplete").textContent).toMatch(/Row 3/);
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it("will not save a day type with no code", async () => {
+    renderPage();
+    await screen.findByTestId("day-types-editor");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a day type" }));
+
+    expect(screen.getByRole("button", { name: "Save day types" })).toBeDisabled();
+    expect(screen.getByTestId("day-types-incomplete").textContent).toMatch(/Row 3/);
+  });
+
+  it("says the greyed text is an example, because that is the trap", async () => {
+    renderPage();
+    await screen.findByTestId("periods-editor");
+    await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
+
+    expect(screen.getByTestId("periods-incomplete").textContent).toMatch(
+      /example, not a value/,
+    );
+  });
+
+  it("lets the save through once the row is filled in", async () => {
+    put.mockResolvedValue(calendar());
+    renderPage();
+    await screen.findByTestId("periods-editor");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
+    const codes = screen.getAllByLabelText("Period code");
+    const labels = screen.getAllByLabelText("Period label");
+    await userEvent.type(codes[codes.length - 1], "super_off_peak");
+    await userEvent.type(labels[labels.length - 1], "Super off-peak");
+
+    expect(screen.queryByTestId("periods-incomplete")).toBeNull();
+    const save = screen.getByRole("button", { name: "Save periods" });
+    expect(save).toBeEnabled();
+
+    await userEvent.click(save);
+    await waitFor(() => expect(put).toHaveBeenCalled());
+    const [, payload] = put.mock.calls[0];
+    expect((payload as { periods: Array<{ peakCode: string }> }).periods).toHaveLength(3);
+  });
+
+  it("treats whitespace as empty, so a space is not a code", async () => {
+    renderPage();
+    await screen.findByTestId("periods-editor");
+    await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
+
+    const codes = screen.getAllByLabelText("Period code");
+    await userEvent.type(codes[codes.length - 1], "   ");
+
+    expect(screen.getByRole("button", { name: "Save periods" })).toBeDisabled();
+  });
+});

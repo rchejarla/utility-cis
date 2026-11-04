@@ -313,3 +313,36 @@ describe("when the set cannot be loaded", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/no season set with that id/);
   });
 });
+
+describe("rows nobody has filled in", () => {
+  it("will not save a season with no code", async () => {
+    /*
+     * The same trap as the TOU editors: "Add a season" creates a row
+     * whose placeholders look like values, and saving it came back
+     * "Validation failed" naming neither the field nor the row.
+     */
+    renderPage();
+    await screen.findByText("Summer and winter");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a season" }));
+
+    expect(screen.getByRole("button", { name: "Save seasons" })).toBeDisabled();
+    expect(screen.getByTestId("seasons-incomplete").textContent).toMatch(/Row 3/);
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it("lets it through once the row is filled in", async () => {
+    put.mockResolvedValue(seasonSet());
+    renderPage();
+    await screen.findByText("Summer and winter");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a season" }));
+    const codes = screen.getAllByLabelText("Season code");
+    const labels = screen.getAllByLabelText("Season label");
+    await userEvent.type(codes[codes.length - 1], "shoulder");
+    await userEvent.type(labels[labels.length - 1], "Shoulder");
+
+    expect(screen.queryByTestId("seasons-incomplete")).toBeNull();
+    expect(screen.getByRole("button", { name: "Save seasons" })).toBeEnabled();
+  });
+});

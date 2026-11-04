@@ -72,6 +72,24 @@ const primaryButton = (disabled: boolean) => ({
   marginLeft: "auto",
 });
 
+/**
+ * A row nobody has filled in yet.
+ *
+ * "Add a period" creates a blank row whose placeholders — `peak`,
+ * `Peak` — look exactly like values, so the obvious next click is Save.
+ * That sent an empty code to a schema demanding at least one character
+ * and came back "Validation failed", which named neither the field nor
+ * the row. Caught here instead: the save is held and the empty boxes
+ * say so.
+ */
+function isBlank(value: string): boolean {
+  return value.trim() === "";
+}
+
+const blankInput = {
+  borderColor: "var(--danger)",
+};
+
 function Card({
   title,
   hint,
@@ -123,6 +141,11 @@ export function PeriodsEditor({
     setError(null);
   };
 
+  /** Rows that would be refused, by position, so the message can say which. */
+  const incomplete = rows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => isBlank(row.peakCode) || isBlank(row.label));
+
   const save = async () => {
     setSaving(true);
     setError(null);
@@ -169,8 +192,12 @@ export function PeriodsEditor({
                 <input
                   aria-label="Period code"
                   disabled={readOnly}
-                  style={{ ...inputStyle, fontFamily: "monospace" }}
                   value={row.peakCode}
+                  style={{
+                    ...inputStyle,
+                    fontFamily: "monospace",
+                    ...(isBlank(row.peakCode) ? blankInput : {}),
+                  }}
                   placeholder="peak"
                   onChange={(e) =>
                     change(rows.map((r, i) => (i === index ? { ...r, peakCode: e.target.value } : r)))
@@ -181,8 +208,8 @@ export function PeriodsEditor({
                 <input
                   aria-label="Period label"
                   disabled={readOnly}
-                  style={inputStyle}
                   value={row.label}
+                  style={{ ...inputStyle, ...(isBlank(row.label) ? blankInput : {}) }}
                   placeholder="Peak"
                   onChange={(e) =>
                     change(rows.map((r, i) => (i === index ? { ...r, label: e.target.value } : r)))
@@ -218,6 +245,15 @@ export function PeriodsEditor({
         </div>
       )}
 
+      {incomplete.length > 0 && (
+        <div data-testid="periods-incomplete" style={{ fontSize: "12px", color: "var(--warning)" }}>
+          {incomplete.length === 1 ? "Row" : "Rows"}{" "}
+          {incomplete.map(({ index }) => index + 1).join(", ")} still{" "}
+          {incomplete.length === 1 ? "needs" : "need"} a code and a label. The greyed text is an
+          example, not a value.
+        </div>
+      )}
+
       {!readOnly && (
         <div style={{ display: "flex", gap: "8px" }}>
           <button
@@ -229,8 +265,8 @@ export function PeriodsEditor({
           </button>
           <button
             type="button"
-            style={primaryButton(!dirty || saving)}
-            disabled={!dirty || saving}
+            style={primaryButton(!dirty || saving || incomplete.length > 0)}
+            disabled={!dirty || saving || incomplete.length > 0}
             onClick={save}
           >
             {saving ? "Saving…" : "Save periods"}
@@ -283,6 +319,11 @@ export function DayTypesEditor({
   const claimed = new Set(rows.flatMap((r) => r.weekdays));
   const unclaimed = WEEKDAYS.filter((d) => !claimed.has(d.iso));
 
+  /** Rows that would be refused, by position. See `isBlank`. */
+  const incomplete = rows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => isBlank(row.dayTypeCode) || isBlank(row.label));
+
   const save = async () => {
     setSaving(true);
     setError(null);
@@ -319,7 +360,11 @@ export function DayTypesEditor({
                 <input
                   aria-label="Day type code"
                   disabled={readOnly}
-                  style={{ ...inputStyle, fontFamily: "monospace" }}
+                  style={{
+                    ...inputStyle,
+                    fontFamily: "monospace",
+                    ...(isBlank(row.dayTypeCode) ? blankInput : {}),
+                  }}
                   value={row.dayTypeCode}
                   placeholder="weekday"
                   onChange={(e) =>
@@ -335,7 +380,7 @@ export function DayTypesEditor({
                 <input
                   aria-label="Day type label"
                   disabled={readOnly}
-                  style={inputStyle}
+                  style={{ ...inputStyle, ...(isBlank(row.label) ? blankInput : {}) }}
                   value={row.label}
                   placeholder="Weekday"
                   onChange={(e) =>
@@ -436,6 +481,15 @@ export function DayTypesEditor({
         </div>
       )}
 
+      {incomplete.length > 0 && (
+        <div data-testid="day-types-incomplete" style={{ fontSize: "12px", color: "var(--warning)" }}>
+          {incomplete.length === 1 ? "Row" : "Rows"}{" "}
+          {incomplete.map(({ index }) => index + 1).join(", ")} still{" "}
+          {incomplete.length === 1 ? "needs" : "need"} a code and a label. The greyed text is an
+          example, not a value.
+        </div>
+      )}
+
       {!readOnly && (
         <div style={{ display: "flex", gap: "8px" }}>
           <button
@@ -449,8 +503,8 @@ export function DayTypesEditor({
           </button>
           <button
             type="button"
-            style={primaryButton(!dirty || saving)}
-            disabled={!dirty || saving}
+            style={primaryButton(!dirty || saving || incomplete.length > 0)}
+            disabled={!dirty || saving || incomplete.length > 0}
             onClick={save}
           >
             {saving ? "Saving…" : "Save day types"}

@@ -35,7 +35,24 @@
  * cannot import the TypeScript.
  */
 
-const CALENDAR_NAME = "Time of Day 5-8pm";
+/*
+ * Named for what it is for, not for what it currently says.
+ *
+ * It was "Time of Day 5-8pm" — lifted from SMUD's published tariff,
+ * which is the golden fixture the rate engine's tests transcribe. Wrong
+ * three times over for a seed: it is another utility's product name
+ * sitting in Bozeman's demo data; it names a *rate* where this is the
+ * *hours* a rate prices against, which is the distinction that lets a
+ * schedule reference a calendar; and a name describing the current peak
+ * cannot survive its own next version.
+ *
+ * That last one decides it. A version IS a (name, effectiveDate) pair,
+ * so the name is half the version key — a 2027 calendar moving the peak
+ * to 4-9pm has to keep this name to be a new *version* of it. Any name
+ * describing today's hours is therefore a bad calendar name by
+ * construction.
+ */
+const CALENDAR_NAME = "Residential time-of-use";
 const HOLIDAY_LIST_NAME = "Observed holidays";
 
 /** Bozeman. The tariff's zone, not any customer's (TOU-CAL-6). */
