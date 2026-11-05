@@ -1056,6 +1056,13 @@ tenant name it in the path. Full inventory and rationale: spec 25.
 
 **Errors:** `{ error: { code: "VALIDATION_ERROR", message: "...", details: [...] } }`. Prisma error codes (P2002 unique constraint, P2025 record not found, P2003 foreign key, P2014 relation constraint) are mapped to HTTP status codes and friendly messages by a central error handler.
 
+**The message is the only channel that is always shown.** `api-client.ts` surfaces `message` and appends `details` when present, so anything a caller must read goes in `message`. Two consequences, both fixed 2026-11-05:
+
+- **P2002 names what collided in the message**, not only in `details`. It previously read "A record with these values already exists" for every constraint on every model, with the field list in `details` — which is dropped entirely when Prisma reports no `target`. The same branch no longer sends `details` at all, because it held exactly those field names and the client would print them twice in one sentence. The Zod branch keeps its details, where each entry is a different field.
+- **`meta.target` is an array, a string, or absent.** Under the driver adapter Postgres hands back a constraint *name* where the Rust engine handed back a field list. It was cast to `string[]` unconditionally, and a string has a truthy `.length` with no `.join` — so that cast threw *inside the error handler* and turned the 409 into a 500. Any new handler reading `meta` must assume the adapter's shape, not the engine's.
+
+A service that can name the conflict should still refuse before reaching the database (`RATE_SCHEDULE_CODE_TAKEN`, `RUN_ALREADY_EXISTS_FOR_WINDOW`): a constraint knows which columns collided, never what the operator should do instead. The handler is the backstop for the races those checks cannot close, which is why it has to be legible on its own.
+
 **Validation:** Zod schemas live in the `@utility-cis/shared` package and are reused by the API (as runtime validators) and by the web (for form validation and TypeScript types via `z.infer`). The same schemas also feed the OpenAPI document generator (5.5), which keeps the machine-readable API contract in lockstep with the runtime contract.
 
 **CRUD factory:** Entities that follow the standard list/get/create/update shape register their routes via `registerCrudRoutes(app, config)` from `packages/api/src/lib/crud-routes.ts`. The factory owns RBAC config, Zod parsing, `request.user` extraction, and status-code shaping; route files just declare their `basePath`, `module`, and service adapter closures. Entities with unusual requirements (premises with its `/geo` endpoint, rate-schedules with `/:id/revise` and no PATCH, roles with DELETE) supply whatever subset fits and add custom routes alongside the factory call.

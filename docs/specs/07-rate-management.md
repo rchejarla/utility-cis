@@ -146,6 +146,28 @@ Defines a read-and-bill schedule. All service agreements are assigned to exactly
 - `active_on` — date (YYYY-MM-DD): returns schedules effective on that date
 - `page`, `limit`, `sort`, `order`
 
+### Code uniqueness
+
+A code names one tariff across all of its versions, which is what makes
+`revise` the only way to add one. `POST /api/v1/rate-schedules` refuses a
+code already in use with **409 `RATE_SCHEDULE_CODE_TAKEN`**, naming the
+code and the highest version that holds it, and saying that a version
+comes from Revise *(added 2026-11-05)*.
+
+Before that the create fell through to
+`@@unique([utilityId, code, version])` and surfaced as the generic
+`UNIQUE_CONSTRAINT`, whose message named neither the field nor the code
+and pointed nowhere — and since every tariff a tenant already has is a
+code someone may plausibly type in (`BZN-WATER`, `RES-TOU-E`), this was
+the first wall anyone creating a schedule by hand hit.
+
+The check is on the code alone, not on (code, version): the constraint
+includes the version, so a tariff already revised to version 2 leaves
+version 1 occupied and a create would collide on a row the author never
+sees. It is check-then-act, so two concurrent creates of one new code
+can both pass it — the constraint remains the authority and answers the
+loser, which is why its message had to be legible too (see below).
+
 ### Revision Endpoint
 
 `POST /api/v1/rate-schedules/:id/revise` accepts the same body as create. On success:

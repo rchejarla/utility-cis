@@ -26,13 +26,44 @@ export function errorHandler(
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     switch (error.code) {
       case "P2002": {
-        // Unique constraint violation
-        const target = (error.meta?.target as string[] | undefined) ?? [];
+        /*
+         * Unique constraint violation.
+         *
+         * `target` is a field list under the Rust engine and a
+         * constraint *name* under the driver adapter, so it arrives as
+         * an array, a string, or not at all. It used to be cast to
+         * `string[]` unconditionally — and a string has a truthy
+         * `.length` with no `.join`, so that cast threw inside the
+         * error handler and turned the 409 into a 500.
+         *
+         * Whatever it names goes in `message`, not only in `details`:
+         * the web client always shows the message and appends details
+         * only when present, so a P2002 reporting no target said
+         * nothing identifiable at all — the same sentence for every
+         * constraint on every model. A service that can name the
+         * conflict should still refuse before reaching the database;
+         * this is the backstop, and it has to be legible on its own.
+         */
+        const raw = error.meta?.target;
+        const fields = Array.isArray(raw)
+          ? raw.map(String)
+          : typeof raw === "string" && raw
+            ? [raw]
+            : [];
         reply.status(409).send({
           error: {
             code: "UNIQUE_CONSTRAINT",
-            message: "A record with these values already exists",
-            details: target.length ? [{ field: target.join(","), message: "must be unique" }] : undefined,
+            message: fields.length
+              ? `A record with these values already exists: ${fields.join(", ")}`
+              : "A record with these values already exists",
+            /*
+             * No `details` here, unlike the Zod branch. It carried
+             * exactly these field names, and `api-client.ts` appends
+             * details to the message it shows — so sending both
+             * printed the field list twice in one sentence. The Zod
+             * branch keeps its details because there each entry is a
+             * *different* field with its own message.
+             */
           },
         });
         return;

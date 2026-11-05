@@ -147,12 +147,52 @@ async function assertCalendarAssignable(utilityId: string, touCalendarId: string
   }
 }
 
+/**
+ * A code names one tariff across all of its versions.
+ *
+ * Without this the create fell through to
+ * `@@unique([utilityId, code, version])` and came back as a bare 409
+ * naming neither the code nor the field — and, worse, pointing nowhere:
+ * the way to get another version of an existing tariff is `revise`, not
+ * a second create. Every tariff a tenant already has is a code someone
+ * may plausibly type into the create form.
+ *
+ * The check is on the code alone, not on (code, version). The
+ * constraint includes the version, so a tariff already revised to
+ * version 2 leaves version 1 occupied and a create would collide on a
+ * row the author never sees — or, if a chain ever began above 1, not
+ * collide at all and leave one code owning two unrelated tariffs.
+ *
+ * Check-then-act, so two concurrent creates of one new code can both
+ * pass here; the unique constraint is still the authority and answers
+ * the loser. That is the right division: this exists to give the
+ * ordinary case an answer it can act on, not to be the guarantee.
+ */
+async function assertCodeFree(utilityId: string, code: string) {
+  const taken = await prisma.rateSchedule.findFirst({
+    where: { utilityId, code },
+    orderBy: { version: "desc" },
+    select: { version: true },
+  });
+  if (taken) {
+    throw Object.assign(
+      new Error(
+        `Rate schedule code ${code} already exists (version ${taken.version}). ` +
+          `A code names one tariff across all its versions — revise that schedule ` +
+          `to add a version, or choose a different code.`,
+      ),
+      { statusCode: 409, code: "RATE_SCHEDULE_CODE_TAKEN" },
+    );
+  }
+}
+
 export async function createRateSchedule(
   utilityId: string,
   actorId: string,
   actorName: string,
   data: CreateRateScheduleInput
 ) {
+  await assertCodeFree(utilityId, data.code);
   if (data.touCalendarId) await assertCalendarAssignable(utilityId, data.touCalendarId);
 
   return auditCreate(
