@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { JsonFallbackEditor } from "./pricing-editors/json-fallback-editor";
+import { TransformsBuilder } from "./transforms-builder";
+import { RequiredMark } from "@/components/ui/required-mark";
 import { quantitySourceSchema } from "@utility-cis/shared";
 import { apiClient } from "@/lib/api-client";
 
@@ -47,9 +48,16 @@ interface Props {
    * base list, built and unreachable for two days.
    */
   transforms?: TransformOption[];
+  /** For the `subtract_linked_commodity` transform's picker. */
+  commodities?: { id: string; name: string }[];
 }
 
-export function QuantitySourceBuilder({ value, onChange, transforms = [] }: Props) {
+export function QuantitySourceBuilder({
+  value,
+  onChange,
+  transforms = [],
+  commodities = [],
+}: Props) {
   const [base, setBase] = useState<string>(
     typeof value.base === "string" ? (value.base as string) : "metered",
   );
@@ -60,11 +68,6 @@ export function QuantitySourceBuilder({ value, onChange, transforms = [] }: Prop
     typeof value.peak_code === "string" ? (value.peak_code as string) : "",
   );
   const [periods, setPeriods] = useState<Period[]>([]);
-  const [transformsJson] = useState<string>(
-    Array.isArray(value.transforms)
-      ? JSON.stringify(value.transforms, null, 2)
-      : "[]",
-  );
   const [transformsValid, setTransformsValid] = useState<boolean>(true);
   const [transformsParsed, setTransformsParsed] = useState<unknown[]>(
     Array.isArray(value.transforms) ? (value.transforms as unknown[]) : [],
@@ -112,6 +115,7 @@ export function QuantitySourceBuilder({ value, onChange, transforms = [] }: Prop
     <div>
       <label style={labelStyle}>Quantity source</label>
       <select
+        aria-label="Quantity source"
         value={base}
         onChange={(e) => setBase(e.target.value)}
         style={inputStyle}
@@ -128,9 +132,13 @@ export function QuantitySourceBuilder({ value, onChange, transforms = [] }: Prop
       </select>
       {base === "tou_period" && (
         <div style={{ marginTop: 12 }}>
-          <label style={labelStyle}>TOU period</label>
+          <label style={labelStyle}>
+            TOU period
+            <RequiredMark />
+          </label>
           <select
             aria-label="TOU period"
+            required
             value={peakCode}
             onChange={(e) => setPeakCode(e.target.value)}
             style={inputStyle}
@@ -151,9 +159,14 @@ export function QuantitySourceBuilder({ value, onChange, transforms = [] }: Prop
       )}
       {base === "premise_attribute" && (
         <div style={{ marginTop: 12 }}>
-          <label style={labelStyle}>Source attribute</label>
+          <label style={labelStyle}>
+            Source attribute
+            <RequiredMark />
+          </label>
           <input
             type="text"
+            aria-label="Source attribute"
+            required
             value={sourceAttr}
             onChange={(e) => setSourceAttr(e.target.value)}
             placeholder="e.g. premise.eru_count or eru_count"
@@ -173,30 +186,14 @@ export function QuantitySourceBuilder({ value, onChange, transforms = [] }: Prop
             Transforms (advanced — optional)
           </summary>
           <div style={{ marginTop: 8 }}>
-            <p style={{ margin: "0 0 8px", fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
-              Adjustments applied to the quantity above, in order,{" "}
-              <strong>before it is priced</strong> — so the charge prices the
-              adjusted figure and the bill line shows it. Most tariffs need
-              none: leave this empty unless the tariff says the measured
-              quantity is not what gets charged for.
-            </p>
-            {transforms.some((t) => t.supported) && (
-              <p style={{ margin: "0 0 8px", fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
-                Available:{" "}
-                {transforms
-                  .filter((t) => t.supported)
-                  .map((t) => t.label)
-                  .join(" · ")}
-              </p>
-            )}
-            <JsonFallbackEditor
-              initialJson={transformsJson}
-              onChange={(parsed, isValid) => {
+            <TransformsBuilder
+              value={Array.isArray(value.transforms) ? (value.transforms as unknown[]) : []}
+              onChange={(built, isValid) => {
                 setTransformsValid(isValid);
-                if (Array.isArray(parsed)) setTransformsParsed(parsed);
+                setTransformsParsed(built);
               }}
-              rows={6}
-              label="Transforms array"
+              available={transforms}
+              commodities={commodities}
             />
           </div>
         </details>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { RequiredMark } from "@/components/ui/required-mark";
 
 export interface UnitOptionGroup {
   label: string;
@@ -78,16 +79,7 @@ export function UnitPicker({
     <div>
       <span style={labelStyle}>
         {label}
-        {required ? (
-          <>
-            <span aria-hidden="true" style={{ color: "var(--danger)", marginLeft: 3 }}>
-              *
-            </span>
-            <span className="sr-only">(required)</span>
-          </>
-        ) : (
-          " (optional)"
-        )}
+        {required ? <RequiredMark /> : " (optional)"}
       </span>
       <select
         aria-label={label}

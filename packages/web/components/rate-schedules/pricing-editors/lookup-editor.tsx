@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { MoneyInput } from "./money-input";
+import { RequiredMark } from "@/components/ui/required-mark";
 import { UnitPicker, type UnitOptionGroup } from "./unit-picker";
 
 interface LookupValue {
@@ -100,12 +101,13 @@ export function LookupEditor({ value, onChange, unitOptions }: Props) {
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th style={thStyle}>Key (e.g. {`5/8"`})</th>
+            <th style={thStyle}>
+              Key (e.g. {`5/8"`})
+              <RequiredMark />
+            </th>
             <th style={thStyle}>
               Rate
-              <span aria-hidden="true" style={{ color: "var(--danger)", marginLeft: 3 }}>
-                *
-              </span>
+              <RequiredMark />
             </th>
             <th style={{ ...thStyle, width: 80 }} />
           </tr>
@@ -117,6 +119,7 @@ export function LookupEditor({ value, onChange, unitOptions }: Props) {
                 <input
                   type="text"
                   aria-label={`Key for row ${idx + 1}`}
+                  required
                   value={r.key}
                   onChange={(e) => updateRow(idx, "key", e.target.value)}
                   placeholder={`e.g. 5/8"`}

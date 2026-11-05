@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { JsonFallbackEditor } from "./pricing-editors/json-fallback-editor";
 import { predicateSchema } from "@utility-cis/shared";
+import { RequiredMark } from "@/components/ui/required-mark";
 
 /**
  * Slice 2 task 7 — structured PredicateBuilder.
@@ -172,22 +173,38 @@ export function PredicateBuilder({ value, onChange }: Props) {
           </p>
         )}
         {op === "class" && (
-          <input
-            type="text"
-            value={classValue}
-            onChange={(e) => setClassValue(e.target.value)}
-            placeholder="e.g. single_family"
-            style={inputStyle}
-          />
+          <>
+            <label style={labelStyle}>
+              Customer class
+              <RequiredMark />
+            </label>
+            <input
+              type="text"
+              aria-label="Customer class"
+              required
+              value={classValue}
+              onChange={(e) => setClassValue(e.target.value)}
+              placeholder="e.g. single_family"
+              style={inputStyle}
+            />
+          </>
         )}
         {op === "class_in" && (
-          <input
-            type="text"
-            value={classInValue}
-            onChange={(e) => setClassInValue(e.target.value)}
-            placeholder="comma-separated, e.g. multi_family, commercial, government"
-            style={inputStyle}
-          />
+          <>
+            <label style={labelStyle}>
+              Customer classes
+              <RequiredMark />
+            </label>
+            <input
+              type="text"
+              aria-label="Customer classes"
+              required
+              value={classInValue}
+              onChange={(e) => setClassInValue(e.target.value)}
+              placeholder="comma-separated, e.g. multi_family, commercial, government"
+              style={inputStyle}
+            />
+          </>
         )}
         {op === "drought_stage_active" && (
           <select
@@ -205,6 +222,8 @@ export function PredicateBuilder({ value, onChange }: Props) {
               type="text"
               value={premiseAttrName}
               onChange={(e) => setPremiseAttrName(e.target.value)}
+              aria-label="Attribute name"
+              required
               placeholder="attribute name (e.g. has_stormwater_infra)"
               style={{ ...inputStyle, flex: 2 }}
             />

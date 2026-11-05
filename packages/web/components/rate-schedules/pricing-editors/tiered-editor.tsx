@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { MoneyInput } from "./money-input";
+import { RequiredMark } from "@/components/ui/required-mark";
 import { UnitPicker, type UnitOptionGroup } from "./unit-picker";
 
 interface Tier {
@@ -103,9 +104,7 @@ export function TieredEditor({ value, onChange, unitOptions }: Props) {
             <th style={thStyle}>Up to (blank = unbounded)</th>
             <th style={thStyle}>
               Rate
-              <span aria-hidden="true" style={{ color: "var(--danger)", marginLeft: 3 }}>
-                *
-              </span>
+              <RequiredMark />
             </th>
             <th style={{ ...thStyle, width: 80 }} />
           </tr>

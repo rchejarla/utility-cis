@@ -277,23 +277,57 @@ loser, which is why its message had to be legible too (see below).
 
   `percent_of`, `catalog` and `floor` have no unit in the grammar at
   all and are unaffected.
-- **Transforms now says what it is for** *(2026-11-05)*. It was a bare
-  `<details>` labelled "advanced — optional" over a JSON textarea, with
-  no statement of what a transform does and no way to discover which
-  ones exist short of reading the Zod union. It now explains that
-  transforms adjust the quantity, in order, *before it is priced*, and
-  lists the ones the engine implements — `clamp`, `net`, `prorate`,
-  `subtract_linked_commodity`, `floor` — read from
-  `/api/v1/rate-grammar/registered`, which already carries each one's
-  label and `supported` flag.
+- **Transforms are picked, not typed** (`TransformsBuilder`,
+  *2026-11-05*). It was a JSON textarea expecting an array of
+  discriminated-union objects, so authoring the commonest adjustment in
+  the grammar meant knowing that prorate's key is `standard_days` and
+  that it takes a positive integer. The five the engine evaluates have
+  two parameters between them at most. Each is now a row with its own
+  inputs, and `subtract_linked_commodity` picks a commodity by name
+  instead of asking for a uuid. The panel states that transforms adjust
+  the quantity, in order, *before it is priced*, and that most tariffs
+  need none.
 
-  The four declared-but-unevaluated transforms (`ratchet`,
-  `tou_window_filter`, `power_factor`, `load_factor`) are deliberately
-  **not** offered: naming them would invite a tariff the engine cannot
-  rate, which is the unsatisfiable-gate mistake again. The list is
-  fetched rather than re-listed in the web for the same reason the base
-  list is pinned by a drift test — a second hand-kept copy of the
-  grammar is how `tou_period` stayed unreachable.
+  Three properties the builder has to hold:
+
+  - **Order is semantic.** They apply left to right, and clamping then
+    prorating is a different quantity from prorating then clamping. The
+    list is numbered, says so, and rows move with ↑/↓.
+  - **The four declared-but-unevaluated transforms are not offered.**
+    `ratchet`, `tou_window_filter`, `power_factor` and `load_factor`
+    exist in the Zod union and the engine does not evaluate them, so
+    offering them would invite a tariff that cannot be rated — the
+    unsatisfiable-gate mistake again. The list of what *is* offered
+    comes from `/api/v1/rate-grammar/registered`, which already carries
+    each one's label and `supported` flag and which the editor was
+    already fetching for the kind dropdown: a second hand-kept copy of
+    the grammar in the web is how `tou_period` stayed unreachable.
+  - **One already stored is kept, not dropped.** An unrecognised
+    transform renders as a read-only row saying the engine does not
+    evaluate it, and is emitted verbatim in its original position.
+    Silently discarding what an editor does not understand is how
+    `unit: "HCF"` vanished from the tiered editor.
+
+  An incomplete row holds Save rather than being quietly omitted: a
+  half-entered transform dropped on save is a different quantity from
+  the one being written. A `clamp` with neither bound parses — both are
+  optional — and bounds nothing, so it counts as incomplete.
+- **Every required field in the popup is marked** *(2026-11-05)*, with
+  `RequiredMark` — the asterisk plus screen-reader "(required)" that
+  `FormField` has always rendered, extracted so a form built from raw
+  labels can use it (it had been copied four times by then). Marked:
+  Kind, Label, Effective Date, Rate (flat, and each tier and lookup
+  row), Unit, the lookup Key, Percent and its Value, and the
+  conditional TOU period and Source attribute. Sort Order and
+  Expiration Date are left unmarked, being genuinely optional —
+  `sortOrder` has a default in `createRateComponentSchema` and the form
+  always sends a number.
+
+  All of these already blocked Save: `allValid` has always required a
+  kind, a label, an effective date and three valid sub-shapes. The
+  disabled button was the only feedback and it named nothing, which is
+  still true — **there is no validation summary saying which field is
+  missing**, only the markers. That remains open.
 - **The tiered and lookup editors no longer drop what they do not edit.**
   Both read only their rows and re-emitted only their rows, and
   `PricingEditor`'s casts stopped at `tiers` / `table` — so opening a

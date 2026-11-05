@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { MoneyInput } from "./money-input";
+import { RequiredMark } from "@/components/ui/required-mark";
 import { UnitPicker, type UnitOptionGroup } from "./unit-picker";
 
 interface FlatValue {
@@ -55,10 +56,7 @@ export function FlatEditor({ value, onChange, unitOptions }: Props) {
       <div style={{ flex: 1 }}>
         <span style={labelStyle}>
           Rate
-          <span aria-hidden="true" style={{ color: "var(--danger)", marginLeft: 3 }}>
-            *
-          </span>
-          <span className="sr-only">(required)</span>
+          <RequiredMark />
         </span>
         <MoneyInput value={rate} onChange={setRate} ariaLabel="Rate" required />
       </div>

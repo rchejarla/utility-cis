@@ -77,7 +77,7 @@ describe("the TOU period source", () => {
     const onChange = vi.fn();
     render(<QuantitySourceBuilder value={{ base: "metered" }} onChange={onChange} />);
 
-    await userEvent.selectOptions(screen.getByRole("combobox"), "tou_period");
+    await userEvent.selectOptions(screen.getByLabelText("Quantity source"), "tou_period");
 
     await waitFor(() => expect(get).toHaveBeenCalledWith("/api/v1/tou-periods"));
     expect((await screen.findByLabelText("TOU period")).textContent).toMatch(/On-peak \(peak\)/);
@@ -87,7 +87,7 @@ describe("the TOU period source", () => {
     const onChange = vi.fn();
     render(<QuantitySourceBuilder value={{ base: "metered" }} onChange={onChange} />);
 
-    await userEvent.selectOptions(screen.getByRole("combobox"), "tou_period");
+    await userEvent.selectOptions(screen.getByLabelText("Quantity source"), "tou_period");
 
     expect(onChange).toHaveBeenLastCalledWith({ base: "tou_period" }, false);
   });
@@ -96,7 +96,7 @@ describe("the TOU period source", () => {
     const onChange = vi.fn();
     render(<QuantitySourceBuilder value={{ base: "metered" }} onChange={onChange} />);
 
-    await userEvent.selectOptions(screen.getByRole("combobox"), "tou_period");
+    await userEvent.selectOptions(screen.getByLabelText("Quantity source"), "tou_period");
     await userEvent.selectOptions(await screen.findByLabelText("TOU period"), "peak");
 
     expect(onChange).toHaveBeenLastCalledWith(

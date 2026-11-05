@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { RequiredMark } from "@/components/ui/required-mark";
 
 interface PercentOfValue {
   type: "percent_of";
@@ -149,7 +150,10 @@ export function PercentOfEditor({ value, onChange }: Props) {
         </select>
       </div>
       <div style={{ marginBottom: 12 }}>
-        <label style={labelStyle}>Value</label>
+        <label style={labelStyle}>
+          Value
+          <RequiredMark />
+        </label>
         {opMeta.needsValue === "kind" && (
           <select
             value={singleValue}
@@ -206,10 +210,15 @@ export function PercentOfEditor({ value, onChange }: Props) {
         )}
       </div>
       <div>
-        <label style={labelStyle}>Percent (use negative for credits)</label>
+        <label style={labelStyle}>
+          Percent (use negative for credits)
+          <RequiredMark />
+        </label>
         <input
           type="number"
           step="0.01"
+          aria-label="Percent"
+          required
           value={percent}
           onChange={(e) => setPercent(e.target.value)}
           placeholder="e.g. 25 for 25%, -45 for 45% credit"

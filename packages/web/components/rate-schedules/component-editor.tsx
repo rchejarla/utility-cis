@@ -9,6 +9,7 @@ import { PredicateBuilder } from "./predicate-builder";
 import { QuantitySourceBuilder, type TransformOption } from "./quantity-source-builder";
 import type { RateComponent } from "./component-list";
 import type { UnitOptionGroup } from "./pricing-editors/unit-picker";
+import { RequiredMark } from "@/components/ui/required-mark";
 
 interface KindOption {
   code: string;
@@ -131,6 +132,7 @@ export function ComponentEditor({
 
   const [transformOptions, setTransformOptions] = useState<TransformOption[]>([]);
   const [uomCodes, setUomCodes] = useState<string[]>([]);
+  const [commodities, setCommodities] = useState<{ id: string; name: string }[]>([]);
   const [unitsInUse, setUnitsInUse] = useState<string[]>([]);
   const [kindOptions, setKindOptions] = useState<KindOption[]>([]);
   const [kindCode, setKindCode] = useState<string>(component?.kindCode ?? "");
@@ -243,6 +245,22 @@ export function ComponentEditor({
         if (cancelled) return;
         const rows = Array.isArray(res) ? res : res.data ?? [];
         setUnitsInUse([...new Set(rows.map((r) => unitOf(r.pricing)).filter((u): u is string => !!u))]);
+      })
+      .catch(() => {});
+    /*
+     * Every commodity, for the `subtract_linked_commodity` transform —
+     * which took a raw uuid before the transforms builder existed. Read
+     * both shapes: this endpoint is a bare array, and assuming the
+     * envelope is what left the new-schedule form's commodity select
+     * empty for every tenant.
+     */
+    apiClient
+      .get<{ id: string; name: string }[] | { data: { id: string; name: string }[] }>(
+        "/api/v1/commodities",
+      )
+      .then((res) => {
+        if (cancelled) return;
+        setCommodities(Array.isArray(res) ? res : res.data ?? []);
       })
       .catch(() => {});
     if (commodityId) {
@@ -422,11 +440,16 @@ export function ComponentEditor({
             }}
           >
             <div>
-              <label style={fieldLabelStyle}>Kind</label>
+              <label style={fieldLabelStyle}>
+                Kind
+                <RequiredMark />
+              </label>
               <select
                 value={kindCode}
                 onChange={(e) => setKindCode(e.target.value)}
                 disabled={loadingKinds}
+                required
+                aria-label="Kind"
                 style={inputStyle}
               >
                 {loadingKinds && <option value="">Loading…</option>}
@@ -454,12 +477,17 @@ export function ComponentEditor({
           </div>
 
           <div style={{ marginBottom: 16 }}>
-            <label style={fieldLabelStyle}>Label</label>
+            <label style={fieldLabelStyle}>
+              Label
+              <RequiredMark />
+            </label>
             <input
               type="text"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               placeholder="e.g. Tier 1 Volumetric"
+              required
+              aria-label="Label"
               style={inputStyle}
             />
           </div>
@@ -473,7 +501,10 @@ export function ComponentEditor({
             }}
           >
             <div>
-              <label style={fieldLabelStyle}>Effective Date</label>
+              <label style={fieldLabelStyle}>
+                Effective Date
+                <RequiredMark />
+              </label>
               <DatePicker
                 value={effectiveDate}
                 onChange={(v) => setEffectiveDate(v)}
@@ -506,6 +537,7 @@ export function ComponentEditor({
                 setQuantitySourceValid(valid);
               }}
               transforms={transformOptions}
+              commodities={commodities}
             />
           </div>
 
