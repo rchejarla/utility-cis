@@ -1149,6 +1149,25 @@ it is wrong.
     drift test now pins the editor's offered bases to the grammar's, in
     both directions; `tou_period` being in one and not the other is
     exactly how this stayed invisible.
+  - **The list prints the period, beside the price** *(2026-11-05)*.
+    The components table showed a label, a kind, and the *name* of the
+    pricing shape — "flat" — so neither the rate nor the period was on
+    the screen at all, and reading a TOU tariff meant opening each
+    charge in turn. Both now have a column: `Price` summarises every
+    shape in the grammar leading with its number (`0.2648 /KWH`,
+    `3 tiers · 2.15 → 5.05 /HCF`, `6.5% of consumption`), and
+    `Charged on` prints the quantity source with its qualifier —
+    `tou_period: off_peak`.
+
+    This is the only check there can be on a **crossed label**. A
+    charge labelled "Off-peak energy" carrying `peak_code: "peak"`
+    satisfies every gate above — the calendar's periods are all priced,
+    exactly once each — and bills off-peak hours at the on-peak rate
+    for as long as the tariff lives. Nothing compares a free-text label
+    against the code beside it, and nothing can: the label is whatever
+    the author typed, in whatever language. Printing both where the
+    author is already looking is the control, which is why the peak
+    code is not hidden behind a hover or an expander.
 
   `rate_schedule.tou_calendar_id` is what the schedule references —
   **on the schedule, not on each component**, because the components of

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { PageHeader } from "@/components/ui/page-header";
 import { FormField } from "@/components/ui/form-field";
 import { DatePicker } from "@/components/ui/date-picker";
@@ -58,9 +59,19 @@ export default function NewRateSchedulePage() {
   });
 
   useEffect(() => {
+    /*
+     * `/api/v1/commodities` answers with a bare array: `listCommodities`
+     * is a `findMany` and the CRUD factory sends it unwrapped. Reading
+     * `res.data` off an array gave `undefined` and emptied the select —
+     * and a commodity is required, so this form could not be submitted
+     * at all. Both shapes are accepted here for the same reason
+     * `entity-list-page.tsx` accepts both: the envelope is the house
+     * style for a paginated list and this endpoint is not one, so the
+     * next person to paginate it must not re-break the page.
+     */
     apiClient
-      .get<{ data: Commodity[] }>("/api/v1/commodities")
-      .then((res) => setCommodities(res.data ?? []))
+      .get<Commodity[] | { data: Commodity[] }>("/api/v1/commodities")
+      .then((res) => setCommodities(Array.isArray(res) ? res : res.data ?? []))
       .catch(console.error);
     apiClient
       .get<{ data: TouCalendar[] }>("/api/v1/tou-calendars")
@@ -128,7 +139,13 @@ export default function NewRateSchedulePage() {
                 required
               />
             </FormField>
-            <FormField label="Code" required tooltip="Code + version must be unique. Cannot be changed." tooltipRuleId="BR-RS-007">
+            <FormField
+              label="Code"
+              required
+              hint="This tariff's short identifier, used to assign it and to refer to it in your tariff book — unlike the name, it never changes. Revising makes a new version under the same code."
+              tooltip="Code + version must be unique within the utility. The code cannot be changed after creation: a rate schedule is immutable and changes go through Revise, which keeps the code and bumps the version."
+              tooltipRuleId="BR-RS-007"
+            >
               <input
                 style={inputStyle}
                 value={form.code}
@@ -139,7 +156,15 @@ export default function NewRateSchedulePage() {
             </FormField>
           </div>
 
-          <FormField label="Commodity" required>
+          <FormField
+            label="Commodity"
+            required
+            hint={
+              commodities.length === 0
+                ? undefined
+                : "What this tariff bills — it fixes the units the charges are priced in."
+            }
+          >
             <select
               style={inputStyle}
               value={form.commodityId}
@@ -154,6 +179,17 @@ export default function NewRateSchedulePage() {
               ))}
             </select>
           </FormField>
+          {commodities.length === 0 && (
+            /*
+             * A required select with nothing in it is a dead end, and it
+             * looks identical whether the tenant has no commodities or
+             * the fetch failed. Say which, and where to go.
+             */
+            <p style={{ margin: "-4px 0 0", fontSize: 12, color: "var(--warning, #b45309)" }}>
+              No commodities are set up for this utility, so there is nothing to
+              price yet. Add one under <Link href="/commodities" style={{ color: "inherit", textDecoration: "underline" }}>Commodities</Link> first.
+            </p>
+          )}
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
             <FormField label="Effective Date" required hint="BR-RS-003: Billing uses the rate in effect during the billing period">
@@ -203,12 +239,16 @@ export default function NewRateSchedulePage() {
             />
           </FormField>
 
-          <FormField label="Regulatory Reference">
+          <FormField
+            label="Regulatory Reference"
+            hint="What authorised these rates — a council resolution, ordinance, PUC docket or tariff sheet number. Free text, shown on the schedule's overview, and carried to the next version when you revise. Optional, but it is the only record of who approved this tariff."
+          >
             <input
               style={inputStyle}
               value={form.regulatoryRef}
               onChange={(e) => set("regulatoryRef", e.target.value)}
-              placeholder="Tariff Sheet No. 12"
+              placeholder="Resolution 5378"
+              maxLength={100}
             />
           </FormField>
 

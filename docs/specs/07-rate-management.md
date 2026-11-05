@@ -189,20 +189,52 @@ Defines a read-and-bill schedule. All service agreements are assigned to exactly
 
 **Tabs:**
 
-- **Overview:** All fields, formatted `rate_config` display (tier table for TIERED, period cards for TOU, etc.), regulatory reference, version badge
+- **Overview:** All fields, regulatory reference, version badge, and the
+  **Components** table — the schedule's RateComponent rows, which is
+  where pricing lives since v2. Columns: order, label, **Price**,
+  **Charged on**, kind, effective range *(the first two added
+  2026-11-05)*. `Price` summarises each pricing shape leading with its
+  number (`0.2648 /KWH`, `3 tiers · 2.15 → 5.05 /HCF`, `6.5% of
+  consumption`, `floor 10`) rather than naming the shape, and
+  `Charged on` prints the quantity source with its qualifier
+  (`tou_period: off_peak`, `premise_attribute: eru_count`). Before
+  that the table showed the label, the kind and the word "flat", so
+  what a charge costs and what it is charged on were both a modal
+  away — and a TOU charge's period was invisible, which is the one
+  thing a free-text label can misstate (spec 26, TOU-UI-3)
 - **Version History:** Timeline of all versions in the chain, effective date ranges, diff view between versions
 - **Actions:** "Revise" button opens revision form; "View Assignments" shows assigned service agreements
 
 ### Rate Schedule Create / Revise (`/rate-schedules/new`, modal on revise)
 
-- Dynamic form: selecting `rate_type` renders the appropriate `rate_config` editor
-- TIERED: interactive tier builder (add/remove rows, validates contiguity)
-- TOU: period editor with time range pickers
-- DEMAND: numeric inputs for demand charge and ratchet
-- BUDGET: smoothing configuration
+Schedule-level metadata only. Pricing is not on this form: it is built
+up afterwards as RateComponent rows in the configurator on the detail
+page, which is why `rate_type` / `rate_config` appear nowhere here (v2
+removed them from the entity).
+
+- Name, **Code**, Commodity, effective date, optional expiration,
+  description, regulatory reference, optional TOU calendar
 - Effective date DatePicker (blocked to future for revisions)
-- Regulatory reference field
-- HelpTooltip on all key fields referencing the applicable BR-RS rule (e.g., BR-RS-001 on effective date ordering, BR-RS-002 on expiration, BR-RS-004 on rate config validation)
+- HelpTooltip on key fields referencing the applicable BR-RS rule
+  (BR-RS-001 effective date ordering, BR-RS-002 expiration, BR-RS-007
+  code + version uniqueness)
+- **Code** and **Regulatory Reference** each carry an always-visible
+  `hint`, not only a hover tooltip *(2026-11-05)*. Neither field's
+  purpose is inferable from its name: the code is the tariff's
+  permanent identifier — a revision keeps it and bumps the version, and
+  it can never be edited, since the entity has no PATCH — and the
+  regulatory reference is the authority that approved the rates
+  (resolution, ordinance, PUC docket, tariff sheet), free text to 100
+  characters, shown on the overview and carried forward by `revise`.
+- **The Commodity select reads a bare array** *(fixed 2026-11-05)*.
+  `/api/v1/commodities` is a `findMany` sent unwrapped by the CRUD
+  factory, while this page read `res.data` — `undefined` on an array —
+  so the required select was empty for every tenant and no rate
+  schedule could be created through the UI at all. The seed writes
+  schedules through Prisma, which is why nothing caught it. The page
+  now accepts either shape, as `entity-list-page.tsx` does, and an
+  empty list says so and links to Commodities instead of presenting a
+  dead dropdown.
 
 ### Billing Cycles (`/billing-cycles`)
 
