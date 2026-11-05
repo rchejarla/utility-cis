@@ -224,6 +224,47 @@ loser, which is why its message had to be legible too (see below).
   what a charge costs and what it is charged on were both a modal
   away — and a TOU charge's period was invisible, which is the one
   thing a free-text label can misstate (spec 26, TOU-UI-3)
+
+#### The component editor's money and units *(2026-11-05)*
+
+- **Every money input is marked `$`** (`MoneyInput`): the flat rate, each
+  tier's rate, each lookup row's rate. A tier's **"up to" threshold is
+  not** — it is a quantity of the priced thing (HCF, kWh) sitting in the
+  next cell, and the two were indistinguishable bare numbers. The symbol
+  is hard-coded, matching how amounts are already printed across the app;
+  there is no currency column on `Utility` or in `utility_config`, so USD
+  is the system's standing assumption rather than a choice made here.
+- **The unit is a dropdown with free text behind it** (`UnitPicker`),
+  grouped as *Used in this tariff* (the distinct units on the schedule's
+  other components), *Units of measure* (the schedule's commodity's UOM
+  codes), and *Billing periods* (`MONTH`, `DAY`, `QUARTER`, `YEAR`), plus
+  **Other…**.
+
+  **It is deliberately not a closed list over `unit_of_measure`.**
+  `pricing.unit` is a bill-line *label* — the engine copies it onto the
+  line and never interprets it — which is why the seeded tariffs price in
+  `MONTH` (13 components, every service charge) and `ERU` (2), neither of
+  which is a measurement of a commodity, and in **`HCF` (24, the most-used
+  unit of all), which is not a UOM row either**. A closed dropdown would
+  have made the water tariffs unauthorable while looking authoritative —
+  the same failure as the empty commodity select and the unsatisfiable TOU
+  gate. The vocabulary is per tenant, so the control offers it and still
+  accepts anything.
+
+  Free text alone is how `kWh` and `KWH` both ended up in one seed, which
+  a bill prints as written; offering the spellings already in use is the
+  cheap half of fixing that. The expensive half — normalising existing
+  rows — is not done, and `HCF`'s absence from `unit_of_measure` is a
+  **data gap in the seed**, not a UI one.
+- **The tiered and lookup editors no longer drop what they do not edit.**
+  Both read only their rows and re-emitted only their rows, and
+  `PricingEditor`'s casts stopped at `tiers` / `table` — so opening a
+  seeded Bozeman water component (tiered, `unit: "HCF"`) and saving
+  silently erased the unit, and `standard_days` with it. That one scales
+  tier thresholds by the days billed (Bozeman Req 138), so losing it
+  turns a prorated allowance back into a full period's and changes what
+  the customer owes. A cast that omits a key of the shape is not a
+  narrowing — it is where the key goes missing.
 - **Version History:** Timeline of all versions in the chain, effective date ranges, diff view between versions
 - **Actions:** "Revise" button opens revision form; "View Assignments" shows assigned service agreements
 

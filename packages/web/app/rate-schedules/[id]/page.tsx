@@ -34,6 +34,7 @@ interface RateSchedule {
   version: number;
   description?: string;
   regulatoryRef?: string;
+  commodityId?: string;
   commodity?: { name: string };
   publishedAt?: string | null;
   supersededById?: string | null;
@@ -689,6 +690,7 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
           component={editingComponent}
           onClose={() => setEditorOpen(false)}
           onSaved={handleSaved}
+          commodityId={rs.commodityId}
         />
       )}
     </div>

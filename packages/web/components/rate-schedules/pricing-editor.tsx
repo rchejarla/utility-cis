@@ -7,10 +7,17 @@ import { TieredEditor } from "./pricing-editors/tiered-editor";
 import { LookupEditor } from "./pricing-editors/lookup-editor";
 import { PercentOfEditor } from "./pricing-editors/percent-of-editor";
 import { JsonFallbackEditor } from "./pricing-editors/json-fallback-editor";
+import type { UnitOptionGroup } from "./pricing-editors/unit-picker";
 
 interface Props {
   value: unknown;
   onChange: (value: unknown, valid: boolean) => void;
+  /**
+   * The unit vocabulary offered by the three editors that carry a unit.
+   * Assembled by `ComponentEditor`, which is the only component that
+   * knows the schedule and its commodity.
+   */
+  unitOptions: UnitOptionGroup[];
 }
 
 /**
@@ -27,7 +34,7 @@ interface Props {
  * disable Save. Otherwise we run pricingSchema.safeParse against the
  * assembled value to produce the validity flag.
  */
-export function PricingEditor({ value, onChange }: Props) {
+export function PricingEditor({ value, onChange, unitOptions }: Props) {
   const initialType = (value as { type?: string } | null)?.type ?? "flat";
   const [type, setType] = useState<string>(initialType);
 
@@ -53,11 +60,21 @@ export function PricingEditor({ value, onChange }: Props) {
     currentValue?.type === "flat"
       ? (currentValue as { type: "flat"; rate: number; unit?: string })
       : null;
+  /*
+   * These casts name every key of the shape, not just the ones with an
+   * input. They used to stop at `tiers` and `table`, and a cast that
+   * omits a key is not a narrowing — it is where the key goes missing:
+   * the sub-editor received a value with no `unit` and no
+   * `standard_days`, so it could only re-emit a shape without them,
+   * and saving a seeded water tariff dropped `unit: "HCF"`.
+   */
   const tieredValue =
     currentValue?.type === "tiered"
       ? (currentValue as {
           type: "tiered";
           tiers: Array<{ to: number | null; rate: number }>;
+          unit?: string;
+          standard_days?: number;
         })
       : null;
   const lookupValue =
@@ -66,6 +83,7 @@ export function PricingEditor({ value, onChange }: Props) {
           type: "lookup";
           by: string;
           table: Record<string, number>;
+          unit?: string;
         })
       : null;
   const percentOfValue =
@@ -97,18 +115,24 @@ export function PricingEditor({ value, onChange }: Props) {
 
       <div>
         {type === "flat" && (
-          <FlatEditor value={flatValue} onChange={handleStructuredChange} />
+          <FlatEditor
+            value={flatValue}
+            onChange={handleStructuredChange}
+            unitOptions={unitOptions}
+          />
         )}
         {type === "tiered" && (
           <TieredEditor
             value={tieredValue}
             onChange={handleStructuredChange}
+            unitOptions={unitOptions}
           />
         )}
         {type === "lookup" && (
           <LookupEditor
             value={lookupValue}
             onChange={handleStructuredChange}
+            unitOptions={unitOptions}
           />
         )}
         {type === "percent_of" && (

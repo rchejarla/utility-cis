@@ -8,6 +8,7 @@ import { PricingEditor } from "./pricing-editor";
 import { PredicateBuilder } from "./predicate-builder";
 import { QuantitySourceBuilder } from "./quantity-source-builder";
 import type { RateComponent } from "./component-list";
+import type { UnitOptionGroup } from "./pricing-editors/unit-picker";
 
 interface KindOption {
   code: string;
@@ -28,6 +29,30 @@ interface Props {
   component: RateComponent | null; // null = create mode
   onClose: () => void;
   onSaved: () => void;
+  /**
+   * The schedule's commodity, so the unit picker can offer that
+   * commodity's units of measure. Optional: without it the picker
+   * still offers the tariff's own vocabulary and free text, which is
+   * the point — it must never become a control with nothing in it.
+   */
+  commodityId?: string;
+}
+
+/**
+ * Units that are not a measurement of any commodity, and so appear in
+ * no `unit_of_measure` row. Every seeded service charge is `MONTH`.
+ *
+ * Provisional, and deliberately short: these are the period labels a
+ * fixed charge is quoted per. Anything else a tenant needs is typed,
+ * which is what `pricing.unit` being free text is for.
+ */
+const BILLING_PERIOD_UNITS = ["MONTH", "DAY", "QUARTER", "YEAR"];
+
+/** The unit of a component's pricing, if its shape carries one. */
+function unitOf(pricing: unknown): string | null {
+  if (!pricing || typeof pricing !== "object") return null;
+  const u = (pricing as { unit?: unknown }).unit;
+  return typeof u === "string" && u.trim() ? u : null;
 }
 
 const DEFAULT_PRICING = '{ "type": "flat", "rate": 0 }';
@@ -98,10 +123,13 @@ export function ComponentEditor({
   component,
   onClose,
   onSaved,
+  commodityId,
 }: Props) {
   const { toast } = useToast();
   const isEdit = component !== null;
 
+  const [uomCodes, setUomCodes] = useState<string[]>([]);
+  const [unitsInUse, setUnitsInUse] = useState<string[]>([]);
   const [kindOptions, setKindOptions] = useState<KindOption[]>([]);
   const [kindCode, setKindCode] = useState<string>(component?.kindCode ?? "");
   const [label, setLabel] = useState<string>(component?.label ?? "");
@@ -188,6 +216,55 @@ export function ComponentEditor({
     // toast is stable; kindCode/isEdit only matter on first mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /*
+   * The unit vocabulary, from the two places it actually lives.
+   *
+   * Both endpoints answer with a bare array — they are `findMany`s sent
+   * unwrapped — and both are read defensively anyway, because the
+   * paginated envelope is the house style and the new-schedule form's
+   * commodity select was empty for every tenant on exactly this
+   * mismatch.
+   *
+   * A failure here is not surfaced: the picker's free-text path still
+   * works with no options at all, so a toast would interrupt the
+   * author over a list of suggestions.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    apiClient
+      .get<RateComponent[] | { data: RateComponent[] }>(
+        `/api/v1/rate-schedules/${scheduleId}/components`,
+      )
+      .then((res) => {
+        if (cancelled) return;
+        const rows = Array.isArray(res) ? res : res.data ?? [];
+        setUnitsInUse([...new Set(rows.map((r) => unitOf(r.pricing)).filter((u): u is string => !!u))]);
+      })
+      .catch(() => {});
+    if (commodityId) {
+      apiClient
+        .get<{ code: string }[] | { data: { code: string }[] }>("/api/v1/uom", { commodityId })
+        .then((res) => {
+          if (cancelled) return;
+          const rows = Array.isArray(res) ? res : res.data ?? [];
+          setUomCodes(rows.map((r) => r.code).filter(Boolean));
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [scheduleId, commodityId]);
+
+  const unitOptions = useMemo<UnitOptionGroup[]>(
+    () => [
+      { label: "Used in this tariff", codes: unitsInUse },
+      { label: "Units of measure", codes: uomCodes },
+      { label: "Billing periods", codes: BILLING_PERIOD_UNITS },
+    ],
+    [unitsInUse, uomCodes],
+  );
 
   const allValid =
     predicateValid &&
@@ -435,6 +512,7 @@ export function ComponentEditor({
                 setPricing(parsed);
                 setPricingValid(valid);
               }}
+              unitOptions={unitOptions}
             />
           </div>
 
