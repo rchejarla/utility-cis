@@ -22,6 +22,7 @@ export * from "./user";
 export * from "./role";
 export * from "./meter-read";
 export * from "./meter-event";
+export * from "./meter-register";
 export * from "./container";
 export * from "./service-suspension";
 export * from "./suspension-type-def";

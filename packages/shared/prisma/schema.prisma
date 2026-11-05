@@ -86,6 +86,7 @@ model Utility {
   measureTypeDefs        MeasureTypeDef[]
   meterEvents            MeterEvent[]
   meterReads             MeterRead[]
+  meterReadIntervals     MeterReadInterval[]
   meterRegisters         MeterRegister[]
   meters                 Meter[]
   notificationTemplates  NotificationTemplate[]
@@ -330,6 +331,7 @@ model UnitOfMeasure {
   meters           Meter[]
   meterRegisters   MeterRegister[]
   meterReads       MeterRead[]
+  meterReadIntervals MeterReadInterval[]
 
   @@unique([utilityId, commodityId, code])
   @@index([commodityId])
@@ -487,6 +489,7 @@ model Meter {
   commodity              Commodity               @relation(fields: [commodityId], references: [id], onDelete: Restrict)
   uom                    UnitOfMeasure           @relation(fields: [uomId], references: [id], onDelete: Restrict)
   meterReads             MeterRead[]
+  meterReadIntervals     MeterReadInterval[]
   servicePointMeters     ServicePointMeter[]
   registers              MeterRegister[]
   events                 MeterEvent[]
@@ -1023,6 +1026,58 @@ model MeterRead {
   @@index([utilityId, importBatchId])
   @@index([utilityId, readEventId])
   @@map("meter_read")
+}
+
+/// Interval consumption — one row per interval per meter or register
+/// (spec 26, TOU-INT-1).
+///
+/// The second of the two ways a TOU bucket exists. A register meter
+/// splits usage itself and its mapping says what each dial means; an
+/// interval meter reports one quantity per interval and the published
+/// calendar classifies them. Both end as `meter_read` rows carrying a
+/// `peak_code`, so the rate engine never learns which kind of meter
+/// produced one.
+///
+/// `interval_start` is always UTC. The source's basis is resolved at
+/// import (TOU-INT-2a) and never stored half-converted — a column that
+/// sometimes means local time is how every interval ends up an hour
+/// out with nothing raised.
+///
+/// A hypertable, chunked by week. The CHECK constraints on
+/// `lengthMinutes` and `quality`, the two partial unique indexes that
+/// make an import idempotent, the tenant-scoped foreign keys and the
+/// RLS policy are all in the `meter_read_interval` migration — none of
+/// them can be expressed here.
+model MeterReadInterval {
+  id            String   @default(uuid()) @db.Uuid
+  utilityId     String   @map("utility_id") @db.Uuid
+  utility       Utility  @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  meterId       String   @map("meter_id") @db.Uuid
+  /// A bare scalar, not a relation: the key is
+  /// `(utility_id, register_id) -> meter_register (utility_id, id)` in
+  /// the migration, and Prisma requires every referencing field of an
+  /// optional composite relation to be optional — `utility_id` is not.
+  registerId    String?  @map("register_id") @db.Uuid
+  uomId         String   @map("uom_id") @db.Uuid
+  intervalStart DateTime @map("interval_start") @db.Timestamptz
+  lengthMinutes Int      @map("length_minutes") @db.SmallInt
+  quantity      Decimal  @db.Decimal(18, 6)
+  /// actual | estimated | missing | edited. `missing` is a row rather
+  /// than an absence: a gap the utility knows about reads differently
+  /// from one nobody has noticed.
+  quality       String   @default("actual") @db.VarChar(20)
+  importBatchId String?  @map("import_batch_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  meter Meter         @relation(fields: [meterId], references: [id], onDelete: Restrict)
+  uom   UnitOfMeasure @relation(fields: [uomId], references: [id], onDelete: Restrict)
+
+  /// TimescaleDB requires the partitioning column in every unique
+  /// constraint, the primary key included.
+  @@id([id, intervalStart])
+  @@index([meterId, intervalStart])
+  @@index([utilityId, importBatchId])
+  @@map("meter_read_interval")
 }
 
 model AuditLog {

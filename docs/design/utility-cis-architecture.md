@@ -922,6 +922,7 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | GET | `/api/v1/rate-schedules/:id` | Rate |
 | POST | `/api/v1/rate-schedules/:id/revise` | Rate |
 | PUT | `/api/v1/rate-schedules/:id/tou-calendar` | Rate (the one field a draft may change without forking a version; refused once published) |
+| PUT | `/api/v1/meter-registers/:id/tou-period` | Meter (which TOU period a register counts — the register's only write; affects future reads only) |
 | GET POST | `/api/v1/season-sets` | Rate (seasons; `rate_schedules` module) |
 | GET PATCH DELETE | `/api/v1/season-sets/:id` | Rate |
 | PUT | `/api/v1/season-sets/:id/seasons` | Rate (whole list — the coverage rule is the list's) |

@@ -56,6 +56,51 @@ export type TouCalendarLoad =
   | { ok: false; problem: string };
 
 /**
+ * One include for both loads.
+ *
+ * The rating path resolves a version from a name; the interval roll-up
+ * asks for one by id. Two copies of this would be two chances for a
+ * calendar to be read differently by the thing that classifies usage
+ * and the thing that prices it.
+ */
+const CALENDAR_INCLUDE = {
+  seasonSet: { include: { seasons: { orderBy: { sortOrder: "asc" } } } },
+  dayTypes: {
+    orderBy: { sortOrder: "asc" },
+    include: { weekdays: { orderBy: { isoWeekday: "asc" } } },
+  },
+  /*
+   * The slot carries its own peak code, so rating needs no join to the
+   * tenant's period list at all — and a published calendar keeps
+   * meaning what it meant even if that list is edited.
+   */
+  slots: {
+    orderBy: { startMinute: "asc" },
+    include: { dayType: { select: { dayTypeCode: true } } },
+  },
+  overrides: { include: { dayType: { select: { dayTypeCode: true } } } },
+} as const;
+
+/** What `CALENDAR_INCLUDE` produces, for the shared mapper below. */
+type TouCalendarRow = TouCalendarDefinitionRows & {
+  id: string;
+  name: string;
+  effectiveDate: Date;
+  timeZone: string;
+  clockBasis: string;
+  touHolidaySetId: string | null;
+  seasonSet: {
+    seasons: Array<{
+      seasonCode: string;
+      startMonth: number;
+      startDay: number;
+      endMonth: number;
+      endDay: number;
+    }>;
+  };
+};
+
+/**
  * The fields `toTouCalendarDefinition` reads.
  *
  * Declared structurally rather than taken from Prisma's generated
@@ -145,23 +190,7 @@ export async function loadTouCalendar(
       effectiveDate: { lte: period.startDate },
     },
     orderBy: { effectiveDate: "desc" },
-    include: {
-      seasonSet: { include: { seasons: { orderBy: { sortOrder: "asc" } } } },
-      dayTypes: {
-        orderBy: { sortOrder: "asc" },
-        include: { weekdays: { orderBy: { isoWeekday: "asc" } } },
-      },
-      /*
-       * The slot carries its own peak code, so rating needs no join to
-       * the tenant's period list at all — and a published calendar
-       * keeps meaning what it meant even if that list is edited.
-       */
-      slots: {
-        orderBy: { startMinute: "asc" },
-        include: { dayType: { select: { dayTypeCode: true } } },
-      },
-      overrides: { include: { dayType: { select: { dayTypeCode: true } } } },
-    },
+    include: CALENDAR_INCLUDE,
   });
 
   if (!row) {
@@ -181,26 +210,73 @@ export async function loadTouCalendar(
       : { ok: false, problem: `There is no TOU calendar named "${name}".` };
   }
 
-  const definition = toTouCalendarDefinition(row);
+  return { ok: true, calendar: await toLoadedCalendar(prisma, utilityId, row, period) };
+}
 
+/**
+ * The same calendar, named by id instead of by name and date.
+ *
+ * Rating resolves a version from a name and the period, because that is
+ * what a tariff asks for. The interval roll-up does not: it classifies
+ * usage for a schedule that already names one exact version, and
+ * TOU-CAL-5 is the reason — a published schedule cannot follow a
+ * calendar republished with different hours, so re-rating that period
+ * must reach the same version it reached the first time.
+ *
+ * Published-only, and deliberately without an effective-date filter: a
+ * schedule may be published against a calendar that takes effect later
+ * in its life, and the schedule's own version is what decides when
+ * those hours apply.
+ */
+export async function loadTouCalendarById(
+  prisma: PrismaClient,
+  args: { utilityId: string; id: string; period: { startDate: Date; endDate: Date } },
+): Promise<TouCalendarLoad> {
+  const { utilityId, id, period } = args;
+
+  const row = await prisma.touCalendar.findFirst({
+    where: { utilityId, id, publishedAt: { not: null } },
+    include: CALENDAR_INCLUDE,
+  });
+
+  if (!row) {
+    const draft = await prisma.touCalendar.findFirst({
+      where: { utilityId, id },
+      select: { name: true },
+    });
+    return draft
+      ? {
+          ok: false,
+          problem: `TOU calendar "${draft.name}" is still a draft, so its hours can change. Usage cannot be classified against it.`,
+        }
+      : { ok: false, problem: "That TOU calendar does not exist." };
+  }
+
+  return { ok: true, calendar: await toLoadedCalendar(prisma, utilityId, row, period) };
+}
+
+/** Shared by both loads, so the two cannot read a calendar differently. */
+async function toLoadedCalendar(
+  prisma: PrismaClient,
+  utilityId: string,
+  row: TouCalendarRow,
+  period: { startDate: Date; endDate: Date },
+): Promise<LoadedTouCalendar> {
   return {
-    ok: true,
-    calendar: {
-      id: row.id,
-      name: row.name,
-      effectiveDate: row.effectiveDate,
-      timeZone: row.timeZone,
-      clockBasis: row.clockBasis as ClockBasis,
-      seasons: row.seasonSet.seasons.map((s) => ({
-        seasonCode: s.seasonCode,
-        startMonth: s.startMonth,
-        startDay: s.startDay,
-        endMonth: s.endMonth,
-        endDay: s.endDay,
-      })),
-      definition,
-      observedHolidays: await loadObservedHolidays(prisma, utilityId, row.touHolidaySetId, period),
-    },
+    id: row.id,
+    name: row.name,
+    effectiveDate: row.effectiveDate,
+    timeZone: row.timeZone,
+    clockBasis: row.clockBasis as ClockBasis,
+    seasons: row.seasonSet.seasons.map((s) => ({
+      seasonCode: s.seasonCode,
+      startMonth: s.startMonth,
+      startDay: s.startDay,
+      endMonth: s.endMonth,
+      endDay: s.endDay,
+    })),
+    definition: toTouCalendarDefinition(row),
+    observedHolidays: await loadObservedHolidays(prisma, utilityId, row.touHolidaySetId, period),
   };
 }
 

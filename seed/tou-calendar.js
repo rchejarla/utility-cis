@@ -206,7 +206,18 @@ async function seedTouCalendar({ p, utilityId }) {
     select: { id: true },
   });
   if (existing) {
-    return { skipped: `"${CALENDAR_NAME}" already exists` };
+    /*
+     * Skipped means "not created", not "nothing to tell you". The
+     * calendar's id and zone travel with the skip because what comes
+     * next — the two TOU services — needs them either way, and a
+     * reseed that found the calendar already here would otherwise skip
+     * the services too, for no reason anybody could see.
+     */
+    return {
+      skipped: `"${CALENDAR_NAME}" already exists`,
+      calendarId: existing.id,
+      timeZone: TIME_ZONE,
+    };
   }
 
   /*

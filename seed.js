@@ -6,6 +6,7 @@ const { PrismaClient } = require("./packages/shared/src/generated/prisma");
 const { seedDelinquencyLadder } = require("./seed/delinquency-ladder.js");
 const { seedPaymentPlan } = require("./seed/payment-plan.js");
 const { seedTouCalendar } = require("./seed/tou-calendar.js");
+const { seedTouService } = require("./seed/tou-service.js");
 
 /*
  * `@prisma/adapter-pg` and `pg` are declared by `packages/shared`, and
@@ -158,6 +159,11 @@ async function main() {
   // SAM table dropped in slice 1 migration; SP/SPM cascade from SA deletion.
   await p.serviceAgreement.deleteMany({});
   if (p.rateServiceClass) await p.rateServiceClass.deleteMany({});
+  // Interval data holds the meter and its registers with RESTRICT, on
+  // purpose: a register with billed intervals behind it is not a row to
+  // delete quietly. A reseed is the one place that is wanted, so it is
+  // cleared explicitly rather than by relaxing the key.
+  if (p.meterReadInterval) await p.meterReadInterval.deleteMany({});
   await p.meterRegister.deleteMany({});
   await p.contact.deleteMany({});
   await p.billingAddress.deleteMany({});
@@ -2118,6 +2124,58 @@ async function main() {
       "       holidays: \"" + tou.holidaySetName + "\" (" + tou.holidayDates +
         " dates" + (tou.holidaySetReused ? ", reused" : "") + ")",
     );
+  }
+
+  /*
+   * The two TOU services — one register meter, one interval meter.
+   *
+   * Both so that the register mapping and the interval roll-up are
+   * visibly the same feature: they end as `meter_read` rows carrying a
+   * peak code, which is the only shape the rate engine knows. The
+   * interval meter has no registers and no programmed calendar, which
+   * is the point worth seeing — registers are one way to split a TOU
+   * bill, not a requirement of one.
+   */
+  const touService = await seedTouService({
+    p,
+    utilityId: UID,
+    calendarId: tou.calendarId,
+    timeZone: tou.timeZone,
+  });
+  if (touService.skipped) {
+    console.log("  [skip] TOU services: " + touService.skipped);
+  } else {
+    console.log(
+      '  TOU tariff "' + touService.scheduleCode + '" published (' +
+        touService.prices.join(", ") + ") per kWh",
+    );
+    console.log(
+      "       register meter " + touService.registerMeter + ": 3 mapped registers, " +
+        "one read event (" + touService.registerBuckets.join(", ") + " kWh)",
+    );
+    console.log(
+      "       interval meter " + touService.intervalMeter + ": " + touService.intervals +
+        " hourly intervals, " + touService.fromDate + ".." + touService.toDate +
+        " (no registers, no programmed calendar)",
+    );
+
+    /*
+     * The roll-up runs through the real service, shelled out for the
+     * same reason provisioning is: this file is CommonJS. A classifier
+     * reimplemented here would be a second answer to "what period is
+     * this hour in", and the one that disagreed would be the one
+     * nobody ran.
+     */
+    try {
+      const out = execSync(
+        `"${TSX_BIN}" scripts/roll-up-intervals.ts --utility-id ${UID} ` +
+          `--meter ${touService.intervalMeter} --from ${touService.fromDate} --to ${touService.toDate}`,
+        { cwd: path.join(__dirname, "packages", "api"), stdio: "pipe" },
+      ).toString();
+      for (const line of out.trim().split("\n")) console.log("       " + line.trim());
+    } catch (err) {
+      console.log("       [warn] interval roll-up failed: " + (err.stderr?.toString().trim() || err.message));
+    }
   }
 
   const portalUsers = [

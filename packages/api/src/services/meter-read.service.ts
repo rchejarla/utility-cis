@@ -330,10 +330,22 @@ export async function createMeterRead(
   // meter, prefer that register's uomId (which may differ from the
   // meter's default uomId — e.g., kW demand vs. kWh usage).
   let uomId = meter.uomId;
+  /**
+   * Which TOU period this read's consumption belongs to (spec 26,
+   * TOU-REG-1).
+   *
+   * Taken from the register, because on a register meter the *device*
+   * did the bucketing — its own clock routed the usage into that dial.
+   * Stamped onto the read rather than left to be derived later: the
+   * mapping is neither versioned nor effective-dated, so a re-rate that
+   * looked it up again would answer with today's mapping and fail to
+   * reproduce a bill from before a remap. NULL for a total register.
+   */
+  let peakCode: string | null = null;
   if (data.registerId) {
     const reg = await prisma.meterRegister.findFirst({
       where: { id: data.registerId, utilityId, meterId: data.meterId },
-      select: { uomId: true },
+      select: { uomId: true, peakCode: true },
     });
     if (!reg) {
       throw Object.assign(
@@ -342,6 +354,7 @@ export async function createMeterRead(
       );
     }
     uomId = reg.uomId;
+    peakCode = reg.peakCode;
   }
 
   return auditCreate(
@@ -355,6 +368,7 @@ export async function createMeterRead(
           serviceAgreementId,
           registerId: data.registerId ?? null,
           uomId,
+          peakCode,
           readDate,
           readDatetime,
           reading: data.reading,
@@ -396,7 +410,9 @@ export async function createMeterReadEvent(
 
   const activeRegisters = await prisma.meterRegister.findMany({
     where: { utilityId, meterId: data.meterId, isActive: true },
-    select: { id: true, registerNumber: true, uomId: true },
+    // `peakCode` is what makes a read event on a TOU meter produce the
+    // buckets rating reads — one row per period, zeros included.
+    select: { id: true, registerNumber: true, uomId: true, peakCode: true },
   });
   if (activeRegisters.length === 0) {
     throw Object.assign(
@@ -472,6 +488,7 @@ export async function createMeterReadEvent(
             registerId: p.register.id,
             readEventId,
             uomId: p.register.uomId,
+            peakCode: p.register.peakCode,
             readDate,
             readDatetime,
             reading: p.input.reading,

@@ -49,6 +49,12 @@ export const EVENT_TYPES = {
   PREMISE_UPDATED: "premise.updated",
   METER_CREATED: "meter.created",
   METER_UPDATED: "meter.updated",
+  /**
+   * Which TOU period a register counts (spec 26, TOU-REG-1). Its own
+   * event because it decides how every later read is bucketed, and a
+   * bill questioned months on is answered by when this changed.
+   */
+  METER_REGISTER_TOU_PERIOD_SET: "meter_register.tou_period_set",
   ACCOUNT_CREATED: "account.created",
   ACCOUNT_UPDATED: "account.updated",
   SERVICE_AGREEMENT_CREATED: "service_agreement.created",

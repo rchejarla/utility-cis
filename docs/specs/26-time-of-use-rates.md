@@ -694,18 +694,58 @@ raw intervals from the same meters. Compression is therefore entirely a
 
 ### 3b. Interval data
 
-- **TOU-INT-1 (Must).** Interval consumption is stored in
-  **`meter_read_interval`**, one row per interval per meter (and
-  register): interval start (UTC), length (5, 15, 30 or 60 minutes),
-  quantity, unit, and a quality flag (`actual`, `estimated`, `missing`,
-  `edited`). A TimescaleDB hypertable with a **native compression
-  policy** — no packed arrays, for the reasons under *How usage is stored* — under RLS with
-  `FORCE`, scoped by `utility_id` like every tenant table.
+- **TOU-INT-1 (Must).** *Built 2026-11-05, except the compression
+  policy.* Interval consumption is stored in **`meter_read_interval`**,
+  one row per interval per meter (and register): interval start (UTC),
+  length (5, 15, 30 or 60 minutes), quantity, unit, and a quality flag
+  (`actual`, `estimated`, `missing`, `edited`). A TimescaleDB
+  hypertable — chunked by **week**, where `meter_read` uses a month,
+  since a month of one tenant's intervals is two orders of magnitude
+  more rows — with a **native compression policy**: no packed arrays,
+  for the reasons under *How usage is stored*. Under RLS with `FORCE`,
+  scoped by `utility_id` like every tenant table, and with the
+  tenant-scoped composite keys every table between two tenant-scoped
+  tables carries.
 
   Compression has no precedent in this codebase: no migration calls
   `add_compression_policy` and `meter_read` is uncompressed. This is
   the first, and the policy's threshold should sit outside the rebill
   window so a correction never has to decompress a chunk.
+
+  **The compression policy is deliberately not in the migration.** Its
+  threshold is the rebill window, which is a tenant setting nobody has
+  measured, and a first-in-the-codebase compression policy chosen blind
+  is worse than none: the failure it buys is a correction that cannot
+  be written. It belongs with TOU-INT-8, where the number can be
+  justified against a measurement.
+
+- **TOU-INT-1a (Must).** *Built 2026-11-05.* The **roll-up** turns
+  classified intervals into `meter_read` rows carrying a `peak_code` —
+  the same shape a register meter's read event produces, which is what
+  lets the rate engine price one shape and never learn which kind of
+  meter made it. `interval-rollup.service.ts`, driven for now by
+  `packages/api/scripts/roll-up-intervals.ts`; wiring it into the
+  billing run is the next step.
+
+  Three rules it applies, each of which would otherwise be a quiet
+  wrong bill:
+
+  - **It refuses rather than under-reports.** A bucket is a sum, and a
+    sum missing a day is indistinguishable from a quiet month —
+    nothing raises, and the customer is charged for less energy than
+    they used. An unclassifiable interval, a straddling one, or one
+    marked `missing` stops the roll-up and is named. TOU-GAP-1's rule,
+    one step earlier than the billing run.
+  - **Every period the calendar uses gets a bucket, zero included** —
+    the same contract the register importer owes. A missing bucket is
+    not a zero: the loader leaves the key unset and the `tou_period`
+    source *raises*, because on a register meter an absent period
+    means usage rolled into another dial. An interval meter has no
+    such ambiguity, so a winter month of a calendar whose summer has a
+    mid-peak must still bill, at zero.
+  - **The calendar comes from the rate schedule, by id.** Not from the
+    meter (TOU-CAL-11), and not by name, because a published schedule
+    names one exact version and re-rating must reach the same one.
 - **TOU-INT-2 (Must).** Import by file, through the existing import
   infrastructure ([22](22-import-infrastructure.md)): CSV (meter, start,
   length, quantity, quality) and Green Button Connect / ESPI XML. An
@@ -1145,6 +1185,22 @@ it is wrong.
   whichever order suits them, and publishing is the commitment.
 - **TOU-UI-4 (Must).** Meter register screens allow mapping a register
   to a TOU period (TOU-REG-1).
+
+  *Write path built 2026-11-05; the screen is still to come.*
+  `PUT /api/v1/meter-registers/:id/tou-period` is the register's only
+  write — there is no register CRUD, because registers arrive with the
+  meter and this is the one thing about one a person needs to change:
+  the *utility's assignment of meaning to a dial*. It refuses a code
+  the tenant has not defined, naming the ones it has, and a second
+  register claiming a period the meter already counts, naming the
+  register that holds it — two registers counting one period would be
+  summed and charged twice.
+
+  Changing it affects **future reads only**: `createMeterRead` stamps
+  the code onto each read, so a re-rate reproduces a bill from what was
+  stamped rather than from today's mapping. That is what makes the
+  mapping safe to change at all, and it is why the stamping (also built
+  2026-11-05) matters more than the mapping does.
 - **TOU-UI-5 (Should).** A test-rating panel: pick a service agreement
   and period, see the bucketed quantities and the lines before
   publishing a schedule.
