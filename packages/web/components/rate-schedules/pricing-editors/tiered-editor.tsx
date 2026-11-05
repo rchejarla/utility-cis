@@ -72,8 +72,13 @@ export function TieredEditor({ value, onChange, unitOptions }: Props) {
       onChange(null);
       return;
     }
-    const next: TieredValue = { type: "tiered", tiers: parsed };
-    if (unit) next.unit = unit;
+    // Same rule as the flat editor: the bill line has to name what it
+    // counted, so a blank unit holds Save.
+    if (!unit) {
+      onChange(null);
+      return;
+    }
+    const next: TieredValue = { type: "tiered", tiers: parsed, unit };
     if (standardDays !== undefined) next.standard_days = standardDays;
     onChange(next);
     // onChange is stable; only re-emit when the rows change
@@ -96,7 +101,12 @@ export function TieredEditor({ value, onChange, unitOptions }: Props) {
         <thead>
           <tr>
             <th style={thStyle}>Up to (blank = unbounded)</th>
-            <th style={thStyle}>Rate</th>
+            <th style={thStyle}>
+              Rate
+              <span aria-hidden="true" style={{ color: "var(--danger)", marginLeft: 3 }}>
+                *
+              </span>
+            </th>
             <th style={{ ...thStyle, width: 80 }} />
           </tr>
         </thead>
@@ -121,6 +131,7 @@ export function TieredEditor({ value, onChange, unitOptions }: Props) {
                   onChange={(v) => updateRow(idx, "rate", v)}
                   ariaLabel={`Rate for tier ${idx + 1}`}
                   style={{ padding: 6 }}
+                  required
                 />
               </td>
               <td style={tdStyle}>
@@ -140,7 +151,7 @@ export function TieredEditor({ value, onChange, unitOptions }: Props) {
         + Add Tier
       </button>
       <div style={{ marginTop: 12, maxWidth: 240 }}>
-        <UnitPicker value={unit} onChange={setUnit} groups={unitOptions} />
+        <UnitPicker value={unit} onChange={setUnit} groups={unitOptions} required />
       </div>
     </div>
   );

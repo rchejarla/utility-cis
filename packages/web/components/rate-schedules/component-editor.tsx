@@ -6,7 +6,7 @@ import { useToast } from "@/components/ui/toast";
 import { DatePicker } from "@/components/ui/date-picker";
 import { PricingEditor } from "./pricing-editor";
 import { PredicateBuilder } from "./predicate-builder";
-import { QuantitySourceBuilder } from "./quantity-source-builder";
+import { QuantitySourceBuilder, type TransformOption } from "./quantity-source-builder";
 import type { RateComponent } from "./component-list";
 import type { UnitOptionGroup } from "./pricing-editors/unit-picker";
 
@@ -17,6 +17,7 @@ interface KindOption {
 
 interface Grammar {
   kinds: KindOption[];
+  transforms?: TransformOption[];
 }
 
 interface CycleCheckResult {
@@ -128,6 +129,7 @@ export function ComponentEditor({
   const { toast } = useToast();
   const isEdit = component !== null;
 
+  const [transformOptions, setTransformOptions] = useState<TransformOption[]>([]);
   const [uomCodes, setUomCodes] = useState<string[]>([]);
   const [unitsInUse, setUnitsInUse] = useState<string[]>([]);
   const [kindOptions, setKindOptions] = useState<KindOption[]>([]);
@@ -195,6 +197,7 @@ export function ComponentEditor({
       .then((g) => {
         if (cancelled) return;
         setKindOptions(g.kinds ?? []);
+        setTransformOptions(g.transforms ?? []);
         // Default the kind dropdown to the first option in create mode
         // so the form is submittable without an explicit selection step.
         if (!isEdit && (g.kinds?.length ?? 0) > 0 && !kindCode) {
@@ -502,6 +505,7 @@ export function ComponentEditor({
                 setQuantitySource(parsed);
                 setQuantitySourceValid(valid);
               }}
+              transforms={transformOptions}
             />
           </div>
 

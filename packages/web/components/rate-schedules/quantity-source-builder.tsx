@@ -30,12 +30,26 @@ interface Period {
   label: string;
 }
 
+export interface TransformOption {
+  code: string;
+  label: string;
+  supported: boolean;
+}
+
 interface Props {
   value: Record<string, unknown>;
   onChange: (value: Record<string, unknown>, valid: boolean) => void;
+  /**
+   * From `/api/v1/rate-grammar/registered`, which already carries each
+   * transform's label and whether the engine evaluates it. Passed in
+   * rather than re-listed here: a second hand-kept copy of the grammar
+   * in the web is exactly how `tou_period` came to be missing from the
+   * base list, built and unreachable for two days.
+   */
+  transforms?: TransformOption[];
 }
 
-export function QuantitySourceBuilder({ value, onChange }: Props) {
+export function QuantitySourceBuilder({ value, onChange, transforms = [] }: Props) {
   const [base, setBase] = useState<string>(
     typeof value.base === "string" ? (value.base as string) : "metered",
   );
@@ -159,6 +173,22 @@ export function QuantitySourceBuilder({ value, onChange }: Props) {
             Transforms (advanced — optional)
           </summary>
           <div style={{ marginTop: 8 }}>
+            <p style={{ margin: "0 0 8px", fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
+              Adjustments applied to the quantity above, in order,{" "}
+              <strong>before it is priced</strong> — so the charge prices the
+              adjusted figure and the bill line shows it. Most tariffs need
+              none: leave this empty unless the tariff says the measured
+              quantity is not what gets charged for.
+            </p>
+            {transforms.some((t) => t.supported) && (
+              <p style={{ margin: "0 0 8px", fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
+                Available:{" "}
+                {transforms
+                  .filter((t) => t.supported)
+                  .map((t) => t.label)
+                  .join(" · ")}
+              </p>
+            )}
             <JsonFallbackEditor
               initialJson={transformsJson}
               onChange={(parsed, isValid) => {

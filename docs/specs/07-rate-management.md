@@ -256,6 +256,44 @@ loser, which is why its message had to be legible too (see below).
   cheap half of fixing that. The expensive half — normalising existing
   rows — is not done, and `HCF`'s absence from `unit_of_measure` is a
   **data gap in the seed**, not a UI one.
+- **Rate and unit are both required, and marked** *(2026-11-05)*. The
+  rate always blocked Save — the editors emit `null` while it will not
+  parse — but nothing on the form said so; it now carries the same red
+  asterisk the rest of the app uses, on the flat rate and on each tier
+  and lookup row. The unit blocked nothing and now blocks the same way.
+
+  **Required in the editor, not in `pricingSchema`.** The grammar stays
+  permissive so rows already stored without a unit still parse and the
+  engine is untouched; the editor enforces the house rule. The rule
+  comes from the data model: `bill_segment_line.unit` exists because
+  "the engine converts, so a gallons meter on an HCF tariff bills
+  6.6279 and the bill has to say of what" — a priced quantity with no
+  unit is a line that prints a number and never names it. Across the
+  three seeds, 48 components carry a unit-bearing pricing shape and
+  every one already sets a unit, so this refuses nothing anyone has
+  authored. The one thing it does change: a component written through
+  the JSON escape hatch without a unit now holds Save until one is
+  picked, which is the gap being surfaced rather than a regression.
+
+  `percent_of`, `catalog` and `floor` have no unit in the grammar at
+  all and are unaffected.
+- **Transforms now says what it is for** *(2026-11-05)*. It was a bare
+  `<details>` labelled "advanced — optional" over a JSON textarea, with
+  no statement of what a transform does and no way to discover which
+  ones exist short of reading the Zod union. It now explains that
+  transforms adjust the quantity, in order, *before it is priced*, and
+  lists the ones the engine implements — `clamp`, `net`, `prorate`,
+  `subtract_linked_commodity`, `floor` — read from
+  `/api/v1/rate-grammar/registered`, which already carries each one's
+  label and `supported` flag.
+
+  The four declared-but-unevaluated transforms (`ratchet`,
+  `tou_window_filter`, `power_factor`, `load_factor`) are deliberately
+  **not** offered: naming them would invite a tariff the engine cannot
+  rate, which is the unsatisfiable-gate mistake again. The list is
+  fetched rather than re-listed in the web for the same reason the base
+  list is pinned by a drift test — a second hand-kept copy of the
+  grammar is how `tou_period` stayed unreachable.
 - **The tiered and lookup editors no longer drop what they do not edit.**
   Both read only their rows and re-emitted only their rows, and
   `PricingEditor`'s casts stopped at `tiers` / `table` — so opening a

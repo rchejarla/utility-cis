@@ -25,9 +25,22 @@ interface Props {
   ariaLabel: string;
   step?: string;
   style?: React.CSSProperties;
+  /**
+   * Always true in practice: a charge with no rate prices nothing. The
+   * editors already blocked Save by emitting `null`, and said nothing
+   * about why — this is the part that marks it.
+   */
+  required?: boolean;
 }
 
-export function MoneyInput({ value, onChange, ariaLabel, step = "0.0001", style }: Props) {
+export function MoneyInput({
+  value,
+  onChange,
+  ariaLabel,
+  step = "0.0001",
+  style,
+  required = false,
+}: Props) {
   return (
     <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
       <span
@@ -46,6 +59,7 @@ export function MoneyInput({ value, onChange, ariaLabel, step = "0.0001", style 
         type="number"
         step={step}
         aria-label={ariaLabel}
+        required={required}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         style={{ ...baseInputStyle, ...style, paddingLeft: 20 }}

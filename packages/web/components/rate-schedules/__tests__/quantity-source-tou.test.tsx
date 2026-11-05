@@ -27,6 +27,51 @@ beforeEach(() => {
   get.mockResolvedValue({ data: PERIODS });
 });
 
+describe("the transforms section", () => {
+  /*
+   * It was a bare `<details>` labelled "Transforms (advanced —
+   * optional)" over a JSON textarea: no statement of what a transform
+   * is, and no way to discover which ones exist short of reading the
+   * Zod union. The list comes from `/api/v1/rate-grammar/registered`,
+   * which already carries each transform's label and whether the
+   * engine implements it — a second hand-kept copy in the web is
+   * precisely how `tou_period` went missing from the base list.
+   */
+  const TRANSFORMS = [
+    { code: "prorate", label: "Prorate by days", supported: true },
+    { code: "clamp", label: "Clamp (min/max)", supported: true },
+    { code: "ratchet", label: "Ratchet (peak-demand-based)", supported: false },
+  ];
+
+  it("says what a transform does to the quantity", () => {
+    render(
+      <QuantitySourceBuilder
+        value={{ base: "metered" }}
+        onChange={vi.fn()}
+        transforms={TRANSFORMS}
+      />,
+    );
+
+    expect(screen.getByText(/before it is priced/i)).toBeInTheDocument();
+  });
+
+  it("names the transforms the engine implements, and not the ones it does not", () => {
+    render(
+      <QuantitySourceBuilder
+        value={{ base: "metered" }}
+        onChange={vi.fn()}
+        transforms={TRANSFORMS}
+      />,
+    );
+
+    expect(screen.getByText(/Prorate by days/)).toBeInTheDocument();
+    expect(screen.getByText(/Clamp/)).toBeInTheDocument();
+    // Declared in the grammar, not evaluated: offering it would be the
+    // unsatisfiable-gate mistake again.
+    expect(screen.queryByText(/Ratchet/)).not.toBeInTheDocument();
+  });
+});
+
 describe("the TOU period source", () => {
   it("offers the tenant's periods once it is chosen", async () => {
     const onChange = vi.fn();

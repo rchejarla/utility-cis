@@ -179,6 +179,83 @@ describe("the lookup editor", () => {
   });
 });
 
+describe("what the form will not let you leave blank", () => {
+  /*
+   * Both fields were enforced-but-unmarked or not enforced at all. The
+   * rate already blocked Save by emitting null, and said nothing about
+   * it; the unit did not block anything, and `bill_segment_line.unit`
+   * exists precisely because "the engine converts, so a gallons meter
+   * on an HCF tariff bills 6.6279 and the bill has to say of what".
+   * A priced quantity with no unit is a bill line that prints a number
+   * and never names it.
+   *
+   * Requiring the unit here, not in `pricingSchema`: the grammar stays
+   * permissive for the engine and for rows already stored, and the
+   * editor enforces the house rule. Across the three seeds, 48
+   * components carry a unit-bearing pricing shape and every one of
+   * them already sets a unit, so this refuses nothing anyone has
+   * actually written.
+   */
+  it("marks the rate required, and holds Save while it is empty", () => {
+    const onChange = vi.fn();
+    render(<FlatEditor value={null} onChange={onChange} unitOptions={GROUPS} />);
+
+    expect(screen.getByLabelText("Rate")).toBeRequired();
+    expect(onChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it("marks the unit required, and holds Save until one is chosen", async () => {
+    const onChange = vi.fn();
+    render(
+      <FlatEditor value={{ type: "flat", rate: 0.0741 }} onChange={onChange} unitOptions={GROUPS} />,
+    );
+
+    expect(unitSelect()).toBeRequired();
+    expect(onChange).toHaveBeenLastCalledWith(null);
+
+    await userEvent.selectOptions(unitSelect(), "HCF");
+
+    expect(onChange).toHaveBeenLastCalledWith({ type: "flat", rate: 0.0741, unit: "HCF" });
+  });
+
+  it("holds Save on a tiered charge with no unit", () => {
+    const onChange = vi.fn();
+    render(
+      <TieredEditor
+        value={{ type: "tiered", tiers: [{ to: null, rate: 2.15 }] }}
+        onChange={onChange}
+        unitOptions={GROUPS}
+      />,
+    );
+
+    expect(onChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it("holds Save on a lookup charge with no unit", () => {
+    const onChange = vi.fn();
+    render(
+      <LookupEditor
+        value={{ type: "lookup", by: "meter_size", table: { '5/8"': 14.5 } }}
+        onChange={onChange}
+        unitOptions={GROUPS}
+      />,
+    );
+
+    expect(onChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it("does not accept Other… with nothing typed into it", async () => {
+    const onChange = vi.fn();
+    render(
+      <FlatEditor value={{ type: "flat", rate: 3 }} onChange={onChange} unitOptions={GROUPS} />,
+    );
+
+    await userEvent.selectOptions(unitSelect(), "__other");
+
+    expect(onChange).toHaveBeenLastCalledWith(null);
+  });
+});
+
 describe("the unit picker with nothing to offer", () => {
   it("is still usable when no groups are supplied", async () => {
     // The lesson from the commodity dropdown: a control with an empty

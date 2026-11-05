@@ -66,8 +66,12 @@ export function LookupEditor({ value, onChange, unitOptions }: Props) {
       }
       table[key] = r;
     }
-    const next: LookupValue = { type: "lookup", by, table };
-    if (unit) next.unit = unit;
+    // Same rule as the flat and tiered editors.
+    if (!unit) {
+      onChange(null);
+      return;
+    }
+    const next: LookupValue = { type: "lookup", by, table, unit };
     onChange(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [by, rows, unit]);
@@ -97,7 +101,12 @@ export function LookupEditor({ value, onChange, unitOptions }: Props) {
         <thead>
           <tr>
             <th style={thStyle}>Key (e.g. {`5/8"`})</th>
-            <th style={thStyle}>Rate</th>
+            <th style={thStyle}>
+              Rate
+              <span aria-hidden="true" style={{ color: "var(--danger)", marginLeft: 3 }}>
+                *
+              </span>
+            </th>
             <th style={{ ...thStyle, width: 80 }} />
           </tr>
         </thead>
@@ -121,6 +130,7 @@ export function LookupEditor({ value, onChange, unitOptions }: Props) {
                   ariaLabel={`Rate for ${r.key.trim() || `row ${idx + 1}`}`}
                   step="0.01"
                   style={{ padding: 6 }}
+                  required
                 />
               </td>
               <td style={tdStyle}>
@@ -140,7 +150,7 @@ export function LookupEditor({ value, onChange, unitOptions }: Props) {
         + Add Row
       </button>
       <div style={{ marginTop: 12, maxWidth: 240 }}>
-        <UnitPicker value={unit} onChange={setUnit} groups={unitOptions} />
+        <UnitPicker value={unit} onChange={setUnit} groups={unitOptions} required />
       </div>
     </div>
   );

@@ -15,6 +15,15 @@ interface Props {
   groups: UnitOptionGroup[];
   /** Accessible name. The table editors name theirs for the whole table. */
   label?: string;
+  /**
+   * Required by the three structured editors, and enforced by them
+   * emitting `null` while it is blank — `pricingSchema` stays
+   * permissive, so rows already stored without a unit still parse and
+   * the engine is unchanged. `bill_segment_line.unit` is why: the
+   * engine converts a gallons meter onto an HCF tariff, "and the bill
+   * has to say of what".
+   */
+  required?: boolean;
 }
 
 /**
@@ -34,7 +43,13 @@ interface Props {
  * written; offering the spellings already in use is the cheap half of
  * fixing that.
  */
-export function UnitPicker({ value, onChange, groups, label = "Unit" }: Props) {
+export function UnitPicker({
+  value,
+  onChange,
+  groups,
+  label = "Unit",
+  required = false,
+}: Props) {
   // Deduped across groups, first occurrence winning, so one code cannot
   // appear as two <option>s with the same value.
   const seen = new Set<string>();
@@ -61,14 +76,27 @@ export function UnitPicker({ value, onChange, groups, label = "Unit" }: Props) {
 
   return (
     <div>
-      <span style={labelStyle}>{label} (optional)</span>
+      <span style={labelStyle}>
+        {label}
+        {required ? (
+          <>
+            <span aria-hidden="true" style={{ color: "var(--danger)", marginLeft: 3 }}>
+              *
+            </span>
+            <span className="sr-only">(required)</span>
+          </>
+        ) : (
+          " (optional)"
+        )}
+      </span>
       <select
         aria-label={label}
+        required={required}
         value={other ? OTHER_UNIT : (value ?? "")}
         onChange={(e) => handleSelect(e.target.value)}
         style={inputStyle}
       >
-        <option value="">(none)</option>
+        <option value="">{required ? "Choose a unit…" : "(none)"}</option>
         {offered.map((g) => (
           <optgroup key={g.label} label={g.label}>
             {g.codes.map((c) => (
@@ -84,6 +112,7 @@ export function UnitPicker({ value, onChange, groups, label = "Unit" }: Props) {
         <input
           type="text"
           aria-label={`${label} label`}
+          required={required}
           value={free}
           onChange={(e) => {
             setFree(e.target.value);

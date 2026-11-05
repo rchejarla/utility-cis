@@ -36,8 +36,15 @@ export function FlatEditor({ value, onChange, unitOptions }: Props) {
       onChange(null);
       return;
     }
-    const v: FlatValue = { type: "flat", rate: r };
-    if (unit) v.unit = unit;
+    // A priced quantity with no unit is a bill line that prints a
+    // number and never names it, so the unit holds Save the same way
+    // the rate does. `pricingSchema` still allows its absence, for
+    // rows already stored and for the engine.
+    if (!unit) {
+      onChange(null);
+      return;
+    }
+    const v: FlatValue = { type: "flat", rate: r, unit };
     onChange(v);
     // onChange is stable in practice; only re-emit when the inputs change
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -46,11 +53,17 @@ export function FlatEditor({ value, onChange, unitOptions }: Props) {
   return (
     <div style={{ display: "flex", gap: 12 }}>
       <div style={{ flex: 1 }}>
-        <span style={labelStyle}>Rate</span>
-        <MoneyInput value={rate} onChange={setRate} ariaLabel="Rate" />
+        <span style={labelStyle}>
+          Rate
+          <span aria-hidden="true" style={{ color: "var(--danger)", marginLeft: 3 }}>
+            *
+          </span>
+          <span className="sr-only">(required)</span>
+        </span>
+        <MoneyInput value={rate} onChange={setRate} ariaLabel="Rate" required />
       </div>
       <div style={{ flex: 1 }}>
-        <UnitPicker value={unit} onChange={setUnit} groups={unitOptions} />
+        <UnitPicker value={unit} onChange={setUnit} groups={unitOptions} required />
       </div>
     </div>
   );
