@@ -87,7 +87,13 @@ beforeEach(() =>
     await prisma.$executeRawUnsafe("DELETE FROM tou_day_override");
     await prisma.$executeRawUnsafe("DELETE FROM tou_day_type_weekday");
     await prisma.$executeRawUnsafe("DELETE FROM tou_day_type");
-    await prisma.$executeRawUnsafe("DELETE FROM tou_period");
+    /*
+     * `tou_period` is deliberately *not* cleared. The periods are the
+     * tenant's configuration now, created once with the tenant by
+     * `ensureUtilities` the way a provisioned tenant gets them —
+     * clearing them between tests would leave every span write failing
+     * the key, for a reason that has nothing to do with the test.
+     */
     await prisma.$executeRawUnsafe("UPDATE rate_schedule SET tou_calendar_id = NULL");
     await prisma.$executeRawUnsafe("DELETE FROM tou_calendar");
     // After the calendars: `tou_calendar_holiday_set_id_fkey` is
@@ -234,10 +240,12 @@ async function createCalendar(over: Record<string, unknown> = {}) {
   return body(res);
 }
 
-const PERIODS = { periods: [
-  { peakCode: "off_peak", label: "Off-peak" },
-  { peakCode: "peak", label: "Peak" },
-] };
+/*
+ * No PERIODS constant: peak codes belong to the tenant, and
+ * `ensureUtilities` gives every test tenant the same three a
+ * provisioned one gets — off_peak, mid_peak, peak. So a span names a
+ * code and nothing has to declare it first.
+ */
 
 /*
  * The three the calendar already has, resubmitted. `holiday` is the
@@ -281,7 +289,6 @@ async function fillSpans(id: string) {
 
 async function completeCalendar() {
   const calendar = await createCalendar();
-  await inject("PUT", `/api/v1/tou-calendars/${calendar.id}/periods`, PERIODS);
   await inject("PUT", `/api/v1/tou-calendars/${calendar.id}/day-types`, DAY_TYPES);
   await fillSpans(calendar.id);
   return calendar.id;
@@ -321,7 +328,6 @@ describe("creating a calendar", () => {
 describe("validation while the calendar is being built", () => {
   it("names the hours that no period covers", async () => {
     const calendar = await createCalendar();
-    await inject("PUT", `/api/v1/tou-calendars/${calendar.id}/periods`, PERIODS);
     await inject("PUT", `/api/v1/tou-calendars/${calendar.id}/day-types`, DAY_TYPES);
     await inject("PUT", `/api/v1/tou-calendars/${calendar.id}/spans`, {
       seasonCode: "summer",
@@ -346,7 +352,6 @@ describe("validation while the calendar is being built", () => {
 
   it("refuses two spans that overlap, naming both", async () => {
     const calendar = await createCalendar();
-    await inject("PUT", `/api/v1/tou-calendars/${calendar.id}/periods`, PERIODS);
     await inject("PUT", `/api/v1/tou-calendars/${calendar.id}/day-types`, DAY_TYPES);
 
     const res = await inject("PUT", `/api/v1/tou-calendars/${calendar.id}/spans`, {
@@ -365,14 +370,47 @@ describe("validation while the calendar is being built", () => {
 });
 
 describe("the collections that cannot be edited row by row", () => {
-  it("refuses to drop a period that hours are still assigned to", async () => {
+  /*
+   * "Refuses to drop a period that hours are assigned to" moved with
+   * the periods themselves, to `tou-period.integration.test.ts`:
+   * they are the tenant's now, so dropping one is a `DELETE
+   * /api/v1/tou-periods/:id` and the calendars using it are what the
+   * refusal has to name.
+   */
+  it("refuses a span naming a period the tenant has not defined", async () => {
+    /*
+     * The other half of what the old per-calendar list enforced. The
+     * database says the same through `tou_slot_peak_code_fkey`, but a
+     * 23503 arrives after the delete inside the transaction, so the
+     * operator would see a failed save rather than a named mistake.
+     */
     const id = await completeCalendar();
-    const res = await inject("PUT", `/api/v1/tou-calendars/${id}/periods`, {
-      periods: [{ peakCode: "off_peak", label: "Off-peak" }],
+    const res = await inject("PUT", `/api/v1/tou-calendars/${id}/spans`, {
+      seasonCode: "summer",
+      dayTypeCode: "weekday",
+      spans: [{ startMinute: 0, endMinute: 1440, peakCode: "super_off_peak" }],
     });
-    expect(res.statusCode).toBe(409);
-    expect(body(res).error.code).toBe("TOU_PERIOD_IN_USE");
-    expect(body(res).error.message).toMatch(/Peak/);
+    expect(res.statusCode).toBe(400);
+    expect(body(res).error.code).toBe("TOU_PERIOD_MISSING");
+    expect(body(res).error.message).toMatch(/not one of this utility's periods/);
+  });
+
+  it("keeps the hours it refused, rather than clearing them first", async () => {
+    // The refusal happens before the write, so a bad code costs
+    // nothing. Inside the transaction it would have cost the group.
+    const id = await completeCalendar();
+    await inject("PUT", `/api/v1/tou-calendars/${id}/spans`, {
+      seasonCode: "summer",
+      dayTypeCode: "weekday",
+      spans: [{ startMinute: 0, endMinute: 1440, peakCode: "super_off_peak" }],
+    });
+
+    const res = await inject("GET", `/api/v1/tou-calendars/${id}`);
+    const group = body(res).spanGroups.find(
+      (g: { seasonCode: string; dayTypeCode: string }) =>
+        g.seasonCode === "summer" && g.dayTypeCode === "weekday",
+    );
+    expect(group.spans).toHaveLength(3);
   });
 
   it("refuses to drop a day type whose hours would be cascaded away", async () => {
@@ -566,7 +604,8 @@ describe("the spot check (TOU-UI-1c)", () => {
     const answer = body(res);
     expect(answer.ok).toBe(true);
     expect(answer.peakCode).toBe("peak");
-    expect(answer.periodLabel).toBe("Peak");
+    // The tenant's label for the code, which is where labels live now.
+    expect(answer.periodLabel).toBe("On-peak");
     expect(answer.seasonCode).toBe("summer");
     expect(answer.dayTypeCode).toBe("weekday");
     expect(answer.why).toMatch(/Thursday/);
@@ -604,7 +643,6 @@ describe("the spot check (TOU-UI-1c)", () => {
 
   it("reports the hour it cannot classify rather than guessing one", async () => {
     const calendar = await createCalendar();
-    await inject("PUT", `/api/v1/tou-calendars/${calendar.id}/periods`, PERIODS);
     await inject("PUT", `/api/v1/tou-calendars/${calendar.id}/day-types`, DAY_TYPES);
     const res = await inject(
       "GET",
@@ -686,7 +724,6 @@ describe("day overrides", () => {
 describe("publishing", () => {
   it("refuses a calendar that does not price every hour, and names the gap", async () => {
     const calendar = await createCalendar();
-    await inject("PUT", `/api/v1/tou-calendars/${calendar.id}/periods`, PERIODS);
     await inject("PUT", `/api/v1/tou-calendars/${calendar.id}/day-types`, DAY_TYPES);
 
     const res = await inject("POST", `/api/v1/tou-calendars/${calendar.id}/publish`);
@@ -753,7 +790,6 @@ describe("publishing", () => {
      * referencing a code that no longer exists.
      */
     const calendar = await createCalendar({ seasonSetId: draftSeasonSetId });
-    await inject("PUT", `/api/v1/tou-calendars/${calendar.id}/periods`, PERIODS);
     await inject("PUT", `/api/v1/tou-calendars/${calendar.id}/day-types`, DAY_TYPES);
     for (const dayTypeCode of ["weekday", "weekend", "holiday"]) {
       await inject("PUT", `/api/v1/tou-calendars/${calendar.id}/spans`, {
@@ -873,7 +909,6 @@ describe("the holiday set a calendar names", () => {
 
   it("refuses to publish a calendar whose set has run out", async () => {
     const created = await createCalendar({ effectiveDate: "2030-06-01" });
-    await inject("PUT", `/api/v1/tou-calendars/${created.id}/periods`, PERIODS);
     await inject("PUT", `/api/v1/tou-calendars/${created.id}/day-types`, DAY_TYPES);
     await fillSpans(created.id);
 
@@ -914,7 +949,6 @@ describe("the holiday set a calendar names", () => {
     });
 
     const created = await createCalendar({ touHolidaySetId: draftSet.id });
-    await inject("PUT", `/api/v1/tou-calendars/${created.id}/periods`, PERIODS);
     await inject("PUT", `/api/v1/tou-calendars/${created.id}/day-types`, DAY_TYPES);
     await fillSpans(created.id);
 
@@ -979,7 +1013,6 @@ describe("what period a version applies for", () => {
 
     // Same name, later date — that pair *is* the version.
     const second = await createCalendar({ effectiveDate: "2027-06-01" });
-    await inject("PUT", `/api/v1/tou-calendars/${second.id}/periods`, PERIODS);
     await inject("PUT", `/api/v1/tou-calendars/${second.id}/day-types`, DAY_TYPES);
     await fillSpans(second.id);
     await inject("POST", `/api/v1/tou-calendars/${second.id}/publish`);
@@ -1009,7 +1042,6 @@ describe("what period a version applies for", () => {
     await inject("POST", `/api/v1/tou-calendars/${first}/publish`);
 
     const other = await createCalendar({ name: "Some other tariff", effectiveDate: "2027-06-01" });
-    await inject("PUT", `/api/v1/tou-calendars/${other.id}/periods`, PERIODS);
     await inject("PUT", `/api/v1/tou-calendars/${other.id}/day-types`, DAY_TYPES);
     await fillSpans(other.id);
     await inject("POST", `/api/v1/tou-calendars/${other.id}/publish`);
@@ -1025,7 +1057,6 @@ describe("what period a version applies for", () => {
     const first = await completeCalendar();
     await inject("POST", `/api/v1/tou-calendars/${first}/publish`);
     const second = await createCalendar({ effectiveDate: "2027-06-01" });
-    await inject("PUT", `/api/v1/tou-calendars/${second.id}/periods`, PERIODS);
     await inject("PUT", `/api/v1/tou-calendars/${second.id}/day-types`, DAY_TYPES);
     await fillSpans(second.id);
     await inject("POST", `/api/v1/tou-calendars/${second.id}/publish`);
@@ -1045,7 +1076,9 @@ describe("what a new calendar starts with", () => {
    * editable and deletable like any other — not placeholder text, which
    * is what made the empty rows look filled in.
    */
-  it("has the three periods nearly every TOU tariff has", async () => {
+  it("offers the tenant's periods, which it did not have to declare", async () => {
+    // It used to create three of its own, which is the duplication
+    // that went when peak codes became the tenant's.
     const created = await createCalendar();
     const res = await inject("GET", `/api/v1/tou-calendars/${created.id}`);
     expect(body(res).periods.map((p: { peakCode: string }) => p.peakCode)).toEqual([
@@ -1053,6 +1086,23 @@ describe("what a new calendar starts with", () => {
       "mid_peak",
       "peak",
     ]);
+  });
+
+  it("uses none of them yet, because nothing is priced by assumption", async () => {
+    /*
+     * The distinction the derivation makes: the tenant has three tiers,
+     * and this calendar charges at none of them until somebody assigns
+     * hours. A rate schedule therefore has nothing it must price yet.
+     */
+    const created = await createCalendar();
+    const res = await inject("GET", `/api/v1/tou-calendars/${created.id}`);
+    expect(body(res).usedPeakCodes).toEqual([]);
+  });
+
+  it("reports the codes its hours use once they have some", async () => {
+    const id = await completeCalendar();
+    const res = await inject("GET", `/api/v1/tou-calendars/${id}`);
+    expect([...body(res).usedPeakCodes].sort()).toEqual(["off_peak", "peak"]);
   });
 
   it("has weekday and weekend, between them claiming all seven days", async () => {
@@ -1075,13 +1125,19 @@ describe("what a new calendar starts with", () => {
     expect(body(res).spanGroups).toHaveLength(4);
   });
 
-  it("leaves the defaults editable like anything else", async () => {
-    const created = await createCalendar();
-    const res = await inject("PUT", `/api/v1/tou-calendars/${created.id}/periods`, {
-      periods: [{ peakCode: "flat", label: "All hours" }],
+  it("leaves the default day types editable like anything else", async () => {
+    // The periods are no longer the calendar's to edit — that is
+    // `/api/v1/tou-periods`, and its own suite covers it.
+    // Without a holiday set, so the reserved row is not in play — that
+    // refusal has its own tests.
+    const created = await createCalendar({ touHolidaySetId: null });
+    const res = await inject("PUT", `/api/v1/tou-calendars/${created.id}/day-types`, {
+      dayTypes: [{ dayTypeCode: "every_day", label: "Every day", weekdays: [1, 2, 3, 4, 5, 6, 7] }],
     });
     expect(res.statusCode).toBe(200);
-    expect(body(res).periods.map((p: { peakCode: string }) => p.peakCode)).toEqual(["flat"]);
+    expect(body(res).dayTypes.map((d: { dayTypeCode: string }) => d.dayTypeCode)).toEqual([
+      "every_day",
+    ]);
   });
 
   it("starts with no hours, so nothing is priced by assumption", async () => {

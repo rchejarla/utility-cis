@@ -27,6 +27,7 @@ interface ProvisionResult {
   utilityId: string;
   created: boolean;
   modulesEnabled: number;
+  periodsCreated: number;
   rolesCreated: number;
   adminCreated: boolean;
 }
@@ -158,6 +159,7 @@ export default function NewPlatformTenantPage() {
             <div style={{ color: "var(--text-secondary)", marginTop: 4 }}>
               {preview.created ? "Would create the utility" : "Utility already exists"} ·{" "}
               {preview.modulesEnabled} modules · {preview.rolesCreated} roles ·{" "}
+              {preview.periodsCreated} TOU periods ·{" "}
               {preview.adminCreated ? "would create the admin" : "no admin created"}
             </div>
           </div>

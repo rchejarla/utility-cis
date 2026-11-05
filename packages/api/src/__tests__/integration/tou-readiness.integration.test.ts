@@ -61,7 +61,15 @@ interface Scene {
   meterId: string;
 }
 
-/** A calendar with the periods named, published. */
+/**
+ * A published calendar whose hours use the given codes.
+ *
+ * Hours rather than declared periods: a calendar's periods are the
+ * distinct codes its spans carry, now that peak codes belong to the
+ * tenant. The spans neither tile the day nor need to — this file is
+ * about whether a meter's registers and the tariff agree, not about
+ * whether the calendar is complete.
+ */
 async function makeCalendar(name: string, peakCodes: string[]): Promise<string> {
   const { prisma } = prismaImports;
   const seasonSet = await prisma.seasonSet.create({
@@ -82,14 +90,30 @@ async function makeCalendar(name: string, peakCodes: string[]): Promise<string> 
       timeZone: "America/Denver",
     },
   });
+  const dayType = await prisma.touDayType.create({
+    data: {
+      utilityId: TENANT_A,
+      touCalendarId: calendar.id,
+      dayTypeCode: "weekday",
+      label: "Weekday",
+      sortOrder: 0,
+    },
+  });
   for (const [i, peakCode] of peakCodes.entries()) {
-    await prisma.touPeriod.create({
+    await prisma.touPeriod.upsert({
+      where: { utilityId_peakCode: { utilityId: TENANT_A, peakCode } },
+      update: {},
+      create: { utilityId: TENANT_A, peakCode, label: peakCode, sortOrder: i },
+    });
+    await prisma.touSlot.create({
       data: {
         utilityId: TENANT_A,
         touCalendarId: calendar.id,
+        seasonCode: "all",
+        touDayTypeId: dayType.id,
         peakCode,
-        label: peakCode,
-        sortOrder: i,
+        startMinute: i * 60,
+        endMinute: (i + 1) * 60,
       },
     });
   }

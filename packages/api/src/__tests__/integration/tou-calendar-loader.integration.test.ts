@@ -10,6 +10,7 @@ import {
 } from "./_effective-dating-fixtures.js";
 import { runAsTenant } from "../../lib/tenant-context.js";
 import { loadTouCalendar } from "../../lib/rate-engine-loaders/load-tou-calendar.js";
+import { peakCodesUsedBy } from "../../lib/rate-engine/tou-calendar.js";
 import {
   SMUD_CALENDAR,
   SMUD_HOLIDAYS,
@@ -140,12 +141,19 @@ async function seedSmud(
       },
     });
 
-    const periodIds = new Map<string, string>();
-    for (const [i, peakCode] of SMUD_CALENDAR.peakCodes.entries()) {
-      const row = await prisma.touPeriod.create({
-        data: { utilityId, touCalendarId: calendar.id, peakCode, label: peakCode, sortOrder: i },
+    /*
+     * The tenant's periods, which the spans key to. SMUD's three are
+     * the three a tenant is provisioned with, so this upserts rather
+     * than creating — and it stays explicit because the round trip this
+     * file performs should not depend on a default happening to match
+     * the fixture.
+     */
+    for (const [i, peakCode] of peakCodesUsedBy(SMUD_CALENDAR).entries()) {
+      await prisma.touPeriod.upsert({
+        where: { utilityId_peakCode: { utilityId, peakCode } },
+        update: {},
+        create: { utilityId, peakCode, label: peakCode, sortOrder: i },
       });
-      periodIds.set(peakCode, row.id);
     }
 
     const dayTypeIds = new Map<string, string>();
@@ -178,7 +186,7 @@ async function seedSmud(
         touCalendarId: calendar.id,
         seasonCode: slot.seasonCode,
         touDayTypeId: dayTypeIds.get(slot.dayTypeCode)!,
-        touPeriodId: periodIds.get(slot.peakCode)!,
+        peakCode: slot.peakCode,
         startMinute: slot.startMinute,
         endMinute: slot.endMinute,
       })),
@@ -216,8 +224,10 @@ describe("the schema holds the real tariff and gives it back unchanged", () => {
 
     expect(sortSlots(loaded.calendar.definition.slots)).toEqual(sortSlots(SMUD_CALENDAR.slots));
     expect(loaded.calendar.definition.dayTypes).toEqual(SMUD_CALENDAR.dayTypes);
-    expect([...loaded.calendar.definition.peakCodes].sort()).toEqual(
-      [...SMUD_CALENDAR.peakCodes].sort(),
+    // Derived both sides now: a calendar's periods are the codes its
+    // hours use, so this says the round trip lost no tier.
+    expect(peakCodesUsedBy(loaded.calendar.definition).sort()).toEqual(
+      peakCodesUsedBy(SMUD_CALENDAR).sort(),
     );
     expect(loaded.calendar.seasons).toEqual(SMUD_SEASONS);
     expect(loaded.calendar.timeZone).toBe(SMUD_TIME_ZONE);

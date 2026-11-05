@@ -1,22 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import { periodColour } from "./day-strip";
 
 /**
- * A calendar's two vocabularies: its periods and its day types
- * (spec 26, TOU-CAL-1 and TOU-CAL-2).
+ * A calendar's day types (spec 26, TOU-CAL-2).
  *
- * Both are saved as whole lists, because both carry invariants the row
- * cannot see — the seven weekdays claimed exactly once between them, and
- * the periods tiling each day exactly once. Moving Saturday from weekday
- * to weekend is not expressible as two row edits at all.
+ * Saved as a whole list, because the list carries an invariant no row
+ * can see: the seven weekdays claimed exactly once between them. Moving
+ * Saturday from weekday to weekend is not expressible as two row edits
+ * at all.
+ *
+ * `PeriodsEditor` stood here too, for a calendar's own periods. Peak
+ * codes became the tenant's on 2026-11-04, so there is nothing about
+ * them for a calendar to edit — it assigns hours to them — and the
+ * whole-list shape was wrong for a list whose only rule is a unique
+ * code. `/tou-periods` edits them a row at a time.
  */
-
-export interface PeriodRow {
-  peakCode: string;
-  label: string;
-}
 
 export interface DayTypeRow {
   dayTypeCode: string;
@@ -132,171 +131,6 @@ function Card({
       <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>{hint}</div>
       {children}
     </div>
-  );
-}
-
-export function PeriodsEditor({
-  periods,
-  readOnly,
-  onDirtyChange,
-  onSave,
-}: {
-  periods: PeriodRow[];
-  readOnly: boolean;
-  /**
-   * Reported upwards so the tab holding this editor can mark itself
-   * unsaved. The editor keeps owning the state — the tab only needs to
-   * know there is some.
-   */
-  onDirtyChange?: (dirty: boolean) => void;
-  onSave: (rows: PeriodRow[]) => Promise<void>;
-}) {
-  const [rows, setRows] = useState<PeriodRow[]>(periods);
-  const [dirty, setDirty] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const change = (next: PeriodRow[]) => {
-    setRows(next);
-    setDirty(true);
-    onDirtyChange?.(true);
-    setError(null);
-  };
-
-  /** Rows that would be refused, by position, so the message can say which. */
-  const incomplete = rows
-    .map((row, index) => ({ row, index }))
-    .filter(({ row }) => isBlank(row.peakCode) || isBlank(row.label));
-
-  const save = async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      await onSave(rows);
-      setDirty(false);
-      onDirtyChange?.(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save the periods");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Card
-      testId="periods-editor"
-      title="Periods"
-      hint="What the hours are called and what a rate schedule prices against. A schedule cannot be published unless it prices every one of them."
-    >
-      <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
-        <thead>
-          <tr style={{ textAlign: "left", color: "var(--text-muted)" }}>
-            <th style={{ padding: "2px 4px 6px 0", fontWeight: 400, width: "32px" }} />
-            <th style={{ padding: "2px 4px 6px", fontWeight: 400 }}>Code</th>
-            <th style={{ padding: "2px 4px 6px", fontWeight: 400 }}>Label</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={index}>
-              <td style={{ padding: "2px 4px 2px 0" }}>
-                <span
-                  style={{
-                    display: "inline-block",
-                    width: "12px",
-                    height: "12px",
-                    borderRadius: "2px",
-                    background: periodColour(rows, row.peakCode).fill,
-                  }}
-                />
-              </td>
-              <td style={{ padding: "2px 4px" }}>
-                <input
-                  aria-label="Period code"
-                  disabled={readOnly}
-                  value={row.peakCode}
-                  style={{
-                    ...inputStyle,
-                    fontFamily: "monospace",
-                    ...(isBlank(row.peakCode) ? blankInput : {}),
-                  }}
-                  placeholder="peak"
-                  onChange={(e) =>
-                    change(rows.map((r, i) => (i === index ? { ...r, peakCode: e.target.value } : r)))
-                  }
-                />
-              </td>
-              <td style={{ padding: "2px 4px" }}>
-                <input
-                  aria-label="Period label"
-                  disabled={readOnly}
-                  value={row.label}
-                  style={{ ...inputStyle, ...(isBlank(row.label) ? blankInput : {}) }}
-                  placeholder="Peak"
-                  onChange={(e) =>
-                    change(rows.map((r, i) => (i === index ? { ...r, label: e.target.value } : r)))
-                  }
-                />
-              </td>
-              <td style={{ padding: "2px 0 2px 4px", textAlign: "right" }}>
-                {!readOnly && (
-                  <button
-                    type="button"
-                    aria-label="Remove this period"
-                    onClick={() => change(rows.filter((_, i) => i !== index))}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      color: "var(--text-muted)",
-                      cursor: "pointer",
-                      fontSize: "14px",
-                    }}
-                  >
-                    ×
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      {error && (
-        <div role="alert" style={{ fontSize: "12px", color: "var(--danger)" }}>
-          {error}
-        </div>
-      )}
-
-      {incomplete.length > 0 && (
-        <div data-testid="periods-incomplete" style={{ fontSize: "12px", color: "var(--warning)" }}>
-          {incomplete.length === 1 ? "Row" : "Rows"}{" "}
-          {incomplete.map(({ index }) => index + 1).join(", ")} still{" "}
-          {incomplete.length === 1 ? "needs" : "need"} a code and a label. The greyed text is an
-          example, not a value.
-        </div>
-      )}
-
-      {!readOnly && (
-        <div style={{ display: "flex", gap: "8px" }}>
-          <button
-            type="button"
-            style={secondaryButton}
-            onClick={() => change([...rows, { peakCode: "", label: "" }])}
-          >
-            Add a period
-          </button>
-          <button
-            type="button"
-            style={primaryButton(!dirty || saving || incomplete.length > 0)}
-            disabled={!dirty || saving || incomplete.length > 0}
-            onClick={save}
-          >
-            {saving ? "Saving…" : "Save periods"}
-          </button>
-        </div>
-      )}
-    </Card>
   );
 }
 

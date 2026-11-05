@@ -3,7 +3,6 @@ import {
   createTouCalendarSchema,
   putTouDayOverridesSchema,
   putTouDayTypesSchema,
-  putTouPeriodsSchema,
   putTouSpansSchema,
   touCalendarQuerySchema,
   touDayPreviewQuerySchema,
@@ -19,7 +18,6 @@ import {
   publishTouCalendar,
   putTouDayOverrides,
   putTouDayTypes,
-  putTouPeriods,
   putTouSpans,
   spotCheckTouCalendar,
   updateTouCalendar,
@@ -65,18 +63,14 @@ export async function touCalendarRoutes(app: FastifyInstance) {
   const read = { config: { module: "rate_schedules", permission: "VIEW" } };
 
   /*
-   * The three child collections are replaced whole, which is why these
-   * are PUTs on a sub-path and not a CRUD set each. See the service's
+   * The child collections are replaced whole, which is why these are
+   * PUTs on a sub-path and not a CRUD set each. See the service's
    * header: the invariants belong to the list, not the row.
+   *
+   * The periods are not among them any more — they are the tenant's,
+   * at /api/v1/tou-periods, and they have no list-wide invariant left
+   * to replace wholesale.
    */
-  app.put("/api/v1/tou-calendars/:id/periods", write, async (request, reply) => {
-    const { utilityId, id: actorId, name: actorName } = request.user;
-    const { id } = idParamSchema.parse(request.params);
-    const data = putTouPeriodsSchema.parse(request.body);
-    await putTouPeriods(utilityId, actorId, actorName, id, data);
-    return reply.status(200).send(await getTouCalendar(id, utilityId));
-  });
-
   app.put("/api/v1/tou-calendars/:id/day-types", write, async (request, reply) => {
     const { utilityId, id: actorId, name: actorName } = request.user;
     const { id } = idParamSchema.parse(request.params);

@@ -143,6 +143,12 @@ vi.mock("../lib/prisma.js", () => {
     // than as a missing mock.
     utility: crud(),
     utilityModule: crud(),
+    // The tenant's TOU price tiers, which provisioning creates since
+    // 2026-11-04. Omitting it makes `tx.touPeriod` undefined inside the
+    // provisioning transaction, which surfaces as "Cannot read
+    // properties of undefined (reading 'createMany')" from a route that
+    // has nothing to do with tariffs.
+    touPeriod: crud(),
     utilityConfig: crud(),
     // One row per (utility, scheduler) since 2026-10-31. Omitting it
     // makes `prisma.schedulerConfig` undefined, which surfaces as

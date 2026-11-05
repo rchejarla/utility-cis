@@ -75,13 +75,17 @@ export interface TouCalendarDefinitionRows {
     dayTypeCode: string;
     weekdays: Array<{ isoWeekday: number }>;
   }>;
-  periods: Array<{ peakCode: string }>;
+  /*
+   * No `periods`. Peak codes belong to the tenant since 2026-11-04, and
+   * a calendar's own periods are the distinct codes its slots carry —
+   * so the slot is the only row the engine needs to be told about.
+   */
   slots: Array<{
     seasonCode: string;
     startMinute: number;
     endMinute: number;
     dayType: { dayTypeCode: string };
-    period: { peakCode: string };
+    peakCode: string;
   }>;
   overrides: Array<{ overrideDate: Date; dayType: { dayTypeCode: string } }>;
 }
@@ -93,13 +97,12 @@ export function toTouCalendarDefinition(row: TouCalendarDefinitionRows): TouCale
       dayTypeCode: d.dayTypeCode,
       weekdays: d.weekdays.map((w) => w.isoWeekday as IsoWeekday),
     })),
-    peakCodes: row.periods.map((p) => p.peakCode),
     slots: row.slots.map((s) => ({
       seasonCode: s.seasonCode,
       dayTypeCode: s.dayType.dayTypeCode,
       startMinute: s.startMinute,
       endMinute: s.endMinute,
-      peakCode: s.period.peakCode,
+      peakCode: s.peakCode,
     })),
     overrides: row.overrides.map((o) => ({
       // `@db.Date` comes back as UTC midnight, so the ISO date is the
@@ -144,14 +147,18 @@ export async function loadTouCalendar(
     orderBy: { effectiveDate: "desc" },
     include: {
       seasonSet: { include: { seasons: { orderBy: { sortOrder: "asc" } } } },
-      periods: { orderBy: { sortOrder: "asc" } },
       dayTypes: {
         orderBy: { sortOrder: "asc" },
         include: { weekdays: { orderBy: { isoWeekday: "asc" } } },
       },
+      /*
+       * The slot carries its own peak code, so rating needs no join to
+       * the tenant's period list at all — and a published calendar
+       * keeps meaning what it meant even if that list is edited.
+       */
       slots: {
         orderBy: { startMinute: "asc" },
-        include: { dayType: { select: { dayTypeCode: true } }, period: { select: { peakCode: true } } },
+        include: { dayType: { select: { dayTypeCode: true } } },
       },
       overrides: { include: { dayType: { select: { dayTypeCode: true } } } },
     },

@@ -78,7 +78,12 @@ beforeEach(() =>
     await prisma.$executeRawUnsafe("DELETE FROM tou_day_override");
     await prisma.$executeRawUnsafe("DELETE FROM tou_day_type_weekday");
     await prisma.$executeRawUnsafe("DELETE FROM tou_day_type");
-    await prisma.$executeRawUnsafe("DELETE FROM tou_period");
+    /*
+     * `tou_period` stays: the periods are the tenant's configuration,
+     * created with the tenant by `bootPostgres`, and clearing them
+     * would fail every later span write on `tou_slot_peak_code_fkey`
+     * for a reason that has nothing to do with the test.
+     */
     await prisma.$executeRawUnsafe("UPDATE rate_schedule SET tou_calendar_id = NULL");
     await prisma.$executeRawUnsafe("DELETE FROM tou_calendar");
     await prisma.$executeRawUnsafe("DELETE FROM season");
@@ -404,9 +409,6 @@ describe("what depends on a season code", () => {
           timeZone: "America/Denver",
         },
       });
-      const period = await prisma.touPeriod.create({
-        data: { utilityId: TENANT_A, touCalendarId: calendar.id, peakCode: "peak", label: "Peak" },
-      });
       const dayType = await prisma.touDayType.create({
         data: {
           utilityId: TENANT_A,
@@ -415,13 +417,15 @@ describe("what depends on a season code", () => {
           label: "Weekday",
         },
       });
+      // `peak` is one of the periods every tenant is provisioned with,
+      // so the span can name it without declaring anything first.
       await prisma.touSlot.create({
         data: {
           utilityId: TENANT_A,
           touCalendarId: calendar.id,
           seasonCode: "summer",
           touDayTypeId: dayType.id,
-          touPeriodId: period.id,
+          peakCode: "peak",
           startMinute: 0,
           endMinute: 1440,
         },

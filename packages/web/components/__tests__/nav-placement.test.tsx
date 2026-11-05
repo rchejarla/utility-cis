@@ -76,6 +76,10 @@ describe("sidebar grouping (2026-11-03)", () => {
     expect(labelsIn("Tariffs")).toEqual([
       "Rate Schedules",
       "TOU Calendars",
+      // The three things a calendar's hours are keyed on, shortest
+      // list first: Periods is what a span is assigned to, and it
+      // stopped being a calendar's own on 2026-11-04.
+      "Periods",
       "Seasons",
       "Holidays",
     ]);

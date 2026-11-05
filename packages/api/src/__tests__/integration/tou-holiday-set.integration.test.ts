@@ -82,7 +82,8 @@ beforeEach(() =>
     await prisma.$executeRawUnsafe("DELETE FROM tou_day_override");
     await prisma.$executeRawUnsafe("DELETE FROM tou_day_type_weekday");
     await prisma.$executeRawUnsafe("DELETE FROM tou_day_type");
-    await prisma.$executeRawUnsafe("DELETE FROM tou_period");
+    // `tou_period` stays — the tenant's configuration, not a calendar's.
+    // See the editor suite's reset for why clearing it breaks spans.
     await prisma.$executeRawUnsafe("DELETE FROM tou_calendar");
     await prisma.$executeRawUnsafe("DELETE FROM tou_holiday");
     await prisma.$executeRawUnsafe("DELETE FROM tou_holiday_set");

@@ -306,9 +306,21 @@ async function assertTouPricingComplete(
     );
   }
 
+  /*
+   * The codes the calendar's *hours* use, not a list it declares.
+   * Peak codes are the tenant's since 2026-11-04, so a calendar's
+   * periods are the distinct codes its slots carry — and that is the
+   * right set to check a tariff against: a code the tenant has defined
+   * but this calendar never assigns is not energy this schedule has to
+   * price.
+   */
   const calendar = await prisma.touCalendar.findFirst({
     where: { id: touCalendarId, utilityId },
-    select: { name: true, publishedAt: true, periods: { select: { peakCode: true } } },
+    select: {
+      name: true,
+      publishedAt: true,
+      slots: { select: { peakCode: true }, distinct: ["peakCode"] },
+    },
   });
   if (!calendar) {
     throw Object.assign(new Error("The schedule's TOU calendar no longer exists."), {
@@ -332,7 +344,7 @@ async function assertTouPricingComplete(
 
   const result = validateTouPricing(
     pricedCodes,
-    calendar.periods.map((p) => p.peakCode),
+    calendar.slots.map((s) => s.peakCode),
   );
   if (!result.ok) {
     throw Object.assign(new Error(result.problems.join(" ")), {

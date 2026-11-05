@@ -72,6 +72,9 @@ beforeEach(() =>
     // foreign key with ON DELETE RESTRICT, and so the utility delete
     // below fails on `audit_log_utility_id_fkey` without this.
     await prisma.auditLog.deleteMany({ where: { utilityId: id } });
+    // And the TOU periods, for exactly the same reason — provisioning
+    // creates them since 2026-11-04.
+    await prisma.touPeriod.deleteMany({ where: { utilityId: id } });
     await prisma.utility.deleteMany({ where: { id } });
   }
 }),
@@ -91,6 +94,23 @@ describe("provisionTenant", () => {
         name: "City of Example",
         status: "ACTIVE",
       });
+
+      /*
+       * The TOU price tiers. Without them `tou_slot.peak_code` has
+       * nothing to key to, so a freshly provisioned tenant could not be
+       * given a single hour of a time-of-use tariff — and the failure
+       * would arrive as a constraint name on somebody's first calendar.
+       */
+      const periods = await prisma.touPeriod.findMany({
+        where: { utilityId: NEW_TENANT },
+        orderBy: { sortOrder: "asc" },
+        select: { peakCode: true, label: true },
+      });
+      expect(periods).toEqual([
+        { peakCode: "off_peak", label: "Off-peak" },
+        { peakCode: "mid_peak", label: "Mid-peak" },
+        { peakCode: "peak", label: "On-peak" },
+      ]);
   
     }));
 

@@ -102,9 +102,20 @@ export interface TouDayOverride {
 export interface TouCalendarDefinition {
   dayTypes: TouDayTypeDefinition[];
   slots: TouSlotDefinition[];
-  /** Declared peaks. TOU-CAL-3 requires every one of them to be used. */
-  peakCodes: string[];
   overrides?: TouDayOverride[];
+}
+
+/**
+ * The price tiers a calendar actually uses, in the order its hours
+ * first mention them.
+ *
+ * Derived rather than declared: peak codes belong to the tenant, and
+ * what makes one a period *of this calendar* is that some span costs
+ * it. A rate schedule has to price every one of these, which
+ * `validateTouPricing` checks when the schedule is published.
+ */
+export function peakCodesUsedBy(calendar: TouCalendarDefinition): string[] {
+  return [...new Set(calendar.slots.map((s) => s.peakCode))];
 }
 
 export type CalendarValidation = { ok: true } | { ok: false; problems: string[] };
@@ -242,22 +253,28 @@ export function validateCalendar(
     }
   }
 
-  // Peaks, both directions (TOU-CAL-3).
-  const declaredPeaks = new Set(calendar.peakCodes);
-  const usedPeaks = new Set<string>();
-  for (const s of calendar.slots) {
-    usedPeaks.add(s.peakCode);
-    if (!declaredPeaks.has(s.peakCode)) {
-      problems.push(
-        `${s.seasonCode} / ${s.dayTypeCode}: ${timeLabel(s.startMinute)}–${timeLabel(s.endMinute)} is priced as "${s.peakCode}", which this calendar does not define.`,
-      );
-    }
-  }
-  for (const p of calendar.peakCodes) {
-    if (!usedPeaks.has(p)) {
-      problems.push(`Period "${p}" is defined and never used.`);
-    }
-  }
+  /*
+   * TOU-CAL-3's two peak rules are gone, and neither is missed.
+   *
+   * They were "every period referenced is defined" and "every period
+   * defined is used somewhere", and both existed only because a
+   * calendar declared its periods as well as using them. Peak codes are
+   * the tenant's now (2026-11-04), and a calendar's periods *are* the
+   * distinct codes its hours use — so neither rule has two things left
+   * to disagree.
+   *
+   * What each was protecting is still protected, better placed:
+   *
+   * - A span naming a code the tenant has not defined is refused by
+   *   `tou_slot_peak_code_fkey` at the write, not reported at a save.
+   * - A code nothing uses is no longer a fault. A four-code tenant with
+   *   a two-period tariff is ordinary, and demanding every calendar use
+   *   every code would have made it an error.
+   * - A code the *tariff* does not price is still caught, by
+   *   `validateTouPricing` when a rate schedule is published — which is
+   *   where it matters, since that is the one that leaves energy
+   *   uncharged.
+   */
 
   // Coverage, over the full cross product. A pair with no spans at all
   // is the common half-finished edit — a season added and never priced

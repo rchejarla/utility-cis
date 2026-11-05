@@ -1,4 +1,4 @@
-import { MODULES, PRESET_ROLES } from "@utility-cis/shared";
+import { DEFAULT_TOU_PERIODS, MODULES, PRESET_ROLES } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
 import { writeAuditRow } from "../lib/audit-wrap.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
@@ -81,6 +81,8 @@ export interface ProvisionTenantResult {
   created: boolean;
   /** Rows created by this call, not rows present. */
   modulesEnabled: number;
+  /** TOU price tiers created by this call. See the transaction. */
+  periodsCreated: number;
   rolesCreated: number;
   adminCreated: boolean;
 }
@@ -198,6 +200,31 @@ export async function provisionTenant(
         skipDuplicates: true,
       });
 
+      /*
+       * The TOU periods — the price tiers a tariff charges at.
+       *
+       * Here because they are the tenant's, not a calendar's, since
+       * 2026-11-04: `tou_slot.peak_code` keys to them, so a tenant with
+       * none cannot be given a single hour of a time-of-use tariff. A
+       * tenant that has edited or added to them keeps what it has, for
+       * the same reason the roles above are left alone.
+       *
+       * Three, because nearly every TOU tariff has exactly these. A
+       * tenant with a super-off-peak tier adds it; one with a flat
+       * two-period tariff simply never assigns hours to mid-peak, which
+       * is not a fault — a calendar's periods are the codes its hours
+       * use.
+       */
+      const periods = await tx.touPeriod.createMany({
+        data: DEFAULT_TOU_PERIODS.map((period, index) => ({
+          utilityId: input.utilityId,
+          peakCode: period.peakCode,
+          label: period.label,
+          sortOrder: index,
+        })),
+        skipDuplicates: true,
+      });
+
       // Never update an existing role's permissions: a tenant may have
       // edited them, and re-provisioning must not quietly revert that.
       const present = new Set(
@@ -277,6 +304,7 @@ export async function provisionTenant(
         utilityId: input.utilityId,
         created: !existing,
         modulesEnabled: modules.count,
+        periodsCreated: periods.count,
         rolesCreated,
         adminCreated,
       };

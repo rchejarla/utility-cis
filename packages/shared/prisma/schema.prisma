@@ -2901,7 +2901,8 @@ model TouCalendar {
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
   updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz
 
-  periods   TouPeriod[]
+  // No `periods` — they belong to the tenant now, and a calendar's own
+  // are the distinct codes its slots use. See `TouPeriod`.
   dayTypes  TouDayType[]
   slots     TouSlot[]
   overrides TouDayOverride[]
@@ -2920,22 +2921,33 @@ model TouCalendar {
 /// billing period and `BaseContext.period`, so a `periodCode` beside
 /// `period.startDate` in the resolver would reintroduce the ambiguity
 /// qualification removes. A period and a peak are the same thing here.
+/// A price tier a tenant's TOU tariffs assign hours to: `peak`,
+/// `off_peak`, `super_off_peak` (spec 26, TOU-CAL-1).
+///
+/// **Per tenant, not per calendar.** The codes were declared on each
+/// calendar until 2026-11-04, which stored one fact twice — every
+/// `meter_register`, `meter_read` and rate component already carried
+/// the code as a plain string, and `tou_slot` was the only keyed
+/// reference in the system.
+///
+/// A calendar's own periods are therefore **derived**: the distinct
+/// codes its hours use. A four-code tenant may have a two-period
+/// tariff, so nothing requires a calendar to use them all.
 model TouPeriod {
-  id            String      @id @default(uuid()) @db.Uuid
-  utilityId     String      @map("utility_id") @db.Uuid
-  utility       Utility     @relation(fields: [utilityId], references: [id], onDelete: Restrict)
-  touCalendarId String      @map("tou_calendar_id") @db.Uuid
-  calendar      TouCalendar @relation(fields: [utilityId, touCalendarId], references: [utilityId, id], onDelete: Cascade)
-  peakCode      String      @map("peak_code") @db.VarChar(50)
-  label         String      @db.VarChar(100)
-  sortOrder     Int         @default(0) @map("sort_order") @db.SmallInt
-  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+  id        String   @id @default(uuid()) @db.Uuid
+  utilityId String   @map("utility_id") @db.Uuid
+  utility   Utility  @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  peakCode  String   @map("peak_code") @db.VarChar(50)
+  label     String   @db.VarChar(100)
+  sortOrder Int      @default(0) @map("sort_order") @db.SmallInt
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   slots TouSlot[]
 
-  @@unique([utilityId, touCalendarId, peakCode], map: "tou_period_peak_code_per_calendar")
-  @@unique([utilityId, touCalendarId, id], map: "tou_period_calendar_id_key")
+  /// The key the slots reference — on the code, not the id. See
+  /// `TouSlot.peakCode`.
+  @@unique([utilityId, peakCode], map: "tou_period_peak_code_per_tenant")
   @@map("tou_period")
 }
 
@@ -3029,8 +3041,23 @@ model TouSlot {
   seasonCode    String      @map("season_code") @db.VarChar(50)
   touDayTypeId  String      @map("tou_day_type_id") @db.Uuid
   dayType       TouDayType  @relation(fields: [utilityId, touCalendarId, touDayTypeId], references: [utilityId, touCalendarId, id], onDelete: Cascade)
-  touPeriodId   String      @map("tou_period_id") @db.Uuid
-  period        TouPeriod   @relation(fields: [utilityId, touCalendarId, touPeriodId], references: [utilityId, touCalendarId, id], onDelete: Restrict)
+  /// The price tier these minutes cost, as the **code** and not a key
+  /// to the row.
+  ///
+  /// That is what makes a tenant-level `tou_period` safe. A published
+  /// calendar is immutable so nothing can move under it — it names a
+  /// season-set version and a holiday-set version for that reason — and
+  /// the tenant's code list is unversioned. Holding the string means a
+  /// published calendar's hours literally say `peak`, the rate
+  /// component prices `peak`, and editing the list changes a label and
+  /// the editor's picker, never what a bill meant.
+  ///
+  /// The foreign key is on the code, so a span cannot name a code the
+  /// tenant has not defined, and a code in use can be neither deleted
+  /// nor renamed. Refusing a rename is right: the code travels into
+  /// rate components and meter registers.
+  peakCode      String      @map("peak_code") @db.VarChar(50)
+  period        TouPeriod   @relation(fields: [utilityId, peakCode], references: [utilityId, peakCode], onDelete: Restrict)
   /// Inclusive, and a multiple of 15 (TOU-CAL-1's granularity).
   startMinute   Int         @map("start_minute") @db.SmallInt
   /// Exclusive; 1440 is the end of the day.

@@ -66,10 +66,18 @@ export const EVENT_TYPES = {
   TOU_CALENDAR_CREATED: "tou_calendar.created",
   TOU_CALENDAR_UPDATED: "tou_calendar.updated",
   TOU_CALENDAR_PUBLISHED: "tou_calendar.published",
-  TOU_CALENDAR_PERIODS_SET: "tou_calendar.periods_set",
   TOU_CALENDAR_DAY_TYPES_SET: "tou_calendar.day_types_set",
   TOU_CALENDAR_SPANS_SET: "tou_calendar.spans_set",
   TOU_CALENDAR_OVERRIDES_SET: "tou_calendar.overrides_set",
+  /**
+   * The tenant's price tiers. Audited per period rather than as a
+   * `tou_calendar.periods_set` on whichever calendar happened to be
+   * open, which is what these were until 2026-11-04 — a period is a
+   * record of the tenant's now, and renaming one reaches every tariff.
+   */
+  TOU_PERIOD_CREATED: "tou_period.created",
+  TOU_PERIOD_UPDATED: "tou_period.updated",
+  TOU_PERIOD_DELETED: "tou_period.deleted",
   /**
    * A season boundary decides which price applies, so moving one
    * changes bills as surely as changing a price does — audited for the

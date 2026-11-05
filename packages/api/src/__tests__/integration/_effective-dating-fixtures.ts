@@ -10,6 +10,9 @@
  * them. Tests import the named helpers explicitly.
  */
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+// The same list a provisioned tenant gets, so a test tenant looks like
+// one. See `periodInsertSql`.
+import { DEFAULT_TOU_PERIODS } from "@utility-cis/shared";
 import pg from "pg";
 import { runAsPlatform } from "../../lib/tenant-context.js";
 import { execSync } from "node:child_process";
@@ -225,6 +228,32 @@ function utilityInsertSql(ids: readonly string[]): string {
 }
 
 /**
+ * The TOU periods a provisioned tenant gets.
+ *
+ * Peak codes became the tenant's on 2026-11-04 and `tou_slot.peak_code`
+ * keys to them, so a tenant with none cannot be given a single hour of
+ * a tariff — the write is refused with a 23503 naming a constraint,
+ * which tells a test author nothing about their test.
+ *
+ * Here as well as in `ensureUtilities` because these are two separate
+ * doors: this one runs raw SQL through `prisma db execute` before any
+ * client exists, and that one upserts through a client for files that
+ * boot their own container.
+ */
+function periodInsertSql(ids: readonly string[]): string {
+  return ids
+    .flatMap((id) =>
+      DEFAULT_TOU_PERIODS.map(
+        (period, index) =>
+          `INSERT INTO tou_period (id, utility_id, peak_code, label, sort_order, created_at, updated_at) ` +
+          `VALUES (gen_random_uuid(), '${id}', '${period.peakCode}', '${period.label}', ${index}, now(), now()) ` +
+          `ON CONFLICT (utility_id, peak_code) DO NOTHING;`,
+      ),
+    )
+    .join("\n");
+}
+
+/**
  * Enable modules for each tenant.
  *
  * `ON CONFLICT DO NOTHING` because several files still enable their own
@@ -261,9 +290,35 @@ export async function ensureUtilities(prisma: any, ids: readonly string[]): Prom
         update: {},
         create: { id, name: `Test Utility ${id.slice(-4)}` },
       });
+      /*
+       * The TOU periods a provisioned tenant gets, because a test
+       * tenant has to look like one.
+       *
+       * Peak codes became the tenant's on 2026-11-04, and
+       * `tou_slot.peak_code` keys to them — so a test writing a span
+       * for a tenant with no periods is refused with a 23503 naming a
+       * constraint rather than anything about the test. The
+       * `tenant_peak_codes` migration seeded every utility that existed
+       * when it ran, which in a fresh testcontainer is none, and
+       * `provision-tenant.ts` seeds the ones created through the
+       * product. This is the third door into existence.
+       */
+      for (const [index, period] of DEFAULT_TOU_PERIODS.entries()) {
+        await prisma.touPeriod.upsert({
+          where: { utilityId_peakCode: { utilityId: id, peakCode: period.peakCode } },
+          update: {},
+          create: {
+            utilityId: id,
+            peakCode: period.peakCode,
+            label: period.label,
+            sortOrder: index,
+          },
+        });
+      }
     }
   });
 }
+
 
 /**
  * Boot a database, and declare the tenants this file writes rows for.
@@ -376,7 +431,11 @@ export async function bootPostgres(
       cwd: SHARED_DIR,
       env: { ...process.env, DATABASE_URL: dbUrl },
       input:
-        utilityInsertSql(opts.utilities) + "\n" + moduleInsertSql(opts.utilities, moduleKeys),
+        utilityInsertSql(opts.utilities) +
+        "\n" +
+        periodInsertSql(opts.utilities) +
+        "\n" +
+        moduleInsertSql(opts.utilities, moduleKeys),
       stdio: ["pipe", "pipe", "pipe"],
     });
   }

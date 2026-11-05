@@ -21,6 +21,7 @@ import {
   faCalendarStar,
   faClock,
   faCloudSunRain,
+  faLayerGroup,
   faTags,
   faDroplet,
   faClipboardList,
@@ -347,6 +348,12 @@ export const navSections: NavSection[] = [
        * a tenant meets them in that order: they come looking for
        * time-of-use pricing and find out seasons exist.
        */
+      /*
+       * Before Seasons and Holidays, because it is the shortest list
+       * and the one the other two reference: the hours a calendar
+       * assigns are assigned *to* these.
+       */
+      { href: "/tou-periods", label: "Periods", icon: faLayerGroup, module: "rate_schedules" },
       { href: "/season-sets", label: "Seasons", icon: faCloudSunRain, module: "rate_schedules" },
       /*
        * After Seasons, for the same reason Seasons comes after

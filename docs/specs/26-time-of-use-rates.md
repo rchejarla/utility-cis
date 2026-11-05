@@ -170,6 +170,27 @@ anything outside this codebase read it.
   minutes) to exactly one named TOU period. Period names are the
   tenant's (`on_peak`, `mid_peak`, `off_peak`, `super_off_peak`, …), with
   a display label and a display order.
+
+  **The periods belong to the tenant, not to a calendar**, and a
+  calendar's own periods are *derived*: the distinct codes its hours
+  use. So a four-period tenant may have a two-period tariff, and
+  nothing requires a calendar to use them all. A new period is added
+  once, at `/tou-periods`, and every calendar can then assign hours to
+  it.
+
+  **A code is immutable once it exists.** It is copied into every
+  calendar's hours, into a rate component's `quantitySource.peak_code`
+  and onto `meter_register.peak_code` — none of which know the period
+  row exists — so renaming it would leave all of them pricing a code
+  that is gone. The label and the display order are editable; the code
+  is not, and a period whose code is in use cannot be deleted either.
+
+  *(Revised 2026-11-04. The periods were declared on each calendar,
+  which stored one fact twice and made every new calendar retype
+  `off_peak/mid_peak/peak` — `createTouCalendar` seeded three defaults
+  purely to paper over it. `tou_slot` was the only keyed reference to a
+  period in the system; everything downstream already carried the code
+  as a string. See "Peak codes belong to the tenant" below.)*
 - **TOU-CAL-2 (Must).** Day types are at least *weekday* and *weekend*,
   and *holiday* when the calendar names a holiday set. A tenant may
   define more (e.g. *Saturday*) and say which weekdays each covers.
@@ -185,9 +206,19 @@ anything outside this codebase read it.
   a day type as "the holiday one" before anything could say what the
   holidays were.)*
 - **TOU-CAL-3 (Must).** Validation at save: every 15-minute slot of every
-  (season, day type) is assigned exactly once; every period referenced
-  is defined; every period defined is used somewhere. Errors name the
-  season, day type and time range.
+  (season, day type) is assigned exactly once. Errors name the season,
+  day type and time range.
+
+  *(Revised 2026-11-04. Two further rules stood here — "every period
+  referenced is defined" and "every period defined is used somewhere" —
+  and both went with the per-calendar period rows, because neither has
+  two things left to disagree. A span naming a code the tenant has not
+  defined is refused by `tou_slot_peak_code_fkey`, and by `putTouSpans`
+  before the write so the message names the code rather than a
+  constraint. A code no calendar uses is no longer a fault at all. What
+  the second rule was really protecting — a period the **tariff** does
+  not price, which leaves energy uncharged — is `validateTouPricing`
+  when a rate schedule is published, which is where it belongs.)*
 - **TOU-CAL-4 (Must).** Holidays: a tenant maintains **holiday sets** of
   explicit dates — `(date, name)` — each set versioned, effective-dated
   and published like a season set, and shared across the tenant's
@@ -259,8 +290,8 @@ tou_calendar          utility_id, name, effective_date, published_at,
                       time_zone, clock_basis
                       unique (utility_id, name, effective_date)
 
-tou_period            utility_id, tou_calendar_id, peak_code, label, sort_order
-                      unique (utility_id, tou_calendar_id, peak_code)
+tou_period            utility_id, peak_code, label, sort_order
+                      unique (utility_id, peak_code)   ← the slots' key
 
 tou_day_type          utility_id, tou_calendar_id, day_type_code, label,
                       sort_order
@@ -270,7 +301,8 @@ tou_day_type_weekday  utility_id, tou_calendar_id, tou_day_type_id, iso_weekday
                       unique (utility_id, tou_calendar_id, iso_weekday)
 
 tou_slot              utility_id, tou_calendar_id, season_code,
-                      tou_day_type_id, tou_period_id, start_minute, end_minute
+                      tou_day_type_id, peak_code, start_minute, end_minute
+                      (utility_id, peak_code) → tou_period  RESTRICT
                       EXCLUDE on (utility, calendar, season_code, day_type,
                                   int4range(start_minute, end_minute))
 
@@ -387,6 +419,61 @@ That proves the schema can hold a tariff nobody designed it around and
 that the loader does not reshape it on the way out — two things neither
 test proves alone.
 
+### Peak codes belong to the tenant (decided 2026-11-04, reversing 2026-11-02)
+
+**The periods are defined once per tenant, and a calendar's own are the
+distinct codes its hours use.** They were `tou_period` rows on each
+calendar.
+
+The reason is duplication, not correctness. One fact was stored twice:
+every `meter_register.peak_code`, `meter_read.peak_code` and rate
+component `quantitySource.peak_code` already carried the code as a plain
+string, and `tou_slot` was the **only keyed reference** to a period in
+the system. So the per-calendar rows were the exception, and they were
+the copy that got retyped — every new calendar re-declared
+`off_peak/mid_peak/peak`, which is why `createTouCalendar` seeded three
+defaults. That code existed only to hide the retyping.
+
+What it buys:
+
+- the Periods tab leaves the calendar editor, which goes from three tabs
+  to two — periods are now one tenant screen, defined once
+- two matched validation rules disappear (TOU-CAL-3), because they only
+  existed to keep the duplicate in step
+- a register's code can be checked against one list, with no need to
+  know which calendar the meter is on (TOU-REG-1)
+- labels and display colours stop drifting between calendar versions
+
+**What it is not:** a correctness fix. A calendar declaring `on_peak`
+while a component priced `peak` was already caught, by
+`validateTouPricing` at publish. This moves the mistake earlier and
+removes the chance to make it, which is worth doing — but no bill was
+ever wrong because of it.
+
+**The condition that makes it safe.** A tenant-level list is
+*unversioned*, and a published calendar is immutable precisely so its
+inputs cannot move under it — it names a season-set *version* and a
+holiday-set *version* for that reason. It survives only because the
+**slot stores the code as a string, not a key**: a published calendar's
+hours literally say `peak`, the rate component prices `peak`, and
+editing the list changes a display label and the editor's picker, never
+what a bill meant. Had the slot kept a key, this would have been
+unversioned config gating versioned work.
+
+The foreign key is therefore on the code —
+`tou_slot (utility_id, peak_code) → tou_period (utility_id, peak_code)`,
+RESTRICT, no ON UPDATE CASCADE — which buys two guards for nothing: a
+span cannot name an undefined code, and a code in use can be neither
+deleted nor renamed. A refused rename is correct: the code travels into
+rate components and meter registers that know nothing about the row.
+
+**Where the three default periods come from.** Every tenant is
+provisioned with `off_peak`, `mid_peak`, `peak`, by
+`provisioning.service.ts`, because a tenant with none cannot be given a
+single hour of a tariff. Test tenants get the same list through
+`bootPostgres` and `ensureUtilities` — three doors into a tenant's
+existence, all of which must leave it able to price an hour.
+
 ### Dates rather than holiday rules (decided 2026-11-04, reversing 2026-11-02)
 
 **A holiday set holds explicit dates.** The first design held rules —
@@ -449,7 +536,7 @@ Settled before slice 1, because it decides how much of the engine slice
 a row.
 
 **A TOU bucket is a `meter_read` row.** `meter_read` gains a nullable
-`tou_period_id` beside `registerId`, and several rows may describe one
+`peak_code` beside `registerId`, and several rows may describe one
 period — which is not new, since a multi-register meter already
 produces one row per register. For a register meter the period is
 derived from the register's mapping (TOU-REG-1), so **a register-based
@@ -526,10 +613,18 @@ raw intervals from the same meters. Compression is therefore entirely a
   The integrity a key would buy already exists and is better placed: a
   read carrying a code no component prices does not bill silently,
   because the `tou_period` quantity source raises when its bucket is
-  absent, and the mapping itself is checked once per register against
-  the meter's programmed calendar — rather than by a foreign key on
-  every row of a hypertable that will take tens of millions of rows a
-  month at TOU granularity.
+  absent — rather than by a foreign key on every row of a hypertable
+  that will take tens of millions of rows a month at TOU granularity.
+
+  *(Simpler since 2026-11-04: peak codes are the tenant's, so the
+  validation target is one list rather than "the meter's programmed
+  calendar". `meter_register` could now carry the same key the slots
+  do — low volume, and it would make an unknown code impossible rather
+  than merely reported — and probably should when this requirement
+  grows a write path. `meter_read` must not, for the volume reason
+  above. **Neither the check nor the write path exists yet**: a
+  register's code can only be set directly in SQL today, and nothing
+  stops `on_peak` where the tenant says `peak` until a bill stops.)*
 
   **A register does not report a peak code** (Rao, 2026-11-03). It
   reports a *number* — a dial count. The meter's own clock routes
@@ -719,7 +814,7 @@ raw intervals from the same meters. Compression is therefore entirely a
   *Simplified 2026-11-02.* This used to say "either TOU register
   quantities or the interval series", and the engine would bucket the
   series itself. Storing both meter types' output as `meter_read` rows
-  with a `tou_period_id` (see *How usage is stored*) means the engine
+  with a `peak_code` (see *How usage is stored*) means the engine
   receives one shape and never learns which kind of meter produced it.
   The bucketing moves to the roll-up, which happens once per period
   rather than on every rating pass, and slice 1 loses a branch it would
@@ -768,16 +863,17 @@ raw intervals from the same meters. Compression is therefore entirely a
 
 > **Built 2026-11-03**, except where a requirement says otherwise below:
 > `/season-sets` and `/tou-calendars` with their editors, and — added
-> 2026-11-04 — `/tou-holiday-sets` with its own list and editor. The API
-> under `/api/v1/season-sets`, `/api/v1/tou-calendars` and
-> `/api/v1/tou-holiday-sets`. All under the
+> 2026-11-04 — `/tou-holiday-sets` with its own list and editor, plus
+> `/tou-periods`, the tenant's price tiers on one screen. The API
+> under `/api/v1/season-sets`, `/api/v1/tou-calendars`,
+> `/api/v1/tou-holiday-sets` and `/api/v1/tou-periods`. All under the
 > **`rate_schedules`** module rather than one of their own — a calendar
 > is only ever the hours a schedule prices against, and a separate
 > module would have to be enabled per tenant, leaving someone with
 > `rate_schedules:EDIT` able to build a schedule they cannot publish.
 >
-> **The child collections are replaced whole** (`PUT …/periods`,
-> `…/day-types`, `…/spans`, `…/overrides`, `…/seasons`, `…/holidays`)
+> **The child collections are replaced whole** (`PUT …/day-types`,
+> `…/spans`, `…/overrides`, `…/seasons`, `…/holidays`)
 > rather than
 > edited row by row. Every invariant they carry belongs to the list: the
 > spans of a (season, day type) must tile the day exactly once, the
@@ -832,10 +928,10 @@ it is wrong.
   bitmap. The grid still earns its place as the thing that shows a gap
   or an overlap at a glance, which a list cannot.
 
-- **TOU-UI-1f (Must).** *Built 2026-11-04.* **Three tabs — Periods, Day
-  Types, Hours — and one season at a time.** All of it on one page is a
-  wall: two seasons and three day types is six span editors, each a
-  strip and a table, under two more cards; three seasons is nine.
+- **TOU-UI-1f (Must).** *Built 2026-11-04.* **Tabs — Day Types and
+  Hours — and one season at a time.** All of it on one page is a wall:
+  two seasons and three day types is six span editors, each a strip and
+  a table, under two more cards; three seasons is nine.
 
   One tab per collection, because that is where the save boundary
   already is — each is its own `PUT` with its own invariants and its own
@@ -843,13 +939,19 @@ it is wrong.
   saving half a tab each, or one button issuing two writes with no way
   to be atomic about them.
 
+  *(It shipped as three tabs the same day, the third being Periods.
+  That one went when peak codes became the tenant's: there is nothing
+  about them for a calendar to edit, and they are one tenant screen at
+  `/tou-periods`. The editor keeps the two collections a calendar
+  actually owns.)*
+
   **Not a wizard**, although the page walks a new calendar through the
   same order: it opens on the first tab with nothing in it and offers
   "Next". A separate create flow would be a second screen over the same
   data with its own idea of what makes a calendar valid, and nothing
-  here needs an order enforced — every part of a draft is editable, and
-  a new calendar already arrives with its periods and day types filled
-  in.
+  here needs an order enforced — every part of a draft is editable, it
+  arrives with its day types filled in, and the periods it assigns
+  hours to already exist on the tenant.
 
   What stays **outside** the tabs: the status, the season set and
   holiday set the calendar names (with links through to those editors),
@@ -1208,7 +1310,7 @@ TOU-CAL-2 says what the reservation costs and buys.)*
 2. **Register or interval first? — registers, as slice 1 says, and the
    choice costs nothing.** The storage decision above already makes both
    meter kinds produce one shape: a TOU bucket is a `meter_read` row
-   with a nullable `tou_period_id`, and an interval is a row in
+   with a nullable `peak_code`, and an interval is a row in
    `meter_read_interval` that aggregates into the same shape. So the
    engine does not branch on the source, TOU-ENG-2 collapses, and slice
    2 adds a data source rather than a second code path. There is no

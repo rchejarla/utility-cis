@@ -13,6 +13,7 @@ import { paginatedTenantList } from "../lib/pagination.js";
 import { auditCreate, auditUpdate } from "../lib/audit-wrap.js";
 import {
   HOLIDAY_DAY_TYPE_CODE,
+  peakCodesUsedBy,
   resolveDayType,
   resolvePeak,
   validateCalendar,
@@ -77,17 +78,15 @@ const EDITOR_INCLUDE = {
       },
     },
   },
-  periods: { orderBy: { sortOrder: "asc" } },
+  // No `periods` — they are the tenant's, fetched beside the calendar
+  // rather than through it. See `tenantPeriods`.
   dayTypes: {
     orderBy: { sortOrder: "asc" },
     include: { weekdays: { orderBy: { isoWeekday: "asc" } } },
   },
   slots: {
     orderBy: { startMinute: "asc" },
-    include: {
-      dayType: { select: { id: true, dayTypeCode: true } },
-      period: { select: { id: true, peakCode: true } },
-    },
+    include: { dayType: { select: { id: true, dayTypeCode: true } } },
   },
   overrides: {
     orderBy: { overrideDate: "asc" },
@@ -290,10 +289,15 @@ export async function listTouCalendars(utilityId: string, query: TouCalendarQuer
       seasonSet: { select: { id: true, name: true } },
       /*
        * The counts are what make a half-built calendar visible on the
-       * row. A calendar with periods and no spans looks finished until
-       * it is opened, and it is the one that cannot be published.
+       * row. A calendar with day types and no spans looks finished
+       * until it is opened, and it is the one that cannot be published.
+       *
+       * No period count: the periods are the tenant's, so counting them
+       * would print the same number on every row and say nothing about
+       * any of them. The span count is what tells a half-built calendar
+       * from a finished one.
        */
-      _count: { select: { periods: true, dayTypes: true, slots: true } },
+      _count: { select: { dayTypes: true, slots: true } },
     },
   });
 
@@ -333,10 +337,11 @@ export async function listTouCalendars(utilityId: string, query: TouCalendarQuer
 
 export async function getTouCalendar(id: string, utilityId: string) {
   const row = await loadEditorCalendar(utilityId, id);
-  const [supersession, horizon, drafts, holidaySet] = await Promise.all([
+  const [supersession, horizon, drafts, periods, holidaySet] = await Promise.all([
     supersessionOf(utilityId, row),
     holidayHorizonProblems(utilityId, row),
     draftInputProblems(utilityId, row),
+    listTenantPeriods(utilityId),
     row.touHolidaySetId
       ? prisma.touHolidaySet.findFirst({
           where: { id: row.touHolidaySetId, utilityId },
@@ -355,7 +360,30 @@ export async function getTouCalendar(id: string, utilityId: string) {
    * is enabled only to fail.
    */
   const problems = [...horizon, ...drafts.map((d) => d.message)];
-  return { ...toEditorPayload(row, problems), ...supersession, holidaySet };
+  return { ...toEditorPayload(row, periods, problems), ...supersession, holidaySet };
+}
+
+export interface TenantPeriod {
+  id: string;
+  peakCode: string;
+  label: string;
+  sortOrder: number;
+}
+
+/**
+ * The tenant's price tiers, which every calendar assigns hours to.
+ *
+ * Read beside the calendar rather than through it: they stopped being
+ * a calendar's children on 2026-11-04, so there is no relation to
+ * include. The slot carries its own code, so this is needed for labels
+ * and for the editor's picker — never to resolve what a span costs.
+ */
+export async function listTenantPeriods(utilityId: string): Promise<TenantPeriod[]> {
+  return prisma.touPeriod.findMany({
+    where: { utilityId },
+    orderBy: { sortOrder: "asc" },
+    select: { id: true, peakCode: true, label: true, sortOrder: true },
+  });
 }
 
 /**
@@ -366,7 +394,11 @@ export async function getTouCalendar(id: string, utilityId: string) {
  * with no spans is rendered; a missing key is not, and an empty
  * (season, day type) is the most common mistake.
  */
-function toEditorPayload(row: EditorCalendar, extraProblems: string[]) {
+function toEditorPayload(
+  row: EditorCalendar,
+  periods: TenantPeriod[],
+  extraProblems: string[],
+) {
   const seasonCodes = row.seasonSet.seasons.map((s) => s.seasonCode);
 
   const groups = seasonCodes.flatMap((seasonCode) =>
@@ -379,7 +411,7 @@ function toEditorPayload(row: EditorCalendar, extraProblems: string[]) {
           id: s.id,
           startMinute: s.startMinute,
           endMinute: s.endMinute,
-          peakCode: s.period.peakCode,
+          peakCode: s.peakCode,
         })),
     })),
   );
@@ -404,12 +436,20 @@ function toEditorPayload(row: EditorCalendar, extraProblems: string[]) {
       seasons: row.seasonSet.seasons,
     },
     touHolidaySetId: row.touHolidaySetId,
-    periods: row.periods.map((p) => ({
+    /*
+     * The tenant's whole list, not just the codes this calendar uses:
+     * the editor needs every code it could *assign*, and the strip's
+     * legend reads the labels. Which of them this calendar actually
+     * uses is `usedPeakCodes` below.
+     */
+    periods: periods.map((p) => ({
       id: p.id,
       peakCode: p.peakCode,
       label: p.label,
       sortOrder: p.sortOrder,
     })),
+    /** Derived — what makes a code a period *of this calendar*. */
+    usedPeakCodes: peakCodesUsedBy(toTouCalendarDefinition(row)),
     dayTypes: row.dayTypes.map((d) => ({
       id: d.id,
       dayTypeCode: d.dayTypeCode,
@@ -440,12 +480,6 @@ function toEditorPayload(row: EditorCalendar, extraProblems: string[]) {
  * re-codeable and deletable like any other — not placeholder text,
  * which is what made the empty rows look filled in.
  */
-const DEFAULT_PERIODS = [
-  { peakCode: "off_peak", label: "Off-peak" },
-  { peakCode: "mid_peak", label: "Mid-peak" },
-  { peakCode: "peak", label: "On-peak" },
-];
-
 const DEFAULT_DAY_TYPES = [
   { dayTypeCode: "weekday", label: "Weekday", weekdays: [1, 2, 3, 4, 5] },
   { dayTypeCode: "weekend", label: "Weekend", weekdays: [6, 7] },
@@ -510,16 +544,12 @@ export async function createTouCalendar(
         },
       });
 
-      await tx.touPeriod.createMany({
-        data: DEFAULT_PERIODS.map((period, index) => ({
-          utilityId,
-          touCalendarId: created.id,
-          peakCode: period.peakCode,
-          label: period.label,
-          sortOrder: index,
-        })),
-      });
-
+      /*
+       * No periods created here. They are the tenant's, seeded when the
+       * tenant is provisioned, and a calendar uses whichever of them
+       * its hours name — so a new calendar starts with a vocabulary it
+       * did not have to declare.
+       */
       for (const [index, dayType] of dayTypes.entries()) {
         const dayTypeRow = await tx.touDayType.create({
           data: {
@@ -786,74 +816,17 @@ export async function publishTouCalendar(
   );
 }
 
-export async function putTouPeriods(
-  utilityId: string,
-  actorId: string,
-  actorName: string,
-  id: string,
-  data: PutTouPeriodsInput,
-) {
-  const row = await loadEditorCalendar(utilityId, id);
-  assertDraft(row);
-
-  const codes = data.periods.map((p) => p.peakCode);
-  const duplicate = codes.find((c, i) => codes.indexOf(c) !== i);
-  if (duplicate) {
-    throw badRequest(`"${duplicate}" is listed twice.`, "DUPLICATE_PEAK_CODE");
-  }
-
-  /*
-   * A period a span still references cannot go. The database would
-   * refuse it (`tou_slot_period_id_fkey` is RESTRICT) with a message
-   * naming a constraint; this names the hours instead.
-   */
-  const removed = row.periods.filter((p) => !codes.includes(p.peakCode));
-  const stillUsed = removed.filter((p) => row.slots.some((s) => s.period.id === p.id));
-  if (stillUsed.length > 0) {
-    throw conflict(
-      `${stillUsed.map((p) => `"${p.label}"`).join(", ")} ${stillUsed.length === 1 ? "is" : "are"} still assigned to hours in this calendar. Reassign those hours first.`,
-      "TOU_PERIOD_IN_USE",
-    );
-  }
-
-  return auditUpdate(
-    { utilityId, actorId, actorName, entityType: "TouCalendar" },
-    EVENT_TYPES.TOU_CALENDAR_PERIODS_SET,
-    row.periods.map((p) => ({ peakCode: p.peakCode, label: p.label })),
-    async (tx) => {
-      if (removed.length > 0) {
-        await tx.touPeriod.deleteMany({ where: { id: { in: removed.map((p) => p.id) } } });
-      }
-      for (const [index, period] of data.periods.entries()) {
-        const existing = row.periods.find((p) => p.peakCode === period.peakCode);
-        if (existing) {
-          await tx.touPeriod.update({
-            where: { id: existing.id },
-            data: { label: period.label, sortOrder: index },
-          });
-        } else {
-          await tx.touPeriod.create({
-            data: {
-              utilityId,
-              touCalendarId: id,
-              peakCode: period.peakCode,
-              label: period.label,
-              sortOrder: index,
-            },
-          });
-        }
-      }
-      /*
-       * The calendar is what the audit row is about: a period is not
-       * separately addressable to anyone asking "who moved the peak
-       * hours", and `auditUpdate` needs an entity with an id. The empty
-       * update also moves `updatedAt`.
-       */
-      return tx.touCalendar.update({ where: { id }, data: {} });
-    },
-  );
-}
-
+/*
+ * `putTouPeriods` is gone from here, to `tou-period.service.ts`.
+ *
+ * It replaced the whole list in one write because the list carried
+ * invariants no row could see — every period used somewhere, every
+ * referenced period defined. Those are precisely the rules that went
+ * when the codes became the tenant's: a period is now a record in its
+ * own right, with no cross-row rule but a unique code, which an index
+ * already keeps. So it is ordinary per-row CRUD, and each period gets
+ * its own audit rows rather than the calendar standing in for them.
+ */
 export async function putTouDayTypes(
   utilityId: string,
   actorId: string,
@@ -991,10 +964,20 @@ export async function putTouSpans(
     );
   }
 
-  const periodByCode = new Map(row.periods.map((p) => [p.peakCode, p.id]));
+  /*
+   * The code has to be one the *tenant* defines. `tou_slot_peak_code_fkey`
+   * says the same and would refuse a 23503, which is not a sentence
+   * anybody can act on — and it would arrive after the deleteMany
+   * inside the transaction, so the operator would see a failed save
+   * rather than a named mistake.
+   */
+  const defined = new Set((await listTenantPeriods(utilityId)).map((p) => p.peakCode));
   for (const span of data.spans) {
-    if (!periodByCode.has(span.peakCode)) {
-      throw badRequest(`This calendar has no period "${span.peakCode}".`, "TOU_PERIOD_MISSING");
+    if (!defined.has(span.peakCode)) {
+      throw badRequest(
+        `"${span.peakCode}" is not one of this utility's periods. Add it under Periods first, or pick one that exists.`,
+        "TOU_PERIOD_MISSING",
+      );
     }
   }
 
@@ -1026,7 +1009,7 @@ export async function putTouSpans(
         .map((s) => ({
           startMinute: s.startMinute,
           endMinute: s.endMinute,
-          peakCode: s.period.peakCode,
+          peakCode: s.peakCode,
         })),
     },
     async (tx) => {
@@ -1045,7 +1028,7 @@ export async function putTouSpans(
             touCalendarId: id,
             seasonCode: data.seasonCode,
             touDayTypeId: dayType.id,
-            touPeriodId: periodByCode.get(span.peakCode) as string,
+            peakCode: span.peakCode,
             startMinute: span.startMinute,
             endMinute: span.endMinute,
           })),
@@ -1197,12 +1180,13 @@ export async function spotCheckTouCalendar(
   const minuteOfDay = hours * 60 + minutes;
 
   const definition = toTouCalendarDefinition(row);
-  const [observedHolidays, holidayName] = await Promise.all([
+  const [observedHolidays, holidayName, periods] = await Promise.all([
     loadObservedHolidays(prisma, utilityId, row.touHolidaySetId, {
       startDate: date,
       endDate: date,
     }),
     holidayNameOn(utilityId, row.touHolidaySetId, date),
+    listTenantPeriods(utilityId),
   ]);
 
   const lookup = resolvePeak({
@@ -1226,7 +1210,7 @@ export async function spotCheckTouCalendar(
           ok: true as const,
           peakCode: lookup.peakCode,
           periodLabel:
-            row.periods.find((p) => p.peakCode === lookup.peakCode)?.label ?? lookup.peakCode,
+            periods.find((p) => p.peakCode === lookup.peakCode)?.label ?? lookup.peakCode,
           seasonCode: lookup.seasonCode,
           seasonLabel:
             row.seasonSet.seasons.find((s) => s.seasonCode === lookup.seasonCode)?.label ??
@@ -1256,12 +1240,13 @@ export async function previewTouDay(id: string, utilityId: string, query: { date
   const date = utcDate(query.date);
   const definition = toTouCalendarDefinition(row);
 
-  const [observedHolidays, holidayName] = await Promise.all([
+  const [observedHolidays, holidayName, periods] = await Promise.all([
     loadObservedHolidays(prisma, utilityId, row.touHolidaySetId, {
       startDate: date,
       endDate: date,
     }),
     holidayNameOn(utilityId, row.touHolidaySetId, date),
+    listTenantPeriods(utilityId),
   ]);
 
   const dayType = resolveDayType(date, definition, observedHolidays);
@@ -1315,10 +1300,10 @@ export async function previewTouDay(id: string, utilityId: string, query: { date
             .map((s) => ({
               startMinute: s.startMinute,
               endMinute: s.endMinute,
-              peakCode: s.period.peakCode,
+              peakCode: s.peakCode,
               periodLabel:
-                row.periods.find((p) => p.peakCode === s.period.peakCode)?.label ??
-                s.period.peakCode,
+                periods.find((p) => p.peakCode === s.peakCode)?.label ??
+                s.peakCode,
             })),
   };
 }

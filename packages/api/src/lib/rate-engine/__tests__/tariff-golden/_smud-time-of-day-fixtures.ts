@@ -117,7 +117,6 @@ export const SMUD_CALENDAR: TouCalendarDefinition = {
     { dayTypeCode: "weekend", weekdays: [6, 7] },
     { dayTypeCode: "holiday", weekdays: [] },
   ],
-  peakCodes: ["off_peak", "mid_peak", "peak"],
   slots: [
     // Non-summer weekdays: off-peak until 5 pm, peak 5–8, off-peak after.
     { seasonCode: "non_summer", dayTypeCode: "weekday", startMinute: hhmm(0), endMinute: hhmm(17), peakCode: "off_peak" },

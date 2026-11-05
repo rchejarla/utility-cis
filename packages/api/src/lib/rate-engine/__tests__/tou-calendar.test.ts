@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  peakCodesUsedBy,
   resolveDayType,
   resolvePeak,
   validateCalendar,
@@ -61,7 +62,6 @@ const SEASONS: SeasonDefinition[] = [
  */
 const CALENDAR: TouCalendarDefinition = {
   dayTypes: [day("weekday", [1, 2, 3, 4, 5]), day("weekend", [6, 7]), day("holiday", [])],
-  peakCodes: ["on_peak", "off_peak"],
   slots: [
     span("summer", "weekday", 0, 960, "off_peak"),
     span("summer", "weekday", 960, 1260, "on_peak"), // 16:00–21:00
@@ -137,24 +137,34 @@ describe("validateCalendar", () => {
     if (!result.ok) expect(result.problems.join(" ")).toMatch(/15 minutes/);
   });
 
-  it("refuses a peak that is declared and never used", () => {
-    // TOU-CAL-3. A declared-unused peak is normally a half-finished
-    // edit, and a rate component priced against it would never bill.
-    const result = validateCalendar(
-      { ...CALENDAR, peakCodes: [...CALENDAR.peakCodes, "super_off_peak"] },
-      SEASONS,
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.problems.join(" ")).toMatch(/super_off_peak/);
+  /*
+   * Two tests stood here, for TOU-CAL-3's peak rules: "a peak declared
+   * and never used" and "a span naming a peak the calendar never
+   * declared". Both are gone rather than repaired, because neither has
+   * two things left to disagree — peak codes are the tenant's since
+   * 2026-11-04, and a calendar's periods *are* the distinct codes its
+   * hours use.
+   *
+   * What each protected is still protected, and tested where it now
+   * lives:
+   *
+   * - an undefined code is refused by `tou_slot_peak_code_fkey`, and by
+   *   `putTouSpans` before the write, in
+   *   `tou-calendar-editor.integration.test.ts`
+   * - a code the *tariff* does not price is `validateTouPricing`, in
+   *   `rate-schedule-publish.integration.test.ts` — the one that would
+   *   leave energy uncharged
+   *
+   * `peakCodesUsedBy` is what "this calendar's periods" means now, and
+   * is tested below.
+   */
+  it("reports a calendar's periods as the codes its hours actually use", () => {
+    expect(peakCodesUsedBy(CALENDAR).sort()).toEqual(["off_peak", "on_peak"]);
   });
 
-  it("refuses a span naming a peak the calendar never declared", () => {
-    const slots = CALENDAR.slots.map((s) =>
-      s.peakCode === "on_peak" ? { ...s, peakCode: "mid_peak" } : s,
-    );
-    const result = validateCalendar({ ...CALENDAR, slots }, SEASONS);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.problems.join(" ")).toMatch(/mid_peak/);
+  it("counts a code once however many spans carry it", () => {
+    // off_peak appears in five spans across seasons and day types.
+    expect(peakCodesUsedBy(CALENDAR).filter((c) => c === "off_peak")).toHaveLength(1);
   });
 
   it("requires the seven weekdays to be claimed exactly once", () => {

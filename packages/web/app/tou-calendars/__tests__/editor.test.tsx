@@ -24,9 +24,10 @@ const get = apiClient.get as unknown as ReturnType<typeof vi.fn>;
 const put = apiClient.put as unknown as ReturnType<typeof vi.fn>;
 const post = apiClient.post as unknown as ReturnType<typeof vi.fn>;
 
+/** The tenant's periods, as the server sends them: id and order too. */
 const PERIODS = [
-  { peakCode: "off_peak", label: "Off-peak" },
-  { peakCode: "peak", label: "Peak" },
+  { id: "p-1", peakCode: "off_peak", label: "Off-peak", sortOrder: 0 },
+  { id: "p-2", peakCode: "peak", label: "Peak", sortOrder: 1 },
 ];
 
 const DAY_TYPES = [
@@ -69,7 +70,14 @@ function calendar(over: Record<string, unknown> = {}) {
     },
     touHolidaySetId: null,
     holidaySet: null,
+    /*
+     * The **tenant's** periods, with the codes this calendar's hours
+     * actually use beside them. They were the calendar's own until
+     * 2026-11-04; `usedPeakCodes` is what "this calendar's periods"
+     * means now.
+     */
     periods: PERIODS,
+    usedPeakCodes: ["off_peak", "peak"],
     dayTypes: DAY_TYPES,
     spanGroups: [
       {
@@ -120,7 +128,7 @@ const renderPage = () => render(<TouCalendarEditorPage />);
  * query that found a hidden input would pass while the control was
  * unreachable.
  */
-async function openTab(name: "Periods" | "Day Types" | "Hours") {
+async function openTab(name: "Day Types" | "Hours") {
   // `find`, not `get`: the tabs appear with the calendar, and these
   // tests call this as their first act after rendering.
   const tab = await screen.findByRole("tab", { name: new RegExp(`^${name}`) });
@@ -234,7 +242,7 @@ describe("a published calendar", () => {
     await screen.findByTestId("published-notice");
     expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Save these hours/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Save periods/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Save day types/ })).toBeNull();
   });
 
   it("offers no delete, because a published calendar is evidence", async () => {
@@ -642,11 +650,11 @@ describe("publishing", () => {
      * be added afterwards.
      */
     renderPage();
-    await openTab("Periods");
-    await screen.findByTestId("periods-editor");
+    await openTab("Day Types");
+    await screen.findByTestId("day-types-editor");
     expect(screen.getByRole("button", { name: "Publish" })).toBeEnabled();
 
-    await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add a day type" }));
 
     const button = screen.getByRole("button", { name: "Publish" });
     expect(button).toBeDisabled();
@@ -750,24 +758,18 @@ describe("when the calendar cannot be loaded", () => {
 
 describe("rows nobody has filled in", () => {
   /*
-   * The bug this closes: "Add a period" creates a row whose
-   * placeholders — `peak`, `Peak` — look exactly like values, so the
-   * obvious next click is Save. That sent an empty code to a schema
+   * The bug this closes: "Add a day type" creates a row whose
+   * placeholders — `weekday`, `Weekday` — look exactly like values, so
+   * the obvious next click is Save. That sent an empty code to a schema
    * demanding at least one character and came back "API error 400:
    * Validation failed", naming neither the field nor the row.
+   *
+   * The period half of this block is gone with the Periods tab. Peak
+   * codes are the tenant's now, so the same trap lives on
+   * `/tou-periods` and is tested in that screen's own suite — the guard
+   * there is an Add button that stays disabled, not a held Save, since
+   * a period is created a row at a time.
    */
-  it("will not save a period with no code", async () => {
-    renderPage();
-    await openTab("Periods");
-    await screen.findByTestId("periods-editor");
-
-    await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
-
-    expect(screen.getByRole("button", { name: "Save periods" })).toBeDisabled();
-    expect(screen.getByTestId("periods-incomplete").textContent).toMatch(/Row 3/);
-    expect(put).not.toHaveBeenCalled();
-  });
-
   it("will not save a day type with no code", async () => {
     renderPage();
     await openTab("Day Types");
@@ -781,11 +783,11 @@ describe("rows nobody has filled in", () => {
 
   it("says the greyed text is an example, because that is the trap", async () => {
     renderPage();
-    await openTab("Periods");
-    await screen.findByTestId("periods-editor");
-    await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
+    await openTab("Day Types");
+    await screen.findByTestId("day-types-editor");
+    await userEvent.click(screen.getByRole("button", { name: "Add a day type" }));
 
-    expect(screen.getByTestId("periods-incomplete").textContent).toMatch(
+    expect(screen.getByTestId("day-types-incomplete").textContent).toMatch(
       /example, not a value/,
     );
   });
@@ -793,44 +795,43 @@ describe("rows nobody has filled in", () => {
   it("lets the save through once the row is filled in", async () => {
     put.mockResolvedValue(calendar());
     renderPage();
-    await openTab("Periods");
-    await screen.findByTestId("periods-editor");
+    await openTab("Day Types");
+    await screen.findByTestId("day-types-editor");
 
-    await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
-    const codes = screen.getAllByLabelText("Period code");
-    const labels = screen.getAllByLabelText("Period label");
+    await userEvent.click(screen.getByRole("button", { name: "Add a day type" }));
+    const codes = screen.getAllByLabelText("Day type code");
+    const labels = screen.getAllByLabelText("Day type label");
     /*
-     * Pasted rather than typed. Twenty-eight characters is twenty-eight
-     * events, and with the tab click before them this test was the one
-     * that tipped over the five-second default when the whole suite ran
-     * at once — it passed on its own, which is the worst way for a test
-     * to fail. What it is about is a filled row, not the keystrokes.
+     * Pasted rather than typed: this was the test that tipped over the
+     * five-second default when all sixty files ran at once, passing on
+     * its own, which is the worst way for a test to fail. What it is
+     * about is a filled row, not the keystrokes.
      */
     await userEvent.click(codes[codes.length - 1]);
-    await userEvent.paste("super_off_peak");
+    await userEvent.paste("public_holiday");
     await userEvent.click(labels[labels.length - 1]);
-    await userEvent.paste("Super off-peak");
+    await userEvent.paste("Public holiday");
 
-    expect(screen.queryByTestId("periods-incomplete")).toBeNull();
-    const save = screen.getByRole("button", { name: "Save periods" });
+    expect(screen.queryByTestId("day-types-incomplete")).toBeNull();
+    const save = screen.getByRole("button", { name: "Save day types" });
     expect(save).toBeEnabled();
 
     await userEvent.click(save);
     await waitFor(() => expect(put).toHaveBeenCalled());
     const [, payload] = put.mock.calls[0];
-    expect((payload as { periods: Array<{ peakCode: string }> }).periods).toHaveLength(3);
+    expect((payload as { dayTypes: Array<{ dayTypeCode: string }> }).dayTypes).toHaveLength(3);
   });
 
   it("treats whitespace as empty, so a space is not a code", async () => {
     renderPage();
-    await openTab("Periods");
-    await screen.findByTestId("periods-editor");
-    await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
+    await openTab("Day Types");
+    await screen.findByTestId("day-types-editor");
+    await userEvent.click(screen.getByRole("button", { name: "Add a day type" }));
 
-    const codes = screen.getAllByLabelText("Period code");
+    const codes = screen.getAllByLabelText("Day type code");
     await userEvent.type(codes[codes.length - 1], "   ");
 
-    expect(screen.getByRole("button", { name: "Save periods" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save day types" })).toBeDisabled();
   });
 });
 
@@ -1077,13 +1078,18 @@ describe("the spot check", () => {
  * each a strip and a table, under two more cards.
  */
 describe("the tabs", () => {
-  /** A calendar with nothing in it, which is what a new one looks like. */
+  /**
+   * A calendar with nothing in it, which is what a new one looks like.
+   *
+   * `periods` stays populated: they are the tenant's, so a brand-new
+   * calendar has the full list available and uses none of it.
+   */
   const empty = () =>
     calendar({
-      periods: [],
       dayTypes: [],
       spanGroups: [],
-      validation: { ok: false, problems: ["This calendar has no periods."] },
+      usedPeakCodes: [],
+      validation: { ok: false, problems: ["This calendar has no day types."] },
     });
 
   it("opens on the first section with nothing in it", async () => {
@@ -1092,7 +1098,7 @@ describe("the tabs", () => {
     // old one is reachable in one click.
     get.mockResolvedValue(empty());
     renderPage();
-    expect(await screen.findByTestId("tab-periods")).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByTestId("tab-day-types")).toHaveAttribute("aria-selected", "true");
   });
 
   it("opens on the hours when every section has something", async () => {
@@ -1104,20 +1110,20 @@ describe("the tabs", () => {
   it("marks a section that has nothing in it", async () => {
     get.mockResolvedValue(empty());
     renderPage();
-    await screen.findByTestId("tab-periods");
+    await screen.findByTestId("tab-day-types");
     expect(screen.getByTestId("tab-day-types-incomplete")).toBeInTheDocument();
     expect(screen.getByTestId("tab-hours-incomplete")).toBeInTheDocument();
   });
 
   it("marks a section holding edits nobody has saved", async () => {
     renderPage();
-    await openTab("Periods");
-    await screen.findByTestId("periods-editor");
-    expect(screen.queryByTestId("tab-periods-unsaved")).toBeNull();
+    await openTab("Day Types");
+    await screen.findByTestId("day-types-editor");
+    expect(screen.queryByTestId("tab-day-types-unsaved")).toBeNull();
 
-    await userEvent.click(screen.getByRole("button", { name: "Add a period" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add a day type" }));
 
-    expect(screen.getByTestId("tab-periods-unsaved")).toBeInTheDocument();
+    expect(screen.getByTestId("tab-day-types-unsaved")).toBeInTheDocument();
   });
 
   it("keeps an unsaved edit when you look at another tab", async () => {
@@ -1127,51 +1133,52 @@ describe("the tabs", () => {
      * elsewhere rather than discarding.
      */
     renderPage();
-    await openTab("Periods");
-    await screen.findByTestId("periods-editor");
+    await openTab("Day Types");
+    await screen.findByTestId("day-types-editor");
 
-    const codes = screen.getAllByLabelText("Period code");
+    const codes = screen.getAllByLabelText("Day type code");
     await userEvent.type(codes[0], "_edited");
 
     await openTab("Hours");
-    await openTab("Periods");
+    await openTab("Day Types");
 
-    expect((screen.getAllByLabelText("Period code")[0] as HTMLInputElement).value).toBe(
-      "off_peak_edited",
+    expect((screen.getAllByLabelText("Day type code")[0] as HTMLInputElement).value).toBe(
+      "weekday_edited",
     );
   });
 
-  it("does not discard one tab's edit when another tab saves", async () => {
+  it("does not discard one tab's edit when a span saves", async () => {
     /*
      * Every save returns the whole calendar, and the sections used to
-     * share one remount counter — so saving the day types threw away a
-     * half-typed period on the tab next door.
+     * share one remount counter — so saving the hours threw away a
+     * half-typed day type on the tab next door.
      */
     put.mockResolvedValue(calendar());
     renderPage();
-    await openTab("Periods");
-    await screen.findByTestId("periods-editor");
-    await userEvent.type(screen.getAllByLabelText("Period code")[0], "_edited");
-
     await openTab("Day Types");
-    await userEvent.click(screen.getByRole("button", { name: "Sat on weekday" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save day types" }));
+    await screen.findByTestId("day-types-editor");
+    await userEvent.type(screen.getAllByLabelText("Day type code")[0], "_edited");
+
+    await openTab("Hours");
+    const group = screen.getByTestId("span-editor-summer-weekend");
+    await userEvent.selectOptions(group.querySelectorAll("select")[2] as HTMLSelectElement, "peak");
+    await userEvent.click(group.querySelector("button[style*='accent']") as HTMLElement);
     await waitFor(() => expect(put).toHaveBeenCalled());
 
-    await openTab("Periods");
-    expect((screen.getAllByLabelText("Period code")[0] as HTMLInputElement).value).toBe(
-      "off_peak_edited",
+    await openTab("Day Types");
+    expect((screen.getAllByLabelText("Day type code")[0] as HTMLInputElement).value).toBe(
+      "weekday_edited",
     );
   });
 
   it("offers the next section rather than leaving somebody to find the tab", async () => {
     get.mockResolvedValue(empty());
     renderPage();
-    await screen.findByTestId("tab-periods");
+    await screen.findByTestId("tab-day-types");
 
-    await userEvent.click(screen.getByTestId("next-to-day-types"));
+    await userEvent.click(screen.getByTestId("next-to-hours"));
 
-    expect(screen.getByTestId("tab-day-types")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("tab-hours")).toHaveAttribute("aria-selected", "true");
   });
 
   it("keeps the verdict and Publish above the tabs, where no tab can hide them", async () => {
@@ -1188,7 +1195,7 @@ describe("the tabs", () => {
     expect(screen.getByTestId("calendar-problems")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Publish" })).toBeInTheDocument();
 
-    await openTab("Periods");
+    await openTab("Day Types");
 
     expect(screen.getByTestId("calendar-problems")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Publish" })).toBeInTheDocument();

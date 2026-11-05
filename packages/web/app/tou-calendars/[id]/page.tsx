@@ -16,9 +16,7 @@ import { SpanEditor, type SpanGroup } from "@/components/tou-calendars/span-edit
 import { SpotCheck } from "@/components/tou-calendars/spot-check";
 import {
   DayTypesEditor,
-  PeriodsEditor,
   type DayTypeRow,
-  type PeriodRow,
 } from "@/components/tou-calendars/structure-editor";
 import { SeasonChips, TabStrip, seasonDates } from "@/components/tou-calendars/tab-strip";
 
@@ -50,19 +48,17 @@ import { SeasonChips, TabStrip, seasonDates } from "@/components/tou-calendars/t
  * sitting on the Periods tab.
  */
 
-type TabKey = "periods" | "day-types" | "hours";
+type TabKey = "day-types" | "hours";
 
 const TAB_LABELS: Record<TabKey, string> = {
-  periods: "Periods",
   "day-types": "Day Types",
   hours: "Hours",
 };
 
-const TAB_ORDER: TabKey[] = ["periods", "day-types", "hours"];
+const TAB_ORDER: TabKey[] = ["day-types", "hours"];
 
 /** Nothing in it yet, which is what the tab's mark means. */
 function isTabIncomplete(calendar: Calendar, key: TabKey): boolean {
-  if (key === "periods") return calendar.periods.length === 0;
   if (key === "day-types") return calendar.dayTypes.length === 0;
   /*
    * The hours are incomplete while any (season, day type) has none —
@@ -232,7 +228,14 @@ interface Calendar {
     publishedAt: string | null;
     _count: { holidays: number };
   } | null;
-  periods: PeriodRow[];
+  /**
+   * The **tenant's** price tiers, not this calendar's — they stopped
+   * being a calendar's own on 2026-11-04. Sent because the hours editor
+   * needs every code it could assign and the strip's legend needs the
+   * labels; `usedPeakCodes` is which of them this calendar charges at.
+   */
+  periods: Array<{ id: string; peakCode: string; label: string; sortOrder: number }>;
+  usedPeakCodes: string[];
   dayTypes: DayTypeRow[];
   spanGroups: SpanGroup[];
   overrides: Array<{ id: string; date: string; dayTypeCode: string; reason: string | null }>;
@@ -803,11 +806,9 @@ export default function TouCalendarEditorPage() {
           label: TAB_LABELS[key],
           incomplete: isTabIncomplete(calendar, key),
           dirty:
-            key === "periods"
-              ? dirty.periods
-              : key === "day-types"
-                ? dirty.dayTypes
-                : Object.values(dirty.spans).some(Boolean),
+            key === "day-types"
+              ? dirty.dayTypes
+              : Object.values(dirty.spans).some(Boolean),
         }))}
         active={showing}
         onSelect={setTab}
@@ -819,24 +820,6 @@ export default function TouCalendarEditorPage() {
         That is the whole reason this is tabs rather than a wizard:
         there is no step to be "on", only a section to be looking at.
       */}
-      <div style={{ display: showing === "periods" ? "block" : "none" }}>
-        <PeriodsEditor
-          key={`periods-${revision.periods}`}
-          periods={calendar.periods}
-          readOnly={readOnly}
-          onDirtyChange={(isDirty) => setDirty((d) => ({ ...d, periods: isDirty }))}
-          onSave={async (rows) =>
-            afterSave(
-              "periods",
-              await apiClient.put<Calendar>(`/api/v1/tou-calendars/${id}/periods`, {
-                periods: rows.map((r) => ({ peakCode: r.peakCode, label: r.label })),
-              }),
-            )
-          }
-        />
-        <NextTab to="day-types" label={TAB_LABELS["day-types"]} onSelect={setTab} />
-      </div>
-
       <div style={{ display: showing === "day-types" ? "block" : "none" }}>
         <DayTypesEditor
           key={`day-types-${revision.dayTypes}`}

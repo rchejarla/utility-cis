@@ -245,18 +245,26 @@ async function seedTouCalendar({ p, utilityId }) {
     },
   });
 
-  const periodByCode = new Map();
+  /*
+   * The tenant's periods, upserted rather than created.
+   *
+   * Peak codes stopped being a calendar's own on 2026-11-04, and a
+   * provisioned tenant already has these three — so this is here for
+   * the tenant that somehow has not got them, and to keep the seed
+   * stating what the calendar needs rather than relying on a default
+   * elsewhere happening to match.
+   */
   for (const [index, period] of PERIODS.entries()) {
-    const row = await p.touPeriod.create({
-      data: {
+    await p.touPeriod.upsert({
+      where: { utilityId_peakCode: { utilityId, peakCode: period.peakCode } },
+      update: {},
+      create: {
         utilityId,
-        touCalendarId: calendar.id,
         peakCode: period.peakCode,
         label: period.label,
         sortOrder: index,
       },
     });
-    periodByCode.set(period.peakCode, row.id);
   }
 
   const dayTypeByCode = new Map();
@@ -293,7 +301,7 @@ async function seedTouCalendar({ p, utilityId }) {
           touCalendarId: calendar.id,
           seasonCode: season.seasonCode,
           touDayTypeId: dayTypeByCode.get(dayType.dayTypeCode),
-          touPeriodId: periodByCode.get(span.peakCode),
+          peakCode: span.peakCode,
           startMinute: span.startMinute,
           endMinute: span.endMinute,
         })),

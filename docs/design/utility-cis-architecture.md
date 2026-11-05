@@ -317,7 +317,7 @@ What this buys is narrower than it looks. The mechanism is chosen and running, s
 | **Delinquency** | DelinquencyRule, DelinquencyAction |
 | **Service Requests** | ServiceRequest, Sla, ServiceRequestTypeDef (+ `service_request_counter` plumbing table for per-tenant/year `SR-YYYY-NNNNNN` numbering) |
 | **Accounts Receivable** | LedgerEntry, LedgerApplication, LedgerReasonDef |
-| **Rates** | SeasonSet, Season, TouCalendar, TouPeriod, TouDayType, TouDayTypeWeekday, TouSlot, TouDayOverride, TouHolidaySet, TouHoliday (spec 26; added 2026-11-02, holidays revised 2026-11-04) |
+| **Rates** | SeasonSet, Season, TouPeriod (tenant-level since 2026-11-04), TouCalendar, TouDayType, TouDayTypeWeekday, TouSlot, TouDayOverride, TouHolidaySet, TouHoliday (spec 26; added 2026-11-02, holidays and peak codes revised 2026-11-04) |
 
 **Service Request enums (Phase 4 slice B):**
 - `ServiceRequestStatus`: NEW, ASSIGNED, IN_PROGRESS, PENDING_FIELD, COMPLETED, CANCELLED, FAILED
@@ -927,7 +927,8 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | POST | `/api/v1/season-sets/:id/publish` | Rate (names diverging TOU calendars) |
 | GET POST | `/api/v1/tou-calendars` | Rate |
 | GET PATCH DELETE | `/api/v1/tou-calendars/:id` | Rate |
-| PUT | `/api/v1/tou-calendars/:id/periods` | Rate (whole list) |
+| GET POST | `/api/v1/tou-periods` | Rate (the tenant's price tiers; each row carries what is charged at it) |
+| GET PATCH DELETE | `/api/v1/tou-periods/:id` | Rate (label and order only — the code is immutable; delete refused while hours use it) |
 | PUT | `/api/v1/tou-calendars/:id/day-types` | Rate (whole list, with weekdays) |
 | PUT | `/api/v1/tou-calendars/:id/spans` | Rate (one season + day type's hours) |
 | PUT | `/api/v1/tou-calendars/:id/overrides` | Rate (whole list) |
@@ -1145,7 +1146,8 @@ Clients can pull the document and generate SDKs, contract tests, or API consoles
 | Season Set Detail | `/season-sets/[id]` | 366-day year bar drawn from the engine's own coverage; month/day rows that may wrap the year; validation by date; publish, which names published TOU calendars keyed on a different set (TOU-SEA-6); read-only once published |
 | Season Set Create | `/season-sets/new` | Header only — the seasons are a list with a coverage rule, added on the editor |
 | TOU Calendars | `/tou-calendars` | Table with status filter; the span count, which is what shows a half-built calendar |
-| TOU Calendar Detail | `/tou-calendars/[id]` | **Three tabs** (Periods, Day Types, Hours), opening on the first with nothing in it — one tab per `PUT`, so each has one Save. Hours scopes to one season via chips marked complete/incomplete, with the months beside the name. Status, the sets it names, the validation verdict and Publish stay above the tabs; changing either set is pick-then-Apply, with the consequence stated first. A 96-quarter strip per (season, day type) rendered *from* the span rows; spot check and whole-day preview answered by the engine server-side; copy hours between groups, including across seasons; read-only once published |
+| TOU Periods | `/tou-periods` | The tenant's price tiers, edited a row at a time; the code cannot be changed once it exists, and a period hours are charged at cannot be removed |
+| TOU Calendar Detail | `/tou-calendars/[id]` | **Two tabs** (Day Types, Hours), opening on the first with nothing in it — one tab per `PUT`, so each has one Save. Hours scopes to one season via chips marked complete/incomplete, with the months beside the name. Status, the sets it names, the validation verdict and Publish stay above the tabs; changing either set is pick-then-Apply, with the consequence stated first. A 96-quarter strip per (season, day type) rendered *from* the span rows; spot check and whole-day preview answered by the engine server-side; copy hours between groups, including across seasons; read-only once published |
 | TOU Calendar Create | `/tou-calendars/new` | Header only: name, effective date, season set, holiday set, IANA zone, clock basis |
 | Holiday Sets | `/tou-holiday-sets` | Table with status filter; the date count and the span it covers, which is where a set runs out |
 | Holiday Set Detail | `/tou-holiday-sets/[id]` | Dates saved as a whole list, each with the weekday it falls on; horizon warnings; the calendars naming it; read-only once published |
