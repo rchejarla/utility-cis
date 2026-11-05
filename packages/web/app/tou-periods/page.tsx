@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageDescription } from "@/components/ui/page-description";
 import { AccessDenied } from "@/components/ui/access-denied";
+import { DataTable, type Column } from "@/components/ui/data-table";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 
@@ -15,10 +16,13 @@ import { usePermission } from "@/lib/use-permission";
  * retyping `off_peak/mid_peak/peak` for every version and gave the
  * calendar editor a tab for a three-row table.
  *
- * Hand-rolled rather than `EntityListPage`: the whole point is editing
- * a handful of rows in place, and a list page that navigates to a
- * detail screen for a code and a label would be three clicks to rename
- * "On-peak".
+ * `DataTable` for the chrome, so this reads as a list page like every
+ * other one, but not `EntityListPage`: that shell navigates to a detail
+ * screen per row, which for a code and a label would be three clicks to
+ * rename "On-peak". The rows are edited where they sit, and the editor
+ * is the row — `DataTable` renders whatever a column hands it, so the
+ * cell holds an input while that row is being edited and plain text the
+ * rest of the time.
  */
 
 interface Period {
@@ -32,34 +36,59 @@ interface Period {
 }
 
 const inputStyle = {
-  padding: "4px 8px",
+  padding: "6px 10px",
   borderRadius: "var(--radius)",
   border: "1px solid var(--border)",
   background: "var(--bg-elevated)",
   color: "var(--text-primary)",
-  fontSize: "12px",
+  fontSize: "13px",
   fontFamily: "inherit",
   width: "100%",
   boxSizing: "border-box" as const,
+  outline: "none",
 };
 
-const button = (kind: "primary" | "secondary", disabled = false) => ({
-  padding: "5px 12px",
+/**
+ * The in-row button, at the size the other tables' row actions use
+ * (`meters-tab.tsx`): 11px on a 3px/10px box, so a cell with two of
+ * them still reads as one line of a table rather than a toolbar.
+ */
+const ROW_BUTTON_KINDS = {
+  primary: { border: "none", background: "var(--accent-primary)", color: "#fff" },
+  secondary: {
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--text-secondary)",
+  },
+  danger: {
+    border: "1px solid var(--danger)",
+    background: "transparent",
+    color: "var(--danger)",
+  },
+} as const;
+
+const rowButton = (kind: keyof typeof ROW_BUTTON_KINDS, disabled = false) => ({
+  padding: "3px 10px",
+  fontSize: "11px",
+  fontWeight: 500 as const,
   borderRadius: "var(--radius)",
-  border: kind === "primary" ? "none" : "1px solid var(--border)",
-  background: kind === "primary" ? "var(--accent-primary)" : "transparent",
-  color: kind === "primary" ? "#fff" : "var(--text-secondary)",
-  fontSize: "12px",
-  fontWeight: kind === "primary" ? 500 : 400,
   cursor: disabled ? "not-allowed" : "pointer",
   opacity: disabled ? 0.6 : 1,
   fontFamily: "inherit",
+  ...ROW_BUTTON_KINDS[kind],
+});
+
+const panelButton = (kind: "primary" | "secondary", disabled = false) => ({
+  ...rowButton(kind, disabled),
+  padding: "6px 14px",
+  fontSize: "12px",
 });
 
 export default function TouPeriodsPage() {
   const { canView, canEdit, canCreate } = usePermission("rate_schedules");
 
   const [periods, setPeriods] = useState<Period[]>([]);
+  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -76,6 +105,8 @@ export default function TouPeriodsPage() {
       setLoadError(null);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Could not load the periods");
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -98,6 +129,144 @@ export default function TouPeriodsPage() {
     }
   };
 
+  const columns: Column<Period>[] = [
+    {
+      key: "peakCode",
+      header: "Code",
+      render: (row) => (
+        <span
+          data-testid={`period-${row.peakCode}`}
+          style={{ fontFamily: "monospace", fontSize: "12px", fontWeight: 600 }}
+        >
+          {row.peakCode}
+        </span>
+      ),
+    },
+    {
+      key: "label",
+      header: "Label",
+      render: (row) =>
+        editing?.id === row.id ? (
+          <input
+            aria-label="Period label"
+            style={inputStyle}
+            value={editing.label}
+            onChange={(e) => setEditing({ ...editing, label: e.target.value })}
+          />
+        ) : (
+          <span style={{ fontWeight: 500 }}>{row.label}</span>
+        ),
+    },
+    {
+      key: "sortOrder",
+      header: "Order",
+      render: (row) =>
+        editing?.id === row.id ? (
+          <input
+            aria-label="Display order"
+            type="number"
+            min={0}
+            max={100}
+            style={{ ...inputStyle, width: "72px" }}
+            value={editing.sortOrder}
+            onChange={(e) => setEditing({ ...editing, sortOrder: Number(e.target.value) })}
+          />
+        ) : (
+          <span style={{ fontFamily: "monospace", fontSize: "12px" }}>{row.sortOrder}</span>
+        ),
+    },
+    {
+      key: "usedBy",
+      header: "Used by",
+      /*
+        What makes this row removable or not, said before somebody
+        tries. A published calendar's hours can never be reassigned, so
+        a code they use is permanent for as long as that version is in
+        force.
+      */
+      render: (row) => (
+        <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+          {row.spanCount === 0
+            ? "nothing yet"
+            : `${row.spanCount} ${row.spanCount === 1 ? "span" : "spans"} in ${row.calendarCount} ${row.calendarCount === 1 ? "calendar" : "calendars"}`}
+        </span>
+      ),
+    },
+  ];
+
+  if (canEdit) {
+    columns.push({
+      key: "actions",
+      header: "",
+      /*
+        Stated rather than left to column order: below tablet width
+        `DataTable` renders each row as a card with its values
+        right-aligned in a span, which an input and two buttons do not
+        survive. So the page is read-only on a phone. Every other list
+        hides a column and sends the reader to the row's detail view;
+        this one has no detail view, by design — the row is the editor.
+      */
+      hideBelow: "tablet",
+      render: (row) =>
+        editing?.id === row.id ? (
+          <div style={{ display: "flex", gap: "6px" }}>
+            <button
+              type="button"
+              disabled={busy || editing.label.trim() === ""}
+              style={rowButton("primary", busy || editing.label.trim() === "")}
+              onClick={() =>
+                run(
+                  () =>
+                    apiClient.patch(`/api/v1/tou-periods/${row.id}`, {
+                      label: editing.label,
+                      sortOrder: editing.sortOrder,
+                    }),
+                  "Could not save this period",
+                )
+              }
+            >
+              Save
+            </button>
+            <button type="button" style={rowButton("secondary")} onClick={() => setEditing(null)}>
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: "6px" }}>
+            <button
+              type="button"
+              aria-label={`Rename ${row.peakCode}`}
+              style={rowButton("secondary")}
+              onClick={() =>
+                setEditing({ id: row.id, label: row.label, sortOrder: row.sortOrder })
+              }
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              aria-label={`Remove ${row.peakCode}`}
+              disabled={busy || row.spanCount > 0}
+              title={
+                row.spanCount > 0
+                  ? "Hours are charged at this code. Reassign them first."
+                  : undefined
+              }
+              style={rowButton("danger", busy || row.spanCount > 0)}
+              onClick={() =>
+                run(
+                  () => apiClient.delete(`/api/v1/tou-periods/${row.id}`),
+                  "Could not remove this period",
+                )
+              }
+            >
+              Remove
+            </button>
+          </div>
+        ),
+    });
+  }
+
   if (!canView) return <AccessDenied />;
   if (loadError) {
     return (
@@ -107,11 +276,19 @@ export default function TouPeriodsPage() {
     );
   }
 
+  const addDisabled =
+    busy || !adding || adding.peakCode.trim() === "" || adding.label.trim() === "";
+
   return (
-    <div style={{ maxWidth: "820px", display: "flex", flexDirection: "column", gap: "16px" }}>
+    <div>
       <PageHeader
         title="Periods"
         subtitle={`${periods.length} price ${periods.length === 1 ? "tier" : "tiers"} this utility's tariffs charge at`}
+        action={
+          canCreate && !adding
+            ? { label: "Add a period", onClick: () => setAdding({ peakCode: "", label: "" }) }
+            : undefined
+        }
       />
 
       <PageDescription storageKey="tou-periods">
@@ -136,6 +313,7 @@ export default function TouPeriodsPage() {
             border: "1px solid var(--danger)",
             borderRadius: "var(--radius)",
             padding: "10px 12px",
+            marginBottom: "16px",
             fontSize: "12px",
             color: "var(--danger)",
             whiteSpace: "pre-wrap",
@@ -145,220 +323,118 @@ export default function TouPeriodsPage() {
         </div>
       )}
 
-      <div
-        style={{
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius)",
-          padding: "14px",
-          background: "var(--bg-card)",
-          display: "flex",
-          flexDirection: "column",
-          gap: "12px",
-        }}
-      >
-        <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ textAlign: "left", color: "var(--text-muted)" }}>
-              <th style={{ padding: "2px 4px 6px 0", fontWeight: 400, width: "22%" }}>Code</th>
-              <th style={{ padding: "2px 4px 6px", fontWeight: 400, width: "28%" }}>Label</th>
-              <th style={{ padding: "2px 4px 6px", fontWeight: 400, width: "10%" }}>Order</th>
-              <th style={{ padding: "2px 4px 6px", fontWeight: 400 }}>Used by</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {periods.map((period) => {
-              const edit = editing?.id === period.id ? editing : null;
-              return (
-                <tr key={period.id} data-testid={`period-${period.peakCode}`}>
-                  <td style={{ padding: "4px 4px 4px 0", fontFamily: "monospace" }}>
-                    {period.peakCode}
-                  </td>
-                  <td style={{ padding: "4px" }}>
-                    {edit ? (
-                      <input
-                        aria-label="Period label"
-                        style={inputStyle}
-                        value={edit.label}
-                        onChange={(e) => setEditing({ ...edit, label: e.target.value })}
-                      />
-                    ) : (
-                      period.label
-                    )}
-                  </td>
-                  <td style={{ padding: "4px" }}>
-                    {edit ? (
-                      <input
-                        aria-label="Display order"
-                        type="number"
-                        min={0}
-                        max={100}
-                        style={inputStyle}
-                        value={edit.sortOrder}
-                        onChange={(e) =>
-                          setEditing({ ...edit, sortOrder: Number(e.target.value) })
-                        }
-                      />
-                    ) : (
-                      period.sortOrder
-                    )}
-                  </td>
-                  <td style={{ padding: "4px", color: "var(--text-muted)" }}>
-                    {/*
-                      What makes this row removable or not, said before
-                      somebody tries. A published calendar's hours can
-                      never be reassigned, so a code they use is
-                      permanent for as long as that version is in force.
-                    */}
-                    {period.spanCount === 0
-                      ? "nothing yet"
-                      : `${period.spanCount} ${period.spanCount === 1 ? "span" : "spans"} in ${period.calendarCount} ${period.calendarCount === 1 ? "calendar" : "calendars"}`}
-                  </td>
-                  <td style={{ padding: "4px 0 4px 4px", textAlign: "right", whiteSpace: "nowrap" }}>
-                    {canEdit &&
-                      (edit ? (
-                        <>
-                          <button
-                            type="button"
-                            disabled={busy || edit.label.trim() === ""}
-                            style={button("primary", busy || edit.label.trim() === "")}
-                            onClick={() =>
-                              run(
-                                () =>
-                                  apiClient.patch(`/api/v1/tou-periods/${period.id}`, {
-                                    label: edit.label,
-                                    sortOrder: edit.sortOrder,
-                                  }),
-                                "Could not save this period",
-                              )
-                            }
-                          >
-                            Save
-                          </button>{" "}
-                          <button
-                            type="button"
-                            style={button("secondary")}
-                            onClick={() => setEditing(null)}
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            aria-label={`Rename ${period.peakCode}`}
-                            style={button("secondary")}
-                            onClick={() =>
-                              setEditing({
-                                id: period.id,
-                                label: period.label,
-                                sortOrder: period.sortOrder,
-                              })
-                            }
-                          >
-                            Edit
-                          </button>{" "}
-                          <button
-                            type="button"
-                            aria-label={`Remove ${period.peakCode}`}
-                            disabled={busy || period.spanCount > 0}
-                            title={
-                              period.spanCount > 0
-                                ? "Hours are charged at this code. Reassign them first."
-                                : undefined
-                            }
-                            style={{
-                              ...button("secondary", busy || period.spanCount > 0),
-                              color: "var(--danger)",
-                            }}
-                            onClick={() =>
-                              run(
-                                () => apiClient.delete(`/api/v1/tou-periods/${period.id}`),
-                                "Could not remove this period",
-                              )
-                            }
-                          >
-                            Remove
-                          </button>
-                        </>
-                      ))}
-                  </td>
-                </tr>
-              );
-            })}
-
-            {adding && (
-              <tr data-testid="new-period">
-                <td style={{ padding: "4px 4px 4px 0" }}>
-                  <input
-                    aria-label="New period code"
-                    style={{ ...inputStyle, fontFamily: "monospace" }}
-                    value={adding.peakCode}
-                    placeholder="super_off_peak"
-                    onChange={(e) => setAdding({ ...adding, peakCode: e.target.value })}
-                  />
-                </td>
-                <td style={{ padding: "4px" }}>
-                  <input
-                    aria-label="New period label"
-                    style={inputStyle}
-                    value={adding.label}
-                    placeholder="Super off-peak"
-                    onChange={(e) => setAdding({ ...adding, label: e.target.value })}
-                  />
-                </td>
-                <td colSpan={2} style={{ padding: "4px", color: "var(--text-muted)" }}>
-                  Lower case, digits and underscores. The code cannot be changed later.
-                </td>
-                <td style={{ padding: "4px 0 4px 4px", textAlign: "right", whiteSpace: "nowrap" }}>
-                  <button
-                    type="button"
-                    disabled={
-                      busy || adding.peakCode.trim() === "" || adding.label.trim() === ""
-                    }
-                    style={button(
-                      "primary",
-                      busy || adding.peakCode.trim() === "" || adding.label.trim() === "",
-                    )}
-                    onClick={() =>
-                      run(
-                        () =>
-                          apiClient.post("/api/v1/tou-periods", {
-                            peakCode: adding.peakCode.trim(),
-                            label: adding.label.trim(),
-                          }),
-                        "Could not add this period",
-                      )
-                    }
-                  >
-                    Add
-                  </button>{" "}
-                  <button
-                    type="button"
-                    style={button("secondary")}
-                    onClick={() => setAdding(null)}
-                  >
-                    Cancel
-                  </button>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-
-        {canCreate && !adding && (
-          <div>
-            <button
-              type="button"
-              style={button("secondary")}
-              onClick={() => setAdding({ peakCode: "", label: "" })}
-            >
-              Add a period
-            </button>
+      {adding && (
+        <div
+          data-testid="new-period"
+          style={{
+            background: "var(--bg-card)",
+            border: "1px solid var(--accent-primary)",
+            borderRadius: "var(--radius)",
+            padding: "20px",
+            marginBottom: "16px",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "14px",
+              fontWeight: 600,
+              color: "var(--text-primary)",
+              marginBottom: "4px",
+            }}
+          >
+            Add a period
           </div>
-        )}
-      </div>
+          <div style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "16px" }}>
+            Lower case, digits and underscores. The code cannot be changed later.
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr) auto",
+              gap: "12px",
+              alignItems: "flex-end",
+            }}
+          >
+            <div>
+              <div
+                style={{
+                  fontSize: "11px",
+                  color: "var(--text-muted)",
+                  marginBottom: "4px",
+                  fontWeight: 500,
+                }}
+              >
+                Code *
+              </div>
+              <input
+                aria-label="New period code"
+                style={{ ...inputStyle, fontFamily: "monospace" }}
+                value={adding.peakCode}
+                placeholder="super_off_peak"
+                onChange={(e) => setAdding({ ...adding, peakCode: e.target.value })}
+              />
+            </div>
+            <div>
+              <div
+                style={{
+                  fontSize: "11px",
+                  color: "var(--text-muted)",
+                  marginBottom: "4px",
+                  fontWeight: 500,
+                }}
+              >
+                Label *
+              </div>
+              <input
+                aria-label="New period label"
+                style={inputStyle}
+                value={adding.label}
+                placeholder="Super off-peak"
+                onChange={(e) => setAdding({ ...adding, label: e.target.value })}
+              />
+            </div>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button
+                type="button"
+                style={panelButton("secondary")}
+                onClick={() => setAdding(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={addDisabled}
+                style={panelButton("primary", addDisabled)}
+                onClick={() =>
+                  run(
+                    () =>
+                      apiClient.post("/api/v1/tou-periods", {
+                        peakCode: adding.peakCode.trim(),
+                        label: adding.label.trim(),
+                      }),
+                    "Could not add this period",
+                  )
+                }
+              >
+                Add
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/*
+        `DataTable` is generic over `Record<string, unknown>`, because a
+        column with no `render` reads `row[col.key]`. Every column here
+        has one, so the cast gives up nothing — it is the same one
+        `entity-list-page.tsx` makes on behalf of its callers.
+      */}
+      <DataTable
+        columns={columns as unknown as Column<Record<string, unknown>>[]}
+        data={periods as unknown as Record<string, unknown>[]}
+        loading={loading}
+      />
     </div>
   );
 }

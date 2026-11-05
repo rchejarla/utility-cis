@@ -31,20 +31,29 @@ beforeEach(() => {
 
 const renderPage = () => render(<TouPeriodsPage />);
 
+/**
+ * The row a code sits in.
+ *
+ * The rows are `DataTable`'s, so the test id is on the code cell rather
+ * than the `<tr>` — a shared table does not take a per-row attribute,
+ * and it should not grow one for a test. The row is its ancestor, which
+ * is what the label and the counts are asserted against.
+ */
+const rowFor = async (code: string) =>
+  (await screen.findByTestId(`period-${code}`)).closest("tr") as HTMLElement;
+
 describe("reading the list", () => {
   it("shows every period with its code and label", async () => {
     renderPage();
-    await screen.findByTestId("period-off_peak");
-    expect(screen.getByTestId("period-mid_peak").textContent).toMatch(/Mid-peak/);
-    expect(screen.getByTestId("period-peak").textContent).toMatch(/On-peak/);
+    expect((await rowFor("mid_peak")).textContent).toMatch(/Mid-peak/);
+    expect((await rowFor("peak")).textContent).toMatch(/On-peak/);
   });
 
   it("says how much is charged at each, which is what makes one removable", async () => {
     renderPage();
-    await screen.findByTestId("period-off_peak");
 
-    expect(screen.getByTestId("period-off_peak").textContent).toMatch(/15 spans in 2 calendars/);
-    expect(screen.getByTestId("period-mid_peak").textContent).toMatch(/nothing yet/);
+    expect((await rowFor("off_peak")).textContent).toMatch(/15 spans in 2 calendars/);
+    expect((await rowFor("mid_peak")).textContent).toMatch(/nothing yet/);
   });
 
   it("counts the tiers in the subtitle, not the calendars", async () => {
