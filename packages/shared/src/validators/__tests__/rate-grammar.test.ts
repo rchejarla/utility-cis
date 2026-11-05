@@ -75,6 +75,41 @@ describe("quantitySourceSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts a tou_period base naming the period it prices", () => {
+    const result = quantitySourceSchema.safeParse({
+      base: "tou_period",
+      peak_code: "off_peak",
+      transforms: [],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a tou_period base that names no period", () => {
+    /*
+     * The engine throws `tou_period quantity source requires peak_code`
+     * at rating time, which is a bill run failing on a tariff somebody
+     * saved weeks earlier. The schema is where that is cheap.
+     */
+    const result = quantitySourceSchema.safeParse({ base: "tou_period", transforms: [] });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a peak_code on a base that prices no period", () => {
+    /*
+     * `metered` with a `peak_code` reads as a TOU charge and is not
+     * one: the engine ignores the key, and the publish gate counts
+     * only `tou_period` components, so the schedule would look
+     * complete while that charge billed total consumption at the
+     * on-peak price.
+     */
+    const result = quantitySourceSchema.safeParse({
+      base: "metered",
+      peak_code: "peak",
+      transforms: [],
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects an unknown transform type", () => {
     const result = quantitySourceSchema.safeParse({
       base: "metered",

@@ -921,6 +921,7 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | POST | `/api/v1/rate-schedules` | Rate |
 | GET | `/api/v1/rate-schedules/:id` | Rate |
 | POST | `/api/v1/rate-schedules/:id/revise` | Rate |
+| PUT | `/api/v1/rate-schedules/:id/tou-calendar` | Rate (the one field a draft may change without forking a version; refused once published) |
 | GET POST | `/api/v1/season-sets` | Rate (seasons; `rate_schedules` module) |
 | GET PATCH DELETE | `/api/v1/season-sets/:id` | Rate |
 | PUT | `/api/v1/season-sets/:id/seasons` | Rate (whole list — the coverage rule is the list's) |
@@ -1140,7 +1141,7 @@ Clients can pull the document and generate SDKs, contract tests, or API consoles
 | Agreements | `/service-agreements` | Table with status filters |
 | Agreement Detail | `/service-agreements/:id` | Tabs: Overview, Meters, Audit, Attachments; inline editing on overview; Activate/Close status transition buttons (PENDING→ACTIVE→FINAL→CLOSED, no INACTIVE); Add/remove meter assignments on Meters tab; Upload button in tab bar |
 | Rate Schedules | `/rate-schedules` | Table with commodity/type/active filters |
-| Rate Schedule Detail | `/rate-schedules/:id` | Tabs: Overview, Version History, Revise action; contextual tooltips referencing BR-RS rules |
+| Rate Schedule Detail | `/rate-schedules/:id` | Tabs: Overview, Version History, Revise action; contextual tooltips referencing BR-RS rules. Overview names the TOU calendar the tariff is priced against and, while the schedule is a draft, is where it is chosen |
 | Rate Schedule Create | `/rate-schedules/new` | Dynamic form: tier builder for TIERED, JSON for TOU/DEMAND; HelpTooltip on all fields |
 | Seasons | `/season-sets` | Table with status filter; season labels and how many TOU calendars are keyed on each |
 | Season Set Detail | `/season-sets/[id]` | 366-day year bar drawn from the engine's own coverage; month/day rows that may wrap the year; validation by date; publish, which names published TOU calendars keyed on a different set (TOU-SEA-6); read-only once published |

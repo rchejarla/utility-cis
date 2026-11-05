@@ -905,8 +905,11 @@ raw intervals from the same meters. Compression is therefore entirely a
 > not open on a warning about a state nobody caused. Nothing prices it
 > yet; a TOU rate schedule is not seeded.
 >
-> **Still to build:** TOU-UI-1d (the published-version diff), TOU-UI-3's
-> editor half, TOU-UI-4 and TOU-UI-5.
+> **Still to build:** TOU-UI-1d (the published-version diff), TOU-UI-4
+> and TOU-UI-5. With TOU-UI-3 built, the one thing standing between a
+> seeded database and a TOU bill is TOU-UI-4: a meter's registers carry
+> no peak code yet, so the `meter:tou:<meter_id>:<peak_code>` buckets
+> the charges read have nothing to fill them.
 
 ### The calendar editor
 
@@ -1076,7 +1079,37 @@ it is wrong.
   and refuses to publish a schedule whose periods do not cover every
   period in the calendar (or says which are deliberately unpriced).
 
-  *Server side built 2026-11-03; the editor UI is still to come.*
+  *Server side built 2026-11-03; the write path and the editor built
+  2026-11-05.* Between those two dates the gate was **reachable and
+  unsatisfiable**: `createRateScheduleSchema` was `.strict()` without
+  `touCalendarId` and a rate schedule has no PATCH, so nothing could
+  name a calendar — and `quantitySourceSchema` had no `tou_period`
+  base, so the charges that price a period could not be saved either.
+  The engine could rate a TOU bill that no author could enter. Both
+  halves now exist:
+
+  - **The schedule names the calendar.** `touCalendarId` is accepted at
+    create, carried forward by `revise` (and overridable there, which
+    is the usual reason a TOU tariff is revised at all), and settable
+    afterwards through `PUT /api/v1/rate-schedules/:id/tou-calendar`.
+    That is a route of its own rather than a PATCH because the entity
+    deliberately has none: this is the single field a **draft** may
+    change without forking a version, and it is refused once published
+    with the same `SCHEDULE_NOT_EDITABLE` the components answer. It
+    does not require a *published* calendar — TOU-CAL-5 binds the
+    published schedule, and the two are usually authored together, so
+    that stays one check at publish rather than two that can disagree.
+  - **The charge names the period.** `quantitySource.base =
+    "tou_period"` with a `peak_code`, offered in the component editor
+    from the tenant's period list. A `peak_code` on any other base is
+    **refused**, because it reads as a TOU charge and is not one: the
+    engine ignores the key and bills total consumption, and the publish
+    gate counts only `tou_period` components — so the schedule would
+    look complete while every unit billed at the on-peak price. A
+    drift test now pins the editor's offered bases to the grammar's, in
+    both directions; `tou_period` being in one and not the other is
+    exactly how this stayed invisible.
+
   `rate_schedule.tou_calendar_id` is what the schedule references —
   **on the schedule, not on each component**, because the components of
   one tariff share one set of peak hours, and per component two of them

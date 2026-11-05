@@ -14,6 +14,13 @@ interface Commodity {
   name: string;
 }
 
+interface TouCalendar {
+  id: string;
+  name: string;
+  effectiveDate: string;
+  publishedAt?: string | null;
+}
+
 const inputStyle = {
   padding: "8px 12px",
   borderRadius: "var(--radius)",
@@ -35,6 +42,7 @@ export default function NewRateSchedulePage() {
   const router = useRouter();
   const { canCreate } = usePermission("rate_schedules");
   const [commodities, setCommodities] = useState<Commodity[]>([]);
+  const [calendars, setCalendars] = useState<TouCalendar[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,12 +54,17 @@ export default function NewRateSchedulePage() {
     expirationDate: "",
     description: "",
     regulatoryRef: "",
+    touCalendarId: "",
   });
 
   useEffect(() => {
     apiClient
       .get<{ data: Commodity[] }>("/api/v1/commodities")
       .then((res) => setCommodities(res.data ?? []))
+      .catch(console.error);
+    apiClient
+      .get<{ data: TouCalendar[] }>("/api/v1/tou-calendars")
+      .then((res) => setCalendars(res.data ?? []))
       .catch(console.error);
   }, []);
 
@@ -73,6 +86,7 @@ export default function NewRateSchedulePage() {
       if (form.expirationDate) body.expirationDate = form.expirationDate;
       if (form.description) body.description = form.description;
       if (form.regulatoryRef) body.regulatoryRef = form.regulatoryRef;
+      if (form.touCalendarId) body.touCalendarId = form.touCalendarId;
 
       await apiClient.post("/api/v1/rate-schedules", body);
       router.push("/rate-schedules");
@@ -156,6 +170,30 @@ export default function NewRateSchedulePage() {
               />
             </FormField>
           </div>
+
+          {/*
+            Only for a time-of-use tariff, and it can be named later
+            from the schedule itself — the publish gate is what insists,
+            once there is a charge pricing a period.
+          */}
+          <FormField
+            label="TOU Calendar"
+            hint="Only for time-of-use tariffs. It says which hours each period covers; charges name the periods. Can be set later."
+          >
+            <select
+              style={inputStyle}
+              value={form.touCalendarId}
+              onChange={(e) => set("touCalendarId", e.target.value)}
+            >
+              <option value="">None — this tariff is not time-of-use</option>
+              {calendars.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} — from {c.effectiveDate?.slice(0, 10)}
+                  {c.publishedAt ? "" : " (draft)"}
+                </option>
+              ))}
+            </select>
+          </FormField>
 
           <FormField label="Description">
             <textarea

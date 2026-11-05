@@ -39,6 +39,16 @@ interface RateSchedule {
   supersededById?: string | null;
   supersedes?: { id: string; version: number; name: string; effectiveDate: string };
   chain?: ChainEntry[];
+  touCalendarId?: string | null;
+  /** Fetched beside the schedule — there is no Prisma relation to include. */
+  touCalendar?: TouCalendar | null;
+}
+
+interface TouCalendar {
+  id: string;
+  name: string;
+  effectiveDate: string;
+  publishedAt?: string | null;
 }
 
 interface AuditEntry {
@@ -59,6 +69,17 @@ const fieldStyle = {
 };
 const labelStyle = { fontSize: "12px", color: "var(--text-muted)", fontWeight: "500" as const };
 const valueStyle = { fontSize: "13px", color: "var(--text-primary)" };
+const linkButtonStyle = {
+  background: "none",
+  border: "none",
+  color: "var(--accent-primary)",
+  fontSize: "13px",
+  cursor: "pointer",
+  padding: 0,
+  textDecoration: "underline",
+  fontFamily: "inherit",
+  textAlign: "left" as const,
+};
 
 export default function RateScheduleDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -76,6 +97,10 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingComponent, setEditingComponent] = useState<RateComponent | null>(null);
   const [publishing, setPublishing] = useState(false);
+  const [calendars, setCalendars] = useState<TouCalendar[]>([]);
+  /** The calendar picked but not yet saved; `null` means "same as stored". */
+  const [pickedCalendarId, setPickedCalendarId] = useState<string | null>(null);
+  const [savingCalendar, setSavingCalendar] = useState(false);
 
   const isEditable = !!rs && !rs.publishedAt && !rs.supersededById;
   // One derivation, shared with the list — see rate-schedule-lifecycle.
@@ -113,6 +138,45 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
         .catch(console.error);
     }
   }, [activeTab, id]);
+
+  /*
+   * Only a draft can be re-pointed, so only a draft needs the list.
+   * `isEditable` is the same rule the components obey and the server
+   * enforces — a published schedule's hours are part of what was
+   * approved.
+   */
+  useEffect(() => {
+    if (!isEditable || !canEdit || calendars.length > 0) return;
+    apiClient
+      .get<{ data: TouCalendar[] }>("/api/v1/tou-calendars")
+      .then((res) => setCalendars(res.data ?? []))
+      .catch(console.error);
+  }, [isEditable, canEdit, calendars.length]);
+
+  const handleSaveCalendar = async () => {
+    if (pickedCalendarId === null) return;
+    setSavingCalendar(true);
+    try {
+      await apiClient.put(`/api/v1/rate-schedules/${id}/tou-calendar`, {
+        touCalendarId: pickedCalendarId === "" ? null : pickedCalendarId,
+      });
+      /*
+       * Re-read rather than use what the PUT returned: the detail GET
+       * is what assembles `touCalendar` beside the row, so patching
+       * state from the response would leave the name blank while the
+       * id was right.
+       */
+      setRs(await apiClient.get<RateSchedule>(`/api/v1/rate-schedules/${id}`));
+      setPickedCalendarId(null);
+      toast("TOU calendar saved", "success");
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message.replace(/^API error \d+:\s*/, "") : "Could not save";
+      toast(message, "error");
+    } finally {
+      setSavingCalendar(false);
+    }
+  };
 
   const handleRevise = async () => {
     if (!rs || !reviseDate) return;
@@ -353,6 +417,87 @@ export default function RateScheduleDetailPage({ params }: { params: Promise<{ i
             <div style={fieldStyle}>
               <span style={labelStyle}>Expiration Date</span>
               <span style={valueStyle}>{rs.expirationDate?.slice(0, 10) ?? "None"}</span>
+            </div>
+            <div style={fieldStyle}>
+              <span style={labelStyle}>TOU Calendar</span>
+              <div data-testid="tou-calendar-field">
+                {rs.touCalendar ? (
+                  <button
+                    onClick={() => router.push(`/tou-calendars/${rs.touCalendar!.id}`)}
+                    style={linkButtonStyle}
+                  >
+                    {rs.touCalendar.name} — from{" "}
+                    {rs.touCalendar.effectiveDate?.slice(0, 10)}
+                    {rs.touCalendar.publishedAt ? "" : " (draft)"}
+                  </button>
+                ) : (
+                  <span style={{ ...valueStyle, color: "var(--text-muted)" }}>
+                    None — this tariff is not time-of-use
+                  </span>
+                )}
+
+                {isEditable && canEdit && (
+                  <div
+                    style={{ display: "flex", gap: "8px", marginTop: "8px", flexWrap: "wrap" }}
+                  >
+                    <select
+                      aria-label="TOU calendar"
+                      value={pickedCalendarId ?? rs.touCalendarId ?? ""}
+                      onChange={(e) => setPickedCalendarId(e.target.value)}
+                      style={{
+                        padding: "6px 10px",
+                        borderRadius: "var(--radius)",
+                        border: "1px solid var(--border)",
+                        background: "var(--bg-elevated)",
+                        color: "var(--text-primary)",
+                        fontSize: "12px",
+                        fontFamily: "inherit",
+                        maxWidth: "340px",
+                      }}
+                    >
+                      <option value="">None — this tariff is not time-of-use</option>
+                      {calendars.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} — from {c.effectiveDate?.slice(0, 10)}
+                          {c.publishedAt ? "" : " (draft)"}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={handleSaveCalendar}
+                      disabled={savingCalendar || pickedCalendarId === null}
+                      style={{
+                        padding: "6px 14px",
+                        borderRadius: "var(--radius)",
+                        border: "none",
+                        background: "var(--accent-primary)",
+                        color: "#fff",
+                        fontSize: "12px",
+                        fontWeight: 500,
+                        fontFamily: "inherit",
+                        cursor:
+                          savingCalendar || pickedCalendarId === null
+                            ? "not-allowed"
+                            : "pointer",
+                        opacity: savingCalendar || pickedCalendarId === null ? 0.6 : 1,
+                      }}
+                    >
+                      {savingCalendar ? "Saving..." : "Save"}
+                    </button>
+                  </div>
+                )}
+
+                {/*
+                  Said where it is decided, not only when Publish
+                  refuses: the calendar is part of what gets approved,
+                  so after publishing it moves only by revising.
+                */}
+                <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "6px" }}>
+                  {isEditable
+                    ? "Charges priced by TOU period name the periods; this says which hours each one covers. Publishing is refused until every period this calendar uses has a charge."
+                    : "Part of what was approved — revise the schedule to price against different hours."}
+                </div>
+              </div>
             </div>
             {rs.description && (
               <div style={fieldStyle}>

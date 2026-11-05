@@ -57,6 +57,13 @@ export const EVENT_TYPES = {
   RATE_SCHEDULE_REVISED: "rate_schedule.revised",
   RATE_SCHEDULE_PUBLISHED: "rate_schedule.published",
   /**
+   * The one field of a draft schedule that can change without forking a
+   * version (spec 26, TOU-UI-3), so it gets its own event rather than a
+   * generic update on an otherwise immutable entity: which hours a
+   * tariff was priced against is what a regulator asks about.
+   */
+  RATE_SCHEDULE_TOU_CALENDAR_SET: "rate_schedule.tou_calendar_set",
+  /**
    * A TOU calendar decides what a bill costs as surely as a price does,
    * so its lifecycle is audited the way a rate schedule's is. The
    * content edits get their own type rather than one `updated`, because
