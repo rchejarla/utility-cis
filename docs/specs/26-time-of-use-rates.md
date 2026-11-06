@@ -810,10 +810,47 @@ raw intervals from the same meters. Compression is therefore entirely a
 
   **Still open:** the preview cannot predict a roll-up failure without
   doing the roll-up, so an interval gap is found mid-run rather than at
-  preview. A cheap coverage check — expected interval count for the
-  window against the actual, plus a `missing`-quality count, both
-  single aggregates — would move most of those forward into the
-  pre-run check. Not built.
+  preview. `findCoverageProblems` is pure and takes only
+  `(intervalStart, lengthMinutes)` rows, so the pre-run check can run
+  the same test over a `select` of those two columns — which is the
+  shape of the remaining work, and is not built.
+- **TOU-INT-4b (Must).** **Intervals must tile the period**
+  (`lib/interval-coverage.ts`, built 2026-11-05). Each interval has to
+  start exactly where the previous one ended, the first at the period's
+  start and the last at its end.
+
+  The roll-up's other three checks — a `missing` reading, an interval
+  that cannot be placed, one straddling a period change — are all
+  properties of a row that **exists**. None of them can see an interval
+  that was never delivered, so a meter that lost three hours to a comms
+  outage or a truncated import classified its remaining 741 rows,
+  objected to nothing, and produced buckets three hours short: a bill
+  undercharged, reading as an ordinary quiet month. The `tou_registers`
+  migration had already said both cases should behave alike — a gap
+  "reads differently from one nobody has noticed, and TOU-GAP-1 refuses
+  to bill either as off-peak" — and only the self-reported half was
+  built. This is TOU-GAP-1 made true for the silent half.
+
+  Overlaps are refused too. The same energy counted twice is as wrong
+  as energy counted never, and the table's partial unique indexes
+  cannot catch it: a 30-minute row underneath a 60-minute one is a
+  distinct key. So is an interval running past the period's end, which
+  would charge this period for energy used in the next.
+
+  **Tiling, not counting, and the reason is daylight saving.** The
+  obvious check is `window minutes ÷ interval length` against the row
+  count, and it is wrong three ways: it needs the meter's interval
+  length, it needs to know when a meter changed length mid-period, and
+  a local day is 23 or 25 hours twice a year — so it would invent a gap
+  every spring and miss a real one every autumn, on exactly the days a
+  TOU calendar matters most. Asking whether each interval starts where
+  the last ended is arithmetic on UTC instants, which neither skip nor
+  repeat. Pinned by unit tests over both 2026 America/Denver
+  transitions, and by one that still finds a real gap on a 25-hour day.
+
+  Worth noting what the seeded sample would **not** have caught: 744
+  intervals is exactly 31 × 24, so October 2026 contains no transition
+  at all.
 - **TOU-INT-5 (Must).** Reconciliation: for a meter with both a register
   read and intervals, the sum of intervals between two register reads
   matches the register's consumption within a tenant tolerance (default

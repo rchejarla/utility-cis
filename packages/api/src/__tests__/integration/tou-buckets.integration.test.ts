@@ -401,6 +401,62 @@ describe("an interval meter", () => {
   });
 });
 
+describe("an interval meter with holes in its data", () => {
+  /*
+   * The wiring for `findCoverageProblems`, whose arithmetic is unit
+   * tested. What matters here is that a gap reaches the same refusal
+   * as a `missing` reading and writes nothing — the migration always
+   * said both should behave alike, and only the self-reported half was
+   * built.
+   */
+  it("refuses a month with hours simply absent, and says how many minutes", async () => {
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+    await asPlatform(() =>
+      prismaImports.prisma.meterReadInterval.deleteMany({
+        where: {
+          meterId: f.fix.meterId,
+          intervalStart: {
+            gte: new Date(PERIOD.startDate.getTime() + 10 * 3_600_000),
+            lt: new Date(PERIOD.startDate.getTime() + 13 * 3_600_000),
+          },
+        },
+      }),
+    );
+
+    const result = await rollUp(f);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.problems.join(" ")).toMatch(/180 minutes/);
+    expect(result.problems.join(" ")).toMatch(/undercharge/i);
+  });
+
+  it("writes no buckets at all when the data has a hole", async () => {
+    // Not "bill what arrived": that bill is short by the missing hours
+    // and reads as an ordinary quiet month.
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+    await asPlatform(() =>
+      prismaImports.prisma.meterReadInterval.deleteMany({
+        where: {
+          meterId: f.fix.meterId,
+          intervalStart: { gte: new Date(PERIOD.startDate.getTime() + 10 * 3_600_000) },
+        },
+      }),
+    );
+
+    await rollUp(f);
+
+    const written = await asPlatform(() =>
+      prismaImports.prisma.meterRead.findMany({
+        where: { meterId: f.fix.meterId, peakCode: { not: null } },
+      }),
+    );
+    expect(written).toHaveLength(0);
+  });
+});
+
 describe("a register meter", () => {
   it("stamps each read with the period its register counts", async () => {
     /*

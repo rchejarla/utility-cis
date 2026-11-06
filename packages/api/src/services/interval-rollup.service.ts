@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { loadTouCalendarById } from "../lib/rate-engine-loaders/load-tou-calendar.js";
+import { findCoverageProblems } from "../lib/interval-coverage.js";
 import { peakCodesUsedBy, resolvePeak } from "../lib/rate-engine/tou-calendar.js";
 import { toLocalMoment } from "../lib/rate-engine/tou-clock.js";
 
@@ -105,6 +106,17 @@ export async function rollUpIntervals(args: RollUpArgs): Promise<RollUpResult> {
   for (const code of peakCodesUsedBy(calendar.definition)) {
     totals.set(code, { sum: 0, intervals: 0 });
   }
+
+  /*
+   * Does the data cover the period at all?
+   *
+   * First, because every check below is a property of a row that
+   * exists and none of them can see an interval that was never
+   * delivered. Without this the loop classified the 741 rows it was
+   * given, objected to nothing, and produced buckets three hours
+   * short — a bill undercharged with nothing saying so.
+   */
+  problems.push(...findCoverageProblems(intervals, period));
 
   for (const row of intervals) {
     const at = row.intervalStart.toISOString();
