@@ -322,6 +322,79 @@ describe("an interval meter", () => {
     expect(rows.some((r) => Number(r.consumption) > 0)).toBe(true);
   });
 
+  /*
+   * What kind of read a bucket is (spec 26, TOU-GAP-2 step 4).
+   *
+   * `readType` was hardcoded `AMI` — which is a *source*, and
+   * `readSource` already said it. So the column that says whether a
+   * figure is measured or estimated said neither, and "a bill
+   * containing any estimate says so" had nothing to read.
+   */
+  it("stamps an interval-derived bucket ACTUAL, not with its source", async () => {
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+
+    await rollUp(f);
+
+    const rows = await asPlatform(() =>
+      prismaImports.prisma.meterRead.findMany({
+        where: { meterId: f.fix.meterId },
+        select: { readType: true, readSource: true },
+      }),
+    );
+    expect(rows.map((r) => r.readType)).toEqual(["ACTUAL", "ACTUAL", "ACTUAL"]);
+    // The source is still AMI, and is where that belongs.
+    expect(rows.map((r) => r.readSource)).toEqual(["AMI", "AMI", "AMI"]);
+  });
+
+  it("says a bucket is an estimate when one of its intervals is", async () => {
+    /*
+     * Per bucket, not per read event: an estimated hour in the on-peak
+     * window makes the on-peak figure an estimate and leaves the
+     * off-peak one measured. Stamping the whole event would overstate
+     * it, and a customer disputing an on-peak charge is owed the
+     * narrower truth.
+     */
+    const f = await makeFixture();
+    await seedHourlyIntervals(f, { at: "2026-07-01T23:00:00.000Z", quality: "estimated" });
+
+    await rollUp(f);
+
+    const rows = await asPlatform(() =>
+      prismaImports.prisma.meterRead.findMany({
+        where: { meterId: f.fix.meterId },
+        select: { peakCode: true, readType: true },
+        orderBy: { peakCode: "asc" },
+      }),
+    );
+    expect(rows).toEqual([
+      { peakCode: "mid_peak", readType: "ACTUAL" },
+      { peakCode: "off_peak", readType: "ACTUAL" },
+      { peakCode: "peak", readType: "ESTIMATED" },
+    ]);
+  });
+
+  it("calls an edited interval measured, because somebody read the meter", async () => {
+    /*
+     * `edited` is a real value a person corrected, not a figure nobody
+     * took — so it is ACTUAL. `CORRECTED` would be wrong: that means a
+     * read row that supersedes another, with `correctsReadId` set, and
+     * there is no such row here.
+     */
+    const f = await makeFixture();
+    await seedHourlyIntervals(f, { at: "2026-07-01T23:00:00.000Z", quality: "edited" });
+
+    await rollUp(f);
+
+    const peak = await asPlatform(() =>
+      prismaImports.prisma.meterRead.findFirstOrThrow({
+        where: { meterId: f.fix.meterId, peakCode: "peak" },
+        select: { readType: true },
+      }),
+    );
+    expect(peak.readType).toBe("ACTUAL");
+  });
+
   it("answers the rating keys a TOU charge reads", async () => {
     // The whole point: the engine asks `meter:tou:<meter>:<code>` and
     // does not care which kind of meter answered.
@@ -1051,6 +1124,30 @@ describe("the coverage sweep's exceptions", () => {
     expect(rows[0]!.status).toBe("accepted");
     expect(second.exceptionsOpened).toBe(0);
     expect(second.exceptionsUpdated).toBe(0);
+  });
+
+  it("opens a missing_reading exception for a value the meter never took", async () => {
+    /*
+     * The other half of TOU-GAP-1, and the half tiling cannot see: the
+     * row is there and covers its minutes, and says the meter had no
+     * value for it. A different problem with a different answer — a
+     * hole means chase the data, this means somebody has to decide
+     * whether to estimate.
+     */
+    const f = await makeFixture();
+    await seedHourlyIntervals(f, { at: "2026-07-03T12:00:00.000Z", quality: "missing" });
+    await configureTenant();
+
+    await sweep();
+
+    const rows = await exceptions();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: "missing_reading",
+      status: "open",
+      minutesAffected: 60,
+    });
+    expect(rows[0]!.windowStart.toISOString()).toBe("2026-07-03T06:00:00.000Z");
   });
 
   it("tells a gap and an overrun on the same day apart", async () => {

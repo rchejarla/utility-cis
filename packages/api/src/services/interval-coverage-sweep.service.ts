@@ -28,7 +28,11 @@ import { intervalCoverageSettings, DEFAULT_RUN_HOUR_LOCAL } from "@utility-cis/s
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { localHour } from "../lib/iana-tz.js";
-import { findCoverageProblems, type CoverageProblem } from "../lib/interval-coverage.js";
+import {
+  findCoverageProblems,
+  findMissingReadings,
+  type CoverageProblem,
+} from "../lib/interval-coverage.js";
 import { groupCoverageFindings } from "../lib/meter-data-exception.js";
 import { flagDataExceptions } from "./meter-data-exception.service.js";
 import { windowsToCheck, type CoverageWindow } from "../lib/coverage-windows.js";
@@ -119,13 +123,22 @@ async function sweepTenant(
     const rows = await prisma.meterReadInterval.findMany({
       where: { utilityId, meterId: { in: chunk }, intervalStart: { gte: rangeStart, lt: rangeEnd } },
       orderBy: [{ meterId: "asc" }, { intervalStart: "asc" }],
-      select: { meterId: true, intervalStart: true, lengthMinutes: true },
+      // `quality` because a row that exists can still say the meter had
+      // no value for it, which tiling is satisfied by and should be.
+      select: { meterId: true, intervalStart: true, lengthMinutes: true, quality: true },
     });
 
-    const byMeter = new Map<string, Array<{ intervalStart: Date; lengthMinutes: number }>>();
+    const byMeter = new Map<
+      string,
+      Array<{ intervalStart: Date; lengthMinutes: number; quality: string }>
+    >();
     for (const r of rows) {
       const list = byMeter.get(r.meterId) ?? [];
-      list.push({ intervalStart: r.intervalStart, lengthMinutes: r.lengthMinutes });
+      list.push({
+        intervalStart: r.intervalStart,
+        lengthMinutes: r.lengthMinutes,
+        quality: r.quality,
+      });
       byMeter.set(r.meterId, list);
     }
 
@@ -145,7 +158,16 @@ async function sweepTenant(
         );
         if (inWindow.length === 0) continue;
 
-        const problems = findCoverageProblems(inWindow, window);
+        /*
+         * Two questions over the same rows: does the series cover the
+         * day, and did the meter have a value for each interval in it.
+         * Both produce the same problem shape, so an exception is keyed
+         * and summed the same way whichever found it.
+         */
+        const problems = [
+          ...findCoverageProblems(inWindow, window),
+          ...findMissingReadings(inWindow),
+        ];
         if (problems.length === 0) continue;
 
         findings.push({

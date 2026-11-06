@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { findCoverageProblems } from "../interval-coverage.js";
+import { findCoverageProblems, findMissingReadings } from "../interval-coverage.js";
 
 /**
  * Do a meter's intervals tile the period?
@@ -174,6 +174,57 @@ describe("interval coverage", () => {
     ];
 
     expect(findCoverageProblems(rows, period)).toEqual([]);
+  });
+});
+
+/**
+ * A reading the meter did not take (spec 26, TOU-GAP-1).
+ *
+ * The other half of missing data, and the half that is *not* a hole in
+ * the series: the row is there and says `missing`, which the migration
+ * called "a gap the utility knows about reads differently from one
+ * nobody has noticed". Tiling cannot see it — the interval exists and
+ * covers its minutes — so it is a separate question over the same rows.
+ */
+describe("missing readings", () => {
+  const quality = (q: string) => ({ quality: q });
+
+  function series(qualities: string[]) {
+    return qualities.map((q, i) => ({
+      intervalStart: new Date(new Date("2026-07-01T06:00:00.000Z").getTime() + i * HOUR),
+      lengthMinutes: 60,
+      ...quality(q),
+    }));
+  }
+
+  it("says nothing when every interval has a value", () => {
+    expect(findMissingReadings(series(["actual", "actual", "edited"]))).toEqual([]);
+  });
+
+  it("reports a run of missing readings once, with the minutes it covers", () => {
+    const problems = findMissingReadings(
+      series(["actual", "missing", "missing", "missing", "actual"]),
+    );
+
+    expect(problems).toEqual([
+      {
+        kind: "missing_reading",
+        startsAt: new Date("2026-07-01T07:00:00.000Z"),
+        minutes: 180,
+        message: expect.stringContaining("no value"),
+      },
+    ]);
+  });
+
+  it("keeps two separate runs apart, so the detail says where each was", () => {
+    const problems = findMissingReadings(
+      series(["missing", "actual", "actual", "missing", "missing"]),
+    );
+
+    expect(problems.map((p) => [p.startsAt.toISOString(), p.minutes])).toEqual([
+      ["2026-07-01T06:00:00.000Z", 60],
+      ["2026-07-01T09:00:00.000Z", 120],
+    ]);
   });
 });
 

@@ -30,13 +30,17 @@ export interface CoveredInterval {
 }
 
 /**
- * The three ways intervals fail to tile a window.
+ * Why a window's intervals cannot be billed as they stand.
  *
- * A subset of `meter_data_exception.kind`, which also has
- * `missing_reading` — a property of a row that exists, found by the
- * roll-up's quality check rather than by tiling.
+ * The first three are failures to **tile**: the series does not cover
+ * the window, or covers part of it twice. The fourth is a property of a
+ * row that is there — the meter reported no value for it — which tiling
+ * cannot see, because the interval exists and covers its minutes.
+ *
+ * The same vocabulary as `meter_data_exception.kind`, so a problem
+ * becomes a row without translation.
  */
-export type CoverageProblemKind = "gap" | "overlap" | "overrun";
+export type CoverageProblemKind = "gap" | "overlap" | "overrun" | "missing_reading";
 
 /**
  * One problem, as fields rather than only as a sentence.
@@ -126,6 +130,61 @@ export function findCoverageProblems(
         "period, so this period would be charged for energy used in the next one.",
     });
   }
+
+  return problems;
+}
+
+/** An interval with the quality the meter or an import gave it. */
+export interface QualifiedInterval extends CoveredInterval {
+  quality: string;
+}
+
+/**
+ * Every run of intervals the meter reported no value for.
+ *
+ * A **separate question over the same rows**, not part of tiling: a
+ * `missing` row covers its minutes, so `findCoverageProblems` is
+ * satisfied by it and should be — the two failures have different
+ * answers. A hole means chase the data that never arrived; a `missing`
+ * reading means the meter itself said it had none, which an estimate
+ * may be the only honest way out of.
+ *
+ * Consecutive missing intervals coalesce into one problem, for the same
+ * reason a gap is one problem rather than one per absent interval: a
+ * day of 15-minute data gone is 96 rows and one fact.
+ *
+ * `intervals` must be sorted by `intervalStart`, as above.
+ */
+export function findMissingReadings(intervals: QualifiedInterval[]): CoverageProblem[] {
+  const problems: CoverageProblem[] = [];
+  let run: { startsAt: Date; minutes: number } | null = null;
+
+  const close = () => {
+    if (!run) return;
+    problems.push({
+      kind: "missing_reading",
+      startsAt: run.startsAt,
+      minutes: run.minutes,
+      message:
+        `${at(run.startsAt.getTime())}: the meter reported no value for the ` +
+        `${run.minutes} minutes from here. Billing them as zero would undercharge, ` +
+        "and an estimate is a decision somebody has to make.",
+    });
+    run = null;
+  };
+
+  for (const row of intervals) {
+    if (row.quality !== "missing") {
+      close();
+      continue;
+    }
+    if (run) {
+      run.minutes += row.lengthMinutes;
+    } else {
+      run = { startsAt: row.intervalStart, minutes: row.lengthMinutes };
+    }
+  }
+  close();
 
   return problems;
 }

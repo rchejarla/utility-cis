@@ -86,7 +86,16 @@ export async function rollUpIntervals(args: RollUpArgs): Promise<RollUpResult> {
 
   const problems: string[] = [];
   /** peakCode → [sum, count]. A Map keeps the calendar's own codes. */
-  const totals = new Map<string, { sum: number; intervals: number }>();
+  /**
+   * Per peak code: the sum, how many intervals made it, and how many of
+   * those were estimates.
+   *
+   * `estimated` is counted per bucket rather than per read event, so an
+   * estimated hour inside the on-peak window makes the on-peak figure
+   * an estimate and leaves the off-peak one measured. It is internal:
+   * `IntervalBucket` does not carry it, because nothing asks.
+   */
+  const totals = new Map<string, { sum: number; intervals: number; estimated: number }>();
 
   /*
    * Every period the calendar uses starts at zero, including ones this
@@ -104,7 +113,7 @@ export async function rollUpIntervals(args: RollUpArgs): Promise<RollUpResult> {
    * which is every winter month of the seeded calendar.
    */
   for (const code of peakCodesUsedBy(calendar.definition)) {
-    totals.set(code, { sum: 0, intervals: 0 });
+    totals.set(code, { sum: 0, intervals: 0, estimated: 0 });
   }
 
   /*
@@ -172,9 +181,15 @@ export async function rollUpIntervals(args: RollUpArgs): Promise<RollUpResult> {
       continue;
     }
 
-    const bucket = totals.get(startPeak.peakCode) ?? { sum: 0, intervals: 0 };
+    const bucket = totals.get(startPeak.peakCode) ?? { sum: 0, intervals: 0, estimated: 0 };
     bucket.sum += Number(row.quantity);
     bucket.intervals += 1;
+    /*
+     * `edited` is not counted: it is a real value a person corrected,
+     * which is measured usage and not a figure nobody took. `missing`
+     * cannot reach here — it refuses the whole period above.
+     */
+    if (row.quality === "estimated") bucket.estimated += 1;
     totals.set(startPeak.peakCode, bucket);
   }
 
@@ -238,7 +253,18 @@ export async function rollUpIntervals(args: RollUpArgs): Promise<RollUpResult> {
         priorReading: null,
         consumption: b.quantity,
         peakCode: b.peakCode,
-        readType: "AMI" as const,
+        /*
+         * Measured or estimated — which is what this column is for.
+         * It held `AMI` until 2026-11-06, a *source*, which
+         * `readSource` beside it already said; so the one column that
+         * could tell a customer their on-peak charge rests on an
+         * estimate said nothing, and TOU-GAP-2's "a bill containing any
+         * estimate says so" had nothing to read.
+         *
+         * Per bucket, so an estimated on-peak hour does not make the
+         * month's off-peak figure an estimate too.
+         */
+        readType: (totals.get(b.peakCode)?.estimated ?? 0) > 0 ? ("ESTIMATED" as const) : ("ACTUAL" as const),
         readSource: "AMI" as const,
       })),
     });

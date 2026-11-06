@@ -1020,15 +1020,46 @@ raw intervals from the same meters. Compression is therefore entirely a
   invisible to anything that does not know which agreements are being
   billed.
 
-  **Still to come:** a screen, and `missing_reading`, which is in the
-  `kind` vocabulary with no writer yet — it is the roll-up's quality
-  check, which gets its flag action with step 4, when interval
-  `quality` is carried through the roll-up into `meter_read.readType`.
+  *`missing_reading` got its writer on 2026-11-06 (step 4).* The sweep
+  now asks two questions over the same rows — does the series cover the
+  day (`findCoverageProblems`), and did the meter have a value for each
+  interval in it (`findMissingReadings`) — because a `missing` row
+  covers its minutes and tiling is satisfied by it, correctly. The two
+  failures have different answers: a hole means chase the data that
+  never arrived, while a `missing` reading means the meter itself said
+  it had none, and an estimate may be the only honest way out. Both
+  produce the same problem shape, so an exception is keyed and summed
+  the same way whichever found it, and consecutive missing intervals
+  coalesce into one row for the same reason a gap does — a day of
+  15-minute data gone is 96 rows and one fact.
+
+  **Still to come:** a screen.
 - **TOU-GAP-2 (Should).** A tenant may instead choose an estimation
   policy: fill gaps by distributing the register total across missing
   intervals using the customer's own prior profile, or a class load
   profile. Every estimated interval is flagged `estimated`, and a bill
   containing any says so.
+
+  *Half-built 2026-11-06 (step 4), from the bottom up.* The roll-up now
+  carries interval `quality` into `meter_read.readType`: a bucket whose
+  intervals include an estimate is written `ESTIMATED`, and one whose
+  intervals are all measured is `ACTUAL`. **Per bucket, not per read
+  event** — an estimated hour inside the on-peak window makes the
+  on-peak figure an estimate and leaves the off-peak one measured, and
+  a customer disputing an on-peak charge is owed the narrower truth.
+  `edited` counts as measured: it is a real value a person corrected,
+  not a figure nobody took, and `CORRECTED` would be wrong because that
+  means a read row superseding another with `corrects_read_id` set.
+
+  The column held `AMI` until then — a *source*, which `read_source`
+  beside it already said. So the one column that could tell a customer
+  their charge rests on an estimate said neither, which is why this
+  requirement was unimplementable rather than merely unbuilt.
+
+  **What is left:** the estimator itself, the `estimate` action on an
+  exception, and the bill saying so. The last of those is now possible
+  without the first two, because an import can already deliver intervals
+  a head-end marked `estimated`.
 
 ## 4. Rate engine
 
