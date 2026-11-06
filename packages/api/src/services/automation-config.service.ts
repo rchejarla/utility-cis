@@ -6,6 +6,7 @@ import {
   DEFAULT_RUN_HOUR_LOCAL,
   SCHEDULER_DEFINITIONS,
   schedulerDefinition,
+  intervalCoverageSettingsSchema,
 } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
@@ -115,6 +116,27 @@ export async function getAutomationConfig(utilityId: string): Promise<Automation
  * `enabled` keeps the enabled it had. Each listed job is upserted, which
  * is what materialises a row the first time anybody changes a setting.
  */
+/**
+ * Why a scheduler's `settings` jsonb will not do, or null if it will.
+ *
+ * One arm per scheduler that has knobs. A scheduler with none accepts
+ * nothing rather than anything: a value nothing reads is a value the
+ * next person reasonably believes matters.
+ */
+function schedulerSettingsProblem(key: SchedulerKey, settings: unknown): string | null {
+  if (key === "intervalCoverage") {
+    const parsed = intervalCoverageSettingsSchema.safeParse(settings);
+    if (parsed.success) return null;
+    return `Invalid settings for the interval coverage sweep: ${parsed.error.issues
+      .map((i) => `${i.path.join(".") || "(root)"} — ${i.message}`)
+      .join("; ")}`;
+  }
+  const keys = Object.keys((settings ?? {}) as Record<string, unknown>);
+  return keys.length > 0
+    ? `The ${key} scheduler has no settings, so ${keys.join(", ")} would be stored and never read.`
+    : null;
+}
+
 export async function patchAutomationConfig(
   utilityId: string,
   patch: AutomationConfigPatch,
@@ -140,6 +162,26 @@ export async function patchAutomationConfig(
      * and the next person to look would reasonably believe it mattered.
      */
     const runHourLocal = def.hasRunHour ? change.runHourLocal : null;
+    /*
+     * Validate the jsonb against the schema for *this* scheduler.
+     *
+     * The patch type takes `settings` as an open record, which has to
+     * stay open — each scheduler's knobs are its own. But saving
+     * `graceHour: 48` for a scheduler whose knob is `graceHours` would
+     * be accepted, and the reader is `.strict()` and falls back to the
+     * defaults on a parse failure, so both knobs would silently revert
+     * and the saved value would read back as if it mattered. Refusing
+     * at the write is the only place anybody is watching.
+     */
+    if (change.settings !== undefined) {
+      const problem = schedulerSettingsProblem(change.key, change.settings);
+      if (problem) {
+        throw Object.assign(new Error(problem), {
+          statusCode: 400,
+          code: "SCHEDULER_SETTINGS_INVALID",
+        });
+      }
+    }
     await prisma.schedulerConfig.upsert({
       where: { utilityId_schedulerKey: { utilityId, schedulerKey: change.key } },
       create: {
@@ -187,6 +229,12 @@ export interface SchedulerTenant {
   /** Null where the job has no time of day. */
   runHourLocal: number | null;
   lastRunAt: Date | null;
+  /**
+   * The row's own jsonb, for a knob only one scheduler needs (spec 18).
+   * `{}` when there is no row, so a dispatcher reads the same shape
+   * whether or not anybody has saved a setting.
+   */
+  settings: Record<string, unknown>;
 }
 
 /**
@@ -249,7 +297,13 @@ export async function tenantsForScheduler(key: SchedulerKey): Promise<SchedulerT
     prisma.utilityConfig.findMany({ select: { utilityId: true, timezone: true } }),
     prisma.schedulerConfig.findMany({
       where: { schedulerKey: key },
-      select: { utilityId: true, enabled: true, runHourLocal: true, lastRunAt: true },
+      select: {
+        utilityId: true,
+        enabled: true,
+        runHourLocal: true,
+        lastRunAt: true,
+        settings: true,
+      },
     }),
   ]);
 
@@ -264,6 +318,7 @@ export async function tenantsForScheduler(key: SchedulerKey): Promise<SchedulerT
       timezone: config?.timezone ?? DEFAULT_TIMEZONE,
       runHourLocal: def.hasRunHour ? (row?.runHourLocal ?? DEFAULT_RUN_HOUR_LOCAL) : null,
       lastRunAt: row?.lastRunAt ?? null,
+      settings: (row?.settings as Record<string, unknown> | null) ?? {},
     });
   }
   return out;

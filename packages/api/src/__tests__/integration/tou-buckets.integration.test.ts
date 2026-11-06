@@ -35,6 +35,7 @@ let pgContainer: StartedPostgreSqlContainer;
 let prismaImports: typeof import("../../lib/prisma.js");
 let rollupImports: typeof import("../../services/interval-rollup.service.js");
 let intervalReadsImports: typeof import("../../services/billing-run/interval-reads.js");
+let sweepImports: typeof import("../../services/interval-coverage-sweep.service.js");
 let readImports: typeof import("../../services/meter-read.service.js");
 
 const ACTOR = "00000000-0000-4000-8000-aaaa00000001";
@@ -55,6 +56,7 @@ beforeAll(async () => {
   prismaImports = await import("../../lib/prisma.js");
   rollupImports = await import("../../services/interval-rollup.service.js");
   intervalReadsImports = await import("../../services/billing-run/interval-reads.js");
+  sweepImports = await import("../../services/interval-coverage-sweep.service.js");
   readImports = await import("../../services/meter-read.service.js");
 }, 180_000);
 
@@ -695,5 +697,168 @@ describe("deriving an interval meter's reads for a run", () => {
     expect(await derive(f)).toEqual([]);
     const after = await bucketsOf(f);
     expect(after.every((b) => Number(b.consumption) === 1)).toBe(true);
+  });
+});
+
+/**
+ * The daily coverage sweep (spec 26, TOU-INT-4c).
+ *
+ * Coverage used to be checked only inside the roll-up, reached only
+ * from a billing run — the one moment a gap is useless to know about,
+ * because by bill day the choices are to hold the account or estimate
+ * it. The point of sweeping is to find it while the meter can still be
+ * re-polled and the real data recovered.
+ *
+ * `now` is passed in rather than mocked, because the whole gate is a
+ * comparison between a tenant's local hour and its configured run
+ * hour, and a test that could not move the clock could not exercise
+ * it.
+ */
+describe("the interval coverage sweep", () => {
+  const ZONE = "America/Denver";
+  /** 04:00 local in Denver on 11 July 2026 (MDT, UTC-6). */
+  const NOW = new Date("2026-07-11T10:00:00.000Z");
+  const RUN_HOUR = 4;
+
+  async function configureTenant(over: { enabled?: boolean; settings?: unknown } = {}) {
+    return asPlatform(async () => {
+      const { prisma } = prismaImports;
+      await prisma.utilityConfig.upsert({
+        where: { utilityId: TENANT_A },
+        create: { utilityId: TENANT_A, timezone: ZONE },
+        update: { timezone: ZONE },
+      });
+      await prisma.schedulerConfig.upsert({
+        where: {
+          utilityId_schedulerKey: { utilityId: TENANT_A, schedulerKey: "intervalCoverage" },
+        },
+        create: {
+          utilityId: TENANT_A,
+          schedulerKey: "intervalCoverage",
+          enabled: over.enabled ?? true,
+          runHourLocal: RUN_HOUR,
+          settings: (over.settings ?? { graceHours: 48, lookbackDays: 7 }) as never,
+        },
+        update: {
+          enabled: over.enabled ?? true,
+          runHourLocal: RUN_HOUR,
+          settings: (over.settings ?? { graceHours: 48, lookbackDays: 7 }) as never,
+        },
+      });
+    });
+  }
+
+  const sweep = (now = NOW) =>
+    asPlatform(() => sweepImports.sweepIntervalCoverage(now));
+
+  /** Remove `hours` hourly intervals starting `offsetHours` into the period. */
+  async function punchHole(f: Fixture, offsetHours: number, hours: number) {
+    return asPlatform(() =>
+      prismaImports.prisma.meterReadInterval.deleteMany({
+        where: {
+          meterId: f.fix.meterId,
+          intervalStart: {
+            gte: new Date(PERIOD.startDate.getTime() + offsetHours * 3_600_000),
+            lt: new Date(PERIOD.startDate.getTime() + (offsetHours + hours) * 3_600_000),
+          },
+        },
+      }),
+    );
+  }
+
+  it("reports nothing for a meter whose days are fully covered", async () => {
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+    await configureTenant();
+
+    const result = await sweep();
+
+    expect(result.tenantsSwept).toBe(1);
+    expect(result.metersChecked).toBe(1);
+    expect(result.findings).toEqual([]);
+  });
+
+  it("names the meter and the day when hours are missing", async () => {
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+    // 48 hours into 1 July local is 3 July; three hours from 06:00 local.
+    await punchHole(f, 54, 3);
+    await configureTenant();
+
+    const result = await sweep();
+
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]!.day).toBe("2026-07-03");
+    expect(result.findings[0]!.minutesAffected).toBe(180);
+    expect(result.findings[0]!.problems.join(" ")).toMatch(/undercharge/i);
+  });
+
+  it("does not sweep a tenant with the scheduler off", async () => {
+    // Which is every tenant until somebody turns it on: the catalogue
+    // default is disabled, so shipping this starts no work anywhere.
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+    await punchHole(f, 54, 3);
+    await configureTenant({ enabled: false });
+
+    const result = await sweep();
+
+    expect(result.tenantsSwept).toBe(0);
+    expect(result.findings).toEqual([]);
+  });
+
+  it("does not sweep at an hour that is not the tenant's", async () => {
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+    await punchHole(f, 54, 3);
+    await configureTenant();
+
+    // 09:00 local, five hours off the configured run hour.
+    const result = await sweep(new Date("2026-07-11T15:00:00.000Z"));
+
+    expect(result.tenantsSwept).toBe(0);
+  });
+
+  it("leaves a hole inside the grace period alone", async () => {
+    /*
+     * The point of the grace window: a head-end backfills for hours or
+     * days, so judging the recent tail would report every meter whose
+     * data is still arriving. With 7 July's hole and a grace of 120
+     * hours from 11 July, the 7th is no longer judgeable.
+     */
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+    await punchHole(f, 150, 3); // 7 July local
+    await configureTenant({ settings: { graceHours: 120, lookbackDays: 7 } });
+
+    expect((await sweep()).findings).toEqual([]);
+  });
+
+  it("stops asking about a day older than the lookback", async () => {
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+    await punchHole(f, 54, 3); // 3 July
+    await configureTenant({ settings: { graceHours: 48, lookbackDays: 2 } });
+
+    // A two-day lookback from the 9th reaches the 7th and 8th only.
+    expect((await sweep()).findings).toEqual([]);
+  });
+
+  it("records that it ran, so the console can show it", async () => {
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+    await configureTenant();
+
+    await sweep();
+
+    const row = await asPlatform(() =>
+      prismaImports.prisma.schedulerConfig.findUniqueOrThrow({
+        where: {
+          utilityId_schedulerKey: { utilityId: TENANT_A, schedulerKey: "intervalCoverage" },
+        },
+        select: { lastRunAt: true },
+      }),
+    );
+    expect(row.lastRunAt?.toISOString()).toBe(NOW.toISOString());
   });
 });

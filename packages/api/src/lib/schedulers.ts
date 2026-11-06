@@ -36,6 +36,7 @@ import { DELINQUENCY_DISPATCH_SCHEDULER_ID } from "../workers/delinquency-dispat
 import { SLA_BREACH_SCHEDULER_ID } from "../workers/sla-breach-worker.js";
 import { AUDIT_RETENTION_SCHEDULER_ID } from "../workers/audit-retention-worker.js";
 import { BILLING_DISPATCH_SCHEDULER_ID } from "../workers/billing-dispatcher.js";
+import { INTERVAL_COVERAGE_SCHEDULER_ID } from "../workers/interval-coverage-worker.js";
 
 /**
  * Every cron this build registers. A worker that arms one MUST name it
@@ -56,6 +57,7 @@ export const SCHEDULER_REGISTRY: ReadonlySet<string> = new Set<string>([
   SLA_BREACH_SCHEDULER_ID,
   AUDIT_RETENTION_SCHEDULER_ID,
   BILLING_DISPATCH_SCHEDULER_ID,
+  INTERVAL_COVERAGE_SCHEDULER_ID,
 ]);
 
 export interface OrphanedScheduler {

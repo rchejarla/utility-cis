@@ -105,9 +105,59 @@ export const SCHEDULER_DEFINITIONS = [
     offNote:
       "Off: nothing starts a billing run. Somebody has to open each cycle on its bill day and press Start.",
   },
+  {
+    key: "intervalCoverage",
+    refusedInOverlay: false,
+    label: "Interval coverage sweep · daily",
+    description:
+      "Checks that interval meters' data covers each day, and reports the days with holes. A gap found on bill day can only be held or estimated; found the day after it happened, the meter can be re-polled and the real data recovered.",
+    hasRunHour: true,
+    defaultEnabled: false,
+    offNote:
+      "Off: nothing checks interval coverage until a bill run reaches the meter, which refuses the month rather than telling anyone a week earlier.",
+  },
 ] as const;
 
 export type SchedulerKey = (typeof SCHEDULER_DEFINITIONS)[number]["key"];
+
+/**
+ * The interval-coverage sweep's own two knobs, in its
+ * `scheduler_config.settings` jsonb (spec 18 — a value only one
+ * scheduler needs costs no migration there).
+ *
+ * Both are per tenant because backfill speed is a property of the
+ * head-end and the network, not of this software: a utility on a tight
+ * cellular network wants two days of grace, one on a flaky mesh wants
+ * seven, and a single fixed number would cry wolf for the first and be
+ * useless for the second.
+ *
+ * `graceHours` defaults to 48 — the thinnest real case, since a cycle
+ * reading on day 8 and billing on day 10 gives the period's last
+ * intervals about that long to arrive. It is a default, not a
+ * measurement: the number wants checking against a real head-end.
+ */
+export const intervalCoverageSettingsSchema = z
+  .object({
+    /** How long the head-end gets to backfill before a hole is real. */
+    graceHours: z.number().int().min(0).max(336).default(48),
+    /** How many complete days back to keep checking. */
+    lookbackDays: z.number().int().min(1).max(60).default(7),
+  })
+  .strict();
+
+export type IntervalCoverageSettings = z.infer<typeof intervalCoverageSettingsSchema>;
+
+/**
+ * The sweep's settings from a `scheduler_config` row's jsonb, with the
+ * defaults applied. Unparseable settings fall back to the defaults
+ * rather than throwing: a sweep that refuses to run because a knob is
+ * malformed reports nothing at all, which is worse than reporting on
+ * the defaults.
+ */
+export function intervalCoverageSettings(settings: unknown): IntervalCoverageSettings {
+  const parsed = intervalCoverageSettingsSchema.safeParse(settings ?? {});
+  return parsed.success ? parsed.data : intervalCoverageSettingsSchema.parse({});
+}
 
 /** The keys alone, for a Zod enum and for iteration. */
 export const SCHEDULER_KEYS = SCHEDULER_DEFINITIONS.map((d) => d.key) as unknown as [

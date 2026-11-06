@@ -28,6 +28,7 @@ against Redis on every worker boot so a removed cron stops firing.
 | `suspension-transitions` | `0 * * * *` | `suspensionEnabled` |
 | `delinquency-dispatch` | `0 * * * *` | `delinquencyEnabled`, `delinquencyRunHourLocal` |
 | `audit-retention` | `0 4 * * *` | none (platform housekeeping) |
+| `interval-coverage-sweep` | `25 * * * *` | `intervalCoverage` (default **off**), `runHourLocal`, `graceHours`, `lookbackDays` |
 
 ### What fires a cron
 

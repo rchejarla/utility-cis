@@ -305,7 +305,9 @@ describe("tenantsForScheduler", () => {
     const tenants = await tenantsForScheduler("delinquency");
 
     expect(tenants).toEqual([
-      { utilityId: ACTIVE.id, timezone: "UTC", runHourLocal: 3, lastRunAt: null },
+      // `settings` is `{}` with no row, so a dispatcher reads the same
+      // shape whether or not anybody has saved a per-scheduler knob.
+      { utilityId: ACTIVE.id, timezone: "UTC", runHourLocal: 3, lastRunAt: null, settings: {} },
     ]);
   });
 
@@ -332,7 +334,13 @@ describe("tenantsForScheduler", () => {
     ]);
 
     expect(await tenantsForScheduler("billing")).toEqual([
-      { utilityId: ACTIVE.id, timezone: "America/Denver", runHourLocal: 5, lastRunAt: null },
+      {
+        utilityId: ACTIVE.id,
+        timezone: "America/Denver",
+        runHourLocal: 5,
+        lastRunAt: null,
+        settings: {},
+      },
     ]);
   });
 
@@ -353,3 +361,56 @@ describe("tenantsForScheduler", () => {
   });
 });
 
+
+describe("per-scheduler settings on write", () => {
+  const UTILITY = "11111111-1111-4111-8111-111111111111";
+
+  beforeEach(() => {
+    (prisma.utilityConfig.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(tenantRow());
+    (prisma.schedulerConfig.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (prisma.schedulerConfig.upsert as ReturnType<typeof vi.fn>).mockResolvedValue({});
+  });
+
+  /*
+   * `AutomationConfigPatch.settings` is an open record and has to stay
+   * open — each scheduler's knobs are its own. The reader is
+   * `.strict()` and falls back to the defaults when the jsonb will not
+   * parse, so a misspelled key would be stored, silently ignored, and
+   * read back as though it mattered. The write is the only moment
+   * somebody is watching.
+   */
+  it("refuses a misspelled knob rather than storing it", async () => {
+    await expect(
+      patchAutomationConfig(UTILITY, {
+        schedulers: [{ key: "intervalCoverage", settings: { graceHour: 48 } }],
+      } as never),
+    ).rejects.toThrow(/graceHour/);
+  });
+
+  it("refuses a value outside the range the sweep can use", async () => {
+    await expect(
+      patchAutomationConfig(UTILITY, {
+        schedulers: [{ key: "intervalCoverage", settings: { lookbackDays: 0 } }],
+      } as never),
+    ).rejects.toThrow(/lookbackDays/);
+  });
+
+  it("accepts the knobs the sweep reads", async () => {
+    await expect(
+      patchAutomationConfig(UTILITY, {
+        schedulers: [
+          { key: "intervalCoverage", settings: { graceHours: 72, lookbackDays: 14 } },
+        ],
+      } as never),
+    ).resolves.toBeDefined();
+  });
+
+  it("refuses settings for a scheduler that has none", async () => {
+    // A value nothing reads is a value the next person believes matters.
+    await expect(
+      patchAutomationConfig(UTILITY, {
+        schedulers: [{ key: "delinquency", settings: { graceHours: 72 } }],
+      } as never),
+    ).rejects.toThrow(/never read/);
+  });
+});

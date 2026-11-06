@@ -26,6 +26,7 @@ export const QUEUE_NAMES = {
   auditRetention: "audit-retention",
   imports: "imports",
   billingRuns: "billing-runs",
+  intervalCoverage: "interval-coverage-sweep",
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
@@ -35,7 +36,7 @@ export const ALL_QUEUE_NAMES: readonly QueueName[] = Object.values(QUEUE_NAMES);
 /**
  * Whether each queue's jobs name one tenant, or sweep across all of them.
  *
- * Read off the handlers rather than assumed. The six `all-tenants`
+ * Read off the handlers rather than assumed. The seven `all-tenants`
  * queues are enqueued by nothing but `worker.ts` — grep for their
  * `QUEUE_NAMES` constants — and each fire runs a single cross-tenant
  * sweep: `sweepSuspensionsAllTenants`, `sweepExpiredSchedulerAudits` and
@@ -59,6 +60,8 @@ export const QUEUE_TENANCY: Record<QueueName, "all-tenants" | "per-tenant"> = {
   "audit-retention": "all-tenants",
   imports: "per-tenant",
   "billing-runs": "per-tenant",
+  // Read-only, and it reads every tenant's interval data in one pass.
+  "interval-coverage-sweep": "all-tenants",
 };
 
 const DAY_SECONDS = 86_400;
@@ -111,6 +114,17 @@ export const QUEUE_DEFAULTS: Record<QueueName, QueueDefaults> = {
     defaultJobOptions: {
       attempts: 3,
       backoff: { type: "exponential", delay: 60_000 },
+      ...RETENTION_OPTS,
+    },
+  },
+  "interval-coverage-sweep": {
+    concurrency: 1,
+    defaultJobOptions: {
+      // Two attempts, not three: the sweep is read-only detection that
+      // fires again next hour, so a transient failure costs one tick's
+      // findings and retrying hard buys nothing.
+      attempts: 2,
+      backoff: { type: "fixed", delay: 60_000 },
       ...RETENTION_OPTS,
     },
   },

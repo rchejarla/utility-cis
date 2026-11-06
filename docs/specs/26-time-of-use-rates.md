@@ -851,6 +851,84 @@ raw intervals from the same meters. Compression is therefore entirely a
   Worth noting what the seeded sample would **not** have caught: 744
   intervals is exactly 31 × 24, so October 2026 contains no transition
   at all.
+- **TOU-INT-4c (Must).** **A daily sweep checks coverage while a gap can
+  still be fixed** (`interval-coverage-sweep`, built 2026-11-05).
+
+  TOU-INT-4b refuses a month with holes, but it only ever ran inside
+  the roll-up — reached from a billing run or an operator's script. That
+  is the one moment a gap is useless to know about: by bill day the only
+  options are to hold the account or estimate it. Found the morning
+  after it happened, the meter can be re-polled, the comms path chased,
+  a technician sent — the gap can stop being one, which is always the
+  best outcome and the only one that bills the truth.
+
+  **Detection only.** `report` is the sole action in this step: a
+  structured log per finding, a summary line, and the counts returned on
+  the job so the platform console's jobs page shows them. The sweep
+  writes no `meter_read`, derives no bucket and touches no interval — a
+  sweep that repaired data would be performing estimation on a
+  schedule, which is a judgement nobody has reviewed. Opening an
+  exception for somebody to work needs a table to put it in, and that
+  is the next step rather than a side effect of this one.
+
+  **Whole local days, excluding a grace window.** Two knobs, both in the
+  scheduler's own `scheduler_config.settings` jsonb (spec 18 — a value
+  one scheduler needs costs no migration there):
+
+  | setting | default | what it is |
+  |---|---|---|
+  | `graceHours` | 48 | how long the head-end gets to backfill before a hole counts as real |
+  | `lookbackDays` | 7 | how many complete days back to keep checking |
+
+  Per tenant because backfill speed is a property of the head-end and
+  the network: a utility on a tight cellular network wants two days, one
+  on a flaky mesh wants seven, and a single fixed number would cry wolf
+  for the first and be useless for the second. 48 hours is the thinnest
+  real case — a cycle reading on day 8 and billing on day 10 gives the
+  period's last intervals about that long to arrive — and it is a
+  default, not a measurement.
+
+  Days rather than a rolling window, because a rolling window ends at an
+  arbitrary instant that is not an interval boundary, so the coverage
+  check would report a spurious part-interval gap at both edges every
+  night. Local days also make a finding actionable: "the 3rd is missing
+  three hours" is something a technician can work; "the window ending
+  04:17Z" is not. `windowsToCheck` steps local calendar dates, so a day
+  the clocks change is 23 or 25 hours and consecutive windows still
+  share a boundary exactly — pinned by unit tests over both 2026
+  America/Denver transitions.
+
+  **Default disabled**, per the standing rule for anything added to
+  `SCHEDULER_DEFINITIONS`: a missing row means the catalogue default, so
+  an enabled-by-default scheduler would start work for every tenant the
+  day it shipped. Hourly cron, because the run hour is per tenant and
+  local — the only way a tenant in Auckland and one in Denver are both
+  swept at 04:00 their own time is to look every hour and act for
+  whoever's hour has come round.
+
+  **No missed-tick recovery**, unlike the delinquency dispatcher. A
+  skipped hour costs one day's detection on a check that runs again
+  tomorrow over an overlapping window; a skipped delinquency pass would
+  mean a notice never sent.
+
+  **The two knobs are validated on write, not only on read.**
+  `AutomationConfigPatch.settings` is an open record and has to stay
+  open, since each scheduler's knobs are its own — so `graceHour: 48`
+  for a scheduler whose knob is `graceHours` would have been stored
+  happily, silently ignored by a `.strict()` reader that falls back to
+  the defaults, and read back as though it mattered. `PATCH
+  /api/v1/settings/automation` now refuses it with
+  `SCHEDULER_SETTINGS_INVALID`, and refuses settings for a scheduler
+  that has none at all. The enable toggle and run hour get their UI
+  from `SCHEDULER_DEFINITIONS` automatically; **the two knobs have no
+  form control yet** and are set through that endpoint.
+
+  It reuses `findCoverageProblems` over real rows, read in chunks of 200
+  meters, rather than reimplementing gap detection as a SQL window
+  function — one definition of "covered", in one place. At 15-minute
+  data that is ~96 rows per meter-day, so a utility with 12,000 interval
+  meters is roughly 60 narrow queries a night. **Unmeasured at that
+  size**, and one of the things TOU-INT-8 should measure.
 - **TOU-INT-5 (Must).** Reconciliation: for a meter with both a register
   read and intervals, the sum of intervals between two register reads
   matches the register's consumption within a tenant tolerance (default
