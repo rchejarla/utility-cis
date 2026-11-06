@@ -971,6 +971,44 @@ raw intervals from the same meters. Compression is therefore entirely a
   `TOU_INTERVALS_INCOMPLETE`, listed by the billing run's pre-run check
   ("what cannot be billed") and in its exceptions by cause. Missing
   energy is never silently priced as off-peak.
+
+  *Step 2 built 2026-11-06: `meter_data_exception`, the queue the sweep
+  writes to.* The roll-up has refused an incomplete period since
+  2026-11-05 and the sweep has found the holes a day later since
+  2026-11-06; both only said so in a log line, which is not work anybody
+  is assigned.
+
+  **One row per (meter, window, kind) while open.** The window is the
+  day a sweep examined, not the gap's own start — that is what makes
+  tonight's sighting of last night's hole find its own row instead of
+  opening a second, and several holes in one day one exception whose
+  minutes sum. A person working the queue wants "this meter, this day,
+  four hours missing", not one task per hole. `kind` is in the key
+  because a gap and an overrun have different answers: chase the
+  missing data, or fix an interval length that is wrong. The unique
+  index is **partial** (`WHERE status = 'open'`) so the history stays —
+  a gap resolved in March and back in April is two exceptions, and a
+  meter that fails every month is the pattern worth seeing.
+
+  **The sweep writes `open` and `resolved`, and nothing else.** Both are
+  facts about the data: the intervals are there or they are not, so a
+  later sweep that finds the hole filled closes its own row with no
+  ceremony. `accepted` (bill it as it stands) and `estimated` (a value
+  was supplied) are judgements, and no scheduled job makes those — the
+  same line the sweep already draws by detecting without repairing.
+
+  **Resolution is scoped to the days actually swept.** An open exception
+  for a day outside the lookback is left alone, because not looking is
+  not the same as finding nothing: a tenant narrowing `lookbackDays`
+  from 7 to 2 would otherwise have five days of exceptions closed by a
+  sweep that never examined them, and a resolved exception reads as one
+  somebody fixed.
+
+  **Still to come:** the pre-run check that reads these (step 3), and a
+  screen. `missing_reading` is in the `kind` vocabulary with no writer
+  yet — it is the roll-up's quality check, which gets its flag action
+  with step 4, when interval `quality` is carried through the roll-up
+  into `meter_read.readType`.
 - **TOU-GAP-2 (Should).** A tenant may instead choose an estimation
   policy: fill gaps by distributing the register total across missing
   intervals using the customer's own prior profile, or a class load

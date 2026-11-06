@@ -9,21 +9,28 @@
  * technician sent — the gap can stop being one, which is always the
  * best outcome.
  *
- * So this detects; it does not act. `report` is the only action in
- * this step, and it means a log line and a count. Opening an exception
- * for somebody to work needs somewhere to put it, and that table is
- * the next step rather than a side effect of this one.
+ * What it does with what it finds is **flag it**: a
+ * `meter_data_exception` row per (meter, day, kind), opened when the
+ * problem appears and resolved by a later sweep that finds the data
+ * arrived. A log line was the first step and a poor last one — a
+ * warning in a worker's output is not work anybody is assigned.
  *
- * Read-only by design. Nothing here writes a `meter_read`, derives a
- * bucket or touches an interval: a sweep that repaired data would be
- * doing estimation on a schedule, which is a judgement nobody has
- * reviewed.
+ * **It writes exceptions; it does not repair data.** Nothing here
+ * writes a `meter_read`, derives a bucket or touches an interval, and
+ * the only statuses it sets are `open` and `resolved` — both facts
+ * about whether the intervals are there. A sweep that filled a gap in
+ * would be estimating on a schedule, and a sweep that marked one
+ * `accepted` would be deciding to bill a short month, which are
+ * judgements nobody has reviewed. The same line `suppressAutoPost`
+ * draws elsewhere.
  */
 import { intervalCoverageSettings, DEFAULT_RUN_HOUR_LOCAL } from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { localHour } from "../lib/iana-tz.js";
-import { findCoverageProblems } from "../lib/interval-coverage.js";
+import { findCoverageProblems, type CoverageProblem } from "../lib/interval-coverage.js";
+import { groupCoverageFindings } from "../lib/meter-data-exception.js";
+import { flagDataExceptions } from "./meter-data-exception.service.js";
 import { windowsToCheck, type CoverageWindow } from "../lib/coverage-windows.js";
 import { markSchedulerRun, tenantsForScheduler } from "./automation-config.service.js";
 import { runAsTenant } from "../lib/tenant-context.js";
@@ -49,8 +56,14 @@ export interface MeterCoverageFinding {
   meterNumber: string;
   /** The local day, as the tenant would name it. */
   day: string;
+  /**
+   * The window swept, which is what an exception is keyed on — one row
+   * per (meter, window, kind), so a second sweep of the same day finds
+   * its own row rather than opening another.
+   */
+  window: { startDate: Date; endDate: Date };
   minutesAffected: number;
-  problems: string[];
+  problems: CoverageProblem[];
 }
 
 export interface SweepResult {
@@ -58,16 +71,15 @@ export interface SweepResult {
   tenantsSwept: number;
   metersChecked: number;
   findings: MeterCoverageFinding[];
+  /** What the findings did to the exception queue, across all tenants. */
+  exceptionsOpened: number;
+  exceptionsUpdated: number;
+  exceptionsResolved: number;
 }
 
 /** The total minutes a window's problems account for, for a headline. */
-function minutesIn(problems: string[]): number {
-  let total = 0;
-  for (const p of problems) {
-    const m = /(\d+) minutes/.exec(p);
-    if (m) total += Number(m[1]);
-  }
-  return total;
+function minutesIn(problems: CoverageProblem[]): number {
+  return problems.reduce((total, p) => total + p.minutes, 0);
 }
 
 /**
@@ -140,6 +152,7 @@ async function sweepTenant(
           meterId,
           meterNumber: numberById.get(meterId) ?? meterId,
           day: window.startDate.toISOString().slice(0, 10),
+          window: { startDate: window.startDate, endDate: window.endDate },
           minutesAffected: minutesIn(problems),
           problems,
         });
@@ -165,6 +178,9 @@ export async function sweepIntervalCoverage(now: Date = new Date()): Promise<Swe
 
   let tenantsSwept = 0;
   let metersChecked = 0;
+  let exceptionsOpened = 0;
+  let exceptionsUpdated = 0;
+  let exceptionsResolved = 0;
   const findings: MeterCoverageFinding[] = [];
 
   for (const tenant of candidates) {
@@ -180,11 +196,31 @@ export async function sweepIntervalCoverage(now: Date = new Date()): Promise<Swe
       graceHours,
     });
 
-    const result = await runAsTenant(tenant.utilityId, () =>
-      sweepTenant(tenant.utilityId, windows),
-    );
+    /*
+     * Both inside one tenant scope, and awaited inside it: the flag
+     * action writes tenant-scoped rows, and a `PrismaPromise` returned
+     * out of the scope would execute after it had exited.
+     *
+     * The windows are passed to the flag action as well as to the
+     * sweep, because resolving is only honest for days that were
+     * actually examined — a narrowed lookback must not close the
+     * exceptions it stopped looking at.
+     */
+    const result = await runAsTenant(tenant.utilityId, async () => {
+      const swept = await sweepTenant(tenant.utilityId, windows);
+      const flagged = await flagDataExceptions({
+        utilityId: tenant.utilityId,
+        sweptWindowStarts: windows.map((w) => w.startDate),
+        found: groupCoverageFindings(swept.findings),
+        now,
+      });
+      return { ...swept, flagged };
+    });
     tenantsSwept += 1;
     metersChecked += result.metersChecked;
+    exceptionsOpened += result.flagged.opened;
+    exceptionsUpdated += result.flagged.updated;
+    exceptionsResolved += result.flagged.resolved;
     findings.push(...result.findings);
 
     for (const f of result.findings) {
@@ -195,7 +231,7 @@ export async function sweepIntervalCoverage(now: Date = new Date()): Promise<Swe
           meterNumber: f.meterNumber,
           day: f.day,
           minutesAffected: f.minutesAffected,
-          problems: f.problems,
+          problems: f.problems.map((p) => p.message),
         },
         "Interval data does not cover the day",
       );
@@ -209,5 +245,8 @@ export async function sweepIntervalCoverage(now: Date = new Date()): Promise<Swe
     tenantsSwept,
     metersChecked,
     findings,
+    exceptionsOpened,
+    exceptionsUpdated,
+    exceptionsResolved,
   };
 }

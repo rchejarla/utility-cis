@@ -317,7 +317,7 @@ What this buys is narrower than it looks. The mechanism is chosen and running, s
 | **Delinquency** | DelinquencyRule, DelinquencyAction |
 | **Service Requests** | ServiceRequest, Sla, ServiceRequestTypeDef (+ `service_request_counter` plumbing table for per-tenant/year `SR-YYYY-NNNNNN` numbering) |
 | **Accounts Receivable** | LedgerEntry, LedgerApplication, LedgerReasonDef |
-| **Rates** | SeasonSet, Season (every tenant is provisioned with a published `Default` set since 2026-11-06 — the 2026-11-02 migration reached only the tenants alive then, and without a set nothing seasonal rates), TouPeriod (tenant-level since 2026-11-04, and keyed from `meter_register.peak_code` since 2026-11-06), TouCalendar, TouDayType, TouDayTypeWeekday, TouSlot, TouDayOverride, TouHolidaySet, TouHoliday (spec 26; added 2026-11-02, holidays and peak codes revised 2026-11-04) |
+| **Rates** | SeasonSet, Season (every tenant is provisioned with a published `Default` set since 2026-11-06 — the 2026-11-02 migration reached only the tenants alive then, and without a set nothing seasonal rates), TouPeriod (tenant-level since 2026-11-04, and keyed from `meter_register.peak_code` since 2026-11-06), TouCalendar, TouDayType, TouDayTypeWeekday, TouSlot, TouDayOverride, TouHolidaySet, TouHoliday (spec 26; added 2026-11-02, holidays and peak codes revised 2026-11-04), MeterReadInterval, MeterDataException (the coverage sweep's queue, added 2026-11-06: one open row per meter-day-kind, opened and resolved by the sweep, never accepted or estimated by it) |
 
 **Service Request enums (Phase 4 slice B):**
 - `ServiceRequestStatus`: NEW, ASSIGNED, IN_PROGRESS, PENDING_FIELD, COMPLETED, CANCELLED, FAILED

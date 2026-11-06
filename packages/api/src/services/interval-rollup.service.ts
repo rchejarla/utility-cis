@@ -116,7 +116,10 @@ export async function rollUpIntervals(args: RollUpArgs): Promise<RollUpResult> {
    * given, objected to nothing, and produced buckets three hours
    * short — a bill undercharged with nothing saying so.
    */
-  problems.push(...findCoverageProblems(intervals, period));
+  // The sentences only: this list is the roll-up's refusal message, and
+  // its own three checks contribute strings. The structured problems are
+  // what the sweep keys exceptions on.
+  problems.push(...findCoverageProblems(intervals, period).map((p) => p.message));
 
   for (const row of intervals) {
     const at = row.intervalStart.toISOString();

@@ -33,11 +33,16 @@ export function buildIntervalCoverageWorker(): Worker {
       const result = await withTelemetry(QUEUE_NAMES.intervalCoverage, () =>
         sweepIntervalCoverage(new Date()),
       );
-      if (result.findings.length > 0) {
+      if (result.findings.length > 0 || result.exceptionsResolved > 0) {
         /*
          * One summary beside the per-finding warnings the service
          * writes, because the count is the thing worth alerting on and
          * a hundred lines is not.
+         *
+         * Resolutions get the same line even on a night that found
+         * nothing new: "nine exceptions closed because the data turned
+         * up" is the outcome the sweep exists for, and it would
+         * otherwise be the one thing it never said.
          */
         logger.warn(
           {
@@ -46,6 +51,9 @@ export function buildIntervalCoverageWorker(): Worker {
             metersChecked: result.metersChecked,
             meterDaysAffected: result.findings.length,
             minutesAffected: result.findings.reduce((a, f) => a + f.minutesAffected, 0),
+            exceptionsOpened: result.exceptionsOpened,
+            exceptionsUpdated: result.exceptionsUpdated,
+            exceptionsResolved: result.exceptionsResolved,
           },
           "Interval coverage sweep found days with missing data",
         );

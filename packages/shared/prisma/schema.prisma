@@ -85,6 +85,7 @@ model Utility {
   ledgerReasonDefs       LedgerReasonDef[]
   measureTypeDefs        MeasureTypeDef[]
   meterEvents            MeterEvent[]
+  meterDataExceptions    MeterDataException[]
   meterReads             MeterRead[]
   meterReadIntervals     MeterReadInterval[]
   meterRegisters         MeterRegister[]
@@ -490,6 +491,7 @@ model Meter {
   uom                    UnitOfMeasure           @relation(fields: [uomId], references: [id], onDelete: Restrict)
   meterReads             MeterRead[]
   meterReadIntervals     MeterReadInterval[]
+  dataExceptions         MeterDataException[]
   servicePointMeters     ServicePointMeter[]
   registers              MeterRegister[]
   events                 MeterEvent[]
@@ -1080,6 +1082,58 @@ model MeterReadInterval {
   @@index([meterId, intervalStart])
   @@index([utilityId, importBatchId])
   @@map("meter_read_interval")
+}
+
+/// A day of one meter's data that cannot be billed as it stands
+/// (spec 26, TOU-GAP-1).
+///
+/// The interval-coverage sweep's output, as work rather than a log
+/// line. One row per (meter, window, kind) **while open** — a partial
+/// unique index that exists only in the migration, because the history
+/// has to stay: a gap resolved in March and back in April is two
+/// exceptions, and a meter that fails every month is the pattern worth
+/// seeing.
+///
+/// `windowStart` is the day the sweep examined, not the gap's own
+/// start. That is what makes tonight's sighting of last night's hole
+/// find its own row, and several holes in one day one exception whose
+/// minutes sum.
+///
+/// **The sweep writes `open` and `resolved` only.** Both are facts
+/// about the data — the intervals are there or they are not — so a
+/// sweep that finds a hole filled closes its own row. `accepted` (bill
+/// it as it stands) and `estimated` (a value was supplied) are
+/// judgements, and no scheduled job makes those. A CHECK ties
+/// `resolvedAt` to `status` both ways.
+///
+/// There is no `createdAt`: `detectedAt` is that timestamp under the
+/// name that says what it means here.
+model MeterDataException {
+  id              String    @id @default(uuid()) @db.Uuid
+  utilityId       String    @map("utility_id") @db.Uuid
+  utility         Utility   @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  meterId         String    @map("meter_id") @db.Uuid
+  windowStart     DateTime  @map("window_start") @db.Timestamptz
+  windowEnd       DateTime  @map("window_end") @db.Timestamptz
+  /// gap | overlap | overrun | missing_reading, by CHECK. The first
+  /// three come from tiling; the fourth is the roll-up's quality check,
+  /// which has no flag action until step 4.
+  kind            String    @db.VarChar(30)
+  minutesAffected Int       @map("minutes_affected")
+  detail          String    @db.Text
+  status          String    @default("open") @db.VarChar(20)
+  detectedAt      DateTime  @default(now()) @map("detected_at") @db.Timestamptz
+  resolvedAt      DateTime? @map("resolved_at") @db.Timestamptz
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  /// Single-column here, composite in the migration — the key is
+  /// `(utility_id, meter_id) -> meter (utility_id, id)`, as it is for
+  /// `meter_read_interval` beside it, so the two rows cannot belong to
+  /// different tenants.
+  meter Meter @relation(fields: [meterId], references: [id], onDelete: Cascade)
+
+  @@index([utilityId, status, windowStart], map: "meter_data_exception_open_by_window")
+  @@map("meter_data_exception")
 }
 
 model AuditLog {

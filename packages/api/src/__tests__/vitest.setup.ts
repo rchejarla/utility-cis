@@ -149,6 +149,8 @@ vi.mock("../lib/prisma.js", () => {
     // properties of undefined (reading 'createMany')" from a route that
     // has nothing to do with tariffs.
     touPeriod: crud(),
+    // The coverage sweep's exception queue, written since 2026-11-06.
+    meterDataException: crud(),
     // And the published season set it creates since 2026-11-06, for the
     // same reason: the whole provisioning transaction fails on the first
     // model the mock has not got, and the error names a property rather

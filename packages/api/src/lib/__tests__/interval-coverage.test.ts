@@ -50,23 +50,70 @@ describe("interval coverage", () => {
     const problems = findCoverageProblems(rows, period);
 
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toMatch(/2026-07-01T09:00/);
-    expect(problems[0]).toMatch(/180 minutes/);
+    expect(problems[0]!.message).toMatch(/2026-07-01T09:00/);
+    expect(problems[0]!.message).toMatch(/180 minutes/);
+  });
+
+  /*
+   * The kind and the minutes are data, not only a sentence.
+   *
+   * `meter_data_exception` keys on the kind and sums the minutes, and
+   * the sweep used to recover the number by running a regex over its
+   * own English — which quietly returned 0 the day a message was
+   * reworded.
+   */
+  it("names each problem's kind, start and minutes as fields", () => {
+    const rows = [
+      ...hourly("2026-07-01T06:00:00.000Z", 3),
+      ...hourly("2026-07-01T12:00:00.000Z", 18),
+    ];
+
+    expect(findCoverageProblems(rows, period)).toEqual([
+      {
+        kind: "gap",
+        startsAt: new Date("2026-07-01T09:00:00.000Z"),
+        minutes: 180,
+        message: expect.stringContaining("undercharge"),
+      },
+    ]);
+  });
+
+  it("calls an overlap an overlap and an overrun an overrun", () => {
+    const overlapping = [
+      ...hourly("2026-07-01T06:00:00.000Z", 2),
+      { intervalStart: new Date("2026-07-01T07:30:00.000Z"), lengthMinutes: 30 },
+      ...hourly("2026-07-01T08:00:00.000Z", 22),
+    ];
+    const overrunning = [
+      ...hourly("2026-07-01T06:00:00.000Z", 23),
+      { intervalStart: new Date("2026-07-02T05:00:00.000Z"), lengthMinutes: 120 },
+    ];
+
+    expect(findCoverageProblems(overlapping, period)[0]).toMatchObject({
+      kind: "overlap",
+      startsAt: new Date("2026-07-01T07:30:00.000Z"),
+      minutes: 30,
+    });
+    expect(findCoverageProblems(overrunning, period)[0]).toMatchObject({
+      kind: "overrun",
+      startsAt: new Date("2026-07-02T06:00:00.000Z"),
+      minutes: 60,
+    });
   });
 
   it("reports a period that does not start where its data does", () => {
     const problems = findCoverageProblems(hourly("2026-07-01T08:00:00.000Z", 22), period);
 
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toMatch(/2026-07-01T06:00/);
-    expect(problems[0]).toMatch(/120 minutes/);
+    expect(problems[0]!.message).toMatch(/2026-07-01T06:00/);
+    expect(problems[0]!.message).toMatch(/120 minutes/);
   });
 
   it("reports data that stops before the period does", () => {
     const problems = findCoverageProblems(hourly("2026-07-01T06:00:00.000Z", 20), period);
 
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toMatch(/240 minutes/);
+    expect(problems[0]!.message).toMatch(/240 minutes/);
   });
 
   it("reports an overlap as usage counted twice", () => {
@@ -81,8 +128,8 @@ describe("interval coverage", () => {
     const problems = findCoverageProblems(rows, period);
 
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toMatch(/twice/i);
-    expect(problems[0]).toMatch(/30 minutes/);
+    expect(problems[0]!.message).toMatch(/twice/i);
+    expect(problems[0]!.message).toMatch(/30 minutes/);
   });
 
   it("reports an interval running past the end of the period", () => {
@@ -95,8 +142,8 @@ describe("interval coverage", () => {
     const problems = findCoverageProblems(rows, period);
 
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toMatch(/past the end/i);
-    expect(problems[0]).toMatch(/60 minutes/);
+    expect(problems[0]!.message).toMatch(/past the end/i);
+    expect(problems[0]!.message).toMatch(/60 minutes/);
   });
 
   it("accepts a meter that changed interval length mid-period", () => {
@@ -114,7 +161,7 @@ describe("interval coverage", () => {
     const problems = findCoverageProblems([], period);
 
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toMatch(/1440 minutes/);
+    expect(problems[0]!.message).toMatch(/1440 minutes/);
   });
 
   it("does not mind an interval that is not on an hour boundary", () => {
@@ -173,6 +220,6 @@ describe("interval coverage across a daylight-saving change", () => {
     const problems = findCoverageProblems(rows, period);
 
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toMatch(/60 minutes/);
+    expect(problems[0]!.message).toMatch(/60 minutes/);
   });
 });

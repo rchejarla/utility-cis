@@ -790,7 +790,8 @@ describe("the interval coverage sweep", () => {
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]!.day).toBe("2026-07-03");
     expect(result.findings[0]!.minutesAffected).toBe(180);
-    expect(result.findings[0]!.problems.join(" ")).toMatch(/undercharge/i);
+    expect(result.findings[0]!.problems.map((p) => p.message).join(" ")).toMatch(/undercharge/i);
+    expect(result.findings[0]!.problems[0]!.kind).toBe("gap");
   });
 
   it("does not sweep a tenant with the scheduler off", async () => {
@@ -860,5 +861,232 @@ describe("the interval coverage sweep", () => {
       }),
     );
     expect(row.lastRunAt?.toISOString()).toBe(NOW.toISOString());
+  });
+});
+
+/**
+ * The flag action (spec 26, TOU-GAP-1 step 2).
+ *
+ * Detection without somewhere to put it is a log line nobody reads. An
+ * exception is a row somebody can work: one per (meter, day, kind), so
+ * tonight's sighting of yesterday's hole finds its own row rather than
+ * opening a second one, and a hole that has since been backfilled
+ * closes itself.
+ *
+ * **It closes itself rather than being closed by a person**, because
+ * the condition is a fact about the data and not a judgement: the
+ * intervals are either there or they are not. The three statuses that
+ * *are* judgements — accepted, estimated — are nobody's but a person's,
+ * which is why the sweep writes only `open` and `resolved`.
+ */
+describe("the coverage sweep's exceptions", () => {
+  const ZONE = "America/Denver";
+  const NOW = new Date("2026-07-11T10:00:00.000Z");
+
+  async function configureTenant(settings: unknown = { graceHours: 48, lookbackDays: 7 }) {
+    return asPlatform(async () => {
+      const { prisma } = prismaImports;
+      await prisma.utilityConfig.upsert({
+        where: { utilityId: TENANT_A },
+        create: { utilityId: TENANT_A, timezone: ZONE },
+        update: { timezone: ZONE },
+      });
+      await prisma.schedulerConfig.upsert({
+        where: {
+          utilityId_schedulerKey: { utilityId: TENANT_A, schedulerKey: "intervalCoverage" },
+        },
+        create: {
+          utilityId: TENANT_A,
+          schedulerKey: "intervalCoverage",
+          enabled: true,
+          runHourLocal: 4,
+          settings: settings as never,
+        },
+        update: { enabled: true, runHourLocal: 4, settings: settings as never },
+      });
+    });
+  }
+
+  const sweep = () => asPlatform(() => sweepImports.sweepIntervalCoverage(NOW));
+
+  async function punchHole(f: Fixture, offsetHours: number, hours: number) {
+    return asPlatform(() =>
+      prismaImports.prisma.meterReadInterval.deleteMany({
+        where: {
+          meterId: f.fix.meterId,
+          intervalStart: {
+            gte: new Date(PERIOD.startDate.getTime() + offsetHours * 3_600_000),
+            lt: new Date(PERIOD.startDate.getTime() + (offsetHours + hours) * 3_600_000),
+          },
+        },
+      }),
+    );
+  }
+
+  /** The data arrives late: put the hole's intervals back. */
+  async function fillHole(f: Fixture, offsetHours: number, hours: number) {
+    return asPlatform(() =>
+      prismaImports.prisma.meterReadInterval.createMany({
+        data: Array.from({ length: hours }, (_, i) => ({
+          utilityId: f.fix.utilityId,
+          meterId: f.fix.meterId,
+          uomId: f.fix.uomId,
+          intervalStart: new Date(PERIOD.startDate.getTime() + (offsetHours + i) * 3_600_000),
+          lengthMinutes: 60,
+          quantity: "1.000000",
+          quality: "actual",
+        })),
+      }),
+    );
+  }
+
+  const exceptions = () =>
+    asPlatform(() =>
+      prismaImports.prisma.meterDataException.findMany({
+        orderBy: [{ windowStart: "asc" }, { kind: "asc" }],
+      }),
+    );
+
+  it("opens an exception naming the meter, the day and the minutes", async () => {
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+    await punchHole(f, 54, 3); // three hours of 3 July local
+    await configureTenant();
+
+    await sweep();
+
+    const rows = await exceptions();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      utilityId: TENANT_A,
+      meterId: f.fix.meterId,
+      kind: "gap",
+      status: "open",
+      minutesAffected: 180,
+    });
+    expect(rows[0]!.windowStart.toISOString()).toBe("2026-07-03T06:00:00.000Z");
+    expect(rows[0]!.windowEnd.toISOString()).toBe("2026-07-04T06:00:00.000Z");
+    expect(rows[0]!.detail).toMatch(/undercharge/i);
+    expect(rows[0]!.resolvedAt).toBeNull();
+  });
+
+  it("does not open a second exception when tonight finds the same hole", async () => {
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+    await punchHole(f, 54, 3);
+    await configureTenant();
+
+    await sweep();
+    await sweep();
+
+    expect(await exceptions()).toHaveLength(1);
+  });
+
+  it("resolves the exception once the missing intervals arrive", async () => {
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+    await punchHole(f, 54, 3);
+    await configureTenant();
+    await sweep();
+
+    await fillHole(f, 54, 3);
+    const second = await sweep();
+
+    const rows = await exceptions();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe("resolved");
+    expect(rows[0]!.resolvedAt).not.toBeNull();
+    // The counts the worker logs and the jobs page shows. A resolution
+    // on a night that found nothing new is the outcome the sweep exists
+    // for, and a count that silently stayed 0 would hide it.
+    expect(second.exceptionsResolved).toBe(1);
+    expect(second.exceptionsOpened).toBe(0);
+    expect(second.findings).toEqual([]);
+  });
+
+  it("leaves an exception open for a day it no longer sweeps", async () => {
+    /*
+     * The dangerous case. A tenant narrowing the lookback must not have
+     * its older exceptions closed by a sweep that never examined those
+     * days — a resolved exception reads as one somebody fixed.
+     */
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+    await punchHole(f, 54, 3); // 3 July
+    await configureTenant();
+    await sweep();
+
+    await configureTenant({ graceHours: 48, lookbackDays: 2 });
+    await sweep();
+
+    const rows = await exceptions();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe("open");
+  });
+
+  it("leaves a problem somebody accepted alone instead of re-opening it nightly", async () => {
+    /*
+     * The hole is still there, so every sweep finds it. Once somebody
+     * has decided to bill the month as it stands, finding it again is
+     * not news — and the partial unique index would not prevent a
+     * second row, because it forbids only a second *open* one.
+     */
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+    await punchHole(f, 54, 3);
+    await configureTenant();
+    await sweep();
+
+    await asPlatform(() =>
+      prismaImports.prisma.meterDataException.updateMany({
+        where: { meterId: f.fix.meterId },
+        data: { status: "accepted", resolvedAt: NOW },
+      }),
+    );
+
+    const second = await sweep();
+
+    const rows = await exceptions();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe("accepted");
+    expect(second.exceptionsOpened).toBe(0);
+    expect(second.exceptionsUpdated).toBe(0);
+  });
+
+  it("tells a gap and an overrun on the same day apart", async () => {
+    const f = await makeFixture();
+    await seedHourlyIntervals(f);
+    await punchHole(f, 54, 3);
+    /*
+     * The last hour of 3 July, delivered half an hour late and still an
+     * hour long — so it runs 30 minutes into the 4th. An interval
+     * cannot simply be stretched: `meter_read_interval_length_known`
+     * allows 5, 15, 30 and 60 minutes and nothing else, which is the
+     * only shape an overrun really arrives in.
+     */
+    const lastHour = new Date(PERIOD.startDate.getTime() + 71 * 3_600_000);
+    await asPlatform(async () => {
+      const { prisma } = prismaImports;
+      await prisma.meterReadInterval.deleteMany({
+        where: { meterId: f.fix.meterId, intervalStart: lastHour },
+      });
+      await prisma.meterReadInterval.create({
+        data: {
+          utilityId: f.fix.utilityId,
+          meterId: f.fix.meterId,
+          uomId: f.fix.uomId,
+          intervalStart: new Date(lastHour.getTime() + 1_800_000),
+          lengthMinutes: 60,
+          quantity: "1.000000",
+          quality: "actual",
+        },
+      });
+    });
+    await configureTenant();
+
+    await sweep();
+
+    const rows = await exceptions();
+    expect(rows.map((r) => r.kind)).toEqual(["gap", "overrun"]);
   });
 });
