@@ -768,6 +768,52 @@ raw intervals from the same meters. Compression is therefore entirely a
   boundary that does not straddle a period change). An interval that
   straddles a period boundary is refused at import with the reason,
   unless the tenant enables proportional splitting.
+- **TOU-INT-4a (Must).** **The billing run derives an interval meter's
+  buckets itself** (`billing-run/interval-reads.ts`, built 2026-11-05).
+
+  Before it did, the only thing that classified intervals was an
+  operator running `scripts/roll-up-intervals.ts`, and the failure was
+  quiet in the worst available way: `resolveServicePeriod` finds a
+  period from an unbilled `meter_read`, and an interval meter has none
+  until its intervals are classified — so the agreement resolved to
+  nothing, the **account was skipped**, and the run reported it as
+  having no read. Not a wrong bill; no bill, blamed on missing data
+  that was present.
+
+  `deriveIntervalReads` runs per account, before the run resolves any
+  period. It is a no-op for an agreement whose tariff prices no TOU
+  period and for a meter reporting no intervals (the ordinary register
+  meter, whose buckets are stamped at import), so a non-TOU cycle pays
+  two grouped queries for the whole feature.
+
+  Three decisions worth keeping:
+
+  - **In the run, not in `createBillSegmentForServiceAgreement`.** The
+    mutation belongs where someone asked for a run. Rating stays a
+    function of the reads it finds, and the manual and API paths do not
+    rewrite reads underneath a caller who only asked to price a period.
+  - **The calendar comes from the assigned published schedule**, never
+    from the meter's programmed one (TOU-CAL-11). A meter's own
+    calendar is a device fact that may disagree, which
+    `CALENDAR_MISMATCH` reports rather than acts on.
+  - **A window already billed is left alone.** The roll-up clears and
+    rewrites only *unbilled* interval-derived rows, so a re-run picks
+    up late-arriving intervals; a billed window is closed, and
+    rewriting it would move a figure a customer has been told.
+
+  Intervals that cannot be classified — a gap, a `missing` reading, an
+  interval straddling a period change — raise `TOU_ROLLUP_FAILED`,
+  which fails that one account's run item naming the meter and the
+  reason, and leaves the rest of the run to continue. Deliberately not
+  "bill what classified and drop the rest": that bill is silently
+  short.
+
+  **Still open:** the preview cannot predict a roll-up failure without
+  doing the roll-up, so an interval gap is found mid-run rather than at
+  preview. A cheap coverage check — expected interval count for the
+  window against the actual, plus a `missing`-quality count, both
+  single aggregates — would move most of those forward into the
+  pre-run check. Not built.
 - **TOU-INT-5 (Must).** Reconciliation: for a meter with both a register
   read and intervals, the sum of intervals between two register reads
   matches the register's consumption within a tenant tolerance (default
@@ -1243,6 +1289,16 @@ it is wrong.
   | `REGISTERS_UNRECONCILED` | Some usage billed twice or not at all. |
   | `PERIOD_NOT_REPORTED` | **Stops** rating — the one visible failure, and better found before a run of thousands than halfway through one. |
   | `NO_TOU_READS` | A TOU tariff with no TOU usage to price. |
+
+  **`NO_TOU_READS` no longer fires for an interval meter** *(2026-11-05)*.
+  It read the meter's `meter_read` rows and nothing else, so an AMI
+  meter holding 744 intervals and no derived buckets was reported as
+  having "reported no TOU usage at all for this period" — which sent an
+  operator to import readings that were already in the database. It now
+  fires only when the meter has neither reads nor intervals, because
+  the run derives the buckets itself (below). One grouped query over
+  `meter_read_interval`, which a utility with no interval meters pays
+  once per preview.
 
   **Reported, not enforced.** The operator approves the preview, and a
   tenant mid-migration may knowingly bill a service whose meter

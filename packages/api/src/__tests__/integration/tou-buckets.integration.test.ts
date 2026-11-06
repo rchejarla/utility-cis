@@ -34,6 +34,7 @@ import { MeterLoader } from "../../lib/rate-engine-loaders/loaders/meter-loader.
 let pgContainer: StartedPostgreSqlContainer;
 let prismaImports: typeof import("../../lib/prisma.js");
 let rollupImports: typeof import("../../services/interval-rollup.service.js");
+let intervalReadsImports: typeof import("../../services/billing-run/interval-reads.js");
 let readImports: typeof import("../../services/meter-read.service.js");
 
 const ACTOR = "00000000-0000-4000-8000-aaaa00000001";
@@ -53,6 +54,7 @@ beforeAll(async () => {
   pgContainer = booted.container;
   prismaImports = await import("../../lib/prisma.js");
   rollupImports = await import("../../services/interval-rollup.service.js");
+  intervalReadsImports = await import("../../services/billing-run/interval-reads.js");
   readImports = await import("../../services/meter-read.service.js");
 }, 180_000);
 
@@ -452,5 +454,190 @@ describe("a register meter", () => {
       }),
     );
     expect(rows.map((r) => r.peakCode)).toEqual(["off_peak", "peak"]);
+  });
+});
+
+/**
+ * The billing run derives an interval meter's buckets itself.
+ *
+ * Until it did, the only thing that classified intervals was an
+ * operator running `scripts/roll-up-intervals.ts`, and the failure was
+ * quiet in the worst way: `resolveServicePeriod` needs an unbilled
+ * `meter_read` to find a period, so an interval meter with a month of
+ * data and no roll-up was **skipped** — and the run reported the
+ * account as having no read.
+ */
+describe("deriving an interval meter's reads for a run", () => {
+  /**
+   * The meter has to reach the agreement the way it does in production:
+   * service agreement → service point → meter. `rollUpIntervals` takes
+   * a meter id and never needed the link, so the fixture above has
+   * none; `deriveIntervalReads` finds the meters for an agreement, and
+   * must, because that is what a run knows.
+   */
+  async function attachMeterToAgreement(f: Fixture) {
+    return asPlatform(async () => {
+      const { prisma } = prismaImports;
+      const sp = await prisma.servicePoint.create({
+        data: {
+          utilityId: f.fix.utilityId,
+          serviceAgreementId: f.saId,
+          premiseId: f.fix.premiseId,
+          startDate: new Date("2026-01-01"),
+        },
+      });
+      await prisma.servicePointMeter.create({
+        data: {
+          utilityId: f.fix.utilityId,
+          servicePointId: sp.id,
+          meterId: f.fix.meterId,
+          addedDate: new Date("2026-01-01"),
+        },
+      });
+    });
+  }
+
+  /** A published TOU tariff over the fixture's calendar, assigned. */
+  async function assignTouSchedule(f: Fixture, over: { touCalendarId?: string | null } = {}) {
+    return asPlatform(async () => {
+      const { prisma } = prismaImports;
+      const schedule = await prisma.rateSchedule.create({
+        data: {
+          utilityId: f.fix.utilityId,
+          name: "Residential TOU",
+          code: `RES-TOU-${Math.random().toString(36).slice(2, 8)}`,
+          commodityId: f.fix.commodityId,
+          effectiveDate: new Date("2026-01-01"),
+          version: 1,
+          publishedAt: new Date(),
+          touCalendarId:
+            over.touCalendarId === undefined ? f.calendarId : over.touCalendarId,
+        },
+      });
+      await prisma.sAScheduleAssignment.create({
+        data: {
+          utilityId: f.fix.utilityId,
+          serviceAgreementId: f.saId,
+          rateScheduleId: schedule.id,
+          roleCode: "primary",
+          effectiveDate: new Date("2026-01-01"),
+        },
+      });
+      return schedule.id;
+    });
+  }
+
+  const derive = (f: Fixture) =>
+    runAsTenant(TENANT_A, () =>
+      intervalReadsImports.deriveIntervalReads({
+        utilityId: f.fix.utilityId,
+        serviceAgreementIds: [f.saId],
+        window: PERIOD,
+      }),
+    );
+
+  const bucketsOf = (f: Fixture) =>
+    asPlatform(() =>
+      prismaImports.prisma.meterRead.findMany({
+        where: { meterId: f.fix.meterId, peakCode: { not: null } },
+        select: { peakCode: true, consumption: true, billedAt: true },
+        orderBy: { peakCode: "asc" },
+      }),
+    );
+
+  it("produces the buckets a bill is priced from", async () => {
+    const f = await makeFixture();
+    await attachMeterToAgreement(f);
+    await assignTouSchedule(f);
+    await seedHourlyIntervals(f);
+
+    const derived = await derive(f);
+
+    expect(derived).toHaveLength(1);
+    expect(derived[0]!.intervalsRead).toBe(HOURS_IN_PERIOD);
+    const buckets = await bucketsOf(f);
+    // Every period the calendar uses, zero included — the contract the
+    // `tou_period` source relies on to raise instead of billing zero.
+    expect(buckets.map((b) => b.peakCode)).toEqual(["mid_peak", "off_peak", "peak"]);
+    const peak = buckets.find((b) => b.peakCode === "peak")!;
+    expect(Number(peak.consumption)).toBe(WEEKDAYS_IN_PERIOD * PEAK_HOURS_PER_WEEKDAY);
+  });
+
+  it("does nothing for an agreement whose tariff prices no TOU period", async () => {
+    const f = await makeFixture();
+    await attachMeterToAgreement(f);
+    await assignTouSchedule(f, { touCalendarId: null });
+    await seedHourlyIntervals(f);
+
+    expect(await derive(f)).toEqual([]);
+    expect(await bucketsOf(f)).toHaveLength(0);
+  });
+
+  it("does nothing for a meter that reports no intervals", async () => {
+    // The ordinary register meter: its buckets are stamped at import,
+    // and asking it for intervals it was never going to have is not a
+    // fault.
+    const f = await makeFixture();
+    await attachMeterToAgreement(f);
+    await assignTouSchedule(f);
+
+    expect(await derive(f)).toEqual([]);
+  });
+
+  it("refuses to bill the account when the intervals cannot be split", async () => {
+    const f = await makeFixture();
+    await attachMeterToAgreement(f);
+    await assignTouSchedule(f);
+    await seedHourlyIntervals(f, {
+      at: PERIOD.startDate.toISOString(),
+      quality: "missing",
+    });
+
+    // Not "bill what classified and drop the rest": a missing hour is
+    // usage nobody can price, and the bill would silently be short.
+    await expect(derive(f)).rejects.toThrow(/could not be split/i);
+    expect(await bucketsOf(f)).toHaveLength(0);
+  });
+
+  it("names the meter in the refusal", async () => {
+    const f = await makeFixture();
+    await attachMeterToAgreement(f);
+    await assignTouSchedule(f);
+    await seedHourlyIntervals(f, {
+      at: PERIOD.startDate.toISOString(),
+      quality: "missing",
+    });
+
+    const meter = await asPlatform(() =>
+      prismaImports.prisma.meter.findUniqueOrThrow({
+        where: { id: f.fix.meterId },
+        select: { meterNumber: true },
+      }),
+    );
+    await expect(derive(f)).rejects.toThrow(new RegExp(meter.meterNumber));
+  });
+
+  it("leaves a window that has already been billed alone", async () => {
+    /*
+     * The roll-up clears and rewrites unbilled interval-derived rows, so
+     * a re-run picks up late-arriving intervals. A window already billed
+     * is closed: rewriting it would move a figure a customer has been
+     * told.
+     */
+    const f = await makeFixture();
+    await attachMeterToAgreement(f);
+    await assignTouSchedule(f);
+    await seedHourlyIntervals(f);
+    await derive(f);
+    await asPlatform(() =>
+      prismaImports.prisma.meterRead.updateMany({
+        where: { meterId: f.fix.meterId, peakCode: { not: null } },
+        data: { billedAt: new Date(), consumption: "1.0000" },
+      }),
+    );
+
+    expect(await derive(f)).toEqual([]);
+    const after = await bucketsOf(f);
+    expect(after.every((b) => Number(b.consumption) === 1)).toBe(true);
   });
 });

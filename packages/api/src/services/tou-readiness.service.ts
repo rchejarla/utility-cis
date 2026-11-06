@@ -250,6 +250,30 @@ export async function checkTouReadinessForAgreements(
     readsByMeter.set(r.meterId, list);
   }
 
+  /*
+   * Which of these meters report intervals for the period.
+   *
+   * An interval meter's buckets do not exist until the calendar has
+   * classified its intervals, and since 2026-11-05 the billing run
+   * derives them itself (`billing-run/interval-reads.ts`). So no reads
+   * **and** no intervals is a meter with no data; no reads and a month
+   * of intervals is a meter the run will deal with, and reporting it as
+   * "reported no TOU usage at all" sent an operator to import readings
+   * that were already in the database.
+   */
+  const intervalGroups = allMeterIds.length
+    ? await prisma.meterReadInterval.groupBy({
+        by: ["meterId"],
+        where: {
+          utilityId,
+          meterId: { in: allMeterIds },
+          intervalStart: { gte: period.startDate, lt: period.endDate },
+        },
+        _count: { meterId: true },
+      })
+    : [];
+  const meterIdsWithIntervals = new Set(intervalGroups.map((g) => g.meterId));
+
   for (const [saId, svc] of touBySa) {
     const problems: TouReadinessProblem[] = [];
     const scheduleCalendarName = calendarNameById.get(svc.calendarId) ?? "(missing)";
@@ -286,7 +310,14 @@ export async function checkTouReadinessForAgreements(
         // Nothing to reconcile or to miss a period from. Reporting the
         // absent periods on top would read as several faults where there
         // is one cause.
-        problems.push({ kind: "NO_TOU_READS", ...where });
+        //
+        // Unless the meter reports intervals, in which case it has data
+        // and the run derives the buckets from it before rating. Saying
+        // it reported nothing would be false, and the thing it told an
+        // operator to go and do was already done.
+        if (!meterIdsWithIntervals.has(meter.id)) {
+          problems.push({ kind: "NO_TOU_READS", ...where });
+        }
         continue;
       }
 
