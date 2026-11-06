@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import { bootPostgres, deprovisionTenants, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 import { runAsPlatform, runAsTenant } from "../../lib/tenant-context.js";
 /**
@@ -100,12 +100,7 @@ afterAll(async () => {
 beforeEach(() =>
   seedAsPlatform(async () => {
   const { prisma } = prismaImports;
-  await prisma.auditLog.deleteMany({ where: { utilityId: UTILITY } });
-  await prisma.userRole.deleteMany({ where: { utilityId: UTILITY } });
-  await prisma.cisUser.deleteMany({ where: { utilityId: UTILITY } });
-  await prisma.role.deleteMany({ where: { utilityId: UTILITY } });
-  await prisma.utilityModule.deleteMany({ where: { utilityId: UTILITY } });
-  await prisma.utility.deleteMany({ where: { id: UTILITY } });
+  await deprovisionTenants(prisma, [UTILITY]);
 }),
 );
 

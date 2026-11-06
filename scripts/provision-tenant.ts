@@ -96,6 +96,7 @@ async function main(): Promise<number> {
   console.log(`  utility created  ${result.created}`);
   console.log(`  modules enabled  ${result.modulesEnabled}`);
   console.log(`  TOU periods      ${result.periodsCreated}`);
+  console.log(`  season set       ${result.seasonSetCreated ? "Default, published" : "kept"}`);
   console.log(`  roles created    ${result.rolesCreated}`);
   console.log(`  admin created    ${result.adminCreated}`);
   return 0;

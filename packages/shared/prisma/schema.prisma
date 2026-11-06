@@ -993,8 +993,10 @@ model MeterRead {
   /// the two meter kinds must produce one shape: a register-based bucket
   /// takes the code from its register, an interval-derived one is
   /// classified by the calendar and has no register. A code rather than
-  /// a key to `tou_period`, which belongs to one calendar version — see
-  /// the migration.
+  /// a key to `tou_period`, which is tenant-level — so the key would now
+  /// be expressible, and is still refused here on volume: this is a
+  /// hypertable taking tens of millions of rows a month at TOU
+  /// granularity.
   peakCode           String?    @map("peak_code") @db.VarChar(50)
   readType           ReadType   @map("read_type")
   readSource         ReadSource @map("read_source")
@@ -1247,6 +1249,14 @@ model MeterRegister {
   /// component pricing it raises rather than billing zero for usage the
   /// meter never counted. A partial unique index allows one register
   /// per period per meter — two would be summed and so charged twice.
+  ///
+  /// Keyed to the tenant's `tou_period` on `(utility_id, peak_code)`
+  /// with RESTRICT since 2026-11-06, and left a bare scalar here: this
+  /// model's three Prisma relations are all single-column while the
+  /// database's are composite, so declaring one accurate relation would
+  /// not make the model accurate — it would add a client accessor
+  /// nothing asked for and a fourth shape to read past.
+  /// `schema-invariants.integration.test.ts` is what pins these keys.
   peakCode       String?  @map("peak_code") @db.VarChar(50)
   isActive       Boolean  @default(true) @map("is_active")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -2968,7 +2978,8 @@ model TouCalendar {
   @@map("tou_calendar")
 }
 
-/// One of a calendar's named periods — what a span of hours costs.
+/// A price tier a tenant's TOU tariffs assign hours to: `peak`,
+/// `off_peak`, `super_off_peak` (spec 26, TOU-CAL-1).
 ///
 /// The table keeps the industry's word, since "TOU period" is what every
 /// tariff document says, and the column keeps the one that is
@@ -2976,8 +2987,6 @@ model TouCalendar {
 /// billing period and `BaseContext.period`, so a `periodCode` beside
 /// `period.startDate` in the resolver would reintroduce the ambiguity
 /// qualification removes. A period and a peak are the same thing here.
-/// A price tier a tenant's TOU tariffs assign hours to: `peak`,
-/// `off_peak`, `super_off_peak` (spec 26, TOU-CAL-1).
 ///
 /// **Per tenant, not per calendar.** The codes were declared on each
 /// calendar until 2026-11-04, which stored one fact twice — every
@@ -3081,10 +3090,12 @@ model TouDayTypeWeekday {
 /// read back (TOU-UI-1d) — a painted grid cannot be summarised for a
 /// regulator.
 ///
-/// `seasonCode` is a code where the day type and period are keys: those
-/// two are children of this calendar, so a three-column key pins them to
-/// it, while a season lives in a separately versioned set and the code
-/// has to travel to the engine anyway. An **exclusion constraint** makes
+/// `seasonCode` and `peakCode` are codes where the day type is a key:
+/// the day type is a child of this calendar, so a three-column key pins
+/// it to this calendar, while a season lives in a separately versioned
+/// set and a period is the tenant's — since 2026-11-04, when it stopped
+/// being a key — and both codes have to travel to the engine anyway. An
+/// **exclusion constraint** makes
 /// "no two spans share a minute" a database guarantee; it exists only in
 /// the `tou_calendar` migration, since Prisma cannot express one.
 model TouSlot {

@@ -163,7 +163,7 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
         // The TOU quantity source: this charge prices one period's
         // usage, read from `meter:tou:<meter>:<peak_code>`.
         quantitySource: { base: "tou_period", peak_code: price.peakCode },
-        pricing: { type: "flat", rate: price.rate, unit: "KWH" },
+        pricing: { type: "flat", rate: price.rate, unit: "kWh" },
       })),
     ],
   });

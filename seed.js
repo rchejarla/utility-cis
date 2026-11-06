@@ -1743,8 +1743,24 @@ async function main() {
     const segments = [];
     for (let i = 0; i < agreements.length; i++) {
       const sa = agreements[i];
+      /*
+       * Ordered, because three of the nine agreements carry three
+       * assignments at once: an unbundled electric agreement has
+       * `delivery`, `supply` and `rider` in force together, and an
+       * unordered `findFirst` returned whichever row the heap offered
+       * first. Two reseeds of identical data therefore produced
+       * different bills — $523.55 and $468.17 on the same account —
+       * which makes a dev database a poor thing to compare anything
+       * against.
+       *
+       * `roleCode` ascending lands on the right one both times without a
+       * special case: `primary` where that is all there is, and
+       * `delivery` for electric, which is the utility's own charge
+       * rather than a supplier's or a rider.
+       */
       const assignment = await p.sAScheduleAssignment.findFirst({
         where: { utilityId: UID, serviceAgreementId: sa.id },
+        orderBy: { roleCode: "asc" },
         select: { rateScheduleId: true },
       });
       if (!assignment) continue;

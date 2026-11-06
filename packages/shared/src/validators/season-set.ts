@@ -22,6 +22,36 @@ const month = z.number().int().min(1).max(12);
  */
 const dayOfMonth = z.number().int().min(1).max(31);
 
+/**
+ * What a tenant is provisioned with: the seasons the rate engine used to
+ * hard-code for every utility on earth.
+ *
+ * Published, and dated at the epoch of this system, so it is in force
+ * for any period a bill could cover — including a backdated import or a
+ * legacy overlay's history.
+ *
+ * It exists because a tenant with no published set rates nothing
+ * seasonal: `seasonOf()` was deleted when seasons became configuration,
+ * so a `season` predicate resolves to no season and a TOU calendar
+ * cannot be created at all, its spans being keyed on a set's codes. The
+ * `season_sets` migration seeded this for every tenant that existed in
+ * 2026-11-02; a tenant provisioned after it needs the same thing, and a
+ * migration cannot reach forward in time to give it one.
+ *
+ * Summer 1 May – 31 October, winter the rest, which is the behaviour
+ * every `bozeman-*` golden test is written against. A tenant whose
+ * climate disagrees publishes its own set; that correction is the
+ * tenant's to make, and this is only a floor.
+ */
+export const DEFAULT_SEASON_SET = {
+  name: "Default",
+  effectiveDate: "2000-01-01",
+  seasons: [
+    { seasonCode: "summer", label: "Summer", startMonth: 5, startDay: 1, endMonth: 10, endDay: 31 },
+    { seasonCode: "winter", label: "Winter", startMonth: 11, startDay: 1, endMonth: 4, endDay: 30 },
+  ],
+} as const;
+
 export const createSeasonSetSchema = z
   .object({
     name: z.string().min(1).max(100),

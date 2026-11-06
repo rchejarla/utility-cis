@@ -149,6 +149,12 @@ vi.mock("../lib/prisma.js", () => {
     // properties of undefined (reading 'createMany')" from a route that
     // has nothing to do with tariffs.
     touPeriod: crud(),
+    // And the published season set it creates since 2026-11-06, for the
+    // same reason: the whole provisioning transaction fails on the first
+    // model the mock has not got, and the error names a property rather
+    // than a table.
+    seasonSet: crud(),
+    season: crud(),
     utilityConfig: crud(),
     // One row per (utility, scheduler) since 2026-10-31. Omitting it
     // makes `prisma.schedulerConfig` undefined, which surfaces as

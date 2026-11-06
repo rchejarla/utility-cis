@@ -319,6 +319,44 @@ export async function ensureUtilities(prisma: any, ids: readonly string[]): Prom
   });
 }
 
+/**
+ * Delete everything `provisionTenant` creates, then the utility itself.
+ *
+ * Every row provisioning writes carries `utility_id` with ON DELETE
+ * RESTRICT, so a test that provisions a tenant and later deletes the
+ * utility has to clear them all — and eight files were each keeping
+ * their own copy of that list. The copies went stale the moment
+ * provisioning grew a row type: the TOU periods arrived on 2026-11-04
+ * and none of the eight learned about them, so each file's second
+ * `beforeEach` failed on `tou_period_utility_id_fkey` and took the rest
+ * of the file with it. The season set would have been the second time.
+ *
+ * One list, next to `ensureUtilities`, which is the other half of the
+ * same knowledge. Order matters: `user_role` before `cis_user`, and the
+ * seasons before the set that owns them — that key cascades, but
+ * `season.utility_id` does not, so the utility delete would fail on
+ * `season_utility_id_fkey` with the set gone and its seasons left.
+ *
+ * It does not touch rows a *test* wrote. A file that seeds meters or
+ * bills still clears its own, before calling this.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function deprovisionTenants(prisma: any, ids: readonly string[]): Promise<void> {
+  await asPlatform(async () => {
+    for (const id of ids) {
+      await prisma.userRole.deleteMany({ where: { utilityId: id } });
+      await prisma.cisUser.deleteMany({ where: { utilityId: id } });
+      await prisma.role.deleteMany({ where: { utilityId: id } });
+      await prisma.utilityModule.deleteMany({ where: { utilityId: id } });
+      // Provisioning writes an audit row for a utility it created.
+      await prisma.auditLog.deleteMany({ where: { utilityId: id } });
+      await prisma.touPeriod.deleteMany({ where: { utilityId: id } });
+      await prisma.season.deleteMany({ where: { utilityId: id } });
+      await prisma.seasonSet.deleteMany({ where: { utilityId: id } });
+      await prisma.utility.deleteMany({ where: { id } });
+    }
+  });
+}
 
 /**
  * Boot a database, and declare the tenants this file writes rows for.

@@ -1,4 +1,9 @@
-import { DEFAULT_TOU_PERIODS, MODULES, PRESET_ROLES } from "@utility-cis/shared";
+import {
+  DEFAULT_SEASON_SET,
+  DEFAULT_TOU_PERIODS,
+  MODULES,
+  PRESET_ROLES,
+} from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
 import { writeAuditRow } from "../lib/audit-wrap.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
@@ -83,6 +88,11 @@ export interface ProvisionTenantResult {
   modulesEnabled: number;
   /** TOU price tiers created by this call. See the transaction. */
   periodsCreated: number;
+  /**
+   * Whether this call published the default season set. False when the
+   * tenant already had one of its own — including a draft.
+   */
+  seasonSetCreated: boolean;
   rolesCreated: number;
   adminCreated: boolean;
 }
@@ -225,6 +235,59 @@ export async function provisionTenant(
         skipDuplicates: true,
       });
 
+      /*
+       * The seasons, published.
+       *
+       * Here for the reason the periods are, one step further on: the
+       * `season_sets` migration gave every tenant that existed on
+       * 2026-11-02 a published Default set, and a migration cannot
+       * reach tenants provisioned after it. Without a set, a `season`
+       * predicate resolves to no season — `seasonOf()` was deleted when
+       * seasons became configuration — and a TOU calendar cannot be
+       * created at all, since its spans key on a set's codes.
+       *
+       * The dev seed found this the hard way: recreating the database
+       * ran the migration against an empty `utility` table, so the
+       * seeded tenant had no seasons and the whole TOU section skipped
+       * itself.
+       *
+       * Any existing set, published or draft, means the tenant has
+       * taken this over and we leave it alone — as with the roles and
+       * the periods above. Checked by existence rather than by name,
+       * because a tenant that renamed or replaced Default has still
+       * answered the question.
+       */
+      const ownSeasonSet = await tx.seasonSet.findFirst({
+        where: { utilityId: input.utilityId },
+        select: { id: true },
+      });
+      let seasonSetCreated = false;
+      if (!ownSeasonSet) {
+        const set = await tx.seasonSet.create({
+          data: {
+            utilityId: input.utilityId,
+            name: DEFAULT_SEASON_SET.name,
+            effectiveDate: new Date(`${DEFAULT_SEASON_SET.effectiveDate}T00:00:00Z`),
+            publishedAt: new Date(),
+          },
+          select: { id: true },
+        });
+        await tx.season.createMany({
+          data: DEFAULT_SEASON_SET.seasons.map((season, index) => ({
+            utilityId: input.utilityId,
+            seasonSetId: set.id,
+            seasonCode: season.seasonCode,
+            label: season.label,
+            startMonth: season.startMonth,
+            startDay: season.startDay,
+            endMonth: season.endMonth,
+            endDay: season.endDay,
+            sortOrder: index + 1,
+          })),
+        });
+        seasonSetCreated = true;
+      }
+
       // Never update an existing role's permissions: a tenant may have
       // edited them, and re-provisioning must not quietly revert that.
       const present = new Set(
@@ -305,6 +368,7 @@ export async function provisionTenant(
         created: !existing,
         modulesEnabled: modules.count,
         periodsCreated: periods.count,
+        seasonSetCreated,
         rolesCreated,
         adminCreated,
       };

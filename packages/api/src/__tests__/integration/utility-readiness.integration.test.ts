@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import { bootPostgres, deprovisionTenants, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 import { runAsPlatform, runAsTenant } from "../../lib/tenant-context.js";
 /**
@@ -83,20 +83,17 @@ afterAll(async () => {
 beforeEach(() =>
   seedAsPlatform(async () => {
   const { prisma } = prismaImports;
-  await prisma.auditLog.deleteMany({ where: { utilityId: UTILITY } });
+  // This file's own fixtures first; provisioning's rows are
+  // `deprovisionTenants`'s business.
   await prisma.rateSchedule.deleteMany({ where: { utilityId: UTILITY } });
   await prisma.billingCycle.deleteMany({ where: { utilityId: UTILITY } });
   await prisma.unitOfMeasure.deleteMany({ where: { utilityId: UTILITY } });
   await prisma.commodity.deleteMany({ where: { utilityId: UTILITY } });
   await prisma.utilityConfig.deleteMany({ where: { utilityId: UTILITY } });
-  await prisma.userRole.deleteMany({ where: { utilityId: UTILITY } });
-  await prisma.cisUser.deleteMany({ where: { utilityId: UTILITY } });
   // Customer references utility ON DELETE RESTRICT, so the portal test's
   // row would block the utility delete on the next run rather than here.
   await prisma.customer.deleteMany({ where: { utilityId: UTILITY } });
-  await prisma.role.deleteMany({ where: { utilityId: UTILITY } });
-  await prisma.utilityModule.deleteMany({ where: { utilityId: UTILITY } });
-  await prisma.utility.deleteMany({ where: { id: UTILITY } });
+  await deprovisionTenants(prisma, [UTILITY]);
   await provisionTenant({ utilityId: UTILITY, name: "City of Readiness" });
 }),
 );

@@ -81,6 +81,17 @@ existing seasonal tariffs, so seasons become configuration first.
   every existing tenant with today's behaviour (summer = May 1 – Oct 31,
   winter otherwise), and every existing golden test (`bozeman-*`) passes
   unchanged.
+
+  *(Extended 2026-11-06: **provisioning seeds the same set**, published
+  and dated 2000-01-01, for a tenant that did not exist when the
+  migration ran — `DEFAULT_SEASON_SET`. A migration cannot reach forward
+  in time, and `seasonOf()` is gone, so without this a new tenant's
+  `season` predicate resolves to no season and no TOU calendar can be
+  created at all, its spans being keyed on a set's codes. Found by
+  recreating the dev database: the migration ran against an empty
+  `utility` table, so the seeded tenant had no seasons and the whole TOU
+  section of the seed skipped itself. Any set the tenant already has,
+  published or draft, is left alone.)*
 - **TOU-SEA-4 (Must).** For TOU, the season is decided **per interval**
   (by the interval's local start time), not per service period. A bill
   spanning Oct 15 – Nov 14 rates October usage at summer prices and
@@ -604,27 +615,33 @@ raw intervals from the same meters. Compression is therefore entirely a
   reconciliation check, which belongs with the import path and is the
   next step.* Three things worth knowing:
 
-  **A `peak_code`, not a key to `tou_period`.** The spec said
-  `tou_period_id`; this reverses it. A `tou_period` row belongs to one
-  calendar *version*, so pointing a register at one would bind a fact
-  about a **device** to a version of a **tariff** — every republished
-  calendar would need every register re-pointed, and TOU-CAL-11 is
-  explicit that what a meter is programmed with never decides pricing.
-  The integrity a key would buy already exists and is better placed: a
-  read carrying a code no component prices does not bill silently,
-  because the `tou_period` quantity source raises when its bucket is
-  absent — rather than by a foreign key on every row of a hypertable
-  that will take tens of millions of rows a month at TOU granularity.
+  **A `peak_code`, and since 2026-11-06 a key on the code.** The spec
+  said `tou_period_id`. The 2026-11-03 reversal argued that a
+  `tou_period` row belonged to one calendar *version*, so pointing a
+  register at one would bind a fact about a **device** to a version of a
+  **tariff**. That reason died on 2026-11-04, when the periods became
+  the tenant's: there is no version left to bind to.
 
-  *(Simpler since 2026-11-04: peak codes are the tenant's, so the
-  validation target is one list rather than "the meter's programmed
-  calendar". `meter_register` could now carry the same key the slots
-  do — low volume, and it would make an unknown code impossible rather
-  than merely reported — and probably should when this requirement
-  grows a write path. `meter_read` must not, for the volume reason
-  above. **Neither the check nor the write path exists yet**: a
-  register's code can only be set directly in SQL today, and nothing
-  stops `on_peak` where the tenant says `peak` until a bill stops.)*
+  What stands in its place is the shape `tou_slot` has carried since
+  that day — `(utility_id, peak_code) -> tou_period (utility_id,
+  peak_code)`, RESTRICT, no update cascade. The column still holds the
+  **code** and not the id, because the code is what travels onto reads
+  and into rate components; the key makes an unknown code impossible
+  rather than merely reported, and a period a register counts neither
+  deletable nor renameable. NULL still means "not a TOU register" —
+  MATCH SIMPLE asks for no parent row when a column of a composite key
+  is NULL, so a total register needs no exemption.
+
+  The TOU-UI-4 write path (built 2026-11-05) still refuses an unknown
+  code first and names the ones the tenant has, which is the better
+  message. The key is the floor under it: a service is one write path,
+  and an import or a script is another.
+
+  **`meter_read.peak_code` is not keyed**, for the volume reason: a
+  hypertable taking tens of millions of rows a month at TOU granularity
+  does not want a foreign key per row. A read carrying a code no
+  component prices still does not bill silently — the `tou_period`
+  quantity source raises when its bucket is absent.
 
   **A register does not report a peak code** (Rao, 2026-11-03). It
   reports a *number* — a dial count. The meter's own clock routes
@@ -1099,8 +1116,9 @@ raw intervals from the same meters. Compression is therefore entirely a
 > **two years of observed dates** (2026–27, including 3 July 2026 and 5
 > July 2027 — the same holiday moved in both directions), so the screens
 > open on something and the spot check can be used. It keys its spans on the
-> season set the tenant already has — the `season_sets` migration seeds
-> every tenant a published "Default" — rather than creating a second set,
+> season set the tenant already has — provisioning gives every tenant a
+> published "Default", as the `season_sets` migration did for the tenants
+> that predate it — rather than creating a second set,
 > because a published calendar naming one set while another is in force
 > is the divergence TOU-SEA-6 warns about, and a fresh database should
 > not open on a warning about a state nobody caused. Nothing prices it

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { MODULES } from "@utility-cis/shared";
-import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import { bootPostgres, deprovisionTenants, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 import { runAsPlatform, runAsTenant } from "../../lib/tenant-context.js";
 /**
@@ -76,19 +76,13 @@ beforeEach(() =>
   seedAsPlatform(async () => {
   const { prisma } = prismaImports;
   for (const id of [TENANT, OTHER]) {
-    // `audit_log.utility_id` is ON DELETE RESTRICT too, and provisioning
-    // now writes a row, so the same applies to the history it leaves.
-    await prisma.auditLog.deleteMany({ where: { utilityId: id } });
-    await prisma.userRole.deleteMany({ where: { utilityId: id } });
-    await prisma.cisUser.deleteMany({ where: { utilityId: id } });
     // Before the utility: customer.utility_id is ON DELETE RESTRICT, so
     // a leftover customer from the portal-count test blocks the teardown
-    // and takes every test after it down with the utility.
+    // and takes every test after it down with the utility. Provisioning's
+    // own rows are `deprovisionTenants`'s business.
     await prisma.customer.deleteMany({ where: { utilityId: id } });
-    await prisma.role.deleteMany({ where: { utilityId: id } });
-    await prisma.utilityModule.deleteMany({ where: { utilityId: id } });
-    await prisma.utility.deleteMany({ where: { id } });
   }
+  await deprovisionTenants(prisma, [TENANT, OTHER]);
   await provisionTenant({
     utilityId: TENANT,
     name: "City of Detail",
