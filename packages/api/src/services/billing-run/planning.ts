@@ -313,15 +313,32 @@ async function findTouProblems(
     accounts: Map<string, string>;
     detail: Set<string>;
   }
-  const groups = new Map<string, Group>();
+  const groups = new Map<TouReadinessProblem["kind"], Group>();
   const blockedAccountIds = new Set<string>();
 
-  const BLOCKING: Record<TouReadinessProblem["kind"], boolean> = {
-    PERIOD_NOT_REPORTED: true,
-    NO_TOU_READS: true,
-    CALENDAR_MISMATCH: false,
-    CALENDAR_UNKNOWN: false,
-    REGISTERS_UNRECONCILED: false,
+  /**
+   * Where each kind goes, in one table the compiler keeps exhaustive.
+   *
+   * This was a `BLOCKING` lookup plus an if/else chain over the same
+   * six kinds — two places to add a kind to, and the chain ended in a
+   * trailing `else` that would have relabelled anything new as
+   * unreconciled registers. Adding `INTERVALS_INCOMPLETE` is what found
+   * it: the lookup would have failed to compile, which is the half that
+   * worked, and the chain would have shipped the wrong sentence.
+   *
+   * The split is the observable test the blocker type states: does a
+   * bill come out?
+   */
+  const DESTINATION: Record<
+    TouReadinessProblem["kind"],
+    { blocking: true; code: RunBlocker["code"] } | { blocking: false; code: RunWarning["code"] }
+  > = {
+    PERIOD_NOT_REPORTED: { blocking: true, code: "TOU_PERIOD_NOT_REPORTED" },
+    NO_TOU_READS: { blocking: true, code: "TOU_NO_READS" },
+    INTERVALS_INCOMPLETE: { blocking: true, code: "TOU_INTERVALS_INCOMPLETE" },
+    CALENDAR_MISMATCH: { blocking: false, code: "TOU_CALENDAR_MISMATCH" },
+    CALENDAR_UNKNOWN: { blocking: false, code: "TOU_CALENDAR_UNKNOWN" },
+    REGISTERS_UNRECONCILED: { blocking: false, code: "TOU_REGISTERS_UNRECONCILED" },
   };
 
   for (const [saId, problems] of byAgreement) {
@@ -334,7 +351,7 @@ async function findTouProblems(
       // agreement's own page describe a problem the same way.
       group.detail.add(describeTouProblem(problem));
       groups.set(problem.kind, group);
-      if (BLOCKING[problem.kind]) blockedAccountIds.add(account.id);
+      if (DESTINATION[problem.kind].blocking) blockedAccountIds.add(account.id);
     }
   }
 
@@ -353,16 +370,11 @@ async function findTouProblems(
       detail: describe(group.detail),
       sampleAccounts: [...group.accounts.values()].sort().slice(0, 5),
     };
-    if (kind === "PERIOD_NOT_REPORTED") {
-      blockers.push({ code: "TOU_PERIOD_NOT_REPORTED", ...row });
-    } else if (kind === "NO_TOU_READS") {
-      blockers.push({ code: "TOU_NO_READS", ...row });
-    } else if (kind === "CALENDAR_MISMATCH") {
-      warnings.push({ code: "TOU_CALENDAR_MISMATCH", ...row });
-    } else if (kind === "CALENDAR_UNKNOWN") {
-      warnings.push({ code: "TOU_CALENDAR_UNKNOWN", ...row });
+    const destination = DESTINATION[kind];
+    if (destination.blocking) {
+      blockers.push({ code: destination.code, ...row });
     } else {
-      warnings.push({ code: "TOU_REGISTERS_UNRECONCILED", ...row });
+      warnings.push({ code: destination.code, ...row });
     }
   }
 

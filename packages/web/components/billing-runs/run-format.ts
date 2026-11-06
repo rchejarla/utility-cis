@@ -114,6 +114,8 @@ export function describeBlocker(b: RunBlocker): string {
       return `${accounts}: a TOU period the tariff prices was never reported — ${b.detail}`;
     case "TOU_NO_READS":
       return `${accounts}: no TOU usage for this period — ${b.detail}`;
+    case "TOU_INTERVALS_INCOMPLETE":
+      return `${accounts}: interval data does not cover the period — ${b.detail}`;
   }
 }
 

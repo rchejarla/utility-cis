@@ -31,7 +31,14 @@ export interface RunBlocker {
      * TOU-BIL-1).
      */
     | "TOU_PERIOD_NOT_REPORTED"
-    | "TOU_NO_READS";
+    | "TOU_NO_READS"
+    /*
+     * The same observable test: `rollUpIntervals` refuses a period its
+     * intervals do not account for, rather than billing a short month,
+     * so the account cannot be billed until the data arrives or an
+     * operator accepts the gap (spec 26, TOU-GAP-1).
+     */
+    | "TOU_INTERVALS_INCOMPLETE";
   accountCount: number;
   /** The thing to go and fix — schedule codes, or the agreements. */
   detail: string;

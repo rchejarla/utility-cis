@@ -544,6 +544,13 @@ const RESET_TABLES = [
   "service_point_meter",
   "service_point",
   "service_agreement",
+  /*
+   * `meter_data_exception` cascades from `meter`, so TRUNCATE would
+   * reach it anyway. Named because a reader looking for where the
+   * coverage sweep's rows are cleared should find them here rather
+   * than work out that the cascade covers it.
+   */
+  "meter_data_exception",
   "meter",
   "account",
   "premise",

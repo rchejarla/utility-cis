@@ -15,6 +15,16 @@
  * - A **period the meter never reported** is the one that *does* stop
  *   rating — `tou_period` raises on the absent bucket — which is better
  *   found here, before a run of thousands, than halfway through one.
+ * - **Intervals that do not account for the period** stop rating too:
+ *   the roll-up refuses an incomplete month rather than billing a short
+ *   one. Added 2026-11-06 (spec 26, TOU-GAP-1 step 3), and it is the
+ *   only check here that an operator can switch off — an `accepted`
+ *   exception means "bill this meter's month as it stands", and those
+ *   minutes stop blocking.
+ *
+ * The first three are about a meter that **splits usage itself**; they
+ * are skipped for one that does not, because what an interval meter was
+ * programmed with decides nothing.
  *
  * Reported rather than enforced. The operator approves the preview, and
  * a tenant mid-migration may knowingly bill a service whose meter
@@ -51,7 +61,22 @@ export type TouReadinessProblem =
       allowed: string;
     }
   | { kind: "PERIOD_NOT_REPORTED"; meterId: string; meterNumber: string; peakCode: string }
-  | { kind: "NO_TOU_READS"; meterId: string; meterNumber: string };
+  | { kind: "NO_TOU_READS"; meterId: string; meterNumber: string }
+  | {
+      /**
+       * An interval meter whose intervals do not account for the
+       * period (spec 26, TOU-GAP-1). A blocker: the roll-up refuses an
+       * incomplete period rather than billing a short month, so no bill
+       * comes out.
+       */
+      kind: "INTERVALS_INCOMPLETE";
+      meterId: string;
+      meterNumber: string;
+      minutesCovered: number;
+      minutesInPeriod: number;
+      /** Minutes an operator has already accepted, which do not block. */
+      minutesAccepted: number;
+    };
 
 /**
  * Do a meter's TOU registers sum to its total register?
@@ -97,6 +122,14 @@ export function describeTouProblem(p: TouReadinessProblem): string {
       return `Meter ${p.meterNumber} reported no "${p.peakCode}" usage for this period, and the rate schedule prices it. Rating will stop rather than bill zero.`;
     case "NO_TOU_READS":
       return `Meter ${p.meterNumber} reported no TOU usage at all for this period, and the rate schedule is a TOU tariff.`;
+    case "INTERVALS_INCOMPLETE": {
+      const short = p.minutesInPeriod - p.minutesCovered - p.minutesAccepted;
+      if (short < 0) {
+        return `Meter ${p.meterNumber}'s intervals account for ${p.minutesCovered} minutes of a ${p.minutesInPeriod}-minute period — ${-short} too many, so some usage overlaps or runs past the end. Rating will refuse rather than count it twice.`;
+      }
+      const accepted = p.minutesAccepted > 0 ? ` (${p.minutesAccepted} already accepted)` : "";
+      return `Meter ${p.meterNumber}'s intervals account for ${p.minutesCovered} minutes of a ${p.minutesInPeriod}-minute period, so ${short} minutes of usage are missing${accepted}. Rating will refuse rather than bill a short month.`;
+    }
   }
 }
 
@@ -114,9 +147,15 @@ function pricedCodesOf(components: Array<{ quantitySource: unknown }>): string[]
  *
  * **Batched because the caller is a billing run's preview**, which runs
  * over every account in a cycle. Called once per agreement this would be
- * six queries times tens of thousands of agreements; here it is five
- * queries in total, and the first one answers "none of these is a TOU
- * service" for the great majority of cycles and returns.
+ * eight queries times tens of thousands of agreements; here it is eight
+ * in total, and the first one answers "none of these is a TOU service"
+ * for the great majority of cycles and returns before the rest.
+ *
+ * Three of the eight serve the interval path: the intervals' summed
+ * minutes (which rides along with a `groupBy` that was already being
+ * run), the mapped TOU registers that say whether a meter splits usage
+ * itself, and the minutes an operator has already accepted. All three
+ * are one row per meter, not one row per interval.
  *
  * Returns a map keyed by agreement id, carrying only the agreements that
  * have a problem — an empty map means nothing to report, not nothing
@@ -270,9 +309,84 @@ export async function checkTouReadinessForAgreements(
           intervalStart: { gte: period.startDate, lt: period.endDate },
         },
         _count: { meterId: true },
+        /*
+         * Summed in the database, not tiled in memory.
+         *
+         * `findCoverageProblems` is the exact test and needs every row:
+         * a month of 15-minute data is 2,880 rows per meter, so a
+         * preview over a cycle of thousands would read tens of millions
+         * of them to answer a yes/no question. The sum of the lengths
+         * against the period's own minutes is one row per meter and
+         * catches every short month — which is the case that arises.
+         *
+         * What it cannot catch is a gap and an overlap of exactly equal
+         * length, which sum to the right total. That is why this is the
+         * *pre-run signal* and the roll-up's tiling check is still the
+         * gate: `rollUpIntervals` refuses at rating, where reading
+         * every row is already necessary and already happening.
+         */
+        _sum: { lengthMinutes: true },
       })
     : [];
   const meterIdsWithIntervals = new Set(intervalGroups.map((g) => g.meterId));
+  const minutesCoveredByMeter = new Map(
+    intervalGroups.map((g) => [g.meterId, g._sum.lengthMinutes ?? 0]),
+  );
+
+  /*
+   * Which of these meters split usage themselves.
+   *
+   * A mapped TOU register is the declaration that the *device* routes
+   * consumption by its own clock, which is what makes its programmed
+   * calendar matter. A meter with none and a month of intervals is
+   * classified by the published calendar at rating time, so asking what
+   * it was programmed with is asking about a fact it does not have —
+   * reported, `CALENDAR_UNKNOWN` sends an operator to record one.
+   *
+   * A meter with both keeps the calendar questions: it does split usage
+   * itself, whatever else it also reports.
+   */
+  const touRegisters = allMeterIds.length
+    ? await prisma.meterRegister.findMany({
+        where: { utilityId, meterId: { in: allMeterIds }, peakCode: { not: null } },
+        select: { meterId: true },
+      })
+    : [];
+  const meterIdsWithTouRegisters = new Set(touRegisters.map((r) => r.meterId));
+
+  /*
+   * Minutes an operator has already accepted for these meters.
+   *
+   * `accepted` means "bill this meter's month as it stands", so those
+   * minutes stop blocking the run — that is the whole point of the
+   * status. Only `accepted`: an `estimated` exception means a value was
+   * supplied, which shows up as coverage on its own, and counting its
+   * minutes here as well would forgive them twice.
+   *
+   * Summed rather than matched day by day, because the shortfall this
+   * compares against is itself a sum over the period. A second gap
+   * nobody has seen therefore still blocks: acceptance forgives its own
+   * minutes and no more.
+   */
+  const acceptedGroups = allMeterIds.length
+    ? await prisma.meterDataException.groupBy({
+        by: ["meterId"],
+        where: {
+          utilityId,
+          meterId: { in: allMeterIds },
+          status: "accepted",
+          windowStart: { gte: period.startDate, lt: period.endDate },
+        },
+        _sum: { minutesAffected: true },
+      })
+    : [];
+  const minutesAcceptedByMeter = new Map(
+    acceptedGroups.map((g) => [g.meterId, g._sum.minutesAffected ?? 0]),
+  );
+
+  const minutesInPeriod = Math.round(
+    (period.endDate.getTime() - period.startDate.getTime()) / 60_000,
+  );
 
   for (const [saId, svc] of touBySa) {
     const problems: TouReadinessProblem[] = [];
@@ -281,7 +395,30 @@ export async function checkTouReadinessForAgreements(
     for (const meter of metersBySa.get(saId) ?? []) {
       const where = { meterId: meter.id, meterNumber: meter.meterNumber };
 
-      if (meter.touCalendarId === null) {
+      /*
+       * An interval meter for this period: it reported intervals and
+       * has no mapped TOU register, so nothing about the device splits
+       * its usage and the published calendar does it at rating time.
+       */
+      const intervalMetered =
+        meterIdsWithIntervals.has(meter.id) && !meterIdsWithTouRegisters.has(meter.id);
+
+      if (intervalMetered) {
+        const minutesCovered = minutesCoveredByMeter.get(meter.id) ?? 0;
+        const minutesAccepted = minutesAcceptedByMeter.get(meter.id) ?? 0;
+        const short = minutesInPeriod - minutesCovered;
+        // Over-covered reports regardless: acceptance forgives missing
+        // minutes, and usage counted twice is not a missing minute.
+        if (short > minutesAccepted || short < 0) {
+          problems.push({
+            kind: "INTERVALS_INCOMPLETE",
+            ...where,
+            minutesCovered,
+            minutesInPeriod,
+            minutesAccepted,
+          });
+        }
+      } else if (meter.touCalendarId === null) {
         problems.push({ kind: "CALENDAR_UNKNOWN", ...where });
       } else {
         const meterCalendar = calendarNameById.get(meter.touCalendarId) ?? "(missing)";

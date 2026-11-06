@@ -1004,11 +1004,26 @@ raw intervals from the same meters. Compression is therefore entirely a
   sweep that never examined them, and a resolved exception reads as one
   somebody fixed.
 
-  **Still to come:** the pre-run check that reads these (step 3), and a
-  screen. `missing_reading` is in the `kind` vocabulary with no writer
-  yet — it is the roll-up's quality check, which gets its flag action
-  with step 4, when interval `quality` is carried through the roll-up
-  into `meter_read.readType`.
+  *Step 3 built 2026-11-06: the pre-run check (TOU-BIL-1) gained an
+  `INTERVALS_INCOMPLETE` blocker, and an **accepted** exception is what
+  switches it off for a meter.* That is the first thing the queue is
+  read for rather than written to: accepting a gap means "bill this
+  meter's month as it stands", so those minutes stop blocking the run —
+  and only those, since a second gap nobody has seen is a new fact.
+  An *open* exception changes nothing at the preview: it is a problem
+  nobody has decided about yet, and the month is still short.
+
+  Two things the sweep cannot stand in for, which is why the pre-run
+  check still exists: it sweeps a `lookbackDays` window (7 by default)
+  while a bill covers a month, and it deliberately skips a meter that
+  reported nothing at all — which is the worst case for a bill and
+  invisible to anything that does not know which agreements are being
+  billed.
+
+  **Still to come:** a screen, and `missing_reading`, which is in the
+  `kind` vocabulary with no writer yet — it is the roll-up's quality
+  check, which gets its flag action with step 4, when interval
+  `quality` is carried through the roll-up into `meter_read.readType`.
 - **TOU-GAP-2 (Should).** A tenant may instead choose an estimation
   policy: fill gaps by distributing the register total across missing
   intervals using the customer's own prior profile, or a class load
@@ -1482,8 +1497,17 @@ it is wrong.
   `blockers`, counting against `billableCount`. The other three produce
   a bill — a wrong one — so they are a separate `warnings` list.
 
+  *(A sixth kind on 2026-11-06 — `INTERVALS_INCOMPLETE`, a blocker by
+  the same test, since `rollUpIntervals` refuses a period its intervals
+  do not account for. The two lists and the if/else chain that mapped
+  kinds to codes became **one exhaustive table**: adding a kind had to
+  be done in both, and the chain's trailing `else` would have
+  relabelled anything new as unreconciled registers. The compiler
+  caught half of it; the half it could not catch is what the table now
+  prevents.)*
+
   Mixing them would make the preview's own headline lie: it reads "N of
-  M cannot be billed yet", and three of the five can be. An operator
+  M cannot be billed yet", and three of the six can be. An operator
   would hold a run that should go ahead, or stop trusting the number.
   The warnings block is rendered muted rather than in the warning
   colour, so the block that stops the run stays the one that looks
@@ -1491,10 +1515,20 @@ it is wrong.
   running anyway is sometimes right mid-migration.
 
   **The batched form is what the preview calls**
-  (`checkTouReadinessForAgreements`). Per agreement it would be six
-  queries times tens of thousands; batched it is five in total, and the
+  (`checkTouReadinessForAgreements`). Per agreement it would be eight
+  queries times tens of thousands; batched it is eight in total, and the
   first answers "no TOU services here" for most cycles and returns. A
   non-TOU utility pays two queries for the whole feature.
+
+  **The coverage check is a sum, not the tiling function** (2026-11-06).
+  `findCoverageProblems` is the exact test and needs every interval
+  row: a month of 15-minute data is 2,880 per meter, so a preview over
+  a cycle of thousands would read tens of millions of rows to answer a
+  yes/no question. The summed `length_minutes` against the period's own
+  minutes is one row per meter and catches every short month. What it
+  cannot catch is a gap and an overlap of exactly equal length — which
+  is why this is the pre-run *signal* and `rollUpIntervals` is still the
+  gate, tiling exactly at rating where every row is read anyway.
 
   The problem *wording* lives in one place (`describeTouProblem`), so
   the preview and an agreement's own page cannot describe the same
