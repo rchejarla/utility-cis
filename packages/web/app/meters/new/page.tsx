@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { FieldDefinition } from "@utility-cis/shared";
+import { METER_TYPES, type FieldDefinition } from "@utility-cis/shared";
 import { DatePicker } from "@/components/ui/date-picker";
 import {
   EntityFormPage,
@@ -29,15 +29,16 @@ interface UOM {
   commodityId: string;
 }
 
-const METER_TYPES = [
-  "STANDARD",
-  "SMART",
-  "AMR",
-  "AMI",
-  "SUBMETER",
-  "MASTER",
-  "OTHER",
-].map((t) => ({ value: t, label: t }));
+/*
+ * The shared list, shaped for this form's option objects.
+ *
+ * Its own copy read STANDARD, SMART, AMR, AMI, SUBMETER, MASTER, OTHER
+ * — five values the API has never accepted, and no `MANUAL`, which is
+ * what most water meters are. So the one form for adding a meter could
+ * not add the commonest kind of meter, and offered five that would be
+ * refused on submit.
+ */
+const METER_TYPE_OPTIONS = METER_TYPES.map((t) => ({ value: t, label: t }));
 
 export default function NewMeterPage() {
   // UOMs are loaded locally because the UOM dropdown must filter by the
@@ -164,7 +165,7 @@ export default function NewMeterPage() {
               label: "Meter Type",
               type: "select",
               required: true,
-              options: METER_TYPES,
+              options: METER_TYPE_OPTIONS,
             },
             {
               key: "multiplier",

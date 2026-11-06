@@ -151,11 +151,18 @@ enum PremiseStatus {
   @@map("premise_status")
 }
 
+/// How a meter is read. **Not** how its usage is split into TOU
+/// periods — that is what a register's `peak_code` mapping declares,
+/// and the two come apart in both directions (an AMR meter can carry
+/// TOU registers; an AMI meter need not report intervals).
+///
+/// `SMART` was removed on 2026-11-06 as a second name for `AMI`.
+/// PostgreSQL cannot drop a value from an enum, so the migration swaps
+/// the type: see `meter_type_smart_removed`.
 enum MeterType {
   AMR
   AMI
   MANUAL
-  SMART
 
   @@map("meter_type")
 }

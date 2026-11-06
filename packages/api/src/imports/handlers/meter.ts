@@ -1,4 +1,4 @@
-import { EVENT_TYPES } from "@utility-cis/shared";
+import { EVENT_TYPES, METER_STATUSES, METER_TYPES } from "@utility-cis/shared";
 import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { prisma } from "../../lib/prisma.js";
 import { registerImportKind } from "../registry.js";
@@ -31,8 +31,6 @@ import type { ImportKindHandler } from "../types.js";
  * a careless re-import. De-dupe sweep is a phase 2 concern.
  */
 
-const METER_TYPES = ["AMR", "AMI", "MANUAL", "SMART"] as const;
-const METER_STATUSES = ["ACTIVE", "REMOVED", "DEFECTIVE", "PENDING_INSTALL"] as const;
 type MeterType = (typeof METER_TYPES)[number];
 type MeterStatus = (typeof METER_STATUSES)[number];
 
@@ -138,7 +136,7 @@ const handler: ImportKindHandler<MeterRow, BatchData> = {
       name: "meterType",
       label: "Meter type",
       required: true,
-      description: "AMR, AMI, MANUAL, or SMART.",
+      description: `One of ${METER_TYPES.join(", ")}.`,
       example: "AMI",
       aliases: ["^metertype$", "^type$"],
     },

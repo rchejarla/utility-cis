@@ -343,6 +343,21 @@ export async function checkTouReadinessForAgreements(
    * it was programmed with is asking about a fact it does not have —
    * reported, `CALENDAR_UNKNOWN` sends an operator to record one.
    *
+   * **Not `meter.meter_type`**, which is the obvious candidate and
+   * answers a different question: AMR, AMI, MANUAL and SMART describe
+   * how a meter is *read*, not how its usage is split. The seeded data
+   * shows the two coming apart in both directions — `TOU-REG-001` is
+   * AMR and splits usage across three mapped registers, while three
+   * AMI meters report no intervals at all. Keying on it would skip the
+   * calendar checks for those three and report a 44,640-minute hole in
+   * a meter that is not an interval meter.
+   *
+   * It is also not a fact anyone has asserted: the meter import
+   * defaults it to AMI, nothing in the API reads it for logic, and AMI
+   * and SMART say roughly the same thing. A billing blocker resting on
+   * a default somebody never chose is the unversioned-config trap this
+   * codebase has already walked into once.
+   *
    * A meter with both keeps the calendar questions: it does split usage
    * itself, whatever else it also reports.
    */

@@ -476,7 +476,7 @@ Physical device measuring consumption. Retained across customer changes.
 | premise_id | UUID | FK → Premise |
 | meter_number | VARCHAR(100) | Unique per utility |
 | commodity_id | UUID | FK → Commodity |
-| meter_type | ENUM | AMR, AMI, MANUAL, SMART |
+| meter_type | ENUM | AMR, AMI, MANUAL (`SMART` removed 2026-11-06 as a second name for AMI) |
 | uom_id | UUID | FK → UnitOfMeasure |
 | dial_count | INTEGER | |
 | multiplier | DECIMAL(10,4) | Default 1.0 |

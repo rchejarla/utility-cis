@@ -27,7 +27,7 @@ Physical device measuring utility consumption at a specific premise.
 | premise_id | UUID | FK → Premise (required; where this meter is installed) |
 | meter_number | VARCHAR(100) | Unique per utility; the physical serial/asset number |
 | commodity_id | UUID | FK → Commodity (what this meter measures) |
-| meter_type | ENUM | `AMR`, `AMI`, `MANUAL`, `SMART` |
+| meter_type | ENUM | `AMR`, `AMI`, `MANUAL` — how the meter is **read**, not how its usage is split |
 | uom_id | UUID | FK → UnitOfMeasure (the unit for raw dial readings) |
 | dial_count | INTEGER | Optional; number of dials on the physical meter |
 | multiplier | DECIMAL(10,4) | Default 1.0; applied to raw readings to get billed consumption |
@@ -52,7 +52,23 @@ Physical device measuring utility consumption at a specific premise.
 - `AMR` — Automatic Meter Reading (one-way communication, drive-by reads)
 - `AMI` — Advanced Metering Infrastructure (two-way communication, smart grid)
 - `MANUAL` — Field staff manually record the dial reading
-- `SMART` — Smart meter with interval data capability (used interchangeably with AMI in some contexts)
+
+*`SMART` was removed on 2026-11-06.* This list described it as "used
+interchangeably with AMI in some contexts", which is the whole case
+against it: two enum values for one idea are two answers to "what kind
+of meter is this". Nothing in the API branches on `meter_type` — it is
+read for a customer-graph subtext, a notification variable and a portal
+field, all display — so the ambiguity cost nothing until something tried
+to mean anything by the answer, and the TOU pre-run check nearly did.
+PostgreSQL cannot drop an enum value, so the migration swaps the type
+and moves the rows to `AMI` first.
+
+**It says how a meter is read, not how its usage is split.** Those come
+apart in both directions: an `AMR` meter can carry mapped TOU registers
+and split usage by its own clock, and an `AMI` meter need not report
+intervals at all. What declares the split is a register's `peak_code`
+mapping (spec 26, TOU-REG-1), which is why the TOU readiness check keys
+on that and not on this column.
 
 ### MeterRegister
 
@@ -110,7 +126,7 @@ All endpoints require JWT authentication with `utility_id` claim.
 | premiseId | Yes | UUID |
 | meterNumber | Yes | min 1, max 100 chars |
 | commodityId | Yes | UUID |
-| meterType | Yes | AMR, AMI, MANUAL, SMART |
+| meterType | Yes | AMR, AMI, MANUAL |
 | uomId | Yes | UUID |
 | dialCount | No | positive integer |
 | multiplier | No | positive number, default 1.0 |
