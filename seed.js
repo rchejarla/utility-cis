@@ -2166,9 +2166,24 @@ async function main() {
         touService.prices.join(", ") + ") per kWh",
     );
     console.log(
-      "       register meter " + touService.registerMeter + ": 3 mapped registers, " +
+      "       register meter " + touService.registerMeter + ": 3 mapped registers + a total, " +
         "one read event (" + touService.registerBuckets.join(", ") + " kWh)",
     );
+    /*
+     * Which of the two reconciles, said out loud. A seeded fault
+     * nobody announced reads as a bug in the product the first time
+     * somebody opens a billing preview and finds a warning on it.
+     */
+    for (const m of touService.registerMeters) {
+      console.log(
+        "       " + m.meterNumber + ": total " + m.total + " kWh against " +
+          touService.bucketSum + " on the dials — " +
+          (m.unattributed === 0
+            ? "reconciles"
+            : m.unattributed +
+              " kWh unattributed, outside the 1 kWh / 0.5% allowance, so a billing preview warns"),
+      );
+    }
     console.log(
       "       interval meter " + touService.intervalMeter + ": " + touService.intervals +
         " hourly intervals, " + touService.fromDate + ".." + touService.toDate +

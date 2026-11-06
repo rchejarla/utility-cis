@@ -228,64 +228,116 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
     return { agreement, meter };
   }
 
-  // ─── Sample A: the register meter ──────────────────────────────
-  const reg = await makeService({
-    meterNumber: "TOU-REG-001",
-    agreementNumber: "SA-TOU-REG-001",
-    meterType: "AMR",
-    programmedCalendarId: calendarId,
-  });
-
-  const REGISTERS = [
-    { registerNumber: 1, peakCode: "peak", description: "On-peak kWh", prior: 4180, now: 4312 },
-    { registerNumber: 2, peakCode: "mid_peak", description: "Mid-peak kWh", prior: 3050, now: 3139 },
-    { registerNumber: 3, peakCode: "off_peak", description: "Off-peak kWh", prior: 9120, now: 9522 },
+  /*
+   * ─── Samples A and B: the register meters ─────────────────────
+   *
+   * Two of them, because the reconciliation check (TOU-REG-1) has two
+   * outcomes and neither could be seen from a clean database before:
+   * these meters had no **total** register, and `reconcileRegisters`
+   * answers "nothing to check" without a total read. So the check was
+   * covered by tests and invisible in the product.
+   *
+   * `TOU-REG-001`'s dials sum to its total. `TOU-REG-002`'s fall 15 kWh
+   * short of it — outside the default allowance of 1 kWh absolute and
+   * 0.5% relative — so a billing preview warns on it, which is the only
+   * way to read that sentence with real numbers in it. Fifteen kWh is
+   * also the useful size: big enough to be a fault rather than
+   * rounding, small enough to look like one a meter really produces.
+   *
+   * **The total is register 1 and the TOU dials are 2, 3 and 4**, which
+   * is the shape spec 26 describes ("register 2 counts on-peak,
+   * register 3 off-peak"). They were 1, 2 and 3 with no total.
+   */
+  const TOU_REGISTERS = [
+    { registerNumber: 2, peakCode: "peak", description: "On-peak kWh", prior: 4180, now: 4312 },
+    { registerNumber: 3, peakCode: "mid_peak", description: "Mid-peak kWh", prior: 3050, now: 3139 },
+    { registerNumber: 4, peakCode: "off_peak", description: "Off-peak kWh", prior: 9120, now: 9522 },
   ];
-  const readDatetime = new Date(month.end.getTime() - 1);
-  const readEventId = require("node:crypto").randomUUID();
+  /** 132 + 89 + 402 = 623 kWh across the three dials. */
+  const BUCKET_SUM = TOU_REGISTERS.reduce((t, r) => t + (r.now - r.prior), 0);
+  /** The total dial started where the three TOU dials did, summed. */
+  const TOTAL_PRIOR = TOU_REGISTERS.reduce((t, r) => t + r.prior, 0);
 
-  for (const r of REGISTERS) {
-    const register = await p.meterRegister.create({
-      data: {
-        utilityId,
-        meterId: reg.meter.id,
-        registerNumber: r.registerNumber,
-        description: r.description,
-        uomId: kwh.id,
-        measureTypeId: measureUsage.id,
-        multiplier: 1.0,
-        isActive: true,
-        peakCode: r.peakCode,
-      },
+  const REGISTER_SAMPLES = [
+    { meterNumber: "TOU-REG-001", agreementNumber: "SA-TOU-REG-001", unattributed: 0 },
+    { meterNumber: "TOU-REG-002", agreementNumber: "SA-TOU-REG-002", unattributed: 15 },
+  ];
+
+  const readDatetime = new Date(month.end.getTime() - 1);
+  const readDate = new Date(readDatetime.toISOString().slice(0, 10));
+  const registerMeters = [];
+
+  for (const sample of REGISTER_SAMPLES) {
+    const reg = await makeService({
+      meterNumber: sample.meterNumber,
+      agreementNumber: sample.agreementNumber,
+      meterType: "AMR",
+      programmedCalendarId: calendarId,
     });
-    /*
-     * One row per register on one read event, zero consumption
-     * included — the contract the importer owes (TOU-REG-1). Writing
-     * only the non-zero ones would make an unused period
-     * indistinguishable from an absent register, and stop a bill that
-     * should have shown a zero.
-     */
-    await p.meterRead.create({
-      data: {
-        utilityId,
-        meterId: reg.meter.id,
-        serviceAgreementId: reg.agreement.id,
-        registerId: register.id,
-        readEventId,
-        uomId: kwh.id,
-        readDate: new Date(readDatetime.toISOString().slice(0, 10)),
-        readDatetime,
-        reading: r.now,
-        priorReading: r.prior,
-        consumption: r.now - r.prior,
-        // What the whole sample turns on. Taken from the register,
-        // because the device did the bucketing.
-        peakCode: r.peakCode,
-        readType: "ACTUAL",
-        readSource: "AMR",
-      },
+    const readEventId = require("node:crypto").randomUUID();
+
+    /** A dial and its read, on the one read event. */
+    async function dial({ registerNumber, description, peakCode, prior, now }) {
+      const register = await p.meterRegister.create({
+        data: {
+          utilityId,
+          meterId: reg.meter.id,
+          registerNumber,
+          description,
+          uomId: kwh.id,
+          measureTypeId: measureUsage.id,
+          multiplier: 1.0,
+          isActive: true,
+          peakCode,
+        },
+      });
+      /*
+       * One row per register on one read event, zero consumption
+       * included — the contract the importer owes (TOU-REG-1). Writing
+       * only the non-zero ones would make an unused period
+       * indistinguishable from an absent register, and stop a bill that
+       * should have shown a zero.
+       */
+      await p.meterRead.create({
+        data: {
+          utilityId,
+          meterId: reg.meter.id,
+          serviceAgreementId: reg.agreement.id,
+          registerId: register.id,
+          readEventId,
+          uomId: kwh.id,
+          readDate,
+          readDatetime,
+          reading: now,
+          priorReading: prior,
+          consumption: now - prior,
+          // What the whole sample turns on. Taken from the register,
+          // because the device did the bucketing. NULL on the total
+          // dial, which is what makes it the total.
+          peakCode,
+          readType: "ACTUAL",
+          readSource: "AMR",
+        },
+      });
+    }
+
+    // The total dial first, because it is register 1 on the device.
+    await dial({
+      registerNumber: 1,
+      description: "Total kWh",
+      peakCode: null,
+      prior: TOTAL_PRIOR,
+      now: TOTAL_PRIOR + BUCKET_SUM + sample.unattributed,
+    });
+    for (const r of TOU_REGISTERS) await dial(r);
+
+    registerMeters.push({
+      meterNumber: sample.meterNumber,
+      total: BUCKET_SUM + sample.unattributed,
+      unattributed: sample.unattributed,
     });
   }
+
 
   // ─── Sample B: the interval meter ──────────────────────────────
   const ami = await makeService({
@@ -332,7 +384,10 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
     scheduleCode: SCHEDULE_CODE,
     prices: PRICES.map((x) => `${x.peakCode} ${x.rate}`),
     registerMeter: "TOU-REG-001",
-    registerBuckets: REGISTERS.map((r) => `${r.peakCode} ${r.now - r.prior}`),
+    registerBuckets: TOU_REGISTERS.map((r) => `${r.peakCode} ${r.now - r.prior}`),
+    /** Both samples, so the seed can say which one the preview warns on. */
+    registerMeters,
+    bucketSum: BUCKET_SUM,
     intervalMeter: "TOU-AMI-001",
     intervals: intervals.length,
     fromDate: month.fromDate,
