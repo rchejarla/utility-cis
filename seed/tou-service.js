@@ -42,17 +42,57 @@ const SCHEDULE_CODE = "RES-TOU-E";
 const SCHEDULE_NAME = "Residential Electric Time-of-Use";
 
 /**
- * The month the samples cover: the last complete one.
+ * The window this account's cycle is about to bill, derived the way
+ * `computeBillPeriod` derives it.
  *
- * Complete, because a half month of intervals is indistinguishable
- * from a meter that stopped reporting, and TOU-GAP-1 refuses to bill
- * that — the sample would seed its own exception.
+ * **Not a calendar month**, which is what this seeded until 2026-11-06.
+ * A cycle's window ends on its `billDayOfMonth` — the 10th for R01 — so
+ * the window in force today runs the 11th to the 10th, and samples dated
+ * 1 October to 1 November overlapped it by ten days. Ten days of overlap
+ * is worse than none: the roll-up found intervals inside the window, so
+ * the meter counted as an interval meter, and then refused the window it
+ * could not cover. `TOU_ROLLUP_FAILED`, and the one account a developer
+ * bills by hand failed outright.
+ *
+ * `readDate` is the cycle's own read day in the month the window ends,
+ * which `seed.js` uses for every other read and for the same reason:
+ * `readDayOfMonth` precedes `billDayOfMonth`, so the read is inside the
+ * window by construction on every day of every month.
  */
-function lastFullMonth(now = new Date()) {
-  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const start = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - 1, 1));
+function cycleWindow({ billDayOfMonth, readDayOfMonth }, now = new Date()) {
+  const daysIn = (y, m) => new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  /** A cycle's day in one month, clamped to months that are shorter. */
+  const dayIn = (y, m, day) => {
+    const month = new Date(Date.UTC(y, m, 1));
+    const yy = month.getUTCFullYear();
+    const mm = month.getUTCMonth();
+    return new Date(Date.UTC(yy, mm, Math.min(day, daysIn(yy, mm))));
+  };
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const thisMonth = dayIn(y, m, billDayOfMonth);
+  const endDate =
+    now.getUTCDate() >= thisMonth.getUTCDate() ? thisMonth : dayIn(y, m - 1, billDayOfMonth);
+  const previousEnd = dayIn(endDate.getUTCFullYear(), endDate.getUTCMonth() - 1, billDayOfMonth);
   const iso = (d) => d.toISOString().slice(0, 10);
-  return { start, end, fromDate: iso(start), toDate: iso(end) };
+  const startDate = new Date(previousEnd.getTime() + 86_400_000);
+  return {
+    startDate,
+    endDate,
+    readDate: dayIn(endDate.getUTCFullYear(), endDate.getUTCMonth(), readDayOfMonth),
+    fromDate: iso(startDate),
+    toDate: iso(endDate),
+    /*
+     * The roll-up script takes **local** dates — a TOU period is local,
+     * so that is the right contract for it — while a billing window is
+     * UTC dates. Local midnight here is six or seven hours later, so a
+     * roll-up run to `toDate` would stamp its read past the window's
+     * end, where no run will ever replace or bill it: a second set of
+     * buckets for the same month, left unbilled for ever. A day short
+     * keeps it strictly inside.
+     */
+    rollUpToDate: iso(new Date(endDate.getTime() - 86_400_000)),
+  };
 }
 
 /**
@@ -68,27 +108,6 @@ const HOURLY_PROFILE = [
   0.4, 0.3, 0.3, 0.3, 0.3, 0.5, 0.9, 1.1, 0.9, 0.7, 0.7, 0.8,
   0.8, 0.8, 0.9, 1.0, 1.4, 2.3, 2.6, 2.1, 1.5, 1.0, 0.7, 0.5,
 ];
-
-/** Local midnight in `zone`, as a UTC instant. Two passes settle the offset. */
-function localMidnight(date, zone) {
-  const utc = new Date(`${date}T00:00:00.000Z`);
-  const offsetAt = (instant) => {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: zone,
-      hour12: false,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    }).formatToParts(instant);
-    const get = (t) => Number(parts.find((p) => p.type === t).value);
-    const asUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour") % 24, get("minute"));
-    return (asUtc - instant.getTime()) / 60000;
-  };
-  const guess = new Date(utc.getTime() - offsetAt(utc) * 60000);
-  return new Date(utc.getTime() - offsetAt(guess) * 60000);
-}
 
 async function seedTouService({ p, utilityId, calendarId, timeZone }) {
   if (!calendarId) return { skipped: "no TOU calendar was seeded" };
@@ -106,11 +125,20 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
     return { skipped: "no ELECTRIC commodity, KWH unit or USAGE measure type" };
   }
 
-  const account = await p.account.findFirst({ where: { utilityId }, orderBy: { accountNumber: "asc" } });
+  const account = await p.account.findFirst({
+    where: { utilityId },
+    orderBy: { accountNumber: "asc" },
+    // The cycle decides when the window the samples cover begins and
+    // ends, and when a drive-by read is taken inside it.
+    select: {
+      id: true,
+      billingCycle: { select: { billDayOfMonth: true, readDayOfMonth: true } },
+    },
+  });
   const premise = await p.premise.findFirst({ where: { utilityId }, orderBy: { createdAt: "asc" } });
   if (!account || !premise) return { skipped: "no account or premise to attach a service to" };
 
-  const month = lastFullMonth();
+  const billWindow = cycleWindow(account.billingCycle);
 
   /*
    * The tariff. Three charges, one per period, which is how a TOU
@@ -168,7 +196,15 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
     ],
   });
 
-  /** One agreement, one service point, one meter — the usual chain. */
+  /**
+   * One agreement, one service point, one meter — the usual chain.
+   *
+   * **Service starts when the window does.** `resolveServicePeriod`
+   * anchors a first segment on the agreement's `startDate`, there being
+   * no billed read to follow, so a service dated 1 January billed ten
+   * months in one segment the first time anybody ran the cycle — the
+   * same catch-up the seeded bills were rewritten to prevent.
+   */
   async function makeService({ meterNumber, agreementNumber, meterType, programmedCalendarId }) {
     const agreement = await p.serviceAgreement.create({
       data: {
@@ -176,7 +212,7 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
         agreementNumber,
         accountId: account.id,
         commodityId: electric.id,
-        startDate: new Date(Date.UTC(2026, 0, 1)),
+        startDate: billWindow.startDate,
         status: "ACTIVE",
       },
     });
@@ -192,7 +228,7 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
         premiseId: premise.id,
         commodityId: electric.id,
         uomId: kwh.id,
-        installDate: new Date(Date.UTC(2026, 0, 1)),
+        installDate: billWindow.startDate,
         // Only the register meter is programmed with a calendar: it is
         // the one whose own clock does the splitting. Recorded so a
         // mismatch with the tariff's calendar can be flagged
@@ -205,7 +241,7 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
         utilityId,
         serviceAgreementId: agreement.id,
         premiseId: premise.id,
-        startDate: new Date(Date.UTC(2026, 0, 1)),
+        startDate: billWindow.startDate,
       },
     });
     await p.servicePointMeter.create({
@@ -213,7 +249,7 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
         utilityId,
         servicePointId: servicePoint.id,
         meterId: meter.id,
-        addedDate: new Date(Date.UTC(2026, 0, 1)),
+        addedDate: billWindow.startDate,
       },
     });
     await p.sAScheduleAssignment.create({
@@ -222,7 +258,7 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
         serviceAgreementId: agreement.id,
         rateScheduleId: schedule.id,
         roleCode: "primary",
-        effectiveDate: new Date(Date.UTC(2026, 0, 1)),
+        effectiveDate: billWindow.startDate,
       },
     });
     return { agreement, meter };
@@ -263,8 +299,13 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
     { meterNumber: "TOU-REG-002", agreementNumber: "SA-TOU-REG-002", unattributed: 15 },
   ];
 
-  const readDatetime = new Date(month.end.getTime() - 1);
-  const readDate = new Date(readDatetime.toISOString().slice(0, 10));
+  /*
+   * Read on the cycle's read day, inside the window being billed — the
+   * 8th for R01, two days before it bills. A read dated after the bill
+   * day is not wrong, it is simply next period's, and the sample would
+   * sit in the database billing nothing.
+   */
+  const readDate = billWindow.readDate;
   const registerMeters = [];
 
   for (const sample of REGISTER_SAMPLES) {
@@ -307,7 +348,7 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
           readEventId,
           uomId: kwh.id,
           readDate,
-          readDatetime,
+          readDatetime: readDate,
           reading: now,
           priorReading: prior,
           consumption: now - prior,
@@ -347,12 +388,22 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
     programmedCalendarId: null,
   });
 
-  const periodStart = localMidnight(month.fromDate, timeZone);
-  const periodEnd = localMidnight(month.toDate, timeZone);
+  /*
+   * Hourly across the whole window, tiling it exactly.
+   *
+   * Aligned to the window's own instants rather than to local midnight,
+   * because that is what the coverage check measures: it asks whether
+   * each interval starts where the last one ended, from the window's
+   * first instant to its last. Local midnight is six hours later here,
+   * which is six hours of the window no interval covered — a gap, and
+   * TOU-GAP-1 refuses to bill a gap. Denver's offset is a whole number
+   * of hours, so the grid still lands on local hours and the profile
+   * below still reads the hour it means.
+   */
   const intervals = [];
   for (
-    let at = periodStart.getTime();
-    at < periodEnd.getTime();
+    let at = billWindow.startDate.getTime();
+    at < billWindow.endDate.getTime();
     at += 3_600_000
   ) {
     const instant = new Date(at);
@@ -390,8 +441,10 @@ async function seedTouService({ p, utilityId, calendarId, timeZone }) {
     bucketSum: BUCKET_SUM,
     intervalMeter: "TOU-AMI-001",
     intervals: intervals.length,
-    fromDate: month.fromDate,
-    toDate: month.toDate,
+    fromDate: billWindow.fromDate,
+    toDate: billWindow.toDate,
+    /** What the roll-up is run over — see `cycleWindow`. */
+    rollUpToDate: billWindow.rollUpToDate,
   };
 }
 

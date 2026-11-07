@@ -2186,8 +2186,8 @@ async function main() {
     }
     console.log(
       "       interval meter " + touService.intervalMeter + ": " + touService.intervals +
-        " hourly intervals, " + touService.fromDate + ".." + touService.toDate +
-        " (no registers, no programmed calendar)",
+        " hourly intervals over " + touService.fromDate + ".." + touService.toDate +
+        ", the window this cycle bills next (no registers, no programmed calendar)",
     );
 
     /*
@@ -2200,7 +2200,7 @@ async function main() {
     try {
       const out = execSync(
         `"${TSX_BIN}" scripts/roll-up-intervals.ts --utility-id ${UID} ` +
-          `--meter ${touService.intervalMeter} --from ${touService.fromDate} --to ${touService.toDate}`,
+          `--meter ${touService.intervalMeter} --from ${touService.fromDate} --to ${touService.rollUpToDate}`,
         { cwd: path.join(__dirname, "packages", "api"), stdio: "pipe" },
       ).toString();
       for (const line of out.trim().split("\n")) console.log("       " + line.trim());

@@ -16,9 +16,15 @@
  *   SA-TOU-REG-001  clean
  *   SA-TOU-REG-002  REGISTERS_UNRECONCILED — 638 against 623, 15 out
  *   SA-TOU-AMI-001  clean
+ *
+ * Over the window the cycle is about to bill, which is what the samples
+ * are seeded to cover — not a calendar month. A month is where the first
+ * version of this script looked, and the interval sample covered it, and
+ * the account still failed every run with `TOU_ROLLUP_FAILED`.
  */
 import { prisma } from "../src/lib/prisma.js";
 import { runAsTenant } from "../src/lib/tenant-context.js";
+import { computeBillPeriod } from "../src/services/bill.service.js";
 import {
   checkTouReadinessForAgreements,
   describeTouProblem,
@@ -26,14 +32,26 @@ import {
 
 const UTILITY_ID = "00000000-0000-4000-8000-000000000001";
 
-/** The month the TOU samples are seeded for, as local midnights in Denver. */
-const PERIOD = {
-  startDate: new Date("2026-10-01T06:00:00.000Z"),
-  endDate: new Date("2026-11-01T06:00:00.000Z"),
-};
-
 async function main(): Promise<void> {
   const lines = await runAsTenant(UTILITY_ID, async () => {
+    /*
+     * The window a run would bill today, from the same function the
+     * planner uses. Stated as dates here until 2026-11-06, which was
+     * wrong twice over: it named a calendar month, and a hard-coded one,
+     * so the check ran over a period no run ever bills and the answer
+     * went stale the following month.
+     */
+    const account = await prisma.account.findFirstOrThrow({
+      where: { utilityId: UTILITY_ID },
+      orderBy: { accountNumber: "asc" },
+      select: {
+        createdAt: true,
+        billingCycle: { select: { billDayOfMonth: true, frequency: true } },
+      },
+    });
+    const period = computeBillPeriod(account, new Date());
+    const PERIOD = { startDate: period.periodStart, endDate: period.periodEnd };
+
     const agreements = await prisma.serviceAgreement.findMany({
       where: { utilityId: UTILITY_ID, agreementNumber: { startsWith: "SA-TOU-" } },
       select: { id: true, agreementNumber: true },
