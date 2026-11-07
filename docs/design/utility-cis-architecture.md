@@ -971,6 +971,7 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | PATCH | `/api/v1/meter-reads/:id` | Meter Reads (creates CORRECTED row, preserves original) |
 | DELETE | `/api/v1/meter-reads/:id` | Meter Reads (guarded against frozen + corrected-by state) |
 | POST | `/api/v1/meter-reads/:id/resolve-exception` | Meter Reads |
+| GET | `/api/v1/meter-reads/progress` | Meter Reads (how much of a cycle is still unread, over the window a run would bill; spec 08) |
 | GET | `/api/v1/meter-data-exceptions` | Meter Reads (interval-coverage queue — days an interval meter's data does not cover; spec 26) |
 | POST | `/api/v1/meter-data-exceptions/:id/accept` | Meter Reads (bill the month as it stands; audited, and the pre-run check stops blocking those minutes) |
 | POST | `/api/v1/meter-data-exceptions/:id/reopen` | Meter Reads (withdraw an acceptance) |

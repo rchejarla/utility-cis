@@ -255,6 +255,59 @@ default: an empty table would otherwise read as good news rather than as
 nobody having looked. Owned by spec 26 (TOU-GAP-1); the table is
 `meter_data_exception`.
 
+### Reading Progress (`/meter-reads/progress`) — live
+
+**The question a list of reads cannot answer.** The rows it wants are
+the ones that do not exist, and they are what decides whether a cycle
+can bill. Until 2026-11-07 the only way to find out which meters were
+still unread was to start a billing run and read the skips — one
+`NO_READ_IN_WINDOW` per account, after the run had been created and the
+window had closed behind it.
+
+Pick a cycle; the screen states the window it is measuring (the cycle's
+own, from the same `computeBillPeriod` call `planBillingRun` makes, so
+the two cannot disagree about "the October window") and leads with three
+figures: still to read, read of expected, percent complete — floored,
+because a screen that rounded 93.88% to 94 would claim progress nobody
+has made. Below them, the outstanding services: meter, premise,
+agreement, account, and when that meter was last read at all, because
+"never" is a new service and "last July" is a meter somebody has stopped
+reaching.
+
+`GET /api/v1/meter-reads/progress?billingCycleId=…[&asOf=&page=&limit=]`,
+gated on `meter_reads:VIEW`. Counted as **meter assignments**, not
+meters: one meter serving two agreements is two readings to take.
+
+**An interval meter counts as read once its intervals are in.** It has
+no `meter_read` row until the roll-up runs inside a billing run, so
+asking only about reads would list every AMI meter as outstanding —
+hundreds of rows needing no action, which is how a readiness screen
+teaches people to ignore it.
+
+#### Found while building it: three filters for one question
+
+"Which agreements does this window involve" is asked in three places
+with three answers:
+
+| Where | Filter |
+|---|---|
+| `billing-run/execution.ts` — what actually bills | no status filter, `endDate >= windowEnd` |
+| `billing-run/planning.ts` — the pre-run blocker check | no status filter, `endDate >= windowStart` |
+| `reading-progress.service.ts` — this screen | mirrors the executor, deliberately |
+
+So **an agreement that ended mid-window is checked for configuration
+faults and then never billed.** A service that closed on the 20th used
+water from the 11th, and nothing bills it: a cycle run skips it, and
+there is no separate final-bill path that picks it up. One of those two
+filters is wrong. This screen mirrors the executor on purpose — an
+operator needs to know what the run *will* skip, not what it ought to —
+which means it will stop listing those services the day the executor is
+fixed, and that is the right coupling.
+
+Neither filters on `status`, so a `PENDING` service with a meter
+assigned would be attempted by a run. It rarely has one, which is why
+nobody has seen it.
+
 ### Import Center (`/meter-reads/import`) — live (UI), partial (backend)
 
 Three-stage wizard: UPLOAD → PREVIEW → COMMIT, with a numbered stage rail on the left that shows active/done state. Drag-and-drop file dropzone or paste-JSON fallback; client-side CSV/JSON parser with per-row validation. Preview shows the first 10 rows with ready/error status. Commit fires an animated progress bar and renders a three-card results summary (imported / exceptions / errors). The backend commit endpoint (`POST /api/v1/meter-reads/import`) is not yet deployed — the UI exercises the flow end-to-end up to the commit step and then surfaces a clean error. The client-side parser + preview is useful for dev/test but genuine bulk ingestion is a Phase 3 follow-up.

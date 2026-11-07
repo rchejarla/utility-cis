@@ -4,6 +4,7 @@ import {
   createMeterReadEventSchema,
   correctMeterReadSchema,
   meterReadQuerySchema,
+  meterReadingProgressQuerySchema,
   resolveExceptionSchema,
 } from "@utility-cis/shared";
 import {
@@ -17,6 +18,7 @@ import {
   resolveException,
   deleteMeterRead,
 } from "../services/meter-read.service.js";
+import { getReadingProgress } from "../services/reading-progress.service.js";
 import { idParamSchema } from "../lib/route-schemas.js";
 import { z } from "zod";
 
@@ -52,6 +54,22 @@ export async function meterReadRoutes(app: FastifyInstance) {
       const { utilityId } = request.user;
       const query = meterReadQuerySchema.parse(request.query);
       return reply.send(await listExceptions(utilityId, query));
+    },
+  );
+
+  /*
+   * How far along a cycle's reading is — the one question the log
+   * cannot answer, because the rows it wants do not exist. Before
+   * `/:id`, like `/exceptions` above, or Fastify reads "progress" as an
+   * id.
+   */
+  app.get(
+    "/api/v1/meter-reads/progress",
+    { config: { module: "meter_reads", permission: "VIEW" } },
+    async (request, reply) => {
+      const { utilityId } = request.user;
+      const query = meterReadingProgressQuerySchema.parse(request.query ?? {});
+      return reply.send(await getReadingProgress(utilityId, query));
     },
   );
 

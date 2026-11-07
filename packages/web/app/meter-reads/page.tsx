@@ -275,6 +275,31 @@ function HeaderActions() {
       >
         ⧖ Interval Coverage
       </Link>
+      {/*
+       * The third question, and the only one that is about reads that
+       * do not exist: how much of a cycle is still unread. This list
+       * cannot show it — the rows are absent — and a billing run only
+       * reports it per account once the run exists.
+       */}
+      <Link
+        href="/meter-reads/progress"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "6px",
+          padding: "7px 14px",
+          borderRadius: "var(--radius)",
+          border: "1px solid var(--border)",
+          background: "var(--bg-elevated)",
+          color: "var(--text-secondary)",
+          fontSize: "12px",
+          fontWeight: 600,
+          textDecoration: "none",
+          fontFamily: "inherit",
+        }}
+      >
+        ◷ Reading Progress
+      </Link>
     </div>
   );
 }

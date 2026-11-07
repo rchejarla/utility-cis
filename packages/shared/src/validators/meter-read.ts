@@ -194,6 +194,26 @@ export const meterReadQuerySchema = z.object({
   toDate: z.string().date().optional(),
 }).strict();
 
+/**
+ * Asking how far along a cycle's reading is.
+ *
+ * `asOf` exists so the answer can be asked of a date rather than only
+ * of today — a biller checking on the 9th wants the window that is
+ * about to close, and a test wants a window it chose. It names the
+ * *window*, not a filter on reads: `computeBillPeriod` derives the
+ * period in force on that date from the cycle's own bill day.
+ */
+export const meterReadingProgressQuerySchema = z
+  .object({
+    billingCycleId: z.string().uuid(),
+    page: z.coerce.number().int().positive().default(1),
+    limit: z.coerce.number().int().positive().max(500).default(50),
+    asOf: z.string().date().optional(),
+  })
+  .strict();
+
+export type MeterReadingProgressQuery = z.infer<typeof meterReadingProgressQuerySchema>;
+
 // Bulk import has moved to the generic /api/v1/imports endpoint with
 // kind-aware handlers (see spec 22). The kind handler defines its own
 // per-row Zod-style validation in `parseRow`; there's no longer a
