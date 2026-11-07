@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { baseListQuerySchema } from "../lib/base-list-query";
+import { baseListQuerySchema, queryBoolean } from "../lib/base-list-query";
 import { serviceRequestTypeCode } from "./service-request-type-def";
 
 export const serviceRequestPriorityEnum = z.enum([
@@ -35,7 +35,7 @@ export const updateSlaSchema = z
 export const slaQuerySchema = baseListQuerySchema
   .extend({
     requestType: serviceRequestTypeCode.optional(),
-    includeInactive: z.coerce.boolean().optional(),
+    includeInactive: queryBoolean.optional(),
   })
   .strict();
 

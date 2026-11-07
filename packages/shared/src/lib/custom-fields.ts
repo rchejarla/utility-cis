@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { queryBoolean } from "./base-list-query";
 
 /**
  * Tenant-configurable custom fields for extendable entities.
@@ -386,7 +387,19 @@ export function buildZodFromFields(fields: FieldDefinition[]): z.ZodTypeAny {
         base = z.string().date();
         break;
       case "boolean":
-        base = z.coerce.boolean();
+        /*
+         * Not `z.coerce.boolean()`: that is `Boolean(input)`, so a body
+         * sending the string "false" would **store `true`** — a wrong
+         * value written to the row, not merely a wrong filter.
+         *
+         * Unreachable from the two callers that exist today, which is
+         * why it survived: a form submits a real boolean, and the CSV
+         * importer converts yes/no words to booleans itself and refuses
+         * anything else by name (`extractCustomFields`). That word list
+         * stays there, where a cell's wording is the importer's
+         * problem; this accepts what JSON can actually mean.
+         */
+        base = queryBoolean;
         break;
       case "enum": {
         const values = (field.enumOptions ?? []).map((o) => o.value);

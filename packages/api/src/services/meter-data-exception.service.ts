@@ -19,6 +19,13 @@
  * `detected_at` and `resolved_at` come from the same clock as the sweep
  * that decided them — and so a test can say when it ran.
  */
+import {
+  EVENT_TYPES,
+  meterDataExceptionSortFields,
+  type MeterDataExceptionQuery,
+} from "@utility-cis/shared";
+import { auditUpdate, type AuditContext } from "../lib/audit-wrap.js";
+import { paginatedTenantList } from "../lib/pagination.js";
 import { prisma } from "../lib/prisma.js";
 import {
   reconcileDataExceptions,
@@ -121,4 +128,156 @@ export async function flagDataExceptions(input: {
     updated: plan.toUpdate.length,
     resolved: plan.toResolveIds.length,
   };
+}
+
+/*
+ * ─── Working the queue ───────────────────────────────────────────────
+ *
+ * Above: what a sweep writes. Below: what a person decides about it.
+ * The two halves share this module because they are the same table's
+ * only writers, and the statuses one sets are exactly the ones the
+ * other must leave alone.
+ */
+
+/** The meter, because its number is what a person recognises. */
+const QUEUE_INCLUDE = { meter: { select: { id: true, meterNumber: true } } } as const;
+
+/**
+ * One row of the queue as the database hands it over.
+ *
+ * `kind` and `status` are narrowed here from the VARCHARs they are
+ * stored as — the same narrowing `flagDataExceptions` does above, and
+ * for the same reason: the CHECK constraints are the enforcement, so
+ * this is the one place rows enter the typed world and the assertion
+ * belongs here rather than at every reader.
+ */
+export interface QueuedDataException {
+  id: string;
+  utilityId: string;
+  meterId: string;
+  windowStart: Date;
+  windowEnd: Date;
+  kind: DataExceptionKind;
+  minutesAffected: number;
+  detail: string;
+  status: DataExceptionStatus;
+  detectedAt: Date;
+  resolvedAt: Date | null;
+  updatedAt: Date;
+  meter: { id: string; meterNumber: string };
+}
+
+export async function listDataExceptions(utilityId: string, query: MeterDataExceptionQuery) {
+  const where: Record<string, unknown> = { utilityId };
+  if (query.status) where.status = query.status;
+  if (query.kind) where.kind = query.kind;
+  if (query.meterId) where.meterId = query.meterId;
+  if (query.fromDate || query.toDate) {
+    const range: Record<string, Date> = {};
+    if (query.fromDate) range.gte = new Date(query.fromDate);
+    // Exclusive, because a window is half-open and `toDate` names the
+    // day somebody typed: `lte` on a timestamptz column would include
+    // that day's midnight row and nothing else of it.
+    if (query.toDate) range.lt = new Date(new Date(query.toDate).getTime() + 86_400_000);
+    where.windowStart = range;
+  }
+  return paginatedTenantList<QueuedDataException>(prisma.meterDataException, where, query, {
+    include: QUEUE_INCLUDE,
+    allowedSorts: meterDataExceptionSortFields,
+  });
+}
+
+async function requireException(id: string, utilityId: string) {
+  const row = await prisma.meterDataException.findFirst({ where: { id, utilityId } });
+  if (!row) {
+    /*
+     * 404 and not 403, for the reason the portal routes answer 404:
+     * whether another tenant has a row with this id is not the
+     * caller's to learn.
+     */
+    throw Object.assign(new Error(`Data exception ${id} not found`), {
+      statusCode: 404,
+      code: "DATA_EXCEPTION_NOT_FOUND",
+    });
+  }
+  return row;
+}
+
+/**
+ * "This hole is never going to be filled."
+ *
+ * `checkTouReadiness` **sums the accepted minutes** for a meter and
+ * stops counting that many against the period, so an accepted month
+ * clears the pre-run check.
+ *
+ * **It does not make the month billable, and the gap between those two
+ * sentences is a known hole** (2026-11-07). `rollUpIntervals` refuses
+ * any period its intervals do not cover and never consults this table,
+ * so a run over an accepted month is allowed to start and then fails
+ * that one account with `TOU_ROLLUP_FAILED`. Either the roll-up learns
+ * to tolerate exactly the accepted minutes — which means billing a
+ * month short on purpose, and a bill that says so — or acceptance is
+ * only ever a route to the estimator. That is a decision about what a
+ * customer is charged, so it is recorded in spec 26 rather than settled
+ * here; the screen and this comment say what the action does today.
+ *
+ * Only from `open`, and a refusal rather than a no-op for the rest.
+ * Accepting a `resolved` row would add minutes to that sum which are no
+ * longer missing — forgiving a later, real shortfall by accident — and
+ * an `estimated` row already shows up as coverage, so counting it here
+ * would forgive it twice. Agreeing silently with a caller who named a
+ * row in neither state hides which of those two things happened.
+ */
+export async function acceptDataException(id: string, ctx: AuditContext) {
+  const before = await requireException(id, ctx.utilityId);
+  if (before.status !== "open") {
+    throw Object.assign(
+      new Error(
+        `This exception is ${before.status}, not open, so there is nothing to accept. ` +
+          (before.status === "resolved"
+            ? "Its data arrived, so the minutes are no longer missing."
+            : "A decision has already been made about it."),
+      ),
+      { statusCode: 409, code: "DATA_EXCEPTION_NOT_OPEN" },
+    );
+  }
+  /*
+   * `resolved_at` is "when it stopped being open", not "when the data
+   * arrived" — the CHECK ties it to `status` in both directions, so an
+   * accepted row without one cannot be written. Here it is the moment
+   * somebody took responsibility for billing the hole.
+   */
+  return auditUpdate(ctx, EVENT_TYPES.METER_DATA_EXCEPTION_ACCEPTED, before, (tx) =>
+    tx.meterDataException.update({
+      where: { id },
+      data: { status: "accepted", resolvedAt: new Date() },
+    }),
+  );
+}
+
+/**
+ * The undo for an acceptance.
+ *
+ * Only from `accepted`: `resolved` is the sweep's to set and to unset,
+ * and a person reopening one would be asserting a hole the data says is
+ * filled. The partial unique index allows this — the sweep leaves an
+ * accepted row alone rather than opening a second one for the same
+ * (meter, window, kind), so there is no open row here to collide with.
+ */
+export async function reopenDataException(id: string, ctx: AuditContext) {
+  const before = await requireException(id, ctx.utilityId);
+  if (before.status !== "accepted") {
+    throw Object.assign(
+      new Error(
+        `This exception is ${before.status}, not accepted, so there is no acceptance to undo.`,
+      ),
+      { statusCode: 409, code: "DATA_EXCEPTION_NOT_ACCEPTED" },
+    );
+  }
+  return auditUpdate(ctx, EVENT_TYPES.METER_DATA_EXCEPTION_REOPENED, before, (tx) =>
+    tx.meterDataException.update({
+      where: { id },
+      data: { status: "open", resolvedAt: null },
+    }),
+  );
 }

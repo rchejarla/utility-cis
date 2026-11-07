@@ -9,6 +9,7 @@ import {
   type SchedulerSetting,
   SCHEDULER_DEFINITIONS,
   schedulerDefinition,
+  intervalCoverageSettings,
 } from "@utility-cis/shared";
 import {
   SettingsSection,
@@ -380,6 +381,85 @@ export default function AutomationSettingsPage() {
               />
             );
           })}
+          {/*
+            * The interval-coverage sweep's own two knobs, which live in
+            * its `scheduler_config.settings` jsonb (spec 18 — a value
+            * only one scheduler needs costs no migration there).
+            *
+            * Hand-written rather than looped, because there is one
+            * scheduler with knobs and its two mean different things:
+            * `graceHours` is how long the head-end gets to backfill
+            * before a hole counts as real, `lookbackDays` is how far
+            * back the sweep keeps re-checking. A generic renderer over a
+            * schema would produce two number boxes labelled by their key
+            * names and explain neither. The next scheduler with knobs
+            * gets its own block here — and `settings-coverage.test.ts`
+            * is where to add the guard that says it must.
+            */}
+          {(() => {
+            const row = schedulerOf("intervalCoverage");
+            // Through the schema, so an empty jsonb renders as the
+            // shipped defaults (48 hours, 7 days) rather than as zeroes.
+            const sweep = intervalCoverageSettings(row.settings);
+            const setSweep = (change: Partial<typeof sweep>) =>
+              setScheduler("intervalCoverage", { settings: { ...sweep, ...change } });
+            return (
+              <>
+                <SettingRow
+                  label="Interval coverage · grace hours"
+                  description="How long the head-end gets to backfill before a hole in a day counts as real. 48 is the thinnest honest case — a cycle reading on day 8 and billing on day 10 gives the period's last intervals about that long to arrive — and it wants checking against your own head-end: too short cries wolf every morning, too long leaves no time to act before bill day."
+                  control={
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <input
+                        type="number"
+                        min={0}
+                        max={336}
+                        step={1}
+                        aria-label="Interval coverage grace hours"
+                        value={sweep.graceHours}
+                        disabled={!canEdit || !row.enabled}
+                        onChange={(e) =>
+                          setSweep({
+                            graceHours: Math.max(0, Math.min(336, Number(e.target.value) || 0)),
+                          })
+                        }
+                        style={NUMBER_INPUT}
+                      />
+                      <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                        hours{!row.enabled && " · this job is off"}
+                      </span>
+                    </div>
+                  }
+                />
+                <SettingRow
+                  label="Interval coverage · lookback days"
+                  description="How many complete days back the sweep keeps checking. Narrowing it does not close the exceptions it stops looking at — resolution is scoped to the days actually swept, so an untouched day keeps its open row rather than reading as fixed."
+                  control={
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <input
+                        type="number"
+                        min={1}
+                        max={60}
+                        step={1}
+                        aria-label="Interval coverage lookback days"
+                        value={sweep.lookbackDays}
+                        disabled={!canEdit || !row.enabled}
+                        onChange={(e) =>
+                          setSweep({
+                            lookbackDays: Math.max(1, Math.min(60, Number(e.target.value) || 1)),
+                          })
+                        }
+                        style={NUMBER_INPUT}
+                      />
+                      <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                        days{!row.enabled && " · this job is off"}
+                      </span>
+                    </div>
+                  }
+                />
+              </>
+            );
+          })()}
           {/*
             * The dispatcher writes these; the page shows them and never
             * patches them. The patch schema has no field for `lastRunAt`

@@ -36,6 +36,13 @@ interface StaticFilter {
   key: string;
   label: string;
   options: FilterOption[];
+  /**
+   * What the clear item is called, when `All {label}` would not be
+   * true — see `FilterBar`. A filter whose label names a condition
+   * needs this: "All Exceptions" reads as every flagged row rather
+   * than as the absence of a filter.
+   */
+  allLabel?: string;
 }
 
 interface DynamicFilter {
@@ -43,6 +50,8 @@ interface DynamicFilter {
   label: string;
   /** Endpoint returning { data: T[] } or T[]. */
   optionsEndpoint: string;
+  /** What the clear item is called — see `StaticFilter.allLabel`. */
+  allLabel?: string;
   /** Maps a fetched row to a {label, value} option. */
   mapOption: (row: Record<string, unknown>) => FilterOption;
   /** Optional extra query params for the options fetch. */
@@ -254,6 +263,10 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
       key: f.key,
       label: f.label,
       options,
+      // Carried through rather than re-derived: the page knows whether
+      // its own label is a dimension or a condition, and this component
+      // cannot tell.
+      ...(f.allLabel ? { allLabel: f.allLabel } : {}),
       value: filterValues[f.key],
       onChange: handleFilterChange(f.key),
     };
@@ -399,6 +412,22 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
       )}
 
       {showEmptyCta ? (
+        <>
+        {/*
+          * The filter row's right-hand control survives the empty
+          * state, on a row of its own.
+          *
+          * It is page-level navigation rather than a filter — the Meter
+          * Reads screen puts its "Show me" menu there — and a tenant
+          * with no rows yet is exactly when "how much of this cycle is
+          * still unread" is worth asking. The pills are suppressed
+          * here because filtering nothing is meaningless; this is not.
+          */}
+        {filtersRightSlot && (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "16px" }}>
+            {filtersRightSlot}
+          </div>
+        )}
         <ListEmptyCta
           subject={subject}
           headline={emptyState?.headline}
@@ -414,6 +443,7 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
             canCreate && importHref ? { label: "Import", href: importHref } : undefined
           }
         />
+        </>
       ) : (
         <>
           {(filterConfigs.length > 0 || searchableFilters.length > 0 || filtersRightSlot) && (

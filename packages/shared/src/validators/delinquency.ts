@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { serviceRequestTypeCode } from "./service-request-type-def";
+import { queryBoolean } from "../lib/base-list-query";
 
 export const delinquencyActionTypes = [
   "NOTICE_EMAIL",
@@ -147,7 +148,7 @@ export const delinquencyRuleQuerySchema = z.object({
   sort: z.enum(["tier", "createdAt", "daysPastDue"]).default("tier"),
   order: z.enum(["asc", "desc"]).default("asc"),
   accountType: z.enum(["RESIDENTIAL", "COMMERCIAL", "INDUSTRIAL", "MUNICIPAL"]).optional(),
-  isActive: z.coerce.boolean().optional(),
+  isActive: queryBoolean.optional(),
 }).strict();
 
 export const delinquencyActionQuerySchema = z.object({

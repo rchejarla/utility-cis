@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { queryBoolean } from "../lib/base-list-query";
 
 /**
  * Per-tenant, per-commodity customer service class (Single Family,
@@ -34,7 +35,7 @@ export const updateRateServiceClassSchema = createRateServiceClassSchema
 export const rateServiceClassQuerySchema = z
   .object({
     commodityId: z.string().uuid().optional(),
-    isActive: z.coerce.boolean().optional(),
+    isActive: queryBoolean.optional(),
   })
   .strict();
 

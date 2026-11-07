@@ -55,6 +55,15 @@ export const EVENT_TYPES = {
    * bill questioned months on is answered by when this changed.
    */
   METER_REGISTER_TOU_PERIOD_SET: "meter_register.tou_period_set",
+  /**
+   * Somebody decided a hole in an interval meter's data may be billed
+   * as it stands, or took that decision back. Audited because the
+   * pre-run check reads `accepted` and stops blocking those minutes:
+   * this is the one action in the interval-coverage queue that changes
+   * what a customer is charged.
+   */
+  METER_DATA_EXCEPTION_ACCEPTED: "meter_data_exception.accepted",
+  METER_DATA_EXCEPTION_REOPENED: "meter_data_exception.reopened",
   ACCOUNT_CREATED: "account.created",
   ACCOUNT_UPDATED: "account.updated",
   SERVICE_AGREEMENT_CREATED: "service_agreement.created",

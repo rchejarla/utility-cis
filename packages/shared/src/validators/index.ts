@@ -21,6 +21,7 @@ export * from "./billing-address";
 export * from "./user";
 export * from "./role";
 export * from "./meter-read";
+export * from "./meter-data-exception";
 export * from "./meter-event";
 export * from "./meter-register";
 export * from "./container";
