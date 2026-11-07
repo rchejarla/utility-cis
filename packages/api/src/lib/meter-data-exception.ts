@@ -24,27 +24,21 @@
  * exception reads as one somebody fixed.
  */
 
+import type { DataExceptionKind, DataExceptionStatus } from "@utility-cis/shared";
 import type { CoverageProblem } from "./interval-coverage.js";
 
-/**
- * Why a day's data cannot be billed as it stands.
+/*
+ * `DataExceptionKind` and `DataExceptionStatus` were declared here as
+ * unions until the queue got a screen, which needs the same two lists
+ * for its filter pills. They now come from `@utility-cis/shared`, where
+ * the vocabulary is written once beside the CHECK constraints it
+ * mirrors — the table's columns are VARCHARs, so nothing generates
+ * them and a third hand-kept copy was the likely next step.
  *
- * The first three come from tiling (`findCoverageProblems`); the fourth
- * is a property of a row that exists and belongs to the roll-up's
- * quality check, which has no flag action yet — declared because the
- * table's CHECK constraint carries the whole vocabulary, and a kind
- * added later would be a migration.
+ * Re-exported because this module's own callers take these types from
+ * it, and `reconcileDataExceptions` is where they are most often read.
  */
-export type DataExceptionKind = "gap" | "overlap" | "overrun" | "missing_reading";
-
-/**
- * `open` is the sweep's to set and to clear. The other three are a
- * person's judgement: `accepted` (billed as it stands), `estimated`
- * (a value was supplied) and `resolved` (the data arrived). Only
- * `resolved` is reachable without somebody deciding something, which is
- * why it is the only one this function writes.
- */
-export type DataExceptionStatus = "open" | "resolved" | "accepted" | "estimated";
+export type { DataExceptionKind, DataExceptionStatus };
 
 export interface FoundDataException {
   meterId: string;
