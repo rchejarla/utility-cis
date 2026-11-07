@@ -210,7 +210,7 @@ Many commercial and industrial meters expose multiple registers on a single devi
 
 ### Meter Reads List (`/meter-reads`) — live
 
-Table: meter number (monospace), read date, reading, consumption, read-type badge (ACTUAL/ESTIMATED/CORRECTED/FINAL color-coded), read source, exception code chip (if any), frozen indicator (`❄`). Filter pills for type, source, exception presence, billed state. Header strip has "+ New Read," "⚠ Exception Queue," and "↑ Import Reads" action buttons.
+Table: meter number (monospace), read date, reading, consumption, read-type badge (ACTUAL/ESTIMATED/CORRECTED/FINAL color-coded), read source, exception code chip (if any), frozen indicator (`❄`). Filter pills for type, source, exception presence, billed state. Header strip has "+ New Read," "⚠ Exception Queue," "⧖ Interval Coverage," and "↑ Import Reads" action buttons.
 
 ### Record Meter Read (`/meter-reads/new`) — live
 
@@ -227,6 +227,33 @@ Full field display with a dedicated 4-column consumption calculation card showin
 ### Exception Queue (`/meter-reads/exceptions`) — live
 
 Distinctive custom design (not shell-based): sticky header strip showing per-exception-code counts with a pulsing red dot when the open count is non-zero, grouped sections by exception code with terminal-style headers, per-row monospace layout with tabular-numeric alignment for the reading columns. Bulk action bar slides up from the bottom when rows are selected, offering `✓ APPROVE AS-IS` and `⏸ HOLD FOR RE-READ` as the two bulk operations. Escape key clears selection.
+
+### Interval Coverage (`/meter-reads/interval-coverage`) — live
+
+**A second queue, about a different failure.** The one above is a reading
+that looks wrong — high, zero, a rollover — and every row in it is a
+reading somebody took. This one lists days where an interval meter's
+series does not cover the day at all: rows that were never delivered, or
+delivered marked as having no value. No reading can show that, which is
+why an empty exception queue says nothing about interval coverage and
+why the two sit side by side in the header strip.
+
+Table: meter (linking to the meter), the day, what is wrong (`No data`,
+`Counted twice`, `Runs past the day`, `Meter reported none`) with the
+sweep's own sentence about it, how much of the day is affected as hours
+and minutes rather than raw minutes, status, and the day it was found.
+Filters for status and problem kind; the status filter opens on `Open`.
+
+One action, and it is consequential: **Accept** means "bill this meter's
+month as it stands", which is what the billing run's pre-run check reads
+when it stops blocking those minutes. It is recorded in the audit log
+with who did it. **Reopen** withdraws it. A `resolved` row offers
+neither — its data arrived, so there is nothing to decide.
+
+**The page says when the sweep that fills it is off**, which it is by
+default: an empty table would otherwise read as good news rather than as
+nobody having looked. Owned by spec 26 (TOU-GAP-1); the table is
+`meter_data_exception`.
 
 ### Import Center (`/meter-reads/import`) — live (UI), partial (backend)
 

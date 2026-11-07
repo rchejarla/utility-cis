@@ -984,6 +984,34 @@ raw intervals from the same meters. Compression is therefore entirely a
   2026-11-06; both only said so in a log line, which is not work anybody
   is assigned.
 
+  *Somebody can work it since 2026-11-07.* `/meter-reads/interval-coverage`
+  lists the queue — meter, day, what is wrong, how much of the day it
+  covers, and the sweep's own sentence about it — filtered by status and
+  kind, reached from the Meter Reads header beside the read exception
+  queue. Two queues side by side on purpose: that one is about a reading
+  that looks wrong, this one about interval rows that were never
+  delivered, and an empty exception queue says nothing about coverage.
+
+  **The screen says when the sweep is off.** It ships disabled, so an
+  empty table would otherwise read as "nobody's interval data has a
+  hole" when it means "nobody looked" — the page asks the automation
+  config and prints a banner naming the setting to turn on. The two
+  knobs it names are editable there since the same day
+  (`graceHours`, `lookbackDays`; see spec 18).
+
+  API: `GET /api/v1/meter-data-exceptions` (status, kind, meter, window
+  range; no filter defaults, because "everything, including what the
+  sweep resolved" is how a meter that fails every month becomes
+  visible), `POST /:id/accept`, `POST /:id/reopen`. Both writes are
+  gated on `meter_reads:EDIT` — the judgement is about meter data, the
+  same authority as correcting a read, which also moves a bill — and
+  **accept is audited**, because `checkTouReadiness` sums accepted
+  minutes and stops blocking them. Accept is refused on anything but an
+  `open` row: that sum would otherwise forgive minutes a `resolved` row
+  no longer lacks, or count an `estimated` row's twice. Reopen is
+  refused on anything but `accepted`, since `resolved` is the sweep's to
+  set and to unset.
+
   **One row per (meter, window, kind) while open.** The window is the
   day a sweep examined, not the gap's own start — that is what makes
   tonight's sighting of last night's hole find its own row instead of

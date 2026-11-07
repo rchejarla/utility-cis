@@ -6,6 +6,7 @@ import {
   AutomationConfigPatchSchema,
   SchedulerSettingPatchSchema,
   SCHEDULER_DEFINITIONS,
+  SCHEDULER_SETTINGS_SCHEMAS,
 } from "@utility-cis/shared";
 
 /**
@@ -54,11 +55,47 @@ describe("Automation settings page covers the whole config", () => {
      * back to a hand-written block per job, adding a scheduler silently
      * stops appearing on screen again — which is exactly the failure
      * this file was created for, in its new form.
+     *
+     * **The exception is a job with knobs of its own** (2026-11-07).
+     * An enable switch and a run hour are the same control for every
+     * job, so they come from the loop; `graceHours` belongs to one job
+     * and means something only there, and a loop rendering it would
+     * label two number boxes by their key names and explain neither. So
+     * a scheduler in `SCHEDULER_SETTINGS_SCHEMAS` may be named here —
+     * and the test below insists it is.
      */
     expect(source).toContain("SCHEDULER_DEFINITIONS");
     for (const def of SCHEDULER_DEFINITIONS) {
+      if (def.key in SCHEDULER_SETTINGS_SCHEMAS) continue;
       expect(source).not.toContain(`"${def.key}"`);
     }
+  });
+
+  /**
+   * The same drift, one level down.
+   *
+   * The interval-coverage sweep's `graceHours` and `lookbackDays`
+   * shipped with a Zod schema, defaults, validation in the patch path
+   * and a jsonb column to live in — and no control anywhere. The page
+   * even sent `settings` with every scheduler patch; the object was
+   * always empty, so the only way to change either value was SQL.
+   * Nothing failed, because nothing compared the schema with the screen.
+   */
+  describe("every scheduler knob is reachable on the page", () => {
+    const entries = Object.entries(SCHEDULER_SETTINGS_SCHEMAS) as Array<
+      [string, { shape: Record<string, unknown> }]
+    >;
+
+    it("has schedulers with knobs to check", () => {
+      // Guards the guard: an empty map would make the loop vacuous.
+      expect(entries.length).toBeGreaterThan(0);
+    });
+
+    it.each(entries.flatMap(([key, schema]) =>
+      Object.keys(schema.shape).map((field) => [key, field] as const),
+    ))("renders %s's %s", (_key, field) => {
+      expect(source).toContain(field);
+    });
   });
 
   it("gives a dispatcher's own timestamp no way in, by construction", () => {

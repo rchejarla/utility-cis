@@ -6,8 +6,9 @@ import {
   DEFAULT_RUN_HOUR_LOCAL,
   SCHEDULER_DEFINITIONS,
   schedulerDefinition,
-  intervalCoverageSettingsSchema,
+  SCHEDULER_SETTINGS_SCHEMAS,
 } from "@utility-cis/shared";
+import type { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { isValidIANA, localHour } from "../lib/iana-tz.js";
@@ -124,10 +125,20 @@ export async function getAutomationConfig(utilityId: string): Promise<Automation
  * next person reasonably believes matters.
  */
 function schedulerSettingsProblem(key: SchedulerKey, settings: unknown): string | null {
-  if (key === "intervalCoverage") {
-    const parsed = intervalCoverageSettingsSchema.safeParse(settings);
+  /*
+   * From the one place that says which schedulers have knobs, rather
+   * than an arm per job here. The page's drift guard reads the same map
+   * to insist those knobs are reachable on screen, so a job added to it
+   * cannot end up validated and unsettable — which is how the sweep's
+   * two spent three commits.
+   */
+  const schema: z.ZodTypeAny | undefined = SCHEDULER_SETTINGS_SCHEMAS[
+    key as keyof typeof SCHEDULER_SETTINGS_SCHEMAS
+  ];
+  if (schema) {
+    const parsed = schema.safeParse(settings);
     if (parsed.success) return null;
-    return `Invalid settings for the interval coverage sweep: ${parsed.error.issues
+    return `Invalid settings for the ${schedulerDefinition(key).label.split(" · ")[0]}: ${parsed.error.issues
       .map((i) => `${i.path.join(".") || "(root)"} — ${i.message}`)
       .join("; ")}`;
   }

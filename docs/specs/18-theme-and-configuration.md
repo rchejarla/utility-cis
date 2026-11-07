@@ -428,6 +428,17 @@ wrong answer used to be.
 | `settings` jsonb on either row | code still names it; not every tenant has it | nothing |
 | `utility_variable` | **the tenant's own configuration** — code never names it | nothing, and no deploy |
 
+**"Nothing" is the migration cost, not the whole cost.** A knob in a
+`scheduler_config.settings` jsonb still needs a control, and the
+interval-coverage sweep's two (`graceHours`, `lookbackDays`) showed what
+happens when that is forgotten: a Zod schema with defaults, validation
+in the patch path, a column to live in, and no control anywhere from
+2026-11-06 to 2026-11-07 — the only way to set either was SQL. The
+Automation page's `settings-coverage.test.ts` now reads
+`SCHEDULER_SETTINGS_SCHEMAS` and fails if a scheduler's knob is not
+reachable on screen, which is the same drift guard that already covered
+the tenant-wide fields one level up.
+
 The third row is the only place where a new knob needs no code at all, and
 it is worth understanding why: the thing that reads it is itself data. A
 rate formula referencing a variable is configuration reading

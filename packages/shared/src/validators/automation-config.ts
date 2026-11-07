@@ -148,6 +148,30 @@ export const intervalCoverageSettingsSchema = z
 export type IntervalCoverageSettings = z.infer<typeof intervalCoverageSettingsSchema>;
 
 /**
+ * Which schedulers have knobs of their own, and what shape they are.
+ *
+ * One statement, three readers: the patch path validates against it, the
+ * Automation page's drift guard asserts that every key in it is
+ * reachable on screen, and that same guard uses it to allow the page to
+ * name these schedulers while still forbidding it to name the others —
+ * a job's enable switch and run hour come from a loop over the
+ * catalogue, and must keep doing so, but a knob only one job has cannot
+ * be rendered by a loop without labelling it by its key name and
+ * explaining nothing.
+ *
+ * It exists because the sweep's two knobs shipped with a schema,
+ * defaults, validation and a column to live in, and **no control
+ * anywhere** — the same orphan-field shape `settings-coverage.test.ts`
+ * was written to catch one level up. A scheduler added here with no
+ * block on the page now fails that test by name.
+ */
+export const SCHEDULER_SETTINGS_SCHEMAS = {
+  intervalCoverage: intervalCoverageSettingsSchema,
+} as const satisfies Partial<Record<SchedulerKey, z.ZodTypeAny>>;
+
+export type SchedulerWithSettings = keyof typeof SCHEDULER_SETTINGS_SCHEMAS;
+
+/**
  * The sweep's settings from a `scheduler_config` row's jsonb, with the
  * defaults applied. Unparseable settings fall back to the defaults
  * rather than throwing: a sweep that refuses to run because a knob is

@@ -222,6 +222,33 @@ function HeaderActions() {
       >
         ⚠ Exception Queue
       </Link>
+      {/*
+       * Two queues, and they answer different questions. The one above
+       * is about a reading that looks wrong — high, zero, a rollover.
+       * This one is about interval data that does not cover its day,
+       * which no reading can show because the rows were never
+       * delivered. Side by side so nobody has to learn that an empty
+       * exception queue says nothing about interval coverage.
+       */}
+      <Link
+        href="/meter-reads/interval-coverage"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "6px",
+          padding: "7px 14px",
+          borderRadius: "var(--radius)",
+          border: "1px solid var(--border)",
+          background: "var(--bg-elevated)",
+          color: "var(--text-secondary)",
+          fontSize: "12px",
+          fontWeight: 600,
+          textDecoration: "none",
+          fontFamily: "inherit",
+        }}
+      >
+        ⧖ Interval Coverage
+      </Link>
     </div>
   );
 }
