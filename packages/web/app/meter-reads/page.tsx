@@ -2,7 +2,12 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { READ_TYPES, type ReadType } from "@utility-cis/shared";
+import {
+  EXCEPTION_CODE_LABELS,
+  READ_TYPES,
+  type ExceptionCode,
+  type ReadType,
+} from "@utility-cis/shared";
 import { EntityListPage } from "@/components/ui/entity-list-page";
 import type { Column } from "@/components/ui/data-table";
 
@@ -201,12 +206,17 @@ const columns: Column<MeterRead>[] = [
             color: "var(--danger)",
             border: "1px solid var(--danger)",
             fontSize: "10px",
-            fontWeight: 700,
-            letterSpacing: "0.04em",
+            fontWeight: 600,
             width: "fit-content",
+            whiteSpace: "nowrap",
           }}
+          /*
+           * The code on hover: the label is for reading, and the
+           * constant is what the API says and what somebody greps for.
+           */
+          title={row.exceptionCode}
         >
-          {row.exceptionCode}
+          {EXCEPTION_CODE_LABELS[row.exceptionCode as ExceptionCode] ?? row.exceptionCode}
         </span>
       ) : (
         <span style={{ color: "var(--text-muted)" }}>—</span>

@@ -28,7 +28,7 @@ export const READ_SOURCES = ["MANUAL", "AMR", "AMI", "CUSTOMER_SELF", "SYSTEM"] 
 
 export const readSourceEnum = z.enum(READ_SOURCES);
 
-export const exceptionCodeEnum = z.enum([
+export const EXCEPTION_CODES = [
   "HIGH_USAGE",
   "LOW_USAGE",
   "ZERO_USAGE",
@@ -36,7 +36,34 @@ export const exceptionCodeEnum = z.enum([
   "REVERSE_FLOW",
   "ROLLOVER",
   "CONSECUTIVE_ESTIMATE",
-]);
+] as const;
+
+export const exceptionCodeEnum = z.enum(EXCEPTION_CODES);
+
+/**
+ * What each one means, in words a column can hold.
+ *
+ * The screens printed the constant itself, and `CONSECUTIVE_ESTIMATE`
+ * is twenty upper-case characters — wider than the column it sits in,
+ * so the table clipped it to `CONSECUTIVE_ESTIMA…`. The fault was not
+ * the width: a cell that shouts a database constant at somebody asking
+ * what is wrong with a read has already failed, and the longest of
+ * these labels is five characters shorter than the shortest clipped
+ * code.
+ *
+ * A `Record`, so a code added to the enum fails to compile until it has
+ * a label. Readers still fall back to the raw value, because an
+ * unlabelled code must show something true rather than an empty cell.
+ */
+export const EXCEPTION_CODE_LABELS: Record<ExceptionCode, string> = {
+  HIGH_USAGE: "High usage",
+  LOW_USAGE: "Low usage",
+  ZERO_USAGE: "Zero usage",
+  METER_DEFECT: "Meter defect",
+  REVERSE_FLOW: "Reverse flow",
+  ROLLOVER: "Rollover",
+  CONSECUTIVE_ESTIMATE: "Repeat estimate",
+};
 
 export const meterReadSortFields = [
   "readDatetime",

@@ -7,6 +7,7 @@ import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { useToast } from "@/components/ui/toast";
+import type { ExceptionCode } from "@utility-cis/shared";
 
 /**
  * Exception queue — the operations command center for meter reads that
@@ -47,8 +48,16 @@ interface EnvelopeResponse {
   meta: { total: number };
 }
 
+/*
+ * Keyed to the enum rather than to `string`, so a code added to the API
+ * fails to compile here instead of falling through to the raw constant
+ * — which is how `CONSECUTIVE_ESTIMATE` came to be clipped in the read
+ * log's column. The labels stay upper case: this screen is deliberately
+ * terminal-looking and groups by them, while the log's chip uses the
+ * shared sentence-case labels.
+ */
 const exceptionMeta: Record<
-  string,
+  ExceptionCode,
   { label: string; accent: string; summary: string }
 > = {
   HIGH_USAGE: {
@@ -282,7 +291,7 @@ export default function ExceptionQueuePage() {
           }}
         >
           {Object.entries(counts).map(([code, n]) => {
-            const meta = exceptionMeta[code] ?? { label: code, accent: "var(--text-secondary)", summary: "" };
+            const meta = exceptionMeta[code as ExceptionCode] ?? { label: code, accent: "var(--text-secondary)", summary: "" };
             return (
               <div
                 key={code}
@@ -350,7 +359,7 @@ export default function ExceptionQueuePage() {
         </div>
       ) : (
         Object.entries(grouped).map(([code, group]) => {
-          const meta = exceptionMeta[code] ?? { label: code, accent: "var(--text-secondary)", summary: "" };
+          const meta = exceptionMeta[code as ExceptionCode] ?? { label: code, accent: "var(--text-secondary)", summary: "" };
           const groupSelected = group.every((r) => selectedIds.has(r.id));
           return (
             <div

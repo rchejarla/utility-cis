@@ -235,3 +235,43 @@ describe("Meter reads — an empty log", () => {
     expect(screen.getByRole("link", { name: /Reading Progress/ })).toBeInTheDocument();
   });
 });
+
+/**
+ * The Exception column.
+ *
+ * It printed the raw enum, and `CONSECUTIVE_ESTIMATE` is twenty
+ * characters of upper case with letter-spacing on top — wider than the
+ * column, so `DataTable` clipped it with an ellipsis (every cell is
+ * `nowrap` unless the column opts into `wrap`). Reported 2026-11-07.
+ *
+ * Widening the column or wrapping the badge would both be answers to
+ * the wrong question: the cell was shouting a database constant at
+ * somebody who wants to know what is wrong with the read. A short
+ * sentence-case label fits and reads, and the code stays on hover for
+ * whoever is grepping for it.
+ */
+describe("Meter reads — the exception column", () => {
+  it("says what is wrong in words, not in an enum", async () => {
+    get.mockResolvedValue(payload([read({ exceptionCode: "CONSECUTIVE_ESTIMATE" })]));
+    renderPage();
+
+    expect(await screen.findByText("Repeat estimate")).toBeInTheDocument();
+    expect(screen.queryByText("CONSECUTIVE_ESTIMATE")).not.toBeInTheDocument();
+  });
+
+  it("keeps the code itself on hover, since that is what the API says", async () => {
+    get.mockResolvedValue(payload([read({ exceptionCode: "CONSECUTIVE_ESTIMATE" })]));
+    renderPage();
+
+    expect(await screen.findByTitle("CONSECUTIVE_ESTIMATE")).toBeInTheDocument();
+  });
+
+  it("falls back to the raw value for a code it has no label for", async () => {
+    // A code added to the API and not here must still show something
+    // true rather than an empty cell.
+    get.mockResolvedValue(payload([read({ exceptionCode: "SOMETHING_NEW" })]));
+    renderPage();
+
+    expect(await screen.findByText("SOMETHING_NEW")).toBeInTheDocument();
+  });
+});

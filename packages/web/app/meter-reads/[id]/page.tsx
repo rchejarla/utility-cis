@@ -11,6 +11,7 @@ import { formInputStyle } from "@/components/ui/entity-form-page";
 import { apiClient } from "@/lib/api-client";
 import { usePermission } from "@/lib/use-permission";
 import { useToast } from "@/components/ui/toast";
+import { EXCEPTION_CODE_LABELS, type ExceptionCode } from "@utility-cis/shared";
 
 /**
  * Meter read detail page.
@@ -397,7 +398,12 @@ export default function MeterReadDetailPage({ params }: PageProps) {
               letterSpacing: "0.06em",
             }}
           >
-            ⚠ {read.exceptionCode}
+            {/*
+              * The same words the list used. It printed the constant,
+              * so clicking a row renamed the thing: "Repeat estimate"
+              * on one screen and `CONSECUTIVE_ESTIMATE` on the next.
+              */}
+            ⚠ {EXCEPTION_CODE_LABELS[read.exceptionCode as ExceptionCode] ?? read.exceptionCode}
           </span>
         )}
       </div>
