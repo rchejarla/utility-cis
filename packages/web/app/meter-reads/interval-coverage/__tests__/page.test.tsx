@@ -41,10 +41,25 @@ function exception(over: Record<string, unknown> = {}) {
 }
 
 /** The queue, plus the automation config the page reads for the banner. */
-function answers(rows: unknown[], sweepEnabled = true) {
+function answers(
+  rows: unknown[],
+  sweep: { enabled?: boolean; lastRunAt?: string | null; runHourLocal?: number } = {},
+) {
   get.mockImplementation(async (url: string) => {
     if (url.startsWith("/api/v1/settings/automation")) {
-      return { schedulers: [{ key: "intervalCoverage", enabled: sweepEnabled, settings: {} }] };
+      return {
+        schedulers: [
+          {
+            key: "intervalCoverage",
+            enabled: sweep.enabled ?? true,
+            // A swept queue by default: the states that need saying are
+            // the exceptions, and each has its own test below.
+            lastRunAt: sweep.lastRunAt === undefined ? "2026-11-07T10:00:00.000Z" : sweep.lastRunAt,
+            runHourLocal: sweep.runHourLocal ?? 3,
+            settings: {},
+          },
+        ],
+      };
     }
     return { data: rows, meta: { total: rows.length, page: 1, limit: 20, pages: 1 } };
   });
@@ -121,17 +136,59 @@ describe("the interval-coverage queue", () => {
    * step along: it looks like good news.
    */
   it("says so when nothing is filling the queue", async () => {
-    answers([], false);
+    answers([], { enabled: false });
     renderPage();
 
     expect(await screen.findByText(/sweep is off/i)).toBeInTheDocument();
   });
 
   it("does not cry wolf when the sweep is running and found nothing", async () => {
-    answers([], true);
+    answers([], { enabled: true });
     renderPage();
 
     await waitFor(() => expect(get).toHaveBeenCalled());
     expect(screen.queryByText(/sweep is off/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/never run/i)).not.toBeInTheDocument();
+  });
+
+  /*
+   * Found by opening the screen (2026-11-07): the banner tested the
+   * enable flag and nothing else, so a sweep that is **on and has never
+   * run** showed a clean queue with no caveat — which is the same trap
+   * one level up from the one this screen was built to avoid, and the
+   * one `CLAUDE.md` describes for a queue with an armed cron and no
+   * worker attached: "zero workers and a healthy-looking set of counts
+   * are the same picture otherwise".
+   *
+   * On the dev stack that is the *ordinary* state: `start_dev.bat`
+   * starts no worker, so an enabled sweep sits with `lastRunAt` null
+   * for ever and the queue stays empty for a reason that has nothing to
+   * do with the data.
+   */
+  it("says so when the sweep is on but has never run", async () => {
+    answers([], { enabled: true, lastRunAt: null });
+    renderPage();
+
+    expect(await screen.findByText(/never run/i)).toBeInTheDocument();
+    // And not the other message: "off" and "never run" are different
+    // things to do something about.
+    expect(screen.queryByText(/sweep is off/i)).not.toBeInTheDocument();
+  });
+
+  it("names the hour it runs at, so somebody can tell whether it is due", async () => {
+    answers([], { enabled: true, lastRunAt: null, runHourLocal: 3 });
+    renderPage();
+
+    expect(await screen.findByText(/03:00/)).toBeInTheDocument();
+  });
+
+  it("says when it last swept, so an empty list can be read", async () => {
+    answers([], { enabled: true, lastRunAt: "2026-11-07T10:00:00.000Z" });
+    renderPage();
+
+    // Quietly, not as a warning: this is the state where an empty list
+    // genuinely means the data is sound, and it is the only state where
+    // it does.
+    expect(await screen.findByText(/last swept/i)).toBeInTheDocument();
   });
 });

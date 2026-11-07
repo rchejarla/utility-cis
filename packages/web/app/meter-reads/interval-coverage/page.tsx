@@ -36,7 +36,34 @@ import { usePermission } from "@/lib/use-permission";
  */
 
 interface AutomationAnswer {
-  schedulers: Array<{ key: string; enabled: boolean }>;
+  schedulers: Array<{
+    key: string;
+    enabled: boolean;
+    lastRunAt: string | null;
+    runHourLocal: number | null;
+  }>;
+}
+
+/**
+ * What the sweep's own state says about an empty list below.
+ *
+ * Three different things, and only the last of them means the data is
+ * sound:
+ *
+ * - **off** — nobody is looking, so the list is empty by construction.
+ * - **on but never run** — armed and nothing has fired it. On a dev
+ *   stack that is the ordinary state, because no worker is attached;
+ *   in production it means the same thing for the same reason, which
+ *   is why the platform console reports queues with armed crons and no
+ *   workers at all. The screen said nothing about this until somebody
+ *   opened it (2026-11-07) and found a clean queue for a sweep that
+ *   had never swept.
+ * - **swept** — then, and only then, an empty list is good news.
+ */
+interface SweepState {
+  enabled: boolean;
+  lastRunAt: string | null;
+  runHourLocal: number | null;
 }
 
 type Row = MeterDataExceptionDto;
@@ -89,8 +116,8 @@ export default function IntervalCoveragePage() {
   const [kind, setKind] = useState<DataExceptionKind | "">("");
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
-  /** `null` until the automation config answers — never assumed on. */
-  const [sweepEnabled, setSweepEnabled] = useState<boolean | null>(null);
+  /** `null` until the automation config answers — never assumed. */
+  const [sweep, setSweep] = useState<SweepState | null>(null);
 
   const fetchRows = useCallback(async () => {
     const params = new URLSearchParams({ limit: "50", sort: "windowStart", order: "desc" });
@@ -122,10 +149,18 @@ export default function IntervalCoveragePage() {
     apiClient
       .get<AutomationAnswer>("/api/v1/settings/automation")
       .then((cfg) => {
-        const sweep = cfg.schedulers?.find((s) => s.key === "intervalCoverage");
-        setSweepEnabled(sweep ? sweep.enabled : null);
+        const found = cfg.schedulers?.find((s) => s.key === "intervalCoverage");
+        setSweep(
+          found
+            ? {
+                enabled: found.enabled,
+                lastRunAt: found.lastRunAt ?? null,
+                runHourLocal: found.runHourLocal ?? null,
+              }
+            : null,
+        );
       })
-      .catch(() => setSweepEnabled(null));
+      .catch(() => setSweep(null));
   }, []);
 
   if (!canView) return <AccessDenied />;
@@ -181,27 +216,7 @@ export default function IntervalCoveragePage() {
         estimator&apos;s job (spec 26, TOU-GAP-2), which is not built.
       </PageDescription>
 
-      {sweepEnabled === false && (
-        <div
-          style={{
-            background: "var(--warning-subtle)",
-            border: "1px solid var(--warning)",
-            borderRadius: "var(--radius)",
-            padding: "12px 16px",
-            marginBottom: 16,
-            fontSize: 13,
-            color: "var(--text-primary)",
-          }}
-        >
-          <b>The nightly sweep is off</b>, so nothing is filling this queue —
-          an empty list here means nobody has looked, not that the data is
-          sound. Turn it on under{" "}
-          <Link href="/settings/automation" style={{ color: "var(--accent-primary)" }}>
-            Settings · Automation
-          </Link>
-          , where its grace period and how far back it checks are set too.
-        </div>
-      )}
+      <SweepStatus sweep={sweep} />
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <select
@@ -334,6 +349,72 @@ export default function IntervalCoveragePage() {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+/**
+ * What the sweep's state means for the list below.
+ *
+ * Nothing at all when the config could not be asked: not knowing
+ * whether the sweep is running is a reason to say nothing about it,
+ * never a reason to guess either way.
+ */
+function SweepStatus({ sweep }: { sweep: SweepState | null }) {
+  if (!sweep) return null;
+
+  const hour =
+    sweep.runHourLocal === null ? null : `${String(sweep.runHourLocal).padStart(2, "0")}:00`;
+
+  if (!sweep.enabled) {
+    return (
+      <Warning>
+        <b>The nightly sweep is off</b>, so nothing is filling this queue —
+        an empty list here means nobody has looked, not that the data is
+        sound. Turn it on under{" "}
+        <Link href="/settings/automation" style={{ color: "var(--accent-primary)" }}>
+          Settings · Automation
+        </Link>
+        , where its grace period and how far back it checks are set too.
+      </Warning>
+    );
+  }
+
+  if (!sweep.lastRunAt) {
+    return (
+      <Warning>
+        <b>The sweep is on but has never run</b>
+        {hour ? `, so nothing has checked your interval data yet. It runs at ${hour} local` : ""}.
+        An empty list below means nobody has looked. If it stays this way past that hour, nothing
+        is draining the queue it runs on — which an operator with platform access can see under
+        Cluster · Workers.
+      </Warning>
+    );
+  }
+
+  return (
+    <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
+      Last swept {new Date(sweep.lastRunAt).toLocaleString()}
+      {hour ? ` · runs at ${hour} local` : ""}. An empty list below means the days it checked tile
+      without a hole.
+    </div>
+  );
+}
+
+function Warning({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        background: "var(--warning-subtle)",
+        border: "1px solid var(--warning)",
+        borderRadius: "var(--radius)",
+        padding: "12px 16px",
+        marginBottom: 16,
+        fontSize: 13,
+        color: "var(--text-primary)",
+      }}
+    >
+      {children}
     </div>
   );
 }
