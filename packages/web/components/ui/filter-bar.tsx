@@ -12,7 +12,8 @@ interface FilterConfigBase {
   label: string;
   options: FilterOption[];
   /**
-   * Whether "All <label>" is offered. True unless said otherwise.
+   * Whether the clear item is offered at all. True unless said
+   * otherwise.
    *
    * False for a filter that must always hold a value — the platform job
    * list asks the API for one state, and there is no "all states" to
@@ -22,6 +23,23 @@ interface FilterConfigBase {
    * unavailable one.
    */
   clearable?: boolean;
+  /**
+   * What that item is called. Defaults to `All {label}`.
+   *
+   * Which reads correctly while the label names a **dimension** — "All
+   * Status", "All Commodity" — and stops being true the moment it names
+   * a **condition**. The Meter Reads screen offered
+   *
+   *     All Exceptions  ·  With exception  ·  No exception
+   *
+   * where the first item means "do not filter on this" and plainly
+   * reads as every read that has one. Reported 2026-11-07 by someone
+   * who had just seen that pill return the wrong rows for an unrelated
+   * reason and could not tell the two faults apart: the label made a
+   * working filter unreadable and a broken one undiagnosable. Such a
+   * filter passes `allLabel: "All"` and says nothing it does not mean.
+   */
+  allLabel?: string;
 }
 
 interface SingleFilterConfig extends FilterConfigBase {
@@ -222,7 +240,7 @@ function FilterPill({ filter }: { filter: FilterConfig }) {
                 click, where clearing means anything at all. */}
             {filter.clearable !== false && (
               <DropdownItem
-                label={`All ${filter.label}`}
+                label={filter.allLabel ?? `All ${filter.label}`}
                 active={!isActive}
                 onClick={clear}
               />

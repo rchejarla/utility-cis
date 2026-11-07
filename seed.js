@@ -979,6 +979,46 @@ async function main() {
   const readDayFor = (sa) => sa?.account?.billingCycle?.readDayOfMonth ?? 8;
   const sa0001 = saList.find(s => s.agreementNumber === "SA-0001");
   const sa0006 = saList.find(s => s.agreementNumber === "SA-0006");
+  /*
+   * ─── Two reads somebody has to look at ───────────────────────────
+   *
+   * The exception queue and the Meter Reads screen's Exceptions filter
+   * had **nothing to show on any seeded database**: not one read
+   * carried an `exception_code`. So a screen built for this work looked
+   * like a clean morning, and the filter could not be told apart from
+   * a broken one — which is exactly what happened on 2026-11-07, when
+   * "No exception" returned an empty table (`z.coerce.boolean()` made
+   * both of its options mean "with"). Nobody could see which half was
+   * wrong, because both halves showed nothing.
+   *
+   * **Neither flag changes a figure.** The anomalies are on each
+   * series' newest read, which is dated on the cycle's read day in the
+   * *current* month and therefore sits after the window a run bills —
+   * next period's read, left for next period. A flag that inflated
+   * consumption would move a bill the day the window caught up with
+   * it, which is how a seed comes to pass today and fail on the 11th.
+   *
+   * `CONSECUTIVE_ESTIMATE` needs the estimates to exist, so the three
+   * newest reads on that series are `ESTIMATED` — the flag and the data
+   * agree, rather than the flag being an assertion about nothing.
+   */
+  const ANOMALY = {
+    "SA-0001": {
+      /** Three estimates running; the newest is the one flagged. */
+      estimatedMonths: 3,
+      code: "CONSECUTIVE_ESTIMATE",
+      notes:
+        "Third estimate in a row — the meter has not been successfully read since August. Needs a field visit before this bills.",
+    },
+    "SA-0006": {
+      /** The dial did not move: a vacant property, or a stopped meter. */
+      zeroUsage: true,
+      code: "ZERO_USAGE",
+      notes:
+        "No consumption recorded this period. Confirm whether the premise is vacant or the meter has stopped.",
+    },
+  };
+
   let readCount = 0;
   for (const { sa, baseReading, monthlyUsage } of [
     { sa: sa0001, baseReading: 1200, monthlyUsage: () => 3500 + Math.floor(Math.random() * 2000) },
@@ -996,9 +1036,14 @@ async function main() {
         READ_DAY_UTC.getUTCMonth() - m,
         readDay,
       ));
-      const usage = monthlyUsage();
+      const anomaly = ANOMALY[sa.agreementNumber];
+      const isNewest = m === 0;
+      const zeroed = isNewest && anomaly?.zeroUsage === true;
+      const usage = zeroed ? 0 : monthlyUsage();
       const prior = running;
       running += usage;
+      const estimated =
+        anomaly?.estimatedMonths !== undefined && m < anomaly.estimatedMonths;
       await p.meterRead.create({
         data: {
           utilityId: UID,
@@ -1010,15 +1055,31 @@ async function main() {
           reading: running,
           priorReading: prior,
           consumption: usage,
-          readType: "ACTUAL",
-          readSource: "AMR",
+          readType: estimated ? "ESTIMATED" : "ACTUAL",
+          // An estimate is a figure nobody took, so it has no reader and
+          // no drive-by behind it: the system produced it.
+          readSource: estimated ? "SYSTEM" : "AMR",
           isFrozen: false,
+          ...(isNewest && anomaly
+            ? { exceptionCode: anomaly.code, exceptionNotes: anomaly.notes }
+            : {}),
         },
       });
       readCount++;
     }
   }
   console.log("  " + readCount + " meter reads");
+  /*
+   * Said out loud, like the register reconciliation: a seeded fault
+   * nobody announced reads as a bug in the product the first time
+   * somebody opens the exception queue and finds work in it.
+   */
+  for (const [agreementNumber, a] of Object.entries(ANOMALY)) {
+    console.log(
+      "       " + agreementNumber + ": newest read flagged " + a.code +
+        " — in the exception queue, and after the window a run bills, so no figure moves",
+    );
+  }
 
   const customerData = [
     { customerType: "INDIVIDUAL", firstName: "Jane", lastName: "Smith", email: "jane.smith@example.com", phone: "555-100-0001", status: "ACTIVE" },

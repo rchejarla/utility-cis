@@ -274,16 +274,26 @@ export default function MeterReadsPage() {
         { key: "readType", label: "Type", options: READ_TYPE_OPTIONS },
         { key: "readSource", label: "Source", options: READ_SOURCE_OPTIONS },
         {
+          /*
+           * The clear item is "All Reads", not "All Exceptions" — that read
+           * as *every flagged read*, a third subset, rather than as
+           * "do not filter on this". A filter whose label is a
+           * condition cannot borrow its own label for the word that
+           * means the absence of it.
+           */
           key: "hasException",
           label: "Exceptions",
+          allLabel: "All Reads",
           options: [
             { label: "With exception", value: "true" },
             { label: "No exception", value: "false" },
           ],
         },
         {
+          // "All Billed" had the same fault as "All Exceptions".
           key: "isFrozen",
           label: "Billed",
+          allLabel: "All Reads",
           options: [
             { label: "Frozen (billed)", value: "true" },
             { label: "Unbilled", value: "false" },

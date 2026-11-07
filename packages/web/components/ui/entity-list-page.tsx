@@ -36,6 +36,13 @@ interface StaticFilter {
   key: string;
   label: string;
   options: FilterOption[];
+  /**
+   * What the clear item is called, when `All {label}` would not be
+   * true — see `FilterBar`. A filter whose label names a condition
+   * needs this: "All Exceptions" reads as every flagged row rather
+   * than as the absence of a filter.
+   */
+  allLabel?: string;
 }
 
 interface DynamicFilter {
@@ -254,6 +261,10 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
       key: f.key,
       label: f.label,
       options,
+      // Carried through rather than re-derived: the page knows whether
+      // its own label is a dimension or a condition, and this component
+      // cannot tell.
+      ...(!isDynamic(f) && f.allLabel ? { allLabel: f.allLabel } : {}),
       value: filterValues[f.key],
       onChange: handleFilterChange(f.key),
     };
