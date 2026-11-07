@@ -717,6 +717,53 @@ raw intervals from the same meters. Compression is therefore entirely a
 
 ### 3b. Interval data
 
+> **Nothing in production can put an interval in, and nothing can show
+> one.** Noted 2026-11-07, both deferred by Rao, both wanted.
+>
+> Everything downstream of the table is built and tested — tiling,
+> classification, the roll-up into TOU buckets, the gap queue, the
+> pre-run blocker, the bill. The table's **only writer in the whole
+> codebase is `seed/tou-service.js`** (plus three integration tests),
+> and no route returns an interval row, so no screen can display one.
+> The derived side is visible — an interval meter's month shows on the
+> Meter Reads log as three `meter_read` rows carrying a `peak_code` with
+> `read_source: AMI` — and the hourly series behind it is not.
+>
+> Two pieces, in the order they are worth doing:
+>
+> **1. The interval import handler (TOU-INT-2).** The ingress, and the
+> thing that makes all of the above usable by an actual utility. An
+> eighth handler in the existing framework (spec 22), so the shape is
+> known: `kind: "meter_read_interval"`, mapping meter number, interval
+> start, length, quantity, quality. What is *not* known and has to be
+> decided when it is built:
+>
+> - **The formats.** MV90 and a head-end CSV are the two real ones. The
+>   framework maps columns, so a wide format — one row per day with 24
+>   or 96 quantity columns — needs either a pre-transform or a handler
+>   that emits many rows per source row, which no handler does today.
+> - **The duplicate rule.** Re-importing a day must not double it.
+>   `meter_read` leans on a unique constraint over
+>   `(meter_id, register_id, read_datetime, read_source)`;
+>   `meter_read_interval` has partial unique indexes but the roll-up
+>   also treats a second row covering the same minutes as an
+>   `overlap` **exception**, so "import the same file twice" would open
+>   a queue item rather than being skipped. Decide which it is before
+>   writing the handler.
+> - **Timestamps.** A head-end file often carries local times, and an
+>   interval's start is UTC here. A file whose zone is implicit, over a
+>   DST boundary, is where this goes wrong silently.
+>
+> **2. A series view.** What you open when a customer disputes a TOU
+> bill, and the only way to *see* a gap the coverage queue is reporting.
+> A day or a week of intervals for one meter, with the quality flag,
+> most likely on the meter detail page beside its read history. Needs a
+> route — there is none — and a decision about how much to return at
+> once: a week of 15-minute data is 672 points, a month is 2,976.
+>
+> Until then the coverage queue, the readiness check and the roll-up all
+> describe data that only a seed can produce.
+
 - **TOU-INT-1 (Must).** *Built 2026-11-05, except the compression
   policy.* Interval consumption is stored in **`meter_read_interval`**,
   one row per interval per meter (and register): interval start (UTC),

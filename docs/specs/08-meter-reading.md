@@ -255,6 +255,17 @@ default: an empty table would otherwise read as good news rather than as
 nobody having looked. Owned by spec 26 (TOU-GAP-1); the table is
 `meter_data_exception`.
 
+### Interval series view — not built
+
+Noted 2026-11-07, deferred. There is **no screen anywhere that shows an
+interval reading**, and no route that returns one: an AMI meter's month
+is visible only as the three `meter_read` rows the roll-up derives from
+it. The view belongs beside a meter's read history on the meter detail
+page, and is what somebody opens when a customer disputes a TOU bill or
+when the interval-coverage queue reports a gap they want to look at.
+Requirements, and the interval *import* gap that matters more, are in
+spec 26 §3b.
+
 ### Reading Progress (`/meter-reads/progress`) — live
 
 **The question a list of reads cannot answer.** The rows it wants are
