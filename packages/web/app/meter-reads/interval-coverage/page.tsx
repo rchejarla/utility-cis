@@ -143,7 +143,7 @@ export default function IntervalCoveragePage() {
       await apiClient.post(`/api/v1/meter-data-exceptions/${row.id}/${action}`, {});
       toast(
         action === "accept"
-          ? `${row.meter.meterNumber} — ${duration(row.minutesAffected)} accepted; this month can bill`
+          ? `${row.meter.meterNumber} — ${duration(row.minutesAffected)} accepted; the pre-run check will stop counting it`
           : `${row.meter.meterNumber} — acceptance withdrawn`,
         "success",
       );
@@ -171,10 +171,14 @@ export default function IntervalCoveragePage() {
         A TOU bill is a sum over classified intervals, so a missing hour is
         not a smaller bill — it is a bill that undercharges with nothing
         saying so. The nightly sweep finds the days that do not add up and
-        lists them here while the data can still be re-polled. <b>Accept</b>{" "}
-        when a hole will never be filled and the month has to bill anyway:
-        the pre-run check stops blocking exactly those minutes, and who
-        accepted it is recorded.
+        lists them here while the data can still be re-polled.{" "}
+        <b>Accept</b> records that a hole is never going to be filled, and
+        who decided that: the billing run&apos;s pre-run check stops
+        counting those minutes against the month.{" "}
+        <b>It does not make the month billable yet</b> — the roll-up still
+        refuses a period its intervals cannot cover, by design, because
+        billing a hole as nothing undercharges. Filling it is the
+        estimator&apos;s job (spec 26, TOU-GAP-2), which is not built.
       </PageDescription>
 
       {sweepEnabled === false && (

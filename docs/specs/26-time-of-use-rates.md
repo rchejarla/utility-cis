@@ -999,6 +999,30 @@ raw intervals from the same meters. Compression is therefore entirely a
   knobs it names are editable there since the same day
   (`graceHours`, `lookbackDays`; see spec 18).
 
+  **Open question, found 2026-11-07: `accepted` is honoured in one place
+  and not the other.** `checkTouReadiness` subtracts accepted minutes, so
+  an accepted month clears the pre-run check — and then
+  `rollUpIntervals` refuses the period anyway, because it consults no
+  exception table and will not bill a window its intervals do not cover.
+  The run therefore starts and fails that one account with
+  `TOU_ROLLUP_FAILED`. Three ways out, and the choice is about what a
+  customer is charged:
+
+  1. **The roll-up tolerates exactly the accepted minutes.** Acceptance
+     then means what the word implies, and the month bills short on
+     purpose — which needs the bill to say so, or TOU-GAP-1's "never
+     silently" is broken by the back door.
+  2. **Acceptance is only ever a route to the estimator** (TOU-GAP-2):
+     it records that re-polling is pointless, and a value still has to
+     be supplied before the month can bill. The pre-run subtraction is
+     then wrong and should go.
+  3. **Accept estimates the hole as zero**, explicitly, through the same
+     path a real estimate takes — honest about the arithmetic, and it
+     leaves one code path rather than two.
+
+  Until it is settled, the screen and the service say what acceptance
+  does today: it clears the pre-run check and nothing more.
+
   API: `GET /api/v1/meter-data-exceptions` (status, kind, meter, window
   range; no filter defaults, because "everything, including what the
   sweep resolved" is how a meter that fails every month becomes

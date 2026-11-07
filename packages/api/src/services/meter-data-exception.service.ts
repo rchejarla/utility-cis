@@ -204,11 +204,22 @@ async function requireException(id: string, utilityId: string) {
 }
 
 /**
- * "Bill this meter's month as it stands."
+ * "This hole is never going to be filled."
  *
- * The consequential one: `checkTouReadiness` **sums the accepted
- * minutes** for a meter and stops blocking that many, so this is how a
- * hole the head-end will never backfill becomes billable.
+ * `checkTouReadiness` **sums the accepted minutes** for a meter and
+ * stops counting that many against the period, so an accepted month
+ * clears the pre-run check.
+ *
+ * **It does not make the month billable, and the gap between those two
+ * sentences is a known hole** (2026-11-07). `rollUpIntervals` refuses
+ * any period its intervals do not cover and never consults this table,
+ * so a run over an accepted month is allowed to start and then fails
+ * that one account with `TOU_ROLLUP_FAILED`. Either the roll-up learns
+ * to tolerate exactly the accepted minutes — which means billing a
+ * month short on purpose, and a bill that says so — or acceptance is
+ * only ever a route to the estimator. That is a decision about what a
+ * customer is charged, so it is recorded in spec 26 rather than settled
+ * here; the screen and this comment say what the action does today.
  *
  * Only from `open`, and a refusal rather than a no-op for the rest.
  * Accepting a `resolved` row would add minutes to that sum which are no
