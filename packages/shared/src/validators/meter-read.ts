@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { queryBoolean } from "../lib/base-list-query";
+import { paginationMetaSchema, queryBoolean } from "../lib/base-list-query";
 
 /**
  * What a read is, in the one place that defines it.
@@ -251,6 +251,105 @@ export const meterReadingProgressQuerySchema = z
   .strict();
 
 export type MeterReadingProgressQuery = z.infer<typeof meterReadingProgressQuerySchema>;
+
+/*
+ * ─── What the API sends back ──────────────────────────────────────────
+ *
+ * Response shapes, so the screens stop describing them by hand.
+ *
+ * The web package had 169 of its own interfaces for API responses, and
+ * every one of its tests mocks the client — so nothing anywhere
+ * compared the two. The read log's own interface never declared
+ * `billedAt`, which is why its ❄ column could not have worked even
+ * after the flag it read got a writer; and `response-contracts.
+ * integration.test.ts` parses a real HTTP body through these, so a
+ * field the UI needs and the API stops sending fails there.
+ *
+ * Timestamps and decimals are **strings**: that is what a JSON body
+ * carries, whatever the column's type. A `Date` here would be a lie
+ * about the wire, and the lie is what lets `new Date(x)` work in one
+ * place and `x.toISOString()` throw in another.
+ */
+
+/** A row of the read log, as `GET /api/v1/meter-reads` sends it. */
+export const meterReadRowSchema = z.object({
+  id: z.string().uuid(),
+  readDate: z.string(),
+  readDatetime: z.string(),
+  /**
+   * Nullable, and the nullability is the point.
+   *
+   * A dial read has a `reading` and a `priorReading`; an
+   * interval-derived TOU bucket is a **sum** and has neither — the
+   * roll-up writes nulls there rather than inventing a cumulative
+   * number that matches nothing on the device. `consumption` is NOT
+   * NULL, because that is the figure every read exists to carry.
+   *
+   * The read log declared all three as plain `string`, so it rendered
+   * `Number(null)` as `0.00` for every TOU bucket row: a reading of
+   * zero where there is no reading at all.
+   */
+  reading: z.string().nullable(),
+  priorReading: z.string().nullable(),
+  consumption: z.string(),
+  readType: readTypeEnum,
+  readSource: readSourceEnum,
+  exceptionCode: z.string().nullable(),
+  /** Set once billed, and the one thing that locks the read. */
+  billedAt: z.string().nullable(),
+  meter: z
+    .object({
+      id: z.string().uuid(),
+      meterNumber: z.string(),
+      commodityId: z.string().uuid().nullable(),
+      multiplier: z.string().nullable(),
+    })
+    .nullable(),
+  /**
+   * The read's own unit, not the meter's — a register read carries its
+   * register's, which is how one meter logs kW beside kWh.
+   */
+  uom: z.object({ id: z.string().uuid(), code: z.string(), name: z.string() }).nullable(),
+  serviceAgreement: z
+    .object({ id: z.string().uuid(), agreementNumber: z.string() })
+    .nullable(),
+});
+
+export type MeterReadRow = z.infer<typeof meterReadRowSchema>;
+
+/** One service a cycle still owes a read for. */
+export const outstandingReadSchema = z.object({
+  meterId: z.string().uuid(),
+  meterNumber: z.string(),
+  agreementNumber: z.string(),
+  accountNumber: z.string(),
+  premise: z.string().nullable(),
+  /** Null when the meter has never been read at all. */
+  lastReadDate: z.string().nullable(),
+});
+
+export type OutstandingRead = z.infer<typeof outstandingReadSchema>;
+
+/**
+ * How far along a cycle's reading is.
+ *
+ * The service **builds** this rather than handing back database rows,
+ * so its return type is this schema's type and the compiler checks the
+ * producing side as well as the reading side.
+ */
+export const readingProgressSchema = z.object({
+  billingCycleId: z.string().uuid(),
+  cycleCode: z.string(),
+  windowStart: z.string().datetime(),
+  windowEnd: z.string().datetime(),
+  expected: z.number().int().nonnegative(),
+  read: z.number().int().nonnegative(),
+  outstanding: z.number().int().nonnegative(),
+  data: z.array(outstandingReadSchema),
+  meta: paginationMetaSchema,
+});
+
+export type ReadingProgress = z.infer<typeof readingProgressSchema>;
 
 // Bulk import has moved to the generic /api/v1/imports endpoint with
 // kind-aware handlers (see spec 22). The kind handler defines its own

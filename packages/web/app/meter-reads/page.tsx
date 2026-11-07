@@ -6,28 +6,11 @@ import {
   EXCEPTION_CODE_LABELS,
   READ_TYPES,
   type ExceptionCode,
+  type MeterReadRow,
   type ReadType,
 } from "@utility-cis/shared";
 import { EntityListPage } from "@/components/ui/entity-list-page";
 import type { Column } from "@/components/ui/data-table";
-
-interface MeterRead {
-  id: string;
-  readDate: string;
-  readDatetime: string;
-  reading: string;
-  priorReading: string;
-  consumption: string;
-  readType: string;
-  readSource: string;
-  exceptionCode?: string | null;
-  /** Set once billed, which is what locks the read. */
-  billedAt?: string | null;
-  meter?: { meterNumber: string; commodityId: string };
-  /** The read's own unit — a register's, where one is named. */
-  uom?: { code: string; name: string } | null;
-  serviceAgreement?: { agreementNumber: string };
-}
 
 /**
  * Built from the shared list, so a pill cannot offer a value the API
@@ -85,7 +68,18 @@ const READ_SOURCE_OPTIONS = [
   { label: "System", value: "SYSTEM" },
 ];
 
-const fmtNumber = (v: string | number) => {
+/**
+ * A quantity, or a dash where there is none.
+ *
+ * `null` is handled before `Number`, because `Number(null)` is **0**:
+ * an interval-derived TOU bucket has no dial reading — it is a sum, and
+ * the roll-up writes null rather than inventing a cumulative figure
+ * that matches nothing on the device — and this printed `0.00` for
+ * every one of them. A reading of zero and no reading at all are
+ * different claims about a meter.
+ */
+const fmtNumber = (v: string | number | null | undefined) => {
+  if (v === null || v === undefined) return "—";
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) : "—";
 };
@@ -105,7 +99,7 @@ const readTypeStyle = (type: string): { bg: string; fg: string } => {
   }
 };
 
-const columns: Column<MeterRead>[] = [
+const columns: Column<MeterReadRow>[] = [
   {
     key: "meterNumber",
     header: "Meter",
@@ -352,7 +346,7 @@ function ShowMeMenu() {
 
 export default function MeterReadsPage() {
   return (
-    <EntityListPage<MeterRead>
+    <EntityListPage<MeterReadRow>
       title="Meter Reads"
       subject="reads"
       module="meter_reads"

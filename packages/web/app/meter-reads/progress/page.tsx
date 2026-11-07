@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import type { ReadingProgress } from "@utility-cis/shared";
 import { PageHeader } from "@/components/ui/page-header";
 import { PageDescription } from "@/components/ui/page-description";
 import { AccessDenied } from "@/components/ui/access-denied";
@@ -26,26 +27,14 @@ import { usePermission } from "@/lib/use-permission";
  * progress figure with no period attached reads as "ever".
  */
 
-interface OutstandingRead {
-  meterId: string;
-  meterNumber: string;
-  agreementNumber: string;
-  accountNumber: string;
-  premise: string | null;
-  lastReadDate: string | null;
-}
-
-interface Progress {
-  billingCycleId: string;
-  cycleCode: string;
-  windowStart: string;
-  windowEnd: string;
-  expected: number;
-  read: number;
-  outstanding: number;
-  data: OutstandingRead[];
-  meta: { total: number; page: number; limit: number; pages: number };
-}
+/*
+ * `OutstandingRead` and `Progress` were declared here, by hand, beside
+ * the API service declaring the same two shapes. Both now come from
+ * `@utility-cis/shared`, where they are Zod schemas that
+ * `response-contracts.integration.test.ts` parses a real response
+ * through — so a field this page reads and the API stops sending fails
+ * a test, and one the API renames fails to compile here.
+ */
 
 interface Cycle {
   id: string;
@@ -66,7 +55,7 @@ export default function ReadingProgressPage() {
   const { canView } = usePermission("meter_reads");
   const [cycles, setCycles] = useState<Cycle[]>([]);
   const [cycleId, setCycleId] = useState<string>("");
-  const [progress, setProgress] = useState<Progress | null>(null);
+  const [progress, setProgress] = useState<ReadingProgress | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -88,7 +77,7 @@ export default function ReadingProgressPage() {
     setLoading(true);
     try {
       setProgress(
-        await apiClient.get<Progress>(
+        await apiClient.get<ReadingProgress>(
           `/api/v1/meter-reads/progress?billingCycleId=${cycleId}&limit=100`,
         ),
       );

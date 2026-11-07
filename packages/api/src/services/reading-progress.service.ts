@@ -1,4 +1,8 @@
-import type { MeterReadingProgressQuery } from "@utility-cis/shared";
+import type {
+  MeterReadingProgressQuery,
+  OutstandingRead,
+  ReadingProgress,
+} from "@utility-cis/shared";
 import { prisma } from "../lib/prisma.js";
 import { computeBillPeriod } from "./bill.service.js";
 
@@ -27,34 +31,21 @@ import { computeBillPeriod } from "./bill.service.js";
  * screen teaches people to ignore it.
  */
 
-export interface OutstandingRead {
-  meterId: string;
-  meterNumber: string;
-  agreementNumber: string;
-  accountNumber: string;
-  /** Where the meter is, for whoever has to go and read it. */
-  premise: string | null;
-  /** When it was last read at all, which says "new" or "stuck". */
-  lastReadDate: Date | null;
-}
-
-export interface ReadingProgress {
-  billingCycleId: string;
-  cycleCode: string;
-  windowStart: Date;
-  windowEnd: Date;
-  /**
-   * Services the cycle expects a read for, counted as **meter
-   * assignments** rather than meters: one meter serving two agreements
-   * is two readings to take, and the operator's unit of work is the
-   * service, not the device.
-   */
-  expected: number;
-  read: number;
-  outstanding: number;
-  data: OutstandingRead[];
-  meta: { total: number; page: number; limit: number; pages: number };
-}
+/*
+ * `OutstandingRead` and `ReadingProgress` were declared here, and
+ * again by hand in the screen that renders them. They live in
+ * `@utility-cis/shared` now, as Zod schemas the web derives its types
+ * from and `response-contracts.integration.test.ts` parses a real
+ * response through — so the shape has one statement, checked at both
+ * ends.
+ *
+ * **Its timestamps are ISO strings, not `Date`s.** This function builds
+ * its response rather than handing back database rows, so making the
+ * return type the wire type costs one `toISOString()` per field and
+ * buys a compiler that checks what is produced. A `Date` in a type the
+ * browser reads is a lie about the wire, and the lie is what lets
+ * `new Date(x)` work in one place and `x.getTime()` throw in another.
+ */
 
 export async function getReadingProgress(
   utilityId: string,
@@ -171,12 +162,12 @@ export async function getReadingProgress(
   return {
     billingCycleId: cycle.id,
     cycleCode: cycle.cycleCode,
-    windowStart,
-    windowEnd,
+    windowStart: windowStart.toISOString(),
+    windowEnd: windowEnd.toISOString(),
     expected,
     read: expected - outstanding,
     outstanding,
-    data: rows.map((r) => ({
+    data: rows.map((r): OutstandingRead => ({
       meterId: r.meterId,
       meterNumber: r.meter.meterNumber,
       agreementNumber: r.servicePoint?.serviceAgreement?.agreementNumber ?? "—",
@@ -184,7 +175,7 @@ export async function getReadingProgress(
       premise: r.servicePoint?.premise
         ? `${r.servicePoint.premise.addressLine1}, ${r.servicePoint.premise.city}`
         : null,
-      lastReadDate: lastByMeter.get(r.meterId) ?? null,
+      lastReadDate: lastByMeter.get(r.meterId)?.toISOString() ?? null,
     })),
     meta: {
       total: outstanding,

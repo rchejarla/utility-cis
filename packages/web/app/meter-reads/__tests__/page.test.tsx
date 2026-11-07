@@ -275,3 +275,39 @@ describe("Meter reads — the exception column", () => {
     expect(await screen.findByText("SOMETHING_NEW")).toBeInTheDocument();
   });
 });
+
+/**
+ * A TOU bucket has no dial reading.
+ *
+ * The roll-up writes `reading` and `priorReading` as null for an
+ * interval-derived row — it is a *sum*, and inventing a cumulative
+ * number would put a figure on the screen that matches nothing on the
+ * device. The log declared both as plain `string` in its own
+ * hand-written interface, so `Number(null)` printed **0.00**: a reading
+ * of zero where there is no reading.
+ *
+ * Found by deriving the row type from the shared schema (2026-11-07),
+ * which is nullable there because the column is.
+ */
+describe("Meter reads — a read with no dial reading", () => {
+  it("shows a dash rather than 0.00", async () => {
+    get.mockResolvedValue(
+      payload([
+        read({
+          id: "r-tou",
+          reading: null,
+          priorReading: null,
+          consumption: "140.0000",
+          readSource: "AMI",
+        }),
+      ]),
+    );
+    renderPage();
+
+    await screen.findByText("WM-001");
+    expect(screen.queryByText("0.00")).not.toBeInTheDocument();
+    // The consumption is still a number: that is the figure the row
+    // exists to carry, and it is NOT NULL in the database.
+    expect(screen.getByText("140.00")).toBeInTheDocument();
+  });
+});
