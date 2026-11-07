@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { queryBoolean } from "../lib/base-list-query";
 
 export const userSortFields = [
   "createdAt",
@@ -31,7 +32,7 @@ export const userQuerySchema = z.object({
   order: z.enum(["asc", "desc"]).default("desc"),
   search: z.string().optional(),
   roleId: z.string().uuid().optional(),
-  isActive: z.coerce.boolean().optional(),
+  isActive: queryBoolean.optional(),
 }).strict();
 
 export type CreateUserInput = z.infer<typeof createUserSchema>;

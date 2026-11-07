@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { queryBoolean } from "../lib/base-list-query";
 
 /**
  * What a read is, in the one place that defines it.
@@ -149,8 +150,8 @@ export const meterReadQuerySchema = z.object({
   readType: readTypeEnum.optional(),
   readSource: readSourceEnum.optional(),
   exceptionCode: exceptionCodeEnum.optional(),
-  hasException: z.coerce.boolean().optional(),
-  isFrozen: z.coerce.boolean().optional(),
+  hasException: queryBoolean.optional(),
+  isFrozen: queryBoolean.optional(),
   fromDate: z.string().date().optional(),
   toDate: z.string().date().optional(),
 }).strict();

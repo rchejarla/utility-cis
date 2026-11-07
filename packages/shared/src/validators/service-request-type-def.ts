@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { baseListQuerySchema } from "../lib/base-list-query";
+import { baseListQuerySchema, queryBoolean } from "../lib/base-list-query";
 
 export const serviceRequestTypeCode = z
   .string()
@@ -9,7 +9,7 @@ export const serviceRequestTypeCode = z
 
 export const serviceRequestTypeQuerySchema = baseListQuerySchema
   .extend({
-    includeInactive: z.coerce.boolean().optional(),
+    includeInactive: queryBoolean.optional(),
   })
   .strict();
 

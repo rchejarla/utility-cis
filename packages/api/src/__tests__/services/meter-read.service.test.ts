@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createMeterReadEvent } from "../../services/meter-read.service.js";
+import { createMeterReadEvent, listMeterReads } from "../../services/meter-read.service.js";
+import { meterReadQuerySchema } from "@utility-cis/shared";
 import { prisma } from "../../lib/prisma.js";
 
 /**
@@ -216,5 +217,57 @@ describe("createMeterReadEvent", () => {
     expect(eventCall.data.eventType).toBe("OTHER");
     expect(eventCall.data.description).toContain("Register 2 skipped");
     expect(eventCall.data.description).toContain("DEFECTIVE");
+  });
+});
+
+/**
+ * The two boolean filters on the Meter Reads list.
+ *
+ * Reported 2026-11-07: the Exceptions pill showed rows only with no
+ * filter applied. The cause was in the Zod schema — `z.coerce.boolean()`
+ * is `Boolean(input)`, so the string "false" a select box sends parsed
+ * as `true` and both options asked for reads *with* an exception. This
+ * pins the other half of that chain: that `false` reaches the query as a
+ * query for `exception_code IS NULL`, and not as the opposite or as
+ * nothing at all.
+ */
+describe("listMeterReads — the exception and billed filters", () => {
+  beforeEach(() => {
+    // Cleared here as well: the `clearAllMocks` above belongs to the
+    // read-event describe, so without this each case would read the
+    // previous one's query and agree with it.
+    vi.clearAllMocks();
+    (prisma.meterRead.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (prisma.meterRead.count as ReturnType<typeof vi.fn>).mockResolvedValue(0);
+  });
+
+  const whereOf = () => {
+    const calls = (prisma.meterRead.findMany as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    return (calls[0]![0] as { where: Record<string, unknown> }).where;
+  };
+
+  const query = (over: Record<string, unknown>) =>
+    meterReadQuerySchema.parse({ ...over });
+
+  it("asks for reads with no exception code when the pill says No exception", async () => {
+    await listMeterReads(UID, query({ hasException: "false" }));
+    expect(whereOf().exceptionCode).toBeNull();
+  });
+
+  it("asks for reads that have one when the pill says With exception", async () => {
+    await listMeterReads(UID, query({ hasException: "true" }));
+    expect(whereOf().exceptionCode).toEqual({ not: null });
+  });
+
+  it("asks about neither when no pill is chosen", async () => {
+    await listMeterReads(UID, query({}));
+    expect(whereOf()).not.toHaveProperty("exceptionCode");
+    expect(whereOf()).not.toHaveProperty("isFrozen");
+  });
+
+  it("distinguishes unbilled from billed, which had the same fault", async () => {
+    await listMeterReads(UID, query({ isFrozen: "false" }));
+    expect(whereOf().isFrozen).toBe(false);
   });
 });

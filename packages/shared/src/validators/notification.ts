@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { queryBoolean } from "../lib/base-list-query";
 
 export const notificationChannelSchema = z.enum(["EMAIL", "SMS"]);
 
@@ -41,7 +42,7 @@ export const notificationTemplateQuerySchema = z.object({
   sort: z.enum(["createdAt", "name", "eventType"]).default("createdAt"),
   order: z.enum(["asc", "desc"]).default("desc"),
   eventType: z.string().optional(),
-  isActive: z.coerce.boolean().optional(),
+  isActive: queryBoolean.optional(),
 }).strict();
 
 export const notificationQuerySchema = z.object({
