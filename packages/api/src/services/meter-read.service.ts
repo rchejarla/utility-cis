@@ -79,6 +79,56 @@ export async function listMeterReads(utilityId: string, query: MeterReadQuery) {
     where.readDate = range;
   }
 
+  /*
+   * One month, as a half-open range on `read_date`.
+   *
+   * Half-open rather than `lte` on the month's last day, because that
+   * date has to be computed and February and leap years are where it
+   * gets computed wrongly. Day 1 of the next month needs no such care —
+   * `Date.UTC(y, m, 1)` normalises December into the following January
+   * on its own.
+   *
+   * Set after `fromDate`/`toDate` and overwriting them: both name the
+   * same column, and a request carrying a month and a range is asking
+   * two questions at once. The month is the one the screen sends.
+   */
+  if (query.readMonth) {
+    const [year, month] = query.readMonth.split("-").map(Number);
+    where.readDate = {
+      gte: new Date(Date.UTC(year!, month! - 1, 1)),
+      lt: new Date(Date.UTC(year!, month!, 1)),
+    };
+  }
+
+  /*
+   * The cycle, reached through the account that owns the agreement —
+   * `meter_read` carries no cycle of its own, and should not: a read
+   * belongs to a meter and an agreement, and which route reads it is
+   * the account's fact, changeable without rewriting history.
+   */
+  if (query.billingCycleId) {
+    where.serviceAgreement = { account: { billingCycleId: query.billingCycleId } };
+  }
+
+  /*
+   * The two numbers a person has in hand. `OR` is its own key, so it
+   * combines with every filter above by AND rather than widening them.
+   *
+   * `contains` and not `startsWith`: a work order says "100234" for
+   * meter `WM-100234`, and a prefix match would find nothing while
+   * looking like a working search.
+   */
+  if (query.search) {
+    where.OR = [
+      { meter: { meterNumber: { contains: query.search, mode: "insensitive" } } },
+      {
+        serviceAgreement: {
+          agreementNumber: { contains: query.search, mode: "insensitive" },
+        },
+      },
+    ];
+  }
+
   return paginatedTenantList(prisma.meterRead, where, query, { include: fullInclude });
 }
 

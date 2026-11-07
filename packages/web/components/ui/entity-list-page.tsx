@@ -50,6 +50,8 @@ interface DynamicFilter {
   label: string;
   /** Endpoint returning { data: T[] } or T[]. */
   optionsEndpoint: string;
+  /** What the clear item is called — see `StaticFilter.allLabel`. */
+  allLabel?: string;
   /** Maps a fetched row to a {label, value} option. */
   mapOption: (row: Record<string, unknown>) => FilterOption;
   /** Optional extra query params for the options fetch. */
@@ -264,7 +266,7 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
       // Carried through rather than re-derived: the page knows whether
       // its own label is a dimension or a condition, and this component
       // cannot tell.
-      ...(!isDynamic(f) && f.allLabel ? { allLabel: f.allLabel } : {}),
+      ...(f.allLabel ? { allLabel: f.allLabel } : {}),
       value: filterValues[f.key],
       onChange: handleFilterChange(f.key),
     };

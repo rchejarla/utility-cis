@@ -147,6 +147,44 @@ export const meterReadQuerySchema = z.object({
   meterId: z.string().uuid().optional(),
   serviceAgreementId: z.string().uuid().optional(),
   readEventId: z.string().uuid().optional(),
+  /**
+   * The meter number or the agreement number, case-insensitively, by
+   * substring.
+   *
+   * The screen had no search at all until 2026-11-07, and at ten
+   * thousand meters that made it unusable for the commonest question
+   * anybody brings to it — *this* meter's reads. Twenty rows of
+   * whatever arrived most recently, out of six figures a year, with no
+   * way to name the one you want.
+   *
+   * Those two numbers and nothing else: they are what the screen's own
+   * columns show, and what a CSR reads off a work order. Searching the
+   * premise address or the customer's name would be a different
+   * screen's question, answered better from the account.
+   */
+  search: z.string().trim().min(1).optional(),
+  /**
+   * The cycle whose reads to show, through the account that owns the
+   * agreement.
+   *
+   * The dimension a meter-reading operation is actually organised by: a
+   * reader walks a route, and the route is the cycle. Nothing could ask
+   * this before, so "is route 1 in yet" had no answer on the one screen
+   * that lists reads.
+   */
+  billingCycleId: z.string().uuid().optional(),
+  /**
+   * One month of reads, as `YYYY-MM`, by read date.
+   *
+   * Beside `fromDate`/`toDate` rather than instead of them: an operator
+   * asks for a month, which is two dates they would otherwise have to
+   * get right, and a month is what a cycle reads in. Arbitrary ranges
+   * stay available for anything else.
+   */
+  readMonth: z
+    .string()
+    .regex(/^\d{4}-(0[1-9]|1[0-2])$/, "readMonth must be YYYY-MM")
+    .optional(),
   readType: readTypeEnum.optional(),
   readSource: readSourceEnum.optional(),
   exceptionCode: exceptionCodeEnum.optional(),

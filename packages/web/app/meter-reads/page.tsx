@@ -44,6 +44,32 @@ const READ_TYPE_OPTIONS = READ_TYPES.map((value) => ({
   value,
 }));
 
+/**
+ * The last twelve months, newest first, as the API's `YYYY-MM`.
+ *
+ * Twelve because that is how far back the reads a biller still argues
+ * about go, and because a longer list would want a search box to find
+ * a month in — which is a worse control than a date range, and the
+ * date range is still there on the API for anything older.
+ *
+ * Built at module load, which is right for a dev-server-lifetime list
+ * of months: this is a Client Component, so it is evaluated in the
+ * browser when the page loads, not baked into a build.
+ */
+const READ_MONTH_OPTIONS = Array.from({ length: 12 }, (_, i) => {
+  const d = new Date();
+  const month = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - i, 1));
+  const value = `${month.getUTCFullYear()}-${String(month.getUTCMonth() + 1).padStart(2, "0")}`;
+  return {
+    value,
+    label: month.toLocaleDateString(undefined, {
+      month: "short",
+      year: "numeric",
+      timeZone: "UTC",
+    }),
+  };
+});
+
 const READ_SOURCE_OPTIONS = [
   { label: "Manual", value: "MANUAL" },
   { label: "AMR", value: "AMR" },
@@ -270,7 +296,41 @@ export default function MeterReadsPage() {
           "Reads are the timestamped consumption values that drive billing. Capture them manually, import a CSV, or wait for an AMI feed to populate the log.",
       }}
       headerSlot={<HeaderActions />}
+      /*
+       * Search, because at ten thousand meters this screen was twenty
+       * rows of whatever arrived most recently out of six figures a
+       * year, and nothing on it could name the meter you wanted. The
+       * two numbers it matches are the two its own columns show.
+       */
+      search={{
+        paramKey: "search",
+        placeholder: "Meter or agreement number…",
+        variant: "compact",
+      }}
       filters={[
+        /*
+         * Route first, then month: a reader walks a route, the route is
+         * the cycle, and "is route 1 in yet" is the question this
+         * screen exists to answer for whoever is about to bill. Every
+         * other filter here slices by *kind*, which narrows nothing
+         * when a cycle's reads all arrive in the same three days.
+         */
+        {
+          key: "billingCycleId",
+          label: "Cycle",
+          allLabel: "All Reads",
+          optionsEndpoint: "/api/v1/billing-cycles",
+          mapOption: (row) => ({
+            value: String(row.id),
+            label: `${String(row.cycleCode)} — ${String(row.name)}`,
+          }),
+        },
+        {
+          key: "readMonth",
+          label: "Month",
+          allLabel: "All Reads",
+          options: READ_MONTH_OPTIONS,
+        },
         { key: "readType", label: "Type", options: READ_TYPE_OPTIONS },
         { key: "readSource", label: "Source", options: READ_SOURCE_OPTIONS },
         {

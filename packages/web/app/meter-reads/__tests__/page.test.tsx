@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "@/components/ui/toast";
 import { apiClient } from "@/lib/api-client";
 import MeterReadsPage from "../page";
@@ -90,5 +91,63 @@ describe("Meter reads — units", () => {
 
     await screen.findByText("WM-001");
     expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Finding a meter's reads among a utility's six figures a year.
+ *
+ * The screen had no search and no way to narrow by route or month —
+ * only by *kind* of read, which does not help when a cycle's ten
+ * thousand reads arrive in the same three days. Added 2026-11-07.
+ */
+describe("Meter reads — narrowing the list", () => {
+  it("asks the API for the typed meter number", async () => {
+    get.mockResolvedValue(payload([read()]));
+    renderPage();
+    await screen.findByText("WM-001");
+
+    await userEvent.type(screen.getByPlaceholderText(/meter or agreement/i), "WM-100");
+
+    // The client takes the params as an object, not in the URL.
+    await waitFor(() =>
+      expect(get).toHaveBeenCalledWith(
+        "/api/v1/meter-reads",
+        expect.objectContaining({ search: "WM-100" }),
+      ),
+    );
+  });
+
+  it("offers the cycles the tenant actually has, not a hard-coded list", async () => {
+    get.mockImplementation(async (url: string) => {
+      if (url.startsWith("/api/v1/billing-cycles")) {
+        return { data: [{ id: "c-1", cycleCode: "R01", name: "Route 1 - North District" }] };
+      }
+      return payload([read()]);
+    });
+    renderPage();
+    await screen.findByText("WM-001");
+
+    await userEvent.click(screen.getByRole("button", { name: /Cycle/ }));
+
+    expect(await screen.findByText(/R01 — Route 1 - North District/)).toBeInTheDocument();
+  });
+
+  it("filters to one month, which is what a cycle reads in", async () => {
+    get.mockResolvedValue(payload([read()]));
+    renderPage();
+    await screen.findByText("WM-001");
+
+    await userEvent.click(screen.getByRole("button", { name: /Month/ }));
+    const months = screen.getAllByText(/^[A-Z][a-z]{2} 20\d\d$/);
+    expect(months.length).toBeGreaterThan(1);
+    await userEvent.click(months[0]!);
+
+    await waitFor(() =>
+      expect(get).toHaveBeenCalledWith(
+        "/api/v1/meter-reads",
+        expect.objectContaining({ readMonth: expect.stringMatching(/^20\d\d-\d\d$/) }),
+      ),
+    );
   });
 });

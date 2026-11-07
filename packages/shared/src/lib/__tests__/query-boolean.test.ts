@@ -66,3 +66,45 @@ describe("the meter-read list query's two boolean filters", () => {
     expect(q.isFrozen).toBeUndefined();
   });
 });
+
+/**
+ * The three filters the Meter Reads screen gained on 2026-11-07.
+ *
+ * Asked for after the observation that a utility with ten thousand
+ * meters has six figures of reads a year, and the screen offered
+ * twenty rows of the most recent ones with no way to name a meter, a
+ * route or a month. Every filter it did have sliced by *kind* — type,
+ * source, flagged, billed — which does not help when ten thousand
+ * reads arrive in the same three days.
+ */
+describe("the meter-read list query's new narrowing filters", () => {
+  it("takes a meter or agreement number to search for", () => {
+    expect(meterReadQuerySchema.parse({ search: "WM-100" }).search).toBe("WM-100");
+  });
+
+  it("trims it, so a pasted number with a space still matches", () => {
+    expect(meterReadQuerySchema.parse({ search: "  WM-100 " }).search).toBe("WM-100");
+  });
+
+  it("refuses an empty search rather than filtering on nothing", () => {
+    // An empty string reaching the service would become
+    // `contains: ""`, which matches every row — a filter that looks
+    // applied and narrows nothing.
+    expect(meterReadQuerySchema.safeParse({ search: "   " }).success).toBe(false);
+  });
+
+  it("takes the cycle whose route is being read", () => {
+    const id = "00000000-0000-4000-8000-000000000001";
+    expect(meterReadQuerySchema.parse({ billingCycleId: id }).billingCycleId).toBe(id);
+  });
+
+  it("takes a month as YYYY-MM", () => {
+    expect(meterReadQuerySchema.parse({ readMonth: "2026-10" }).readMonth).toBe("2026-10");
+  });
+
+  it("refuses a month that is not one", () => {
+    for (const bad of ["2026-13", "2026-00", "2026-1", "202610", "Oct 2026", "2026-10-08"]) {
+      expect(meterReadQuerySchema.safeParse({ readMonth: bad }).success).toBe(false);
+    }
+  });
+});
