@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { READ_TYPES, type ReadType } from "@utility-cis/shared";
 import { EntityListPage } from "@/components/ui/entity-list-page";
 import type { Column } from "@/components/ui/data-table";
 
@@ -21,13 +22,27 @@ interface MeterRead {
   serviceAgreement?: { agreementNumber: string };
 }
 
-const READ_TYPE_OPTIONS = [
-  { label: "Actual", value: "ACTUAL" },
-  { label: "Estimated", value: "ESTIMATED" },
-  { label: "Corrected", value: "CORRECTED" },
-  { label: "Final", value: "FINAL" },
-  { label: "AMI", value: "AMI" },
-];
+/**
+ * Built from the shared list, so a pill cannot offer a value the API
+ * refuses. It offered `AMI` until 2026-11-06, which no read has ever
+ * carried: `AMI` is a *source*, and this filter is on `read_type`.
+ *
+ * The labels are a `Record`, which is the point of doing it this way —
+ * a fifth read type added to the shared list fails to compile here
+ * until it has a label, instead of quietly going missing from the
+ * filter.
+ */
+const READ_TYPE_LABELS: Record<ReadType, string> = {
+  ACTUAL: "Actual",
+  ESTIMATED: "Estimated",
+  CORRECTED: "Corrected",
+  FINAL: "Final",
+};
+
+const READ_TYPE_OPTIONS = READ_TYPES.map((value) => ({
+  label: READ_TYPE_LABELS[value],
+  value,
+}));
 
 const READ_SOURCE_OPTIONS = [
   { label: "Manual", value: "MANUAL" },
@@ -52,8 +67,6 @@ const readTypeStyle = (type: string): { bg: string; fg: string } => {
       return { bg: "var(--info-subtle)", fg: "var(--info)" };
     case "FINAL":
       return { bg: "var(--accent-tertiary-subtle)", fg: "var(--accent-tertiary)" };
-    case "AMI":
-      return { bg: "var(--accent-primary-subtle)", fg: "var(--accent-primary)" };
     default:
       return { bg: "var(--bg-elevated)", fg: "var(--text-secondary)" };
   }

@@ -1,4 +1,10 @@
-import { EVENT_TYPES } from "@utility-cis/shared";
+import {
+  EVENT_TYPES,
+  READ_SOURCES,
+  READ_TYPES,
+  type ReadSource,
+  type ReadType,
+} from "@utility-cis/shared";
 import { writeAuditRow } from "../../lib/audit-wrap.js";
 import { prisma } from "../../lib/prisma.js";
 import {
@@ -37,8 +43,8 @@ interface MeterReadRow {
   meterNumber: string;
   readDatetime: string;
   reading: number;
-  readType?: "ACTUAL" | "ESTIMATED" | "CORRECTED" | "FINAL" | "AMI";
-  readSource?: "MANUAL" | "AMR" | "AMI" | "CUSTOMER_SELF" | "SYSTEM";
+  readType?: ReadType;
+  readSource?: ReadSource;
 }
 
 interface BatchData {
@@ -50,8 +56,6 @@ interface BatchData {
   defaultReadSource: "MANUAL" | "AMR" | "AMI" | "SYSTEM";
 }
 
-const READ_TYPES = ["ACTUAL", "ESTIMATED", "CORRECTED", "FINAL", "AMI"] as const;
-const READ_SOURCES = ["MANUAL", "AMR", "AMI", "CUSTOMER_SELF", "SYSTEM"] as const;
 
 const handler: ImportKindHandler<MeterReadRow, BatchData> = {
   kind: "meter_read",
@@ -96,7 +100,7 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
       name: "readType",
       label: "Read type",
       required: false,
-      description: "ACTUAL (default), ESTIMATED, CORRECTED, FINAL, AMI.",
+      description: "ACTUAL (default), ESTIMATED, CORRECTED, FINAL.",
       example: "ACTUAL",
       aliases: ["^readtype$", "^type$"],
     },
@@ -170,9 +174,7 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
 
     const typeRaw = (raw.readType ?? "").trim().toUpperCase();
     const readType =
-      typeRaw && READ_TYPES.includes(typeRaw as (typeof READ_TYPES)[number])
-        ? (typeRaw as (typeof READ_TYPES)[number])
-        : undefined;
+      typeRaw && READ_TYPES.includes(typeRaw as ReadType) ? (typeRaw as ReadType) : undefined;
     if (typeRaw && !readType) {
       return {
         ok: false,
@@ -183,8 +185,8 @@ const handler: ImportKindHandler<MeterReadRow, BatchData> = {
 
     const sourceRaw = (raw.readSource ?? "").trim().toUpperCase();
     const readSource =
-      sourceRaw && READ_SOURCES.includes(sourceRaw as (typeof READ_SOURCES)[number])
-        ? (sourceRaw as (typeof READ_SOURCES)[number])
+      sourceRaw && READ_SOURCES.includes(sourceRaw as ReadSource)
+        ? (sourceRaw as ReadSource)
         : undefined;
     if (sourceRaw && !readSource) {
       return {

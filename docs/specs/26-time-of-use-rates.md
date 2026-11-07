@@ -33,6 +33,12 @@ does. To bill it, the system must know four things it does not know today:
 
 ## What exists today
 
+**As of when this spec was written** — a baseline, left as the record of
+what the work below started from. Several rows have since been answered
+by it: seasons are tenant-configurable (`season_set`), and `read_type`
+no longer carries `AMI`, which was removed on 2026-11-06 so that an
+interval-derived bucket can say whether it was measured or estimated.
+
 | Piece | State |
 |---|---|
 | `tou_window` predicate (`evaluators/predicate.ts:47`) | In the grammar; **throws** `UnsupportedInSlice3Error` |

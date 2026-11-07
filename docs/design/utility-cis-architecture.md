@@ -625,7 +625,7 @@ Every reading from a meter. TimescaleDB hypertable for interval data at scale.
 | reading | DECIMAL(12,4) | Raw dial reading |
 | prior_reading | DECIMAL(12,4) | |
 | consumption | DECIMAL(12,4) | Calculated |
-| read_type | ENUM | ACTUAL, ESTIMATED, CORRECTED, FINAL, AMI |
+| read_type | ENUM | ACTUAL, ESTIMATED, CORRECTED, FINAL (`AMI` removed 2026-11-06 — a source, not a type; `read_source` says that) |
 | read_source | ENUM | MANUAL, AMR, AMI, CUSTOMER_SELF, SYSTEM |
 | exception_code | VARCHAR(50) | HIGH_USAGE, ZERO_USAGE, METER_DEFECT |
 | reader_id | UUID | |

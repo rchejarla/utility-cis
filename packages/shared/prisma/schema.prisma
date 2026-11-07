@@ -241,12 +241,16 @@ enum BillingRunItemStatus {
   @@map("billing_run_item_status")
 }
 
+/// Whether a read was measured, and if not what stands in its place.
+/// Not where it came from: `ReadSource` says that, and `AMI` was removed
+/// from here on 2026-11-06 as a source masquerading as a type — no
+/// writer, no rows, and it left `read_type` unable to say the one thing
+/// it exists to say.
 enum ReadType {
   ACTUAL
   ESTIMATED
   CORRECTED
   FINAL
-  AMI
 
   @@map("read_type")
 }

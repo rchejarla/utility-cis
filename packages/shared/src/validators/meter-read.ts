@@ -1,20 +1,31 @@
 import { z } from "zod";
 
-export const readTypeEnum = z.enum([
-  "ACTUAL",
-  "ESTIMATED",
-  "CORRECTED",
-  "FINAL",
-  "AMI",
-]);
+/**
+ * What a read is, in the one place that defines it.
+ *
+ * Four values, and every one of them answers the same question: is this
+ * figure measured, and if not, what stands in its place. `AMI` was a
+ * fifth until 2026-11-06 and answered a different question — where the
+ * read came from — which `readSourceEnum` below says beside it. Nothing
+ * ever wrote it and no row carried it, which is itself the evidence: the
+ * roll-up, the only producer of AMI reads here, needed a `read_type` and
+ * wrote the *source* word again rather than ACTUAL or ESTIMATED. The one
+ * column that could tell a customer their on-peak charge rests on an
+ * estimate therefore said nothing, and TOU-GAP-2 had nothing to read.
+ *
+ * Exported as a list because the vocabulary had four hand-kept copies —
+ * this enum, the meter-read import handler, and the two meter-read
+ * screens. A `Record<ReadType, …>` on the label map keeps a fifth from
+ * being added to one of them and nowhere else.
+ */
+export const READ_TYPES = ["ACTUAL", "ESTIMATED", "CORRECTED", "FINAL"] as const;
 
-export const readSourceEnum = z.enum([
-  "MANUAL",
-  "AMR",
-  "AMI",
-  "CUSTOMER_SELF",
-  "SYSTEM",
-]);
+export const readTypeEnum = z.enum(READ_TYPES);
+
+/** Where a read came from. `AMI` is a source, and belongs only here. */
+export const READ_SOURCES = ["MANUAL", "AMR", "AMI", "CUSTOMER_SELF", "SYSTEM"] as const;
+
+export const readSourceEnum = z.enum(READ_SOURCES);
 
 export const exceptionCodeEnum = z.enum([
   "HIGH_USAGE",
