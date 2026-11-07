@@ -58,7 +58,7 @@ Existing table. Already has source, fileName, recordCount, importedCount, except
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `entity_kind` | `String @db.VarChar(50)` | `meter_read`, `customer`, `premise`, `meter`, `account`, ... — drives handler dispatch. **No `meter_read_interval` handler exists** (noted 2026-11-07, deferred): interval data has no production ingress at all, so the whole TOU interval path is fed only by the seed. Requirements and the three open decisions are in spec 26 §3b. |
+| `entity_kind` | `String @db.VarChar(50)` | `meter_read`, `customer`, `premise`, `meter`, `account`, ... — drives handler dispatch. `meter_read_interval` is the seventh kind, added 2026-11-07 — before it, interval data had no production ingress at all and the whole TOU path was fed only by the seed. Long format, one row per interval; a re-imported day replaces rather than doubles; see spec 26 §3b for the format, duplicate and timezone decisions. |
 | `processing_started_at` | `DateTime?` | Set when worker picks up the job; lets us detect zombie batches (PROCESSING for > N min with no progress) |
 | `last_progress_at` | `DateTime?` | Set every 100 rows; another zombie-detection signal |
 | `cancel_requested` | `Boolean @default(false)` | User clicked Cancel; worker checks this between rows and exits gracefully |

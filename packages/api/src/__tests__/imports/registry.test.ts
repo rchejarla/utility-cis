@@ -33,12 +33,18 @@ beforeAll(async () => {
 });
 
 describe("the import kind registry", () => {
-  it("registers the six kinds the specs name", () => {
+  it("registers the seven kinds the specs name", () => {
     expect(listKinds().map((k) => k.kind).sort()).toEqual([
       "account",
       "customer",
       "meter",
       "meter_read",
+      /*
+       * The seventh, added 2026-11-07. Interval data had no ingress at
+       * all: everything downstream of `meter_read_interval` was built
+       * and tested while the table's only writer was the dev seed.
+       */
+      "meter_read_interval",
       "premise",
       "service_agreement",
     ]);
