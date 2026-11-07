@@ -157,11 +157,17 @@ describe("a cycle nobody has read yet", () => {
 
     const p = await progress();
 
-    // The same window `planBillingRun` would pick for this date, which
-    // is the point of sharing `computeBillPeriod`: a progress screen
-    // that measured a different month would be worse than none.
-    expect(p.windowStart.toISOString()).toBe(WINDOW_START.toISOString());
-    expect(p.windowEnd.toISOString()).toBe("2026-02-10T00:00:00.000Z");
+    /*
+     * The same window `planBillingRun` would pick for this date, which
+     * is the point of sharing `computeBillPeriod`: a progress screen
+     * measuring a different month would be worse than none.
+     *
+     * As ISO strings, because that is what the service returns — its
+     * type is the shared wire schema's, so what this asserts is what
+     * the browser will actually receive.
+     */
+    expect(p.windowStart).toBe(WINDOW_START.toISOString());
+    expect(p.windowEnd).toBe("2026-02-10T00:00:00.000Z");
   });
 
   it("carries the premise and the last read, which say new or stuck", async () => {
@@ -172,7 +178,7 @@ describe("a cycle nobody has read yet", () => {
 
     expect(p.outstanding).toBe(1);
     expect(p.data[0]!.premise).toContain(",");
-    expect(p.data[0]!.lastReadDate?.toISOString().slice(0, 10)).toBe("2025-11-08");
+    expect(p.data[0]!.lastReadDate?.slice(0, 10)).toBe("2025-11-08");
   });
 
   it("says nothing was ever read when nothing was", async () => {

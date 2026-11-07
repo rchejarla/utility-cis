@@ -71,3 +71,40 @@ export const queryBoolean = z.union([
   z.boolean(),
   z.enum(["true", "false"]).transform((v) => v === "true"),
 ]);
+
+/**
+ * The envelope every paginated list endpoint answers with.
+ *
+ * `{ data, meta: { total, page, limit, pages } }`, which the API has
+ * always sent (`lib/pagination.ts`) and which the web had been
+ * re-describing by hand, page by page — one of them as a bare `total`,
+ * so the count read `undefined` and the subtitle said "undefined total
+ * reads" until somebody noticed.
+ */
+export const paginationMetaSchema = z.object({
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  limit: z.number().int().positive(),
+  pages: z.number().int().nonnegative(),
+});
+
+export type PaginationMeta = z.infer<typeof paginationMetaSchema>;
+
+/**
+ * That envelope around a given row schema.
+ *
+ * **Not `.strict()`**, here or in the row schemas it wraps. These state
+ * what a caller depends on, not everything a route happens to include,
+ * so adding a field to a response stays a non-event and only taking one
+ * away fails. A strict schema would turn every harmless addition into a
+ * broken test and teach everybody to stop writing them.
+ */
+export function paginatedSchema<T extends z.ZodTypeAny>(row: T) {
+  return z.object({ data: z.array(row), meta: paginationMetaSchema });
+}
+
+/** `{ data: Row[]; meta: PaginationMeta }` for a row type. */
+export interface Paginated<T> {
+  data: T[];
+  meta: PaginationMeta;
+}
