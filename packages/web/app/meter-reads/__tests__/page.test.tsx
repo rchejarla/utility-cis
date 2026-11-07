@@ -151,3 +151,87 @@ describe("Meter reads — narrowing the list", () => {
     );
   });
 });
+
+/**
+ * The other three views of this data, behind one control.
+ *
+ * They were three always-visible buttons in their own row above the
+ * filters — a third row of chrome on a screen whose job is the table.
+ * Collapsed into a "Show me" menu at the right of the filter row
+ * (2026-11-07).
+ *
+ * The risk the shape carries: everything else in that row filters the
+ * table, and these three navigate away from it. So each item is a link
+ * that says where it goes, and the menu is not styled as a pill.
+ */
+describe("Meter reads — the Show me menu", () => {
+  it("does not spend a row on three buttons", async () => {
+    get.mockResolvedValue(payload([read()]));
+    renderPage();
+    await screen.findByText("WM-001");
+
+    // Collapsed: the destinations are not on screen until asked for.
+    expect(screen.queryByRole("link", { name: /Exception Queue/ })).not.toBeInTheDocument();
+  });
+
+  it("offers the three screens, as links", async () => {
+    get.mockResolvedValue(payload([read()]));
+    renderPage();
+    await screen.findByText("WM-001");
+
+    await userEvent.click(screen.getByRole("button", { name: /show me/i }));
+
+    expect(screen.getByRole("link", { name: /Exception Queue/ })).toHaveAttribute(
+      "href",
+      "/meter-reads/exceptions",
+    );
+    expect(screen.getByRole("link", { name: /Interval Coverage/ })).toHaveAttribute(
+      "href",
+      "/meter-reads/interval-coverage",
+    );
+    expect(screen.getByRole("link", { name: /Reading Progress/ })).toHaveAttribute(
+      "href",
+      "/meter-reads/progress",
+    );
+  });
+
+  it("closes when the menu is dismissed", async () => {
+    get.mockResolvedValue(payload([read()]));
+    renderPage();
+    await screen.findByText("WM-001");
+
+    const trigger = screen.getByRole("button", { name: /show me/i });
+    await userEvent.click(trigger);
+    expect(screen.getByRole("link", { name: /Exception Queue/ })).toBeInTheDocument();
+
+    await userEvent.click(trigger);
+    expect(screen.queryByRole("link", { name: /Exception Queue/ })).not.toBeInTheDocument();
+  });
+});
+
+/*
+ * The menu is page-level navigation, so it has to survive the state
+ * where the filter row does not: a tenant with no reads at all.
+ *
+ * That is when Reading Progress says the most — every service is
+ * outstanding — and none of the three screens is in the sidebar, so
+ * losing the menu there would leave them reachable only by URL.
+ */
+describe("Meter reads — an empty log", () => {
+  it("still offers the other views when there are no reads yet", async () => {
+    get.mockResolvedValue(payload([]));
+    renderPage();
+
+    /*
+     * Wait for the empty state to settle before touching the menu.
+     * While the list is still loading, the filter row renders — and
+     * with it a `ShowMeMenu` that React unmounts when the empty branch
+     * replaces it. A click on the loading one lands on a detached node
+     * and does nothing, which is what this test caught first.
+     */
+    await screen.findByText(/No meter reads recorded/);
+    await userEvent.click(screen.getByRole("button", { name: /show me/i }));
+
+    expect(screen.getByRole("link", { name: /Reading Progress/ })).toBeInTheDocument();
+  });
+});

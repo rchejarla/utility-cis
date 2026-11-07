@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { READ_TYPES, type ReadType } from "@utility-cis/shared";
 import { EntityListPage } from "@/components/ui/entity-list-page";
@@ -226,38 +227,51 @@ const columns: Column<MeterRead>[] = [
   },
 ];
 
-function HeaderActions() {
+/**
+ * The other three views of this data, behind one control.
+ *
+ * They were three always-visible buttons in a row of their own above
+ * the filters — a third band of chrome on a screen whose job is the
+ * table. One menu, at the right of the filter row.
+ *
+ * **Links, and visibly not a filter pill.** Everything else in that row
+ * narrows the table; these three leave it. A control that reads as
+ * "filter to the exception queue" would be the same mistake as the
+ * "All Exceptions" item it sits next to, so each destination is an
+ * anchor carrying an arrow, and the trigger says "Show me" rather than
+ * naming a dimension.
+ */
+const DESTINATIONS = [
+  {
+    href: "/meter-reads/exceptions",
+    label: "Exception Queue",
+    hint: "Readings that look wrong — high, zero, reversed, rolled over",
+  },
+  {
+    href: "/meter-reads/interval-coverage",
+    label: "Interval Coverage",
+    /*
+     * Spelled out because the two queues are easily confused: this one
+     * is about interval rows that were never delivered, which no
+     * reading can show, so an empty exception queue says nothing about
+     * it.
+     */
+    hint: "Days an interval meter's data does not cover",
+  },
+  {
+    href: "/meter-reads/progress",
+    label: "Reading Progress",
+    hint: "How much of a cycle is still unread",
+  },
+];
+
+function ShowMeMenu() {
+  const [open, setOpen] = useState(false);
   return (
-    <div style={{ display: "flex", gap: "8px", marginBottom: "12px", flexWrap: "wrap" }}>
-      <Link
-        href="/meter-reads/exceptions"
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: "6px",
-          padding: "7px 14px",
-          borderRadius: "var(--radius)",
-          border: "1px solid var(--danger)",
-          background: "var(--danger-subtle)",
-          color: "var(--danger)",
-          fontSize: "12px",
-          fontWeight: 600,
-          textDecoration: "none",
-          fontFamily: "inherit",
-        }}
-      >
-        ⚠ Exception Queue
-      </Link>
-      {/*
-       * Two queues, and they answer different questions. The one above
-       * is about a reading that looks wrong — high, zero, a rollover.
-       * This one is about interval data that does not cover its day,
-       * which no reading can show because the rows were never
-       * delivered. Side by side so nobody has to learn that an empty
-       * exception queue says nothing about interval coverage.
-       */}
-      <Link
-        href="/meter-reads/interval-coverage"
+    <div style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -265,41 +279,62 @@ function HeaderActions() {
           padding: "7px 14px",
           borderRadius: "var(--radius)",
           border: "1px solid var(--border)",
-          background: "var(--bg-elevated)",
+          background: "var(--bg-card)",
           color: "var(--text-secondary)",
           fontSize: "12px",
-          fontWeight: 600,
-          textDecoration: "none",
+          fontWeight: 500,
+          cursor: "pointer",
           fontFamily: "inherit",
+          whiteSpace: "nowrap",
         }}
       >
-        ⧖ Interval Coverage
-      </Link>
-      {/*
-       * The third question, and the only one that is about reads that
-       * do not exist: how much of a cycle is still unread. This list
-       * cannot show it — the rows are absent — and a billing run only
-       * reports it per account once the run exists.
-       */}
-      <Link
-        href="/meter-reads/progress"
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: "6px",
-          padding: "7px 14px",
-          borderRadius: "var(--radius)",
-          border: "1px solid var(--border)",
-          background: "var(--bg-elevated)",
-          color: "var(--text-secondary)",
-          fontSize: "12px",
-          fontWeight: 600,
-          textDecoration: "none",
-          fontFamily: "inherit",
-        }}
-      >
-        ◷ Reading Progress
-      </Link>
+        <span>Show me</span>
+        <span style={{ fontSize: "10px", opacity: 0.6 }}>{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <>
+          {/* Click-away, as FilterBar's own dropdown does it. */}
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 49 }}
+            onClick={() => setOpen(false)}
+          />
+          <div
+            style={{
+              position: "absolute",
+              top: "calc(100% + 4px)",
+              right: 0,
+              zIndex: 50,
+              minWidth: 280,
+              background: "var(--bg-card)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              boxShadow: "0 8px 24px rgba(0,0,0,0.28)",
+              overflow: "hidden",
+            }}
+          >
+            {DESTINATIONS.map((d) => (
+              <Link
+                key={d.href}
+                href={d.href}
+                onClick={() => setOpen(false)}
+                style={{
+                  display: "block",
+                  padding: "10px 14px",
+                  textDecoration: "none",
+                  color: "var(--text-primary)",
+                  borderBottom: "1px solid var(--border-subtle)",
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 500 }}>{d.label} →</div>
+                <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+                  {d.hint}
+                </div>
+              </Link>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -320,7 +355,7 @@ export default function MeterReadsPage() {
         description:
           "Reads are the timestamped consumption values that drive billing. Capture them manually, import a CSV, or wait for an AMI feed to populate the log.",
       }}
-      headerSlot={<HeaderActions />}
+      filtersRightSlot={<ShowMeMenu />}
       /*
        * Search, because at ten thousand meters this screen was twenty
        * rows of whatever arrived most recently out of six figures a

@@ -210,7 +210,11 @@ Many commercial and industrial meters expose multiple registers on a single devi
 
 ### Meter Reads List (`/meter-reads`) — live
 
-Table: meter number (monospace), read date, reading, consumption, read-type badge (ACTUAL/ESTIMATED/CORRECTED/FINAL color-coded), read source, exception code chip (if any), frozen indicator (`❄`). Filter pills for type, source, exception presence, billed state. Header strip has "+ New Read," "⚠ Exception Queue," "⧖ Interval Coverage," and "↑ Import Reads" action buttons.
+Table: meter number (monospace), read date, reading, consumption, read-type badge (ACTUAL/ESTIMATED/CORRECTED/FINAL color-coded), read source, exception code chip (if any), frozen indicator (`❄`).
+
+**Search** by meter number or agreement number, and filter pills for cycle, month, type, source, exception presence and billed state. The first two are the ones that make the screen usable at scale: a utility with ten thousand meters has six figures of reads a year, and every other pill slices by *kind*, which narrows nothing when a cycle's reads all arrive in the same three days. Header has "+ New Read" and "↑ Import Reads".
+
+A **"Show me" menu** at the right of the filter row leads to the other three views of this data — Exception Queue, Interval Coverage, Reading Progress — each with a line saying what is in it. They were three always-visible buttons in a band of their own above the filters until 2026-11-07; one menu costs a click and gives the table back a row. They are *links*, deliberately not styled as a filter pill: everything else in that row narrows the table and these three leave it, which is the same confusion "All Exceptions" caused. The menu survives the empty-state CTA, because a tenant with no reads yet is exactly when Reading Progress has something to say and none of the three is in the sidebar.
 
 ### Record Meter Read (`/meter-reads/new`) — live
 

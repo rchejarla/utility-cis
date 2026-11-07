@@ -412,6 +412,22 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
       )}
 
       {showEmptyCta ? (
+        <>
+        {/*
+          * The filter row's right-hand control survives the empty
+          * state, on a row of its own.
+          *
+          * It is page-level navigation rather than a filter — the Meter
+          * Reads screen puts its "Show me" menu there — and a tenant
+          * with no rows yet is exactly when "how much of this cycle is
+          * still unread" is worth asking. The pills are suppressed
+          * here because filtering nothing is meaningless; this is not.
+          */}
+        {filtersRightSlot && (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "16px" }}>
+            {filtersRightSlot}
+          </div>
+        )}
         <ListEmptyCta
           subject={subject}
           headline={emptyState?.headline}
@@ -427,6 +443,7 @@ export function EntityListPage<T extends { id: string }>(props: EntityListPagePr
             canCreate && importHref ? { label: "Import", href: importHref } : undefined
           }
         />
+        </>
       ) : (
         <>
           {(filterConfigs.length > 0 || searchableFilters.length > 0 || filtersRightSlot) && (
