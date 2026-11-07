@@ -71,7 +71,11 @@ export async function listMeterReads(utilityId: string, query: MeterReadQuery) {
   if (query.exceptionCode) where.exceptionCode = query.exceptionCode;
   if (query.hasException === true) where.exceptionCode = { not: null };
   if (query.hasException === false) where.exceptionCode = null;
-  if (query.isFrozen !== undefined) where.isFrozen = query.isFrozen;
+  if (query.billed !== undefined) {
+    // `billed_at` is the fact; `is_frozen` was a second column holding
+    // the same one, which nothing ever wrote.
+    where.billedAt = query.billed ? { not: null } : null;
+  }
   if (query.fromDate || query.toDate) {
     const range: Record<string, Date> = {};
     if (query.fromDate) range.gte = new Date(query.fromDate);
@@ -224,7 +228,7 @@ export async function listExceptions(
   return listMeterReads(utilityId, {
     ...query,
     hasException: true,
-    isFrozen: false,
+    billed: false,
   });
 }
 
@@ -706,10 +710,20 @@ export async function deleteMeterRead(
   if (!before) {
     throw Object.assign(new Error("Meter read not found"), { statusCode: 404 });
   }
-  if (before.isFrozen) {
+  /*
+   * Billed, so locked: a figure a customer has been invoiced for is not
+   * editable behind their back, and a correction is a new row rather
+   * than a change to this one.
+   *
+   * This read `before.isFrozen` until 2026-11-07 — a column nothing
+   * ever set — so the guard whose message names the rebill workflow
+   * refused nothing, and a billed read was deletable by anyone holding
+   * the permission. It is `billed_at` that says a read has been billed.
+   */
+  if (before.billedAt !== null) {
     throw Object.assign(
-      new Error("Cannot delete a frozen (already billed) read. Use the rebill workflow instead."),
-      { statusCode: 400, code: "READ_FROZEN" },
+      new Error("Cannot delete an already billed read. Use the rebill workflow instead."),
+      { statusCode: 400, code: "READ_BILLED" },
     );
   }
   const correctedBy = await prisma.meterRead.findFirst({
@@ -765,10 +779,10 @@ export async function resolveException(
   if (!before) {
     throw Object.assign(new Error("Meter read not found"), { statusCode: 404 });
   }
-  if (before.isFrozen) {
+  if (before.billedAt !== null) {
     throw Object.assign(
-      new Error("Cannot resolve exception on a frozen (already billed) read"),
-      { statusCode: 400, code: "READ_FROZEN" },
+      new Error("Cannot resolve an exception on an already billed read"),
+      { statusCode: 400, code: "READ_BILLED" },
     );
   }
 

@@ -1016,7 +1016,6 @@ model MeterRead {
   exceptionCode      String?    @map("exception_code") @db.VarChar(50)
   exceptionNotes     String?    @map("exception_notes") @db.Text
   readerId           String?    @map("reader_id") @db.Uuid
-  isFrozen           Boolean    @default(false) @map("is_frozen")
   billedAt           DateTime?  @map("billed_at") @db.Timestamptz
   importBatchId      String?    @map("import_batch_id") @db.Uuid
   correctsReadId     String?    @map("corrects_read_id") @db.Uuid

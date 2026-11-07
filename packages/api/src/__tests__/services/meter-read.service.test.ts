@@ -263,12 +263,19 @@ describe("listMeterReads — the exception and billed filters", () => {
   it("asks about neither when no pill is chosen", async () => {
     await listMeterReads(UID, query({}));
     expect(whereOf()).not.toHaveProperty("exceptionCode");
-    expect(whereOf()).not.toHaveProperty("isFrozen");
+    expect(whereOf()).not.toHaveProperty("billedAt");
   });
 
-  it("distinguishes unbilled from billed, which had the same fault", async () => {
-    await listMeterReads(UID, query({ isFrozen: "false" }));
-    expect(whereOf().isFrozen).toBe(false);
+  it("asks for reads with no billed_at when the pill says Not billed", async () => {
+    await listMeterReads(UID, query({ billed: "false" }));
+    expect(whereOf().billedAt).toBeNull();
+  });
+
+  it("asks for the billed ones by the column that says so", async () => {
+    // Not `is_frozen`, which nothing ever wrote: that pill could only
+    // ever return nothing for "Billed".
+    await listMeterReads(UID, query({ billed: "true" }));
+    expect(whereOf().billedAt).toEqual({ not: null });
   });
 });
 

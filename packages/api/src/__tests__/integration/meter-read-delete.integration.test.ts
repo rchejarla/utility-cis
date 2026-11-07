@@ -58,7 +58,16 @@ async function makeRead(
         consumption: "200.0000",
         readType: opts.corrects ? "CORRECTED" : "ACTUAL",
         readSource: "MANUAL",
-        isFrozen: opts.frozen ?? false,
+        /*
+         * `billed_at` is what being billed means. The fixture set
+         * `is_frozen` until 2026-11-07, which is why the guard below
+         * passed every test it had while protecting nothing: **nothing
+         * in the codebase ever set that column.** Billing stamps
+         * `billed_at` (`bill-segment.service.ts`), so a read that had
+         * gone out on an invoice was deletable by anyone holding
+         * `meter_reads:DELETE`.
+         */
+        billedAt: opts.frozen ? new Date("2026-07-05T00:00:00Z") : null,
         correctsReadId: opts.corrects,
       },
     });
@@ -133,11 +142,11 @@ describe("deleting a meter read", () => {
     expect(rows[0].afterState).toBeNull();
   });
 
-  it("refuses a frozen read, naming the workflow that replaces it", async () => {
+  it("refuses an already billed read, naming the workflow that replaces it", async () => {
     const read = await makeRead({ frozen: true });
     await expect(
       deleteMeterRead(fix.utilityId, ACTOR, "Tester", read.id),
-    ).rejects.toMatchObject({ code: "READ_FROZEN" });
+    ).rejects.toMatchObject({ code: "READ_BILLED" });
 
     const survived = await seedAsPlatform(async () =>
       prismaImports.prisma.meterRead.findMany({ where: { id: read.id } }),

@@ -78,7 +78,7 @@ export const meterReadSortFields = [
  *
  * The service is responsible for computing `priorReading` and
  * `consumption` from the meter history — callers must not supply them
- * directly. `is_frozen` / `billed_at` are managed by the billing
+ * directly. `billed_at` is managed by the billing
  * engine in Phase 3 and are not exposed.
  *
  * `serviceAgreementId` is optional because the service will resolve
@@ -216,7 +216,18 @@ export const meterReadQuerySchema = z.object({
   readSource: readSourceEnum.optional(),
   exceptionCode: exceptionCodeEnum.optional(),
   hasException: queryBoolean.optional(),
-  isFrozen: queryBoolean.optional(),
+  /**
+   * Billed, or not — by `billed_at`, which is the column that says so.
+   *
+   * It was `isFrozen` until 2026-11-07, against `meter_read.is_frozen`:
+   * a column **nothing in the codebase ever wrote**. So "Frozen
+   * (billed)" could only ever return nothing and "Unbilled" returned
+   * every read including the billed ones, and the guards that read the
+   * same flag — no deleting or resolving an exception on a billed read
+   * — could not fire at all. The column is gone; `billed_at` carried
+   * the fact all along.
+   */
+  billed: queryBoolean.optional(),
   fromDate: z.string().date().optional(),
   toDate: z.string().date().optional(),
 }).strict();

@@ -1059,7 +1059,6 @@ async function main() {
           // An estimate is a figure nobody took, so it has no reader and
           // no drive-by behind it: the system produced it.
           readSource: estimated ? "SYSTEM" : "AMR",
-          isFrozen: false,
           ...(isNewest && anomaly
             ? { exceptionCode: anomaly.code, exceptionNotes: anomaly.notes }
             : {}),

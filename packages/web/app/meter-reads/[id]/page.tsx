@@ -39,7 +39,6 @@ interface MeterReadDetail {
   readSource: string;
   exceptionCode?: string | null;
   exceptionNotes?: string | null;
-  isFrozen: boolean;
   billedAt?: string | null;
   correctsReadId?: string | null;
   readEventId?: string | null;
@@ -244,6 +243,19 @@ export default function MeterReadDetailPage({ params }: PageProps) {
   }
 
   const tone = readTypeTone(read.readType);
+  /**
+   * Billed, and therefore locked: Correct and Delete are refused
+   * server-side, so the buttons say so rather than offering an action
+   * the API will reject.
+   *
+   * From `billedAt`, not from `isFrozen` — this page gated all of that
+   * on `read.isFrozen` until 2026-11-07, a column nothing in the
+   * codebase ever wrote. So nothing was ever disabled here, and the
+   * "Frozen" row below printed "editable" for a read that had been on
+   * an invoice for a month. It even held the billed date already: the
+   * row rendered `billedAt` inside the branch the dead flag guarded.
+   */
+  const billed = read.billedAt != null;
   const multiplier = read.meter?.multiplier ?? "1";
   const rawDelta = Number(read.reading) - Number(read.priorReading);
 
@@ -284,9 +296,9 @@ export default function MeterReadDetailPage({ params }: PageProps) {
             <button
               type="button"
               onClick={startCorrection}
-              disabled={read.isFrozen || correcting}
+              disabled={billed || correcting}
               title={
-                read.isFrozen
+                billed
                   ? "Frozen reads cannot be corrected in place — use the Phase 3 rebill workflow"
                   : "Create a CORRECTED row pointing at this original"
               }
@@ -299,8 +311,8 @@ export default function MeterReadDetailPage({ params }: PageProps) {
                 fontSize: "12px",
                 fontWeight: 600,
                 fontFamily: "inherit",
-                cursor: read.isFrozen || correcting ? "not-allowed" : "pointer",
-                opacity: read.isFrozen || correcting ? 0.5 : 1,
+                cursor: billed || correcting ? "not-allowed" : "pointer",
+                opacity: billed || correcting ? 0.5 : 1,
               }}
             >
               ✎ Correct
@@ -310,9 +322,9 @@ export default function MeterReadDetailPage({ params }: PageProps) {
             <button
               type="button"
               onClick={() => setDeleteConfirm(true)}
-              disabled={read.isFrozen || deleting}
+              disabled={billed || deleting}
               title={
-                read.isFrozen
+                billed
                   ? "Frozen reads cannot be deleted"
                   : "Delete this read permanently"
               }
@@ -325,8 +337,8 @@ export default function MeterReadDetailPage({ params }: PageProps) {
                 fontSize: "12px",
                 fontWeight: 600,
                 fontFamily: "inherit",
-                cursor: read.isFrozen || deleting ? "not-allowed" : "pointer",
-                opacity: read.isFrozen || deleting ? 0.5 : 1,
+                cursor: billed || deleting ? "not-allowed" : "pointer",
+                opacity: billed || deleting ? 0.5 : 1,
               }}
             >
               🗑 Delete
@@ -362,7 +374,7 @@ export default function MeterReadDetailPage({ params }: PageProps) {
         >
           {tone.label}
         </span>
-        {read.isFrozen && (
+        {billed && (
           <span
             style={{
               display: "inline-flex",
@@ -761,8 +773,8 @@ export default function MeterReadDetailPage({ params }: PageProps) {
           <DetailRow label="Updated">
             {new Date(read.updatedAt).toLocaleString()}
           </DetailRow>
-          <DetailRow label="Frozen">
-            {read.isFrozen ? (
+          <DetailRow label="Billed">
+            {billed ? (
               <span style={{ color: "var(--text-muted)" }}>
                 ❄ billed at{" "}
                 {read.billedAt ? new Date(read.billedAt).toLocaleDateString() : "—"}

@@ -56,14 +56,18 @@ describe("the meter-read list query's two boolean filters", () => {
   });
 
   it("does the same for the billed filter, which had it too", () => {
-    expect(meterReadQuerySchema.parse({ isFrozen: "false" }).isFrozen).toBe(false);
-    expect(meterReadQuerySchema.parse({ isFrozen: "true" }).isFrozen).toBe(true);
+    // `billed`, against `billed_at`. It was `isFrozen` until
+    // 2026-11-07, against a column nothing ever wrote — so that pill
+    // was broken twice over: the coercion, and the dead column under
+    // it.
+    expect(meterReadQuerySchema.parse({ billed: "false" }).billed).toBe(false);
+    expect(meterReadQuerySchema.parse({ billed: "true" }).billed).toBe(true);
   });
 
   it("leaves both unset when neither pill is chosen", () => {
     const q = meterReadQuerySchema.parse({});
     expect(q.hasException).toBeUndefined();
-    expect(q.isFrozen).toBeUndefined();
+    expect(q.billed).toBeUndefined();
   });
 });
 

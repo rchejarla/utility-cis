@@ -21,7 +21,8 @@ interface MeterRead {
   readType: string;
   readSource: string;
   exceptionCode?: string | null;
-  isFrozen: boolean;
+  /** Set once billed, which is what locks the read. */
+  billedAt?: string | null;
   meter?: { meterNumber: string; commodityId: string };
   /** The read's own unit — a register's, where one is named. */
   uom?: { code: string; name: string } | null;
@@ -223,12 +224,12 @@ const columns: Column<MeterRead>[] = [
       ),
   },
   {
-    key: "isFrozen",
+    key: "billed",
     header: "",
     render: (row) =>
-      row.isFrozen ? (
+      row.billedAt ? (
         <span
-          title="Frozen — already billed, cannot be edited"
+          title={`Billed ${new Date(row.billedAt).toLocaleDateString()} — cannot be edited`}
           style={{ fontSize: "11px", color: "var(--text-muted)" }}
         >
           ❄
@@ -420,13 +421,18 @@ export default function MeterReadsPage() {
           ],
         },
         {
-          // "All Billed" had the same fault as "All Exceptions".
-          key: "isFrozen",
+          /*
+           * On `billed_at`, not on `is_frozen` — a column nothing ever
+           * wrote, so "Frozen (billed)" returned nothing for ever and
+           * "Unbilled" returned the billed ones too. ("All Billed" had
+           * the same fault as "All Exceptions", hence `allLabel`.)
+           */
+          key: "billed",
           label: "Billed",
           allLabel: "All Reads",
           options: [
-            { label: "Frozen (billed)", value: "true" },
-            { label: "Unbilled", value: "false" },
+            { label: "Billed", value: "true" },
+            { label: "Not billed", value: "false" },
           ],
         },
       ]}

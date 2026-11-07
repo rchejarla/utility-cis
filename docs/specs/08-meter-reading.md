@@ -33,7 +33,7 @@ Every reading associated with a meter. Stored in a TimescaleDB hypertable, parti
 | read_source | ENUM | MANUAL, AMR, AMI, CUSTOMER_SELF, SYSTEM — where the read came from, which is where `AMI` belongs |
 | exception_code | VARCHAR(50) | Nullable: HIGH_USAGE, ZERO_USAGE, METER_DEFECT, REVERSE_FLOW, ROLLOVER |
 | exception_notes | TEXT | Nullable: free-text explanation from reader or system |
-| is_frozen | BOOLEAN | True after billing cycle processes this read; blocks edits |
+| ~~is_frozen~~ | — | **Dropped 2026-11-07.** It meant "billed, so locked" and **nothing ever wrote it**: `DEFAULT false` since the baseline migration, no writer anywhere, while billing stamped `billed_at`. Five readers believed it and every one was inert — see *Read freeze after billing* below. |
 | billed_at | TIMESTAMPTZ | Nullable: timestamp when billing used this read |
 | reader_id | UUID | Nullable FK → User (for MANUAL reads) |
 | import_batch_id | UUID | Nullable: groups reads from the same import file |
@@ -89,13 +89,13 @@ Tracks bulk read imports for reconciliation and error handling.
 
 | Method | Path | Status | Description |
 |--------|------|--------|-------------|
-| GET | `/api/v1/meter-reads` | live | List reads (filterable by meter, date range, type, exception, frozen state) |
+| GET | `/api/v1/meter-reads` | live | List reads (filterable by meter or agreement number via `search`, cycle, month, date range, type, source, exception presence, billed state) |
 | POST | `/api/v1/meter-reads` | live | Create a single meter read. `serviceAgreementId` is optional in the request body — the service resolves it from `ServiceAgreementMeter` using meter id + read date, erroring with `METER_NOT_ASSIGNED` if no active assignment exists at that date. |
 | GET | `/api/v1/meter-reads/:id` | live | Get read detail with meter, agreement, account, premise, commodity, and register hydrated |
 | PATCH | `/api/v1/meter-reads/:id` | live | Correct a read. Does NOT mutate the original row — creates a new `CORRECTED` row with `correctsReadId` pointing at the original. Returns 201 with the new row. |
-| DELETE | `/api/v1/meter-reads/:id` | live | Hard-delete a read. Guarded: frozen (billed) reads cannot be deleted, and reads that have been corrected by a subsequent CORRECTED row cannot be deleted without first deleting the correction. Emits a domain event with the before-state so the audit log preserves a record of the deletion. |
+| DELETE | `/api/v1/meter-reads/:id` | live | Hard-delete a read. Guarded: already-billed reads cannot be deleted (`READ_BILLED`), and reads that have been corrected by a subsequent CORRECTED row cannot be deleted without first deleting the correction. Emits a domain event with the before-state so the audit log preserves a record of the deletion. |
 | GET | `/api/v1/meters/:id/reads` | live | All reads for a specific meter, newest first |
-| GET | `/api/v1/meter-reads/exceptions` | live | Exception queue: reads flagged for review (non-frozen with an `exceptionCode`) |
+| GET | `/api/v1/meter-reads/exceptions` | live | Exception queue: reads flagged for review (unbilled, with an `exceptionCode`) |
 | POST | `/api/v1/meter-reads/:id/resolve-exception` | live | Mark exception resolved (approve / hold for re-read / estimate). Errors with `READ_FROZEN` if the read is already billed. |
 | POST | `/api/v1/meter-reads/import` | planned | Bulk import backend (file parser + ImportBatch job runner). The UI at `/meter-reads/import` exists and exercises the flow via client-side CSV/JSON parsing, but the server-side commit endpoint is Phase 3. |
 | GET | `/api/v1/meter-reads/import/:batchId` | planned | Import batch status and error report |
@@ -125,7 +125,9 @@ Supported file formats (configurable per tenant):
 
 3. **Estimated reads:** When a physical read is unavailable, the system generates an ESTIMATED read using the trailing 3-month average consumption for the meter. Estimation is only allowed for up to 2 consecutive billing cycles before escalating to an exception requiring field action.
 
-4. **Read freeze after billing:** When a billing cycle processes a read, `is_frozen=true` and `billed_at` are set. Frozen reads cannot be edited or deleted. A correction requires creating a new CORRECTED read (referencing `corrects_read_id`) and triggering a rebill workflow in Phase 3.
+4. **Read freeze after billing:** when a billing cycle processes a read it sets **`billed_at`**, and that column is what locks it: a billed read cannot be deleted and its exception cannot be resolved. A correction requires a new CORRECTED read (referencing `corrects_read_id`) and a rebill workflow in Phase 3.
+
+   *Corrected 2026-11-07.* This said `is_frozen=true` **and** `billed_at` were set. Only the second was ever true. The boolean had no writer, so the guards that read it refused nothing — a read that had gone out on an invoice was deletable by anyone holding `meter_reads:DELETE`, the Billed filter could only ever return nothing for "billed", the ❄ indicator never appeared, and the detail page's Correct and Delete were never disabled. Its integration test passed throughout, because the fixture set the column itself: tested behaviour, unreachable in production. Two columns for one fact is how they come to disagree, and `billed_at` answers both "is it" and "when", so the boolean is gone.
 
    **`billed_at` also bounds the next service period (2026-10-15).** Billing is read to read: a segment's period starts the day after the last read carrying a `billed_at`, and ends on the newest read without one. So this column is not only a freeze marker — it is where one interval ends and the next begins. Two consequences follow. A read that arrives *dated before* the last billed read cannot simply be billed, because its interval overlaps one already issued; segment creation refuses it with `READ_PREDATES_BILLED_PERIOD` and it needs a rebill. And an account with no unbilled read has no interval at all, answered as `NO_READ_IN_WINDOW` rather than billed as zero usage — which is what estimated reads (rule 3, **not built**) exist to prevent. See spec 09.
 
@@ -145,7 +147,7 @@ Supported file formats (configurable per tenant):
 
 12. **Reverse flow:** If `consumption` is negative and no rollover condition is detected, flag as `exception_code=REVERSE_FLOW`. This may indicate backflow, cross-connection, or a tampered meter (Bozeman Req 98).
 
-13. **Backfill imports:** Importing historical reads (past billing periods) is allowed only if `is_frozen=false` on any affected reads. Importing into already-billed periods requires supervisor authorization captured in AuditLog.
+13. **Backfill imports:** Importing historical reads (past billing periods) is allowed only if `billed_at IS NULL` on any affected reads. Importing into already-billed periods requires supervisor authorization captured in AuditLog.
 
 ## Multi-Register Reads
 
@@ -210,7 +212,7 @@ Many commercial and industrial meters expose multiple registers on a single devi
 
 ### Meter Reads List (`/meter-reads`) — live
 
-Table: meter number (monospace), read date, reading, consumption, read-type badge (ACTUAL/ESTIMATED/CORRECTED/FINAL color-coded), read source, exception code chip (if any), frozen indicator (`❄`).
+Table: meter number (monospace), read date, reading, consumption, read-type badge (ACTUAL/ESTIMATED/CORRECTED/FINAL color-coded), read source, exception code chip (if any, in words rather than the raw code), billed indicator (`❄`).
 
 **Search** by meter number or agreement number, and filter pills for cycle, month, type, source, exception presence and billed state. The first two are the ones that make the screen usable at scale: a utility with ten thousand meters has six figures of reads a year, and every other pill slices by *kind*, which narrows nothing when a cycle's reads all arrive in the same three days. Header has "+ New Read" and "↑ Import Reads".
 
@@ -222,11 +224,11 @@ Hand-rolled form (not the `EntityFormPage` shell) with a **premise → meter cas
 
 ### Meter Read Detail (`/meter-reads/:id`) — live
 
-Full field display with a dedicated 4-column consumption calculation card showing READING / PRIOR / × MULTIPLIER / = CONSUMPTION in large monospace, plus a formula line beneath (`(12,345.67 − 12,000.00) × 1 = 345.67`). Four context cards in a 2×2 grid cover meter info, service agreement with account + premise + commodity links, read metadata (type, source, dates, reader), and audit (created, updated, frozen, correction chain links). Exception panel renders only if the read is flagged. Header has `Correct` and `Delete` action buttons, both disabled (with explanatory tooltips) when the read is frozen.
+Full field display with a dedicated 4-column consumption calculation card showing READING / PRIOR / × MULTIPLIER / = CONSUMPTION in large monospace, plus a formula line beneath (`(12,345.67 − 12,000.00) × 1 = 345.67`). Four context cards in a 2×2 grid cover meter info, service agreement with account + premise + commodity links, read metadata (type, source, dates, reader), and audit (created, updated, billed, correction chain links). Exception panel renders only if the read is flagged. Header has `Correct` and `Delete` action buttons, both disabled (with explanatory tooltips) once the read is billed.
 
 **Correction workflow.** Clicking `Correct` reveals an inline form with the current reading pre-filled and a required notes field. Submitting calls `PATCH /api/v1/meter-reads/:id`, which creates a new `CORRECTED` row via the same service path as a manual correction — the original is never mutated. On success, the page redirects to the new corrected row's detail page so the operator can verify the recalculated consumption.
 
-**Delete workflow.** Clicking `Delete` opens the shared `ConfirmDialog` with a clear warning naming the reading value, date, and meter. Submitting calls `DELETE /api/v1/meter-reads/:id`, which enforces the frozen + correction-chain guards server-side. On success, toast + redirect to the list.
+**Delete workflow.** Clicking `Delete` opens the shared `ConfirmDialog` with a clear warning naming the reading value, date, and meter. Submitting calls `DELETE /api/v1/meter-reads/:id`, which enforces the billed + correction-chain guards server-side. On success, toast + redirect to the list.
 
 ### Exception Queue (`/meter-reads/exceptions`) — live
 
@@ -340,16 +342,16 @@ Read history tab with a consumption-over-time chart and a table of recent reads.
   - MeterEvent entity + CRUD (LEAK, TAMPER, REVERSE_FLOW, HIGH_USAGE, NO_SIGNAL, BATTERY_LOW, COVER_OPEN, BURST_PIPE, FREEZE, OTHER)
   - ImportBatch entity (tracks bulk import jobs with error reporting)
   - Manual read entry UI (hand-rolled form at /meter-reads/new with premise → meter cascade and automatic service-agreement resolution)
-  - Meter Reads list page with exception indicator, read-type badges, frozen indicator, filter pills for type/source/exception/billed
+  - Meter Reads list page with exception indicator, read-type badges, billed indicator, search, and filter pills for cycle/month/type/source/exception/billed
   - **Meter Read detail page** (/meter-reads/:id): full field display, consumption calculation card with formula line, 2×2 context grid (meter / agreement / metadata / audit), exception panel when flagged, correction chain links
   - **Correct workflow** on the detail page: inline form with pre-filled reading + required notes, submits `PATCH /api/v1/meter-reads/:id` which creates a new `CORRECTED` row preserving the original via `corrects_read_id`, redirects to the new row's detail page
-  - **Delete workflow** on the detail page: `ConfirmDialog` with warning naming the reading value and date, calls `DELETE /api/v1/meter-reads/:id`, guarded server-side against frozen reads and reads with downstream corrections
+  - **Delete workflow** on the detail page: `ConfirmDialog` with warning naming the reading value and date, calls `DELETE /api/v1/meter-reads/:id`, guarded server-side against billed reads and reads with downstream corrections
   - Exception queue UI (/meter-reads/exceptions): grouped by exception code, sticky count strip with pulse indicator for open items, bulk approve / bulk hold-for-reread action bar, keyboard escape to clear selection
   - Import Center UI (/meter-reads/import): three-stage wizard (upload → preview → commit) with drag-and-drop file drop, CSV/JSON client-side parser, per-row validation status, progress bar, results summary with error panel. Backend commit endpoint deferred to Phase 3.
   - Consumption calculation in service layer with rollover detection (respects meter.dial_count)
   - Reverse-flow detection (negative consumption with no rollover flag)
   - Correction chain via corrects_read_id self-reference — correction inserts a new row instead of mutating the original
-  - Freeze-after-bill guard: cannot resolve exceptions on frozen (already-billed) reads, cannot delete frozen reads
+  - Freeze-after-bill guard: cannot resolve exceptions on already-billed reads, cannot delete them (on `billed_at` since 2026-11-07; the boolean it used to read had no writer)
   - **Auto-resolve service agreement**: `createMeterReadSchema.serviceAgreementId` is optional; the backend resolves the owning agreement from the `ServiceAgreementMeter` junction table using `meter_id + read_date`, returning `METER_NOT_ASSIGNED` if no active assignment exists at the read date. Operators never pick the agreement manually — preventing the class of bug where a read gets attributed to a closed-out customer.
   - **Server-side meter search**: `GET /api/v1/meters?search=<q>` does a case-insensitive substring match on `meter_number`, backing the meter picker in the read-entry form so dropdowns don't preload unbounded lists.
 - **Phase 2 (Deferred to Phase 3):**

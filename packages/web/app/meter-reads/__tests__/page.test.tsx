@@ -30,7 +30,7 @@ function read(over: Record<string, unknown> = {}) {
     readType: "ACTUAL",
     readSource: "AMR",
     exceptionCode: null,
-    isFrozen: false,
+    billedAt: null,
     meter: { meterNumber: "WM-001", commodityId: "c-water" },
     uom: { code: "GAL", name: "Gallons" },
     serviceAgreement: { agreementNumber: "SA-0001" },
