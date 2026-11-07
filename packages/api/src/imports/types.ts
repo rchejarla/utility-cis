@@ -26,6 +26,19 @@ export interface HandlerContext {
   utilityId: string;
   actorId: string;
   actorName: string;
+  /**
+   * The batch these rows came from, for the `import_batch_id` columns
+   * that exist to answer "which file put this here".
+   *
+   * Added 2026-11-07. `meter_read` and `meter_read_interval` have both
+   * had that column since the baseline migration — the second with an
+   * index on `(utility_id, import_batch_id)` — and **no handler could
+   * stamp it**, because the context did not carry the id. So the
+   * question the column exists for had no answer, which is the same
+   * shape as `meter_read.is_frozen`: a column every reader believed
+   * and nothing ever wrote.
+   */
+  batchId: string;
   tx: ImportTx;
 }
 

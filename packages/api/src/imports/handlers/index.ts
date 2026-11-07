@@ -11,6 +11,7 @@
  */
 // Handlers register here as they're written:
 import "./meter-read.js";
+import "./meter-read-interval.js";
 import "./customer.js";
 import "./premise.js";
 import "./meter.js";

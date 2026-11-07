@@ -147,3 +147,36 @@ describe("reading progress", () => {
     );
   });
 });
+
+/**
+ * What the screen says before it can say anything.
+ *
+ * Found by opening it (2026-11-07): on a cold load the Cycle control
+ * rendered as an **empty `<select>`** — no options, no placeholder, not
+ * disabled — above a table reading "Loading...". An empty dropdown
+ * reads as a broken control rather than a loading one, and if the cycle
+ * list never arrives it stays that way for ever, because the progress
+ * fetch returns early with no cycle and nothing clears `loading`.
+ */
+describe("reading progress — before the cycles arrive", () => {
+  it("says it is loading them rather than offering an empty list", async () => {
+    // Never resolves: the state the screen shows while it waits.
+    get.mockImplementation(() => new Promise(() => {}));
+    renderPage();
+
+    expect(await screen.findByRole("combobox", { name: /cycle/i })).toBeDisabled();
+    expect(screen.getByText(/loading cycles/i)).toBeInTheDocument();
+  });
+
+  it("says so when the tenant has no cycles, instead of waiting for ever", async () => {
+    get.mockImplementation(async (url: string) => {
+      if (url.startsWith("/api/v1/billing-cycles")) return { data: [] };
+      return progress();
+    });
+    renderPage();
+
+    expect(await screen.findByText(/no billing cycles/i)).toBeInTheDocument();
+    // And the table stops claiming to be loading something.
+    expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
+  });
+});

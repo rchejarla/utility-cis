@@ -717,52 +717,63 @@ raw intervals from the same meters. Compression is therefore entirely a
 
 ### 3b. Interval data
 
-> **Nothing in production can put an interval in, and nothing can show
-> one.** Noted 2026-11-07, both deferred by Rao, both wanted.
+> **The importer exists since 2026-11-07. The view does not.**
 >
-> Everything downstream of the table is built and tested — tiling,
-> classification, the roll-up into TOU buckets, the gap queue, the
-> pre-run blocker, the bill. The table's **only writer in the whole
-> codebase is `seed/tou-service.js`** (plus three integration tests),
-> and no route returns an interval row, so no screen can display one.
-> The derived side is visible — an interval meter's month shows on the
-> Meter Reads log as three `meter_read` rows carrying a `peak_code` with
-> `read_source: AMI` — and the hourly series behind it is not.
+> Interval data had no ingress at all: everything downstream of the
+> table was built and tested — tiling, classification, the roll-up into
+> TOU buckets, the gap queue, the pre-run blocker, the bill — while the
+> table's only writer was `seed/tou-service.js`.
 >
-> Two pieces, in the order they are worth doing:
+> **TOU-INT-2 is now the seventh import kind** (`meter_read_interval`,
+> `imports/handlers/meter-read-interval.ts`, wizard at
+> `/meter-reads/intervals/import`). Columns: meter number, interval
+> start, length, quantity, and optionally quality and register number.
+> The three decisions spec 22's framework left open were settled like
+> this:
 >
-> **1. The interval import handler (TOU-INT-2).** The ingress, and the
-> thing that makes all of the above usable by an actual utility. An
-> eighth handler in the existing framework (spec 22), so the shape is
-> known: `kind: "meter_read_interval"`, mapping meter number, interval
-> start, length, quantity, quality. What is *not* known and has to be
-> decided when it is built:
+> - **Long format only** — one row per interval, which is the shape a
+>   column-mapping framework can read. A *wide* head-end export (one row
+>   per day, 24 or 96 quantity columns) needs a handler that emits many
+>   rows per source row, which none does; not built for a file nobody
+>   has sent.
+> - **A re-imported day replaces, it does not double.** Keyed on the
+>   database's own `(meter_id, register_id, interval_start)` — two
+>   partial unique indexes, one per branch of `register_id IS NULL` —
+>   because a head-end re-sending a day usually means corrected values
+>   and an operator importing twice means the same day. *Nothing is
+>   deleted that the file did not mention*, so re-importing a day at a
+>   different resolution leaves the old rows beside the new and the
+>   roll-up reports an `overlap`, visible in the coverage queue rather
+>   than silently resolved by discarding data.
+> - **Timestamps** are taken as instants when the file names a zone or
+>   offset, and otherwise read in the tenant's `utility_config.timezone`
+>   with the offset resolved per row, so a file crossing a DST boundary
+>   lands correctly (tested against 8 March 2026 in Denver).
 >
-> - **The formats.** MV90 and a head-end CSV are the two real ones. The
->   framework maps columns, so a wide format — one row per day with 24
->   or 96 quantity columns — needs either a pre-transform or a handler
->   that emits many rows per source row, which no handler does today.
-> - **The duplicate rule.** Re-importing a day must not double it.
->   `meter_read` leans on a unique constraint over
->   `(meter_id, register_id, read_datetime, read_source)`;
->   `meter_read_interval` has partial unique indexes but the roll-up
->   also treats a second row covering the same minutes as an
->   `overlap` **exception**, so "import the same file twice" would open
->   a queue item rather than being skipped. Decide which it is before
->   writing the handler.
-> - **Timestamps.** A head-end file often carries local times, and an
->   interval's start is UTC here. A file whose zone is implicit, over a
->   DST boundary, is where this goes wrong silently.
+> It also closed a dead column on the way: `HandlerContext` carried no
+> batch id, so **no handler could stamp `import_batch_id`** — a column
+> on both read tables since the baseline migration, with an index on
+> `(utility_id, import_batch_id)`, and no writer. Intervals now record
+> which file wrote them.
 >
-> **2. A series view.** What you open when a customer disputes a TOU
-> bill, and the only way to *see* a gap the coverage queue is reporting.
-> A day or a week of intervals for one meter, with the quality flag,
-> most likely on the meter detail page beside its read history. Needs a
-> route — there is none — and a decision about how much to return at
-> once: a week of 15-minute data is 672 points, a month is 2,976.
+> **Two follow-ups, neither built:**
 >
-> Until then the coverage queue, the readiness check and the roll-up all
-> describe data that only a seed can produce.
+> 1. **The wizard should say when a file names no timezone**, showing
+>    the first row resolved. There is no per-row warning channel
+>    (`RowResult` is ok-or-error), so today a zoneless file is read in
+>    the tenant's zone silently — and one whose times are really in
+>    another zone imports cleanly and bills against the wrong periods.
+> 2. **A series view.** Still nothing shows an interval: a day or a week
+>    for one meter with its quality flags, on the meter detail page.
+>    Needs a route, and a cap — a week of 15-minute data is 672 points,
+>    a month 2,976.
+>
+> **A scale limit worth knowing.** The framework is row-at-a-time, each
+> row in its own transaction. A month of 15-minute data is 2,976 rows
+> *per meter*, so a hundred meters is 300,000 and will be slow enough to
+> notice. Still the right first move — per-row errors, history, cancel
+> and retry come free, and the shape of a real head-end file is a guess
+> until one arrives. A bulk path when one proves it necessary.
 
 - **TOU-INT-1 (Must).** *Built 2026-11-05, except the compression
   policy.* Interval consumption is stored in **`meter_read_interval`**,

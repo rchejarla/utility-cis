@@ -95,6 +95,7 @@ export async function processBatch(
           utilityId,
           actorId,
           actorName,
+          batchId,
           source: batch.source,
         },
         parsedRowsForBatch,
@@ -147,7 +148,7 @@ export async function processBatch(
       const result = await prisma.$transaction(async (txClient) => {
         const tx = txClient as unknown as ImportTx;
         return handler.processRow(
-          { utilityId, actorId, actorName, tx },
+          { utilityId, actorId, actorName, batchId, tx },
           parsedRow,
           prepared,
         );

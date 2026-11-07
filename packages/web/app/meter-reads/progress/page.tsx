@@ -53,7 +53,17 @@ const day = (iso: string) =>
 export default function ReadingProgressPage() {
   const { toast } = useToast();
   const { canView } = usePermission("meter_reads");
-  const [cycles, setCycles] = useState<Cycle[]>([]);
+  /**
+   * `null` while the list is being fetched, which is a different state
+   * from "this tenant has none" — and the control has to say which.
+   *
+   * It rendered an empty `<select>` for both until 2026-11-07: no
+   * options, no placeholder, not disabled, above a table reading
+   * "Loading...". That reads as a broken control, and when the fetch
+   * fails it stays that way for ever, because the progress fetch
+   * returns early with no cycle and nothing clears `loading`.
+   */
+  const [cycles, setCycles] = useState<Cycle[] | null>(null);
   const [cycleId, setCycleId] = useState<string>("");
   const [progress, setProgress] = useState<ReadingProgress | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,12 +74,17 @@ export default function ReadingProgressPage() {
       .then((res) => {
         const list = Array.isArray(res) ? res : (res.data ?? []);
         setCycles(list);
+        // Nothing to ask about, so stop claiming to be loading one.
+        if (list.length === 0) setLoading(false);
         // The first cycle rather than none: a screen that opens on an
         // empty selector makes the operator work before it answers
         // anything, and most tenants have one or two routes.
         if (list.length > 0) setCycleId((prev) => prev || list[0]!.id);
       })
-      .catch(() => setCycles([]));
+      .catch(() => {
+        setCycles([]);
+        setLoading(false);
+      });
   }, []);
 
   const fetchProgress = useCallback(async () => {
@@ -130,9 +145,12 @@ export default function ReadingProgressPage() {
             id="cycle"
             style={selectStyle}
             value={cycleId}
+            disabled={cycles === null || cycles.length === 0}
             onChange={(e) => setCycleId(e.target.value)}
           >
-            {cycles.map((c) => (
+            {cycles === null && <option value="">Loading cycles…</option>}
+            {cycles?.length === 0 && <option value="">No billing cycles</option>}
+            {(cycles ?? []).map((c) => (
               <option key={c.id} value={c.id}>
                 {c.cycleCode} — {c.name}
               </option>

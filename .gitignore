@@ -20,3 +20,8 @@ reads-*.csv
 # apptor-connect in dev. Real deployments put these in the tenant's own
 # object store and nothing lands here.
 .dev-files/
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
