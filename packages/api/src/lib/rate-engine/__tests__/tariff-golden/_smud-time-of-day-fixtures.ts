@@ -3,7 +3,7 @@
  *
  * Sacramento Municipal Utility District is a publicly owned utility,
  * which is the market this system is built for, and it publishes the
- * whole calendar — seasons, windows, the holiday list and the
+ * whole calendar — seasons, windows, the holiday set and the
  * observance rule — on one page:
  * https://www.smud.org/Rate-Information/Residential-rates/Time-of-Day-5-8pm-Rate/Rate-details
  *
@@ -37,7 +37,6 @@
  */
 
 import type { SeasonDefinition } from "../../seasons.js";
-import type { HolidayRule } from "../../holidays.js";
 import type { TouCalendarDefinition } from "../../tou-calendar.js";
 
 /** Minutes from midnight, for spans written as clock times. */
@@ -55,24 +54,57 @@ export const SMUD_SEASONS: SeasonDefinition[] = [
 ];
 
 /**
- * All eleven, all `NONE`: SMUD does not move a fixed-date holiday that
- * falls on a weekend to the adjacent weekday. The nth-weekday rules
- * always land on a Monday or Thursday, so observance never arises for
- * them.
+ * SMUD's eleven holidays, as dates for 2026.
+ *
+ * Dates rather than rules, because a rule is a computation nobody
+ * checked. The interesting one is what is **not** here: 4 July 2026
+ * falls on a Saturday and SMUD does not move the holiday to the Friday,
+ * so 3 July is an ordinary summer weekday at the most expensive rate in
+ * the tariff. Under rules that was `observance: "NONE"` and easy to
+ * mis-set; as dates it is simply the day somebody typed.
  */
-export const SMUD_HOLIDAY_RULES: HolidayRule[] = [
-  { code: "new_years_day", label: "New Year's Day", kind: "FIXED", month: 1, day: 1, observance: "NONE" },
-  { code: "mlk_day", label: "Martin Luther King Jr. Day", kind: "NTH_WEEKDAY", month: 1, weekday: 1, nth: 3, observance: "NONE" },
-  { code: "presidents_day", label: "Presidents Day", kind: "NTH_WEEKDAY", month: 2, weekday: 1, nth: 3, observance: "NONE" },
-  { code: "memorial_day", label: "Memorial Day", kind: "NTH_WEEKDAY", month: 5, weekday: 1, nth: -1, observance: "NONE" },
-  { code: "juneteenth", label: "Juneteenth National Independence Day", kind: "FIXED", month: 6, day: 19, observance: "NONE" },
-  { code: "independence_day", label: "Independence Day", kind: "FIXED", month: 7, day: 4, observance: "NONE" },
-  { code: "labor_day", label: "Labor Day", kind: "NTH_WEEKDAY", month: 9, weekday: 1, nth: 1, observance: "NONE" },
-  { code: "indigenous_peoples_day", label: "Indigenous Peoples' Day", kind: "NTH_WEEKDAY", month: 10, weekday: 1, nth: 2, observance: "NONE" },
-  { code: "veterans_day", label: "Veterans Day", kind: "FIXED", month: 11, day: 11, observance: "NONE" },
-  { code: "thanksgiving", label: "Thanksgiving Day", kind: "NTH_WEEKDAY", month: 11, weekday: 4, nth: 4, observance: "NONE" },
-  { code: "christmas", label: "Christmas Day", kind: "FIXED", month: 12, day: 25, observance: "NONE" },
+export const SMUD_HOLIDAYS_2026: Array<{ date: string; name: string }> = [
+  { date: "2026-01-01", name: "New Year's Day" },
+  { date: "2026-01-19", name: "Martin Luther King Jr. Day" },
+  { date: "2026-02-16", name: "Presidents Day" },
+  { date: "2026-05-25", name: "Memorial Day" },
+  { date: "2026-06-19", name: "Juneteenth National Independence Day" },
+  { date: "2026-07-04", name: "Independence Day" },
+  { date: "2026-09-07", name: "Labor Day" },
+  { date: "2026-10-12", name: "Indigenous Peoples' Day" },
+  { date: "2026-11-11", name: "Veterans Day" },
+  { date: "2026-11-26", name: "Thanksgiving Day" },
+  { date: "2026-12-25", name: "Christmas Day" },
 ];
+
+/**
+ * The next year, by the same policy: the actual date, never shifted.
+ *
+ * Here because a set covers a horizon — the loader fetches the dates
+ * falling inside the billing period, and a December-to-January period
+ * needs both years or New Year's Day prices as an ordinary weekday. One
+ * year of dates cannot show that; it is also what a real tenant will
+ * hit, two Decembers from now.
+ */
+export const SMUD_HOLIDAYS_2027: Array<{ date: string; name: string }> = [
+  { date: "2027-01-01", name: "New Year's Day" },
+  { date: "2027-01-18", name: "Martin Luther King Jr. Day" },
+  { date: "2027-02-15", name: "Presidents Day" },
+  { date: "2027-05-31", name: "Memorial Day" },
+  { date: "2027-06-19", name: "Juneteenth National Independence Day" },
+  { date: "2027-07-04", name: "Independence Day" },
+  { date: "2027-09-06", name: "Labor Day" },
+  { date: "2027-10-11", name: "Indigenous Peoples' Day" },
+  { date: "2027-11-11", name: "Veterans Day" },
+  { date: "2027-11-25", name: "Thanksgiving Day" },
+  { date: "2027-12-25", name: "Christmas Day" },
+];
+
+/** Both years, which is what a holiday set holds. */
+export const SMUD_HOLIDAYS = [...SMUD_HOLIDAYS_2026, ...SMUD_HOLIDAYS_2027];
+
+/** The same, as the engine consumes them. */
+export const SMUD_OBSERVED_2026 = new Set(SMUD_HOLIDAYS_2026.map((h) => h.date));
 
 /**
  * Peak is weekdays 5–8 p.m. in both seasons. Weekends and holidays are
@@ -81,11 +113,10 @@ export const SMUD_HOLIDAY_RULES: HolidayRule[] = [
  */
 export const SMUD_CALENDAR: TouCalendarDefinition = {
   dayTypes: [
-    { dayTypeCode: "weekday", weekdays: [1, 2, 3, 4, 5], isHoliday: false },
-    { dayTypeCode: "weekend", weekdays: [6, 7], isHoliday: false },
-    { dayTypeCode: "holiday", weekdays: [], isHoliday: true },
+    { dayTypeCode: "weekday", weekdays: [1, 2, 3, 4, 5] },
+    { dayTypeCode: "weekend", weekdays: [6, 7] },
+    { dayTypeCode: "holiday", weekdays: [] },
   ],
-  peakCodes: ["off_peak", "mid_peak", "peak"],
   slots: [
     // Non-summer weekdays: off-peak until 5 pm, peak 5–8, off-peak after.
     { seasonCode: "non_summer", dayTypeCode: "weekday", startMinute: hhmm(0), endMinute: hhmm(17), peakCode: "off_peak" },

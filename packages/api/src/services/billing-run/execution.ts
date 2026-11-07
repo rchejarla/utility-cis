@@ -8,6 +8,7 @@ import { Prisma } from "@utility-cis/shared/src/generated/prisma";
 import { prisma } from "../../lib/prisma.js";
 import { RUN_CYCLE_SELECT, toSummary, type BillingRunSummary } from "./summary.js";
 import { generateBillForAccount } from "./../bill.service.js";
+import { deriveIntervalReads } from "./interval-reads.js";
 import {
   createBillSegmentForServiceAgreement,
   resolveServicePeriod,
@@ -114,6 +115,7 @@ export async function processBillingRun(args: {
         actorId,
         actorName,
         accountId: item.accountId,
+        windowStart: run.windowStart,
         windowEnd: run.windowEnd,
       });
       await prisma.billingRunItem.update({
@@ -171,6 +173,12 @@ async function billOneAccount(args: {
   actorId: string | null;
   actorName: string;
   accountId: string;
+  /**
+   * Needed only to derive an interval meter's buckets, which is a
+   * window and not a point in time. Rating still resolves each
+   * agreement's own read-to-read period from `windowEnd`.
+   */
+  windowStart: Date;
   windowEnd: Date;
 }): Promise<{
   billId: string;
@@ -179,7 +187,7 @@ async function billOneAccount(args: {
   segmentCount: number;
   total: Prisma.Decimal;
 }> {
-  const { utilityId, actorId, actorName, accountId, windowEnd } = args;
+  const { utilityId, actorId, actorName, accountId, windowStart, windowEnd } = args;
 
   const agreements = await prisma.serviceAgreement.findMany({
     where: {
@@ -197,6 +205,26 @@ async function billOneAccount(args: {
       code: "NO_ACTIVE_ASSIGNMENTS",
     });
   }
+
+  /*
+   * An interval meter's buckets, before anything looks for a read.
+   *
+   * It has to come first: `resolveServicePeriod` finds the period from
+   * an unbilled `meter_read`, and an interval meter has none until the
+   * calendar has classified its intervals. Without this the agreement
+   * resolved to nothing, the account was skipped, and the run said it
+   * had no read — of a meter holding a month of data.
+   *
+   * A meter whose intervals cannot be classified throws
+   * `TOU_ROLLUP_FAILED` here, which fails this one account's item with
+   * the meter and the reason. That is the right blast radius: the
+   * alternative is billing whatever classified and dropping the rest.
+   */
+  await deriveIntervalReads({
+    utilityId,
+    serviceAgreementIds: agreements.map((sa) => sa.id),
+    window: { startDate: windowStart, endDate: windowEnd },
+  });
 
   /*
    * Resolve before rating, so an account with nothing to bill is skipped

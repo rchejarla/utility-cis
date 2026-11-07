@@ -14,6 +14,17 @@ export const createRateScheduleSchema = z
     expirationDate: z.string().date().optional(),
     description: z.string().optional(),
     regulatoryRef: z.string().max(100).optional(),
+    /**
+     * The TOU calendar this tariff's peak hours come from (spec 26,
+     * TOU-UI-3) — on the schedule, not on each component, because the
+     * components of one tariff share one set of peak hours.
+     *
+     * Optional here because most tariffs are not TOU, and a TOU one
+     * may name its calendar after its charges: `publishRateSchedule`
+     * is where it becomes required, and where TOU-CAL-5 refuses a
+     * draft calendar.
+     */
+    touCalendarId: z.string().uuid().optional(),
   })
   .strict();
 
@@ -26,7 +37,31 @@ export const reviseRateScheduleSchema = z.object({
   expirationDate: z.string().date().optional(),
   description: z.string().optional(),
   regulatoryRef: z.string().max(100).optional(),
+  /**
+   * Omitted keeps the predecessor's calendar, which is right for a
+   * revision that only reprices. `null` clears it; a uuid re-points
+   * the new version at new hours — the usual reason a TOU tariff is
+   * revised at all, since a published schedule cannot follow a
+   * calendar republished with different hours.
+   */
+  touCalendarId: z.string().uuid().nullable().optional(),
 });
+
+/**
+ * Naming (or clearing) the calendar of a schedule that already exists.
+ *
+ * Its own endpoint rather than a PATCH, because a rate schedule has
+ * none: it is immutable by design and changes go through `revise`.
+ * This one field is the exception, and only while the schedule is a
+ * draft — a published tariff's hours are exactly what must not move.
+ */
+export const assignTouCalendarSchema = z
+  .object({
+    touCalendarId: z.string().uuid().nullable(),
+  })
+  .strict();
+
+export type AssignTouCalendarInput = z.infer<typeof assignTouCalendarSchema>;
 
 export type ReviseRateScheduleInput = z.infer<typeof reviseRateScheduleSchema>;
 

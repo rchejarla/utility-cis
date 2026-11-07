@@ -86,7 +86,7 @@ function emptyDraft(): Draft {
 
 export default function BillMessagesPage() {
   const { toast } = useToast();
-  const { canView, canEdit, canDelete } = usePermission("settings");
+  const { canView, canEdit, canDelete } = usePermission("tenant_profile");
 
   const [rows, setRows] = useState<BillMessageRow[]>([]);
   const [types, setTypes] = useState<AccountTypeDef[]>([]);

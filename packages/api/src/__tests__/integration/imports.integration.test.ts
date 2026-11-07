@@ -55,6 +55,14 @@ let saId: string;
 let meterNumber: string;
 let meter2Number: string;
 
+/**
+ * `tenant_profile` is here because maintaining the premise and account
+ * type lists answers to it — the key the type-definition *writes* moved
+ * to on 2026-11-03, when `premises:EDIT` was found to let a Field
+ * Technician rewrite the premise type list. This list was not followed,
+ * so the two write tests below asked a tenant with the module disabled
+ * and read the 403 as the route's answer.
+ */
 const ENABLED_MODULES = [
   "imports",
   "meter_reads",
@@ -63,6 +71,7 @@ const ENABLED_MODULES = [
   "accounts",
   "customers",
   "agreements",
+  "tenant_profile",
 ];
 
 /**

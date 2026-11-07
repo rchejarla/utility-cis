@@ -50,6 +50,22 @@ const replaceBodySchema = z
   })
   .strict();
 
+/*
+ * `tenant_profile`, not `settings` (moved 2026-11-03).
+ *
+ * `settings` is the one key that separates Utility Admin from System
+ * Admin — Utility Admin holds `settings: ["VIEW"]` — so it should mean
+ * what that role's description says: *system* settings, the things that
+ * expose or erase a tenant's data. Keys, retention, the danger zone and
+ * which integrations are wired stay there.
+ *
+ * A custom field definition is not that. It is the tenant's own
+ * configuration, which is what `tenant_profile` already means: General,
+ * Branding, Numbering, Automation and Custom Fields' menu entry all sit
+ * on it. **The menu entry for this screen already gated on
+ * `tenant_profile`**, so a Utility Admin was shown Custom Fields and
+ * refused on save — the same mismatch Users & Roles had.
+ */
 export async function customFieldSchemaRoutes(app: FastifyInstance) {
   // Read the full schema for one entity. No module permission — any
   // authenticated user on the tenant can read the shape of their
@@ -68,7 +84,7 @@ export async function customFieldSchemaRoutes(app: FastifyInstance) {
   // importing a schema. Validates the whole list for invariants.
   app.put(
     "/api/v1/custom-fields/:entity",
-    { config: { module: "settings", permission: "EDIT" } },
+    { config: { module: "tenant_profile", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { entity } = entityParamSchema.parse(request.params);
@@ -85,7 +101,7 @@ export async function customFieldSchemaRoutes(app: FastifyInstance) {
   // Append one field. Keys must be unique within an entity.
   app.post(
     "/api/v1/custom-fields/:entity/fields",
-    { config: { module: "settings", permission: "EDIT" } },
+    { config: { module: "tenant_profile", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { entity } = entityParamSchema.parse(request.params);
@@ -104,7 +120,7 @@ export async function customFieldSchemaRoutes(app: FastifyInstance) {
   // changed through this route.
   app.patch(
     "/api/v1/custom-fields/:entity/fields/:fieldKey",
-    { config: { module: "settings", permission: "EDIT" } },
+    { config: { module: "tenant_profile", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { entity, fieldKey } = entityAndKeyParamSchema.parse(request.params);
@@ -122,7 +138,7 @@ export async function customFieldSchemaRoutes(app: FastifyInstance) {
   // Mark a field deprecated — sugar over the PATCH above.
   app.post(
     "/api/v1/custom-fields/:entity/fields/:fieldKey/deprecate",
-    { config: { module: "settings", permission: "EDIT" } },
+    { config: { module: "tenant_profile", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { entity, fieldKey } = entityAndKeyParamSchema.parse(request.params);
@@ -146,7 +162,7 @@ export async function customFieldSchemaRoutes(app: FastifyInstance) {
   // Utility Admin role has it, CSR-level roles don't.
   app.delete(
     "/api/v1/custom-fields/:entity/fields/:fieldKey",
-    { config: { module: "settings", permission: "DELETE" } },
+    { config: { module: "tenant_profile", permission: "DELETE" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { entity, fieldKey } = entityAndKeyParamSchema.parse(request.params);

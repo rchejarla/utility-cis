@@ -116,7 +116,22 @@ describe("the dev seed produces a database that can bill", () => {
       // no reads — but a failure means the seed produced data the engine
       // cannot rate, which is the whole class of fault this file exists
       // for.
-      expect(done.failedCount).toBe(0);
+      //
+      // Asserted as the list of reasons rather than as the count: a count
+      // reports "expected 1 to be +0" and leaves the next hour to
+      // guesswork, while the account number and the engine's own message
+      // are already on the row.
+      const failures = await prisma.billingRunItem.findMany({
+        where: { billingRunId: run.id, status: "FAILED" },
+        select: {
+          errorCode: true,
+          errorMessage: true,
+          account: { select: { accountNumber: true } },
+        },
+      });
+      expect(
+        failures.map((f) => `${f.account.accountNumber}: ${f.errorCode} — ${f.errorMessage}`),
+      ).toEqual([]);
       expect(done.billedCount).toBeGreaterThan(0);
 
       const billed = await prisma.billingRunItem.findMany({

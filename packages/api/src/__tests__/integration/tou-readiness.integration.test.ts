@@ -61,7 +61,15 @@ interface Scene {
   meterId: string;
 }
 
-/** A calendar with the periods named, published. */
+/**
+ * A published calendar whose hours use the given codes.
+ *
+ * Hours rather than declared periods: a calendar's periods are the
+ * distinct codes its spans carry, now that peak codes belong to the
+ * tenant. The spans neither tile the day nor need to — this file is
+ * about whether a meter's registers and the tariff agree, not about
+ * whether the calendar is complete.
+ */
 async function makeCalendar(name: string, peakCodes: string[]): Promise<string> {
   const { prisma } = prismaImports;
   const seasonSet = await prisma.seasonSet.create({
@@ -82,14 +90,30 @@ async function makeCalendar(name: string, peakCodes: string[]): Promise<string> 
       timeZone: "America/Denver",
     },
   });
+  const dayType = await prisma.touDayType.create({
+    data: {
+      utilityId: TENANT_A,
+      touCalendarId: calendar.id,
+      dayTypeCode: "weekday",
+      label: "Weekday",
+      sortOrder: 0,
+    },
+  });
   for (const [i, peakCode] of peakCodes.entries()) {
-    await prisma.touPeriod.create({
+    await prisma.touPeriod.upsert({
+      where: { utilityId_peakCode: { utilityId: TENANT_A, peakCode } },
+      update: {},
+      create: { utilityId: TENANT_A, peakCode, label: peakCode, sortOrder: i },
+    });
+    await prisma.touSlot.create({
       data: {
         utilityId: TENANT_A,
         touCalendarId: calendar.id,
+        seasonCode: "all",
+        touDayTypeId: dayType.id,
         peakCode,
-        label: peakCode,
-        sortOrder: i,
+        startMinute: i * 60,
+        endMinute: (i + 1) * 60,
       },
     });
   }
@@ -215,6 +239,82 @@ async function seedRead(
         peakCode,
         readType: "ACTUAL",
         readSource: "MANUAL",
+      },
+    });
+  });
+}
+
+/** The period is 30 days: 1 January to 31 January, both at UTC midnight. */
+const PERIOD_MINUTES = 30 * 24 * 60;
+
+/**
+ * `hours` hourly intervals from the start of the period.
+ *
+ * 720 of them tile it exactly, so a test asks for 717 to be three hours
+ * short. Hourly because the length is what the check sums — the meter's
+ * interval length is not something it needs to know.
+ */
+async function seedIntervals(scene: Scene, hours: number): Promise<void> {
+  await seedAsPlatform(async () => {
+    await prismaImports.prisma.meterReadInterval.createMany({
+      data: Array.from({ length: hours }, (_, i) => ({
+        utilityId: TENANT_A,
+        meterId: scene.meterId,
+        uomId: scene.fix.uomId,
+        intervalStart: new Date(PERIOD.startDate.getTime() + i * 3_600_000),
+        lengthMinutes: 60,
+        quantity: "1.000000",
+        quality: "actual",
+      })),
+    });
+  });
+}
+
+/** A TOU register, which is what makes a meter one that splits usage itself. */
+async function seedTouRegister(scene: Scene, peakCode: string): Promise<void> {
+  await seedAsPlatform(async () => {
+    const { prisma } = prismaImports;
+    // `measure_type_def` is global reference data the migrations seed,
+    // and the tenant fixture does not carry its id.
+    const measureType = await prisma.measureTypeDef.findFirstOrThrow({ select: { id: true } });
+    await prisma.meterRegister.create({
+      data: {
+        utilityId: TENANT_A,
+        meterId: scene.meterId,
+        registerNumber: peakCode === "peak" ? 2 : 3,
+        uomId: scene.fix.uomId,
+        measureTypeId: measureType.id,
+        peakCode,
+      },
+    });
+  });
+}
+
+/**
+ * An exception row, in whatever state the test needs.
+ *
+ * `async` inside the scope, like every other writer here: a
+ * `PrismaPromise` returned straight out of `seedAsPlatform` is lazy and
+ * runs after the scope has exited, which surfaces as
+ * `invalid input syntax for type uuid: ""` — the unscoped-tenant error,
+ * from a line that plainly asked for the platform.
+ */
+async function seedException(
+  scene: Scene,
+  over: { status: string; minutesAffected: number },
+): Promise<void> {
+  await seedAsPlatform(async () => {
+    await prismaImports.prisma.meterDataException.create({
+      data: {
+        utilityId: TENANT_A,
+        meterId: scene.meterId,
+        windowStart: new Date("2026-01-10T00:00:00.000Z"),
+        windowEnd: new Date("2026-01-11T00:00:00.000Z"),
+        kind: "gap",
+        minutesAffected: over.minutesAffected,
+        detail: `${over.minutesAffected} minutes missing`,
+        status: over.status,
+        resolvedAt: over.status === "open" ? null : new Date("2026-01-12T00:00:00.000Z"),
       },
     });
   });
@@ -520,5 +620,114 @@ describe("checking many agreements at once", () => {
       svc.checkTouReadinessForAgreements(TENANT_A, [], PERIOD),
     );
     expect(byAgreement.size).toBe(0);
+  });
+});
+
+/**
+ * An interval meter (spec 26, TOU-GAP-1; step 3 of the gap plan).
+ *
+ * Every check above is about a meter that **splits usage itself** — its
+ * own clock routes consumption into register 2 or register 3, so what it
+ * was programmed with decides what the dials mean. An interval meter
+ * splits nothing: it reports one quantity per interval and the published
+ * calendar classifies them at rating time.
+ *
+ * So the calendar questions have no meaning for one, and the question
+ * that *does* have meaning — do the intervals cover the period? — was
+ * asked nowhere before a run.
+ */
+describe("a TOU service metered by intervals", () => {
+  async function intervalScene(hours: number) {
+    const cal = await seedAsPlatform(() => makeCalendar("TOD 5-8pm", ["peak", "off_peak"]));
+    const scene = await makeScene({
+      pricedCodes: ["peak", "off_peak"],
+      scheduleCalendarId: cal,
+      // No programmed calendar, because an interval meter is not
+      // programmed with one. This is the ordinary case, not a fault.
+      meterCalendarId: null,
+    });
+    await seedIntervals(scene, hours);
+    return scene;
+  }
+
+  it("says nothing about the programming of a meter that reports intervals", async () => {
+    /*
+     * `CALENDAR_UNKNOWN` reads "whether its peak hours match the rate
+     * schedule's cannot be checked", which for an interval meter is not
+     * a gap in our knowledge: there is nothing to match, because the
+     * device is not splitting anything. Reported, it sends an operator
+     * to record a programming fact the meter does not have.
+     */
+    const scene = await intervalScene(720);
+
+    expect(await check(scene)).toEqual([]);
+  });
+
+  it("reports a month the intervals do not cover", async () => {
+    const scene = await intervalScene(717);
+
+    const problems = await check(scene);
+
+    expect(problems).toEqual([
+      {
+        kind: "INTERVALS_INCOMPLETE",
+        meterId: scene.meterId,
+        meterNumber: expect.any(String),
+        minutesCovered: PERIOD_MINUTES - 180,
+        minutesInPeriod: PERIOD_MINUTES,
+        minutesAccepted: 0,
+      },
+    ]);
+  });
+
+  it("stops reporting the part of a short month somebody accepted", async () => {
+    /*
+     * Accepting means "bill this meter's month as it stands", so the
+     * run should stop refusing it. Only the accepted minutes, though: a
+     * second gap nobody has seen is a new fact, and billing it because
+     * of a decision about a different day would be the wrong lesson
+     * drawn from a right decision.
+     */
+    const scene = await intervalScene(717);
+    await seedException(scene, { status: "accepted", minutesAffected: 180 });
+
+    expect(await check(scene)).toEqual([]);
+  });
+
+  it("still reports the minutes an acceptance does not cover", async () => {
+    const scene = await intervalScene(717);
+    await seedException(scene, { status: "accepted", minutesAffected: 60 });
+
+    const problems = await check(scene);
+
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({
+      kind: "INTERVALS_INCOMPLETE",
+      minutesCovered: PERIOD_MINUTES - 180,
+      minutesAccepted: 60,
+    });
+  });
+
+  it("keeps asking the calendar questions of a meter that has TOU registers", async () => {
+    // Both kinds at once: an AMI meter with mapped registers does split
+    // usage itself, so its programming still decides what dial 2 means.
+    const scene = await intervalScene(720);
+    await seedTouRegister(scene, "peak");
+
+    const problems = await check(scene);
+
+    expect(problems.map((p) => p.kind)).toEqual(["CALENDAR_UNKNOWN"]);
+  });
+
+  it("leaves an open exception to the sweep, and still refuses the bill", async () => {
+    /*
+     * An *open* exception is a problem nobody has decided about yet, so
+     * it changes nothing here: the month is still short and rating will
+     * still refuse. Only an acceptance is a decision.
+     */
+    const scene = await intervalScene(717);
+    await seedException(scene, { status: "open", minutesAffected: 180 });
+
+    expect((await check(scene)).map((p) => p.kind)).toEqual(["INTERVALS_INCOMPLETE"]);
   });
 });

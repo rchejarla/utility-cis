@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { PrismaClient } from "@utility-cis/shared/src/generated/prisma";
-import { VARIABLE_NAMESPACES } from "../grammar-introspection.js";
+import { QUANTITY_BASES } from "@utility-cis/shared";
+import { QUANTITY_SOURCES, VARIABLE_NAMESPACES } from "../grammar-introspection.js";
 import { buildRegistry } from "../../rate-engine-registry.js";
 
 /**
@@ -78,5 +79,34 @@ describe("VARIABLE_NAMESPACES against the loaders", () => {
     // The one that prompted this file: a TOU component cannot be
     // authored without it.
     expect(documentedPatterns.has("meter:tou:<meter_id>:<peak_code>")).toBe(true);
+  });
+});
+
+/**
+ * The same drift, one level up: the bases the editor offers against the
+ * bases the grammar accepts.
+ *
+ * `QUANTITY_BASES` is what `createRateComponentSchema` will save;
+ * `QUANTITY_SOURCES` is what `rate-grammar.service.ts` serves to the
+ * editor's dropdown. Nothing kept them in step, and `tou_period` spent
+ * two days in the first list and not the second: the engine could rate
+ * a TOU charge that no author could enter, and the only symptom was a
+ * dropdown with one fewer option than it should have.
+ */
+const grammarBases = new Set<string>(QUANTITY_BASES);
+const offeredBases = new Set<string>(QUANTITY_SOURCES.map((q) => q.code));
+
+describe("QUANTITY_SOURCES against the grammar", () => {
+  it("offers every base the grammar accepts", () => {
+    const unoffered = [...grammarBases].filter((b) => !offeredBases.has(b)).sort();
+    expect(unoffered).toEqual([]);
+  });
+
+  it("offers nothing the grammar would refuse", () => {
+    // This direction fails at the save, loudly, so it is the cheaper
+    // of the two — but it still reaches the author as a validation
+    // error on a choice the editor itself presented.
+    const unsavable = [...offeredBases].filter((b) => !grammarBases.has(b)).sort();
+    expect(unsavable).toEqual([]);
   });
 });

@@ -5,7 +5,7 @@ import { runAsPlatform, runAsTenant } from "./tenant-context.js";
 /**
  * Run a queue's work under the authority its tenancy implies.
  *
- * Six of the nine queues sweep every tenant in one pass, and under an
+ * Seven of the ten queues sweep every tenant in one pass, and under an
  * enforcing policy a sweep with no tenant set reads nothing and reports
  * success: no rows flipped, no error raised, and nobody's SLA breached
  * overnight. The other three name a tenant in their payload and must be

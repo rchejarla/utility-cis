@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import {
+  assignTouCalendarSchema,
   createRateScheduleSchema,
   rateScheduleQuerySchema,
   reviseRateScheduleSchema,
@@ -10,6 +11,7 @@ import {
   createRateSchedule,
   reviseRateSchedule,
   publishRateSchedule,
+  assignTouCalendar,
 } from "../services/rate-schedule.service.js";
 import { idParamSchema } from "../lib/route-schemas.js";
 import { registerCrudRoutes } from "../lib/crud-routes.js";
@@ -41,6 +43,23 @@ export async function rateScheduleRoutes(app: FastifyInstance) {
       const schedule = await reviseRateSchedule(utilityId, actorId, actorName, id, data);
       return reply.status(201).send(schedule);
     }
+  );
+
+  /*
+   * Not a PATCH on the schedule: there is deliberately none (see the
+   * CRUD block above). A draft's TOU calendar is the single field that
+   * may change without forking a version, so it gets the single route
+   * that can change it.
+   */
+  app.put(
+    "/api/v1/rate-schedules/:id/tou-calendar",
+    { config: { module: "rate_schedules", permission: "EDIT" } },
+    async (request) => {
+      const { utilityId, id: actorId, name: actorName } = request.user;
+      const { id } = idParamSchema.parse(request.params);
+      const { touCalendarId } = assignTouCalendarSchema.parse(request.body);
+      return assignTouCalendar(utilityId, actorId, actorName, id, touCalendarId);
+    },
   );
 
   app.post(

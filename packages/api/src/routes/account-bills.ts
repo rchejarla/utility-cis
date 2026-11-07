@@ -9,7 +9,13 @@ import {
 export async function accountBillRoutes(app: FastifyInstance) {
   app.post(
     "/api/v1/accounts/:id/bills",
-    { config: { module: "accounts", permission: "EDIT" } },
+    /*
+     * Generating a bill is billing work even for one account, so it
+     * answers to `billing`. Reading the account's bills below stays on
+     * `accounts`: that is the record in front of the clerk, the same
+     * scope rule the audit log uses for one entity's history.
+     */
+    { config: { module: "billing", permission: "CREATE" } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id: accountId } = idParamSchema.parse(request.params);

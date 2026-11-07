@@ -107,12 +107,103 @@ function formatRange(effective: string, expiration: string | null) {
   return `${start} → ${end}`;
 }
 
-function pricingType(pricing: unknown): string {
-  if (pricing && typeof pricing === "object" && "type" in pricing) {
-    const t = (pricing as { type: unknown }).type;
-    if (typeof t === "string") return t;
+/** Rates are printed as authored: 0.0741 must not round to 0.07. */
+function num(v: unknown): string {
+  return typeof v === "number" ? String(v) : "?";
+}
+
+function per(unit: unknown): string {
+  return typeof unit === "string" && unit ? ` /${unit}` : "";
+}
+
+/**
+ * Which other components a `percent_of` or `floor` is measured against.
+ *
+ * Selectors nest arbitrarily, so anything compound collapses to "a
+ * selection" — the editor is where a selector is read in full. What
+ * this cell owes the reader is the common case, which is one kind.
+ */
+function selectorSummary(selector: unknown): string {
+  if (!selector || typeof selector !== "object") return "a selection";
+  const s = selector as Record<string, unknown>;
+  if (typeof s.kind === "string") return s.kind;
+  if (Array.isArray(s.kind_in)) return s.kind_in.join(", ");
+  if (Array.isArray(s.exclude_kind)) return `all but ${s.exclude_kind.join(", ")}`;
+  if (typeof s.has_label_prefix === "string") return `labels "${s.has_label_prefix}"`;
+  if (typeof s.component_id === "string") return "one component";
+  return "a selection";
+}
+
+/**
+ * What the charge costs, in one cell.
+ *
+ * The list used to print the *name* of the pricing shape — "flat" —
+ * which is the one thing about a tariff nobody needs to look up. The
+ * number is why the page is open. Every shape in the grammar gets a
+ * summary that leads with its rate; the shape's name appears only
+ * where the rate alone would be ambiguous ("3 tiers", "6.5% of").
+ */
+function priceSummary(pricing: unknown): string {
+  if (!pricing || typeof pricing !== "object") return "—";
+  const p = pricing as Record<string, unknown>;
+
+  switch (p.type) {
+    case "flat":
+    case "per_unit":
+      return `${num(p.rate)}${per(p.unit)}`;
+    case "tiered": {
+      const tiers = Array.isArray(p.tiers) ? (p.tiers as Record<string, unknown>[]) : [];
+      if (tiers.length === 0) return "tiered (no tiers)";
+      const first = num(tiers[0]!.rate);
+      const last = num(tiers[tiers.length - 1]!.rate);
+      // First → last in tier order, not min–max: a declining block
+      // tariff would read backwards the other way round.
+      const span = tiers.length === 1 ? first : `${first} → ${last}`;
+      return `${tiers.length} tier${tiers.length === 1 ? "" : "s"} · ${span}${per(p.unit)}`;
+    }
+    case "lookup": {
+      const rates = p.table && typeof p.table === "object" ? Object.keys(p.table).length : 0;
+      return `by ${String(p.by)} · ${rates} rate${rates === 1 ? "" : "s"}${per(p.unit)}`;
+    }
+    case "catalog": {
+      const rates = p.table && typeof p.table === "object" ? Object.keys(p.table).length : 0;
+      const by = Array.isArray(p.by) ? p.by.join(" + ") : String(p.by);
+      return `by ${by} · ${rates} price${rates === 1 ? "" : "s"}`;
+    }
+    case "percent_of":
+      return `${num(p.percent)}% of ${selectorSummary(p.selector)}`;
+    case "indexed": {
+      const mult = typeof p.multiplier === "number" && p.multiplier !== 1 ? ` × ${p.multiplier}` : "";
+      return `index ${String(p.index_name)}${mult}${per(p.unit)}`;
+    }
+    case "floor":
+      return `floor ${num(p.amount)}${p.applies_to_subtotal === true ? " (subtotal)" : ""}`;
+    default:
+      return typeof p.type === "string" ? p.type : "—";
   }
-  return "—";
+}
+
+/**
+ * What the charge is measured on — and, for a TOU charge, which period.
+ *
+ * The peak code lived only inside the quantity source, so two charges
+ * labelled "Off-peak energy" and "On-peak energy" with their codes
+ * crossed over read identically here and billed at each other's rate.
+ * Nothing compares a free-text label against the code, and nothing
+ * can; printing the code next to the label is what makes the pair
+ * checkable by the person who wrote it.
+ */
+function quantitySummary(source: unknown): { base: string; qualifier: string | null } {
+  if (!source || typeof source !== "object") return { base: "—", qualifier: null };
+  const q = source as Record<string, unknown>;
+  const base = typeof q.base === "string" ? q.base : "—";
+  if (base === "tou_period") {
+    return { base, qualifier: typeof q.peak_code === "string" ? q.peak_code : "no period" };
+  }
+  if (base === "premise_attribute") {
+    return { base, qualifier: typeof q.source_attr === "string" ? q.source_attr : null };
+  }
+  return { base, qualifier: null };
 }
 
 export function ComponentList({ scheduleId, refreshKey, onEdit, onAdd, disabled = false }: Props) {
@@ -234,8 +325,9 @@ export function ComponentList({ scheduleId, refreshKey, onEdit, onAdd, disabled 
             <tr>
               <th style={{ ...thStyle, width: 80 }}>Order</th>
               <th style={thStyle}>Label</th>
+              <th style={thStyle}>Price</th>
+              <th style={thStyle}>Charged on</th>
               <th style={thStyle}>Kind</th>
-              <th style={thStyle}>Pricing</th>
               <th style={thStyle}>Effective Range</th>
               <th style={{ ...thStyle, textAlign: "right" as const, width: 160 }} />
             </tr>
@@ -244,7 +336,7 @@ export function ComponentList({ scheduleId, refreshKey, onEdit, onAdd, disabled 
             {loading ? (
               <tr>
                 <td
-                  colSpan={6}
+                  colSpan={7}
                   style={{
                     ...tdStyle,
                     textAlign: "center",
@@ -258,7 +350,7 @@ export function ComponentList({ scheduleId, refreshKey, onEdit, onAdd, disabled 
             ) : components.length === 0 ? (
               <tr>
                 <td
-                  colSpan={6}
+                  colSpan={7}
                   style={{
                     ...tdStyle,
                     textAlign: "center",
@@ -296,11 +388,37 @@ export function ComponentList({ scheduleId, refreshKey, onEdit, onAdd, disabled 
                       {c.sortOrder}
                     </td>
                     <td style={tdStyle}>{c.label}</td>
-                    <td style={tdStyle}>
-                      <span style={kindBadgeStyle}>{c.kindCode}</span>
+                    <td
+                      style={{
+                        ...tdStyle,
+                        fontFamily: "monospace",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {priceSummary(c.pricing)}
                     </td>
                     <td style={{ ...tdStyle, fontFamily: "monospace", fontSize: 12 }}>
-                      {pricingType(c.pricing)}
+                      {(() => {
+                        const { base, qualifier } = quantitySummary(c.quantitySource);
+                        return (
+                          <>
+                            <span style={{ color: "var(--text-muted)" }}>{base}</span>
+                            {qualifier && (
+                              <>
+                                <span style={{ color: "var(--text-muted)" }}>: </span>
+                                <span style={{ color: "var(--text-primary)", fontWeight: 600 }}>
+                                  {qualifier}
+                                </span>
+                              </>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </td>
+                    <td style={tdStyle}>
+                      <span style={kindBadgeStyle}>{c.kindCode}</span>
                     </td>
                     <td style={{ ...tdStyle, color: "var(--text-secondary)", fontSize: 12 }}>
                       {formatRange(c.effectiveDate, c.expirationDate)}

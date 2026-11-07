@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  peakCodesUsedBy,
   resolveDayType,
   resolvePeak,
   validateCalendar,
@@ -27,10 +28,9 @@ import type { SeasonDefinition } from "../seasons.js";
  * offsets at all.
  */
 
-const day = (code: string, weekdays: number[], isHoliday = false): TouDayTypeDefinition => ({
+const day = (code: string, weekdays: number[]): TouDayTypeDefinition => ({
   dayTypeCode: code,
   weekdays: weekdays as TouDayTypeDefinition["weekdays"],
-  isHoliday,
 });
 
 /** A whole day of one peak, for the (season, day type) given. */
@@ -61,8 +61,7 @@ const SEASONS: SeasonDefinition[] = [
  * holidays are off-peak all day, and winter is flat.
  */
 const CALENDAR: TouCalendarDefinition = {
-  dayTypes: [day("weekday", [1, 2, 3, 4, 5]), day("weekend", [6, 7]), day("holiday", [], true)],
-  peakCodes: ["on_peak", "off_peak"],
+  dayTypes: [day("weekday", [1, 2, 3, 4, 5]), day("weekend", [6, 7]), day("holiday", [])],
   slots: [
     span("summer", "weekday", 0, 960, "off_peak"),
     span("summer", "weekday", 960, 1260, "on_peak"), // 16:00–21:00
@@ -138,24 +137,34 @@ describe("validateCalendar", () => {
     if (!result.ok) expect(result.problems.join(" ")).toMatch(/15 minutes/);
   });
 
-  it("refuses a peak that is declared and never used", () => {
-    // TOU-CAL-3. A declared-unused peak is normally a half-finished
-    // edit, and a rate component priced against it would never bill.
-    const result = validateCalendar(
-      { ...CALENDAR, peakCodes: [...CALENDAR.peakCodes, "super_off_peak"] },
-      SEASONS,
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.problems.join(" ")).toMatch(/super_off_peak/);
+  /*
+   * Two tests stood here, for TOU-CAL-3's peak rules: "a peak declared
+   * and never used" and "a span naming a peak the calendar never
+   * declared". Both are gone rather than repaired, because neither has
+   * two things left to disagree — peak codes are the tenant's since
+   * 2026-11-04, and a calendar's periods *are* the distinct codes its
+   * hours use.
+   *
+   * What each protected is still protected, and tested where it now
+   * lives:
+   *
+   * - an undefined code is refused by `tou_slot_peak_code_fkey`, and by
+   *   `putTouSpans` before the write, in
+   *   `tou-calendar-editor.integration.test.ts`
+   * - a code the *tariff* does not price is `validateTouPricing`, in
+   *   `rate-schedule-publish.integration.test.ts` — the one that would
+   *   leave energy uncharged
+   *
+   * `peakCodesUsedBy` is what "this calendar's periods" means now, and
+   * is tested below.
+   */
+  it("reports a calendar's periods as the codes its hours actually use", () => {
+    expect(peakCodesUsedBy(CALENDAR).sort()).toEqual(["off_peak", "on_peak"]);
   });
 
-  it("refuses a span naming a peak the calendar never declared", () => {
-    const slots = CALENDAR.slots.map((s) =>
-      s.peakCode === "on_peak" ? { ...s, peakCode: "mid_peak" } : s,
-    );
-    const result = validateCalendar({ ...CALENDAR, slots }, SEASONS);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.problems.join(" ")).toMatch(/mid_peak/);
+  it("counts a code once however many spans carry it", () => {
+    // off_peak appears in five spans across seasons and day types.
+    expect(peakCodesUsedBy(CALENDAR).filter((c) => c === "off_peak")).toHaveLength(1);
   });
 
   it("requires the seven weekdays to be claimed exactly once", () => {
@@ -166,7 +175,7 @@ describe("validateCalendar", () => {
      * failure that looks like a working calendar.
      */
     const gap = validateCalendar(
-      { ...CALENDAR, dayTypes: [day("weekday", [1, 2, 3, 4, 5]), day("holiday", [], true)] },
+      { ...CALENDAR, dayTypes: [day("weekday", [1, 2, 3, 4, 5]), day("holiday", [])] },
       SEASONS,
     );
     expect(gap.ok).toBe(false);
@@ -175,7 +184,7 @@ describe("validateCalendar", () => {
     const overlap = validateCalendar(
       {
         ...CALENDAR,
-        dayTypes: [day("weekday", [1, 2, 3, 4, 5, 6]), day("weekend", [6, 7]), day("holiday", [], true)],
+        dayTypes: [day("weekday", [1, 2, 3, 4, 5, 6]), day("weekend", [6, 7]), day("holiday", [])],
       },
       SEASONS,
     );
@@ -183,26 +192,14 @@ describe("validateCalendar", () => {
     if (!overlap.ok) expect(overlap.problems.join(" ")).toMatch(/Saturday/);
   });
 
-  it("refuses two day types flagged as the holiday day type", () => {
-    // The flag is what tells the resolver which day type a resolved
-    // holiday takes, so two of them makes that answer arbitrary. The
-    // database enforces it with a partial unique index; this is the
-    // message the editor shows before the save is attempted.
-    const result = validateCalendar(
-      {
-        ...CALENDAR,
-        dayTypes: [
-          day("weekday", [1, 2, 3, 4, 5]),
-          day("weekend", [6, 7]),
-          day("holiday", [], true),
-          day("holiday_observed", [], true),
-        ],
-      },
-      SEASONS,
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.problems.join(" ")).toMatch(/holiday_observed/);
-  });
+  /*
+   * "refuses two day types flagged as the holiday day type" was here
+   * and is deleted, not repaired. The flag it guarded is gone: `holiday`
+   * is a reserved code now and `tou_day_type_code_per_calendar` already
+   * makes a code unique within a calendar, so two of them cannot exist
+   * for the validator to catch. Rewritten to pass, it would have
+   * validated an ordinary calendar while claiming to refuse something.
+   */
 
   it("refuses a day type that nothing can ever select", () => {
     // No weekdays and not the holiday day type: every slot under it is
@@ -276,7 +273,7 @@ describe("resolveDayType", () => {
   it("lets a dated override win over a holiday", () => {
     /*
      * TOU-CAL-9. The override is the narrowest statement a tenant can
-     * make — one named date — so it outranks both the holiday rules and
+     * make — one named date — so it outranks both the holiday set and
      * the weekday coverage. A critical peak event called on a holiday
      * is the case: the event is why the day is priced as it is.
      */
@@ -287,7 +284,7 @@ describe("resolveDayType", () => {
 
   it("falls back to the weekday when a calendar has no holiday day type", () => {
     // A tenant whose tariff does not distinguish holidays. The date is
-    // still a holiday to the holiday list; no day type claims it, so the
+    // still a holiday to the holiday set; no day type claims it, so the
     // weekday coverage answers.
     const noHolidayType: TouCalendarDefinition = {
       ...CALENDAR,

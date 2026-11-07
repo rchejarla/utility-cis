@@ -146,6 +146,28 @@ Defines a read-and-bill schedule. All service agreements are assigned to exactly
 - `active_on` — date (YYYY-MM-DD): returns schedules effective on that date
 - `page`, `limit`, `sort`, `order`
 
+### Code uniqueness
+
+A code names one tariff across all of its versions, which is what makes
+`revise` the only way to add one. `POST /api/v1/rate-schedules` refuses a
+code already in use with **409 `RATE_SCHEDULE_CODE_TAKEN`**, naming the
+code and the highest version that holds it, and saying that a version
+comes from Revise *(added 2026-11-05)*.
+
+Before that the create fell through to
+`@@unique([utilityId, code, version])` and surfaced as the generic
+`UNIQUE_CONSTRAINT`, whose message named neither the field nor the code
+and pointed nowhere — and since every tariff a tenant already has is a
+code someone may plausibly type in (`BZN-WATER`, `RES-TOU-E`), this was
+the first wall anyone creating a schedule by hand hit.
+
+The check is on the code alone, not on (code, version): the constraint
+includes the version, so a tariff already revised to version 2 leaves
+version 1 occupied and a create would collide on a row the author never
+sees. It is check-then-act, so two concurrent creates of one new code
+can both pass it — the constraint remains the authority and answers the
+loser, which is why its message had to be legible too (see below).
+
 ### Revision Endpoint
 
 `POST /api/v1/rate-schedules/:id/revise` accepts the same body as create. On success:
@@ -189,20 +211,165 @@ Defines a read-and-bill schedule. All service agreements are assigned to exactly
 
 **Tabs:**
 
-- **Overview:** All fields, formatted `rate_config` display (tier table for TIERED, period cards for TOU, etc.), regulatory reference, version badge
+- **Overview:** All fields, regulatory reference, version badge, and the
+  **Components** table — the schedule's RateComponent rows, which is
+  where pricing lives since v2. Columns: order, label, **Price**,
+  **Charged on**, kind, effective range *(the first two added
+  2026-11-05)*. `Price` summarises each pricing shape leading with its
+  number (`0.2648 /KWH`, `3 tiers · 2.15 → 5.05 /HCF`, `6.5% of
+  consumption`, `floor 10`) rather than naming the shape, and
+  `Charged on` prints the quantity source with its qualifier
+  (`tou_period: off_peak`, `premise_attribute: eru_count`). Before
+  that the table showed the label, the kind and the word "flat", so
+  what a charge costs and what it is charged on were both a modal
+  away — and a TOU charge's period was invisible, which is the one
+  thing a free-text label can misstate (spec 26, TOU-UI-3)
+
+#### The component editor's money and units *(2026-11-05)*
+
+- **Every money input is marked `$`** (`MoneyInput`): the flat rate, each
+  tier's rate, each lookup row's rate. A tier's **"up to" threshold is
+  not** — it is a quantity of the priced thing (HCF, kWh) sitting in the
+  next cell, and the two were indistinguishable bare numbers. The symbol
+  is hard-coded, matching how amounts are already printed across the app;
+  there is no currency column on `Utility` or in `utility_config`, so USD
+  is the system's standing assumption rather than a choice made here.
+- **The unit is a dropdown with free text behind it** (`UnitPicker`),
+  grouped as *Used in this tariff* (the distinct units on the schedule's
+  other components), *Units of measure* (the schedule's commodity's UOM
+  codes), and *Billing periods* (`MONTH`, `DAY`, `QUARTER`, `YEAR`), plus
+  **Other…**.
+
+  **It is deliberately not a closed list over `unit_of_measure`.**
+  `pricing.unit` is a bill-line *label* — the engine copies it onto the
+  line and never interprets it — which is why the seeded tariffs price in
+  `MONTH` (13 components, every service charge) and `ERU` (2), neither of
+  which is a measurement of a commodity, and in **`HCF` (24, the most-used
+  unit of all), which is not a UOM row either**. A closed dropdown would
+  have made the water tariffs unauthorable while looking authoritative —
+  the same failure as the empty commodity select and the unsatisfiable TOU
+  gate. The vocabulary is per tenant, so the control offers it and still
+  accepts anything.
+
+  Free text alone is how `kWh` and `KWH` both ended up in one seed, which
+  a bill prints as written; offering the spellings already in use is the
+  cheap half of fixing that. The expensive half — normalising existing
+  rows — is not done, and `HCF`'s absence from `unit_of_measure` is a
+  **data gap in the seed**, not a UI one.
+- **Rate and unit are both required, and marked** *(2026-11-05)*. The
+  rate always blocked Save — the editors emit `null` while it will not
+  parse — but nothing on the form said so; it now carries the same red
+  asterisk the rest of the app uses, on the flat rate and on each tier
+  and lookup row. The unit blocked nothing and now blocks the same way.
+
+  **Required in the editor, not in `pricingSchema`.** The grammar stays
+  permissive so rows already stored without a unit still parse and the
+  engine is untouched; the editor enforces the house rule. The rule
+  comes from the data model: `bill_segment_line.unit` exists because
+  "the engine converts, so a gallons meter on an HCF tariff bills
+  6.6279 and the bill has to say of what" — a priced quantity with no
+  unit is a line that prints a number and never names it. Across the
+  three seeds, 48 components carry a unit-bearing pricing shape and
+  every one already sets a unit, so this refuses nothing anyone has
+  authored. The one thing it does change: a component written through
+  the JSON escape hatch without a unit now holds Save until one is
+  picked, which is the gap being surfaced rather than a regression.
+
+  `percent_of`, `catalog` and `floor` have no unit in the grammar at
+  all and are unaffected.
+- **Transforms are picked, not typed** (`TransformsBuilder`,
+  *2026-11-05*). It was a JSON textarea expecting an array of
+  discriminated-union objects, so authoring the commonest adjustment in
+  the grammar meant knowing that prorate's key is `standard_days` and
+  that it takes a positive integer. The five the engine evaluates have
+  two parameters between them at most. Each is now a row with its own
+  inputs, and `subtract_linked_commodity` picks a commodity by name
+  instead of asking for a uuid. The panel states that transforms adjust
+  the quantity, in order, *before it is priced*, and that most tariffs
+  need none.
+
+  Three properties the builder has to hold:
+
+  - **Order is semantic.** They apply left to right, and clamping then
+    prorating is a different quantity from prorating then clamping. The
+    list is numbered, says so, and rows move with ↑/↓.
+  - **The four declared-but-unevaluated transforms are not offered.**
+    `ratchet`, `tou_window_filter`, `power_factor` and `load_factor`
+    exist in the Zod union and the engine does not evaluate them, so
+    offering them would invite a tariff that cannot be rated — the
+    unsatisfiable-gate mistake again. The list of what *is* offered
+    comes from `/api/v1/rate-grammar/registered`, which already carries
+    each one's label and `supported` flag and which the editor was
+    already fetching for the kind dropdown: a second hand-kept copy of
+    the grammar in the web is how `tou_period` stayed unreachable.
+  - **One already stored is kept, not dropped.** An unrecognised
+    transform renders as a read-only row saying the engine does not
+    evaluate it, and is emitted verbatim in its original position.
+    Silently discarding what an editor does not understand is how
+    `unit: "HCF"` vanished from the tiered editor.
+
+  An incomplete row holds Save rather than being quietly omitted: a
+  half-entered transform dropped on save is a different quantity from
+  the one being written. A `clamp` with neither bound parses — both are
+  optional — and bounds nothing, so it counts as incomplete.
+- **Every required field in the popup is marked** *(2026-11-05)*, with
+  `RequiredMark` — the asterisk plus screen-reader "(required)" that
+  `FormField` has always rendered, extracted so a form built from raw
+  labels can use it (it had been copied four times by then). Marked:
+  Kind, Label, Effective Date, Rate (flat, and each tier and lookup
+  row), Unit, the lookup Key, Percent and its Value, and the
+  conditional TOU period and Source attribute. Sort Order and
+  Expiration Date are left unmarked, being genuinely optional —
+  `sortOrder` has a default in `createRateComponentSchema` and the form
+  always sends a number.
+
+  All of these already blocked Save: `allValid` has always required a
+  kind, a label, an effective date and three valid sub-shapes. The
+  disabled button was the only feedback and it named nothing, which is
+  still true — **there is no validation summary saying which field is
+  missing**, only the markers. That remains open.
+- **The tiered and lookup editors no longer drop what they do not edit.**
+  Both read only their rows and re-emitted only their rows, and
+  `PricingEditor`'s casts stopped at `tiers` / `table` — so opening a
+  seeded Bozeman water component (tiered, `unit: "HCF"`) and saving
+  silently erased the unit, and `standard_days` with it. That one scales
+  tier thresholds by the days billed (Bozeman Req 138), so losing it
+  turns a prorated allowance back into a full period's and changes what
+  the customer owes. A cast that omits a key of the shape is not a
+  narrowing — it is where the key goes missing.
 - **Version History:** Timeline of all versions in the chain, effective date ranges, diff view between versions
 - **Actions:** "Revise" button opens revision form; "View Assignments" shows assigned service agreements
 
 ### Rate Schedule Create / Revise (`/rate-schedules/new`, modal on revise)
 
-- Dynamic form: selecting `rate_type` renders the appropriate `rate_config` editor
-- TIERED: interactive tier builder (add/remove rows, validates contiguity)
-- TOU: period editor with time range pickers
-- DEMAND: numeric inputs for demand charge and ratchet
-- BUDGET: smoothing configuration
+Schedule-level metadata only. Pricing is not on this form: it is built
+up afterwards as RateComponent rows in the configurator on the detail
+page, which is why `rate_type` / `rate_config` appear nowhere here (v2
+removed them from the entity).
+
+- Name, **Code**, Commodity, effective date, optional expiration,
+  description, regulatory reference, optional TOU calendar
 - Effective date DatePicker (blocked to future for revisions)
-- Regulatory reference field
-- HelpTooltip on all key fields referencing the applicable BR-RS rule (e.g., BR-RS-001 on effective date ordering, BR-RS-002 on expiration, BR-RS-004 on rate config validation)
+- HelpTooltip on key fields referencing the applicable BR-RS rule
+  (BR-RS-001 effective date ordering, BR-RS-002 expiration, BR-RS-007
+  code + version uniqueness)
+- **Code** and **Regulatory Reference** each carry an always-visible
+  `hint`, not only a hover tooltip *(2026-11-05)*. Neither field's
+  purpose is inferable from its name: the code is the tariff's
+  permanent identifier — a revision keeps it and bumps the version, and
+  it can never be edited, since the entity has no PATCH — and the
+  regulatory reference is the authority that approved the rates
+  (resolution, ordinance, PUC docket, tariff sheet), free text to 100
+  characters, shown on the overview and carried forward by `revise`.
+- **The Commodity select reads a bare array** *(fixed 2026-11-05)*.
+  `/api/v1/commodities` is a `findMany` sent unwrapped by the CRUD
+  factory, while this page read `res.data` — `undefined` on an array —
+  so the required select was empty for every tenant and no rate
+  schedule could be created through the UI at all. The seed writes
+  schedules through Prisma, which is why nothing caught it. The page
+  now accepts either shape, as `entity-list-page.tsx` does, and an
+  empty list says so and links to Commodities instead of presenting a
+  dead dropdown.
 
 ### Billing Cycles (`/billing-cycles`)
 

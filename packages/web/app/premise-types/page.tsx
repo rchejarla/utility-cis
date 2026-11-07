@@ -36,7 +36,7 @@ const EMPTY: Form = {
 
 export default function PremiseTypesPage() {
   const { toast } = useToast();
-  const { canView, canCreate, canEdit } = usePermission("premises");
+  const { canView, canCreate, canEdit } = usePermission("tenant_profile");
   const [rows, setRows] = useState<TypeDef[]>([]);
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);

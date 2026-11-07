@@ -17,7 +17,7 @@ vi.mock("../../lib/queues.js", async (importOriginal) => ({
  *
  * Task 7 of `docs/superpowers/plans/2026-10-24-rls-enforcement.md`.
  *
- * Six of the nine queues sweep every tenant in one pass. Under an
+ * Seven of the ten queues sweep every tenant in one pass. Under an
  * enforcing policy a sweep with no tenant set reads *nothing* and
  * reports success — it flips no rows, logs no error, and the next
  * morning nobody's SLA has breached. That is the failure this task

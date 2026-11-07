@@ -54,6 +54,10 @@ export const PREDICATE_OPS = [
 
 export const QUANTITY_SOURCES = [
   { code: "metered", label: "Metered consumption", supported: true },
+  // One period's usage, priced by its own component. The label says
+  // "one" because the common mistake is to expect a single TOU charge
+  // to cover the whole bill — a TOU tariff is one component per period.
+  { code: "tou_period", label: "One TOU period's consumption", supported: true },
   { code: "wqa", label: "Winter Quarter Average", supported: true },
   { code: "fixed", label: "Fixed (1)", supported: true },
   { code: "item_count", label: "Count of attached items", supported: true },

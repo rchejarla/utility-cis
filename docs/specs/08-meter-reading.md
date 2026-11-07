@@ -29,8 +29,8 @@ Every reading associated with a meter. Stored in a TimescaleDB hypertable, parti
 | reading | DECIMAL(12,4) | Raw dial reading as recorded |
 | prior_reading | DECIMAL(12,4) | Previous read value for consumption calculation |
 | consumption | DECIMAL(12,4) | Calculated: (reading - prior_reading) × multiplier |
-| read_type | ENUM | ACTUAL, ESTIMATED, CORRECTED, FINAL, AMI |
-| read_source | ENUM | MANUAL, AMR, AMI, CUSTOMER_SELF, SYSTEM |
+| read_type | ENUM | ACTUAL, ESTIMATED, CORRECTED, FINAL — whether the figure was measured, and if not what stands in its place. `AMI` was removed 2026-11-06: it named a source, not a type, so a read that came from a head-end could say nothing about whether it was estimated. No row had ever carried it. |
+| read_source | ENUM | MANUAL, AMR, AMI, CUSTOMER_SELF, SYSTEM — where the read came from, which is where `AMI` belongs |
 | exception_code | VARCHAR(50) | Nullable: HIGH_USAGE, ZERO_USAGE, METER_DEFECT, REVERSE_FLOW, ROLLOVER |
 | exception_notes | TEXT | Nullable: free-text explanation from reader or system |
 | is_frozen | BOOLEAN | True after billing cycle processes this read; blocks edits |
@@ -210,7 +210,7 @@ Many commercial and industrial meters expose multiple registers on a single devi
 
 ### Meter Reads List (`/meter-reads`) — live
 
-Table: meter number (monospace), read date, reading, consumption, read-type badge (ACTUAL/ESTIMATED/CORRECTED/FINAL/AMI color-coded), read source, exception code chip (if any), frozen indicator (`❄`). Filter pills for type, source, exception presence, billed state. Header strip has "+ New Read," "⚠ Exception Queue," and "↑ Import Reads" action buttons.
+Table: meter number (monospace), read date, reading, consumption, read-type badge (ACTUAL/ESTIMATED/CORRECTED/FINAL color-coded), read source, exception code chip (if any), frozen indicator (`❄`). Filter pills for type, source, exception presence, billed state. Header strip has "+ New Read," "⚠ Exception Queue," and "↑ Import Reads" action buttons.
 
 ### Record Meter Read (`/meter-reads/new`) — live
 
@@ -289,7 +289,7 @@ Read history tab with a consumption-over-time chart and a table of recent reads.
 | 79 | Unique read IDs, prevent duplicate billing | Unique constraint on [meter, register, datetime, source] |
 | 80 | Associate reads to meters | MeterRead.meter_id FK |
 | 81 | Multi-register meter handling | Phase 2: `register_id` on `MeterRead`, per-register rows; Phase 2.5: end-to-end support (read_event_id grouping, multi-register entry form, import format, rate-schedule validation) |
-| 82 | Label estimated vs actual reads | read_type enum: ACTUAL, ESTIMATED, CORRECTED, FINAL, AMI |
+| 82 | Label estimated vs actual reads | read_type enum: ACTUAL, ESTIMATED, CORRECTED, FINAL. The interval roll-up writes it **per TOU bucket**, so an estimated on-peak hour leaves the off-peak figure measured (spec 26, TOU-GAP-2) |
 | 83 | Retain raw interval data | TimescaleDB hypertable, raw reading field preserved |
 | 84 | Meter events (leaks, tamper, reverse flow) | exception_code=REVERSE_FLOW; MeterEvent entity Phase 2 |
 | 86 | Freeze validated reads after billing | is_frozen field; Phase 3 implementation |

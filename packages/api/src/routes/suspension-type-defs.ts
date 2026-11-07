@@ -21,6 +21,20 @@ const listQuerySchema = baseListQuerySchema
   })
   .strict();
 
+/*
+ * `tenant_profile`, not `settings` (moved 2026-11-03).
+ *
+ * `settings` is the one key that separates Utility Admin from System
+ * Admin — Utility Admin holds `settings: ["VIEW"]` — so it should mean
+ * what that role's description says: *system* settings, the things that
+ * expose or erase a tenant's data. Keys, retention, the danger zone and
+ * which integrations are wired stay there.
+ *
+ * A suspension type is not that. It is the tenant's own
+ * configuration, which is what `tenant_profile` already means: General,
+ * Branding, Numbering, Automation and Custom Fields all sit on it. Leaving this on `settings` made "full access except system
+ * settings" mean "cannot edit the small print on a bill".
+ */
 export async function suspensionTypeDefRoutes(app: FastifyInstance) {
   // Any authenticated user can read the active type list — the new and
   // list forms both consume it. No module permission needed; the type
@@ -43,7 +57,7 @@ export async function suspensionTypeDefRoutes(app: FastifyInstance) {
   // and can't be modified through this API.
   app.post(
     "/api/v1/suspension-types",
-    { config: { module: "settings", permission: "EDIT" } },
+    { config: { module: "tenant_profile", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const data = createSuspensionTypeDefSchema.parse(request.body);
@@ -54,7 +68,7 @@ export async function suspensionTypeDefRoutes(app: FastifyInstance) {
 
   app.patch(
     "/api/v1/suspension-types/:id",
-    { config: { module: "settings", permission: "EDIT" } },
+    { config: { module: "tenant_profile", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);

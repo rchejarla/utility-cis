@@ -5,6 +5,8 @@ const { createRequire } = require("node:module");
 const { PrismaClient } = require("./packages/shared/src/generated/prisma");
 const { seedDelinquencyLadder } = require("./seed/delinquency-ladder.js");
 const { seedPaymentPlan } = require("./seed/payment-plan.js");
+const { seedTouCalendar } = require("./seed/tou-calendar.js");
+const { seedTouService } = require("./seed/tou-service.js");
 
 /*
  * `@prisma/adapter-pg` and `pg` are declared by `packages/shared`, and
@@ -157,6 +159,11 @@ async function main() {
   // SAM table dropped in slice 1 migration; SP/SPM cascade from SA deletion.
   await p.serviceAgreement.deleteMany({});
   if (p.rateServiceClass) await p.rateServiceClass.deleteMany({});
+  // Interval data holds the meter and its registers with RESTRICT, on
+  // purpose: a register with billed intervals behind it is not a row to
+  // delete quietly. A reseed is the one place that is wanted, so it is
+  // cleared explicitly rather than by relaxing the key.
+  if (p.meterReadInterval) await p.meterReadInterval.deleteMany({});
   await p.meterRegister.deleteMany({});
   await p.contact.deleteMany({});
   await p.billingAddress.deleteMany({});
@@ -786,14 +793,14 @@ async function main() {
     { premiseId: pArr[1].id, meterNumber: "WM-002", commodityId: water.id, uomId: gal.id, meterType: "AMR", status: "ACTIVE", installDate: new Date("2024-02-01"), customFields: { size: '2"' } },
     { premiseId: pArr[1].id, meterNumber: "EM-001", commodityId: electric.id, uomId: kwh.id, meterType: "AMI", status: "ACTIVE", installDate: new Date("2024-02-01") },
     { premiseId: pArr[1].id, meterNumber: "GM-001", commodityId: gas.id, uomId: mcf.id, meterType: "AMR", status: "ACTIVE", installDate: new Date("2024-02-01") },
-    { premiseId: pArr[2].id, meterNumber: "EM-002", commodityId: electric.id, uomId: kwh.id, meterType: "SMART", status: "ACTIVE", installDate: new Date("2024-03-01") },
+    { premiseId: pArr[2].id, meterNumber: "EM-002", commodityId: electric.id, uomId: kwh.id, meterType: "AMI", status: "ACTIVE", installDate: new Date("2024-03-01") },
     { premiseId: pArr[2].id, meterNumber: "GM-002", commodityId: gas.id, uomId: mcf.id, meterType: "MANUAL", status: "ACTIVE", installDate: new Date("2024-03-01") },
     { premiseId: pArr[3].id, meterNumber: "WM-003", commodityId: water.id, uomId: gal.id, meterType: "AMI", status: "ACTIVE", installDate: new Date("2024-01-20"), customFields: { size: '4"' } },
     { premiseId: pArr[3].id, meterNumber: "EM-003", commodityId: electric.id, uomId: kwh.id, meterType: "AMI", status: "ACTIVE", installDate: new Date("2024-01-20") },
     { premiseId: pArr[4].id, meterNumber: "WM-004", commodityId: water.id, uomId: gal.id, meterType: "AMR", status: "ACTIVE", installDate: new Date("2024-04-01"), customFields: { size: '1.5"' } },
     { premiseId: pArr[4].id, meterNumber: "EM-004", commodityId: electric.id, uomId: kwh.id, meterType: "AMR", status: "ACTIVE", installDate: new Date("2024-04-01") },
     { premiseId: pArr[5].id, meterNumber: "WM-005", commodityId: water.id, uomId: gal.id, meterType: "MANUAL", status: "ACTIVE", installDate: new Date("2024-05-01"), customFields: { size: '5/8"' } },
-    { premiseId: pArr[5].id, meterNumber: "EM-005", commodityId: electric.id, uomId: kwh.id, meterType: "SMART", status: "ACTIVE", installDate: new Date("2024-05-01") },
+    { premiseId: pArr[5].id, meterNumber: "EM-005", commodityId: electric.id, uomId: kwh.id, meterType: "AMI", status: "ACTIVE", installDate: new Date("2024-05-01") },
     { premiseId: pArr[6].id, meterNumber: "WM-006", commodityId: water.id, uomId: gal.id, meterType: "AMI", status: "ACTIVE", installDate: new Date("2024-06-01"), customFields: { size: '1"' } },
     { premiseId: pArr[6].id, meterNumber: "EM-006", commodityId: electric.id, uomId: kwh.id, meterType: "AMI", status: "ACTIVE", installDate: new Date("2024-06-01") },
   ];
@@ -1736,8 +1743,24 @@ async function main() {
     const segments = [];
     for (let i = 0; i < agreements.length; i++) {
       const sa = agreements[i];
+      /*
+       * Ordered, because three of the nine agreements carry three
+       * assignments at once: an unbundled electric agreement has
+       * `delivery`, `supply` and `rider` in force together, and an
+       * unordered `findFirst` returned whichever row the heap offered
+       * first. Two reseeds of identical data therefore produced
+       * different bills — $523.55 and $468.17 on the same account —
+       * which makes a dev database a poor thing to compare anything
+       * against.
+       *
+       * `roleCode` ascending lands on the right one both times without a
+       * special case: `primary` where that is all there is, and
+       * `delivery` for electric, which is the utility's own charge
+       * rather than a supplier's or a rider.
+       */
       const assignment = await p.sAScheduleAssignment.findFirst({
         where: { utilityId: UID, serviceAgreementId: sa.id },
+        orderBy: { roleCode: "asc" },
         select: { rateScheduleId: true },
       });
       if (!assignment) continue;
@@ -2091,6 +2114,99 @@ async function main() {
         ", $" + plan.downPayment + " down (paid)",
     );
     console.log("       covering " + plan.covered.join(", "));
+  }
+
+  /*
+   * A published TOU calendar, so the time-of-use screens open on
+   * something and the spot check can be used. After the rate
+   * schedules, because a calendar is only meaningful as the hours a
+   * schedule prices against — though nothing here prices it yet, which
+   * the log line says.
+   */
+  const tou = await seedTouCalendar({ p, utilityId: UID });
+  if (tou.skipped) {
+    console.log("  [skip] TOU calendar: " + tou.skipped);
+  } else {
+    console.log(
+      '  TOU calendar "' + tou.name + '" (published, ' + tou.timeZone + "): " +
+        tou.periods + " periods x " + tou.dayTypes + " day types x " +
+        tou.seasonCodes.length + " seasons = " + tou.spans + " spans",
+    );
+    console.log(
+      "       keyed on season set \"" + tou.seasonSetName + "\" (" +
+        tou.seasonCodes.join(", ") + "); no rate schedule prices it yet",
+    );
+    console.log(
+      "       holidays: \"" + tou.holidaySetName + "\" (" + tou.holidayDates +
+        " dates" + (tou.holidaySetReused ? ", reused" : "") + ")",
+    );
+  }
+
+  /*
+   * The two TOU services — one register meter, one interval meter.
+   *
+   * Both so that the register mapping and the interval roll-up are
+   * visibly the same feature: they end as `meter_read` rows carrying a
+   * peak code, which is the only shape the rate engine knows. The
+   * interval meter has no registers and no programmed calendar, which
+   * is the point worth seeing — registers are one way to split a TOU
+   * bill, not a requirement of one.
+   */
+  const touService = await seedTouService({
+    p,
+    utilityId: UID,
+    calendarId: tou.calendarId,
+    timeZone: tou.timeZone,
+  });
+  if (touService.skipped) {
+    console.log("  [skip] TOU services: " + touService.skipped);
+  } else {
+    console.log(
+      '  TOU tariff "' + touService.scheduleCode + '" published (' +
+        touService.prices.join(", ") + ") per kWh",
+    );
+    console.log(
+      "       register meter " + touService.registerMeter + ": 3 mapped registers + a total, " +
+        "one read event (" + touService.registerBuckets.join(", ") + " kWh)",
+    );
+    /*
+     * Which of the two reconciles, said out loud. A seeded fault
+     * nobody announced reads as a bug in the product the first time
+     * somebody opens a billing preview and finds a warning on it.
+     */
+    for (const m of touService.registerMeters) {
+      console.log(
+        "       " + m.meterNumber + ": total " + m.total + " kWh against " +
+          touService.bucketSum + " on the dials — " +
+          (m.unattributed === 0
+            ? "reconciles"
+            : m.unattributed +
+              " kWh unattributed, outside the 1 kWh / 0.5% allowance, so a billing preview warns"),
+      );
+    }
+    console.log(
+      "       interval meter " + touService.intervalMeter + ": " + touService.intervals +
+        " hourly intervals over " + touService.fromDate + ".." + touService.toDate +
+        ", the window this cycle bills next (no registers, no programmed calendar)",
+    );
+
+    /*
+     * The roll-up runs through the real service, shelled out for the
+     * same reason provisioning is: this file is CommonJS. A classifier
+     * reimplemented here would be a second answer to "what period is
+     * this hour in", and the one that disagreed would be the one
+     * nobody ran.
+     */
+    try {
+      const out = execSync(
+        `"${TSX_BIN}" scripts/roll-up-intervals.ts --utility-id ${UID} ` +
+          `--meter ${touService.intervalMeter} --from ${touService.fromDate} --to ${touService.rollUpToDate}`,
+        { cwd: path.join(__dirname, "packages", "api"), stdio: "pipe" },
+      ).toString();
+      for (const line of out.trim().split("\n")) console.log("       " + line.trim());
+    } catch (err) {
+      console.log("       [warn] interval roll-up failed: " + (err.stderr?.toString().trim() || err.message));
+    }
   }
 
   const portalUsers = [

@@ -15,6 +15,10 @@ import { applyPerNodeLimits } from "./lib/queue-limits.js";
 import { findOrphanedSchedulers, SCHEDULER_REGISTRY } from "./lib/schedulers.js";
 import { startDlqMonitor, stopDlqMonitor } from "./workers/dlq-monitor.js";
 import {
+  buildIntervalCoverageWorker,
+  registerIntervalCoverageScheduler,
+} from "./workers/interval-coverage-worker.js";
+import {
   buildSuspensionWorker,
   registerSuspensionScheduler,
 } from "./workers/suspension-worker.js";
@@ -247,6 +251,11 @@ async function main(): Promise<void> {
   if (activeQueues.includes(QUEUE_NAMES.slaBreachSweep)) {
     activeWorkers.push(buildSlaBreachWorker());
     await registerSlaBreachScheduler();
+  }
+
+  if (activeQueues.includes(QUEUE_NAMES.intervalCoverage)) {
+    activeWorkers.push(buildIntervalCoverageWorker());
+    await registerIntervalCoverageScheduler();
   }
 
   if (activeQueues.includes(QUEUE_NAMES.auditRetention)) {

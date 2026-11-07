@@ -92,8 +92,6 @@ const readTypeTone = (type: string): { accent: string; label: string } => {
       return { accent: "var(--info)", label: "CORRECTED" };
     case "FINAL":
       return { accent: "var(--accent-tertiary)", label: "FINAL" };
-    case "AMI":
-      return { accent: "var(--accent-primary)", label: "AMI" };
     default:
       return { accent: "var(--text-secondary)", label: type };
   }

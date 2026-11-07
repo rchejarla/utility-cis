@@ -1,16 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { MoneyInput } from "./money-input";
+import { RequiredMark } from "@/components/ui/required-mark";
+import { UnitPicker, type UnitOptionGroup } from "./unit-picker";
 
 interface LookupValue {
   type: "lookup";
   by: string;
   table: Record<string, number>;
+  unit?: string;
 }
 
 interface Props {
   value: LookupValue | null;
   onChange: (value: LookupValue | null) => void;
+  unitOptions: UnitOptionGroup[];
 }
 
 /**
@@ -24,8 +29,12 @@ interface Props {
  * finite rate; if either is missing we emit `null` so the parent blocks
  * Save until the table is complete.
  */
-export function LookupEditor({ value, onChange }: Props) {
+export function LookupEditor({ value, onChange, unitOptions }: Props) {
   const [by, setBy] = useState<string>(value?.by ?? "meter_size");
+  // Carried through the same way the tiered editor carries its own: a
+  // save through this form used to drop it, and every seeded service
+  // charge priced by meter size is `unit: "MONTH"`.
+  const [unit, setUnit] = useState<string>(value?.unit ?? "");
   const [rows, setRows] = useState<Array<{ key: string; rate: string }>>(
     Object.entries(value?.table ?? {}).map(([k, v]) => ({
       key: k,
@@ -58,9 +67,15 @@ export function LookupEditor({ value, onChange }: Props) {
       }
       table[key] = r;
     }
-    onChange({ type: "lookup", by, table });
+    // Same rule as the flat and tiered editors.
+    if (!unit) {
+      onChange(null);
+      return;
+    }
+    const next: LookupValue = { type: "lookup", by, table, unit };
+    onChange(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [by, rows]);
+  }, [by, rows, unit]);
 
   const updateRow = (idx: number, field: "key" | "rate", v: string) =>
     setRows((prev) =>
@@ -86,8 +101,14 @@ export function LookupEditor({ value, onChange }: Props) {
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th style={thStyle}>Key (e.g. {`5/8"`})</th>
-            <th style={thStyle}>Rate</th>
+            <th style={thStyle}>
+              Key (e.g. {`5/8"`})
+              <RequiredMark />
+            </th>
+            <th style={thStyle}>
+              Rate
+              <RequiredMark />
+            </th>
             <th style={{ ...thStyle, width: 80 }} />
           </tr>
         </thead>
@@ -97,6 +118,8 @@ export function LookupEditor({ value, onChange }: Props) {
               <td style={tdStyle}>
                 <input
                   type="text"
+                  aria-label={`Key for row ${idx + 1}`}
+                  required
                   value={r.key}
                   onChange={(e) => updateRow(idx, "key", e.target.value)}
                   placeholder={`e.g. 5/8"`}
@@ -104,12 +127,13 @@ export function LookupEditor({ value, onChange }: Props) {
                 />
               </td>
               <td style={tdStyle}>
-                <input
-                  type="number"
-                  step="0.01"
+                <MoneyInput
                   value={r.rate}
-                  onChange={(e) => updateRow(idx, "rate", e.target.value)}
-                  style={inputStyle}
+                  onChange={(v) => updateRow(idx, "rate", v)}
+                  ariaLabel={`Rate for ${r.key.trim() || `row ${idx + 1}`}`}
+                  step="0.01"
+                  style={{ padding: 6 }}
+                  required
                 />
               </td>
               <td style={tdStyle}>
@@ -128,6 +152,9 @@ export function LookupEditor({ value, onChange }: Props) {
       <button type="button" onClick={addRow} style={addButtonStyle}>
         + Add Row
       </button>
+      <div style={{ marginTop: 12, maxWidth: 240 }}>
+        <UnitPicker value={unit} onChange={setUnit} groups={unitOptions} required />
+      </div>
     </div>
   );
 }

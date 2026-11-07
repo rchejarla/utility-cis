@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { MoneyInput } from "./money-input";
+import { RequiredMark } from "@/components/ui/required-mark";
+import { UnitPicker, type UnitOptionGroup } from "./unit-picker";
 
 interface Tier {
   to: number | null;
@@ -10,11 +13,23 @@ interface Tier {
 interface TieredValue {
   type: "tiered";
   tiers: Tier[];
+  unit?: string;
+  /**
+   * Edited nowhere in this form and carried through untouched. It
+   * scales each tier's threshold by the days actually billed (Bozeman
+   * Req 138), so dropping it silently turns a prorated allowance back
+   * into a full period's and changes what the customer owes. It used
+   * to be dropped: this editor read only `tiers` and re-emitted only
+   * `tiers`, so a save through the form erased everything else in the
+   * shape.
+   */
+  standard_days?: number;
 }
 
 interface Props {
   value: TieredValue | null;
   onChange: (value: TieredValue | null) => void;
+  unitOptions: UnitOptionGroup[];
 }
 
 /**
@@ -26,13 +41,18 @@ interface Props {
  * non-numeric `to`) collapses the whole value to `null` so the parent
  * blocks Save until the user fills the gap.
  */
-export function TieredEditor({ value, onChange }: Props) {
+export function TieredEditor({ value, onChange, unitOptions }: Props) {
   const [tiers, setTiers] = useState<Array<{ to: string; rate: string }>>(
     value?.tiers.map((t) => ({
       to: t.to === null ? "" : String(t.to),
       rate: String(t.rate),
     })) ?? [{ to: "", rate: "" }],
   );
+  const [unit, setUnit] = useState<string>(value?.unit ?? "");
+  // Read once, from the value this editor opened on: it has no input,
+  // so nothing in the form can change it, and re-reading `value` would
+  // fight the parent's re-render of what we just emitted.
+  const [standardDays] = useState<number | undefined>(value?.standard_days);
 
   useEffect(() => {
     const parsed: Tier[] = [];
@@ -53,10 +73,18 @@ export function TieredEditor({ value, onChange }: Props) {
       onChange(null);
       return;
     }
-    onChange({ type: "tiered", tiers: parsed });
+    // Same rule as the flat editor: the bill line has to name what it
+    // counted, so a blank unit holds Save.
+    if (!unit) {
+      onChange(null);
+      return;
+    }
+    const next: TieredValue = { type: "tiered", tiers: parsed, unit };
+    if (standardDays !== undefined) next.standard_days = standardDays;
+    onChange(next);
     // onChange is stable; only re-emit when the rows change
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tiers]);
+  }, [tiers, unit, standardDays]);
 
   const updateRow = (idx: number, field: "to" | "rate", v: string) => {
     setTiers((prev) =>
@@ -74,7 +102,10 @@ export function TieredEditor({ value, onChange }: Props) {
         <thead>
           <tr>
             <th style={thStyle}>Up to (blank = unbounded)</th>
-            <th style={thStyle}>Rate</th>
+            <th style={thStyle}>
+              Rate
+              <RequiredMark />
+            </th>
             <th style={{ ...thStyle, width: 80 }} />
           </tr>
         </thead>
@@ -82,9 +113,11 @@ export function TieredEditor({ value, onChange }: Props) {
           {tiers.map((t, idx) => (
             <tr key={idx}>
               <td style={tdStyle}>
+                {/* A quantity of the priced thing — HCF, kWh — not money. */}
                 <input
                   type="number"
                   step="0.01"
+                  aria-label={`Up to, tier ${idx + 1}`}
                   value={t.to}
                   onChange={(e) => updateRow(idx, "to", e.target.value)}
                   placeholder="unbounded"
@@ -92,12 +125,12 @@ export function TieredEditor({ value, onChange }: Props) {
                 />
               </td>
               <td style={tdStyle}>
-                <input
-                  type="number"
-                  step="0.0001"
+                <MoneyInput
                   value={t.rate}
-                  onChange={(e) => updateRow(idx, "rate", e.target.value)}
-                  style={inputStyle}
+                  onChange={(v) => updateRow(idx, "rate", v)}
+                  ariaLabel={`Rate for tier ${idx + 1}`}
+                  style={{ padding: 6 }}
+                  required
                 />
               </td>
               <td style={tdStyle}>
@@ -116,6 +149,9 @@ export function TieredEditor({ value, onChange }: Props) {
       <button type="button" onClick={addRow} style={addButtonStyle}>
         + Add Tier
       </button>
+      <div style={{ marginTop: 12, maxWidth: 240 }}>
+        <UnitPicker value={unit} onChange={setUnit} groups={unitOptions} required />
+      </div>
     </div>
   );
 }

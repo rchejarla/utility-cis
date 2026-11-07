@@ -10,6 +10,9 @@
  * them. Tests import the named helpers explicitly.
  */
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+// The same list a provisioned tenant gets, so a test tenant looks like
+// one. See `periodInsertSql`.
+import { DEFAULT_TOU_PERIODS } from "@utility-cis/shared";
 import pg from "pg";
 import { runAsPlatform } from "../../lib/tenant-context.js";
 import { execSync } from "node:child_process";
@@ -225,6 +228,52 @@ function utilityInsertSql(ids: readonly string[]): string {
 }
 
 /**
+ * The TOU periods a provisioned tenant gets.
+ *
+ * Peak codes became the tenant's on 2026-11-04 and `tou_slot.peak_code`
+ * keys to them, so a tenant with none cannot be given a single hour of
+ * a tariff — the write is refused with a 23503 naming a constraint,
+ * which tells a test author nothing about their test.
+ *
+ * Here as well as in `ensureUtilities` because these are two separate
+ * doors: this one runs raw SQL through `prisma db execute` before any
+ * client exists, and that one upserts through a client for files that
+ * boot their own container.
+ */
+function periodInsertSql(ids: readonly string[]): string {
+  return ids
+    .flatMap((id) =>
+      DEFAULT_TOU_PERIODS.map(
+        (period, index) =>
+          `INSERT INTO tou_period (id, utility_id, peak_code, label, sort_order, created_at, updated_at) ` +
+          `VALUES (gen_random_uuid(), '${id}', '${period.peakCode}', '${period.label}', ${index}, now(), now()) ` +
+          `ON CONFLICT (utility_id, peak_code) DO NOTHING;`,
+      ),
+    )
+    .join("\n");
+}
+
+/**
+ * Enable modules for each tenant.
+ *
+ * `ON CONFLICT DO NOTHING` because several files still enable their own
+ * by hand; those loops are now redundant rather than wrong, and a file
+ * may keep one without breaking.
+ */
+function moduleInsertSql(ids: readonly string[], moduleKeys: readonly string[]): string {
+  return ids
+    .flatMap((id) =>
+      moduleKeys.map(
+        (key) =>
+          `INSERT INTO utility_module (id, utility_id, module_key, is_enabled, enabled_at) ` +
+          `VALUES (gen_random_uuid(), '${id}', '${key}', true, now()) ` +
+          `ON CONFLICT (utility_id, module_key) DO NOTHING;`,
+      ),
+    )
+    .join("\n");
+}
+
+/**
  * Create the utility rows a test's tenant ids refer to.
  *
  * For the files that boot their own container rather than calling
@@ -241,6 +290,70 @@ export async function ensureUtilities(prisma: any, ids: readonly string[]): Prom
         update: {},
         create: { id, name: `Test Utility ${id.slice(-4)}` },
       });
+      /*
+       * The TOU periods a provisioned tenant gets, because a test
+       * tenant has to look like one.
+       *
+       * Peak codes became the tenant's on 2026-11-04, and
+       * `tou_slot.peak_code` keys to them — so a test writing a span
+       * for a tenant with no periods is refused with a 23503 naming a
+       * constraint rather than anything about the test. The
+       * `tenant_peak_codes` migration seeded every utility that existed
+       * when it ran, which in a fresh testcontainer is none, and
+       * `provision-tenant.ts` seeds the ones created through the
+       * product. This is the third door into existence.
+       */
+      for (const [index, period] of DEFAULT_TOU_PERIODS.entries()) {
+        await prisma.touPeriod.upsert({
+          where: { utilityId_peakCode: { utilityId: id, peakCode: period.peakCode } },
+          update: {},
+          create: {
+            utilityId: id,
+            peakCode: period.peakCode,
+            label: period.label,
+            sortOrder: index,
+          },
+        });
+      }
+    }
+  });
+}
+
+/**
+ * Delete everything `provisionTenant` creates, then the utility itself.
+ *
+ * Every row provisioning writes carries `utility_id` with ON DELETE
+ * RESTRICT, so a test that provisions a tenant and later deletes the
+ * utility has to clear them all — and eight files were each keeping
+ * their own copy of that list. The copies went stale the moment
+ * provisioning grew a row type: the TOU periods arrived on 2026-11-04
+ * and none of the eight learned about them, so each file's second
+ * `beforeEach` failed on `tou_period_utility_id_fkey` and took the rest
+ * of the file with it. The season set would have been the second time.
+ *
+ * One list, next to `ensureUtilities`, which is the other half of the
+ * same knowledge. Order matters: `user_role` before `cis_user`, and the
+ * seasons before the set that owns them — that key cascades, but
+ * `season.utility_id` does not, so the utility delete would fail on
+ * `season_utility_id_fkey` with the set gone and its seasons left.
+ *
+ * It does not touch rows a *test* wrote. A file that seeds meters or
+ * bills still clears its own, before calling this.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function deprovisionTenants(prisma: any, ids: readonly string[]): Promise<void> {
+  await asPlatform(async () => {
+    for (const id of ids) {
+      await prisma.userRole.deleteMany({ where: { utilityId: id } });
+      await prisma.cisUser.deleteMany({ where: { utilityId: id } });
+      await prisma.role.deleteMany({ where: { utilityId: id } });
+      await prisma.utilityModule.deleteMany({ where: { utilityId: id } });
+      // Provisioning writes an audit row for a utility it created.
+      await prisma.auditLog.deleteMany({ where: { utilityId: id } });
+      await prisma.touPeriod.deleteMany({ where: { utilityId: id } });
+      await prisma.season.deleteMany({ where: { utilityId: id } });
+      await prisma.seasonSet.deleteMany({ where: { utilityId: id } });
+      await prisma.utility.deleteMany({ where: { id } });
     }
   });
 }
@@ -272,7 +385,31 @@ export async function ensureUtilities(prisma: any, ids: readonly string[]): Prom
  * uses rather than a parallel one that can drift from it.
  */
 export async function bootPostgres(
-  opts: { utilities?: readonly string[] } = {},
+  opts: {
+    utilities?: readonly string[];
+    /**
+     * Modules to enable for those tenants. **Defaults to none**, which
+     * is not the default it should have.
+     *
+     * `provisionTenant` enables every key for a real tenant, and this
+     * ought to match it — then adding a key to `MODULES` could not
+     * break a fixture. It broke 72 tests across two files when
+     * `billing` landed on 2026-11-03, as 403s that read like a product
+     * fault; the symptom is `MODULE_DISABLED` naming the key, which is
+     * worth knowing before diagnosing anything else.
+     *
+     * Defaulting to all was tried and reverted the same day: 33 files
+     * create their own `utility_module` rows and over half do it with
+     * an unguarded `create`, so the default made them fail on the
+     * unique constraint instead. Fixing that is a sweep of those files
+     * plus a full integration run to prove it, which is why this is a
+     * knob and not yet the default.
+     *
+     * Until then: a file that gates on a module must enable it, and a
+     * new key means grepping for the narrow lists that predate it.
+     */
+    modules?: readonly string[];
+  } = {},
 ): Promise<BootedContainer> {
   const container = await new PostgreSqlContainer("timescale/timescaledb:latest-pg16")
     .withDatabase("utility_cis_test")
@@ -325,12 +462,18 @@ export async function bootPostgres(
   // only just set DATABASE_URL, and the caller imports `lib/prisma.js`
   // afterwards precisely so the singleton reads it.
   if (opts.utilities && opts.utilities.length > 0) {
+    const moduleKeys = opts.modules ?? [];
     // No `--schema`: Prisma 7 removed the flag from `db execute`, which
     // now takes the schema path from prisma.config.ts.
     execSync("pnpm prisma db execute --stdin", {
       cwd: SHARED_DIR,
       env: { ...process.env, DATABASE_URL: dbUrl },
-      input: utilityInsertSql(opts.utilities),
+      input:
+        utilityInsertSql(opts.utilities) +
+        "\n" +
+        periodInsertSql(opts.utilities) +
+        "\n" +
+        moduleInsertSql(opts.utilities, moduleKeys),
       stdio: ["pipe", "pipe", "pipe"],
     });
   }
@@ -401,6 +544,13 @@ const RESET_TABLES = [
   "service_point_meter",
   "service_point",
   "service_agreement",
+  /*
+   * `meter_data_exception` cascades from `meter`, so TRUNCATE would
+   * reach it anyway. Named because a reader looking for where the
+   * coverage sweep's rows are cleared should find them here rather
+   * than work out that the cascade covers it.
+   */
+  "meter_data_exception",
   "meter",
   "account",
   "premise",
@@ -419,7 +569,7 @@ const RESET_TABLES = [
    * The rate engine's tenant configuration (spec 26). Three roots, and
    * CASCADE takes the rest: `season_set` → `season`, `tou_calendar` →
    * its periods, day types, weekday rows, spans and overrides, and
-   * `tou_holiday_list` → its rules.
+   * `tou_holiday_set` → its dates.
    *
    * `season_set` was missing from this list from the day it shipped,
    * which leaked a season set from one test into the next — and the
@@ -427,12 +577,12 @@ const RESET_TABLES = [
    * on `season_set_name_per_tenant`, or worse, its lookup of "the set
    * in force" quietly finds the previous test's.
    *
-   * `tou_calendar` is listed before `season_set` because it references
-   * it with RESTRICT. CASCADE would reach it anyway; naming it is
+   * `tou_calendar` is listed before both sets because it references
+   * them with RESTRICT. CASCADE would reach it anyway; naming it is
    * cheaper to read than relying on that.
    */
   "tou_calendar",
-  "tou_holiday_list",
+  "tou_holiday_set",
   "season_set",
 ].join(", ");
 

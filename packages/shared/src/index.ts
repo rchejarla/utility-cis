@@ -1,4 +1,5 @@
 export * from "./types/api";
+export * from "./types/billing-run";
 export * from "./validators/index";
 export * from "./events/index";
 export * from "./modules/constants";

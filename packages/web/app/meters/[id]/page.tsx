@@ -3,6 +3,14 @@
 import { useState, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
 import type { FieldDefinition } from "@utility-cis/shared";
+/*
+ * Both vocabularies come from shared now. This page offered `OTHER` as
+ * a type and `INACTIVE`/`FAULTY` as statuses — none of which the API
+ * has ever accepted — while `DEFECTIVE` and `PENDING_INSTALL`, which it
+ * does, were missing. A dropdown of values the API refuses is a form
+ * that cannot be saved, and nothing on the screen says why.
+ */
+import { METER_STATUSES, METER_TYPES } from "@utility-cis/shared";
 import { PageHeader } from "@/components/ui/page-header";
 import { Tabs } from "@/components/ui/tabs";
 import { NotesTab } from "@/components/ui/notes-tab";
@@ -44,8 +52,6 @@ interface Meter {
   }>;
 }
 
-const METER_TYPES = ["AMI", "AMR", "MANUAL", "SMART", "OTHER"];
-const METER_STATUSES = ["ACTIVE", "INACTIVE", "REMOVED", "FAULTY"];
 
 const fieldStyle = {
   display: "grid" as const,

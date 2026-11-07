@@ -30,7 +30,7 @@
 
 import type { PrismaClient } from "@utility-cis/shared/src/generated/prisma";
 import type { SeasonDefinition } from "../rate-engine/seasons.js";
-import { observedDays, type HolidayObservance, type HolidayRule, type IsoWeekday } from "../rate-engine/holidays.js";
+import type { IsoWeekday } from "../rate-engine/tou-calendar.js";
 import type { TouCalendarDefinition } from "../rate-engine/tou-calendar.js";
 import type { ClockBasis } from "../rate-engine/tou-clock.js";
 
@@ -46,7 +46,7 @@ export interface LoadedTouCalendar {
   definition: TouCalendarDefinition;
   /**
    * Observed holiday dates (`YYYY-MM-DD`) for every year the period
-   * touches. Empty when the calendar names no holiday list.
+   * touches. Empty when the calendar names no holiday set.
    */
   observedHolidays: Set<string>;
 }
@@ -54,6 +54,110 @@ export interface LoadedTouCalendar {
 export type TouCalendarLoad =
   | { ok: true; calendar: LoadedTouCalendar }
   | { ok: false; problem: string };
+
+/**
+ * One include for both loads.
+ *
+ * The rating path resolves a version from a name; the interval roll-up
+ * asks for one by id. Two copies of this would be two chances for a
+ * calendar to be read differently by the thing that classifies usage
+ * and the thing that prices it.
+ */
+const CALENDAR_INCLUDE = {
+  seasonSet: { include: { seasons: { orderBy: { sortOrder: "asc" } } } },
+  dayTypes: {
+    orderBy: { sortOrder: "asc" },
+    include: { weekdays: { orderBy: { isoWeekday: "asc" } } },
+  },
+  /*
+   * The slot carries its own peak code, so rating needs no join to the
+   * tenant's period list at all — and a published calendar keeps
+   * meaning what it meant even if that list is edited.
+   */
+  slots: {
+    orderBy: { startMinute: "asc" },
+    include: { dayType: { select: { dayTypeCode: true } } },
+  },
+  overrides: { include: { dayType: { select: { dayTypeCode: true } } } },
+} as const;
+
+/** What `CALENDAR_INCLUDE` produces, for the shared mapper below. */
+type TouCalendarRow = TouCalendarDefinitionRows & {
+  id: string;
+  name: string;
+  effectiveDate: Date;
+  timeZone: string;
+  clockBasis: string;
+  touHolidaySetId: string | null;
+  seasonSet: {
+    seasons: Array<{
+      seasonCode: string;
+      startMonth: number;
+      startDay: number;
+      endMonth: number;
+      endDay: number;
+    }>;
+  };
+};
+
+/**
+ * The fields `toTouCalendarDefinition` reads.
+ *
+ * Declared structurally rather than taken from Prisma's generated
+ * types, because this is the seam between the database and the pure
+ * engine: any query whose include supplies these may use the mapper.
+ * Two do — the rating load below, and the calendar editor's own query,
+ * which additionally selects the ids, labels and sort orders the engine
+ * has no use for.
+ *
+ * That shared mapper is the point. The editor's validation, spot check
+ * and day preview have to answer exactly what rating would answer, and
+ * two copies of twenty lines of mapping is how a screen ends up
+ * confirming a calendar the engine reads differently.
+ */
+export interface TouCalendarDefinitionRows {
+  dayTypes: Array<{
+    dayTypeCode: string;
+    weekdays: Array<{ isoWeekday: number }>;
+  }>;
+  /*
+   * No `periods`. Peak codes belong to the tenant since 2026-11-04, and
+   * a calendar's own periods are the distinct codes its slots carry —
+   * so the slot is the only row the engine needs to be told about.
+   */
+  slots: Array<{
+    seasonCode: string;
+    startMinute: number;
+    endMinute: number;
+    dayType: { dayTypeCode: string };
+    peakCode: string;
+  }>;
+  overrides: Array<{ overrideDate: Date; dayType: { dayTypeCode: string } }>;
+}
+
+/** Rows → the pure definition the engine classifies with. */
+export function toTouCalendarDefinition(row: TouCalendarDefinitionRows): TouCalendarDefinition {
+  return {
+    dayTypes: row.dayTypes.map((d) => ({
+      dayTypeCode: d.dayTypeCode,
+      weekdays: d.weekdays.map((w) => w.isoWeekday as IsoWeekday),
+    })),
+    slots: row.slots.map((s) => ({
+      seasonCode: s.seasonCode,
+      dayTypeCode: s.dayType.dayTypeCode,
+      startMinute: s.startMinute,
+      endMinute: s.endMinute,
+      peakCode: s.peakCode,
+    })),
+    overrides: row.overrides.map((o) => ({
+      // `@db.Date` comes back as UTC midnight, so the ISO date is the
+      // date — no local getters, which would shift it a day west of
+      // Greenwich.
+      date: o.overrideDate.toISOString().slice(0, 10),
+      dayTypeCode: o.dayType.dayTypeCode,
+    })),
+  };
+}
 
 /**
  * Load the calendar in force for a period.
@@ -86,19 +190,7 @@ export async function loadTouCalendar(
       effectiveDate: { lte: period.startDate },
     },
     orderBy: { effectiveDate: "desc" },
-    include: {
-      seasonSet: { include: { seasons: { orderBy: { sortOrder: "asc" } } } },
-      periods: { orderBy: { sortOrder: "asc" } },
-      dayTypes: {
-        orderBy: { sortOrder: "asc" },
-        include: { weekdays: { orderBy: { isoWeekday: "asc" } } },
-      },
-      slots: {
-        orderBy: { startMinute: "asc" },
-        include: { dayType: { select: { dayTypeCode: true } }, period: { select: { peakCode: true } } },
-      },
-      overrides: { include: { dayType: { select: { dayTypeCode: true } } } },
-    },
+    include: CALENDAR_INCLUDE,
   });
 
   if (!row) {
@@ -118,93 +210,109 @@ export async function loadTouCalendar(
       : { ok: false, problem: `There is no TOU calendar named "${name}".` };
   }
 
-  const definition: TouCalendarDefinition = {
-    dayTypes: row.dayTypes.map((d) => ({
-      dayTypeCode: d.dayTypeCode,
-      weekdays: d.weekdays.map((w) => w.isoWeekday as IsoWeekday),
-      isHoliday: d.isHoliday,
-    })),
-    peakCodes: row.periods.map((p) => p.peakCode),
-    slots: row.slots.map((s) => ({
-      seasonCode: s.seasonCode,
-      dayTypeCode: s.dayType.dayTypeCode,
-      startMinute: s.startMinute,
-      endMinute: s.endMinute,
-      peakCode: s.period.peakCode,
-    })),
-    overrides: row.overrides.map((o) => ({
-      // `@db.Date` comes back as UTC midnight, so the ISO date is the
-      // date — no local getters, which would shift it a day west of
-      // Greenwich.
-      date: o.overrideDate.toISOString().slice(0, 10),
-      dayTypeCode: o.dayType.dayTypeCode,
-    })),
-  };
+  return { ok: true, calendar: await toLoadedCalendar(prisma, utilityId, row, period) };
+}
 
+/**
+ * The same calendar, named by id instead of by name and date.
+ *
+ * Rating resolves a version from a name and the period, because that is
+ * what a tariff asks for. The interval roll-up does not: it classifies
+ * usage for a schedule that already names one exact version, and
+ * TOU-CAL-5 is the reason — a published schedule cannot follow a
+ * calendar republished with different hours, so re-rating that period
+ * must reach the same version it reached the first time.
+ *
+ * Published-only, and deliberately without an effective-date filter: a
+ * schedule may be published against a calendar that takes effect later
+ * in its life, and the schedule's own version is what decides when
+ * those hours apply.
+ */
+export async function loadTouCalendarById(
+  prisma: PrismaClient,
+  args: { utilityId: string; id: string; period: { startDate: Date; endDate: Date } },
+): Promise<TouCalendarLoad> {
+  const { utilityId, id, period } = args;
+
+  const row = await prisma.touCalendar.findFirst({
+    where: { utilityId, id, publishedAt: { not: null } },
+    include: CALENDAR_INCLUDE,
+  });
+
+  if (!row) {
+    const draft = await prisma.touCalendar.findFirst({
+      where: { utilityId, id },
+      select: { name: true },
+    });
+    return draft
+      ? {
+          ok: false,
+          problem: `TOU calendar "${draft.name}" is still a draft, so its hours can change. Usage cannot be classified against it.`,
+        }
+      : { ok: false, problem: "That TOU calendar does not exist." };
+  }
+
+  return { ok: true, calendar: await toLoadedCalendar(prisma, utilityId, row, period) };
+}
+
+/** Shared by both loads, so the two cannot read a calendar differently. */
+async function toLoadedCalendar(
+  prisma: PrismaClient,
+  utilityId: string,
+  row: TouCalendarRow,
+  period: { startDate: Date; endDate: Date },
+): Promise<LoadedTouCalendar> {
   return {
-    ok: true,
-    calendar: {
-      id: row.id,
-      name: row.name,
-      effectiveDate: row.effectiveDate,
-      timeZone: row.timeZone,
-      clockBasis: row.clockBasis as ClockBasis,
-      seasons: row.seasonSet.seasons.map((s) => ({
-        seasonCode: s.seasonCode,
-        startMonth: s.startMonth,
-        startDay: s.startDay,
-        endMonth: s.endMonth,
-        endDay: s.endDay,
-      })),
-      definition,
-      observedHolidays: await loadObservedHolidays(prisma, utilityId, row.touHolidayListId, period),
-    },
+    id: row.id,
+    name: row.name,
+    effectiveDate: row.effectiveDate,
+    timeZone: row.timeZone,
+    clockBasis: row.clockBasis as ClockBasis,
+    seasons: row.seasonSet.seasons.map((s) => ({
+      seasonCode: s.seasonCode,
+      startMonth: s.startMonth,
+      startDay: s.startDay,
+      endMonth: s.endMonth,
+      endDay: s.endDay,
+    })),
+    definition: toTouCalendarDefinition(row),
+    observedHolidays: await loadObservedHolidays(prisma, utilityId, row.touHolidaySetId, period),
   };
 }
 
 /**
- * The holiday dates a period needs, resolved from the rules.
+ * The holiday dates a period touches.
  *
- * **Every year the period touches**, not just its start year: a
- * December-to-January billing period that resolved only 2026 would
- * price New Year's Day 2027 as an ordinary weekday — at peak, on a day
- * the tariff says is off-peak, with nothing raised.
+ * A read now, not a resolution. They were computed from rules — "4
+ * July, nearest weekday" — which meant the dates a bill priced against
+ * existed nowhere until something worked them out, and nobody could
+ * check them without a preview built for the purpose. They are rows.
  *
- * The list is read by id rather than through a relation because the key
- * from a calendar to its list is nullable and composite, which Prisma
+ * Filtered to the period rather than loaded whole: a set covers a
+ * horizon of years and a bill covers a month.
+ *
+ * The set is read by id rather than through a relation because the key
+ * from a calendar to its set is nullable and composite, which Prisma
  * cannot express; the foreign key itself is in the migration.
  */
-async function loadObservedHolidays(
+export async function loadObservedHolidays(
   prisma: PrismaClient,
   utilityId: string,
-  touHolidayListId: string | null,
+  touHolidaySetId: string | null,
   period: { startDate: Date; endDate: Date },
 ): Promise<Set<string>> {
-  if (!touHolidayListId) return new Set();
+  if (!touHolidaySetId) return new Set();
 
-  const rules = await prisma.touHolidayRule.findMany({
-    where: { utilityId, touHolidayListId },
-    orderBy: [{ month: "asc" }, { code: "asc" }],
+  const rows = await prisma.touHoliday.findMany({
+    where: {
+      utilityId,
+      touHolidaySetId,
+      holidayDate: { gte: period.startDate, lte: period.endDate },
+    },
+    select: { holidayDate: true },
   });
 
-  const asRules: HolidayRule[] = rules.map((r) => ({
-    code: r.code,
-    label: r.label,
-    kind: r.kind as HolidayRule["kind"],
-    month: r.month,
-    day: r.day ?? undefined,
-    weekday: (r.weekday ?? undefined) as IsoWeekday | undefined,
-    nth: r.nth ?? undefined,
-    observance: r.observance as HolidayObservance,
-  }));
-
-  const dates = new Set<string>();
-  for (
-    let year = period.startDate.getUTCFullYear();
-    year <= period.endDate.getUTCFullYear();
-    year++
-  ) {
-    for (const day of observedDays(asRules, year)) dates.add(day);
-  }
-  return dates;
+  // `@db.Date` comes back as UTC midnight, so the ISO date is the date
+  // — no local getters, which would shift it a day west of Greenwich.
+  return new Set(rows.map((r) => r.holidayDate.toISOString().slice(0, 10)));
 }

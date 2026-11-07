@@ -114,7 +114,9 @@ export const MODULES = [
   "audit_log",       // AuditLog (VIEW only)
   "attachments",     // Attachment (cross-entity)
   "theme",           // UtilityTheme, UserPreference
-  "settings",        // User management, Role management, system config
+  "settings",        // System config. NOT user/role management — see below
+  "tenant_users",    // User management, Role management
+  "billing",         // Billing runs, posting, delivery; the cross-account bill list
 ] as const;
 ```
 
@@ -350,20 +352,20 @@ answer arrives.
 
 ### Settings Page (`/settings`)
 
-Two tabs: **Users** and **Roles**. Only visible to users with `settings:VIEW`.
+Two tabs: **Users** and **Roles**. Only visible to users with `tenant_users:VIEW`.
 
 ### Users Tab
 
 - DataTable: Name, Email, Role (badge), Status (Active/Inactive), Last Login
-- "Add User" button (settings:CREATE): inline form — email, name, role dropdown, isActive
-- Inline edit (settings:EDIT): change role, toggle active status
+- "Add User" button (tenant_users:CREATE): inline form — email, name, role dropdown, isActive
+- Inline edit (tenant_users:EDIT): change role, toggle active status
 - Search by name/email
 - No password management — SSO handles authentication
 
 ### Roles Tab
 
 - DataTable: Name, Description, System (badge), Users Count
-- "Add Role" button (settings:CREATE): opens role editor
+- "Add Role" button (tenant_users:CREATE): opens role editor
 - System roles: viewable but not deletable
 - Custom roles: full CRUD
 
@@ -391,20 +393,45 @@ Meters               ✓        □        □        □
 
 Seeded on tenant creation (`is_system: true`):
 
-| Role | customers | premises | meters | accounts | agreements | commodities | rate_schedules | billing_cycles | delinquency | audit_log | attachments | theme | settings |
-|------|-----------|----------|--------|----------|------------|-------------|----------------|----------------|-------------|-----------|-------------|-------|----------|
-| **System Admin** | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | V | VCED | VCED | VCED |
-| **Utility Admin** | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | V | VCED | VCED | V |
-| **CSR** | VCE | VCE | V | VCE | VCE | V | V | V | **VC** | V | VCE | — | — |
-| **Field Technician** | V | VE | VE | V | V | V | — | — | — | V | VCE | — | — |
-| **Read-Only** | V | V | V | V | V | V | V | V | V | V | V | — | — |
+| Role | customers | premises | meters | accounts | **billing** | agreements | rate_schedules | delinquency | audit_log | **tenant_profile** | **tenant_users** | settings |
+|------|-----------|----------|--------|----------|-------------|------------|----------------|-------------|-----------|--------------------|------------------|----------|
+| **System Admin** | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | V | VCED | VCED | VCED |
+| **Utility Admin** | VCED | VCED | VCED | VCED | VCED | VCED | VCED | VCED | V | VCED | VCED | V |
+| **CSR** | VCE | VCE | V | VCE | **V** | VCE | V | **VC** | V | — | — | — |
+| **Field Technician** | V | VE | VE | V | — | V | — | — | V | — | — | — |
+| **Read-Only** | V | V | V | V | V | V | V | V | V | V | V | — |
 
 V=VIEW, C=CREATE, E=EDIT, D=DELETE, —=no access
 
-The table is not the whole matrix — `everyModule()` gives both admin
-roles every module, and Read-Only gets VIEW on all but `settings`,
-`theme` and the portal. The columns shown are the ones where the roles
-differ meaningfully.
+**`role-presets.ts` is the source of truth; this is a summary and is
+maintained by hand.** It cannot be otherwise without 33 columns, so it
+shows the keys where a role's authority is most often misread — and it
+has drifted before: the CSR had no `delinquency` key at all until
+2026-10-29, and the three bold columns were missing on 2026-11-03 while
+two of them were the keys being got wrong.
+
+`everyModule()` gives both admin roles every module, so an absent
+column means VCED for them; Read-Only gets VIEW on all but `settings`,
+`theme` and the portal. `role-presets.test.ts` guards the grants
+themselves, and `presetDrift` reports a tenant whose copy of a role has
+since been edited.
+
+The three added on 2026-11-03 are the keys a menu review found were not
+doing what their names said:
+
+- **`billing`** — running a cycle, posting, delivery, documents, and the
+  cross-account bill list. It was `accounts:EDIT`, the verb that edits a
+  mailing address, so every CSR could bill the cycle and send the bills.
+  A CSR keeps VIEW: reading a bill is counter work.
+- **`tenant_users`** — staff users and roles. The APIs gated on
+  `settings`, which Utility Admin holds VIEW-only, so that role could
+  not create a user; and no route enforced `tenant_users` at all while
+  two menus named it.
+- **`tenant_profile`** — the tenant's own configuration, which now
+  includes bill messages, custom fields, suspension types and the
+  premise / account / measure type lists. Those writes answered to
+  `settings` or to an operational key, so a Field Technician holding
+  `premises:EDIT` for field work could rewrite the premise type list.
 
 **The CSR's `delinquency: VC` was added 2026-10-29**, with payment plans
 slice 1. It had **no `delinquency` key at all** — not VIEW — so the role
@@ -428,16 +455,53 @@ migration.
 | Method | Path | Permission | Description |
 |--------|------|------------|-------------|
 | GET | /api/v1/auth/me | (authenticated) | Get current user permissions + modules, and which tenant this is |
-| GET | /api/v1/users | settings:VIEW | List users |
-| POST | /api/v1/users | settings:CREATE | Create user |
-| GET | /api/v1/users/:id | settings:VIEW | Get user detail |
-| PATCH | /api/v1/users/:id | settings:EDIT | Update user (role, active) |
-| GET | /api/v1/roles | settings:VIEW | List roles |
-| POST | /api/v1/roles | settings:CREATE | Create role |
-| GET | /api/v1/roles/:id | settings:VIEW | Get role detail |
-| PATCH | /api/v1/roles/:id | settings:EDIT | Update role permissions |
-| DELETE | /api/v1/roles/:id | settings:DELETE | Delete custom role |
+| GET | /api/v1/users | tenant_users:VIEW | List users |
+| POST | /api/v1/users | tenant_users:CREATE | Create user |
+| GET | /api/v1/users/:id | tenant_users:VIEW | Get user detail |
+| PATCH | /api/v1/users/:id | tenant_users:EDIT | Update user (role, active) |
+| GET | /api/v1/roles | tenant_users:VIEW | List roles |
+| POST | /api/v1/roles | tenant_users:CREATE | Create role |
+| GET | /api/v1/roles/:id | tenant_users:VIEW | Get role detail |
+| PATCH | /api/v1/roles/:id | tenant_users:EDIT | Update role permissions |
+| DELETE | /api/v1/roles/:id | tenant_users:DELETE | Delete custom role |
 | GET | /api/v1/tenant-modules | settings:VIEW | List enabled modules |
+
+---
+
+## Two keys that moved (2026-11-03)
+
+A menu review measured what each preset role can actually reach and
+found two grants that were not what their names said.
+
+**`users` and `roles` answered to `settings`, not `tenant_users`.**
+`settings` is the single key that separates Utility Admin from System
+Admin — Utility Admin holds `settings: ["VIEW"]` — so a Utility Admin,
+whose description is "full access except system settings modification",
+**could not create a staff user or a role**. The page and the sidebar
+already gated on `tenant_users`, so Read-Only (which holds it) was shown
+a Users & Roles entry whose API answered 403. Both routes now use
+`tenant_users`: Utility Admin administers users, Read-Only reads the
+list, CSR and Field Technician reach neither.
+
+**Billing work answered to `accounts`.** `POST /billing-runs`,
+`/:id/post` and `/:id/send` required `accounts:EDIT`, the same verb that
+lets a CSR correct a mailing address — so every CSR could bill a whole
+cycle and send the bills. The new **`billing`** key covers the
+cross-account bill list, posting, delivery, documents and runs; CSR
+holds `billing:["VIEW"]`. An account's *own* bills stay on `accounts`,
+which is the record in front of the clerk — the same scope rule the
+audit log already uses for one entity's history.
+
+The maintenance routes for the three type-definition lists (premise,
+account, measure) moved from their operational keys to
+`tenant_profile`, where Custom Fields already sits. Reading them stays
+open, because every form that offers those types needs them; writing
+them was reachable with `premises:EDIT`, which a Field Technician holds
+for field work.
+
+**Adding a key costs a `utility_module` row per tenant and a place in
+each preset.** Nothing is backfilled: a tenant is reprovisioned or
+reseeded, and `presetDrift` leaves an edited role alone on purpose.
 
 ---
 

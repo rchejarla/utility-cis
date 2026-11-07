@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { MoneyInput } from "./money-input";
+import { RequiredMark } from "@/components/ui/required-mark";
+import { UnitPicker, type UnitOptionGroup } from "./unit-picker";
 
 interface FlatValue {
   type: "flat";
@@ -11,6 +14,7 @@ interface FlatValue {
 interface Props {
   value: FlatValue | null;
   onChange: (value: FlatValue | null) => void;
+  unitOptions: UnitOptionGroup[];
 }
 
 /**
@@ -21,7 +25,7 @@ interface Props {
  * full shape, otherwise we emit `null` so the parent treats pricing as
  * incomplete and disables Save.
  */
-export function FlatEditor({ value, onChange }: Props) {
+export function FlatEditor({ value, onChange, unitOptions }: Props) {
   const [rate, setRate] = useState<string>(
     value?.rate !== undefined ? String(value.rate) : "",
   );
@@ -33,8 +37,15 @@ export function FlatEditor({ value, onChange }: Props) {
       onChange(null);
       return;
     }
-    const v: FlatValue = { type: "flat", rate: r };
-    if (unit) v.unit = unit;
+    // A priced quantity with no unit is a bill line that prints a
+    // number and never names it, so the unit holds Save the same way
+    // the rate does. `pricingSchema` still allows its absence, for
+    // rows already stored and for the engine.
+    if (!unit) {
+      onChange(null);
+      return;
+    }
+    const v: FlatValue = { type: "flat", rate: r, unit };
     onChange(v);
     // onChange is stable in practice; only re-emit when the inputs change
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -43,24 +54,14 @@ export function FlatEditor({ value, onChange }: Props) {
   return (
     <div style={{ display: "flex", gap: 12 }}>
       <div style={{ flex: 1 }}>
-        <label style={labelStyle}>Rate</label>
-        <input
-          type="number"
-          step="0.0001"
-          value={rate}
-          onChange={(e) => setRate(e.target.value)}
-          style={inputStyle}
-        />
+        <span style={labelStyle}>
+          Rate
+          <RequiredMark />
+        </span>
+        <MoneyInput value={rate} onChange={setRate} ariaLabel="Rate" required />
       </div>
       <div style={{ flex: 1 }}>
-        <label style={labelStyle}>Unit (optional)</label>
-        <input
-          type="text"
-          value={unit}
-          onChange={(e) => setUnit(e.target.value)}
-          placeholder="e.g. HCF, kWh"
-          style={inputStyle}
-        />
+        <UnitPicker value={unit} onChange={setUnit} groups={unitOptions} required />
       </div>
     </div>
   );
@@ -73,14 +74,3 @@ const labelStyle = {
   marginBottom: 6,
 } as const;
 
-const inputStyle = {
-  width: "100%",
-  padding: 8,
-  border: "1px solid var(--border)",
-  borderRadius: "var(--radius)",
-  background: "var(--bg-deep)",
-  color: "var(--text-primary)",
-  fontSize: 13,
-  fontFamily: "inherit",
-  boxSizing: "border-box" as const,
-};

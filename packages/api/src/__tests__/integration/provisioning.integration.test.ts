@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { MODULES } from "@utility-cis/shared";
 import { runAsPlatform } from "../../lib/tenant-context.js";
-import { bootPostgres, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import { bootPostgres, deprovisionTenants, seedAsPlatform } from "./_effective-dating-fixtures.js";
 
 /**
  * Bringing a tenant into existence.
@@ -62,18 +62,10 @@ const listUtilities = (...args: Parameters<typeof svc.listUtilities>) =>
 beforeEach(() =>
   seedAsPlatform(async () => {
   const { prisma } = prismaImports;
-  // Children first: utility_id is ON DELETE RESTRICT.
-  for (const id of [NEW_TENANT, OTHER]) {
-    await prisma.userRole.deleteMany({ where: { utilityId: id } });
-    await prisma.cisUser.deleteMany({ where: { utilityId: id } });
-    await prisma.role.deleteMany({ where: { utilityId: id } });
-    await prisma.utilityModule.deleteMany({ where: { utilityId: id } });
-    // Audit rows too: `provisionTenant` writes them, `utility_id` is a
-    // foreign key with ON DELETE RESTRICT, and so the utility delete
-    // below fails on `audit_log_utility_id_fkey` without this.
-    await prisma.auditLog.deleteMany({ where: { utilityId: id } });
-    await prisma.utility.deleteMany({ where: { id } });
-  }
+  // Children first: utility_id is ON DELETE RESTRICT. The list of what
+  // provisioning creates lives with the fixtures, because eight other
+  // files need the same one and their private copies went stale.
+  await deprovisionTenants(prisma, [NEW_TENANT, OTHER]);
 }),
 );
 
@@ -91,7 +83,50 @@ describe("provisionTenant", () => {
         name: "City of Example",
         status: "ACTIVE",
       });
-  
+
+      /*
+       * The TOU price tiers. Without them `tou_slot.peak_code` has
+       * nothing to key to, so a freshly provisioned tenant could not be
+       * given a single hour of a time-of-use tariff — and the failure
+       * would arrive as a constraint name on somebody's first calendar.
+       */
+      const periods = await prisma.touPeriod.findMany({
+        where: { utilityId: NEW_TENANT },
+        orderBy: { sortOrder: "asc" },
+        select: { peakCode: true, label: true },
+      });
+      expect(periods).toEqual([
+        { peakCode: "off_peak", label: "Off-peak" },
+        { peakCode: "mid_peak", label: "Mid-peak" },
+        { peakCode: "peak", label: "On-peak" },
+      ]);
+
+      /*
+       * The seasons, published — the `season_sets` migration seeded
+       * these for every tenant that existed on 2026-11-02 and cannot
+       * reach one provisioned afterwards. Without a published set a
+       * `season` predicate resolves to no season and no TOU calendar can
+       * be created at all, since its spans key on a set's codes.
+       */
+      expect(result.seasonSetCreated).toBe(true);
+      const seasonSet = await prisma.seasonSet.findFirstOrThrow({
+        where: { utilityId: NEW_TENANT },
+        include: { seasons: { orderBy: { sortOrder: "asc" } } },
+      });
+      expect(seasonSet.name).toBe("Default");
+      expect(seasonSet.publishedAt).not.toBeNull();
+      expect(
+        seasonSet.seasons.map((s) => ({
+          seasonCode: s.seasonCode,
+          startMonth: s.startMonth,
+          startDay: s.startDay,
+          endMonth: s.endMonth,
+          endDay: s.endDay,
+        })),
+      ).toEqual([
+        { seasonCode: "summer", startMonth: 5, startDay: 1, endMonth: 10, endDay: 31 },
+        { seasonCode: "winter", startMonth: 11, startDay: 1, endMonth: 4, endDay: 30 },
+      ]);
     }));
 
   it("is a no-op when run twice", () =>
@@ -102,7 +137,13 @@ describe("provisionTenant", () => {
       await provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
       const second = await provisionTenant({ utilityId: NEW_TENANT, name: "City of Example" });
 
-      expect(second).toMatchObject({ created: false, modulesEnabled: 0, rolesCreated: 0 });
+      expect(second).toMatchObject({
+        created: false,
+        modulesEnabled: 0,
+        rolesCreated: 0,
+        seasonSetCreated: false,
+      });
+      expect(await prisma.seasonSet.count({ where: { utilityId: NEW_TENANT } })).toBe(1);
       expect(await prisma.role.count({ where: { utilityId: NEW_TENANT } })).toBe(6);
       expect(await prisma.utilityModule.count({ where: { utilityId: NEW_TENANT } })).toBe(
         MODULES.length,

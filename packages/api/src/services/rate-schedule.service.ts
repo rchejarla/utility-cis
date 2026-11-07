@@ -101,7 +101,89 @@ export async function getRateSchedule(id: string, utilityId: string) {
     orderBy: { version: "asc" },
   });
 
-  return { ...schedule, chain };
+  /*
+   * The named calendar, fetched rather than included: `touCalendarId`
+   * is a bare scalar column in `schema.prisma` with the key itself in
+   * the `rate_schedule_tou_calendar` migration, because Prisma cannot
+   * express an optional composite relation whose `utility_id` is not
+   * optional. So there is no relation to include — and the detail page
+   * needs the name, the effective date and whether it is published,
+   * which are what the publish gate will judge it on.
+   */
+  const touCalendar = schedule.touCalendarId
+    ? await prisma.touCalendar.findFirst({
+        where: { id: schedule.touCalendarId, utilityId },
+        select: { id: true, name: true, effectiveDate: true, publishedAt: true },
+      })
+    : null;
+
+  return { ...schedule, chain, touCalendar };
+}
+
+/**
+ * The calendar a schedule names has to be one of this tenant's.
+ *
+ * `rate_schedule_tou_calendar` is a tenant-scoped composite key, so
+ * another tenant's id is refused by the database anyway — as a P2003
+ * naming a constraint, which reaches the author as a 500. This is the
+ * same refusal in words, and it also catches the calendar deleted
+ * while the form was open.
+ *
+ * It does **not** require a published calendar. TOU-CAL-5 binds the
+ * published *schedule*, and the two are usually authored together, so
+ * that rule stays where it can be checked once and finally:
+ * `publishRateSchedule`.
+ */
+async function assertCalendarAssignable(utilityId: string, touCalendarId: string) {
+  const calendar = await prisma.touCalendar.findFirst({
+    where: { id: touCalendarId, utilityId },
+    select: { id: true },
+  });
+  if (!calendar) {
+    throw Object.assign(
+      new Error("That TOU calendar does not exist in this utility."),
+      { statusCode: 400, code: "TOU_CALENDAR_UNKNOWN" },
+    );
+  }
+}
+
+/**
+ * A code names one tariff across all of its versions.
+ *
+ * Without this the create fell through to
+ * `@@unique([utilityId, code, version])` and came back as a bare 409
+ * naming neither the code nor the field — and, worse, pointing nowhere:
+ * the way to get another version of an existing tariff is `revise`, not
+ * a second create. Every tariff a tenant already has is a code someone
+ * may plausibly type into the create form.
+ *
+ * The check is on the code alone, not on (code, version). The
+ * constraint includes the version, so a tariff already revised to
+ * version 2 leaves version 1 occupied and a create would collide on a
+ * row the author never sees — or, if a chain ever began above 1, not
+ * collide at all and leave one code owning two unrelated tariffs.
+ *
+ * Check-then-act, so two concurrent creates of one new code can both
+ * pass here; the unique constraint is still the authority and answers
+ * the loser. That is the right division: this exists to give the
+ * ordinary case an answer it can act on, not to be the guarantee.
+ */
+async function assertCodeFree(utilityId: string, code: string) {
+  const taken = await prisma.rateSchedule.findFirst({
+    where: { utilityId, code },
+    orderBy: { version: "desc" },
+    select: { version: true },
+  });
+  if (taken) {
+    throw Object.assign(
+      new Error(
+        `Rate schedule code ${code} already exists (version ${taken.version}). ` +
+          `A code names one tariff across all its versions — revise that schedule ` +
+          `to add a version, or choose a different code.`,
+      ),
+      { statusCode: 409, code: "RATE_SCHEDULE_CODE_TAKEN" },
+    );
+  }
 }
 
 export async function createRateSchedule(
@@ -110,6 +192,9 @@ export async function createRateSchedule(
   actorName: string,
   data: CreateRateScheduleInput
 ) {
+  await assertCodeFree(utilityId, data.code);
+  if (data.touCalendarId) await assertCalendarAssignable(utilityId, data.touCalendarId);
+
   return auditCreate(
     { utilityId, actorId, actorName, entityType: "RateSchedule" },
     EVENT_TYPES.RATE_SCHEDULE_CREATED,
@@ -124,6 +209,7 @@ export async function createRateSchedule(
           expirationDate: data.expirationDate ? new Date(data.expirationDate) : null,
           description: data.description,
           regulatoryRef: data.regulatoryRef,
+          touCalendarId: data.touCalendarId ?? null,
           version: 1,
         },
         include: fullInclude,
@@ -142,6 +228,8 @@ export async function reviseRateSchedule(
   data: ReviseRateScheduleInput
 ) {
   const predecessor = await prisma.rateSchedule.findUniqueOrThrow({ where: { id, utilityId } });
+
+  if (data.touCalendarId) await assertCalendarAssignable(utilityId, data.touCalendarId);
 
   const newEffectiveDate = new Date(data.effectiveDate);
   if (newEffectiveDate <= predecessor.effectiveDate) {
@@ -166,6 +254,16 @@ export async function reviseRateSchedule(
           expirationDate: data.expirationDate ? new Date(data.expirationDate) : null,
           description: data.description ?? predecessor.description,
           regulatoryRef: data.regulatoryRef ?? predecessor.regulatoryRef,
+          /*
+           * Carried forward, like everything else a revision does not
+           * change — but `null` has to mean "clear it", so this reads
+           * `undefined` rather than falsy. A revision that only
+           * reprices keeps the hours it was approved against; one
+           * that follows new hours names the new calendar version,
+           * which is the usual reason a TOU tariff is revised.
+           */
+          touCalendarId:
+            data.touCalendarId === undefined ? predecessor.touCalendarId : data.touCalendarId,
           version: predecessor.version + 1,
           supersedesId: id,
           // publishedAt left NULL — the new revision is a draft until
@@ -219,6 +317,61 @@ export async function reviseRateSchedule(
       await cacheDel(`rate-schedule:${utilityId}:${predecessor.code}`);
       return newSchedule;
     }
+  );
+}
+
+/**
+ * Name (or clear) the TOU calendar of a schedule that already exists
+ * (spec 26, TOU-UI-3).
+ *
+ * Its own endpoint because a rate schedule has no PATCH: it is
+ * immutable by design, and changes fork a new version through
+ * `revise`. This one field is the exception while the schedule is
+ * still a draft, so that an author can add the calendar after the
+ * charges — the order `assertTouPricingComplete` explicitly allows.
+ * Once published the hours are exactly what must not move, which is
+ * the same editability rule the components obey.
+ */
+export async function assignTouCalendar(
+  utilityId: string,
+  actorId: string,
+  actorName: string,
+  id: string,
+  touCalendarId: string | null,
+) {
+  const before = await prisma.rateSchedule.findUniqueOrThrow({ where: { id, utilityId } });
+
+  if (before.publishedAt !== null) {
+    throw Object.assign(
+      new Error(
+        "This schedule is published — its TOU calendar is part of what was approved and cannot " +
+          "change. Revise the schedule and point the new version at the calendar you want.",
+      ),
+      { statusCode: 409, code: "SCHEDULE_NOT_EDITABLE" },
+    );
+  }
+  if (before.supersededById !== null) {
+    throw Object.assign(
+      new Error("This schedule has been superseded — change the newer version instead."),
+      { statusCode: 409, code: "SCHEDULE_NOT_EDITABLE" },
+    );
+  }
+
+  if (touCalendarId) await assertCalendarAssignable(utilityId, touCalendarId);
+
+  return auditUpdate(
+    { utilityId, actorId, actorName, entityType: "RateSchedule" },
+    EVENT_TYPES.RATE_SCHEDULE_TOU_CALENDAR_SET,
+    before,
+    async (tx) => {
+      const updated = await tx.rateSchedule.update({
+        where: { id, utilityId },
+        data: { touCalendarId },
+        include: fullInclude,
+      });
+      await cacheDel(`rate-schedule:${utilityId}:${before.code}`);
+      return updated;
+    },
   );
 }
 
@@ -306,9 +459,21 @@ async function assertTouPricingComplete(
     );
   }
 
+  /*
+   * The codes the calendar's *hours* use, not a list it declares.
+   * Peak codes are the tenant's since 2026-11-04, so a calendar's
+   * periods are the distinct codes its slots carry — and that is the
+   * right set to check a tariff against: a code the tenant has defined
+   * but this calendar never assigns is not energy this schedule has to
+   * price.
+   */
   const calendar = await prisma.touCalendar.findFirst({
     where: { id: touCalendarId, utilityId },
-    select: { name: true, publishedAt: true, periods: { select: { peakCode: true } } },
+    select: {
+      name: true,
+      publishedAt: true,
+      slots: { select: { peakCode: true }, distinct: ["peakCode"] },
+    },
   });
   if (!calendar) {
     throw Object.assign(new Error("The schedule's TOU calendar no longer exists."), {
@@ -332,7 +497,7 @@ async function assertTouPricingComplete(
 
   const result = validateTouPricing(
     pricedCodes,
-    calendar.periods.map((p) => p.peakCode),
+    calendar.slots.map((s) => s.peakCode),
   );
   if (!result.ok) {
     throw Object.assign(new Error(result.problems.join(" ")), {

@@ -343,3 +343,92 @@ describe("POST /api/v1/rate-schedules/:id/revise component copy", () => {
     expect(onPredecessor).not.toBeNull();
   });
 });
+
+/**
+ * A code names one tariff across all its versions, which is why
+ * `revise` exists. Creating a second schedule under a code already in
+ * use used to fall through to the database and come back as the
+ * `@@unique([utilityId, code, version])` violation, which the error
+ * handler reported as "A record with these values already exists" —
+ * naming neither the field nor the code, and giving no hint that the
+ * intended next step is Revise rather than a different code. Every
+ * seeded tariff's code is a live mine for anyone typing a plausible
+ * one into the create form.
+ */
+describe("a rate schedule code already in use", () => {
+  it("is refused by name, with the version that holds it", async () => {
+    await createDraftSchedule("RES-WATER", "Residential Water");
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/rate-schedules",
+      headers: headers(),
+      payload: {
+        name: "Residential Water 2027",
+        code: "RES-WATER",
+        commodityId: waterCommodityId,
+        effectiveDate: "2027-01-01",
+      },
+    });
+
+    expect(res.statusCode).toBe(409);
+    const body = JSON.parse(res.body);
+    expect(body.error?.code).toBe("RATE_SCHEDULE_CODE_TAKEN");
+    expect(body.error?.message).toMatch(/RES-WATER/);
+    expect(body.error?.message).toMatch(/version 1/);
+    // The actionable half: a new version comes from Revise, not create.
+    expect(body.error?.message).toMatch(/revise/i);
+  });
+
+  it("does not stand in the way of a code that is free", async () => {
+    await createDraftSchedule("RES-WATER", "Residential Water");
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/rate-schedules",
+      headers: headers(),
+      payload: {
+        name: "Commercial Water",
+        code: "COM-WATER",
+        commodityId: waterCommodityId,
+        effectiveDate: "2027-01-01",
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+  });
+
+  it("refuses on the code alone, whatever version the predecessor is on", async () => {
+    /*
+     * The constraint is on (utility, code, version), so a predecessor
+     * revised to version 2 leaves version 1 occupied and a naive
+     * create would collide there instead — or, worse, not collide and
+     * produce a second version-1 tariff under one code if the chain
+     * ever started above 1. The check is on the code.
+     */
+    const first = await createDraftSchedule("RES-WATER", "Residential Water");
+    const revised = await app.inject({
+      method: "POST",
+      url: `/api/v1/rate-schedules/${first.id}/revise`,
+      headers: headers(),
+      payload: { effectiveDate: "2027-01-01" },
+    });
+    expect(revised.statusCode).toBe(201);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/rate-schedules",
+      headers: headers(),
+      payload: {
+        name: "Residential Water again",
+        code: "RES-WATER",
+        commodityId: waterCommodityId,
+        effectiveDate: "2028-01-01",
+      },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res.body).error?.code).toBe("RATE_SCHEDULE_CODE_TAKEN");
+    expect(JSON.parse(res.body).error?.message).toMatch(/version 2/);
+  });
+});

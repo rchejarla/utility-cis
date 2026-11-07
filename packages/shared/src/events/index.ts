@@ -49,6 +49,12 @@ export const EVENT_TYPES = {
   PREMISE_UPDATED: "premise.updated",
   METER_CREATED: "meter.created",
   METER_UPDATED: "meter.updated",
+  /**
+   * Which TOU period a register counts (spec 26, TOU-REG-1). Its own
+   * event because it decides how every later read is bucketed, and a
+   * bill questioned months on is answered by when this changed.
+   */
+  METER_REGISTER_TOU_PERIOD_SET: "meter_register.tou_period_set",
   ACCOUNT_CREATED: "account.created",
   ACCOUNT_UPDATED: "account.updated",
   SERVICE_AGREEMENT_CREATED: "service_agreement.created",
@@ -56,6 +62,52 @@ export const EVENT_TYPES = {
   RATE_SCHEDULE_CREATED: "rate_schedule.created",
   RATE_SCHEDULE_REVISED: "rate_schedule.revised",
   RATE_SCHEDULE_PUBLISHED: "rate_schedule.published",
+  /**
+   * The one field of a draft schedule that can change without forking a
+   * version (spec 26, TOU-UI-3), so it gets its own event rather than a
+   * generic update on an otherwise immutable entity: which hours a
+   * tariff was priced against is what a regulator asks about.
+   */
+  RATE_SCHEDULE_TOU_CALENDAR_SET: "rate_schedule.tou_calendar_set",
+  /**
+   * A TOU calendar decides what a bill costs as surely as a price does,
+   * so its lifecycle is audited the way a rate schedule's is. The
+   * content edits get their own type rather than one `updated`, because
+   * "who moved the peak hours" is the question asked after a disputed
+   * bill and it is not answerable from a header change.
+   */
+  TOU_CALENDAR_CREATED: "tou_calendar.created",
+  TOU_CALENDAR_UPDATED: "tou_calendar.updated",
+  TOU_CALENDAR_PUBLISHED: "tou_calendar.published",
+  TOU_CALENDAR_DAY_TYPES_SET: "tou_calendar.day_types_set",
+  TOU_CALENDAR_SPANS_SET: "tou_calendar.spans_set",
+  TOU_CALENDAR_OVERRIDES_SET: "tou_calendar.overrides_set",
+  /**
+   * The tenant's price tiers. Audited per period rather than as a
+   * `tou_calendar.periods_set` on whichever calendar happened to be
+   * open, which is what these were until 2026-11-04 — a period is a
+   * record of the tenant's now, and renaming one reaches every tariff.
+   */
+  TOU_PERIOD_CREATED: "tou_period.created",
+  TOU_PERIOD_UPDATED: "tou_period.updated",
+  TOU_PERIOD_DELETED: "tou_period.deleted",
+  /**
+   * A season boundary decides which price applies, so moving one
+   * changes bills as surely as changing a price does — audited for the
+   * same reason the calendar is.
+   */
+  SEASON_SET_CREATED: "season_set.created",
+  SEASON_SET_UPDATED: "season_set.updated",
+  SEASON_SET_PUBLISHED: "season_set.published",
+  SEASON_SET_SEASONS_SET: "season_set.seasons_set",
+  /**
+   * A holiday moves which hours a day is priced at, so changing a set
+   * changes bills — audited like the calendar that names it.
+   */
+  TOU_HOLIDAY_SET_CREATED: "tou_holiday_set.created",
+  TOU_HOLIDAY_SET_UPDATED: "tou_holiday_set.updated",
+  TOU_HOLIDAY_SET_PUBLISHED: "tou_holiday_set.published",
+  TOU_HOLIDAYS_SET: "tou_holiday_set.holidays_set",
   BILLING_CYCLE_CREATED: "billing_cycle.created",
   BILLING_CYCLE_UPDATED: "billing_cycle.updated",
   BILL_SEGMENT_CREATED: "bill_segment.created",

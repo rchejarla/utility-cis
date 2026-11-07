@@ -33,6 +33,12 @@ does. To bill it, the system must know four things it does not know today:
 
 ## What exists today
 
+**As of when this spec was written** — a baseline, left as the record of
+what the work below started from. Several rows have since been answered
+by it: seasons are tenant-configurable (`season_set`), and `read_type`
+no longer carries `AMI`, which was removed on 2026-11-06 so that an
+interval-derived bucket can say whether it was measured or estimated.
+
 | Piece | State |
 |---|---|
 | `tou_window` predicate (`evaluators/predicate.ts:47`) | In the grammar; **throws** `UnsupportedInSlice3Error` |
@@ -81,6 +87,17 @@ existing seasonal tariffs, so seasons become configuration first.
   every existing tenant with today's behaviour (summer = May 1 – Oct 31,
   winter otherwise), and every existing golden test (`bozeman-*`) passes
   unchanged.
+
+  *(Extended 2026-11-06: **provisioning seeds the same set**, published
+  and dated 2000-01-01, for a tenant that did not exist when the
+  migration ran — `DEFAULT_SEASON_SET`. A migration cannot reach forward
+  in time, and `seasonOf()` is gone, so without this a new tenant's
+  `season` predicate resolves to no season and no TOU calendar can be
+  created at all, its spans being keyed on a set's codes. Found by
+  recreating the dev database: the migration ran against an empty
+  `utility` table, so the seeded tenant had no seasons and the whole TOU
+  section of the seed skipped itself. Any set the tenant already has,
+  published or draft, is left alone.)*
 - **TOU-SEA-4 (Must).** For TOU, the season is decided **per interval**
   (by the interval's local start time), not per service period. A bill
   spanning Oct 15 – Nov 14 rates October usage at summer prices and
@@ -89,6 +106,34 @@ existing seasonal tariffs, so seasons become configuration first.
   chooses how a period spanning two seasons is decided — by start date
   (today's behaviour, the default), by majority of days, or by prorating
   the component across both. Recorded on the season set.
+- **TOU-SEA-6 (Must; built 2026-11-03).** Publishing a set must name the
+  **published TOU calendars keyed on a different one**, before the
+  button is pressed and again in the response.
+
+  A TOU calendar names its season set explicitly and a published one is
+  immutable, so it keeps those seasons for ever — that is TOU-CAL-10 and
+  it is correct. Non-TOU charges do not: `load-base.ts` takes whichever
+  published set is in force for the period. So from the day a new set
+  takes effect, one customer's water bill follows the new boundaries
+  while their TOU electric bill keeps the old ones. **Both are right by
+  their own rules and nothing else in the system compares them**, which
+  is what makes this a screen's job rather than a validation rule: it
+  cannot be refused, because the state is legitimate. What is not
+  legitimate is a tenant not knowing.
+
+  Reported on the editor (`calendarsOnOtherSets`) rather than only on
+  the publish response, because a warning that arrives after an
+  irreversible step is a post-mortem. Draft calendars are left out —
+  they have priced nothing — and so is a calendar keyed on the set being
+  published, since reporting agreement would train people to ignore the
+  warning.
+
+  The matching refusal is on the other side: a season **code** a
+  calendar's hours reference cannot be removed or renamed
+  (`SEASON_CODE_IN_USE`), because `tou_slot.season_code` is a string
+  with no foreign key, so a rename would leave those hours pricing
+  nothing and `resolvePeak` answering "no period covers 17:15" on every
+  bill.
 
 ## Naming (decided 2026-11-02)
 
@@ -142,19 +187,67 @@ anything outside this codebase read it.
   minutes) to exactly one named TOU period. Period names are the
   tenant's (`on_peak`, `mid_peak`, `off_peak`, `super_off_peak`, …), with
   a display label and a display order.
-- **TOU-CAL-2 (Must).** Day types are at least *weekday*, *weekend* and
-  *holiday*. A tenant may define more (e.g. *Saturday*) and say which
-  weekdays each covers.
+
+  **The periods belong to the tenant, not to a calendar**, and a
+  calendar's own periods are *derived*: the distinct codes its hours
+  use. So a four-period tenant may have a two-period tariff, and
+  nothing requires a calendar to use them all. A new period is added
+  once, at `/tou-periods`, and every calendar can then assign hours to
+  it.
+
+  **A code is immutable once it exists.** It is copied into every
+  calendar's hours, into a rate component's `quantitySource.peak_code`
+  and onto `meter_register.peak_code` — none of which know the period
+  row exists — so renaming it would leave all of them pricing a code
+  that is gone. The label and the display order are editable; the code
+  is not, and a period whose code is in use cannot be deleted either.
+
+  *(Revised 2026-11-04. The periods were declared on each calendar,
+  which stored one fact twice and made every new calendar retype
+  `off_peak/mid_peak/peak` — `createTouCalendar` seeded three defaults
+  purely to paper over it. `tou_slot` was the only keyed reference to a
+  period in the system; everything downstream already carried the code
+  as a string. See "Peak codes belong to the tenant" below.)*
+- **TOU-CAL-2 (Must).** Day types are at least *weekday* and *weekend*,
+  and *holiday* when the calendar names a holiday set. A tenant may
+  define more (e.g. *Saturday*) and say which weekdays each covers.
+  **`holiday` is the one reserved code**: the system creates that day
+  type when a holiday set is attached and the engine resolves a holiday
+  date to it by matching the code. A tenant may not create, rename or
+  remove it while a set is named, and every other code is theirs.
+  *(Revised 2026-11-04. It was an `is_holiday` boolean on the day type,
+  so that nothing matched a literal string while the vocabulary stayed
+  open. Reserving one code settles the same question with one mechanism
+  instead of three — the flag, a partial unique index and a validator
+  rule — and removes the setup step that asked an operator to nominate
+  a day type as "the holiday one" before anything could say what the
+  holidays were.)*
 - **TOU-CAL-3 (Must).** Validation at save: every 15-minute slot of every
-  (season, day type) is assigned exactly once; every period referenced
-  is defined; every period defined is used somewhere. Errors name the
-  season, day type and time range.
-- **TOU-CAL-4 (Must).** Holidays: a tenant maintains a holiday list per
-  calendar, by fixed date (Jul 4), by rule (fourth Thursday of November,
-  last Monday of May), with an observed-date rule (a Saturday holiday
-  observed Friday, a Sunday holiday observed Monday — configurable,
-  including "not observed"). The system shows the resolved dates for the
-  current and next two years.
+  (season, day type) is assigned exactly once. Errors name the season,
+  day type and time range.
+
+  *(Revised 2026-11-04. Two further rules stood here — "every period
+  referenced is defined" and "every period defined is used somewhere" —
+  and both went with the per-calendar period rows, because neither has
+  two things left to disagree. A span naming a code the tenant has not
+  defined is refused by `tou_slot_peak_code_fkey`, and by `putTouSpans`
+  before the write so the message names the code rather than a
+  constraint. A code no calendar uses is no longer a fault at all. What
+  the second rule was really protecting — a period the **tariff** does
+  not price, which leaves energy uncharged — is `validateTouPricing`
+  when a rate schedule is published, which is where it belongs.)*
+- **TOU-CAL-4 (Must).** Holidays: a tenant maintains **holiday sets** of
+  explicit dates — `(date, name)` — each set versioned, effective-dated
+  and published like a season set, and shared across the tenant's
+  calendars. A calendar names at most one; naming none means days are
+  classified by their weekday alone, which is a real tariff shape. The
+  dates are the days **observed**: if the 4th falls on a Saturday and
+  the utility takes the Friday, the Friday is the row.
+  *(Revised 2026-11-04. It was rules — fixed date, nth weekday, plus an
+  observance rule — which is why the original also promised a
+  three-year preview of the resolved dates. See "Dates rather than
+  holiday rules" below for why that went the other way, and what it
+  costs.)*
 - **TOU-CAL-5 (Must).** Calendars are effective-dated, versioned and
   published. Only published calendars can be referenced by a published
   rate schedule. Changing peak hours means publishing a new version with
@@ -203,29 +296,30 @@ anything outside this codebase read it.
   days called for one region, TOU-CAL-9) is scoped by a service area that
   premises belong to, not by attaching calendars to premises.
 
-### Data model (built 2026-11-02)
+### Data model (built 2026-11-02, holidays revised 2026-11-04)
 
-Eight tables, by the `tou_calendar` migration.
+Eight tables: seven by the `tou_calendar` migration, with the two
+holiday tables replaced by the `tou_holiday_sets` migration.
 
 ```
 tou_calendar          utility_id, name, effective_date, published_at,
-                      season_set_id → season_set, tou_holiday_list_id?,
+                      season_set_id → season_set, tou_holiday_set_id?,
                       time_zone, clock_basis
                       unique (utility_id, name, effective_date)
 
-tou_period            utility_id, tou_calendar_id, peak_code, label, sort_order
-                      unique (utility_id, tou_calendar_id, peak_code)
+tou_period            utility_id, peak_code, label, sort_order
+                      unique (utility_id, peak_code)   ← the slots' key
 
 tou_day_type          utility_id, tou_calendar_id, day_type_code, label,
-                      is_holiday, sort_order
+                      sort_order
                       unique (utility_id, tou_calendar_id, day_type_code)
-                      partial unique (utility_id, tou_calendar_id) where is_holiday
 
 tou_day_type_weekday  utility_id, tou_calendar_id, tou_day_type_id, iso_weekday
                       unique (utility_id, tou_calendar_id, iso_weekday)
 
 tou_slot              utility_id, tou_calendar_id, season_code,
-                      tou_day_type_id, tou_period_id, start_minute, end_minute
+                      tou_day_type_id, peak_code, start_minute, end_minute
+                      (utility_id, peak_code) → tou_period  RESTRICT
                       EXCLUDE on (utility, calendar, season_code, day_type,
                                   int4range(start_minute, end_minute))
 
@@ -233,22 +327,34 @@ tou_day_override      utility_id, tou_calendar_id, override_date,
                       tou_day_type_id, reason
                       unique (utility_id, tou_calendar_id, override_date)
 
-tou_holiday_list      utility_id, name
-                      unique (utility_id, name)
+tou_holiday_set       utility_id, name, effective_date, published_at
+                      unique (utility_id, name, effective_date)
 
-tou_holiday_rule      utility_id, tou_holiday_list_id, code, label, kind,
-                      month, day?, weekday?, nth?, observance
-                      unique (utility_id, tou_holiday_list_id, code)
+tou_holiday           utility_id, tou_holiday_set_id, holiday_date, name
+                      unique (utility_id, tou_holiday_set_id, holiday_date)
 ```
 
-**`is_holiday` is a flag, not a code the resolver matches.** TOU-CAL-2
-makes the day-type vocabulary open — at least weekday, weekend and
-holiday, and a tenant may add Saturday — so `day_type_code` is the
-tenant's own string and no code path may compare it to a literal
-`'holiday'`. A tenant coding theirs `observed_holiday` would otherwise
-have every holiday classified as an ordinary weekday with nothing
-raised. One per calendar; `validateCalendar` reports a second before the
-save, the partial unique index refuses it.
+**`holiday` is a reserved code, and that is the only mechanism.** The
+day-type vocabulary stays open — a tenant may price Saturday apart from
+Sunday — but exactly one code belongs to the system, so the engine finds
+the holiday day type by matching `HOLIDAY_DAY_TYPE_CODE` and nothing
+else is needed. Three service refusals keep it honest: a tenant cannot
+create one (it arrives with the holiday set), cannot rename the
+system's, and cannot remove it while a set is named. Each failure is the
+same quiet one — a holiday day type nothing resolves to means every
+holiday bills as an ordinary weekday with nothing raised.
+
+There is **no CHECK constraint** for the reservation. A constraint
+cannot tell the system's row from a tenant's: both are `tou_day_type`
+rows with the same code, so it could only ban the code outright, which
+would ban the system's own row. The reservation lives in
+`tou-calendar.service.ts`, where the intent is known and the refusal can
+say why.
+
+*(Until 2026-11-04 this was an `is_holiday` boolean with a partial
+unique index and a validator rule behind it — three mechanisms for one
+fact, all of them existing only because nothing was allowed to match a
+literal string.)*
 
 **Weekday coverage is a child table, not seven booleans on the day
 type.** The relationship is one-to-many (TOU-CAL-2's "say which weekdays
@@ -285,11 +391,11 @@ still accepted. The other half — no *gaps* — is a property of the set
 and cannot be a constraint, so `validateCalendar` owns it. That is the
 same division `validateSeasons` draws for season tiling.
 
-Four things live only in SQL, and `migrate dev` would propose dropping
-each: the exclusion constraint, the partial unique index on
-`is_holiday`, the nullable composite key from a calendar to its holiday
-list, and the CHECK that keeps each holiday-rule kind's columns and not
-the other's.
+Two things live only in SQL, and `migrate dev` would propose dropping
+each: the exclusion constraint on `tou_slot`, and the nullable composite
+key from a calendar to its holiday set — Prisma requires every
+referencing field of an optional composite relation to be optional, and
+`utility_id` is not.
 
 ### How the engine reads it (built 2026-11-02)
 
@@ -305,10 +411,11 @@ Three rules it fixes:
   makes re-rating an old period reproducible: a calendar published since
   then has a later effective date and is not reached.
 - **Which seasons:** the set the calendar *names*, for the reason above.
-- **Which holidays:** resolved for **every year the period touches**, not
-  just its start year. A December-to-January period that resolved only
-  the first year would price New Year's Day as an ordinary weekday — at
-  peak, on a day the tariff calls off-peak, with nothing raised.
+- **Which holidays:** the dates in the named set that fall **inside the
+  period**, which is one date-range query and so covers a
+  December-to-January period without special-casing the year end. The
+  filter matters in the other direction too: a set gets longer every
+  year and a bill still covers a month.
 
 It does **not** re-validate. `validateCalendar` runs at save and
 publishing freezes the result, so re-checking 96 cells per (season, day
@@ -329,28 +436,109 @@ That proves the schema can hold a tariff nobody designed it around and
 that the loader does not reshape it on the way out — two things neither
 test proves alone.
 
-### Holiday rules rather than a list of dates (decided 2026-11-02)
+### Peak codes belong to the tenant (decided 2026-11-04, reversing 2026-11-02)
 
-TOU-CAL-4 says "by fixed date, by rule", and the rules are kept even
-though a date list would need no resolution code. A published calendar
-is immutable, so a list of dates **expires**: a calendar published in
-2026 holds no holidays for 2029, and either somebody re-enters dates
-every year forever or the dates live outside the version, at which point
-publishing no longer fixes what the calendar means. A missed year raises
-nothing — the holiday day type silently stops applying and every TOU
-bill for those days misprices, which is the same failure shape as the
-interval timestamp basis (TOU-INT-2a).
+**The periods are defined once per tenant, and a calendar's own are the
+distinct codes its hours use.** They were `tou_period` rows on each
+calendar.
 
-Three smaller consequences: TOU-CAL-4's three-year preview is a rule
-feature, since a list has no output to show; observance has to be
-computed, and with dates the person typing them applies it in their head
-and nothing records whether they did; and "fourth Thursday of November"
-survives a regulator's question where a bare `2027-11-25` does not.
+The reason is duplication, not correctness. One fact was stored twice:
+every `meter_register.peak_code`, `meter_read.peak_code` and rate
+component `quantitySource.peak_code` already carried the code as a plain
+string, and `tou_slot` was the **only keyed reference** to a period in
+the system. So the per-calendar rows were the exception, and they were
+the copy that got retyped — every new calendar re-declared
+`off_peak/mid_peak/peak`, which is why `createTouCalendar` seeded three
+defaults. That code existed only to hide the retyping.
 
-The honest limit: a fixed-date rule *is* a list entry with a leap-year
-guard, so the rules only earn their keep for the recurring-weekday and
-observance cases. Genuine one-offs are not forced into a rule —
-`tou_day_override` (TOU-CAL-9) is the mechanism for those.
+What it buys:
+
+- the Periods tab leaves the calendar editor, which goes from three tabs
+  to two — periods are now one tenant screen, defined once
+- two matched validation rules disappear (TOU-CAL-3), because they only
+  existed to keep the duplicate in step
+- a register's code can be checked against one list, with no need to
+  know which calendar the meter is on (TOU-REG-1)
+- labels and display colours stop drifting between calendar versions
+
+**What it is not:** a correctness fix. A calendar declaring `on_peak`
+while a component priced `peak` was already caught, by
+`validateTouPricing` at publish. This moves the mistake earlier and
+removes the chance to make it, which is worth doing — but no bill was
+ever wrong because of it.
+
+**The condition that makes it safe.** A tenant-level list is
+*unversioned*, and a published calendar is immutable precisely so its
+inputs cannot move under it — it names a season-set *version* and a
+holiday-set *version* for that reason. It survives only because the
+**slot stores the code as a string, not a key**: a published calendar's
+hours literally say `peak`, the rate component prices `peak`, and
+editing the list changes a display label and the editor's picker, never
+what a bill meant. Had the slot kept a key, this would have been
+unversioned config gating versioned work.
+
+The foreign key is therefore on the code —
+`tou_slot (utility_id, peak_code) → tou_period (utility_id, peak_code)`,
+RESTRICT, no ON UPDATE CASCADE — which buys two guards for nothing: a
+span cannot name an undefined code, and a code in use can be neither
+deleted nor renamed. A refused rename is correct: the code travels into
+rate components and meter registers that know nothing about the row.
+
+**Where the three default periods come from.** Every tenant is
+provisioned with `off_peak`, `mid_peak`, `peak`, by
+`provisioning.service.ts`, because a tenant with none cannot be given a
+single hour of a tariff. Test tenants get the same list through
+`bootPostgres` and `ensureUtilities` — three doors into a tenant's
+existence, all of which must leave it able to price an hour.
+
+### Dates rather than holiday rules (decided 2026-11-04, reversing 2026-11-02)
+
+**A holiday set holds explicit dates.** The first design held rules —
+fixed date, nth weekday, plus an observance rule — and this reverses it.
+
+The argument for rules was that a list of dates **expires**: a set
+entered in 2026 holds nothing for 2029, and a missed year raises nothing
+while every holiday that year bills as an ordinary weekday. That failure
+is real and it is why `holidayHorizonProblems` exists — the editor
+reports a set whose last date is behind the calendar's effective date,
+and publishing refuses it. The horizon is now loud rather than absent,
+which is what the rules were buying.
+
+What the rules cost was worse. **A rule is a computation nobody
+checked.** "4 July, nearest weekday" does not say that 2026 lands on a
+Saturday and moves the holiday to Friday the 3rd — a weekday whose peak
+hours disappear. Nobody reading the tariff could see which day their
+bill would be cheap, which is why the original TOU-CAL-4 had to promise
+a three-year preview: a feature whose entire job was to show what the
+data already meant. And the observance itself was a guess about the
+tenant's own policy — SMUD keeps a Saturday holiday on the Saturday,
+some utilities take the Friday, and `observance: "NEAREST_WEEKDAY"` was
+easy to set wrongly and impossible to notice.
+
+With dates, the observance is applied by the person who knows it, at the
+moment they type the date, and the date is then the fact: auditable, and
+the same on every bill that priced against it.
+
+Three consequences:
+
+- **The three-year preview is gone**, because the rows *are* the answer.
+  The holiday-set editor shows each date's weekday beside it, which is
+  the one piece of arithmetic worth doing for somebody — "Sat" next to
+  4 July is what prompts them to enter the Friday instead.
+- **A set is versioned and published** like a season set, so a
+  correction is a new version and a published calendar's holidays cannot
+  move under bills already issued. That is what makes a date list safe
+  to share across calendars.
+- **Someone has to enter next year's dates.** The horizon warnings on
+  the set's own page and on the calendar's validation are what make that
+  a visible chore rather than a silent misprice. `tou_day_override`
+  (TOU-CAL-9) remains the mechanism for genuine one-offs.
+
+What this gave up: "fourth Thursday of November" survives a regulator's
+question in a way a bare `2027-11-25` does not. The answer is that the
+*name* travels with the date — `Thanksgiving Day` on `2027-11-25` — and
+a rule that produced the wrong Thursday would have survived the same
+question just as well.
 
 ## 3. Usage data
 
@@ -365,7 +553,7 @@ Settled before slice 1, because it decides how much of the engine slice
 a row.
 
 **A TOU bucket is a `meter_read` row.** `meter_read` gains a nullable
-`tou_period_id` beside `registerId`, and several rows may describe one
+`peak_code` beside `registerId`, and several rows may describe one
 period — which is not new, since a multi-register meter already
 produces one row per register. For a register meter the period is
 derived from the register's mapping (TOU-REG-1), so **a register-based
@@ -433,19 +621,33 @@ raw intervals from the same meters. Compression is therefore entirely a
   reconciliation check, which belongs with the import path and is the
   next step.* Three things worth knowing:
 
-  **A `peak_code`, not a key to `tou_period`.** The spec said
-  `tou_period_id`; this reverses it. A `tou_period` row belongs to one
-  calendar *version*, so pointing a register at one would bind a fact
-  about a **device** to a version of a **tariff** — every republished
-  calendar would need every register re-pointed, and TOU-CAL-11 is
-  explicit that what a meter is programmed with never decides pricing.
-  The integrity a key would buy already exists and is better placed: a
-  read carrying a code no component prices does not bill silently,
-  because the `tou_period` quantity source raises when its bucket is
-  absent, and the mapping itself is checked once per register against
-  the meter's programmed calendar — rather than by a foreign key on
-  every row of a hypertable that will take tens of millions of rows a
-  month at TOU granularity.
+  **A `peak_code`, and since 2026-11-06 a key on the code.** The spec
+  said `tou_period_id`. The 2026-11-03 reversal argued that a
+  `tou_period` row belonged to one calendar *version*, so pointing a
+  register at one would bind a fact about a **device** to a version of a
+  **tariff**. That reason died on 2026-11-04, when the periods became
+  the tenant's: there is no version left to bind to.
+
+  What stands in its place is the shape `tou_slot` has carried since
+  that day — `(utility_id, peak_code) -> tou_period (utility_id,
+  peak_code)`, RESTRICT, no update cascade. The column still holds the
+  **code** and not the id, because the code is what travels onto reads
+  and into rate components; the key makes an unknown code impossible
+  rather than merely reported, and a period a register counts neither
+  deletable nor renameable. NULL still means "not a TOU register" —
+  MATCH SIMPLE asks for no parent row when a column of a composite key
+  is NULL, so a total register needs no exemption.
+
+  The TOU-UI-4 write path (built 2026-11-05) still refuses an unknown
+  code first and names the ones the tenant has, which is the better
+  message. The key is the floor under it: a service is one write path,
+  and an import or a script is another.
+
+  **`meter_read.peak_code` is not keyed**, for the volume reason: a
+  hypertable taking tens of millions of rows a month at TOU granularity
+  does not want a foreign key per row. A read carrying a code no
+  component prices still does not bill silently — the `tou_period`
+  quantity source raises when its bucket is absent.
 
   **A register does not report a peak code** (Rao, 2026-11-03). It
   reports a *number* — a dial count. The meter's own clock routes
@@ -515,18 +717,58 @@ raw intervals from the same meters. Compression is therefore entirely a
 
 ### 3b. Interval data
 
-- **TOU-INT-1 (Must).** Interval consumption is stored in
-  **`meter_read_interval`**, one row per interval per meter (and
-  register): interval start (UTC), length (5, 15, 30 or 60 minutes),
-  quantity, unit, and a quality flag (`actual`, `estimated`, `missing`,
-  `edited`). A TimescaleDB hypertable with a **native compression
-  policy** — no packed arrays, for the reasons under *How usage is stored* — under RLS with
-  `FORCE`, scoped by `utility_id` like every tenant table.
+- **TOU-INT-1 (Must).** *Built 2026-11-05, except the compression
+  policy.* Interval consumption is stored in **`meter_read_interval`**,
+  one row per interval per meter (and register): interval start (UTC),
+  length (5, 15, 30 or 60 minutes), quantity, unit, and a quality flag
+  (`actual`, `estimated`, `missing`, `edited`). A TimescaleDB
+  hypertable — chunked by **week**, where `meter_read` uses a month,
+  since a month of one tenant's intervals is two orders of magnitude
+  more rows — with a **native compression policy**: no packed arrays,
+  for the reasons under *How usage is stored*. Under RLS with `FORCE`,
+  scoped by `utility_id` like every tenant table, and with the
+  tenant-scoped composite keys every table between two tenant-scoped
+  tables carries.
 
   Compression has no precedent in this codebase: no migration calls
   `add_compression_policy` and `meter_read` is uncompressed. This is
   the first, and the policy's threshold should sit outside the rebill
   window so a correction never has to decompress a chunk.
+
+  **The compression policy is deliberately not in the migration.** Its
+  threshold is the rebill window, which is a tenant setting nobody has
+  measured, and a first-in-the-codebase compression policy chosen blind
+  is worse than none: the failure it buys is a correction that cannot
+  be written. It belongs with TOU-INT-8, where the number can be
+  justified against a measurement.
+
+- **TOU-INT-1a (Must).** *Built 2026-11-05.* The **roll-up** turns
+  classified intervals into `meter_read` rows carrying a `peak_code` —
+  the same shape a register meter's read event produces, which is what
+  lets the rate engine price one shape and never learn which kind of
+  meter made it. `interval-rollup.service.ts`, driven for now by
+  `packages/api/scripts/roll-up-intervals.ts`; wiring it into the
+  billing run is the next step.
+
+  Three rules it applies, each of which would otherwise be a quiet
+  wrong bill:
+
+  - **It refuses rather than under-reports.** A bucket is a sum, and a
+    sum missing a day is indistinguishable from a quiet month —
+    nothing raises, and the customer is charged for less energy than
+    they used. An unclassifiable interval, a straddling one, or one
+    marked `missing` stops the roll-up and is named. TOU-GAP-1's rule,
+    one step earlier than the billing run.
+  - **Every period the calendar uses gets a bucket, zero included** —
+    the same contract the register importer owes. A missing bucket is
+    not a zero: the loader leaves the key unset and the `tou_period`
+    source *raises*, because on a register meter an absent period
+    means usage rolled into another dial. An interval meter has no
+    such ambiguity, so a winter month of a calendar whose summer has a
+    mid-peak must still bill, at zero.
+  - **The calendar comes from the rate schedule, by id.** Not from the
+    meter (TOU-CAL-11), and not by name, because a published schedule
+    names one exact version and re-rating must reach the same one.
 - **TOU-INT-2 (Must).** Import by file, through the existing import
   infrastructure ([22](22-import-infrastructure.md)): CSV (meter, start,
   length, quantity, quality) and Green Button Connect / ESPI XML. An
@@ -549,6 +791,167 @@ raw intervals from the same meters. Compression is therefore entirely a
   boundary that does not straddle a period change). An interval that
   straddles a period boundary is refused at import with the reason,
   unless the tenant enables proportional splitting.
+- **TOU-INT-4a (Must).** **The billing run derives an interval meter's
+  buckets itself** (`billing-run/interval-reads.ts`, built 2026-11-05).
+
+  Before it did, the only thing that classified intervals was an
+  operator running `scripts/roll-up-intervals.ts`, and the failure was
+  quiet in the worst available way: `resolveServicePeriod` finds a
+  period from an unbilled `meter_read`, and an interval meter has none
+  until its intervals are classified — so the agreement resolved to
+  nothing, the **account was skipped**, and the run reported it as
+  having no read. Not a wrong bill; no bill, blamed on missing data
+  that was present.
+
+  `deriveIntervalReads` runs per account, before the run resolves any
+  period. It is a no-op for an agreement whose tariff prices no TOU
+  period and for a meter reporting no intervals (the ordinary register
+  meter, whose buckets are stamped at import), so a non-TOU cycle pays
+  two grouped queries for the whole feature.
+
+  Three decisions worth keeping:
+
+  - **In the run, not in `createBillSegmentForServiceAgreement`.** The
+    mutation belongs where someone asked for a run. Rating stays a
+    function of the reads it finds, and the manual and API paths do not
+    rewrite reads underneath a caller who only asked to price a period.
+  - **The calendar comes from the assigned published schedule**, never
+    from the meter's programmed one (TOU-CAL-11). A meter's own
+    calendar is a device fact that may disagree, which
+    `CALENDAR_MISMATCH` reports rather than acts on.
+  - **A window already billed is left alone.** The roll-up clears and
+    rewrites only *unbilled* interval-derived rows, so a re-run picks
+    up late-arriving intervals; a billed window is closed, and
+    rewriting it would move a figure a customer has been told.
+
+  Intervals that cannot be classified — a gap, a `missing` reading, an
+  interval straddling a period change — raise `TOU_ROLLUP_FAILED`,
+  which fails that one account's run item naming the meter and the
+  reason, and leaves the rest of the run to continue. Deliberately not
+  "bill what classified and drop the rest": that bill is silently
+  short.
+
+  **Still open:** the preview cannot predict a roll-up failure without
+  doing the roll-up, so an interval gap is found mid-run rather than at
+  preview. `findCoverageProblems` is pure and takes only
+  `(intervalStart, lengthMinutes)` rows, so the pre-run check can run
+  the same test over a `select` of those two columns — which is the
+  shape of the remaining work, and is not built.
+- **TOU-INT-4b (Must).** **Intervals must tile the period**
+  (`lib/interval-coverage.ts`, built 2026-11-05). Each interval has to
+  start exactly where the previous one ended, the first at the period's
+  start and the last at its end.
+
+  The roll-up's other three checks — a `missing` reading, an interval
+  that cannot be placed, one straddling a period change — are all
+  properties of a row that **exists**. None of them can see an interval
+  that was never delivered, so a meter that lost three hours to a comms
+  outage or a truncated import classified its remaining 741 rows,
+  objected to nothing, and produced buckets three hours short: a bill
+  undercharged, reading as an ordinary quiet month. The `tou_registers`
+  migration had already said both cases should behave alike — a gap
+  "reads differently from one nobody has noticed, and TOU-GAP-1 refuses
+  to bill either as off-peak" — and only the self-reported half was
+  built. This is TOU-GAP-1 made true for the silent half.
+
+  Overlaps are refused too. The same energy counted twice is as wrong
+  as energy counted never, and the table's partial unique indexes
+  cannot catch it: a 30-minute row underneath a 60-minute one is a
+  distinct key. So is an interval running past the period's end, which
+  would charge this period for energy used in the next.
+
+  **Tiling, not counting, and the reason is daylight saving.** The
+  obvious check is `window minutes ÷ interval length` against the row
+  count, and it is wrong three ways: it needs the meter's interval
+  length, it needs to know when a meter changed length mid-period, and
+  a local day is 23 or 25 hours twice a year — so it would invent a gap
+  every spring and miss a real one every autumn, on exactly the days a
+  TOU calendar matters most. Asking whether each interval starts where
+  the last ended is arithmetic on UTC instants, which neither skip nor
+  repeat. Pinned by unit tests over both 2026 America/Denver
+  transitions, and by one that still finds a real gap on a 25-hour day.
+
+  Worth noting what the seeded sample would **not** have caught: 744
+  intervals is exactly 31 × 24, so October 2026 contains no transition
+  at all.
+- **TOU-INT-4c (Must).** **A daily sweep checks coverage while a gap can
+  still be fixed** (`interval-coverage-sweep`, built 2026-11-05).
+
+  TOU-INT-4b refuses a month with holes, but it only ever ran inside
+  the roll-up — reached from a billing run or an operator's script. That
+  is the one moment a gap is useless to know about: by bill day the only
+  options are to hold the account or estimate it. Found the morning
+  after it happened, the meter can be re-polled, the comms path chased,
+  a technician sent — the gap can stop being one, which is always the
+  best outcome and the only one that bills the truth.
+
+  **Detection only.** `report` is the sole action in this step: a
+  structured log per finding, a summary line, and the counts returned on
+  the job so the platform console's jobs page shows them. The sweep
+  writes no `meter_read`, derives no bucket and touches no interval — a
+  sweep that repaired data would be performing estimation on a
+  schedule, which is a judgement nobody has reviewed. Opening an
+  exception for somebody to work needs a table to put it in, and that
+  is the next step rather than a side effect of this one.
+
+  **Whole local days, excluding a grace window.** Two knobs, both in the
+  scheduler's own `scheduler_config.settings` jsonb (spec 18 — a value
+  one scheduler needs costs no migration there):
+
+  | setting | default | what it is |
+  |---|---|---|
+  | `graceHours` | 48 | how long the head-end gets to backfill before a hole counts as real |
+  | `lookbackDays` | 7 | how many complete days back to keep checking |
+
+  Per tenant because backfill speed is a property of the head-end and
+  the network: a utility on a tight cellular network wants two days, one
+  on a flaky mesh wants seven, and a single fixed number would cry wolf
+  for the first and be useless for the second. 48 hours is the thinnest
+  real case — a cycle reading on day 8 and billing on day 10 gives the
+  period's last intervals about that long to arrive — and it is a
+  default, not a measurement.
+
+  Days rather than a rolling window, because a rolling window ends at an
+  arbitrary instant that is not an interval boundary, so the coverage
+  check would report a spurious part-interval gap at both edges every
+  night. Local days also make a finding actionable: "the 3rd is missing
+  three hours" is something a technician can work; "the window ending
+  04:17Z" is not. `windowsToCheck` steps local calendar dates, so a day
+  the clocks change is 23 or 25 hours and consecutive windows still
+  share a boundary exactly — pinned by unit tests over both 2026
+  America/Denver transitions.
+
+  **Default disabled**, per the standing rule for anything added to
+  `SCHEDULER_DEFINITIONS`: a missing row means the catalogue default, so
+  an enabled-by-default scheduler would start work for every tenant the
+  day it shipped. Hourly cron, because the run hour is per tenant and
+  local — the only way a tenant in Auckland and one in Denver are both
+  swept at 04:00 their own time is to look every hour and act for
+  whoever's hour has come round.
+
+  **No missed-tick recovery**, unlike the delinquency dispatcher. A
+  skipped hour costs one day's detection on a check that runs again
+  tomorrow over an overlapping window; a skipped delinquency pass would
+  mean a notice never sent.
+
+  **The two knobs are validated on write, not only on read.**
+  `AutomationConfigPatch.settings` is an open record and has to stay
+  open, since each scheduler's knobs are its own — so `graceHour: 48`
+  for a scheduler whose knob is `graceHours` would have been stored
+  happily, silently ignored by a `.strict()` reader that falls back to
+  the defaults, and read back as though it mattered. `PATCH
+  /api/v1/settings/automation` now refuses it with
+  `SCHEDULER_SETTINGS_INVALID`, and refuses settings for a scheduler
+  that has none at all. The enable toggle and run hour get their UI
+  from `SCHEDULER_DEFINITIONS` automatically; **the two knobs have no
+  form control yet** and are set through that endpoint.
+
+  It reuses `findCoverageProblems` over real rows, read in chunks of 200
+  meters, rather than reimplementing gap detection as a SQL window
+  function — one definition of "covered", in one place. At 15-minute
+  data that is ~96 rows per meter-day, so a utility with 12,000 interval
+  meters is roughly 60 narrow queries a night. **Unmeasured at that
+  size**, and one of the things TOU-INT-8 should measure.
 - **TOU-INT-5 (Must).** Reconciliation: for a meter with both a register
   read and intervals, the sum of intervals between two register reads
   matches the register's consumption within a tenant tolerance (default
@@ -574,11 +977,95 @@ raw intervals from the same meters. Compression is therefore entirely a
   `TOU_INTERVALS_INCOMPLETE`, listed by the billing run's pre-run check
   ("what cannot be billed") and in its exceptions by cause. Missing
   energy is never silently priced as off-peak.
+
+  *Step 2 built 2026-11-06: `meter_data_exception`, the queue the sweep
+  writes to.* The roll-up has refused an incomplete period since
+  2026-11-05 and the sweep has found the holes a day later since
+  2026-11-06; both only said so in a log line, which is not work anybody
+  is assigned.
+
+  **One row per (meter, window, kind) while open.** The window is the
+  day a sweep examined, not the gap's own start — that is what makes
+  tonight's sighting of last night's hole find its own row instead of
+  opening a second, and several holes in one day one exception whose
+  minutes sum. A person working the queue wants "this meter, this day,
+  four hours missing", not one task per hole. `kind` is in the key
+  because a gap and an overrun have different answers: chase the
+  missing data, or fix an interval length that is wrong. The unique
+  index is **partial** (`WHERE status = 'open'`) so the history stays —
+  a gap resolved in March and back in April is two exceptions, and a
+  meter that fails every month is the pattern worth seeing.
+
+  **The sweep writes `open` and `resolved`, and nothing else.** Both are
+  facts about the data: the intervals are there or they are not, so a
+  later sweep that finds the hole filled closes its own row with no
+  ceremony. `accepted` (bill it as it stands) and `estimated` (a value
+  was supplied) are judgements, and no scheduled job makes those — the
+  same line the sweep already draws by detecting without repairing.
+
+  **Resolution is scoped to the days actually swept.** An open exception
+  for a day outside the lookback is left alone, because not looking is
+  not the same as finding nothing: a tenant narrowing `lookbackDays`
+  from 7 to 2 would otherwise have five days of exceptions closed by a
+  sweep that never examined them, and a resolved exception reads as one
+  somebody fixed.
+
+  *Step 3 built 2026-11-06: the pre-run check (TOU-BIL-1) gained an
+  `INTERVALS_INCOMPLETE` blocker, and an **accepted** exception is what
+  switches it off for a meter.* That is the first thing the queue is
+  read for rather than written to: accepting a gap means "bill this
+  meter's month as it stands", so those minutes stop blocking the run —
+  and only those, since a second gap nobody has seen is a new fact.
+  An *open* exception changes nothing at the preview: it is a problem
+  nobody has decided about yet, and the month is still short.
+
+  Two things the sweep cannot stand in for, which is why the pre-run
+  check still exists: it sweeps a `lookbackDays` window (7 by default)
+  while a bill covers a month, and it deliberately skips a meter that
+  reported nothing at all — which is the worst case for a bill and
+  invisible to anything that does not know which agreements are being
+  billed.
+
+  *`missing_reading` got its writer on 2026-11-06 (step 4).* The sweep
+  now asks two questions over the same rows — does the series cover the
+  day (`findCoverageProblems`), and did the meter have a value for each
+  interval in it (`findMissingReadings`) — because a `missing` row
+  covers its minutes and tiling is satisfied by it, correctly. The two
+  failures have different answers: a hole means chase the data that
+  never arrived, while a `missing` reading means the meter itself said
+  it had none, and an estimate may be the only honest way out. Both
+  produce the same problem shape, so an exception is keyed and summed
+  the same way whichever found it, and consecutive missing intervals
+  coalesce into one row for the same reason a gap does — a day of
+  15-minute data gone is 96 rows and one fact.
+
+  **Still to come:** a screen.
 - **TOU-GAP-2 (Should).** A tenant may instead choose an estimation
   policy: fill gaps by distributing the register total across missing
   intervals using the customer's own prior profile, or a class load
   profile. Every estimated interval is flagged `estimated`, and a bill
   containing any says so.
+
+  *Half-built 2026-11-06 (step 4), from the bottom up.* The roll-up now
+  carries interval `quality` into `meter_read.readType`: a bucket whose
+  intervals include an estimate is written `ESTIMATED`, and one whose
+  intervals are all measured is `ACTUAL`. **Per bucket, not per read
+  event** — an estimated hour inside the on-peak window makes the
+  on-peak figure an estimate and leaves the off-peak one measured, and
+  a customer disputing an on-peak charge is owed the narrower truth.
+  `edited` counts as measured: it is a real value a person corrected,
+  not a figure nobody took, and `CORRECTED` would be wrong because that
+  means a read row superseding another with `corrects_read_id` set.
+
+  The column held `AMI` until then — a *source*, which `read_source`
+  beside it already said. So the one column that could tell a customer
+  their charge rests on an estimate said neither, which is why this
+  requirement was unimplementable rather than merely unbuilt.
+
+  **What is left:** the estimator itself, the `estimate` action on an
+  exception, and the bill saying so. The last of those is now possible
+  without the first two, because an import can already deliver intervals
+  a head-end marked `estimated`.
 
 ## 4. Rate engine
 
@@ -635,7 +1122,7 @@ raw intervals from the same meters. Compression is therefore entirely a
   *Simplified 2026-11-02.* This used to say "either TOU register
   quantities or the interval series", and the engine would bucket the
   series itself. Storing both meter types' output as `meter_read` rows
-  with a `tou_period_id` (see *How usage is stored*) means the engine
+  with a `peak_code` (see *How usage is stored*) means the engine
   receives one shape and never learns which kind of meter produced it.
   The bucketing moves to the roll-up, which happens once per period
   rather than on every rating pass, and slice 1 loses a branch it would
@@ -682,6 +1169,57 @@ raw intervals from the same meters. Compression is therefore entirely a
 
 ## 5. Configuration UI
 
+> **Built 2026-11-03**, except where a requirement says otherwise below:
+> `/season-sets` and `/tou-calendars` with their editors, and — added
+> 2026-11-04 — `/tou-holiday-sets` with its own list and editor, plus
+> `/tou-periods`, the tenant's price tiers on one screen. The API
+> under `/api/v1/season-sets`, `/api/v1/tou-calendars`,
+> `/api/v1/tou-holiday-sets` and `/api/v1/tou-periods`. All under the
+> **`rate_schedules`** module rather than one of their own — a calendar
+> is only ever the hours a schedule prices against, and a separate
+> module would have to be enabled per tenant, leaving someone with
+> `rate_schedules:EDIT` able to build a schedule they cannot publish.
+>
+> **The child collections are replaced whole** (`PUT …/day-types`,
+> `…/spans`, `…/overrides`, `…/seasons`, `…/holidays`)
+> rather than
+> edited row by row. Every invariant they carry belongs to the list: the
+> spans of a (season, day type) must tile the day exactly once, the
+> seven weekdays must be claimed exactly once, a set must cover the year
+> exactly once. Row-at-a-time saving makes every intermediate state
+> invalid, which reduces validation to advice — and "move Saturday from
+> weekday to weekend" is not expressible as two row edits at all,
+> because `tou_day_type_weekday_once_per_calendar` makes a weekday one
+> day type's property.
+>
+> **Both editors run the engine's own functions.** `validateCalendar`,
+> `resolvePeak`, `resolveDayType`, `validateSeasons` and
+> `seasonCoverage` are called server-side over the definition the
+> *rating* loader's mapper produces (`toTouCalendarDefinition`, extracted
+> for this). So the validation, the spot check, the day preview and the
+> year bar cannot say anything a bill would not. A second classifier in
+> the browser would eventually bless a calendar the engine reads
+> differently, and the wrapped season is exactly where it would start.
+>
+> **Dev seed:** `seed/tou-calendar.js` creates a published "Residential
+> time-of-use" calendar and a published "Observed holidays" set holding
+> **two years of observed dates** (2026–27, including 3 July 2026 and 5
+> July 2027 — the same holiday moved in both directions), so the screens
+> open on something and the spot check can be used. It keys its spans on the
+> season set the tenant already has — provisioning gives every tenant a
+> published "Default", as the `season_sets` migration did for the tenants
+> that predate it — rather than creating a second set,
+> because a published calendar naming one set while another is in force
+> is the divergence TOU-SEA-6 warns about, and a fresh database should
+> not open on a warning about a state nobody caused. Nothing prices it
+> yet; a TOU rate schedule is not seeded.
+>
+> **Still to build:** TOU-UI-1d (the published-version diff), TOU-UI-4
+> and TOU-UI-5. With TOU-UI-3 built, the one thing standing between a
+> seeded database and a TOU bill is TOU-UI-4: a meter's registers carry
+> no peak code yet, so the `meter:tou:<meter_id>:<peak_code>` buckets
+> the charges read have nothing to fill them.
+
 ### The calendar editor
 
 Expanded 2026-11-02, because "a grid painted by period" is two lines
@@ -701,6 +1239,84 @@ it is wrong.
   asks "what are your peak hours"; the answer has to be four rows, not a
   bitmap. The grid still earns its place as the thing that shows a gap
   or an overlap at a glance, which a list cannot.
+
+- **TOU-UI-1f (Must).** *Built 2026-11-04.* **Tabs — Day Types and
+  Hours — and one season at a time.** All of it on one page is a wall:
+  two seasons and three day types is six span editors, each a strip and
+  a table, under two more cards; three seasons is nine.
+
+  One tab per collection, because that is where the save boundary
+  already is — each is its own `PUT` with its own invariants and its own
+  refusals. Two collections on one tab would mean two Save buttons
+  saving half a tab each, or one button issuing two writes with no way
+  to be atomic about them.
+
+  *(It shipped as three tabs the same day, the third being Periods.
+  That one went when peak codes became the tenant's: there is nothing
+  about them for a calendar to edit, and they are one tenant screen at
+  `/tou-periods`. The editor keeps the two collections a calendar
+  actually owns.)*
+
+  **Not a wizard**, although the page walks a new calendar through the
+  same order: it opens on the first tab with nothing in it and offers
+  "Next". A separate create flow would be a second screen over the same
+  data with its own idea of what makes a calendar valid, and nothing
+  here needs an order enforced — every part of a draft is editable, it
+  arrives with its day types filled in, and the periods it assigns
+  hours to already exist on the tenant.
+
+  What stays **outside** the tabs: the status, the season set and
+  holiday set the calendar names (with links through to those editors),
+  the validation verdict and Publish. A tab that hid "2 problems to fix"
+  would let somebody believe the hours were finished.
+
+  **Publish is disabled while the verdict lists anything**, because then
+  it can only fail, and a button like that is what teaches an operator
+  not to believe the screen. The verdict is the server's own — the
+  browser computes no notion of validity, since a second validator
+  would eventually disagree with the one publishing applies.
+
+  That required the verdict to list **everything publishing refuses**.
+  Two conditions used to be known only to the publish path — a season
+  set or holiday set still in draft (TOU-CAL-10) — so the editor called
+  such a calendar ready while the button could only fail.
+  `draftInputProblems` now states each one once and is read by both the
+  editor's verdict and `publishTouCalendar`, which still answers with
+  the specific code: "publish the season set" is a different
+  instruction from "these hours have a gap", and an operator acts on
+  them in different places.
+
+  **Changing either set is pick-then-Apply**, with what it will do
+  stated above the Apply. They were the only controls on the page that
+  committed the moment they were touched while everything else was a
+  list with a Save, and the confusion ran the dangerous way: somebody
+  who had just used the Periods tab looked for a Save, found none, and
+  left assuming their choice had been discarded. Apply *is* that Save,
+  and it sits where the change was made. It also gives the three side
+  effects somewhere to be said *before* they happen rather than as a
+  refusal afterwards — attaching adds a day type, detaching removes it,
+  and a season set that does not define a season the hours use is
+  refused. A refusal keeps the choice on screen, so the message is
+  read against the set it is about. The other picker locks while one is
+  waiting, since applying either reloads the whole calendar.
+
+  Not a Save button on the header: attaching a set *adds a day type*,
+  so a pending header selection plus an unsaved day-type list would
+  make whichever Save came second wrong, and leave the operator
+  sequencing two writes that interact.
+
+  The Hours tab scopes to one season, chosen by **chips rather than a
+  dropdown**, each marked complete or incomplete: publishing needs every
+  (season, day type) covered exactly once, and a dropdown can only say
+  which season is empty once somebody has opened it and gone looking.
+  Each season's name carries the months it covers ("Summer · 1 May –
+  31 Oct"), since a season code is the tenant's word and says nothing
+  about when it runs — least of all when it wraps the year end.
+
+  Every tab stays mounted and hidden rather than unmounted, and each
+  section remounts on **its own** counter after saving, so switching tab
+  or season does not discard a half-typed list and neither does saving
+  the one next door. A tab or chip holding unsaved edits is marked.
 
 - **TOU-UI-1a (Must).** Validation is **inline and positional**: an
   uncovered or doubly-covered span is highlighted on the grid *and*
@@ -722,7 +1338,8 @@ it is wrong.
   screen: it is how somebody checks a calendar before publishing, and
   the holiday interaction is the part people get wrong.
 
-- **TOU-UI-1d (Must).** A published version is **read-only, with a diff
+- **TOU-UI-1d (Must).** *Read-only is built; the diff is not.* A
+  published version is **read-only, with a diff
   against the version it replaced**. "What changed between v1 and v2,
   and from when" is what a regulator and a disputing customer both ask,
   and reconstructing it by opening two screens is how the wrong answer
@@ -732,27 +1349,95 @@ it is wrong.
 - **TOU-UI-1e (Should).** **Preview a date.** Enter a date and see which
   day type and which season resolve for it, with the day's periods laid
   out — the same mechanism as TOU-UI-1c but for a whole day, which is
-  how a holiday-observance rule gets sanity-checked.
+  how an observed holiday gets sanity-checked against the hours it
+  changes.
 
-- **TOU-UI-2 (Must).** A holiday editor: fixed dates and rules ("fourth
-  Thursday of November"), each with its observance rule, and **the
-  resolved dates for the current and next two years shown beside the
-  rule that produced them**. A rule nobody can see the output of is a
-  rule nobody will trust — and the observance rules are where the
-  surprises live, since a Saturday holiday observed on the Friday moves
-  a peak day.
+- **TOU-UI-2 (Must).** *Built 2026-11-04, for dates rather than rules.*
+  A holiday-set editor: a list of `(date, name)` rows saved whole, with
+  **the weekday shown beside each date** and the set's span and status
+  on the list page. The weekday is the one piece of arithmetic worth
+  doing for the operator — "Sat" next to 4 July is what prompts them to
+  enter the Friday the utility actually takes.
+  *(Originally: rules with an observance rule each, and the resolved
+  dates for three years shown beside the rule that produced them,
+  because a rule nobody can see the output of is a rule nobody will
+  trust. With dates, the rows are the output.)*
+  The set's page also carries **the horizon** — "every date in this set
+  is in the past", or "only N dates are still ahead" — which is what
+  makes entering next year's dates a visible chore instead of a silent
+  misprice.
 
-- **TOU-UI-2a (Should).** A holiday list is **shared across calendars**
-  of the tenant, since a utility's holidays do not vary by tariff, with
-  each calendar naming the list it uses. TOU-CAL-4 says "per calendar";
-  this relaxes it to "named by the calendar" so that adding a holiday
-  does not mean editing three calendars and missing one.
+  **Publish is disabled on a set with no dates**, which the server
+  refuses anyway, **and on one with unsaved dates**, which it would not:
+  publishing freezes the set as *stored*, and a published set is
+  immutable, so anything unsaved could never be added afterwards. That
+  is the worse of the two, because it succeeds. Both are judged on the
+  stored set rather than the rows on screen, and the reason is stated
+  beside the button instead of only in its tooltip. The same unsaved
+  guard is on the calendar's Publish, for the same reason.
+
+- **TOU-UI-2a (Should).** *Built 2026-11-04.* A holiday set is **shared
+  across calendars** of the tenant, since a utility's holidays do not
+  vary by tariff, with each calendar naming the set it uses. TOU-CAL-4
+  says "per calendar"; this relaxes it to "named by the calendar" so
+  that adding a holiday does not mean editing three calendars and
+  missing one. The set's page lists the calendars naming it, which is
+  what a new version has to be carried into.
 - **TOU-UI-3 (Must).** The rate schedule editor offers the TOU filter on
   consumption components, picking a published calendar and its periods,
   and refuses to publish a schedule whose periods do not cover every
   period in the calendar (or says which are deliberately unpriced).
 
-  *Server side built 2026-11-03; the editor UI is still to come.*
+  *Server side built 2026-11-03; the write path and the editor built
+  2026-11-05.* Between those two dates the gate was **reachable and
+  unsatisfiable**: `createRateScheduleSchema` was `.strict()` without
+  `touCalendarId` and a rate schedule has no PATCH, so nothing could
+  name a calendar — and `quantitySourceSchema` had no `tou_period`
+  base, so the charges that price a period could not be saved either.
+  The engine could rate a TOU bill that no author could enter. Both
+  halves now exist:
+
+  - **The schedule names the calendar.** `touCalendarId` is accepted at
+    create, carried forward by `revise` (and overridable there, which
+    is the usual reason a TOU tariff is revised at all), and settable
+    afterwards through `PUT /api/v1/rate-schedules/:id/tou-calendar`.
+    That is a route of its own rather than a PATCH because the entity
+    deliberately has none: this is the single field a **draft** may
+    change without forking a version, and it is refused once published
+    with the same `SCHEDULE_NOT_EDITABLE` the components answer. It
+    does not require a *published* calendar — TOU-CAL-5 binds the
+    published schedule, and the two are usually authored together, so
+    that stays one check at publish rather than two that can disagree.
+  - **The charge names the period.** `quantitySource.base =
+    "tou_period"` with a `peak_code`, offered in the component editor
+    from the tenant's period list. A `peak_code` on any other base is
+    **refused**, because it reads as a TOU charge and is not one: the
+    engine ignores the key and bills total consumption, and the publish
+    gate counts only `tou_period` components — so the schedule would
+    look complete while every unit billed at the on-peak price. A
+    drift test now pins the editor's offered bases to the grammar's, in
+    both directions; `tou_period` being in one and not the other is
+    exactly how this stayed invisible.
+  - **The list prints the period, beside the price** *(2026-11-05)*.
+    The components table showed a label, a kind, and the *name* of the
+    pricing shape — "flat" — so neither the rate nor the period was on
+    the screen at all, and reading a TOU tariff meant opening each
+    charge in turn. Both now have a column: `Price` summarises every
+    shape in the grammar leading with its number (`0.2648 /KWH`,
+    `3 tiers · 2.15 → 5.05 /HCF`, `6.5% of consumption`), and
+    `Charged on` prints the quantity source with its qualifier —
+    `tou_period: off_peak`.
+
+    This is the only check there can be on a **crossed label**. A
+    charge labelled "Off-peak energy" carrying `peak_code: "peak"`
+    satisfies every gate above — the calendar's periods are all priced,
+    exactly once each — and bills off-peak hours at the on-peak rate
+    for as long as the tariff lives. Nothing compares a free-text label
+    against the code beside it, and nothing can: the label is whatever
+    the author typed, in whatever language. Printing both where the
+    author is already looking is the control, which is why the peak
+    code is not hidden behind a hover or an expander.
+
   `rate_schedule.tou_calendar_id` is what the schedule references —
   **on the schedule, not on each component**, because the components of
   one tariff share one set of peak hours, and per component two of them
@@ -788,6 +1473,22 @@ it is wrong.
   whichever order suits them, and publishing is the commitment.
 - **TOU-UI-4 (Must).** Meter register screens allow mapping a register
   to a TOU period (TOU-REG-1).
+
+  *Write path built 2026-11-05; the screen is still to come.*
+  `PUT /api/v1/meter-registers/:id/tou-period` is the register's only
+  write — there is no register CRUD, because registers arrive with the
+  meter and this is the one thing about one a person needs to change:
+  the *utility's assignment of meaning to a dial*. It refuses a code
+  the tenant has not defined, naming the ones it has, and a second
+  register claiming a period the meter already counts, naming the
+  register that holds it — two registers counting one period would be
+  summed and charged twice.
+
+  Changing it affects **future reads only**: `createMeterRead` stamps
+  the code onto each read, so a re-rate reproduces a bill from what was
+  stamped rather than from today's mapping. That is what makes the
+  mapping safe to change at all, and it is why the stamping (also built
+  2026-11-05) matters more than the mapping does.
 - **TOU-UI-5 (Should).** A test-rating panel: pick a service agreement
   and period, see the bucketed quantities and the lines before
   publishing a schedule.
@@ -812,6 +1513,16 @@ it is wrong.
   | `PERIOD_NOT_REPORTED` | **Stops** rating — the one visible failure, and better found before a run of thousands than halfway through one. |
   | `NO_TOU_READS` | A TOU tariff with no TOU usage to price. |
 
+  **`NO_TOU_READS` no longer fires for an interval meter** *(2026-11-05)*.
+  It read the meter's `meter_read` rows and nothing else, so an AMI
+  meter holding 744 intervals and no derived buckets was reported as
+  having "reported no TOU usage at all for this period" — which sent an
+  operator to import readings that were already in the database. It now
+  fires only when the meter has neither reads nor intervals, because
+  the run derives the buckets itself (below). One grouped query over
+  `meter_read_interval`, which a utility with no interval meters pays
+  once per preview.
+
   **Reported, not enforced.** The operator approves the preview, and a
   tenant mid-migration may knowingly bill a service whose meter
   programming is not yet recorded.
@@ -823,8 +1534,17 @@ it is wrong.
   `blockers`, counting against `billableCount`. The other three produce
   a bill — a wrong one — so they are a separate `warnings` list.
 
+  *(A sixth kind on 2026-11-06 — `INTERVALS_INCOMPLETE`, a blocker by
+  the same test, since `rollUpIntervals` refuses a period its intervals
+  do not account for. The two lists and the if/else chain that mapped
+  kinds to codes became **one exhaustive table**: adding a kind had to
+  be done in both, and the chain's trailing `else` would have
+  relabelled anything new as unreconciled registers. The compiler
+  caught half of it; the half it could not catch is what the table now
+  prevents.)*
+
   Mixing them would make the preview's own headline lie: it reads "N of
-  M cannot be billed yet", and three of the five can be. An operator
+  M cannot be billed yet", and three of the six can be. An operator
   would hold a run that should go ahead, or stop trusting the number.
   The warnings block is rendered muted rather than in the warning
   colour, so the block that stops the run stays the one that looks
@@ -832,10 +1552,20 @@ it is wrong.
   running anyway is sometimes right mid-migration.
 
   **The batched form is what the preview calls**
-  (`checkTouReadinessForAgreements`). Per agreement it would be six
-  queries times tens of thousands; batched it is five in total, and the
+  (`checkTouReadinessForAgreements`). Per agreement it would be eight
+  queries times tens of thousands; batched it is eight in total, and the
   first answers "no TOU services here" for most cycles and returns. A
   non-TOU utility pays two queries for the whole feature.
+
+  **The coverage check is a sum, not the tiling function** (2026-11-06).
+  `findCoverageProblems` is the exact test and needs every interval
+  row: a month of 15-minute data is 2,880 per meter, so a preview over
+  a cycle of thousands would read tens of millions of rows to answer a
+  yes/no question. The summed `length_minutes` against the period's own
+  minutes is one row per meter and catches every short month. What it
+  cannot catch is a gap and an overlap of exactly equal length — which
+  is why this is the pre-run *signal* and `rollUpIntervals` is still the
+  gate, tiling exactly at rating where every row is read anyway.
 
   The problem *wording* lives in one place (`describeTouProblem`), so
   the preview and an agreement's own page cannot describe the same
@@ -944,24 +1674,27 @@ The general rule the answers follow: where a question is about a
 *behaviour* the model declares the choice rather than hard-coding one.
 Three places already work that way — season codes, day-type codes and
 peak codes are all open sets, so nothing in code matches a literal
-value.
+value. *(One exception since 2026-11-04: `holiday` is a reserved
+day-type code the system owns. The open set stays open around it, and
+TOU-CAL-2 says what the reservation costs and buys.)*
 
 1. **Which tariff first? — SMUD residential Time-of-Day (5–8 p.m.).**
    Sacramento Municipal Utility District, a publicly owned utility,
    which is the market this system targets, and it publishes the whole
-   calendar on one page: seasons, windows, the holiday list and the
-   observance rule.
+   calendar on one page: seasons, windows and the holidays.
 
    Chosen because it exercises more of the model than a two-period
    tariff would: a season that **wraps the year end** (non-summer is
    1 Oct – 31 May), **three periods in summer and two in non-summer** so
    the calendar's shape is not constant across seasons, a period
    appearing **twice in one day** (summer mid-peak brackets the peak),
-   **eleven holidays** mixing fixed dates with nth-weekday rules
-   including a last-Monday, and an **observance rule that is not the one
-   a textbook assumes** — a fixed-date holiday falling on a weekend is
-   *not* shifted to an adjacent weekday, so all eleven rules are
-   `observance: "NONE"`.
+   **eleven holidays** including both fixed dates and floating ones, and
+   an **observance that is not the one a textbook assumes** — a
+   fixed-date holiday falling on a weekend is *not* shifted to an
+   adjacent weekday, so 4 July 2026 stays on the Saturday and 3 July is
+   an ordinary summer weekday at the tariff's peak rate. Under rules
+   that was eleven `observance: "NONE"` settings, each easy to set
+   wrongly; as dates it is the eleven days somebody typed.
 
    Fixture and golden test: `__tests__/tariff-golden/_smud-time-of-day-fixtures.ts`
    and `smud-time-of-day-calendar.test.ts`. The model accepted the
@@ -983,7 +1716,7 @@ value.
 2. **Register or interval first? — registers, as slice 1 says, and the
    choice costs nothing.** The storage decision above already makes both
    meter kinds produce one shape: a TOU bucket is a `meter_read` row
-   with a nullable `tou_period_id`, and an interval is a row in
+   with a nullable `peak_code`, and an interval is a row in
    `meter_read_interval` that aggregates into the same shape. So the
    engine does not branch on the source, TOU-ENG-2 collapses, and slice
    2 adds a data source rather than a second code path. There is no

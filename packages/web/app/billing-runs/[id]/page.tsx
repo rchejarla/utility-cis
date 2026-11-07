@@ -95,7 +95,7 @@ const TAB_STATUS: Record<string, string | undefined> = {
 
 export default function BillingRunDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { canView, canEdit } = usePermission("accounts");
+  const { canView, canEdit } = usePermission("billing");
   const { toast } = useToast();
 
   const [run, setRun] = useState<RunDetail | null>(null);

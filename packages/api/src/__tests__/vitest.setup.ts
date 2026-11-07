@@ -143,6 +143,20 @@ vi.mock("../lib/prisma.js", () => {
     // than as a missing mock.
     utility: crud(),
     utilityModule: crud(),
+    // The tenant's TOU price tiers, which provisioning creates since
+    // 2026-11-04. Omitting it makes `tx.touPeriod` undefined inside the
+    // provisioning transaction, which surfaces as "Cannot read
+    // properties of undefined (reading 'createMany')" from a route that
+    // has nothing to do with tariffs.
+    touPeriod: crud(),
+    // The coverage sweep's exception queue, written since 2026-11-06.
+    meterDataException: crud(),
+    // And the published season set it creates since 2026-11-06, for the
+    // same reason: the whole provisioning transaction fails on the first
+    // model the mock has not got, and the error names a property rather
+    // than a table.
+    seasonSet: crud(),
+    season: crud(),
     utilityConfig: crud(),
     // One row per (utility, scheduler) since 2026-10-31. Omitting it
     // makes `prisma.schedulerConfig` undefined, which surfaces as

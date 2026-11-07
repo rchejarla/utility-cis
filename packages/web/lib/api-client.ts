@@ -125,6 +125,30 @@ async function handleResponse<T>(response: Response): Promise<T> {
       if (Array.isArray(missing) && missing.length > 0) {
         errorDetails = `${errorDetails} (${missing.join(", ")})`;
       }
+      /*
+       * The same idea for a Zod 400, which is every form in the product.
+       *
+       * `error-handler.ts` has always sent
+       * `details: [{ field, message }]` and nothing read it, so a
+       * validation failure anywhere surfaced as the bare "Validation
+       * failed" — true, and useless. Saving a day type with an empty
+       * code said exactly that, with no hint that a code was the
+       * problem or which row it was in.
+       *
+       * The field path is printed as the server sends it
+       * (`dayTypes.0.dayTypeCode`), because the index is how you find
+       * the row and inventing friendlier names here would need a map of
+       * every schema in the app.
+       */
+      const details = errorBody.error?.details;
+      if (Array.isArray(details) && details.length > 0) {
+        const named = details
+          .map((d: { field?: string; message?: string }) =>
+            d.field ? `${d.field}: ${d.message}` : d.message,
+          )
+          .filter(Boolean);
+        if (named.length > 0) errorDetails = `${errorDetails} — ${named.join("; ")}`;
+      }
     } catch {
       errorDetails = await response.text();
     }

@@ -1,20 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { JsonFallbackEditor } from "./pricing-editors/json-fallback-editor";
+import { TransformsBuilder } from "./transforms-builder";
+import { RequiredMark } from "@/components/ui/required-mark";
 import { quantitySourceSchema } from "@utility-cis/shared";
+import { apiClient } from "@/lib/api-client";
 
 /**
  * Slice 2 task 7 — structured QuantitySourceBuilder.
  *
- * Base dropdown + per-base inputs covering the 6 supported quantity
- * sources. premise_attribute is the only base that takes a structured
- * extra input; transforms remain a collapsible JSON textarea since they
- * are rare and varied.
+ * Base dropdown + per-base inputs covering the supported quantity
+ * sources. `premise_attribute` and `tou_period` are the two that take a
+ * structured extra input; transforms remain a collapsible JSON textarea
+ * since they are rare and varied.
  */
 
 const BASES = [
   { code: "metered", label: "Metered consumption" },
+  { code: "tou_period", label: "One TOU period's consumption" },
   { code: "wqa", label: "Winter Quarter Average" },
   { code: "fixed", label: "Fixed (1)" },
   { code: "item_count", label: "Count of attached items" },
@@ -23,27 +26,68 @@ const BASES = [
   { code: "peak_demand", label: "Peak demand (not supported in slice 4)" },
 ];
 
+interface Period {
+  peakCode: string;
+  label: string;
+}
+
+export interface TransformOption {
+  code: string;
+  label: string;
+  supported: boolean;
+}
+
 interface Props {
   value: Record<string, unknown>;
   onChange: (value: Record<string, unknown>, valid: boolean) => void;
+  /**
+   * From `/api/v1/rate-grammar/registered`, which already carries each
+   * transform's label and whether the engine evaluates it. Passed in
+   * rather than re-listed here: a second hand-kept copy of the grammar
+   * in the web is exactly how `tou_period` came to be missing from the
+   * base list, built and unreachable for two days.
+   */
+  transforms?: TransformOption[];
+  /** For the `subtract_linked_commodity` transform's picker. */
+  commodities?: { id: string; name: string }[];
 }
 
-export function QuantitySourceBuilder({ value, onChange }: Props) {
+export function QuantitySourceBuilder({
+  value,
+  onChange,
+  transforms = [],
+  commodities = [],
+}: Props) {
   const [base, setBase] = useState<string>(
     typeof value.base === "string" ? (value.base as string) : "metered",
   );
   const [sourceAttr, setSourceAttr] = useState<string>(
     typeof value.source_attr === "string" ? (value.source_attr as string) : "",
   );
-  const [transformsJson] = useState<string>(
-    Array.isArray(value.transforms)
-      ? JSON.stringify(value.transforms, null, 2)
-      : "[]",
+  const [peakCode, setPeakCode] = useState<string>(
+    typeof value.peak_code === "string" ? (value.peak_code as string) : "",
   );
+  const [periods, setPeriods] = useState<Period[]>([]);
   const [transformsValid, setTransformsValid] = useState<boolean>(true);
   const [transformsParsed, setTransformsParsed] = useState<unknown[]>(
     Array.isArray(value.transforms) ? (value.transforms as unknown[]) : [],
   );
+
+  /*
+   * The tenant's price tiers, which is the right list even though the
+   * schedule prices one calendar's: peak codes belong to the utility,
+   * and a calendar uses whichever of them its hours name. Publishing
+   * is where the two are compared — it refuses a charge pricing a
+   * period the calendar has not got, and a calendar period nothing
+   * prices — so this offers the names rather than deciding them.
+   */
+  useEffect(() => {
+    if (base !== "tou_period" || periods.length > 0) return;
+    apiClient
+      .get<{ data: Period[] }>("/api/v1/tou-periods")
+      .then((res) => setPeriods(res.data ?? []))
+      .catch(console.error);
+  }, [base, periods.length]);
 
   useEffect(() => {
     const assembled: Record<string, unknown> = { base };
@@ -54,16 +98,24 @@ export function QuantitySourceBuilder({ value, onChange }: Props) {
       }
       assembled.source_attr = sourceAttr.trim();
     }
+    if (base === "tou_period") {
+      if (!peakCode) {
+        onChange({ base }, false);
+        return;
+      }
+      assembled.peak_code = peakCode;
+    }
     if (transformsParsed.length > 0) assembled.transforms = transformsParsed;
     const result = quantitySourceSchema.safeParse(assembled);
     onChange(assembled, result.success && transformsValid);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base, sourceAttr, transformsParsed, transformsValid]);
+  }, [base, sourceAttr, peakCode, transformsParsed, transformsValid]);
 
   return (
     <div>
       <label style={labelStyle}>Quantity source</label>
       <select
+        aria-label="Quantity source"
         value={base}
         onChange={(e) => setBase(e.target.value)}
         style={inputStyle}
@@ -78,11 +130,43 @@ export function QuantitySourceBuilder({ value, onChange }: Props) {
           </option>
         ))}
       </select>
+      {base === "tou_period" && (
+        <div style={{ marginTop: 12 }}>
+          <label style={labelStyle}>
+            TOU period
+            <RequiredMark />
+          </label>
+          <select
+            aria-label="TOU period"
+            required
+            value={peakCode}
+            onChange={(e) => setPeakCode(e.target.value)}
+            style={inputStyle}
+          >
+            <option value="">Choose a period…</option>
+            {periods.map((p) => (
+              <option key={p.peakCode} value={p.peakCode}>
+                {p.label} ({p.peakCode})
+              </option>
+            ))}
+          </select>
+          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
+            One charge per period: this one prices only the hours the
+            schedule&apos;s TOU calendar puts in this period. Publishing is refused
+            until every period that calendar uses has a charge.
+          </div>
+        </div>
+      )}
       {base === "premise_attribute" && (
         <div style={{ marginTop: 12 }}>
-          <label style={labelStyle}>Source attribute</label>
+          <label style={labelStyle}>
+            Source attribute
+            <RequiredMark />
+          </label>
           <input
             type="text"
+            aria-label="Source attribute"
+            required
             value={sourceAttr}
             onChange={(e) => setSourceAttr(e.target.value)}
             placeholder="e.g. premise.eru_count or eru_count"
@@ -102,14 +186,14 @@ export function QuantitySourceBuilder({ value, onChange }: Props) {
             Transforms (advanced — optional)
           </summary>
           <div style={{ marginTop: 8 }}>
-            <JsonFallbackEditor
-              initialJson={transformsJson}
-              onChange={(parsed, isValid) => {
+            <TransformsBuilder
+              value={Array.isArray(value.transforms) ? (value.transforms as unknown[]) : []}
+              onChange={(built, isValid) => {
                 setTransformsValid(isValid);
-                if (Array.isArray(parsed)) setTransformsParsed(parsed);
+                setTransformsParsed(built);
               }}
-              rows={6}
-              label="Transforms array"
+              available={transforms}
+              commodities={commodities}
             />
           </div>
         </details>

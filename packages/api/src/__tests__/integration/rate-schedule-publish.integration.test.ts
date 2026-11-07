@@ -438,14 +438,39 @@ describe("publishing a TOU schedule (spec 26, TOU-UI-3 and TOU-CAL-5)", () => {
           timeZone: "America/Denver",
         },
       });
+      /*
+       * A calendar's periods are the distinct codes its *hours* use,
+       * now that peak codes belong to the tenant. So the codes are
+       * declared by giving the calendar a span at each one, which is
+       * what the schedule's publish check reads.
+       *
+       * The spans neither tile the day nor need to: these tests
+       * exercise the rate schedule's rules, not the calendar's.
+       */
+      const dayType = await prisma.touDayType.create({
+        data: {
+          utilityId: TENANT_A,
+          touCalendarId: calendar.id,
+          dayTypeCode: "weekday",
+          label: "Weekday",
+          sortOrder: 0,
+        },
+      });
       for (const [i, peakCode] of peakCodes.entries()) {
-        await prisma.touPeriod.create({
+        await prisma.touPeriod.upsert({
+          where: { utilityId_peakCode: { utilityId: TENANT_A, peakCode } },
+          update: {},
+          create: { utilityId: TENANT_A, peakCode, label: peakCode, sortOrder: i },
+        });
+        await prisma.touSlot.create({
           data: {
             utilityId: TENANT_A,
             touCalendarId: calendar.id,
+            seasonCode: "all",
+            touDayTypeId: dayType.id,
             peakCode,
-            label: peakCode,
-            sortOrder: i,
+            startMinute: i * 60,
+            endMinute: (i + 1) * 60,
           },
         });
       }

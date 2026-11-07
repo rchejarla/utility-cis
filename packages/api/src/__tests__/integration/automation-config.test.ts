@@ -98,6 +98,7 @@ describe("automation-config routes", () => {
         "slaBreachSweep",
         "delinquency",
         "billing",
+        "intervalCoverage",
       ]);
       const billing = body.schedulers.find((s: { key: string }) => s.key === "billing");
       expect(billing).toMatchObject({ enabled: false, runHourLocal: 3, lastRunAt: null });

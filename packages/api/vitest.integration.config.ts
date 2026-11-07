@@ -54,8 +54,12 @@ export default defineConfig({
     // `fileParallelism: false` keeps them serial: every file boots its
     // own containers, and running them in parallel would multiply that
     // startup cost for no real benefit at our current size. What it
-    // deliberately does NOT do is put all 58 files in one process, which
-    // `singleFork: true` used to.
+    // deliberately does NOT do is put every file in this directory into
+    // one process, which `singleFork: true` used to.
+    //
+    // No count here on purpose: this said "all 58 files" while there
+    // were 104, which is the kind of stale number that makes a reader
+    // distrust the rest of the comment.
     //
     // That sharing cost an evening of misattributed errors.
     // worker-suspension.test.ts sets `process.env.REDIS_URL` to its Redis

@@ -2,6 +2,7 @@
 
 import React, { useId } from "react";
 import { HelpTooltip } from "./tooltip";
+import { RequiredMark } from "./required-mark";
 
 interface FormFieldProps {
   label: string;
@@ -60,12 +61,7 @@ export function FormField({
         }}
       >
         {label}
-        {required && (
-          <span aria-hidden="true" style={{ color: "var(--danger)", fontSize: "14px", lineHeight: 1 }}>
-            *
-          </span>
-        )}
-        {required && <span className="sr-only">(required)</span>}
+        {required && <RequiredMark />}
         {tooltip && <HelpTooltip text={tooltip} ruleId={tooltipRuleId} />}
       </label>
 

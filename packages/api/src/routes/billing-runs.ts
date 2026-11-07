@@ -37,7 +37,7 @@ import {
 export async function billingRunRoutes(app: FastifyInstance) {
   app.post(
     "/api/v1/billing-runs",
-    { config: { module: "accounts", permission: "EDIT" , refusedInOverlay: true } },
+    { config: { module: "billing", permission: "EDIT" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const body = createBillingRunSchema.parse(request.body ?? {});
@@ -68,7 +68,7 @@ export async function billingRunRoutes(app: FastifyInstance) {
 
   app.get(
     "/api/v1/billing-runs",
-    { config: { module: "accounts", permission: "VIEW" } },
+    { config: { module: "billing", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       return reply.send(await listBillingRuns(utilityId));
@@ -85,7 +85,7 @@ export async function billingRunRoutes(app: FastifyInstance) {
    */
   app.get(
     "/api/v1/billing-runs/preview",
-    { config: { module: "accounts", permission: "VIEW" } },
+    { config: { module: "billing", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const query = previewBillingRunSchema.parse(request.query ?? {});
@@ -110,7 +110,7 @@ export async function billingRunRoutes(app: FastifyInstance) {
    */
   app.get(
     "/api/v1/billing-runs/schedule",
-    { config: { module: "accounts", permission: "VIEW" } },
+    { config: { module: "billing", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       return reply.send(await getBillingSchedule(utilityId));
@@ -119,7 +119,7 @@ export async function billingRunRoutes(app: FastifyInstance) {
 
   app.get(
     "/api/v1/billing-runs/:id",
-    { config: { module: "accounts", permission: "VIEW" } },
+    { config: { module: "billing", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -130,7 +130,7 @@ export async function billingRunRoutes(app: FastifyInstance) {
   /** The exception list. `?status=FAILED` is the work queue. */
   app.get(
     "/api/v1/billing-runs/:id/items",
-    { config: { module: "accounts", permission: "VIEW" } },
+    { config: { module: "billing", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -148,7 +148,7 @@ export async function billingRunRoutes(app: FastifyInstance) {
    */
   app.get(
     "/api/v1/billing-runs/:id/exception-summary",
-    { config: { module: "accounts", permission: "VIEW" } },
+    { config: { module: "billing", permission: "VIEW" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -169,7 +169,7 @@ export async function billingRunRoutes(app: FastifyInstance) {
    */
   app.post(
     "/api/v1/billing-runs/:id/send",
-    { config: { module: "accounts", permission: "EDIT" , refusedInOverlay: true } },
+    { config: { module: "billing", permission: "EDIT" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -194,7 +194,7 @@ export async function billingRunRoutes(app: FastifyInstance) {
    */
   app.post(
     "/api/v1/billing-runs/:id/post",
-    { config: { module: "accounts", permission: "EDIT" , refusedInOverlay: true } },
+    { config: { module: "billing", permission: "EDIT" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -220,7 +220,7 @@ export async function billingRunRoutes(app: FastifyInstance) {
    */
   app.post(
     "/api/v1/billing-runs/:id/resume",
-    { config: { module: "accounts", permission: "EDIT" , refusedInOverlay: true } },
+    { config: { module: "billing", permission: "EDIT" , refusedInOverlay: true } },
     async (request, reply) => {
       const { utilityId, id: actorId, name: actorName } = request.user;
       const { id } = idParamSchema.parse(request.params);
@@ -239,7 +239,7 @@ export async function billingRunRoutes(app: FastifyInstance) {
 
   app.post(
     "/api/v1/billing-runs/:id/cancel",
-    { config: { module: "accounts", permission: "EDIT" } },
+    { config: { module: "billing", permission: "EDIT" } },
     async (request, reply) => {
       const { utilityId } = request.user;
       const { id } = idParamSchema.parse(request.params);

@@ -1,7 +1,35 @@
 import { z } from "zod";
 
-export const meterTypeEnum = z.enum(["AMR", "AMI", "MANUAL", "SMART"]);
-export const meterStatusEnum = z.enum(["ACTIVE", "REMOVED", "DEFECTIVE", "PENDING_INSTALL"]);
+/**
+ * The kinds of meter, in the one place that defines them.
+ *
+ * `SMART` was removed on 2026-11-06: it said nothing `AMI` did not, and
+ * spec 03 admitted it ("used interchangeably with AMI in some
+ * contexts"). Two values for one idea is two answers to "what is this
+ * meter", and nothing in the API branches on `meter_type` at all — so
+ * the ambiguity's only cost was paid by whoever had to pick one on a
+ * form, and by anyone who later tried to mean something by the answer.
+ *
+ * Exported as a list because there were **five** hand-kept copies — this
+ * enum, the meter import handler, and three web forms, one of which
+ * offered `OTHER`, a value the API would have refused. A vocabulary the
+ * database constrains should have one statement in TypeScript.
+ */
+export const METER_TYPES = ["AMR", "AMI", "MANUAL"] as const;
+
+export const meterTypeEnum = z.enum(METER_TYPES);
+
+/**
+ * A meter's lifecycle state, exported for the same reason.
+ *
+ * The meter detail page offered `INACTIVE` and `FAULTY` — neither of
+ * which has ever existed — while `DEFECTIVE` and `PENDING_INSTALL`,
+ * which do, were missing from it. A dropdown of values the API refuses
+ * is a form that cannot be saved, and the reason is never on the screen.
+ */
+export const METER_STATUSES = ["ACTIVE", "REMOVED", "DEFECTIVE", "PENDING_INSTALL"] as const;
+
+export const meterStatusEnum = z.enum(METER_STATUSES);
 
 export const meterSortFields = [
   "createdAt",

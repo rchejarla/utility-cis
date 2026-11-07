@@ -15,7 +15,16 @@ import {
   checkTouReadinessForAgreements,
   describeTouProblem,
   type TouReadinessProblem,
-} from "../tou-readiness.service.js";
+} from "../tou-readiness.service.js";/*
+ * The two shapes live in `shared` so the web cannot drift from them:
+ * its renderer kept a hand-written copy, and a code added here and
+ * not there type-checks on both sides and renders as an empty row.
+ */
+import type { RunBlocker, RunWarning } from "@utility-cis/shared";
+
+export type { RunBlocker, RunWarning };
+
+
 
 export interface CreateBillingRunArgs {
   billingCycleId: string;
@@ -154,50 +163,6 @@ async function resolveRunPlan(
   };
 }
 
-/**
- * A reason some of the eligible accounts cannot be billed, and what to
- * fix. Grouped by cause rather than listed per account: one publish or
- * one assignment usually clears the whole group.
- */
-export interface RunBlocker {
-  code:
-    | "NO_ACTIVE_ASSIGNMENTS"
-    | "SCHEDULE_NOT_PUBLISHED"
-    /*
-     * Both TOU codes are blockers rather than warnings on an observable
-     * test: does a bill come out? The `tou_period` quantity source
-     * raises when a period it prices has no bucket, so these two stop
-     * rating and the account genuinely cannot be billed (spec 26,
-     * TOU-BIL-1).
-     */
-    | "TOU_PERIOD_NOT_REPORTED"
-    | "TOU_NO_READS";
-  accountCount: number;
-  /** The thing to go and fix — schedule codes, or the agreements. */
-  detail: string;
-  /** A few account numbers, so the group is recognisable. */
-  sampleAccounts: string[];
-}
-
-/**
- * Something wrong with an account that **will still be billed**.
- *
- * A separate list from `RunBlocker` because the instruction is
- * different, and mixing them would make the preview's headline lie: it
- * reads "N of M cannot be billed yet", and these all can be. They will
- * simply be billed **wrongly**, in ways nothing about the resulting bill
- * reveals — a TOU calendar mismatch bills against hours the meter was
- * not counting by and every figure reconciles.
- *
- * Same shape as a blocker, grouped by cause for the same reason: one
- * fix usually clears the whole group.
- */
-export interface RunWarning {
-  code: "TOU_CALENDAR_MISMATCH" | "TOU_CALENDAR_UNKNOWN" | "TOU_REGISTERS_UNRECONCILED";
-  accountCount: number;
-  detail: string;
-  sampleAccounts: string[];
-}
 
 /**
  * Which of the eligible accounts a run would fail or skip on config,
@@ -348,15 +313,32 @@ async function findTouProblems(
     accounts: Map<string, string>;
     detail: Set<string>;
   }
-  const groups = new Map<string, Group>();
+  const groups = new Map<TouReadinessProblem["kind"], Group>();
   const blockedAccountIds = new Set<string>();
 
-  const BLOCKING: Record<TouReadinessProblem["kind"], boolean> = {
-    PERIOD_NOT_REPORTED: true,
-    NO_TOU_READS: true,
-    CALENDAR_MISMATCH: false,
-    CALENDAR_UNKNOWN: false,
-    REGISTERS_UNRECONCILED: false,
+  /**
+   * Where each kind goes, in one table the compiler keeps exhaustive.
+   *
+   * This was a `BLOCKING` lookup plus an if/else chain over the same
+   * six kinds — two places to add a kind to, and the chain ended in a
+   * trailing `else` that would have relabelled anything new as
+   * unreconciled registers. Adding `INTERVALS_INCOMPLETE` is what found
+   * it: the lookup would have failed to compile, which is the half that
+   * worked, and the chain would have shipped the wrong sentence.
+   *
+   * The split is the observable test the blocker type states: does a
+   * bill come out?
+   */
+  const DESTINATION: Record<
+    TouReadinessProblem["kind"],
+    { blocking: true; code: RunBlocker["code"] } | { blocking: false; code: RunWarning["code"] }
+  > = {
+    PERIOD_NOT_REPORTED: { blocking: true, code: "TOU_PERIOD_NOT_REPORTED" },
+    NO_TOU_READS: { blocking: true, code: "TOU_NO_READS" },
+    INTERVALS_INCOMPLETE: { blocking: true, code: "TOU_INTERVALS_INCOMPLETE" },
+    CALENDAR_MISMATCH: { blocking: false, code: "TOU_CALENDAR_MISMATCH" },
+    CALENDAR_UNKNOWN: { blocking: false, code: "TOU_CALENDAR_UNKNOWN" },
+    REGISTERS_UNRECONCILED: { blocking: false, code: "TOU_REGISTERS_UNRECONCILED" },
   };
 
   for (const [saId, problems] of byAgreement) {
@@ -369,7 +351,7 @@ async function findTouProblems(
       // agreement's own page describe a problem the same way.
       group.detail.add(describeTouProblem(problem));
       groups.set(problem.kind, group);
-      if (BLOCKING[problem.kind]) blockedAccountIds.add(account.id);
+      if (DESTINATION[problem.kind].blocking) blockedAccountIds.add(account.id);
     }
   }
 
@@ -388,16 +370,11 @@ async function findTouProblems(
       detail: describe(group.detail),
       sampleAccounts: [...group.accounts.values()].sort().slice(0, 5),
     };
-    if (kind === "PERIOD_NOT_REPORTED") {
-      blockers.push({ code: "TOU_PERIOD_NOT_REPORTED", ...row });
-    } else if (kind === "NO_TOU_READS") {
-      blockers.push({ code: "TOU_NO_READS", ...row });
-    } else if (kind === "CALENDAR_MISMATCH") {
-      warnings.push({ code: "TOU_CALENDAR_MISMATCH", ...row });
-    } else if (kind === "CALENDAR_UNKNOWN") {
-      warnings.push({ code: "TOU_CALENDAR_UNKNOWN", ...row });
+    const destination = DESTINATION[kind];
+    if (destination.blocking) {
+      blockers.push({ code: destination.code, ...row });
     } else {
-      warnings.push({ code: "TOU_REGISTERS_UNRECONCILED", ...row });
+      warnings.push({ code: destination.code, ...row });
     }
   }
 

@@ -44,7 +44,7 @@ const EMPTY_CREATE: CreateForm = {
 
 export default function MeasureTypesPage() {
   const { toast } = useToast();
-  const { canView, canCreate, canEdit } = usePermission("commodities");
+  const { canView, canCreate, canEdit } = usePermission("tenant_profile");
   const [rows, setRows] = useState<MeasureTypeDef[]>([]);
   const [loading, setLoading] = useState(true);
 

@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
-import { bootPostgres, ensurePrincipal, ACTOR, seedAsPlatform } from "./_effective-dating-fixtures.js";
+import {
+  bootPostgres,
+  deprovisionTenants,
+  ensurePrincipal,
+  ACTOR,
+  seedAsPlatform,
+} from "./_effective-dating-fixtures.js";
 
 /**
  * A utility's roles, from above it.
@@ -76,16 +82,7 @@ afterAll(async () => {
 beforeEach(() =>
   seedAsPlatform(async () => {
   const { prisma } = prismaImports;
-  for (const id of [UTILITY, OTHER]) {
-    // Role mutations write audit rows, and audit_log.utility_id is
-    // ON DELETE RESTRICT, so they go before the utility.
-    await prisma.auditLog.deleteMany({ where: { utilityId: id } });
-    await prisma.userRole.deleteMany({ where: { utilityId: id } });
-    await prisma.cisUser.deleteMany({ where: { utilityId: id } });
-    await prisma.role.deleteMany({ where: { utilityId: id } });
-    await prisma.utilityModule.deleteMany({ where: { utilityId: id } });
-    await prisma.utility.deleteMany({ where: { id } });
-  }
+  await deprovisionTenants(prisma, [UTILITY, OTHER]);
   await prisma.cisUser.deleteMany({ where: { utilityId: null } });
   await svc.provisionTenant({ utilityId: UTILITY, name: "City of Roles" });
   await svc.provisionTenant({ utilityId: OTHER, name: "Other Utility" });

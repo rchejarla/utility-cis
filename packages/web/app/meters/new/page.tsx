@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { FieldDefinition } from "@utility-cis/shared";
+import { METER_TYPES, type FieldDefinition, type MeterType } from "@utility-cis/shared";
 import { DatePicker } from "@/components/ui/date-picker";
 import {
   EntityFormPage,
@@ -14,7 +14,17 @@ interface MeterForm extends Record<string, unknown> {
   premiseId: string;
   meterNumber: string;
   commodityId: string;
-  meterType: string;
+  /**
+   * A kind the API accepts, or blank until the clerk picks one.
+   *
+   * `string` is what let this form open on `"STANDARD"` — a value
+   * `meter_type` has never had. The select's options come from
+   * `METER_TYPES`, so nothing could *choose* it; it was simply what the
+   * field held until somebody touched the dropdown, and leaving it
+   * alone sent it. `required` did not catch that, because a wrong value
+   * is not an empty one, so the clerk got a 400 the page cannot explain.
+   */
+  meterType: MeterType | "";
   uomId: string;
   multiplier: string;
   installDate: string;
@@ -29,15 +39,16 @@ interface UOM {
   commodityId: string;
 }
 
-const METER_TYPES = [
-  "STANDARD",
-  "SMART",
-  "AMR",
-  "AMI",
-  "SUBMETER",
-  "MASTER",
-  "OTHER",
-].map((t) => ({ value: t, label: t }));
+/*
+ * The shared list, shaped for this form's option objects.
+ *
+ * Its own copy read STANDARD, SMART, AMR, AMI, SUBMETER, MASTER, OTHER
+ * — five values the API has never accepted, and no `MANUAL`, which is
+ * what most water meters are. So the one form for adding a meter could
+ * not add the commonest kind of meter, and offered five that would be
+ * refused on submit.
+ */
+const METER_TYPE_OPTIONS = METER_TYPES.map((t) => ({ value: t, label: t }));
 
 export default function NewMeterPage() {
   // UOMs are loaded locally because the UOM dropdown must filter by the
@@ -81,7 +92,7 @@ export default function NewMeterPage() {
         premiseId: "",
         meterNumber: "",
         commodityId: "",
-        meterType: "STANDARD",
+        meterType: "",
         uomId: "",
         multiplier: "1",
         installDate: "",
@@ -164,7 +175,15 @@ export default function NewMeterPage() {
               label: "Meter Type",
               type: "select",
               required: true,
-              options: METER_TYPES,
+              /*
+               * Blank first, like the premise, commodity and UOM
+               * selects above. How a meter is read is a fact about the
+               * device, and a form that pre-answers it records whatever
+               * the default happened to be — for every meter whose
+               * installer never looked at this field.
+               */
+              emptyOption: "Select meter type...",
+              options: METER_TYPE_OPTIONS,
             },
             {
               key: "multiplier",

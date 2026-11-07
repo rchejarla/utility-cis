@@ -55,7 +55,9 @@ const ISSUER = {
 };
 
 /** Modules the endpoints are gated on; absent, every request is a 403. */
-const MODULES = ["accounts", "portal_billing"];
+// `billing` since 2026-11-03: producing and streaming a bill
+// document is billing work, not the account record.
+const MODULES = ["accounts", "billing", "portal_billing"];
 
 let pgContainer: StartedPostgreSqlContainer;
 let prismaImports: typeof import("../../lib/prisma.js");
@@ -848,7 +850,7 @@ describe("bill documents", () => {
  * middleware skips permission checks entirely, so a test that cares
  * about authority has to seed one.
  */
-async function grantAccounts(permissions: string[]): Promise<void> {
+async function grantBilling(permissions: string[]): Promise<void> {
   /*
    * Arranging rows, so the authority the fixtures use. The routes under
    * test still run as `cis_app` acting for the tenant their own request
@@ -857,7 +859,16 @@ async function grantAccounts(permissions: string[]): Promise<void> {
   return seedAsPlatform(async () => {
     const { prisma } = prismaImports;
     const role = await prisma.role.create({
-      data: { utilityId: UTILITY, name: `Role ${permissions.join("-")}`, permissions: { accounts: permissions } },
+      data: { utilityId: UTILITY, name: `Role ${permissions.join("-")}`, permissions: {
+        /*
+         * Full on `accounts` so only the authority under test
+         * varies: the rest of this file reads the account the
+         * bill hangs off, and narrowing both at once makes a
+         * failure unattributable.
+         */
+        accounts: ["VIEW", "CREATE", "EDIT", "DELETE"],
+        billing: permissions,
+      } },
     });
     // Upserted, not created: `ensurePrincipal` in beforeEach already made
     // this actor so the cases that never call this helper can authenticate
@@ -1038,9 +1049,9 @@ describe("bill document endpoints", () => {
    * store — so a user who may only look at accounts cannot trigger it.
    * Downloading one that already exists is a read, and stays on VIEW.
    */
-  it("refuses to produce a document for a user who only holds accounts:VIEW", async () => {
+  it("refuses to produce a document for a user who only holds billing:VIEW", async () => {
     const billId = await postedBill();
-    await grantAccounts(["VIEW"]);
+    await grantBilling(["VIEW"]);
     await generateBillDocument(UTILITY, billId, ACTOR, ACTOR_NAME);
     get.mockResolvedValue((put.mock.calls[0][0] as { body: Buffer }).body);
     put.mockClear();
@@ -1061,9 +1072,9 @@ describe("bill document endpoints", () => {
     expect(put).not.toHaveBeenCalled();
   }, 60_000);
 
-  it("lets accounts:EDIT produce and replace a document", async () => {
+  it("lets billing:EDIT produce and replace a document", async () => {
     const billId = await postedBill();
-    await grantAccounts(["VIEW", "EDIT"]);
+    await grantBilling(["VIEW", "EDIT"]);
 
     const generate = await app.inject({
       method: "POST",

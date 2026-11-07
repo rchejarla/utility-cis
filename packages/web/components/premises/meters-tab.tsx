@@ -1,6 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
+// From shared, not a fourth copy: the three forms that kept their own
+// had drifted to seven values between them, four of which the API has
+// never accepted.
+import { METER_TYPES } from "@utility-cis/shared";
 import { DataTable } from "@/components/ui/data-table";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CommodityBadge } from "@/components/ui/commodity-badge";
@@ -41,7 +45,6 @@ interface MetersTabProps {
   onShowFormChange?: (show: boolean) => void;
 }
 
-const METER_TYPES = ["MANUAL", "AMR", "AMI", "SMART"];
 
 const inputStyle = {
   padding: "6px 10px",

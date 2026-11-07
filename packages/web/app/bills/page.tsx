@@ -105,7 +105,7 @@ const STATE_OPTIONS = (Object.keys(STATE_LABELS) as BillState[]).map((value) => 
 type StateFilter = BillState | "all";
 
 function Bills() {
-  const { canView } = usePermission("accounts");
+  const { canView } = usePermission("billing");
   const params = useSearchParams();
   const { toast } = useToast();
 

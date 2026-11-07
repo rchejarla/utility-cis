@@ -317,7 +317,7 @@ What this buys is narrower than it looks. The mechanism is chosen and running, s
 | **Delinquency** | DelinquencyRule, DelinquencyAction |
 | **Service Requests** | ServiceRequest, Sla, ServiceRequestTypeDef (+ `service_request_counter` plumbing table for per-tenant/year `SR-YYYY-NNNNNN` numbering) |
 | **Accounts Receivable** | LedgerEntry, LedgerApplication, LedgerReasonDef |
-| **Rates** | SeasonSet, Season, TouCalendar, TouPeriod, TouDayType, TouDayTypeWeekday, TouSlot, TouDayOverride, TouHolidayList, TouHolidayRule (spec 26; added 2026-11-02) |
+| **Rates** | SeasonSet, Season (every tenant is provisioned with a published `Default` set since 2026-11-06 — the 2026-11-02 migration reached only the tenants alive then, and without a set nothing seasonal rates), TouPeriod (tenant-level since 2026-11-04, and keyed from `meter_register.peak_code` since 2026-11-06), TouCalendar, TouDayType, TouDayTypeWeekday, TouSlot, TouDayOverride, TouHolidaySet, TouHoliday (spec 26; added 2026-11-02, holidays and peak codes revised 2026-11-04), MeterReadInterval, MeterDataException (the coverage sweep's queue, added 2026-11-06: one open row per meter-day-kind, opened and resolved by the sweep, never accepted or estimated by it) |
 
 **Service Request enums (Phase 4 slice B):**
 - `ServiceRequestStatus`: NEW, ASSIGNED, IN_PROGRESS, PENDING_FIELD, COMPLETED, CANCELLED, FAILED
@@ -476,7 +476,7 @@ Physical device measuring consumption. Retained across customer changes.
 | premise_id | UUID | FK → Premise |
 | meter_number | VARCHAR(100) | Unique per utility |
 | commodity_id | UUID | FK → Commodity |
-| meter_type | ENUM | AMR, AMI, MANUAL, SMART |
+| meter_type | ENUM | AMR, AMI, MANUAL (`SMART` removed 2026-11-06 as a second name for AMI) |
 | uom_id | UUID | FK → UnitOfMeasure |
 | dial_count | INTEGER | |
 | multiplier | DECIMAL(10,4) | Default 1.0 |
@@ -625,7 +625,7 @@ Every reading from a meter. TimescaleDB hypertable for interval data at scale.
 | reading | DECIMAL(12,4) | Raw dial reading |
 | prior_reading | DECIMAL(12,4) | |
 | consumption | DECIMAL(12,4) | Calculated |
-| read_type | ENUM | ACTUAL, ESTIMATED, CORRECTED, FINAL, AMI |
+| read_type | ENUM | ACTUAL, ESTIMATED, CORRECTED, FINAL (`AMI` removed 2026-11-06 — a source, not a type; `read_source` says that) |
 | read_source | ENUM | MANUAL, AMR, AMI, CUSTOMER_SELF, SYSTEM |
 | exception_code | VARCHAR(50) | HIGH_USAGE, ZERO_USAGE, METER_DEFECT |
 | reader_id | UUID | |
@@ -848,7 +848,7 @@ The tenant itself, as a row (2026-10-18). `utility_id` on all 61 tables that car
 
 **RLS:** non-standard, because the predicate is on the primary key rather than on a `utility_id` column: `id = current_setting('app.current_utility_id')::uuid`. A tenant can see its own row and no other.
 
-**Written by** `provisionTenant` (`scripts/provision-tenant.ts`, `POST /api/v1/platform/utilities`), which also creates all 32 `UtilityModule` rows, the six preset roles and optionally a first admin — in one transaction, idempotent on the **id**, with a dry-run mode that meets the same constraints and rolls back. Suspension and reactivation are the platform actor's (spec 25); there is no delete.
+**Written by** `provisionTenant` (`scripts/provision-tenant.ts`, `POST /api/v1/platform/utilities`), which also creates a `UtilityModule` row for every key in `MODULES` (33 since `billing` landed on 2026-11-03), the six preset roles and optionally a first admin — in one transaction, idempotent on the **id**, with a dry-run mode that meets the same constraints and rolls back. Suspension and reactivation are the platform actor's (spec 25); there is no delete.
 
 ### 4.24 Database Invariants (CHECK constraints)
 
@@ -921,6 +921,27 @@ All endpoints under `/api/v1`. All require a JWT bearer token with a `utility_id
 | POST | `/api/v1/rate-schedules` | Rate |
 | GET | `/api/v1/rate-schedules/:id` | Rate |
 | POST | `/api/v1/rate-schedules/:id/revise` | Rate |
+| PUT | `/api/v1/rate-schedules/:id/tou-calendar` | Rate (the one field a draft may change without forking a version; refused once published) |
+| PUT | `/api/v1/meter-registers/:id/tou-period` | Meter (which TOU period a register counts — the register's only write; affects future reads only) |
+| GET POST | `/api/v1/season-sets` | Rate (seasons; `rate_schedules` module) |
+| GET PATCH DELETE | `/api/v1/season-sets/:id` | Rate |
+| PUT | `/api/v1/season-sets/:id/seasons` | Rate (whole list — the coverage rule is the list's) |
+| POST | `/api/v1/season-sets/:id/publish` | Rate (names diverging TOU calendars) |
+| GET POST | `/api/v1/tou-calendars` | Rate |
+| GET PATCH DELETE | `/api/v1/tou-calendars/:id` | Rate |
+| GET POST | `/api/v1/tou-periods` | Rate (the tenant's price tiers; each row carries what is charged at it) |
+| GET PATCH DELETE | `/api/v1/tou-periods/:id` | Rate (label and order only — the code is immutable; delete refused while hours use it) |
+| PUT | `/api/v1/tou-calendars/:id/day-types` | Rate (whole list, with weekdays) |
+| PUT | `/api/v1/tou-calendars/:id/spans` | Rate (one season + day type's hours) |
+| PUT | `/api/v1/tou-calendars/:id/overrides` | Rate (whole list) |
+| POST | `/api/v1/tou-calendars/:id/publish` | Rate |
+| GET | `/api/v1/tou-calendars/:id/validation` | Rate |
+| GET | `/api/v1/tou-calendars/:id/spot-check` | Rate (date + time → period, and why) |
+| GET | `/api/v1/tou-calendars/:id/day` | Rate (a whole day laid out) |
+| GET POST | `/api/v1/tou-holiday-sets` | Rate (each row carries its date count, span and how many calendars name it) |
+| GET PATCH DELETE | `/api/v1/tou-holiday-sets/:id` | Rate (names the calendars using it; delete refused while one does) |
+| PUT | `/api/v1/tou-holiday-sets/:id/holidays` | Rate (whole list of dates) |
+| POST | `/api/v1/tou-holiday-sets/:id/publish` | Rate (refused while the set is empty) |
 | GET | `/api/v1/billing-cycles` | Billing |
 | POST | `/api/v1/billing-cycles` | Billing |
 | GET | `/api/v1/billing-cycles/:id` | Billing |
@@ -1035,6 +1056,13 @@ tenant name it in the path. Full inventory and rationale: spec 25.
 
 **Errors:** `{ error: { code: "VALIDATION_ERROR", message: "...", details: [...] } }`. Prisma error codes (P2002 unique constraint, P2025 record not found, P2003 foreign key, P2014 relation constraint) are mapped to HTTP status codes and friendly messages by a central error handler.
 
+**The message is the only channel that is always shown.** `api-client.ts` surfaces `message` and appends `details` when present, so anything a caller must read goes in `message`. Two consequences, both fixed 2026-11-05:
+
+- **P2002 names what collided in the message**, not only in `details`. It previously read "A record with these values already exists" for every constraint on every model, with the field list in `details` — which is dropped entirely when Prisma reports no `target`. The same branch no longer sends `details` at all, because it held exactly those field names and the client would print them twice in one sentence. The Zod branch keeps its details, where each entry is a different field.
+- **`meta.target` is an array, a string, or absent.** Under the driver adapter Postgres hands back a constraint *name* where the Rust engine handed back a field list. It was cast to `string[]` unconditionally, and a string has a truthy `.length` with no `.join` — so that cast threw *inside the error handler* and turned the 409 into a 500. Any new handler reading `meta` must assume the adapter's shape, not the engine's.
+
+A service that can name the conflict should still refuse before reaching the database (`RATE_SCHEDULE_CODE_TAKEN`, `RUN_ALREADY_EXISTS_FOR_WINDOW`): a constraint knows which columns collided, never what the operator should do instead. The handler is the backstop for the races those checks cannot close, which is why it has to be legible on its own.
+
 **Validation:** Zod schemas live in the `@utility-cis/shared` package and are reused by the API (as runtime validators) and by the web (for form validation and TypeScript types via `z.infer`). The same schemas also feed the OpenAPI document generator (5.5), which keeps the machine-readable API contract in lockstep with the runtime contract.
 
 **CRUD factory:** Entities that follow the standard list/get/create/update shape register their routes via `registerCrudRoutes(app, config)` from `packages/api/src/lib/crud-routes.ts`. The factory owns RBAC config, Zod parsing, `request.user` extraction, and status-code shaping; route files just declare their `basePath`, `module`, and service adapter closures. Entities with unusual requirements (premises with its `/geo` endpoint, rate-schedules with `/:id/revise` and no PATCH, roles with DELETE) supply whatever subset fits and add custom routes alongside the factory call.
@@ -1121,8 +1149,18 @@ Clients can pull the document and generate SDKs, contract tests, or API consoles
 | Agreements | `/service-agreements` | Table with status filters |
 | Agreement Detail | `/service-agreements/:id` | Tabs: Overview, Meters, Audit, Attachments; inline editing on overview; Activate/Close status transition buttons (PENDING→ACTIVE→FINAL→CLOSED, no INACTIVE); Add/remove meter assignments on Meters tab; Upload button in tab bar |
 | Rate Schedules | `/rate-schedules` | Table with commodity/type/active filters |
-| Rate Schedule Detail | `/rate-schedules/:id` | Tabs: Overview, Version History, Revise action; contextual tooltips referencing BR-RS rules |
+| Rate Schedule Detail | `/rate-schedules/:id` | Tabs: Overview, Version History, Revise action; contextual tooltips referencing BR-RS rules. Overview names the TOU calendar the tariff is priced against and, while the schedule is a draft, is where it is chosen |
 | Rate Schedule Create | `/rate-schedules/new` | Dynamic form: tier builder for TIERED, JSON for TOU/DEMAND; HelpTooltip on all fields |
+| Seasons | `/season-sets` | Table with status filter; season labels and how many TOU calendars are keyed on each |
+| Season Set Detail | `/season-sets/[id]` | 366-day year bar drawn from the engine's own coverage; month/day rows that may wrap the year; validation by date; publish, which names published TOU calendars keyed on a different set (TOU-SEA-6); read-only once published |
+| Season Set Create | `/season-sets/new` | Header only — the seasons are a list with a coverage rule, added on the editor |
+| TOU Calendars | `/tou-calendars` | Table with status filter; the span count, which is what shows a half-built calendar |
+| TOU Periods | `/tou-periods` | The tenant's price tiers, edited a row at a time; the code cannot be changed once it exists, and a period hours are charged at cannot be removed |
+| TOU Calendar Detail | `/tou-calendars/[id]` | **Two tabs** (Day Types, Hours), opening on the first with nothing in it — one tab per `PUT`, so each has one Save. Hours scopes to one season via chips marked complete/incomplete, with the months beside the name. Status, the sets it names, the validation verdict and Publish stay above the tabs; changing either set is pick-then-Apply, with the consequence stated first. A 96-quarter strip per (season, day type) rendered *from* the span rows; spot check and whole-day preview answered by the engine server-side; copy hours between groups, including across seasons; read-only once published |
+| TOU Calendar Create | `/tou-calendars/new` | Header only: name, effective date, season set, holiday set, IANA zone, clock basis |
+| Holiday Sets | `/tou-holiday-sets` | Table with status filter; the date count and the span it covers, which is where a set runs out |
+| Holiday Set Detail | `/tou-holiday-sets/[id]` | Dates saved as a whole list, each with the weekday it falls on; horizon warnings; the calendars naming it; read-only once published |
+| Holiday Set Create | `/tou-holiday-sets/new` | Header only — the dates are a list, added on the editor |
 | Billing Cycles | `/billing-cycles` | Table |
 | Billing Cycle Detail | `/billing-cycles/:id` | Overview; inline editing; Deactivate button |
 | Commodities & UOM | `/commodities` | Inline edit, UOM table per commodity |
@@ -1142,7 +1180,7 @@ Eight pages behind the platform actor, outside the tenant permission model.
 | Operators | `/platform/users` | The platform's own identities, `lastLoginAt`, deactivate / reactivate; appointing opens in place |
 | Cluster Overview | `/platform/cluster` | One verdict — unattended queues, paused queues, failures — and the recent failures with the tenant each belongs to |
 | Workers | `/platform/cluster/workers` | One row per API node: worker id, pid, queues, uptime, attachment. Start is node-local; Stop only where the pid is this node's to signal |
-| Queues | `/platform/cluster/queues` | The nine queues, counts only; each count links to Jobs with queue and state in the URL |
+| Queues | `/platform/cluster/queues` | The ten queues, counts only; each count links to Jobs with queue and state in the URL |
 | Jobs | `/platform/cluster/jobs` | Jobs in one queue and one state, queue and status as URL filters (so the page is shareable and Back replaces a Close control), **All queues** fan-out merged by "most recently relevant", per-job retry / promote / replay, and a plain-English reason where a job cannot run |
 
 ### 6.3 Shared UI Components (Phase 2)
@@ -1444,7 +1482,7 @@ Rating and billing (shipped — Rate Model v2 slices 1–5b.2, plus bill product
 - **Versioned schedules** — `RateSchedule` carries an explicit publish state and a `supersedes`/`supersededBy` chain, with a visual component editor in the web app.
 - **Charges** — `BillSegment` + `BillSegmentLine` per agreement per period (slice 5a); account-level `Bill` aggregating segments (slice 5b.2). Each line is traceable to the exact schedule version and component that produced it, and carries the `unit` its `quantity` is counted in — the tariff's unit, which the rate engine converts a meter's reading into (HCF tiers, gallon meters).
 - **Golden tests** pin the Bozeman water / sewer / stormwater / solid-waste tariffs and NorthWestern Energy residential electric.
-- **Seasons and the TOU calendar** (2026-11-02, spec 26 slice 1) — `SeasonSet`/`Season` replace a hard-coded `seasonOf()` that returned summer for May–October for every tenant; `TouCalendar` and its children carry which hours cost what, effective-dated and published like a rate schedule. Three pure modules do the work and never query: `seasons.ts` (tiling and resolution, validated against a leap year so a set cannot lose 29 February), `holidays.ts` (rules and observance — rules rather than dates, because a published calendar is immutable and a date list expires without raising), and `tou-calendar.ts` (classification and save-time validation). `tou-clock.ts` is the only module in the engine that knows a time zone exists, because TOU-CAL-7 classifies the repeated fall-back hour twice "both by the same wall-clock rule" — so the classifying rule must not see offsets. Half of the tiling rule is a database guarantee (an exclusion constraint on half-open minute ranges rules out overlap); gaps are a property of the set, so code owns them.
+- **Seasons and the TOU calendar** (2026-11-02, spec 26 slice 1) — `SeasonSet`/`Season` replace a hard-coded `seasonOf()` that returned summer for May–October for every tenant; `TouCalendar` and its children carry which hours cost what, effective-dated and published like a rate schedule. Two pure modules do the work and never query: `seasons.ts` (tiling and resolution, validated against a leap year so a set cannot lose 29 February) and `tou-calendar.ts` (classification and save-time validation, including the one reserved day-type code). There was a third, `holidays.ts`, resolving rules and observance; **it was deleted on 2026-11-04** when holidays became explicit dates in a versioned `TouHolidaySet` — a rule is a computation nobody checked, and the horizon it was protecting against is now reported by `holidayHorizonProblems` and refused at publish instead of being computed away. `tou-clock.ts` is the only module in the engine that knows a time zone exists, because TOU-CAL-7 classifies the repeated fall-back hour twice "both by the same wall-clock rule" — so the classifying rule must not see offsets. Half of the tiling rule is a database guarantee (an exclusion constraint on half-open minute ranges rules out overlap); gaps are a property of the set, so code owns them.
 
 SaaSLogic, reduced to a payment rail and reached over apptor-connect (see `docs/specs/21-saaslogic-billing.md` and §3.6):
 
@@ -1491,7 +1529,7 @@ Special assessments: Assessment districts, parcel-based assessments, installment
 
 ### Platform and tenancy (shipped, outside the numbered phases)
 
-This belongs to no phase because it is about the deployment rather than about what a utility does. A tenant is now a **row** — `Utility`, with every `utility_id` a foreign key to it under `ON DELETE RESTRICT` — rather than a UUID in a column with no row, no name and no status. Above tenants sits one identity, the **platform actor**: a `CisUser` with a null `utility_id`, holding no role, whose routes are gated on being that row rather than on a permission. Its console is eight pages at `/platform/*` in two sections — tenant lifecycle (provision with a dry-run preview, modules, roles from above the tenant, suspend, operators) and the cluster (nodes, worker processes, the nine queues, and the jobs behind a count with retry, promote and replay). Suspension is enforced in the same authorization pass that checks enabled modules, so a token minted before it stops working rather than running out its lifetime.
+This belongs to no phase because it is about the deployment rather than about what a utility does. A tenant is now a **row** — `Utility`, with every `utility_id` a foreign key to it under `ON DELETE RESTRICT` — rather than a UUID in a column with no row, no name and no status. Above tenants sits one identity, the **platform actor**: a `CisUser` with a null `utility_id`, holding no role, whose routes are gated on being that row rather than on a permission. Its console is eight pages at `/platform/*` in two sections — tenant lifecycle (provision with a dry-run preview, modules, roles from above the tenant, suspend, operators) and the cluster (nodes, worker processes, the ten queues, and the jobs behind a count with retry, promote and replay). Suspension is enforced in the same authorization pass that checks enabled modules, so a token minted before it stops working rather than running out its lifetime.
 
 Three things are deliberately *not* in it: editing global reference rows (a write to a `utility_id = NULL` row changes behaviour for every tenant at once, so that is a migration or a tenant override), pausing a queue (a decision about a queue, not a job), and purging a tenant. Still outstanding: worker control across nodes (spec 24, steps 2–4), `TENANCY_MODE` as boot configuration, and nullable `audit_log.utility_id` / `entity_id` so host-level actions can be audited at all rather than only logged. See `docs/specs/25-platform-console.md` and `docs/specs/24-platform-worker-control.md`.
 

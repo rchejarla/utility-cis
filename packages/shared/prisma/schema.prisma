@@ -58,8 +58,8 @@ model Utility {
   touDayTypeWeekdays     TouDayTypeWeekday[]
   touSlots               TouSlot[]
   touDayOverrides        TouDayOverride[]
-  touHolidayLists        TouHolidayList[]
-  touHolidayRules        TouHolidayRule[]
+  touHolidaySets         TouHolidaySet[]
+  touHolidays            TouHoliday[]
   billDocuments          BillDocument[]
   billMessages           BillMessage[]
   billSegmentLines       BillSegmentLine[]
@@ -85,7 +85,9 @@ model Utility {
   ledgerReasonDefs       LedgerReasonDef[]
   measureTypeDefs        MeasureTypeDef[]
   meterEvents            MeterEvent[]
+  meterDataExceptions    MeterDataException[]
   meterReads             MeterRead[]
+  meterReadIntervals     MeterReadInterval[]
   meterRegisters         MeterRegister[]
   meters                 Meter[]
   notificationTemplates  NotificationTemplate[]
@@ -149,11 +151,18 @@ enum PremiseStatus {
   @@map("premise_status")
 }
 
+/// How a meter is read. **Not** how its usage is split into TOU
+/// periods — that is what a register's `peak_code` mapping declares,
+/// and the two come apart in both directions (an AMR meter can carry
+/// TOU registers; an AMI meter need not report intervals).
+///
+/// `SMART` was removed on 2026-11-06 as a second name for `AMI`.
+/// PostgreSQL cannot drop a value from an enum, so the migration swaps
+/// the type: see `meter_type_smart_removed`.
 enum MeterType {
   AMR
   AMI
   MANUAL
-  SMART
 
   @@map("meter_type")
 }
@@ -232,12 +241,16 @@ enum BillingRunItemStatus {
   @@map("billing_run_item_status")
 }
 
+/// Whether a read was measured, and if not what stands in its place.
+/// Not where it came from: `ReadSource` says that, and `AMI` was removed
+/// from here on 2026-11-06 as a source masquerading as a type — no
+/// writer, no rows, and it left `read_type` unable to say the one thing
+/// it exists to say.
 enum ReadType {
   ACTUAL
   ESTIMATED
   CORRECTED
   FINAL
-  AMI
 
   @@map("read_type")
 }
@@ -330,6 +343,7 @@ model UnitOfMeasure {
   meters           Meter[]
   meterRegisters   MeterRegister[]
   meterReads       MeterRead[]
+  meterReadIntervals MeterReadInterval[]
 
   @@unique([utilityId, commodityId, code])
   @@index([commodityId])
@@ -487,6 +501,8 @@ model Meter {
   commodity              Commodity               @relation(fields: [commodityId], references: [id], onDelete: Restrict)
   uom                    UnitOfMeasure           @relation(fields: [uomId], references: [id], onDelete: Restrict)
   meterReads             MeterRead[]
+  meterReadIntervals     MeterReadInterval[]
+  dataExceptions         MeterDataException[]
   servicePointMeters     ServicePointMeter[]
   registers              MeterRegister[]
   events                 MeterEvent[]
@@ -990,8 +1006,10 @@ model MeterRead {
   /// the two meter kinds must produce one shape: a register-based bucket
   /// takes the code from its register, an interval-derived one is
   /// classified by the calendar and has no register. A code rather than
-  /// a key to `tou_period`, which belongs to one calendar version — see
-  /// the migration.
+  /// a key to `tou_period`, which is tenant-level — so the key would now
+  /// be expressible, and is still refused here on volume: this is a
+  /// hypertable taking tens of millions of rows a month at TOU
+  /// granularity.
   peakCode           String?    @map("peak_code") @db.VarChar(50)
   readType           ReadType   @map("read_type")
   readSource         ReadSource @map("read_source")
@@ -1023,6 +1041,110 @@ model MeterRead {
   @@index([utilityId, importBatchId])
   @@index([utilityId, readEventId])
   @@map("meter_read")
+}
+
+/// Interval consumption — one row per interval per meter or register
+/// (spec 26, TOU-INT-1).
+///
+/// The second of the two ways a TOU bucket exists. A register meter
+/// splits usage itself and its mapping says what each dial means; an
+/// interval meter reports one quantity per interval and the published
+/// calendar classifies them. Both end as `meter_read` rows carrying a
+/// `peak_code`, so the rate engine never learns which kind of meter
+/// produced one.
+///
+/// `interval_start` is always UTC. The source's basis is resolved at
+/// import (TOU-INT-2a) and never stored half-converted — a column that
+/// sometimes means local time is how every interval ends up an hour
+/// out with nothing raised.
+///
+/// A hypertable, chunked by week. The CHECK constraints on
+/// `lengthMinutes` and `quality`, the two partial unique indexes that
+/// make an import idempotent, the tenant-scoped foreign keys and the
+/// RLS policy are all in the `meter_read_interval` migration — none of
+/// them can be expressed here.
+model MeterReadInterval {
+  id            String   @default(uuid()) @db.Uuid
+  utilityId     String   @map("utility_id") @db.Uuid
+  utility       Utility  @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  meterId       String   @map("meter_id") @db.Uuid
+  /// A bare scalar, not a relation: the key is
+  /// `(utility_id, register_id) -> meter_register (utility_id, id)` in
+  /// the migration, and Prisma requires every referencing field of an
+  /// optional composite relation to be optional — `utility_id` is not.
+  registerId    String?  @map("register_id") @db.Uuid
+  uomId         String   @map("uom_id") @db.Uuid
+  intervalStart DateTime @map("interval_start") @db.Timestamptz
+  lengthMinutes Int      @map("length_minutes") @db.SmallInt
+  quantity      Decimal  @db.Decimal(18, 6)
+  /// actual | estimated | missing | edited. `missing` is a row rather
+  /// than an absence: a gap the utility knows about reads differently
+  /// from one nobody has noticed.
+  quality       String   @default("actual") @db.VarChar(20)
+  importBatchId String?  @map("import_batch_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  meter Meter         @relation(fields: [meterId], references: [id], onDelete: Restrict)
+  uom   UnitOfMeasure @relation(fields: [uomId], references: [id], onDelete: Restrict)
+
+  /// TimescaleDB requires the partitioning column in every unique
+  /// constraint, the primary key included.
+  @@id([id, intervalStart])
+  @@index([meterId, intervalStart])
+  @@index([utilityId, importBatchId])
+  @@map("meter_read_interval")
+}
+
+/// A day of one meter's data that cannot be billed as it stands
+/// (spec 26, TOU-GAP-1).
+///
+/// The interval-coverage sweep's output, as work rather than a log
+/// line. One row per (meter, window, kind) **while open** — a partial
+/// unique index that exists only in the migration, because the history
+/// has to stay: a gap resolved in March and back in April is two
+/// exceptions, and a meter that fails every month is the pattern worth
+/// seeing.
+///
+/// `windowStart` is the day the sweep examined, not the gap's own
+/// start. That is what makes tonight's sighting of last night's hole
+/// find its own row, and several holes in one day one exception whose
+/// minutes sum.
+///
+/// **The sweep writes `open` and `resolved` only.** Both are facts
+/// about the data — the intervals are there or they are not — so a
+/// sweep that finds a hole filled closes its own row. `accepted` (bill
+/// it as it stands) and `estimated` (a value was supplied) are
+/// judgements, and no scheduled job makes those. A CHECK ties
+/// `resolvedAt` to `status` both ways.
+///
+/// There is no `createdAt`: `detectedAt` is that timestamp under the
+/// name that says what it means here.
+model MeterDataException {
+  id              String    @id @default(uuid()) @db.Uuid
+  utilityId       String    @map("utility_id") @db.Uuid
+  utility         Utility   @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  meterId         String    @map("meter_id") @db.Uuid
+  windowStart     DateTime  @map("window_start") @db.Timestamptz
+  windowEnd       DateTime  @map("window_end") @db.Timestamptz
+  /// gap | overlap | overrun | missing_reading, by CHECK. The first
+  /// three come from tiling; the fourth is the roll-up's quality check,
+  /// which has no flag action until step 4.
+  kind            String    @db.VarChar(30)
+  minutesAffected Int       @map("minutes_affected")
+  detail          String    @db.Text
+  status          String    @default("open") @db.VarChar(20)
+  detectedAt      DateTime  @default(now()) @map("detected_at") @db.Timestamptz
+  resolvedAt      DateTime? @map("resolved_at") @db.Timestamptz
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  /// Single-column here, composite in the migration — the key is
+  /// `(utility_id, meter_id) -> meter (utility_id, id)`, as it is for
+  /// `meter_read_interval` beside it, so the two rows cannot belong to
+  /// different tenants.
+  meter Meter @relation(fields: [meterId], references: [id], onDelete: Cascade)
+
+  @@index([utilityId, status, windowStart], map: "meter_data_exception_open_by_window")
+  @@map("meter_data_exception")
 }
 
 model AuditLog {
@@ -1192,6 +1314,14 @@ model MeterRegister {
   /// component pricing it raises rather than billing zero for usage the
   /// meter never counted. A partial unique index allows one register
   /// per period per meter — two would be summed and so charged twice.
+  ///
+  /// Keyed to the tenant's `tou_period` on `(utility_id, peak_code)`
+  /// with RESTRICT since 2026-11-06, and left a bare scalar here: this
+  /// model's three Prisma relations are all single-column while the
+  /// database's are composite, so declaring one accurate relation would
+  /// not make the model accurate — it would add a client accessor
+  /// nothing asked for and a fourth shape to read past.
+  /// `schema-invariants.integration.test.ts` is what pins these keys.
   peakCode       String?  @map("peak_code") @db.VarChar(50)
   isActive       Boolean  @default(true) @map("is_active")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -2885,12 +3015,12 @@ model TouCalendar {
   publishedAt   DateTime? @map("published_at") @db.Timestamptz
   seasonSetId   String    @map("season_set_id") @db.Uuid
   seasonSet     SeasonSet @relation(fields: [utilityId, seasonSetId], references: [utilityId, id], onDelete: Restrict)
-  /// Null for a tenant whose tariff does not distinguish holidays;
-  /// `resolveDayType` then answers from the weekday coverage. The key
-  /// itself is in the `tou_calendar` migration — Prisma requires every
-  /// referencing field of an optional composite relation to be optional,
-  /// and `utility_id` is not.
-  touHolidayListId String? @map("tou_holiday_list_id") @db.Uuid
+  /// Null for a tariff that does not distinguish holidays, which is then
+  /// never asked for holiday hours. The key itself is in the
+  /// `tou_holiday_sets` migration — Prisma requires every referencing
+  /// field of an optional composite relation to be optional, and
+  /// `utility_id` is not.
+  touHolidaySetId String? @map("tou_holiday_set_id") @db.Uuid
   /// IANA name, e.g. `America/Denver` (TOU-CAL-6). Belongs to the
   /// tariff, not the customer: where someone lives never changes which
   /// hours are on-peak.
@@ -2901,7 +3031,8 @@ model TouCalendar {
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
   updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz
 
-  periods   TouPeriod[]
+  // No `periods` — they belong to the tenant now, and a calendar's own
+  // are the distinct codes its slots use. See `TouPeriod`.
   dayTypes  TouDayType[]
   slots     TouSlot[]
   overrides TouDayOverride[]
@@ -2912,7 +3043,8 @@ model TouCalendar {
   @@map("tou_calendar")
 }
 
-/// One of a calendar's named periods — what a span of hours costs.
+/// A price tier a tenant's TOU tariffs assign hours to: `peak`,
+/// `off_peak`, `super_off_peak` (spec 26, TOU-CAL-1).
 ///
 /// The table keeps the industry's word, since "TOU period" is what every
 /// tariff document says, and the column keeps the one that is
@@ -2920,38 +3052,50 @@ model TouCalendar {
 /// billing period and `BaseContext.period`, so a `periodCode` beside
 /// `period.startDate` in the resolver would reintroduce the ambiguity
 /// qualification removes. A period and a peak are the same thing here.
+///
+/// **Per tenant, not per calendar.** The codes were declared on each
+/// calendar until 2026-11-04, which stored one fact twice — every
+/// `meter_register`, `meter_read` and rate component already carried
+/// the code as a plain string, and `tou_slot` was the only keyed
+/// reference in the system.
+///
+/// A calendar's own periods are therefore **derived**: the distinct
+/// codes its hours use. A four-code tenant may have a two-period
+/// tariff, so nothing requires a calendar to use them all.
 model TouPeriod {
-  id            String      @id @default(uuid()) @db.Uuid
-  utilityId     String      @map("utility_id") @db.Uuid
-  utility       Utility     @relation(fields: [utilityId], references: [id], onDelete: Restrict)
-  touCalendarId String      @map("tou_calendar_id") @db.Uuid
-  calendar      TouCalendar @relation(fields: [utilityId, touCalendarId], references: [utilityId, id], onDelete: Cascade)
-  peakCode      String      @map("peak_code") @db.VarChar(50)
-  label         String      @db.VarChar(100)
-  sortOrder     Int         @default(0) @map("sort_order") @db.SmallInt
-  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+  id        String   @id @default(uuid()) @db.Uuid
+  utilityId String   @map("utility_id") @db.Uuid
+  utility   Utility  @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  peakCode  String   @map("peak_code") @db.VarChar(50)
+  label     String   @db.VarChar(100)
+  sortOrder Int      @default(0) @map("sort_order") @db.SmallInt
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   slots TouSlot[]
 
-  @@unique([utilityId, touCalendarId, peakCode], map: "tou_period_peak_code_per_calendar")
-  @@unique([utilityId, touCalendarId, id], map: "tou_period_calendar_id_key")
+  /// The key the slots reference — on the code, not the id. See
+  /// `TouSlot.peakCode`.
+  @@unique([utilityId, peakCode], map: "tou_period_peak_code_per_tenant")
   @@map("tou_period")
 }
 
 /// A kind of day, which decides which hours are on-peak (TOU-CAL-2).
 ///
-/// `dayTypeCode` is the tenant's own string and the vocabulary is
-/// **open** — at least weekday, weekend and holiday, and a tenant may
-/// add Saturday — so nothing in code may match a literal value. That is
-/// what `isHoliday` is for: a tenant coding theirs `observed_holiday`
-/// would otherwise have every holiday classified as an ordinary weekday
-/// with nothing raised.
+/// `dayTypeCode` is the tenant's own string and the vocabulary stays
+/// **open** — Saturday priced apart from Sunday is a real tariff and a
+/// fixed set of three could not express it.
 ///
-/// One per calendar may set it, enforced by a partial unique index that
-/// exists only in the `tou_calendar` migration — Prisma cannot express
-/// the predicate, so this declaration exists so `migrate dev` is not
-/// tempted to add a second.
+/// **`holiday` is the one reserved code.** The system creates that day
+/// type when a calendar names a holiday set, and `resolveDayType`
+/// matches it directly. It replaced an `is_holiday` boolean, which
+/// existed only because every code was the tenant's own and so none
+/// could be matched — and which needed a partial unique index and a
+/// validator rule to enforce "at most one". Reserving one code settles
+/// all three: `tou_day_type_code_per_calendar` already makes it unique.
+///
+/// The reservation is enforced in `tou-calendar.service.ts`, not by a
+/// CHECK: a constraint cannot tell the system's row from a tenant's.
 model TouDayType {
   id            String      @id @default(uuid()) @db.Uuid
   utilityId     String      @map("utility_id") @db.Uuid
@@ -2960,7 +3104,6 @@ model TouDayType {
   calendar      TouCalendar @relation(fields: [utilityId, touCalendarId], references: [utilityId, id], onDelete: Cascade)
   dayTypeCode   String      @map("day_type_code") @db.VarChar(50)
   label         String      @db.VarChar(100)
-  isHoliday     Boolean     @default(false) @map("is_holiday")
   sortOrder     Int         @default(0) @map("sort_order") @db.SmallInt
   createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz
   updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz
@@ -3012,10 +3155,12 @@ model TouDayTypeWeekday {
 /// read back (TOU-UI-1d) — a painted grid cannot be summarised for a
 /// regulator.
 ///
-/// `seasonCode` is a code where the day type and period are keys: those
-/// two are children of this calendar, so a three-column key pins them to
-/// it, while a season lives in a separately versioned set and the code
-/// has to travel to the engine anyway. An **exclusion constraint** makes
+/// `seasonCode` and `peakCode` are codes where the day type is a key:
+/// the day type is a child of this calendar, so a three-column key pins
+/// it to this calendar, while a season lives in a separately versioned
+/// set and a period is the tenant's — since 2026-11-04, when it stopped
+/// being a key — and both codes have to travel to the engine anyway. An
+/// **exclusion constraint** makes
 /// "no two spans share a minute" a database guarantee; it exists only in
 /// the `tou_calendar` migration, since Prisma cannot express one.
 model TouSlot {
@@ -3027,8 +3172,23 @@ model TouSlot {
   seasonCode    String      @map("season_code") @db.VarChar(50)
   touDayTypeId  String      @map("tou_day_type_id") @db.Uuid
   dayType       TouDayType  @relation(fields: [utilityId, touCalendarId, touDayTypeId], references: [utilityId, touCalendarId, id], onDelete: Cascade)
-  touPeriodId   String      @map("tou_period_id") @db.Uuid
-  period        TouPeriod   @relation(fields: [utilityId, touCalendarId, touPeriodId], references: [utilityId, touCalendarId, id], onDelete: Restrict)
+  /// The price tier these minutes cost, as the **code** and not a key
+  /// to the row.
+  ///
+  /// That is what makes a tenant-level `tou_period` safe. A published
+  /// calendar is immutable so nothing can move under it — it names a
+  /// season-set version and a holiday-set version for that reason — and
+  /// the tenant's code list is unversioned. Holding the string means a
+  /// published calendar's hours literally say `peak`, the rate
+  /// component prices `peak`, and editing the list changes a label and
+  /// the editor's picker, never what a bill meant.
+  ///
+  /// The foreign key is on the code, so a span cannot name a code the
+  /// tenant has not defined, and a code in use can be neither deleted
+  /// nor renamed. Refusing a rename is right: the code travels into
+  /// rate components and meter registers.
+  peakCode      String      @map("peak_code") @db.VarChar(50)
+  period        TouPeriod   @relation(fields: [utilityId, peakCode], references: [utilityId, peakCode], onDelete: Restrict)
   /// Inclusive, and a multiple of 15 (TOU-CAL-1's granularity).
   startMinute   Int         @map("start_minute") @db.SmallInt
   /// Exclusive; 1440 is the end of the day.
@@ -3066,62 +3226,55 @@ model TouDayOverride {
 
 /// A named set of holiday rules, shared across the tenant's calendars
 /// (TOU-UI-2a), each calendar naming the list it uses — so adding a
-/// holiday does not mean editing three calendars and missing one.
-model TouHolidayList {
-  id        String   @id @default(uuid()) @db.Uuid
-  utilityId String   @map("utility_id") @db.Uuid
-  utility   Utility  @relation(fields: [utilityId], references: [id], onDelete: Restrict)
-  name      String   @db.VarChar(100)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+/// Which dates are holidays (spec 26, TOU-CAL-4).
+///
+/// **Explicit dates, not rules.** A rule — "4 July, nearest weekday" —
+/// is a computation nobody checked: it does not tell anybody that 2026
+/// lands on a Saturday and moves the holiday to Friday the 3rd, a
+/// weekday whose peak hours disappear. A date is the fact itself, and
+/// the observance is applied by the person who knows it.
+///
+/// **Versioned and published like a season set**, and for the same
+/// reason: a published calendar names a published version, so editing
+/// a set cannot change which days got holiday hours on bills already
+/// issued (TOU-CAL-10 argues this for seasons).
+///
+/// A set covers a horizon and runs out. `validateCalendar` reports a
+/// year the calendar covers with no dates in its set, because the
+/// alternative is every holiday that year quietly billing as an
+/// ordinary weekday.
+model TouHolidaySet {
+  id            String    @id @default(uuid()) @db.Uuid
+  utilityId     String    @map("utility_id") @db.Uuid
+  utility       Utility   @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  name          String    @db.VarChar(100)
+  effectiveDate DateTime  @map("effective_date") @db.Date
+  /// Null until published. A published set is immutable.
+  publishedAt   DateTime? @map("published_at") @db.Timestamptz
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz
 
-  rules TouHolidayRule[]
+  holidays TouHoliday[]
 
-  @@unique([utilityId, name], map: "tou_holiday_list_name_per_tenant")
-  @@unique([utilityId, id], map: "tou_holiday_list_tenant_id_key")
-  @@map("tou_holiday_list")
+  @@unique([utilityId, name, effectiveDate], map: "tou_holiday_set_version_per_tenant")
+  @@unique([utilityId, id], map: "tou_holiday_set_tenant_id_key")
+  @@map("tou_holiday_set")
 }
 
-/// A holiday, stated as a rule (TOU-CAL-4).
-///
-/// Rules rather than a list of dates, because a published calendar is
-/// immutable and a list of dates expires: a calendar published in 2026
-/// would hold no holidays for 2029, so either somebody re-enters dates
-/// every year forever or the dates live outside the version and
-/// publishing stops fixing what the calendar means. A missed year does
-/// not raise — the holiday day type silently stops applying and every
-/// TOU bill for those days misprices.
-///
-/// `lib/rate-engine/holidays.ts` resolves these, observance included. A
-/// CHECK keeps each kind's columns and not the other's, since a FIXED
-/// rule with a stray `nth` would look configured and resolve elsewhere.
-model TouHolidayRule {
-  id               String         @id @default(uuid()) @db.Uuid
-  utilityId        String         @map("utility_id") @db.Uuid
-  utility          Utility        @relation(fields: [utilityId], references: [id], onDelete: Restrict)
-  touHolidayListId String         @map("tou_holiday_list_id") @db.Uuid
-  list             TouHolidayList @relation(fields: [utilityId, touHolidayListId], references: [utilityId, id], onDelete: Cascade)
-  code             String         @db.VarChar(50)
-  label            String         @db.VarChar(100)
-  /// `FIXED` is a date (4 July); `NTH_WEEKDAY` is a count (fourth
-  /// Thursday of November, last Monday of May).
-  kind             String         @db.VarChar(20)
-  month            Int            @db.SmallInt
-  /// `FIXED` only.
-  day              Int?           @db.SmallInt
-  /// `NTH_WEEKDAY` only. ISO weekday: Monday is 1.
-  weekday          Int?           @db.SmallInt
-  /// `NTH_WEEKDAY` only. 1–5, or -1 for the last in the month. A rule
-  /// naming an nth the month has not got resolves to nothing that year
-  /// rather than shifting to the previous one.
-  nth              Int?           @db.SmallInt
-  /// `NONE`, `NEAREST_WEEKDAY` or `FOLLOWING_MONDAY`. This is where the
-  /// surprises live: a Saturday holiday observed on the Friday moves
-  /// which day is off-peak.
-  observance       String         @default("NONE") @db.VarChar(20)
-  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+/// One date in a set. A real date with a year, which is the whole point
+/// of leaving rules behind.
+model TouHoliday {
+  id              String        @id @default(uuid()) @db.Uuid
+  utilityId       String        @map("utility_id") @db.Uuid
+  utility         Utility       @relation(fields: [utilityId], references: [id], onDelete: Restrict)
+  touHolidaySetId String        @map("tou_holiday_set_id") @db.Uuid
+  set             TouHolidaySet @relation(fields: [utilityId, touHolidaySetId], references: [utilityId, id], onDelete: Cascade)
+  holidayDate     DateTime      @map("holiday_date") @db.Date
+  name            String        @db.VarChar(100)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz
 
-  @@unique([utilityId, touHolidayListId, code], map: "tou_holiday_rule_code_per_list")
-  @@map("tou_holiday_rule")
+  @@unique([utilityId, touHolidaySetId, holidayDate], map: "tou_holiday_date_per_set")
+  @@index([utilityId, touHolidaySetId, holidayDate], map: "tou_holiday_set_date_idx")
+  @@map("tou_holiday")
 }
