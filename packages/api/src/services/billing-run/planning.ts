@@ -10,6 +10,7 @@ import { computeBillPeriod } from "./../bill.service.js";
 import { auditCreate } from "../../lib/audit-wrap.js";
 import { EVENT_TYPES } from "@utility-cis/shared";
 import { BILLABLE_ACCOUNT_STATUSES } from "./statuses.js";
+import { agreementInWindow } from "./window.js";
 import { RUN_CYCLE_SELECT, toSummary, type BillingRunSummary } from "./summary.js";
 import {
   checkTouReadinessForAgreements,
@@ -139,12 +140,7 @@ async function resolveRunPlan(
       utilityId,
       billingCycleId: cycle.id,
       status: { in: [...BILLABLE_ACCOUNT_STATUSES] },
-      serviceAgreements: {
-        some: {
-          startDate: { lte: window.periodEnd },
-          OR: [{ endDate: null }, { endDate: { gte: window.periodStart } }],
-        },
-      },
+      serviceAgreements: { some: agreementInWindow(window) },
     },
     select: { id: true },
     orderBy: { accountNumber: "asc" },
@@ -196,8 +192,7 @@ async function findRunBlockers(
     where: {
       utilityId,
       accountId: { in: accountIds },
-      startDate: { lte: window.periodEnd },
-      OR: [{ endDate: null }, { endDate: { gte: window.periodStart } }],
+      ...agreementInWindow(window),
     },
     select: {
       id: true,
@@ -292,8 +287,7 @@ async function findTouProblems(
     where: {
       utilityId,
       accountId: { in: accountIds },
-      startDate: { lte: window.periodEnd },
-      OR: [{ endDate: null }, { endDate: { gte: window.periodStart } }],
+      ...agreementInWindow(window),
     },
     select: { id: true, account: { select: { id: true, accountNumber: true } } },
   });

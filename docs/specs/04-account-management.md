@@ -50,7 +50,7 @@ Billing relationship between a customer and the utility.
 **Account status definitions:**
 - `ACTIVE` — Account in good standing with active services
 - `INACTIVE` — Account suspended or no current active services
-- `FINAL` — Account in the process of being closed; final bill being prepared
+- `FINAL` — Account in the process of being closed; final bill being prepared. **Set by move-out since 2026-11-08**, and until then set by nothing: a move-out went `ACTIVE` → `CLOSED` in one step and the final bill was never produced. `moveOut` now leaves the account here, generates the final bill (spec 09 rule 9), and closes it once the bill exists or once there is nothing left to bill. An account that stays `FINAL` is one whose final bill *failed* — an unpublished tariff, a gap in interval data — and is waiting for somebody.
 - `CLOSED` — Account permanently closed; no new agreements allowed
 - `SUSPENDED` — Account temporarily suspended (e.g., for non-payment)
 
@@ -101,7 +101,9 @@ All endpoints require JWT authentication with `utility_id` claim.
 
 ### Account Closure Guard
 
-An account cannot be set to `CLOSED` or `FINAL` while it has active ServiceAgreements. This is enforced inside a `$transaction`: the closure request first checks for agreements with `status IN ('PENDING', 'ACTIVE')`. If any exist, the transaction rolls back with a descriptive error. This prevents orphaned agreements and ensures final billing occurs before closure.
+An account cannot be set to `CLOSED` or `FINAL` while it has active ServiceAgreements. This is enforced inside a `$transaction`: the closure request first checks for agreements with `status IN ('PENDING', 'ACTIVE')`. If any exist, the transaction rolls back with a descriptive error. This prevents orphaned agreements.
+
+**It does not ensure final billing**, which this section used to claim. The guard checks that no agreement is still open; it never checks that a bill exists. Closing through **move-out** does produce the final bill (spec 09 rule 9) and will not reach `CLOSED` until it has one or there is nothing to bill — but setting `status: CLOSED` directly through `PATCH /api/v1/accounts/:id` passes the guard with the final period unbilled. Making the guard mean what it says is a separate piece of work.
 
 ### Status Lifecycle
 

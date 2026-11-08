@@ -338,7 +338,21 @@ describe("POST /api/v1/service-agreements/:id/bill-segments — Bozeman SFR gold
     expect(body.error?.code).toBe("INVALID_PERIOD");
   });
 
-  it("returns 400 NO_ACTIVE_ASSIGNMENTS for a period before any assignment", async () => {
+  /*
+   * A period the agreement had no service in — 1999 — now answers
+   * about the *service point* rather than the tariff.
+   *
+   * Both are absent for such a request, and which one is reported is
+   * whichever gate runs first. This answered `NO_ACTIVE_ASSIGNMENTS`
+   * while `loadBase` looked for the service point open *today*: it
+   * resolved one for 1999, and the tariff check further on was
+   * therefore the first to fail. Since 2026-11-08 that lookup asks
+   * which service point covered the period — the change that let a
+   * closed service be billed at all — so there is no premise for 1999
+   * and the loader says so. Still a 400, and the more fundamental fact
+   * of the two: no service, so nothing to price.
+   */
+  it("returns 400 NO_SERVICE_POINT_IN_PERIOD for a period before the agreement had service", async () => {
     const res = await app.inject({
       method: "POST",
       url: `/api/v1/service-agreements/${saId}/bill-segments`,
@@ -347,7 +361,7 @@ describe("POST /api/v1/service-agreements/:id/bill-segments — Bozeman SFR gold
     });
     expect(res.statusCode).toBe(400);
     const body = JSON.parse(res.body);
-    expect(body.error?.code).toBe("NO_ACTIVE_ASSIGNMENTS");
+    expect(body.error?.code).toBe("NO_SERVICE_POINT_IN_PERIOD");
   });
 
   it("returns 409 SCHEDULE_NOT_PUBLISHED when an assigned schedule has publishedAt = NULL", () =>

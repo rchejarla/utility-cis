@@ -54,6 +54,8 @@ The core billing unit linking account, premise, commodity, rate schedule, billin
 - `FINAL` — Service stop has been initiated; a final read and final bill are being processed
 - `CLOSED` — Final bill issued; agreement permanently closed
 
+**The agreement stays at `FINAL` after its final bill.** Move-out sets `FINAL` and, since 2026-11-08, produces the final bill (spec 09 rule 9) and closes the *account* — but it does not take the agreement on to `CLOSED`. `closeServiceAgreement` supports that step and describes it ("FINAL → CLOSED is a legitimate billing-lifecycle step (final bill issued)"); nothing calls it. The distinction currently costs nothing — `FINAL` agreements are excluded from runs by their end date, not their status — so it is recorded rather than fixed.
+
 ### ServiceAgreementMeter (Junction)
 
 Links one or more meters to a ServiceAgreement. Tracks when each meter was added to and removed from the agreement.

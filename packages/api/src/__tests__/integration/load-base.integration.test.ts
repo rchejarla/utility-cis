@@ -268,12 +268,65 @@ describe("loadBase", () => {
   
     }));
 
-  it("throws when the SA has no active service point", async () => {
-    const { saId } = await makeSaWithSchedule({ endServicePoint: true });
-    await expect(
-      loadBase(prismaImports.prisma, saId, PERIOD, TENANT_A),
-    ).rejects.toThrow(/no active service point/);
-  });
+  /*
+   * The service point is end-dated 2026-02-15 and the period is March,
+   * so no service point covers it — which is a different fact from a
+   * service point that closed *inside* the period, and that one has to
+   * bill (a final bill is for a period that is over by definition).
+   *
+   * The assignment is created on purpose: the fixture has no tariff of
+   * its own, so without one this test would hold on a service agreement
+   * that is missing both, and it is about the service point.
+   */
+  it("throws when no service point covers the period", () =>
+    seedAsPlatform(async () => {
+      const { saId, scheduleId } = await makeSaWithSchedule({ endServicePoint: true });
+      const { prisma } = prismaImports;
+      await prisma.sAScheduleAssignment.create({
+        data: {
+          utilityId: TENANT_A,
+          serviceAgreementId: saId,
+          rateScheduleId: scheduleId,
+          roleCode: "supply",
+          effectiveDate: new Date("2026-01-01"),
+        },
+      });
+
+      await expect(
+        loadBase(prisma, saId, PERIOD, TENANT_A),
+      ).rejects.toThrow(/no active service point/);
+    }));
+
+  /*
+   * The other side of that: a service point closed *inside* the period
+   * is the final-bill case, and it has to rate.
+   *
+   * `endDate: null` was the filter until 2026-11-08, so this failed
+   * with "no active service point with a premise" — closing an
+   * agreement end-dates its service points, so the one month a utility
+   * most needs to bill was the one it could not.
+   */
+  it("resolves the premise for a service point that closed inside the period", () =>
+    seedAsPlatform(async () => {
+      const { saId, scheduleId } = await makeSaWithSchedule();
+      const { prisma } = prismaImports;
+      await prisma.servicePoint.updateMany({
+        where: { serviceAgreementId: saId },
+        data: { status: "FINAL", endDate: new Date("2026-03-20") },
+      });
+      await prisma.sAScheduleAssignment.create({
+        data: {
+          utilityId: TENANT_A,
+          serviceAgreementId: saId,
+          rateScheduleId: scheduleId,
+          roleCode: "supply",
+          effectiveDate: new Date("2026-01-01"),
+        },
+      });
+
+      const base = await loadBase(prisma, saId, PERIOD, TENANT_A);
+      expect(base.premise.id).toBeTruthy();
+    }));
 
   it("returns components ordered by sortOrder ascending even if seeded out of order", () =>
     seedAsPlatform(async () => {      /* Fixture rows and read-backs under the fixture authority; the
