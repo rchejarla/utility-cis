@@ -477,7 +477,6 @@ model Meter {
   installDate  DateTime    @map("install_date") @db.Date
   removalDate  DateTime?   @map("removal_date") @db.Date
   status       MeterStatus @map("status")
-  notes        String?     @map("notes") @db.Text
   customFields Json        @default("{}") @map("custom_fields")
   /// The TOU calendar version this meter is programmed with (spec 26,
   /// TOU-REG-2). A fact about the **device**: it records what we believe

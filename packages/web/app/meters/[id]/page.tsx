@@ -36,7 +36,6 @@ interface Meter {
   multiplier?: number;
   installDate?: string;
   removalDate?: string;
-  notes?: string;
   customFields?: Record<string, unknown>;
   /**
    * Whether this meter has ever reported an interval — the one honest
@@ -168,7 +167,6 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
       meterType: meter.meterType ?? "",
       status: meter.status ?? "",
       multiplier: meter.multiplier != null ? String(meter.multiplier) : "1",
-      notes: meter.notes ?? "",
       installDate: meter.installDate ? meter.installDate.slice(0, 10) : "",
       removalDate: meter.removalDate ? meter.removalDate.slice(0, 10) : "",
       uomId: meter.uom?.id ?? "",
@@ -217,7 +215,6 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
       if (editForm.status !== meter.status) changes.status = editForm.status;
       const multVal = editForm.multiplier !== "" ? parseFloat(editForm.multiplier) : 1;
       if (multVal !== (meter.multiplier ?? 1)) changes.multiplier = multVal;
-      if (editForm.notes !== (meter.notes ?? "")) changes.notes = editForm.notes || null;
       if (editForm.uomId !== (meter.uom?.id ?? "") && editForm.uomId) changes.uomId = editForm.uomId;
       const installVal = editForm.installDate || null;
       const currentInstall = meter.installDate ? meter.installDate.slice(0, 10) : null;
@@ -483,19 +480,6 @@ export default function MeterDetailPage({ params }: { params: Promise<{ id: stri
                 />
               ) : (
                 <span style={valueStyle}>{meter.removalDate ? meter.removalDate.slice(0, 10) : "—"}</span>
-              )}
-            </div>
-            <div style={fieldStyle}>
-              <span style={labelStyle}>Notes</span>
-              {editing ? (
-                <textarea
-                  style={{ ...inputStyle, minHeight: "70px", resize: "vertical" as const }}
-                  value={editForm.notes}
-                  onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))}
-                  placeholder="Optional notes"
-                />
-              ) : (
-                <span style={valueStyle}>{meter.notes || "—"}</span>
               )}
             </div>
 

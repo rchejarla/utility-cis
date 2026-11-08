@@ -1,0 +1,40 @@
+-- `meter.notes` goes. The Notes tab replaced it on 2026-11-02 and the
+-- screens kept showing both.
+--
+-- WHY
+--
+-- Spec 03 already said so, in the sentence that introduced the
+-- replacement: the notes feature is "a dated, attributed remark a staff
+-- member attaches to this record… It replaces the pattern `meter.notes`
+-- represents: one note, no author, no date, overwritten by the second."
+--
+-- What survived that decision was the column and every control that
+-- wrote to it — a Notes row on the meter's Overview, a textarea on the
+-- create form, and a `notes` column in the meter import with the
+-- aliases `notes` and `comments`. So a meter page offered two things
+-- called Notes: one that recorded who said it and when, and one that
+-- did not, and that the next person to type in it would overwrite.
+--
+-- Noticed by somebody looking at the page, which is the only way it was
+-- going to be: nothing fails when a superseded column keeps being
+-- rendered.
+--
+-- NOTHING IS LOST
+--
+-- No row carries one. Checked against the dev database before writing
+-- this — `SELECT count(*) FROM meter WHERE notes IS NOT NULL AND
+-- notes <> ''` is 0, while the notes feature holds 25 rows across four
+-- entity types. A deployment with values in it should copy them into
+-- `note` before applying this; there is no automatic migration here
+-- because an unattributed remark has no author or date to carry over,
+-- and inventing either would be worse than an operator deciding.
+--
+-- The import's column goes with it. A file that still carries one now
+-- leaves it unmapped and ignored, rather than writing into a field no
+-- screen shows — the quieter version of the same fault.
+--
+-- `Contact`, `ServiceEvent`, `DelinquencyAction` and `PaymentPlan` keep
+-- theirs: none has a Notes tab, and on those records the field is part
+-- of the record — why an action was taken, what a plan was agreed on.
+
+ALTER TABLE "meter" DROP COLUMN "notes";
