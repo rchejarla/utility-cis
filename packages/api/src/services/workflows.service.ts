@@ -8,6 +8,7 @@ import type {
 import { writeAuditRow } from "../lib/audit-wrap.js";
 import { generateNumber } from "../lib/number-generator.js";
 import { closeServiceAgreement } from "./effective-dating.service.js";
+import type { FinalBillResult } from "./final-bill.service.js";
 
 /**
  * Cross-entity workflows. Each function wraps a multi-step business
@@ -521,9 +522,23 @@ export async function moveOut(
           { statusCode: 400, code: "ACCOUNT_HAS_OTHER_AGREEMENTS" },
         );
       }
+      /*
+       * `FINAL`, not `CLOSED` — for now.
+       *
+       * Spec 04 defines `FINAL` as "final bill being prepared", and
+       * that is exactly where this account is: the service has stopped
+       * and the last days are not billed yet. The account is closed
+       * below, once the bill exists or once it is clear there is
+       * nothing to bill. `closeServiceAgreement` already describes the
+       * same step for an agreement — "FINAL → CLOSED is a legitimate
+       * billing-lifecycle step (final bill issued)".
+       *
+       * `closedAt` is deliberately not set here: the account is not
+       * closed.
+       */
       account = await tx.account.update({
         where: { id: data.accountId },
-        data: { status: "CLOSED", closedAt: moveOutDate },
+        data: { status: "FINAL" },
       });
     }
 
@@ -614,7 +629,77 @@ export async function moveOut(
     };
   });
 
-  return result;
+  /*
+   * The final bill (Req 134), and only when the account is closing.
+   *
+   * **After the transaction, not inside it.** Stopping service is a
+   * physical fact somebody has already acted on, and rating can fail
+   * for reasons that have nothing to do with it — an unpublished
+   * tariff, a gap in interval data. A move-out that rolled back over
+   * one would send the operator back to re-enter a move-out that had,
+   * in every sense that matters, happened. So the service stops, the
+   * account waits at `FINAL`, and the reason is reported.
+   *
+   * **Only when `closeAccount`.** Closing one premise of several leaves
+   * the account live, and the part-period for the service that stopped
+   * is billed by its next cycle run — which is what the run's window
+   * filter was fixed to do on 2026-11-08. A separate bill there would
+   * be a second bill in the same month for a customer who is getting
+   * one anyway.
+   *
+   * Dated the move-out date, so a read taken after service stopped
+   * belongs to nobody's final bill.
+   */
+  let finalBill: FinalBillResult | null = null;
+  if (data.closeAccount) {
+    const { generateFinalBill } = await import("./final-bill.service.js");
+    try {
+      finalBill = await generateFinalBill(utilityId, actorId, actorName, data.accountId, {
+        asOf: new Date(data.moveOutDate),
+      });
+    } catch (err) {
+      finalBill = {
+        billId: null,
+        total: null,
+        error: err instanceof Error ? err.message : "The final bill could not be produced",
+      };
+    }
+
+    /*
+     * Closed once there is nothing left to do: a bill was produced, or
+     * there was nothing to bill. A fault leaves the account at `FINAL`
+     * for somebody to act on — which is the one state where `FINAL`
+     * means what spec 04 says it means, rather than a status nothing
+     * ever set.
+     */
+    if (!finalBill.error) {
+      await prisma.account.update({
+        where: { id: data.accountId },
+        data: { status: "CLOSED", closedAt: new Date(data.moveOutDate) },
+      });
+    }
+  }
+
+  /*
+   * The balance after the bill, not the one from inside the
+   * transaction.
+   *
+   * `depositReturn.stillOwed` is computed where the refund is written,
+   * which is before the final bill exists — so an operator handing back
+   * a deposit was told what the account owed *excluding* the charges
+   * about to be raised. Reported alongside rather than overwritten, so
+   * the refund's own figure still reads as what it was at the time.
+   */
+  const closingBalance = finalBill?.billId
+    ? (
+        await prisma.account.findFirstOrThrow({
+          where: { id: data.accountId, utilityId },
+          select: { balance: true },
+        })
+      ).balance.toFixed(2)
+    : null;
+
+  return { ...result, finalBill, closingBalance };
 }
 
 /**

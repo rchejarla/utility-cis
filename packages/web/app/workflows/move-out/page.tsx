@@ -7,6 +7,7 @@ import { usePermission } from "@/lib/use-permission";
 import { AccessDenied } from "@/components/ui/access-denied";
 import { PageHeader } from "@/components/ui/page-header";
 import { useToast } from "@/components/ui/toast";
+import { describeOutcome, type MoveOutOutcome } from "./outcome";
 import { SearchableEntitySelect } from "@/components/ui/searchable-entity-select";
 
 /**
@@ -148,26 +149,14 @@ export default function MoveOutWizardPage() {
       };
       if (refundDeposit && depositTender) body.depositTender = depositTender;
       if (notes) body.notes = notes;
-      const res = await apiClient.post<{
-        depositReturn: { refunded: string; stillOwed: string } | null;
-      }>("/api/v1/workflows/move-out", body);
-      // Say what happened to the money. A deposit return is the part of
-      // a move-out the customer will ring about, and "Move-out complete"
-      // answers none of it -- including the case where the box was
-      // ticked and nothing was held.
-      const d = res.depositReturn;
-      if (!d) {
-        toast("Move-out complete", "success");
-      } else if (parseFloat(d.refunded) === 0) {
-        toast("Move-out complete. No deposit was held, so nothing was returned.", "success");
-      } else if (parseFloat(d.stillOwed) > 0) {
-        toast(
-          `Move-out complete. Deposit of $${d.refunded} returned — note this account still owes $${d.stillOwed}.`,
-          "success",
-        );
-      } else {
-        toast(`Move-out complete. Deposit of $${d.refunded} returned.`, "success");
-      }
+      const res = await apiClient.post<MoveOutOutcome>(
+        "/api/v1/workflows/move-out",
+        body,
+      );
+      // What happened to the money, sentence by sentence — see
+      // `outcome.ts`, which is where the branches are tested.
+      const said = describeOutcome(res);
+      toast(said.text, said.tone);
       router.push(`/accounts/${accountId}`);
     } catch (err) {
       toast(err instanceof Error ? err.message : "Move-out failed", "error");

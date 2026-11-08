@@ -360,10 +360,14 @@ on.
 with a meter assigned would be attempted by a run. It rarely has one,
 which is why nobody has seen it.
 
-**Also still open, and larger:** a *closed account*. Move-out sets the
-account `CLOSED` and `BILLABLE_ACCOUNT_STATUSES` is `["ACTIVE"]`, so
-the planner never sees it and its last days are billed by nothing. That
-is spec 09 rule 9's final bill, which is not built.
+**The other half of it, a *closing* account, is not this filter's job
+and was built the same day.** `BILLABLE_ACCOUNT_STATUSES` is still
+`["ACTIVE"]`, so a closing account is never in a run — which is correct:
+Req 134 wants the final bill "independent of billing cycle", so
+`moveOut` produces it directly through `generateFinalBill`. The two
+halves divide cleanly: a service that stops while the account stays open
+is billed by the next run (this fix), and an account that closes is
+billed at closure (spec 09 rule 9).
 
 ### Import Center (`/meter-reads/import`) — live (UI), partial (backend)
 

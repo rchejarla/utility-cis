@@ -246,6 +246,23 @@ export async function generateBillForAccount(
      * the operator is looking at the one bill they just made.
      */
     suppressAutoPost?: boolean;
+    /**
+     * Bill these charges, rather than whichever ones fall in the
+     * account's cycle window.
+     *
+     * For a **final bill**, which Req 134 requires to work
+     * "independent of billing cycle". The window below does three
+     * jobs — it refuses a second bill for the same span, it selects
+     * the unbilled segments, and it dates the bill — and all three
+     * are cycle-derived, so a part-period ending on a move-out date
+     * fell outside the window its own account's cycle produced and
+     * the bill reported "nothing to bill" over a segment it had just
+     * been handed.
+     *
+     * Only the final-bill path passes it: a cycle run's window *is*
+     * the cycle's, which is the whole point of a run.
+     */
+    window?: { periodStart: Date; periodEnd: Date };
   },
 ): Promise<BillWithSegments> {
   const account = await prisma.account.findUnique({
@@ -260,7 +277,7 @@ export async function generateBillForAccount(
   }
 
   const asOfDate = input.asOfDate ?? new Date();
-  const period = computeBillPeriod(account, asOfDate);
+  const period = input.window ?? computeBillPeriod(account, asOfDate);
 
   // Pre-check: refuse to create a second Bill for the same period.
   // Two bills overlap if one's start ≤ other's end and vice versa.
